@@ -2,6 +2,7 @@ package hiveci
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const hiveCITestPrivateKey = "1111111111111111111111111111111111111111111111111111111111111111"
@@ -165,6 +167,30 @@ func TestHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {
 	require.Empty(t, repo.runs, "invalid event must not persist")
 	require.Empty(t, repo.results, "invalid event must not persist result records")
 	require.False(t, called, "invalid event must not dispatch callbacks")
+}
+
+func TestHandleEventIngestsCanonicalGraspTagOnlyWorkflowRun(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
+	s.now = func() time.Time { return now }
+
+	run := signedHiveCIEvent(t, kindWorkflowRun, now, nostr.Tags{
+		{"a", "30617:owner:astillero"}, {"commit", "dfbe0d7df7978febff4658381069fb154c4951dc"},
+		{"branch", "main"}, {"trigger", "push"}, {"triggered-by", "operator"},
+		{"workflow", ".gitea/workflows/ci.yml"}, {"publisher", publisher}, {"t", "hive-ci"},
+	})
+	run.Content = ""
+	require.NoError(t, nostrutil.SignEventWithHexKey(run, hiveCITestPrivateKey))
+
+	s.handleEvent(context.Background(), run)
+
+	stored := repo.runs[nostrutil.EventIDHex(run)]
+	require.Equal(t, "30617:owner:astillero", stored.RepoCoordinate)
+	require.Equal(t, "dfbe0d7df7978febff4658381069fb154c4951dc", stored.CommitSHA)
+	require.Equal(t, ".gitea/workflows/ci.yml", stored.WorkflowPath)
+	require.Equal(t, publisher, stored.PublisherPubkey)
 }
 
 func TestHandleEventIngestsValidWorkflowRunAndResult(t *testing.T) {
@@ -332,6 +358,87 @@ func TestTrustedDispatcherFiltering(t *testing.T) {
 	s.handleWorkflowRun(context.Background(), ev)
 	if len(repo.runs) != 0 {
 		t.Fatalf("expected run to be dropped for untrusted dispatcher")
+	}
+}
+
+func TestSubscriptionFiltersScopeTrusted5401AuthorsAndKeepCorrelated5402Open(t *testing.T) {
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, newTestHiveRepo(), []string{publisher}, zap.NewNop(), nil)
+	filters := s.subscriptionFilters()
+	if len(filters) != 2 || len(filters[0].Kinds) != 1 || int(filters[0].Kinds[0]) != kindWorkflowRun ||
+		len(filters[0].Authors) != 1 || filters[0].Authors[0].Hex() != publisher {
+		t.Fatalf("unexpected trusted 5401 filter: %#v", filters)
+	}
+	if len(filters[1].Kinds) != 1 || int(filters[1].Kinds[0]) != kindWorkflowResult || len(filters[1].Authors) != 0 {
+		t.Fatalf("unexpected correlated 5402 filter: %#v", filters)
+	}
+}
+
+func TestTrustedLoomWorkerSignerAcceptedForBahiaDispatched5402(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	workerSecret := "2222222222222222222222222222222222222222222222222222222222222222"
+	workerPubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(workerSecret)
+	require.NoError(t, err)
+	runID := "bahia-dispatched-run"
+	repo.runs[runID] = domain.HiveCIWorkflowRun{RunEventID: runID, PublisherPubkey: publisher, EventCreatedAt: now}
+	called := ""
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), func(_ context.Context, resultEventID string) { called = resultEventID })
+	s.now = func() time.Time { return now }
+	s.SetTrustedResultPubkeys([]string{workerPubkey})
+	event := &nostr.Event{
+		Kind: nostr.Kind(kindWorkflowResult), CreatedAt: nostr.Timestamp(now.Unix()),
+		Tags: nostr.Tags{{"e", runID}, {"log_url", "https://blossom.example/log"}, {"status", "success"},
+			{"exit_code", "0"}, {"duration", "12"}, {"image_repo", "harbor.sharegap.net/cascadia/astillero"},
+			{"image_tag", "dfbe0d7"}, {"image_digest", "sha256:" + strings.Repeat("a", 64)}},
+		Content: `{"image_repo":"harbor.sharegap.net/cascadia/astillero","image_tag":"dfbe0d7","image_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+	}
+	require.NoError(t, nostrutil.SignEventWithHexKey(event, workerSecret))
+
+	s.handleEvent(context.Background(), event)
+
+	stored, ok := repo.results[event.ID.Hex()]
+	if !ok || called != event.ID.Hex() {
+		t.Fatalf("trusted worker 5402 was not dispatched: stored=%v callback=%q", ok, called)
+	}
+	if stored.ImageRepo != "harbor.sharegap.net/cascadia/astillero" || stored.ImageDigest != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("artifact identity changed: %+v", stored)
+	}
+}
+
+func TestCandidateDiagnosticsLogReasonsAndMonotonicCounter(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	runID := "diagnostic-run"
+	repo.runs[runID] = domain.HiveCIWorkflowRun{RunEventID: runID, PublisherPubkey: publisher, EventCreatedAt: now}
+	core, logs := observer.New(zap.WarnLevel)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.New(core), nil)
+
+	unauthorizedSecret := "2222222222222222222222222222222222222222222222222222222222222222"
+	unauthorized := &nostr.Event{Kind: nostr.Kind(kindWorkflowResult), CreatedAt: nostr.Timestamp(now.Unix()), Content: `{}`,
+		Tags: nostr.Tags{{"e", runID}, {"log_url", "https://b.test/log"}, {"status", "success"}, {"exit_code", "0"}, {"duration", "12"}}}
+	require.NoError(t, nostrutil.SignEventWithHexKey(unauthorized, unauthorizedSecret))
+	s.handleWorkflowResult(context.Background(), unauthorized)
+
+	malformed := signedHiveCIEvent(t, kindWorkflowResult, now.Add(time.Second), nostr.Tags{
+		{"e", runID}, {"log_url", "https://b.test/log"}, {"status", "success"}, {"exit_code", "0"}, {"duration", "12"},
+		{"image_repo", "harbor.sharegap.net/cascadia/astillero"}, {"image_tag", "dfbe0d7"}, {"image_digest", "sha256:" + strings.Repeat("a", 64)},
+	})
+	malformed.Content = `{`
+	s.handleWorkflowResult(context.Background(), malformed)
+
+	entries := logs.All()
+	if len(entries) != 2 {
+		t.Fatalf("warning entries = %d, want 2: %#v", len(entries), entries)
+	}
+	first, second := entries[0].ContextMap(), entries[1].ContextMap()
+	if first["reason"] != "unauthorized_signer" || first["decision_count"] != uint64(1) {
+		t.Fatalf("unauthorized diagnostic = %#v", first)
+	}
+	if second["reason"] != "envelope_parse_failure" || second["decision_count"] != uint64(2) {
+		t.Fatalf("parse diagnostic = %#v", second)
 	}
 }
 

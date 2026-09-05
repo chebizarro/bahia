@@ -137,7 +137,7 @@ nostr:
     backend_url: "ws://relay:3334/relay"
 ```
 
-Browser and API Nostr relay traffic goes through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. The advertised `nostr.browser_relays` / `nostr.sidecar_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
+Browser and API Nostr relay traffic can go through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. It stores and broadcasts locally but does not forward accepted events to external relays. The advertised `nostr.browser_relays` / `nostr.sidecar_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
 
 ### Relay Policy Sources
 
@@ -154,12 +154,15 @@ nostr:
   # Browser-safe bootstrap/read relays.
   browser_relays:
     - "wss://sidecar.example.com"
-  # Preferred ContextVM request/reply relays. If absent, clients may fall back to browser_relays with degraded metadata.
+  # Direct ContextVM request/reply relays. Bahia subscribes and publishes to the deduplicated union
+  # of these relays and the sidecar when enabled. If absent, browser_relays is used as the direct fallback.
   contextvm_relays:
     - "wss://contextvm-relay.example.com"
   # Fixed behavior when a relay requires NIP-42 AUTH and no signer is available.
   relay_auth_unavailable: "exclude_and_fail"
 ```
+
+Bahia resolves both its ContextVM request-subscription pool and its isolated response-publication pool to the same deduplicated relay union. With `nostr.sidecar.enabled=true`, the preferred sidecar backend URL (or `public_url` when no backend URL is set) augments `nostr.contextvm_relays`; it does not replace them. When `contextvm_relays` is empty, `browser_relays` supplies the direct destinations. This ensures progress acknowledgments and terminal results reach operators subscribed on public ContextVM/browser relays while retaining the local sidecar copy.
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 

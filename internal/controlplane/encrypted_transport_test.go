@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,18 +40,51 @@ func (m *mockEncryptedPublisher) Publish(_ context.Context, ev nostr.Event) (int
 
 type scriptedPublishOutcome struct {
 	published int
+	results   []nostrpool.PublishResult
 	err       error
 }
 
 type scriptedEncryptedPublisher struct {
-	mu       sync.Mutex
-	events   []nostr.Event
-	outcomes []scriptedPublishOutcome
-	called   chan int
-	calls    int
+	mu                sync.Mutex
+	events            []nostr.Event
+	outcomes          []scriptedPublishOutcome
+	called            chan int
+	calls             int
+	detailedRelayURLs []string
 }
 
 func (p *scriptedEncryptedPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+	outcome := p.recordPublish(event)
+	if outcome.results != nil {
+		published := 0
+		for _, result := range outcome.results {
+			if result.Accepted || result.IsDuplicate() {
+				published++
+			}
+		}
+		return published, outcome.err
+	}
+	return outcome.published, outcome.err
+}
+
+func (p *scriptedEncryptedPublisher) PublishWithResults(_ context.Context, event nostr.Event) ([]nostrpool.PublishResult, error) {
+	outcome := p.recordPublish(event)
+	if outcome.results != nil {
+		p.mu.Lock()
+		for _, result := range outcome.results {
+			p.detailedRelayURLs = append(p.detailedRelayURLs, result.RelayURL)
+		}
+		p.mu.Unlock()
+		return outcome.results, outcome.err
+	}
+	results := make([]nostrpool.PublishResult, 0, outcome.published)
+	for i := 0; i < outcome.published; i++ {
+		results = append(results, nostrpool.PublishResult{RelayURL: fmt.Sprintf("wss://relay-%d.example", i+1), Accepted: true})
+	}
+	return results, outcome.err
+}
+
+func (p *scriptedEncryptedPublisher) recordPublish(event nostr.Event) scriptedPublishOutcome {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.events = append(p.events, event)
@@ -59,11 +93,11 @@ func (p *scriptedEncryptedPublisher) Publish(_ context.Context, event nostr.Even
 		p.called <- p.calls
 	}
 	if len(p.outcomes) == 0 {
-		return 1, nil
+		return scriptedPublishOutcome{published: 1}
 	}
 	outcome := p.outcomes[0]
 	p.outcomes = p.outcomes[1:]
-	return outcome.published, outcome.err
+	return outcome
 }
 
 type toggledEncryptedPublisher struct {
@@ -1178,6 +1212,37 @@ func TestContextVMTransport_LargeTerminalPayloadUnchanged(t *testing.T) {
 	result, ok := response.Result.(map[string]any)
 	if !ok || result["payload"] != large {
 		t.Fatalf("large payload changed: got length %d, want %d", len(fmt.Sprint(result["payload"])), len(large))
+	}
+}
+
+func TestContextVMTransport_ResponsePublishesToEveryConfiguredRelay(t *testing.T) {
+	publisher := &scriptedEncryptedPublisher{outcomes: []scriptedPublishOutcome{
+		{published: 2},
+		{results: []nostrpool.PublishResult{
+			{RelayURL: "ws://relay:3334", Accepted: true},
+			{RelayURL: "wss://relay.sharegap.net", Accepted: true},
+		}},
+	}}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"rolled_back": true}, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"multi-relay","method":"service/rollback","params":{}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if publisher.calls != 2 {
+		t.Fatalf("publish calls = %d, want progress ack plus terminal response", publisher.calls)
+	}
+	wantRelays := []string{"ws://relay:3334", "wss://relay.sharegap.net"}
+	if !slices.Equal(publisher.detailedRelayURLs, wantRelays) {
+		t.Fatalf("terminal response relays = %v, want %v", publisher.detailedRelayURLs, wantRelays)
+	}
+	if len(publisher.outcomes) != 0 {
+		t.Fatalf("unconsumed publish outcomes = %d, want 0", len(publisher.outcomes))
 	}
 }
 

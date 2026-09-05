@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,6 +55,8 @@ type Bridge struct {
 	logger            *zap.Logger
 	autoRegister      bool
 	releaseAuditor    ReleaseRegistrationAuditor
+	trustedResults    map[string]struct{}
+	decisionCount     atomic.Uint64
 }
 
 func NewBridge(
@@ -82,6 +85,18 @@ func NewBridge(
 	}
 }
 
+// SetTrustedResultPubkeys admits worker-signed 5402 results produced by
+// Bahia-dispatched ci/workflow-run jobs.
+func (b *Bridge) SetTrustedResultPubkeys(pubkeys []string) {
+	b.trustedResults = make(map[string]struct{}, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+		if pubkey != "" {
+			b.trustedResults[pubkey] = struct{}{}
+		}
+	}
+}
+
 func (b *Bridge) SetDesiredStateBuilder(builder desiredStateBuilder) {
 	if b != nil {
 		b.desiredState = builder
@@ -90,6 +105,31 @@ func (b *Bridge) SetDesiredStateBuilder(builder desiredStateBuilder) {
 
 func (b *Bridge) SetReleaseRegistrationAuditor(auditor ReleaseRegistrationAuditor) {
 	b.releaseAuditor = auditor
+}
+
+func (b *Bridge) warnCandidate(message, reason string, fields ...zap.Field) {
+	count := b.decisionCount.Add(1)
+	fields = append(fields, zap.String("reason", reason), zap.Uint64("decision_count", count))
+	b.logger.Warn(message, fields...)
+}
+
+func buildResultRejectionReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "publisher") || strings.Contains(message, "signer"):
+		return "unauthorized_signer"
+	case strings.Contains(message, "pipeline policy") || strings.Contains(message, "repository does not match") || strings.Contains(message, "service") && strings.Contains(message, "not found"):
+		return "unmapped_repository"
+	case strings.Contains(message, "digest") || strings.Contains(message, "repository, tag"):
+		return "missing_or_invalid_digest"
+	case strings.Contains(message, "manifest") || strings.Contains(message, "registry"):
+		return "artifact_verification_failed"
+	default:
+		return "artifact_registration_rejected"
+	}
 }
 
 // RegisterAcceptedRelease converts the validated release boundary into one
@@ -200,7 +240,7 @@ func (b *Bridge) RegisterBuildResult(ctx context.Context, buildID uuid.UUID) (*d
 	return b.processResult(ctx, result.ResultEventID, build, true)
 }
 
-func (b *Bridge) processResult(ctx context.Context, resultEventID string, expectedBuild *domain.Build, explicit bool) (*domain.Artifact, error) {
+func (b *Bridge) processResult(ctx context.Context, resultEventID string, expectedBuild *domain.Build, explicit bool) (artifact *domain.Artifact, err error) {
 	result, err := b.hiveRepo.GetResultByEventID(ctx, resultEventID)
 	if err != nil {
 		return nil, fmt.Errorf("load hiveci result: %w", err)
@@ -208,7 +248,26 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	if result == nil {
 		return nil, fmt.Errorf("HiveCI result %s not found", resultEventID)
 	}
-	run, err := b.hiveRepo.GetRunByEventID(ctx, result.RunEventID)
+	var run *domain.HiveCIWorkflowRun
+	if result.Status == "success" {
+		defer func() {
+			if err == nil {
+				return
+			}
+			fields := []zap.Field{
+				zap.String("result_event_id", result.ResultEventID),
+				zap.String("run_event_id", result.RunEventID),
+				zap.String("image_repo", result.ImageRepo),
+				zap.String("image_digest", result.ImageDigest),
+				zap.Error(err),
+			}
+			if run != nil {
+				fields = append(fields, zap.String("repo_coordinate", run.RepoCoordinate), zap.String("workflow", run.WorkflowPath))
+			}
+			b.warnCandidate("Hive-CI artifact candidate rejected", buildResultRejectionReason(err), fields...)
+		}()
+	}
+	run, err = b.hiveRepo.GetRunByEventID(ctx, result.RunEventID)
 	if err != nil {
 		return nil, fmt.Errorf("load hiveci run: %w", err)
 	}
@@ -223,16 +282,18 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		if explicit {
 			return nil, fmt.Errorf("no enabled pipeline policy binds this build result to a Bahia service")
 		}
-		b.logger.Info("no enabled pipeline policy match; skipping",
+		b.warnCandidate("no enabled pipeline policy match; ignoring Hive-CI artifact candidate", "unmapped_repository",
+			zap.String("result_event_id", result.ResultEventID),
 			zap.String("run_event_id", run.RunEventID),
-			zap.String("repo", run.RepoCoordinate),
-			zap.String("workflow", run.WorkflowPath),
-		)
+			zap.String("repo_coordinate", run.RepoCoordinate),
+			zap.String("workflow", run.WorkflowPath))
 		return nil, nil
 	}
 	if result.PublisherPubkey != run.PublisherPubkey {
-		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
-		return nil, fmt.Errorf("HiveCI result publisher does not match run publisher")
+		if _, trustedWorker := b.trustedResults[strings.ToLower(strings.TrimSpace(result.PublisherPubkey))]; !trustedWorker {
+			_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
+			return nil, fmt.Errorf("HiveCI result publisher does not match run publisher or trusted Loom worker allowlist")
+		}
 	}
 
 	build := expectedBuild
@@ -299,6 +360,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
 			return nil, fmt.Errorf("mark result artifact pending: %w", err)
 		}
+		b.warnCandidate("automatic Hive-CI artifact registration is disabled; retaining candidate", "automatic_registration_disabled",
+			zap.String("result_event_id", result.ResultEventID), zap.String("run_event_id", run.RunEventID),
+			zap.String("repo_coordinate", run.RepoCoordinate), zap.String("workflow", run.WorkflowPath))
 		return nil, nil
 	}
 
@@ -307,9 +371,14 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	imageDigest := strings.ToLower(strings.TrimSpace(result.ImageDigest))
 	if imageRepo == "" || imageTag == "" || !immutableManifestDigest.MatchString(imageDigest) {
 		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
+		candidateErr := fmt.Errorf("successful build result must include repository, tag, and immutable sha256 manifest digest")
 		if explicit {
-			return nil, fmt.Errorf("successful build result must include repository, tag, and immutable sha256 manifest digest")
+			return nil, candidateErr
 		}
+		b.warnCandidate("rejecting Hive-CI artifact candidate with incomplete image identity", "missing_or_invalid_digest",
+			zap.String("result_event_id", result.ResultEventID), zap.String("run_event_id", run.RunEventID),
+			zap.String("repo_coordinate", run.RepoCoordinate), zap.String("workflow", run.WorkflowPath),
+			zap.String("image_repo", imageRepo), zap.String("image_tag", imageTag), zap.String("image_digest", imageDigest))
 		return nil, nil
 	}
 	if b.serviceRepo == nil || b.artifactRepo == nil || b.registry == nil {
@@ -335,9 +404,13 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		if explicit {
 			return nil, fmt.Errorf("immutable OCI manifest could not be verified")
 		}
+		b.warnCandidate("Hive-CI artifact candidate is waiting for immutable OCI verification", "artifact_unavailable",
+			zap.String("result_event_id", result.ResultEventID), zap.String("run_event_id", run.RunEventID),
+			zap.String("repo_coordinate", run.RepoCoordinate), zap.String("workflow", run.WorkflowPath),
+			zap.String("image_repo", imageRepo), zap.String("image_digest", imageDigest))
 		return nil, nil
 	}
-	artifact := &domain.Artifact{
+	artifact = &domain.Artifact{
 		BuildID: build.ID, ServiceID: build.ServiceID, ImageRepo: imageRepo,
 		ImageTag: imageTag, ImageDigest: imageDigest, ScanStatus: domain.ScanStatusUnknown,
 		Metadata: map[string]any{

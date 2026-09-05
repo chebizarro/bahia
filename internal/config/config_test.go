@@ -193,6 +193,49 @@ func TestLoadDevModeFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadHiveCIDisabledAllowsMalformedInertPubkeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`dev_mode: true
+hiveci:
+  enabled: false
+  trusted_ci_pubkeys:
+    - npub1truncated
+  trusted_loom_worker_pubkeys:
+    - not-a-worker-pubkey
+  trusted_release_attestors:
+    - deadbeef
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("disabled HiveCI config with inert malformed pubkeys must load: %v", err)
+	}
+	if got := cfg.HiveCI.TrustedCIPubkeys; len(got) != 1 || got[0] != "npub1truncated" {
+		t.Fatalf("disabled trusted_ci_pubkeys = %#v", got)
+	}
+}
+
+func TestLoadHiveCIEnabledRejectsMalformedPubkey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`dev_mode: true
+hiveci:
+  enabled: true
+  trusted_ci_pubkeys:
+    - npub1truncated
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "hiveci.trusted_ci_pubkeys") {
+		t.Fatalf("Load() error = %v, want malformed enabled HiveCI pubkey rejection", err)
+	}
+}
+
 func TestLoadLoomCanonicalProjectionConfigFromYAMLAndEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`mode: full

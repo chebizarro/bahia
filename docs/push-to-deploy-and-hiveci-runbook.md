@@ -156,9 +156,11 @@ The desired flow is:
 git push
   -> grasp-gitea publishes kind 5401 workflow run
   -> hive-ci-runner consumes 5401 and runs the workflow
-  -> workflow builds/pushes image and writes .hiveci-result.json
-  -> hive-ci-runner publishes kind 5402 workflow result
-  -> Bahia ingests the terminal RELEASE 5402 and registers a digest-only artifact
+  -> workflow builds/pushes image and prints a BAHIA_ARTIFACT marker
+  -> loom-worker publishes an ordinary kind 5402 workflow result with immutable image metadata
+  -> Bahia correlates the trusted 5401/5402 and registers the verified artifact
+  -> optional release-provenance bridge publishes a second terminal RELEASE 5402
+  -> Bahia verifies its complete supply-chain envelope and registers a digest-only artifact
   -> an operator separately signs an authorized ContextVM promotion intent
   -> Bahia/Loom executes a staged canary from the registered digest
 ```
@@ -181,12 +183,19 @@ RELEASE registration.
 
 ### Hive Workflow Contract
 
-The Hive-executed workflow should:
+The Loom `ci/workflow-run` profile does not read `.hiveci-result.json`. The
+Hive-executed workflow must:
 
 1. Build backend and web images.
 2. Push images to Harbor or another registry Bahia can inspect.
 3. Resolve the pushed manifest digest.
-4. Write `.hiveci-result.json` in the repository root.
+4. Print exactly one `BAHIA_ARTIFACT=<json>` line to stdout. The JSON keys are
+   `image_repo`, `image_tag`, and `image_digest`.
+
+Loom copies those three values into both the signed 5402 tags and its JSON
+content. Bahia accepts the tag values first and uses the JSON content as a
+compatibility source. A malformed content envelope is logged at WARN and can
+only fall back to complete signed tags.
 
 Example core shell:
 
@@ -208,14 +217,8 @@ docker push "$image_repo:$image_tag"
 
 digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$image_repo:$image_tag" | sed 's/^.*@//')"
 
-cat > .hiveci-result.json <<JSON
-{
-  "imageRepo": "$image_repo",
-  "imageTag": "$image_tag",
-  "imageDigest": "$digest",
-  "logURL": "local://hive-ci/${sha}"
-}
-JSON
+printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
+  "$image_repo" "$image_tag" "$digest"
 ```
 
 If backend and web stay as separate images, either:
@@ -236,14 +239,74 @@ Bahia needs:
 - registry inspection configured for the target registry;
 - a trusted release-attestor key and OCI/Blossom evidence resolver for RELEASE results.
 
-The bridge still handles ordinary successful build-result `5402` events through
-the legacy artifact-pending flow. That flow is separate from release acceptance.
+The bridge handles ordinary successful build-result `5402` events as the live
+Loom integration path. The result must be signed either by the ephemeral
+`publisher` declared by the trusted 5401 or by a key in
+`hiveci.trusted_loom_worker_pubkeys`. It must include `image_repo`, `image_tag`,
+and a full lowercase `sha256:<64 hex>` manifest digest. This path is separate
+from terminal RELEASE acceptance.
 
 A terminal RELEASE result is registered only after manifest, SBOM, and in-toto
 provenance bytes match every signed descriptor and lineage binding. The
 artifact identity is `repository@sha256:digest`; any signed image tag is stored
-only as evidence. CI success never creates a deployment intent or mutates
-desired state. Promotion is a separately authorized control-plane action.
+only as evidence. CI success does not promote production. The legacy `auto_deploy_staging` policy
+metadata may create a staging intent; protected environments leave that intent
+pending approval. Production promotion remains a separately authorized
+control-plane action.
+
+### Edge-01 Astillero configuration
+
+The checked-in Compose configuration does not enable HiveCI by default. The
+live edge configuration must add the following block, replacing every angle-
+bracketed value with the observed deployment value:
+
+```yaml
+nostr:
+  # Keep the existing sidecar settings. When mirror_external is false, the
+  # external Hive/Loom relay must also appear under nostr.relays or loom.relays.
+  relays:
+    - "wss://<relay-carrying-5401-and-5402>"
+
+loom:
+  relays:
+    - "wss://<relay-carrying-5401-and-5402>"
+
+hiveci:
+  enabled: true
+  auto_register_builds: true
+  trusted_ci_pubkeys:
+    - "<grasp-gitea-5401-signer-hex>"
+  trusted_loom_worker_pubkeys:
+    - "<loom-worker-5402-signer-hex>"
+  policies:
+    - repo_coordinate: "30617:<repository-owner-pubkey>:<astillero-repository-id>"
+      workflow_path: ".gitea/workflows/ci.yml"
+      branch_pattern: "main"
+      service_name: astillero
+      environment_name: edge-01-production
+
+harbor:
+  enabled: true
+  url: "https://harbor.<deployment-domain>"
+  username: "<registry-read-account>"
+  password: "<registry-read-password>"
+```
+
+The existing `astillero` service must have `artifact_repo` equal to the 5402
+`image_repo` exactly. The workflow must print the `BAHIA_ARTIFACT` marker shown
+above; the current Astillero CI workflow otherwise produces no artifact
+identity for Bahia to register.
+
+Do not add `trusted_release_attestors` for the ordinary Loom result path. That
+key enables the stricter second RELEASE-5402 verifier and additionally requires
+Bahia's OCI evidence service, full lineage/SBOM/provenance descriptors, worker
+admission evidence, and the metadata constraints shown below.
+
+On startup, verify the `hive-ci bridge enabled` log includes the expected relay
+and non-zero trusted-key/policy counts. A `hiveci_disabled`,
+`trusted_loom_worker_pubkeys_missing`, `unauthorized_signer`,
+`missing_or_invalid_digest`, or `unmapped_repository` WARN identifies the exact
+gate that prevented registration.
 
 ### Seeding the Pipeline Policy Row
 

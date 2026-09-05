@@ -55,8 +55,8 @@ nostr:
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"
-  # ContextVM request/reply relays. MVP deployments must configure at least one
-  # operator-approved control-plane relay; checked-in defaults are local-only and locked down by publish_enabled=false.
+  # Direct ContextVM request/reply relays. When the sidecar is enabled, Bahia uses
+  # the deduplicated union of its URL and this list. If empty, browser_relays is the direct fallback.
   contextvm_relays:
     - "ws://localhost:3000/relay"
   # Fixed relay AUTH-unavailable behavior: exclude auth-required relays without credentials and fail if quorum is unmet.

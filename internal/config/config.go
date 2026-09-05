@@ -188,7 +188,7 @@ type DNSBackendConfig struct {
 	AgentTimeout              time.Duration `koanf:"agent_timeout" yaml:"agent_timeout"`
 	AgentRetries              *int          `koanf:"agent_retries" yaml:"agent_retries"`
 	agentEncryptedConfigured  bool
-	HostsPath                 string        `koanf:"hosts_path" yaml:"hosts_path"`
+	HostsPath                 string `koanf:"hosts_path" yaml:"hosts_path"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -492,10 +492,13 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey                 string                    `koanf:"private_key"`
-	Relays                     []string                  `koanf:"relays"`
-	ServiceRelays              []string                  `koanf:"service_relays"`
-	BrowserRelays              []string                  `koanf:"browser_relays"`
+	PrivateKey    string   `koanf:"private_key"`
+	Relays        []string `koanf:"relays"`
+	ServiceRelays []string `koanf:"service_relays"`
+	BrowserRelays []string `koanf:"browser_relays"`
+	// ContextVMRelays are direct request-subscription and response-publication
+	// destinations. When the sidecar is enabled, its backend/public URL is added
+	// to this policy rather than replacing it. BrowserRelays remain the fallback.
 	ContextVMRelays            []string                  `koanf:"contextvm_relays"`
 	NIP34Relays                []string                  `koanf:"nip34_relays" yaml:"nip34_relays"`
 	TrustedRelayMonitorPubkeys []string                  `koanf:"trusted_relay_monitor_pubkeys" yaml:"trusted_relay_monitor_pubkeys"`
@@ -824,6 +827,7 @@ type HiveCIInitiatorConfig struct {
 type HiveCIConfig struct {
 	Enabled                         bool                  `koanf:"enabled"`
 	TrustedCIPubkeys                []string              `koanf:"trusted_ci_pubkeys"`
+	TrustedLoomWorkerPubkeys        []string              `koanf:"trusted_loom_worker_pubkeys"`
 	TrustedReleaseAttestors         []string              `koanf:"trusted_release_attestors"`
 	AutoRegisterBuilds              bool                  `koanf:"auto_register_builds"`
 	AllowManualArtifactRegistration bool                  `koanf:"allow_manual_artifact_registration"`
@@ -1318,8 +1322,25 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config validation failed: oci.upload_expiry must be > 0 when oci.enabled=true")
 		}
 	}
-	if c.HiveCI.Enabled && len(c.HiveCI.TrustedCIPubkeys) == 0 {
-		return fmt.Errorf("config validation failed: hiveci.trusted_ci_pubkeys is required when hiveci.enabled=true")
+	if c.HiveCI.Enabled {
+		trustedCI, err := normalizePubkeyList(c.HiveCI.TrustedCIPubkeys)
+		if err != nil {
+			return fmt.Errorf("config validation failed: hiveci.trusted_ci_pubkeys: %w", err)
+		}
+		c.HiveCI.TrustedCIPubkeys = trustedCI
+		trustedWorkers, err := normalizePubkeyList(c.HiveCI.TrustedLoomWorkerPubkeys)
+		if err != nil {
+			return fmt.Errorf("config validation failed: hiveci.trusted_loom_worker_pubkeys: %w", err)
+		}
+		c.HiveCI.TrustedLoomWorkerPubkeys = trustedWorkers
+		trustedAttestors, err := normalizePubkeyList(c.HiveCI.TrustedReleaseAttestors)
+		if err != nil {
+			return fmt.Errorf("config validation failed: hiveci.trusted_release_attestors: %w", err)
+		}
+		c.HiveCI.TrustedReleaseAttestors = trustedAttestors
+		if len(c.HiveCI.TrustedCIPubkeys) == 0 {
+			return fmt.Errorf("config validation failed: hiveci.trusted_ci_pubkeys is required when hiveci.enabled=true")
+		}
 	}
 	if c.HiveCI.RetryInterval <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.retry_interval must be > 0")

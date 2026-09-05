@@ -146,16 +146,4 @@ func (shellDnsmasqCommandExecutor) Run(ctx context.Context, command string) erro
 	return nil
 }
 
-func dnsmasqZoneConfig(zone domain.DNSZone, records []domain.DNSRecord) ([]byte, error) {
-	return engine.RenderZone(zone, records)
-}
-
-func dnsmasqDirective(zone domain.DNSZone, record domain.DNSRecord) (string, error) {
-	return engine.RenderDirective(zone, record)
-}
-
-func dnsmasqSanitizeZoneFilename(zoneName string) string {
-	return engine.SanitizeFileName(zoneName)
-}
-
 var _ Backend = (*DnsmasqBackend)(nil)

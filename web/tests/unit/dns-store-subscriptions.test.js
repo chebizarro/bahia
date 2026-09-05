@@ -76,6 +76,16 @@ function zoneEvent(overrides = {}) {
   });
 }
 
+function backendEvent(overrides = {}) {
+  return event({
+    id: overrides.id || 'backend-1',
+    kind: 30900,
+    tags: overrides.tags || [['domain', 'dns'], ['schema', 'bahia.state.dns-backend.v1'], ['d', 'backend:cloudflare'], ['backend', 'cloudflare'], ['type', 'cloudflare'], ['health', 'healthy']],
+    content: { ref: 'cloudflare', type: 'cloudflare', health: 'healthy', ...overrides.content },
+    ...overrides
+  });
+}
+
 describe('DNS dashboard Nostr subscription store', () => {
   let store;
 
@@ -236,6 +246,25 @@ describe('DNS dashboard Nostr subscription store', () => {
     });
     expect(store.applyRelayMonitorEvent(unknownRelay)).toBe(false);
     expect(store.dnsState.connection.relays).toEqual(['wss://relay.example']);
+  });
+
+  it('distinguishes loading, disabled, and active-without-zones from EVENT and EOSE callbacks', async () => {
+    await store.connect('ws://localhost:10547/relay', 'b'.repeat(64));
+    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
+
+    expect(store.dnsState.availability).toBe('loading');
+
+    callbacks.onEose('relay-a');
+    expect(store.dnsState.availability).toBe('disabled');
+    expect(store.dnsState.zones).toEqual([]);
+    expect(store.dnsState.backends).toEqual([]);
+
+    callbacks.onEvent(backendEvent(), 'relay-a');
+    expect(store.dnsState.availability).toBe('active');
+    expect(store.dnsState.zones).toEqual([]);
+    expect(store.dnsState.backends).toEqual([
+      expect.objectContaining({ id: 'cloudflare', type: 'cloudflare', health: 'healthy' })
+    ]);
   });
 
   it('updates reactive DNS state from live EVENT callbacks and marks EOSE catch-up complete', async () => {

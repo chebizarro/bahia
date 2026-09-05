@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -17,6 +18,15 @@ type atomicHiveCIReleaseRegistry interface {
 		service.ReleaseArtifactVerificationProof,
 		service.ReleaseArtifactAuditPreparer,
 	) error
+}
+
+func TestHiveCIRunnerWiringIsConfigGated(t *testing.T) {
+	if shouldRegisterHiveCIRunners(config.HiveCIConfig{}) {
+		t.Fatal("Hive-CI runners must remain disabled without hiveci.enabled")
+	}
+	if !shouldRegisterHiveCIRunners(config.HiveCIConfig{Enabled: true}) {
+		t.Fatal("Hive-CI runners must be registered when hiveci.enabled=true")
+	}
 }
 
 func TestRelayFirstRegistryRetainsAtomicHiveCIRegistrationCapability(t *testing.T) {

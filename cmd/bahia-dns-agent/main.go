@@ -176,7 +176,7 @@ func loadConfig(args []string) (config, error) {
 	relays := strings.Join(cfg.RelayURLs, ",")
 	zones := strings.Join(cfg.AllowedZones, ",")
 	flags := flag.NewFlagSet("bahia-dns-agent", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags.SetOutput(os.Stderr)
 	flags.StringVar(&cfg.ConfigFile, "config", cfg.ConfigFile, "optional JSON configuration file")
 	flags.StringVar(&cfg.PrivateKeyFile, "private-key-file", cfg.PrivateKeyFile, "file containing the DNS agent Nostr private key")
 	flags.StringVar(&relays, "relays", relays, "comma-separated Nostr relay URLs")

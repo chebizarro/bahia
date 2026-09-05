@@ -12,6 +12,9 @@ Bead `bahia-xwpsw` verifies bounded terminal-result delivery across the signer-f
 - `TestContextVMResultDeliveryE2EDualRelaySubscriptionPartialFailure` models failed subscription establishment on relay A and response publication only on relay B; the client completes using the actually subscribed relay set.
 - Existing focused client tests cover EOSE activation, zero subscriptions, bounded retry, relay accounting, command construction, and correlation diagnostics.
 - Existing control-plane and repository tests cover bounded server response publication retry, multi-relay partial success, in-memory replay, PostgreSQL restart replay, and response record storage.
+- `TestContextVMRelayURLsUsesSidecarAndConfiguredPolicyUnion` covers sidecar enabled/disabled, configured ContextVM relays present/absent, and browser fallback present/absent; `TestContextVMRelayURLsDeduplicatesSidecarAndPolicy` proves duplicate URLs collapse.
+- `TestRelayTopologyCoordinatorPreservesSidecarPrecedence` proves canonical projectors remain sidecar-only while dynamically reconfigured ContextVM request and response pools retain the sidecar-plus-public-policy union.
+- `TestContextVMTransport_ResponsePublishesToEveryConfiguredRelay` proves both the progress acknowledgment and terminal response path use the scripted multi-relay publisher, with the terminal result accepted by the sidecar and public relay destinations.
 
 ## Implementation note
 
@@ -19,10 +22,11 @@ The end-to-end lost-result test exposed that event-id deduplication preceded ide
 
 ## Quality gates
 
-Verified on 2026-09-03 from `/Users/bizarro/Documents/Projects/bahia`:
+Verified on 2026-09-05 from `/Users/bizarro/Documents/Projects/bahia`:
 
 - `go build ./...` — PASS
 - `go vet ./...` — PASS
+- `go test ./internal/app/... ./internal/config/... ./internal/controlplane/... -count=1` — PASS
 - `go test ./...` — PASS
 
 ## Deviations

@@ -137,9 +137,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Relay pools are initialized before the optional database cache.
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
+	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
+	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
-	contextVMResponsePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMRequestPool.Connect(ctx)
+	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	contextVMResponsePool.Connect(ctx)
 	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
 	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
@@ -150,6 +154,8 @@ func New(cfg *config.Config) (*App, error) {
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
+		zap.Strings("contextvm_request_subscription_relays", contextVMRequestRelays),
+		zap.Strings("contextvm_response_publication_relays", contextVMResponseRelays),
 		zap.Strings("interop_relays", relayURLs),
 		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
 		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
@@ -868,7 +874,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Hive-CI wiring.
 	var buildResultRegistrar controlplane.BuildResultArtifactRegistrar
-	if cfg.HiveCI.Enabled {
+	if shouldRegisterHiveCIRunners(cfg.HiveCI) {
 		hiveRepo := repository.NewPgHiveCIRepository(pool)
 		bridge := pipeline.NewBridge(
 			hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
@@ -882,6 +888,7 @@ func New(cfg *config.Config) (*App, error) {
 				cfg.HiveCI.TrustedCIPubkeys, cfg.HiveCI.AutoRegisterBuilds, logger,
 			)
 		}
+		bridge.SetTrustedResultPubkeys(cfg.HiveCI.TrustedLoomWorkerPubkeys)
 		if runtimeLifecycleSvc != nil {
 			bridge.SetDesiredStateBuilder(runtimeLifecycleSvc)
 		}
@@ -893,6 +900,11 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
+		hiveSub.SetTrustedResultPubkeys(cfg.HiveCI.TrustedLoomWorkerPubkeys)
+		if len(cfg.HiveCI.TrustedLoomWorkerPubkeys) == 0 {
+			logger.Warn("Hive-CI Loom worker result allowlist is empty; worker-signed 5402 artifact results will be rejected",
+				zap.String("reason", "trusted_loom_worker_pubkeys_missing"))
+		}
 		if len(cfg.HiveCI.TrustedReleaseAttestors) > 0 {
 			if ociSvc == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires Bahia OCI registry evidence resolution")
@@ -1005,7 +1017,16 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 
-		logger.Info("hive-ci bridge enabled")
+		logger.Info("hive-ci bridge enabled",
+			zap.Strings("subscription_relays", relayURLs),
+			zap.Int("trusted_ci_pubkeys", len(cfg.HiveCI.TrustedCIPubkeys)),
+			zap.Int("trusted_loom_worker_pubkeys", len(cfg.HiveCI.TrustedLoomWorkerPubkeys)),
+			zap.Int("trusted_release_attestors", len(cfg.HiveCI.TrustedReleaseAttestors)),
+			zap.Bool("auto_register_builds", cfg.HiveCI.AutoRegisterBuilds),
+			zap.Int("pipeline_policies", len(cfg.HiveCI.Policies)))
+	} else {
+		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
+			zap.String("reason", "hiveci_disabled"), zap.Strings("available_interop_relays", relayURLs))
 	}
 
 	var securityScanner *service.SecurityScanner
@@ -1314,12 +1335,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	if servicePubkey != "" && relayPolicyProjectionRepo != nil {
 		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
-			ControlPlanePool: controlPlanePool,
-			ResponsePool:     contextVMResponsePool,
-			ServicePool:      relayPool,
-			NostrConfig:      cfg.Nostr,
-			LoomRelays:       cfg.Loom.Relays,
-			Logger:           logger,
+			ControlPlanePool:      controlPlanePool,
+			ContextVMRequestPool:  contextVMRequestPool,
+			ContextVMResponsePool: contextVMResponsePool,
+			ServicePool:           relayPool,
+			NostrConfig:           cfg.Nostr,
+			LoomRelays:            cfg.Loom.Relays,
+			Logger:                logger,
 		})
 		relaySettingsHydrator := controlplane.NewRelaySettingsHydrator(controlplane.RelaySettingsHydratorConfig{
 			Pool:            relayPolicyHydrationPool,
@@ -1376,13 +1398,13 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
-	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
+	if len(contextVMRequestRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		transportOptions := []controlplane.EncryptedRequestTransportOption{}
 		if contextVMResponseStore != nil {
 			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
 		}
-		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
+		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(contextVMRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}
@@ -1494,7 +1516,10 @@ func New(cfg *config.Config) (*App, error) {
 		// ContextVM carries the canonical mutation plane, so it must remain
 		// available in the minimum production control-plane tier.
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier1))
-		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
+		logger.Info("encrypted request/result event runtime registered",
+			zap.Strings("request_subscription_relays", contextVMRequestRelays),
+			zap.Strings("response_publication_relays", contextVMResponseRelays),
+		)
 	}
 
 	// Nostr control plane reactor for event-driven deployment operations.
@@ -1628,7 +1653,7 @@ func New(cfg *config.Config) (*App, error) {
 	outboxRepo, _ := nostrEventRepo.(repository.NostrEventOutboxRepository)
 	bgManager.RegisterWithOptions(newNostrTransportMetricsRunner(
 		telemetryProvider.GetMetrics(), outboxRepo, 15*time.Second, logger,
-		controlPlanePool, contextVMResponsePool, relayPool, fipsRelayPool,
+		controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPool, fipsRelayPool,
 	), RunnerTier(Tier1), RunnerRequired(false))
 
 	application := &App{
@@ -1647,7 +1672,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:                 telemetryProvider,
 		Background:                bgManager,
 		toolCoordinator:           toolCoordinator,
-		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
+		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
 		dnsBackendClosers:         dnsBackendClosers,
 		ModePolicy:                policy,
 		Health:                    healthProvider,
@@ -2735,6 +2760,10 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 	return zones, resolver, closers, nil
 }
 
+func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
+	return cfg.Enabled
+}
+
 func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 	if cfg.Sidecar.Enabled {
 		if cfg.Sidecar.BackendURL != "" {
@@ -2745,6 +2774,21 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 		}
 	}
 	return cfg.ContextVMRelayPolicyRelays()
+}
+
+func contextVMRelayURLs(cfg config.NostrConfig) []string {
+	var relays []string
+	if cfg.Sidecar.Enabled {
+		if cfg.Sidecar.BackendURL != "" {
+			relays = appendUniqueRelay(relays, cfg.Sidecar.BackendURL)
+		} else {
+			relays = appendUniqueRelay(relays, cfg.Sidecar.PublicURL)
+		}
+	}
+	for _, relay := range cfg.ContextVMRelayPolicyRelays() {
+		relays = appendUniqueRelay(relays, relay)
+	}
+	return relays
 }
 
 func relayPolicyHydrationRelayURLs(cfg config.NostrConfig) []string {

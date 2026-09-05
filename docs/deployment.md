@@ -441,7 +441,15 @@ hiveci:
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
 
-  # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results
+  # Loom workers permitted to sign ordinary 5402 results for Bahia-dispatched
+  # ci/workflow-run jobs. Grasp-dispatched ephemeral publisher keys remain
+  # correlated through the trusted 5401 publisher tag.
+  trusted_loom_worker_pubkeys:
+    - <loom-worker-pubkey>
+
+  # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results.
+  # Omit this block unless the second release-provenance event and Bahia OCI
+  # evidence service are both deployed.
   trusted_release_attestors:
     - <hive-ci-release-attestor-pubkey>
   
@@ -451,8 +459,10 @@ hiveci:
   # Advanced signed manual artifact registration (disabled by default)
   allow_manual_artifact_registration: false
   
-  # CI registration never promotes; promotion requires a separately
-  # authorized promotion intent.
+  # Terminal RELEASE registration never promotes production. Ordinary results
+  # may create a staging intent only when legacy auto_deploy_staging metadata is
+  # enabled; protected environments keep that intent pending approval.
+  # Production promotion requires a separately authorized promotion intent.
 
   # Each release policy must explicitly bind workflow_digest, policy_digest,
   # review_policy, source_repo_identity, release_image_repository, and a

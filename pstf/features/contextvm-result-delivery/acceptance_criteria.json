@@ -28,6 +28,10 @@
     {
       "id": "AC-7",
       "statement": "Failures expose request method, event id, d-tag, configured/subscribed/failed relays, publish count, attempt count, and per-relay publish outcomes for correlation with server handler and publication logs."
+    },
+    {
+      "id": "AC-8",
+      "statement": "When the relay sidecar is enabled, ContextVM request subscriptions, progress acknowledgments, and terminal responses use the deduplicated union of the sidecar and configured ContextVM relays, falling back to browser relays when the ContextVM list is empty."
     }
   ]
 }

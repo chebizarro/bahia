@@ -10,6 +10,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type mockHiveRepo struct {
@@ -459,6 +461,68 @@ func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
 	if h.updated["res-1"] != domain.HiveCIProcessingStateProcessed {
 		t.Fatalf("expected result state processed, got %q", h.updated["res-1"])
 	}
+}
+
+func TestBridge_TrustedLoomWorker5402RegistersDigestPinnedArtifact(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "grasp-publisher", "loom-worker")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	builds, artifacts, oci := newMockBuildRepo(), newMockArtifactRepo(), newMockOCIRepo()
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	oci.manifests[artifactKey("ghcr.io/acme/api", "main")] = &domain.OCIManifest{
+		Digest: digest, MediaType: "application/vnd.oci.image.manifest.v1+json", SizeBytes: 123,
+	}
+	services := &mockServiceRepo{service: &domain.Service{ID: h.policy.ServiceID, ArtifactRepo: "ghcr.io/acme/api"}}
+	registry := &mockCanonicalRegistry{builds: builds, artifacts: artifacts, intents: newMockIntentRepo()}
+	bridge := NewBridge(h, services, builds, artifacts, registry.intents, newMockEnvRepo(), oci, nil, registry, nil, true, nil)
+	bridge.SetTrustedResultPubkeys([]string{"loom-worker"})
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult error: %v", err)
+	}
+	artifact := artifacts.byDigest[artifactKey("ghcr.io/acme/api", digest)]
+	if artifact == nil || artifact.ImageDigest != digest {
+		t.Fatalf("digest-pinned artifact not registered: %#v", artifact)
+	}
+	if registry.intents.created != 0 {
+		t.Fatalf("CI registration created %d deployment intents", registry.intents.created)
+	}
+}
+
+func TestBridge_LogsUnmappedRepositoryAndMissingDigestCandidateReasons(t *testing.T) {
+	t.Run("unmapped repository", func(t *testing.T) {
+		h := newMockHiveRepo()
+		seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+		core, logs := observer.New(zap.WarnLevel)
+		bridge := NewBridge(h, &mockServiceRepo{}, newMockBuildRepo(), newMockArtifactRepo(), newMockIntentRepo(), newMockEnvRepo(), newMockOCIRepo(), nil,
+			&mockCanonicalRegistry{builds: newMockBuildRepo(), artifacts: newMockArtifactRepo()}, nil, true, zap.New(core))
+		if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+			t.Fatal(err)
+		}
+		entries := logs.FilterMessage("no enabled pipeline policy match; ignoring Hive-CI artifact candidate").All()
+		if len(entries) != 1 || entries[0].ContextMap()["reason"] != "unmapped_repository" {
+			t.Fatalf("unmapped repository warning = %#v", entries)
+		}
+	})
+
+	t.Run("missing digest", func(t *testing.T) {
+		h := newMockHiveRepo()
+		seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+		h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+		h.results["res-1"].ImageDigest = ""
+		builds, artifacts := newMockBuildRepo(), newMockArtifactRepo()
+		core, logs := observer.New(zap.WarnLevel)
+		services := &mockServiceRepo{service: &domain.Service{ID: h.policy.ServiceID, ArtifactRepo: h.results["res-1"].ImageRepo}}
+		bridge := NewBridge(h, services, builds, artifacts, newMockIntentRepo(), newMockEnvRepo(), newMockOCIRepo(), nil,
+			&mockCanonicalRegistry{builds: builds, artifacts: artifacts}, nil, true, zap.New(core))
+		if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+			t.Fatal(err)
+		}
+		entries := logs.FilterMessage("rejecting Hive-CI artifact candidate with incomplete image identity").All()
+		if len(entries) != 1 || entries[0].ContextMap()["reason"] != "missing_or_invalid_digest" || entries[0].ContextMap()["decision_count"] != uint64(1) {
+			t.Fatalf("missing digest warning = %#v", entries)
+		}
+	})
 }
 
 func TestBridge_RejectsResultPublisherMismatch(t *testing.T) {

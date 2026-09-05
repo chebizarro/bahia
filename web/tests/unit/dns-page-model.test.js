@@ -3,12 +3,41 @@ import { DNS_COMMANDS } from '../../src/lib/nostr/dns-controlplane.js';
 import {
   buildDNSCommandPayload,
   commandRunView,
+  dnsZonePanelState,
   initialDNSCommandForms,
   summarizePublishOk,
   validateDNSCommandForm
 } from '../../src/routes/dns/page-model.js';
 
 describe('DNS command page model', () => {
+  it('models loading, disabled, and active-but-empty DNS zone panels', () => {
+    expect(dnsZonePanelState({ availability: 'loading' })).toEqual({
+      kind: 'loading',
+      title: 'Loading DNS configuration',
+      description: 'Waiting for the DNS relay subscription to finish its initial sync.'
+    });
+
+    expect(dnsZonePanelState({ availability: 'disabled', zones: [], backends: [] })).toEqual({
+      kind: 'disabled',
+      title: 'DNS orchestration is not enabled on this Bahia server',
+      description: 'Enable dns: with a backend. See docs/user-guide/features/dns.md.'
+    });
+
+    expect(dnsZonePanelState({ availability: 'loading', zones: [], backends: [{ ref: 'cloudflare' }] })).toEqual({
+      kind: 'active-empty',
+      title: 'No DNS zones configured yet',
+      description: 'DNS orchestration is active with 1 backend configured.'
+    });
+  });
+
+  it('keeps populated zones active so a degraded connection still renders the zone table', () => {
+    expect(dnsZonePanelState({
+      availability: 'loading',
+      zones: [{ name: 'prod.example' }],
+      backends: []
+    })).toEqual({ kind: 'active', title: '', description: '' });
+  });
+
   it('validates forms before dispatching malformed DNS commands', () => {
     expect(validateDNSCommandForm(DNS_COMMANDS.ZONE_CREATE, { zone: 'invalid', backend: '', visibility: 'public' })).toEqual({
       valid: false,

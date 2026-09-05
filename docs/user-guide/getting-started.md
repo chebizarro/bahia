@@ -67,7 +67,7 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAYS` | Backward-compatible service relay alias | (none) |
 | `BAHIA_NOSTR_SERVICE_RELAYS` | Backend service publish/backfill relays | `BAHIA_NOSTR_RELAYS` |
 | `BAHIA_NOSTR_BROWSER_RELAYS` | Browser-safe bootstrap/read relays | (discovery) |
-| `BAHIA_NOSTR_CONTEXTVM_RELAYS` | ContextVM request/reply relays; falls back to browser relays when absent | browser relays |
+| `BAHIA_NOSTR_CONTEXTVM_RELAYS` | Direct ContextVM request/reply relays; when the sidecar is enabled Bahia uses their deduplicated union with the sidecar, falling back to browser relays when absent | browser relays |
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
@@ -95,6 +95,7 @@ nostr:
     - "wss://service-relay.example.com"
   browser_relays:
     - "wss://sidecar.example.com"
+  # Direct ContextVM request/reply destinations. An enabled sidecar augments this list.
   contextvm_relays:
     - "wss://contextvm-relay.example.com"
   relay_auth_unavailable: "exclude_and_fail"

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -59,6 +60,8 @@ type Subscriber struct {
 	repo           repository.HiveCIRepository
 	logger         *zap.Logger
 	trusted        map[string]struct{}
+	trustedResults map[string]struct{}
+	decisionCount  atomic.Uint64
 	onResult       ResultConsumer
 	onRun          RunConsumer
 	releases       *ReleaseIngestor
@@ -69,6 +72,19 @@ type Subscriber struct {
 }
 
 func (s *Subscriber) SetRunConsumer(consumer RunConsumer) { s.onRun = consumer }
+
+// SetTrustedResultPubkeys admits worker-signed 5402 results produced by
+// Bahia-dispatched ci/workflow-run jobs. The original ephemeral-publisher
+// correlation remains accepted for grasp-gitea-dispatched jobs.
+func (s *Subscriber) SetTrustedResultPubkeys(pubkeys []string) {
+	s.trustedResults = make(map[string]struct{}, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+		if pubkey != "" {
+			s.trustedResults[pubkey] = struct{}{}
+		}
+	}
+}
 
 func (s *Subscriber) SetReleaseIngestor(ingestor *ReleaseIngestor, consumer AcceptedReleaseConsumer) {
 	s.releases = ingestor
@@ -84,7 +100,7 @@ func (s *Subscriber) SetReleaseEvidenceRecorder(events repository.NostrEventRepo
 func NewSubscriber(pool *nostrAdapter.RelayPool, repo repository.HiveCIRepository, trustedCIPubkeys []string, logger *zap.Logger, onResult ResultConsumer) *Subscriber {
 	trusted := make(map[string]struct{}, len(trustedCIPubkeys))
 	for _, pk := range trustedCIPubkeys {
-		pk = strings.TrimSpace(pk)
+		pk = strings.ToLower(strings.TrimSpace(pk))
 		if pk != "" {
 			trusted[pk] = struct{}{}
 		}
@@ -127,7 +143,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) subscribe(ctx context.Context) error {
-	filters := []nostr.Filter{{Kinds: []nostr.Kind{kinds.HiveCIWorkflowRun, kinds.HiveCIWorkflowResult}}}
+	filters := s.subscriptionFilters()
 	authAttempted := make(map[string]struct{})
 	for {
 		if s.pool == nil {
@@ -144,6 +160,49 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 		if !retry {
 			return nil
 		}
+	}
+}
+
+func (s *Subscriber) subscriptionFilters() []nostr.Filter {
+	authors := make([]nostr.PubKey, 0, len(s.trusted))
+	for raw := range s.trusted {
+		if author, err := nostr.PubKeyFromHex(raw); err == nil {
+			authors = append(authors, author)
+		}
+	}
+	// 5401 authors are statically known. 5402 authors cannot be fully scoped:
+	// grasp-gitea uses a per-run ephemeral publisher, while Bahia-dispatched
+	// jobs use configured Loom worker keys. Correlation is enforced after load.
+	return []nostr.Filter{
+		{Kinds: []nostr.Kind{kinds.HiveCIWorkflowRun}, Authors: authors},
+		{Kinds: []nostr.Kind{kinds.HiveCIWorkflowResult}},
+	}
+}
+
+func (s *Subscriber) warnDecision(message, reason string, fields ...zap.Field) {
+	count := s.decisionCount.Add(1)
+	fields = append(fields, zap.String("reason", reason), zap.Uint64("decision_count", count))
+	s.logger.Warn(message, fields...)
+}
+
+func releaseRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, ErrUntrustedReleaseAttestor):
+		return "unauthorized_signer"
+	case errors.Is(err, ErrReleasePolicyDenied):
+		return "unmapped_repository_or_policy"
+	case errors.Is(err, ErrReleaseWorkerNotAdmitted):
+		return "unauthorized_worker"
+	case errors.Is(err, ErrReleaseArtifactUnavailable):
+		return "artifact_unavailable"
+	case errors.Is(err, ErrReleaseLineagePending):
+		return "lineage_pending"
+	case err != nil && strings.Contains(err.Error(), "descriptor is incomplete"):
+		return "missing_or_invalid_digest"
+	case errors.Is(err, ErrInvalidRelease):
+		return "envelope_validation_failed"
+	default:
+		return "release_registration_rejected"
 	}
 }
 
@@ -226,11 +285,13 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 			eventID = nostrutil.EventIDHex(ev)
 			kind = int(ev.Kind)
 		}
-		s.logger.Warn("dropping invalid hiveci event before persistence",
-			zap.String("event_id", eventID),
-			zap.Int("kind", kind),
-			zap.Error(err),
-		)
+		if isArtifactCandidate(ev) {
+			s.warnDecision("dropping invalid Hive-CI artifact candidate before persistence", "inbound_validation_failed",
+				zap.String("event_id", eventID), zap.Int("kind", kind), zap.Error(err))
+		} else {
+			s.logger.Warn("dropping invalid hiveci event before persistence",
+				zap.String("event_id", eventID), zap.Int("kind", kind), zap.Error(err))
+		}
 		if IsReleaseCandidate(ev) && s.releaseAuditor != nil {
 			if auditErr := s.releaseAuditor.AuditReleaseRejection(ctx, ev, err); auditErr != nil {
 				s.logger.Error("failed to persist invalid Hive-CI release audit", zap.Error(auditErr))
@@ -251,7 +312,8 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 	eventID := nostrutil.EventIDHex(ev)
 	pubkey := nostrutil.EventPubKeyHex(ev)
 	if _, ok := s.trusted[pubkey]; !ok {
-		s.logger.Debug("ignoring untrusted hiveci workflow run", zap.String("event_id", eventID), zap.String("pubkey", pubkey))
+		s.warnDecision("ignoring untrusted hiveci workflow run", "unauthorized_signer",
+			zap.String("event_id", eventID), zap.Int("kind", kinds.HiveCIWorkflowRun), zap.String("pubkey", pubkey))
 		return
 	}
 	existing, err := s.repo.GetRunByEventID(ctx, eventID)
@@ -273,9 +335,12 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 			TriggeredBy string `json:"triggered_by"`
 		} `json:"params"`
 	}
-	if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
-		return
+	if strings.TrimSpace(ev.Content) != "" {
+		if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
+			s.warnDecision("invalid Hive-CI workflow run content envelope", "envelope_parse_failure",
+				zap.String("event_id", eventID), zap.Int("kind", kinds.HiveCIWorkflowRun), zap.Error(err))
+			return
+		}
 	}
 	commit := firstNonEmpty(optionalTag(ev, "commit"), envelope.Params.Commit)
 	branch := firstNonEmpty(optionalTag(ev, "branch"), envelope.Params.Branch)
@@ -355,15 +420,16 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID stri
 			s.logger.Warn("failed to load hiveci workflow run for orphaned result", zap.String("run_event_id", runEventID), zap.Error(err))
 			continue
 		}
-		if run == nil || result.PublisherPubkey != run.PublisherPubkey {
+		_, trustedWorker := s.trustedResults[result.PublisherPubkey]
+		if run == nil || (result.PublisherPubkey != run.PublisherPubkey && !trustedWorker) {
 			expected := ""
 			if run != nil {
 				expected = run.PublisherPubkey
 			}
-			s.logger.Warn("orphaned result publisher mismatch, rejecting",
+			s.warnDecision("orphaned Hive-CI result signer is not authorized, rejecting", "unauthorized_signer",
 				zap.String("run_event_id", runEventID),
 				zap.String("result_event_id", result.ResultEventID),
-				zap.String("expected", expected),
+				zap.String("expected_ephemeral_publisher", expected),
 				zap.String("actual", result.PublisherPubkey))
 			_ = s.repo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
 			continue
@@ -446,7 +512,8 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		}
 		if s.releases == nil {
 			err := fmt.Errorf("release ingestor is not configured")
-			s.logger.Warn("dropping Hive-CI RELEASE result", zap.String("event_id", eventID), zap.Error(err))
+			s.warnDecision("dropping Hive-CI RELEASE result", "release_ingestor_disabled",
+				zap.String("event_id", eventID), zap.String("pubkey", ev.PubKey.Hex()), zap.Error(err))
 			if s.releaseAuditor != nil {
 				_ = s.releaseAuditor.AuditReleaseRejection(ctx, ev, err)
 			}
@@ -459,7 +526,8 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 			return
 		}
 		if err != nil {
-			s.logger.Warn("rejecting Hive-CI RELEASE result", zap.String("event_id", eventID), zap.Error(err))
+			s.warnDecision("rejecting Hive-CI RELEASE result", releaseRejectionReason(err),
+				zap.String("event_id", eventID), zap.String("pubkey", ev.PubKey.Hex()), zap.Error(err))
 			if s.releaseAuditor != nil {
 				if auditErr := s.releaseAuditor.AuditReleaseRejection(ctx, ev, err); auditErr != nil {
 					s.logger.Error("failed to persist Hive-CI release rejection audit", zap.Error(auditErr))
@@ -488,41 +556,41 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	pubkey := nostrutil.EventPubKeyHex(ev)
 	runEventID, err := requiredTag(ev, "e")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	logURL, err := requiredTag(ev, "log_url")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	status, err := requiredTag(ev, "status")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	if status != "success" && status != "failure" {
-		s.logger.Warn("invalid hiveci workflow result status", zap.String("event_id", eventID), zap.String("status", status))
+		s.warnDecision("invalid Hive-CI workflow result status", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("status", status))
 		return
 	}
 	exitCodeStr, err := requiredTag(ev, "exit_code")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	exitCode, err := strconv.Atoi(exitCodeStr)
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result exit_code", zap.String("event_id", eventID), zap.String("exit_code", exitCodeStr))
+		s.warnDecision("invalid Hive-CI workflow result exit_code", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("exit_code", exitCodeStr))
 		return
 	}
 	durationStr, err := requiredTag(ev, "duration")
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	duration, err := strconv.Atoi(durationStr)
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow result duration", zap.String("event_id", eventID), zap.String("duration", durationStr))
+		s.warnDecision("invalid Hive-CI workflow result duration", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("duration", durationStr))
 		return
 	}
 
@@ -532,13 +600,15 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		return
 	}
 	if run != nil && pubkey != run.PublisherPubkey {
-		s.logger.Warn("hiveci workflow result publisher mismatch, rejecting",
-			zap.String("run_event_id", runEventID),
-			zap.String("result_event_id", eventID),
-			zap.String("expected", run.PublisherPubkey),
-			zap.String("actual", pubkey))
-		_ = s.repo.UpdateResultState(ctx, eventID, domain.HiveCIProcessingStateRejected)
-		return
+		if _, trustedWorker := s.trustedResults[pubkey]; !trustedWorker {
+			s.warnDecision("hiveci workflow result signer is not authorized, rejecting", "unauthorized_signer",
+				zap.String("run_event_id", runEventID),
+				zap.String("result_event_id", eventID),
+				zap.String("expected_ephemeral_publisher", run.PublisherPubkey),
+				zap.String("actual", pubkey))
+			_ = s.repo.UpdateResultState(ctx, eventID, domain.HiveCIProcessingStateRejected)
+			return
+		}
 	}
 
 	// Determine processing state: pending_run if run hasn't arrived yet, pending_result otherwise
@@ -558,7 +628,11 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	}
 	var content workflowResultContent
 	if strings.TrimSpace(ev.Content) != "" {
-		_ = json.Unmarshal([]byte(ev.Content), &content)
+		if decodeErr := json.Unmarshal([]byte(ev.Content), &content); decodeErr != nil {
+			s.warnDecision("ignoring malformed Hive-CI result content and falling back to signed tags", "envelope_parse_failure",
+				zap.String("event_id", eventID), zap.String("run_event_id", runEventID),
+				zap.String("pubkey", pubkey), zap.Error(decodeErr))
+		}
 	}
 	imageRepo := optionalTag(ev, "image_repo")
 	if imageRepo == "" {
@@ -613,6 +687,11 @@ func isTerminalHiveCIResultState(state domain.HiveCIProcessingState) bool {
 	default:
 		return false
 	}
+}
+
+func isArtifactCandidate(event *nostr.Event) bool {
+	return IsReleaseCandidate(event) ||
+		(event != nil && int(event.Kind) == kinds.HiveCIWorkflowResult && optionalTag(event, "status") == "success")
 }
 
 func firstNonEmpty(values ...string) string {

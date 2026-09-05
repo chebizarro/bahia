@@ -23,6 +23,34 @@ export const DNS_CONTROL_FORMS = {
   }
 };
 
+export function dnsZonePanelState({ availability = 'loading', zones = [], backends = [] } = {}) {
+  const zoneList = Array.isArray(zones) ? zones : [];
+  const backendList = Array.isArray(backends) ? backends : [];
+
+  if (zoneList.length > 0) {
+    return { kind: 'active', title: '', description: '' };
+  }
+  if (backendList.length > 0) {
+    return {
+      kind: 'active-empty',
+      title: 'No DNS zones configured yet',
+      description: `DNS orchestration is active with ${backendList.length} backend${backendList.length === 1 ? '' : 's'} configured.`
+    };
+  }
+  if (availability === 'loading') {
+    return {
+      kind: 'loading',
+      title: 'Loading DNS configuration',
+      description: 'Waiting for the DNS relay subscription to finish its initial sync.'
+    };
+  }
+  return {
+    kind: 'disabled',
+    title: 'DNS orchestration is not enabled on this Bahia server',
+    description: 'Enable dns: with a backend. See docs/user-guide/features/dns.md.'
+  };
+}
+
 export function initialDNSCommandForms() {
   return {
     [DNS_COMMANDS.ZONE_CREATE]: { zone: '', backend: '', visibility: 'public', reconcile: true, idempotencyKey: '' },

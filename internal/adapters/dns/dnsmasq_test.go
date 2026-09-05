@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -49,9 +50,9 @@ func TestDnsmasqDirectiveGeneration(t *testing.T) {
 		"srv-host=_http._tcp.embeddings.prod.cascadia,10.0.1.50,8080,10,100",
 	}
 	for i, record := range records {
-		got, err := dnsmasqDirective(zone, record)
+		got, err := engine.RenderDirective(zone, record)
 		if err != nil {
-			t.Fatalf("dnsmasqDirective(%d) returned error: %v", i, err)
+			t.Fatalf("engine.RenderDirective(%d) returned error: %v", i, err)
 		}
 		if got != want[i] {
 			t.Fatalf("directive %d mismatch: got %q want %q", i, got, want[i])

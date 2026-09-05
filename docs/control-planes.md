@@ -117,7 +117,7 @@ Browser and Bahia control-plane traffic should target the relay sidecar first.
 - Bahia backend connection: `nostr.sidecar.backend_url` when set, otherwise `nostr.sidecar.public_url`
 - Bahia-owned control-plane reactor/projector traffic uses only the sidecar backend URL in sidecar mode.
 - Upstream relays: configure `nostr.relays` for public interop/audit traffic. If `nostr.sidecar.mirror_external=true`, Bahia treats the sidecar as the upstream mirror boundary and does not also connect directly to those URLs.
-- ContextVM requests and replies use the ContextVM relay policy. Bahia gives encrypted replies a separate relay-pool connection so response publication cannot interfere with request subscriptions; Loom and other protocol relays remain separately configured.
+- ContextVM request subscriptions and the isolated response-publication pool use the same deduplicated union: the sidecar backend/public URL when enabled plus `nostr.contextvm_relays`, or `nostr.browser_relays` when the ContextVM list is empty. Sidecar presence augments rather than replaces direct ContextVM destinations, so progress and terminal replies reach public-relay subscribers.
 
 This avoids duplicate event loops: Bahia publishes canonical observables (`30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext, ContextVM discovery `11316`-`11320`, relay sets `30002`, and app data `30078`) to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
 
@@ -128,7 +128,7 @@ Relay URLs are physical endpoints; Bahia relay purpose is policy. A deployment m
 | Purpose | Owner | Canonical mechanism | Boundary |
 |---|---|---|---|
 | Public browser bootstrap/read models | Bahia service | NIP-51 `30002`, `d=bahia-browser-v1` | Public browser bootstrap and read-model relay boundary. |
-| ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | ContextVM mutation traffic. Request and isolated response pools share this policy; clients prefer it and may fall back to browser relays only with degraded metadata. |
+| ContextVM request/reply | Bahia service | NIP-51 `30002`, `d=bahia-contextvm-v1` | ContextVM mutation traffic. Request and isolated response pools share the sidecar-plus-policy union; `browser_relays` is the fallback when the ContextVM list is empty. |
 | Service publish/backfill | Bahia service | NIP-51 `30002`, `d=bahia-service-v1`; advisory NIP-65 `10002` | Backend/service publication and historical backfill; not automatically exposed to browsers. |
 | User/operator preferences | User/operator pubkey | NIP-65 `10002` | General author routing preferences, not Bahia service-strategy authorization. |
 | Repository/ngit | Repository maintainer or SoulFactory | NIP-34 `30617` `relays` tags and `30618` state | Repository-specific relay hints, preferred before global Bahia relay policy for repository operations. |

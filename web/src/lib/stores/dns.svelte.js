@@ -49,7 +49,14 @@ export const DNS_OPERATION_KINDS = Object.freeze([
 const NIP66_RELAY_MONITOR_ANNOUNCEMENT = 10166;
 const NIP66_RELAY_DISCOVERY = 30166;
 
+export const DNS_AVAILABILITY = Object.freeze({
+  LOADING: 'loading',
+  DISABLED: 'disabled',
+  ACTIVE: 'active'
+});
+
 export const dnsState = $state({
+  availability: DNS_AVAILABILITY.LOADING,
   zones: [],
   endpoints: [],
   driftEvents: [],
@@ -121,12 +128,24 @@ function sortByNameOrId(a, b) {
   return String(a.name || a.fqdn || a.id || '').localeCompare(String(b.name || b.fqdn || b.id || ''));
 }
 
+function refreshAvailability() {
+  const caughtUp = dnsState.connection.status === 'live' && !dnsState.loading.subscription;
+  if (!caughtUp) {
+    dnsState.availability = DNS_AVAILABILITY.LOADING;
+    return;
+  }
+  dnsState.availability = dnsState.zones.length === 0 && dnsState.backends.length === 0
+    ? DNS_AVAILABILITY.DISABLED
+    : DNS_AVAILABILITY.ACTIVE;
+}
+
 function refreshCollections() {
   replaceArray(dnsState.zones, Array.from(zoneMap.values()).sort(sortByNameOrId));
   replaceArray(dnsState.endpoints, Array.from(endpointMap.values()).sort(sortByNameOrId));
   replaceArray(dnsState.policies, Array.from(policyMap.values()).sort(sortByNameOrId));
   replaceArray(dnsState.backends, Array.from(backendMap.values()).sort(sortByNameOrId));
   replaceArray(dnsState.driftEvents, buildDriftEvents());
+  refreshAvailability();
 }
 
 function buildDriftEvents() {
@@ -754,6 +773,7 @@ function startDNSReadModelSubscription(since = null) {
       if (connectedRelayCount === 0 || eoseRelays.size >= connectedRelayCount) {
         setCollectionLoading(false);
         dnsState.connection.status = 'live';
+        refreshAvailability();
         markCollectionLoaded();
       }
     },
@@ -844,6 +864,7 @@ export function disconnect({ resetData = false } = {}) {
   dnsState.connection.status = 'disconnected';
   dnsState.connection.eoseRelays = [];
   setCollectionLoading(false);
+  refreshAvailability();
 
   if (resetData) {
     replaceableEvents.clear();
@@ -958,6 +979,7 @@ export function seedDnsState({ zones = [], endpoints = [], driftEvents = [], pol
   replaceArray(dnsState.driftEvents, Array.isArray(driftEvents) ? driftEvents : []);
   replaceArray(dnsState.policies, Array.isArray(policies) ? policies : []);
   replaceArray(dnsState.backends, Array.isArray(backends) ? backends : []);
+  refreshAvailability();
 }
 
 export function resetDnsReadModels() {

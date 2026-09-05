@@ -16,6 +16,7 @@
     DNS_CONTROL_FORMS,
     buildDNSCommandPayload,
     commandRunView,
+    dnsZonePanelState,
     initialDNSCommandForms,
     validateDNSCommandForm
   } from './page-model.js';
@@ -41,6 +42,8 @@
   });
 
   const zones = $derived(dnsState.zones || []);
+  const backends = $derived(dnsState.backends || []);
+  const zonePanel = $derived(dnsZonePanelState({ availability: dnsState.availability, zones, backends }));
   const allEndpoints = $derived(dnsState.endpoints || []);
   const endpoints = $derived(allEndpoints.filter((endpoint) => matchesEndpointFilters(endpoint)));
   const driftEvents = $derived(dnsState.driftEvents || []);
@@ -295,8 +298,20 @@
         <h2>Zones</h2>
         <span>{zones.length} total</span>
       </div>
-      {#if zones.length === 0 && !dnsState.error.subscription}
-        <div class="empty-card"><h3>No DNS zones projected yet</h3><p>Zones will appear after canonical DNS zone state events are projected.</p></div>
+      {#if zonePanel.kind === 'loading' && !dnsState.error.subscription}
+        <div class="empty-card" role="status"><h3>{zonePanel.title}</h3><p>{zonePanel.description}</p></div>
+      {:else if zonePanel.kind === 'disabled' && !dnsState.error.subscription}
+        <div class="empty-card" role="status"><h3>{zonePanel.title}</h3><p>{zonePanel.description}</p></div>
+      {:else if zonePanel.kind === 'active-empty' && !dnsState.error.subscription}
+        <div class="empty-card" role="status"><h3>{zonePanel.title}</h3><p>{zonePanel.description}</p></div>
+        <div class="backend-grid" aria-label="Configured DNS backends">
+          {#each backends as backend (valueOf(backend, ['id', 'ref', 'name'], JSON.stringify(backend)))}
+            <article class="backend-card">
+              <strong>{valueOf(backend, ['name', 'ref', 'id'])}</strong>
+              <span>{valueOf(backend, ['type'], 'backend')} · {valueOf(backend, ['health', 'status'], 'configured')}</span>
+            </article>
+          {/each}
+        </div>
       {:else}
         <div class="table-wrap">
           <table>
@@ -409,7 +424,7 @@
   .eyebrow { color: var(--primary); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
   h1 { margin-top: 0.25rem; font-size: 2rem; }
   .subtitle { color: var(--text-muted); margin-top: 0.35rem; max-width: 760px; }
-  .summary-card, .panel, .empty-card, .alert, .detail-card, .policy-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; }
+  .summary-card, .panel, .empty-card, .alert, .detail-card, .policy-card, .backend-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; }
   .summary-card { min-width: 210px; padding: 1rem; display: grid; gap: 0.15rem; }
   .summary-number { font-size: 2rem; font-weight: 800; }
   .summary-label, .summary-note, .panel-header span, .empty-card p, dt, time, .timeline p, .timeline footer, .connection-status { color: var(--text-muted); }
@@ -445,6 +460,9 @@
   .panel-header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
   .panel-header h2 { font-size: 1.25rem; }
   .empty-card { padding: 2rem; }
+  .backend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+  .backend-card { padding: 1rem; display: grid; gap: 0.25rem; }
+  .backend-card span { color: var(--text-muted); }
   .table-wrap { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 14px; }
   table { width: 100%; border-collapse: collapse; min-width: 820px; }
   th, td { padding: 0.85rem; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: top; }

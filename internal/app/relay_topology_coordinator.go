@@ -11,22 +11,24 @@ import (
 )
 
 type relayTopologyCoordinator struct {
-	mu               sync.Mutex
-	controlPlanePool *nostrAdapter.RelayPool
-	responsePool     *nostrAdapter.RelayPool
-	servicePool      *nostrAdapter.RelayPool
-	nostrConfig      config.NostrConfig
-	loomRelays       []string
-	logger           *zap.Logger
+	mu                    sync.Mutex
+	controlPlanePool      *nostrAdapter.RelayPool
+	contextVMRequestPool  *nostrAdapter.RelayPool
+	contextVMResponsePool *nostrAdapter.RelayPool
+	servicePool           *nostrAdapter.RelayPool
+	nostrConfig           config.NostrConfig
+	loomRelays            []string
+	logger                *zap.Logger
 }
 
 type relayTopologyCoordinatorConfig struct {
-	ControlPlanePool *nostrAdapter.RelayPool
-	ResponsePool     *nostrAdapter.RelayPool
-	ServicePool      *nostrAdapter.RelayPool
-	NostrConfig      config.NostrConfig
-	LoomRelays       []string
-	Logger           *zap.Logger
+	ControlPlanePool      *nostrAdapter.RelayPool
+	ContextVMRequestPool  *nostrAdapter.RelayPool
+	ContextVMResponsePool *nostrAdapter.RelayPool
+	ServicePool           *nostrAdapter.RelayPool
+	NostrConfig           config.NostrConfig
+	LoomRelays            []string
+	Logger                *zap.Logger
 }
 
 func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopologyCoordinator {
@@ -35,12 +37,13 @@ func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopol
 		logger = zap.NewNop()
 	}
 	return &relayTopologyCoordinator{
-		controlPlanePool: cfg.ControlPlanePool,
-		responsePool:     cfg.ResponsePool,
-		servicePool:      cfg.ServicePool,
-		nostrConfig:      cloneNostrRelayTopologyConfig(cfg.NostrConfig),
-		loomRelays:       cloneAppStrings(cfg.LoomRelays),
-		logger:           logger.Named("relay-topology-coordinator"),
+		controlPlanePool:      cfg.ControlPlanePool,
+		contextVMRequestPool:  cfg.ContextVMRequestPool,
+		contextVMResponsePool: cfg.ContextVMResponsePool,
+		servicePool:           cfg.ServicePool,
+		nostrConfig:           cloneNostrRelayTopologyConfig(cfg.NostrConfig),
+		loomRelays:            cloneAppStrings(cfg.LoomRelays),
+		logger:                logger.Named("relay-topology-coordinator"),
 	}
 }
 
@@ -57,14 +60,19 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	}
 
 	controlPlaneRelays, reconfigureControlPlane := c.controlPlaneRelaysForSnapshot(state)
+	contextVMRelays, reconfigureContextVM := c.contextVMRelaysForSnapshot(state)
 	serviceRelays, reconfigureService := c.serviceRelaysForSnapshot(state, controlPlaneRelays)
 
 	if reconfigureControlPlane && c.controlPlanePool != nil {
 		result := c.controlPlanePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays)
 		c.logReconfigureResult("control_plane", result)
 	}
-	if reconfigureControlPlane && c.responsePool != nil {
-		result := c.responsePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays)
+	if reconfigureContextVM && c.contextVMRequestPool != nil {
+		result := c.contextVMRequestPool.ReconfigureRelayURLsContext(ctx, contextVMRelays)
+		c.logReconfigureResult("contextvm_request", result)
+	}
+	if reconfigureContextVM && c.contextVMResponsePool != nil {
+		result := c.contextVMResponsePool.ReconfigureRelayURLsContext(ctx, contextVMRelays)
 		c.logReconfigureResult("contextvm_response", result)
 	}
 	if reconfigureService && c.servicePool != nil {
@@ -85,6 +93,19 @@ func (c *relayTopologyCoordinator) controlPlaneRelaysForSnapshot(state controlpl
 		return cloneAppStrings(state.ServiceRelays), true
 	}
 	return nil, false
+}
+
+func (c *relayTopologyCoordinator) contextVMRelaysForSnapshot(state controlplane.RelayPolicyState) ([]string, bool) {
+	relays := c.configuredSidecarRelays()
+	policyRelays := state.ContextVMRelays
+	if len(policyRelays) == 0 {
+		policyRelays = state.BrowserRelays
+	}
+	relays = appendUniqueRelays(relays, policyRelays...)
+	if len(relays) == 0 {
+		return nil, false
+	}
+	return relays, true
 }
 
 func (c *relayTopologyCoordinator) serviceRelaysForSnapshot(state controlplane.RelayPolicyState, controlPlaneRelays []string) ([]string, bool) {

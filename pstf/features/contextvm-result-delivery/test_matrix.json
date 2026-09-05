@@ -60,6 +60,15 @@
         "pkg/client: TestOperatorZeroSubscribedRelaysFailsBeforePublish",
         "pkg/client: TestOperatorPendingRelaysUsesEstablishedSubscriptions"
       ]
+    },
+    {
+      "criterion": "AC-8",
+      "coverage": [
+        "internal/app: TestContextVMRelayURLsUsesSidecarAndConfiguredPolicyUnion",
+        "internal/app: TestContextVMRelayURLsDeduplicatesSidecarAndPolicy",
+        "internal/app: TestRelayTopologyCoordinatorPreservesSidecarPrecedence",
+        "internal/controlplane: TestContextVMTransport_ResponsePublishesToEveryConfiguredRelay"
+      ]
     }
   ]
 }
