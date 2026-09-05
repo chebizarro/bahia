@@ -271,6 +271,17 @@
       "pstf_status": "current_audit_evidence"
     },
     {
+      "id": "ops-widgets-wheelhouse",
+      "surface": "`/widgets` trusted operations widget wall",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/widgets/+page.svelte"],
+      "control_files": ["web/src/lib/widgets/ops-widget-wall.js", "web/src/lib/nostr/subscriptions.js"],
+      "evidence": ["Ops Widgets uses Bahia's recovering, signature-validating PoolBackedClient for kind 30318 and delegates event trust storage, envelope validation, templates, and fallbacks to Wheelhouse."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "verified_by_bahia-fbzq7",
+      "resolved_by_beads": ["bahia-fbzq7"]
+    },
+    {
       "id": "security-http-native-sbom-osv",
       "surface": "`/security` and `/security/[id]` SBOM/OSV scan findings and schedules",
       "transport_class": "http_native",

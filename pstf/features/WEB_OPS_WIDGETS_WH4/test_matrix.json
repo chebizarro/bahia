@@ -1,0 +1,23 @@
+{
+  "feature_id": "WEB_OPS_WIDGETS_WH4",
+  "tests": [
+    {
+      "test": "tests/unit/ops-widget-wall.test.js",
+      "criteria": ["AC-WH4-001", "AC-WH4-002"],
+      "type": "unit",
+      "notes": "Proves fixed relay/kind subscription, recovery adapter wiring, cleanup, allowlist normalization and denial, and latest slot replacement."
+    },
+    {
+      "test": "tests/unit/nav.test.js",
+      "criteria": ["AC-WH4-003"],
+      "type": "unit",
+      "notes": "Proves the route is exposed in Operations navigation and backed by user-guide documentation."
+    },
+    {
+      "test": "pnpm lint && pnpm build",
+      "criteria": ["AC-WH4-003"],
+      "type": "quality-gate",
+      "notes": "Type-checks and compiles the Svelte route against the local Wheelhouse package."
+    }
+  ]
+}

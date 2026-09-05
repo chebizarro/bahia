@@ -57,6 +57,7 @@ describe('nav model helpers', () => {
       expect.objectContaining({ href: '/dns', label: 'DNS', docTopic: 'features-dns' }),
       expect.objectContaining({ href: '/events', label: 'Events', docTopic: 'features-events' }),
       expect.objectContaining({ href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' }),
+      expect.objectContaining({ href: '/widgets', label: 'Ops Widgets', docTopic: 'features-ops-widgets' }),
       expect.objectContaining({ href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' }),
       expect.objectContaining({ href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }),
       expect.objectContaining({ href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' }),
@@ -100,6 +101,7 @@ describe('nav model helpers', () => {
       topic: 'features-deployments'
     });
     expect(currentRouteDocs('/fleet-health')).toMatchObject({ topic: 'features-fleet-health' });
+    expect(currentRouteDocs('/widgets')).toMatchObject({ topic: 'features-ops-widgets' });
     expect(currentRouteDocs('/llm/history')).toMatchObject({ topic: 'features-llm-routes' });
     expect(currentRouteDocs('/ml/endpoints')).toMatchObject({ topic: 'features-ml-models' });
     expect(currentRouteDocs('/settings')).toBeNull();
@@ -118,6 +120,7 @@ describe('nav model helpers', () => {
       { href: '/services', label: 'Services', docTopic: 'features-services' },
       { href: '/deployments', label: 'Deployments', docTopic: 'features-deployments' },
       { href: '/fleet-health', label: 'Fleet Health', docTopic: 'features-fleet-health' },
+      { href: '/widgets', label: 'Ops Widgets', docTopic: 'features-ops-widgets' },
       { href: '/continuity', label: 'Continuity', docTopic: 'features-continuity' },
       { href: '/events', label: 'Events', docTopic: 'features-events' },
       { href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' },

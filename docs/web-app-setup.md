@@ -61,6 +61,7 @@ The web app uses compile-time environment variables for Nostr bootstrap discover
 | `PUBLIC_BAHIA_WEB_BASE_VERSION` | Frontend SemVer base, default `0.1.0`. |
 | `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
 | `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
+| `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Comma-separated 64-character hex pubkeys trusted to publish ops widgets; empty denies all widget events. |
 
 The Settings **Versions** section treats the signed system-discovery `observed_deployments` projection as runtime truth. Each row is derived from the current environment-service state and its matching runtime observation, with service/environment names, runtime target, observed version or image digest, host, health, drift, and observation time. The backend publishes this discovery projection when browser relay policy is configured even when the relay runs as a separate container and `nostr.sidecar.enabled=false`.
 

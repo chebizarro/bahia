@@ -56,6 +56,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Souls](features/souls.md) | AI agent provisioning with Soul Factory (feature-gated; disabled by default) |
 | [Workers](features/workers.md) | Loom workers for deployment execution |
 | [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
+| [Ops Widgets](features/ops-widgets.md) | Trusted live kind-30318 operations widgets rendered by Wheelhouse |
 | [Continuity](features/continuity.md) | Failover readiness, topology, and local simulation |
 | [Events](features/events.md) | Live inspection of Nostr control-plane and read-model events |
 | [Environment States](features/environment-states.md) | Desired-versus-observed state and drift inspection |

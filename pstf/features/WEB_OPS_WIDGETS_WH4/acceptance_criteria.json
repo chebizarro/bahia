@@ -1,0 +1,20 @@
+{
+  "feature_id": "WEB_OPS_WIDGETS_WH4",
+  "criteria": [
+    {
+      "id": "AC-WH4-001",
+      "statement": "Bahia opens a recovering subscription for kind 30318 on only the two Wheelhouse fleet relays and cleans it up with the route lifecycle.",
+      "verification": ["cd web && pnpm exec vitest run tests/unit/ops-widget-wall.test.js"]
+    },
+    {
+      "id": "AC-WH4-002",
+      "statement": "The publisher allowlist is normalized, fails closed when empty, and accepted events use Wheelhouse latest-by-(pubkey,d) storage.",
+      "verification": ["cd web && pnpm exec vitest run tests/unit/ops-widget-wall.test.js"]
+    },
+    {
+      "id": "AC-WH4-003",
+      "statement": "A navigable Ops Widgets route renders stored events through Wheelhouse WidgetRenderer rather than hand-written templates.",
+      "verification": ["cd web && pnpm lint", "cd web && pnpm build", "cd web && pnpm exec vitest run tests/unit/nav.test.js"]
+    }
+  ]
+}

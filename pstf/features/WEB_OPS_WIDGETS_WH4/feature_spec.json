@@ -1,0 +1,17 @@
+{
+  "feature_id": "WEB_OPS_WIDGETS_WH4",
+  "beads": ["bahia-fbzq7"],
+  "source_plan": "../fleet-planning/docs/designs/nostr-dashboard-widgets-plan-2026-09-04.md",
+  "scope": "Bahia web operations widget ingestion, trust configuration, navigation, and Wheelhouse rendering.",
+  "intended_behavior": [
+    "The web UI maintains a recovering kind-30318 subscription on only the Wheelhouse fleet relays.",
+    "Inbound events pass Bahia signature validation and a fail-closed publisher allowlist before entering Wheelhouse latest-by-slot storage.",
+    "The Ops Widgets route delegates envelope validation, template selection, ECharts options, tables, data_ref placeholders, and fallback cards to Wheelhouse.",
+    "Operators can configure trusted widget publisher pubkeys through PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS."
+  ],
+  "out_of_scope": [
+    "Publishing dashboard widget events",
+    "Fetching data_ref sidecars without Wheelhouse's future verified-sidecar implementation",
+    "Dashboard layout definition events"
+  ]
+}

@@ -34,6 +34,7 @@ const mandatoryEntryIds = [
   'continuity-nostr-read-models',
   'souls-nostr-with-eose-caveats',
   'events-relay-activity',
+  'ops-widgets-wheelhouse',
   'settings-discovery-and-relay-config',
   'backend-rest-compatibility-routes'
 ];
