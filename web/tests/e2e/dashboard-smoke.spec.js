@@ -705,7 +705,7 @@ test.describe('Dashboard Smoke Test', () => {
     await menuButton.click();
     await expect(page.getByRole('heading', { name: 'Workspace' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Delivery' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
     const pendingApprovalsLink = page.locator('#navigation-drawer a[href="/deployments/pending"]');
     await expect(pendingApprovalsLink).toContainText('Pending Approvals');
     await expect(pendingApprovalsLink.locator('.badge')).toHaveCount(0);

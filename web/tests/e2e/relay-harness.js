@@ -16,14 +16,14 @@ function hexToBytes(hex) {
   return Uint8Array.from(normalized.match(/.{1,2}/g).map((byte) => Number.parseInt(byte, 16)));
 }
 
-export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = waitForRelayReady } = {}) {
+export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = waitForRelayReady, spawnImpl = spawn } = {}) {
   const healthUrl = `http://${addr}/healthz`;
   const existing = await readRelayHealth(healthUrl);
   if (existing?.ok) {
     return relayHandle(addr, null, existing);
   }
 
-  const child = spawn('go', ['run', './cmd/bahia-test-relay', '--addr', addr], {
+  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr], {
     cwd: repoRoot,
     env: { ...process.env, BAHIA_TEST_RELAY_ADDR: addr },
     stdio: ['ignore', 'pipe', 'pipe']
