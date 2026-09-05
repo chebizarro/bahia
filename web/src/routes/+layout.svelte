@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { page } from '$app/state';
   import Nav from '$lib/components/Nav.svelte';
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
@@ -12,6 +13,7 @@
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
+  import { createVersionReloadWatcher } from '$lib/version-reload.js';
   /**
    * @typedef {Object} Props
    * @property {import('svelte').Snippet} [children]
@@ -37,6 +39,8 @@
     currentRouteDocsRef(page.url.pathname) ? [currentRouteDocsRef(page.url.pathname)] : []
   );
   let assistantBootstrappedForPubkey = $state('');
+
+  onMount(() => createVersionReloadWatcher().start());
 
   $effect(() => {
     let active = true;
