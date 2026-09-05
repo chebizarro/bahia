@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -143,6 +144,66 @@ func NewOCIRegistryService(
 // CheckAPI returns OCI Distribution API version information.
 func (s *OCIRegistryService) CheckAPI(_ context.Context) (*APIVersionResponse, error) {
 	return &APIVersionResponse{DockerDistributionAPIVersion: "registry/2.0"}, nil
+}
+
+type OCIResolvedObject struct {
+	Content   []byte
+	MediaType string
+	Size      int64
+}
+
+// ResolveObjectByDigest is the internal, content-addressed evidence path used
+// after a signed release has already established repository authorization. It
+// never accepts or resolves tags.
+func (s *OCIRegistryService) ResolveObjectByDigest(ctx context.Context, repoName, digest string, maxSize int64) (OCIResolvedObject, error) {
+	if s == nil || s.repo == nil || s.blossom == nil {
+		return OCIResolvedObject{}, fmt.Errorf("OCI evidence resolver is not configured")
+	}
+	if maxSize <= 0 {
+		return OCIResolvedObject{}, fmt.Errorf("positive signed descriptor size is required")
+	}
+	manifest, err := s.repo.GetManifestByDigest(ctx, repoName, digest)
+	if err != nil {
+		return OCIResolvedObject{}, fmt.Errorf("get OCI evidence manifest by digest: %w", err)
+	}
+	if manifest != nil {
+		return OCIResolvedObject{Content: append([]byte(nil), manifest.Content...), MediaType: manifest.MediaType, Size: manifest.SizeBytes}, nil
+	}
+	exists, err := s.repo.BlobExistsInRepo(ctx, repoName, digest)
+	if err != nil {
+		return OCIResolvedObject{}, fmt.Errorf("check OCI evidence blob: %w", err)
+	}
+	if !exists {
+		return OCIResolvedObject{}, ErrBlobNotFound
+	}
+	blob, err := s.repo.GetBlob(ctx, digest)
+	if err != nil || blob == nil || strings.TrimSpace(blob.StorageRef) == "" {
+		if err != nil {
+			return OCIResolvedObject{}, fmt.Errorf("get OCI evidence blob: %w", err)
+		}
+		return OCIResolvedObject{}, ErrBlobNotFound
+	}
+	stream, err := s.blossom.OpenStreamByURL(ctx, blob.StorageRef)
+	if err != nil {
+		return OCIResolvedObject{}, fmt.Errorf("open OCI evidence blob: %w", err)
+	}
+	defer func() { _ = stream.Close() }()
+	content, err := io.ReadAll(io.LimitReader(stream.Body, maxSize+1))
+	if err != nil {
+		return OCIResolvedObject{}, fmt.Errorf("read OCI evidence blob: %w", err)
+	}
+	if int64(len(content)) > maxSize {
+		return OCIResolvedObject{}, fmt.Errorf("OCI evidence blob exceeds signed descriptor size")
+	}
+	mediaType := blob.MediaType
+	if mediaType == "" {
+		mediaType = stream.ContentType
+	}
+	size := blob.SizeBytes
+	if size <= 0 {
+		size = stream.ContentLength
+	}
+	return OCIResolvedObject{Content: content, MediaType: mediaType, Size: size}, nil
 }
 
 // FetchManifest fetches a manifest by tag or digest.

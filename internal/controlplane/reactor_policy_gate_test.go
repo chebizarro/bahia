@@ -657,6 +657,9 @@ type testArtifactRepo struct {
 }
 
 func (r *testArtifactRepo) Create(_ context.Context, artifact *domain.Artifact) error {
+	if artifact.ID == uuid.Nil {
+		artifact.ID = uuid.New()
+	}
 	if r.artifacts == nil {
 		r.artifacts = map[uuid.UUID]*domain.Artifact{}
 	}

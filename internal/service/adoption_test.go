@@ -972,7 +972,7 @@ func (e *mockAdoptionTxExecutor) WithinTx(ctx context.Context, fn func(repos rep
 	e.environments.envs = txEnvironments.envs
 	e.builds.builds = txBuilds.builds
 	e.artifacts.artifacts = txArtifacts.artifacts
-	e.state.states = txState.states
+	e.state.replaceFrom(txState)
 	e.observations.observations = txObservations.observations
 	if e.secrets != nil && txSecrets != nil {
 		e.secrets.secrets = txSecrets.secrets
@@ -1029,12 +1029,7 @@ func cloneMockArtifactRepo(src *mockArtifactRepo) *mockArtifactRepo {
 
 func cloneMockStateRepo(src *mockStateRepo) *mockStateRepo {
 	clone := newMockStateRepo()
-	clone.upsertErr = src.upsertErr
-	clone.getErr = src.getErr
-	for key, state := range src.states {
-		copied := *state
-		clone.states[key] = &copied
-	}
+	clone.replaceFrom(src)
 	return clone
 }
 

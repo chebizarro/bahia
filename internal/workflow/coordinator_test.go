@@ -1100,6 +1100,57 @@ func TestMapLoomStatus(t *testing.T) {
 	}
 }
 
+func TestExecuteDeployment_AuthorizedReleasePromotionCreatesDigestOnlyCanary(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc := &domain.Service{Name: "release-api", ArtifactRepo: "harbor.example/team/release-api"}
+	if err := svcRepo.Create(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	env := &domain.Environment{Name: "staging", DeployStrategy: domain.DeployStrategyCanary}
+	if err := envRepo.Create(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	artifact := &domain.Artifact{
+		BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: svc.ArtifactRepo,
+		ImageDigest: digest, Metadata: map[string]any{"registration_mode": "hiveci_release_digest"},
+	}
+	if err := artRepo.Create(ctx, artifact); err != nil {
+		t.Fatal(err)
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		RequestedBy: "authorized-operator", SourceKind: domain.SourceKindEventTriggered,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+		Metadata: map[string]any{
+			"release_promotion": true, "promotion_strategy": "canary",
+			"artifact_digest": digest, "release_identity": domain.HiveCIReleaseIdentityPrefix + strings.Repeat("b", 64),
+			"previous_artifact_digest": "sha256:" + strings.Repeat("c", 64),
+			"health_contract":          map[string]any{"type": "http", "path": "/health", "timeout_seconds": 10},
+			"readiness_contract":       map[string]any{"type": "http", "path": "/ready", "timeout_seconds": 15},
+		},
+	}
+	if err := intentRepo.Create(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	loomClient := &stubLoomClient{status: &loom.JobStatus{Status: "succeeded"}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentLoomClient(loomClient))
+	defer coord.Shutdown(time.Second)
+	if err := coord.ExecuteDeployment(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if loomClient.submitCalls != 1 {
+		t.Fatalf("SubmitJob calls=%d", loomClient.submitCalls)
+	}
+	request := loomClient.lastJobReq
+	if request.Image != artifact.ImageRepo+"@"+digest || request.Digest != digest ||
+		request.Params["rollout_strategy"] != "canary" || request.Params["canary_weight"] != "10" {
+		t.Fatalf("canary job did not preserve digest/strategy: %+v", request)
+	}
+}
+
 func TestExecuteDeployment_RejectsNonApprovedIntent(t *testing.T) {
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 

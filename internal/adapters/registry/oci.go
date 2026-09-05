@@ -2,10 +2,12 @@ package registry
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -142,6 +144,96 @@ func (c *OCIClient) InspectImage(ctx context.Context, repo, reference string) (*
 
 	return inspection, nil
 }
+
+// ResolveObjectByDigest retrieves immutable manifest/blob bytes from the
+// configured registry. Fully-qualified repository identity must match the
+// configured registry authority; redirects remain governed by the HTTP client.
+func (c *OCIClient) ResolveObjectByDigest(
+	ctx context.Context,
+	repository, digest, mediaType string,
+	maxSize int64,
+) (ImmutableObject, error) {
+	if c == nil || c.httpClient == nil || maxSize <= 0 {
+		return ImmutableObject{}, fmt.Errorf("registry digest object resolver is not configured")
+	}
+	if len(digest) != len("sha256:")+64 || !strings.HasPrefix(digest, "sha256:") {
+		return ImmutableObject{}, fmt.Errorf("immutable sha256 digest is required")
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(digest, "sha256:")); err != nil {
+		return ImmutableObject{}, fmt.Errorf("immutable sha256 digest is invalid")
+	}
+	base, err := url.Parse(c.registryURL)
+	if err != nil || base.Host == "" {
+		return ImmutableObject{}, fmt.Errorf("configured registry URL is invalid")
+	}
+	repository = strings.TrimSpace(strings.TrimPrefix(repository, "https://"))
+	repository = strings.TrimPrefix(repository, "http://")
+	parts := strings.SplitN(repository, "/", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], base.Host) || strings.TrimSpace(parts[1]) == "" {
+		return ImmutableObject{}, fmt.Errorf("release repository authority does not match configured registry")
+	}
+	repoPath := parts[1]
+	resource := "blobs"
+	if strings.TrimSpace(strings.Split(mediaType, ";")[0]) == "application/vnd.oci.image.manifest.v1+json" {
+		resource = "manifests"
+	}
+	segments := strings.Split(repoPath, "/")
+	for index := range segments {
+		if strings.TrimSpace(segments[index]) == "" {
+			return ImmutableObject{}, fmt.Errorf("release repository path is invalid")
+		}
+		segments[index] = url.PathEscape(segments[index])
+	}
+	base.Path = strings.TrimSuffix(base.Path, "/") + "/v2/" + strings.Join(segments, "/") +
+		"/" + resource + "/" + url.PathEscape(digest)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return ImmutableObject{}, fmt.Errorf("create registry evidence request: %w", err)
+	}
+	if strings.TrimSpace(mediaType) != "" {
+		request.Header.Set("Accept", mediaType)
+	}
+	if err := c.setAuth(ctx, request, repoPath); err != nil {
+		return ImmutableObject{}, fmt.Errorf("authenticate registry evidence request: %w", err)
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return ImmutableObject{}, fmt.Errorf("fetch registry evidence object: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusNotFound {
+		return ImmutableObject{}, fmt.Errorf("registry evidence object is missing")
+	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return ImmutableObject{}, &RegistryAuthError{
+			StatusCode: response.StatusCode, Registry: c.registryURL, Repository: repoPath,
+		}
+	}
+	if response.StatusCode != http.StatusOK {
+		return ImmutableObject{}, fmt.Errorf("registry evidence request returned status %d", response.StatusCode)
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxSize+1))
+	if err != nil {
+		return ImmutableObject{}, fmt.Errorf("read registry evidence object: %w", err)
+	}
+	if int64(len(content)) > maxSize {
+		return ImmutableObject{}, fmt.Errorf("registry evidence object exceeds signed descriptor size")
+	}
+	// OCI blob storage does not retain a descriptor media type and Harbor
+	// commonly serves blobs as application/octet-stream. Bind blob bytes to
+	// the signed producer descriptor; manifest responses retain the registry
+	// content type so the caller can reject an incompatible structure.
+	resolvedMediaType := strings.TrimSpace(mediaType)
+	if resource == "manifests" {
+		resolvedMediaType = strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
+		if resolvedMediaType == "" {
+			return ImmutableObject{}, fmt.Errorf("registry manifest response omitted content type")
+		}
+	}
+	return ImmutableObject{Content: content, MediaType: resolvedMediaType, Size: int64(len(content))}, nil
+}
+
+var _ DigestObjectResolver = (*OCIClient)(nil)
 
 // ListTags returns all tags for the given repository.
 func (c *OCIClient) ListTags(ctx context.Context, repo string) ([]string, error) {

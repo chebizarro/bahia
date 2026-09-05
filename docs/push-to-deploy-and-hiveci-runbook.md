@@ -158,36 +158,26 @@ git push
   -> hive-ci-runner consumes 5401 and runs the workflow
   -> workflow builds/pushes image and writes .hiveci-result.json
   -> hive-ci-runner publishes kind 5402 workflow result
-  -> Bahia ingests 5402 and registers build/artifact
-  -> Bahia creates or receives deployment intent
-  -> Bahia/Loom executes deployment
+  -> Bahia ingests the terminal RELEASE 5402 and registers a digest-only artifact
+  -> an operator separately signs an authorized ContextVM promotion intent
+  -> Bahia/Loom executes a staged canary from the registered digest
 ```
 
-### Required 5402 Artifact Fields
+### Required terminal RELEASE 5402 contract
 
-Bahia's Hive CI subscriber accepts artifact metadata from either `5402` tags or JSON content:
+Artifact registration consumes the canonical **second** kind `5402` emitted by
+the grasp-gitea release-provenance path. Both the signed tags and JSON content
+must identify `RELEASE`, and the result must be terminal and successful. The
+content mirrors producer schema `hiveci.release-provenance.v1` with
+`release_identity`, full `lineage`, `execution.worker_identity`, immutable
+`manifest`, `sbom`, and `provenance` descriptors, plus the Signet artifact
+attestation. Bahia joins the trusted signed kind `5401`, worker admission, and
+repository policy evidence before accepting it.
 
-```json
-{
-  "image_repo": "harbor.sharegap.net/cascadia/bahia",
-  "image_tag": "master-<sha>",
-  "image_digest": "sha256:...",
-  "log_url": "..."
-}
-```
-
-The current runner also reads `.hiveci-result.json` from the workflow checkout. The workflow should write:
-
-```json
-{
-  "imageRepo": "harbor.sharegap.net/cascadia/bahia",
-  "imageTag": "master-<sha>",
-  "imageDigest": "sha256:...",
-  "logURL": "..."
-}
-```
-
-Without `image_repo`, `image_tag`, and `image_digest`, Bahia correctly leaves the result in `artifact_pending`.
+The producer's optional `image_tag` is evidence only. It is never an artifact
+identity, lookup, copy, or deployment input. The older `.hiveci-result.json`
+shape used for an ordinary build-result `5402` does **not** qualify as a terminal
+RELEASE registration.
 
 ### Hive Workflow Contract
 
@@ -244,14 +234,16 @@ Bahia needs:
 - relay list including the relay where `5401` and `5402` are published;
 - a `hiveci_pipeline_policies` row matching the repo coordinate and workflow path;
 - registry inspection configured for the target registry;
-- policy metadata if auto deploy is wanted.
+- a trusted release-attestor key and OCI/Blossom evidence resolver for RELEASE results.
 
-The bridge already transitions successful `5402` results:
+The bridge still handles ordinary successful build-result `5402` events through
+the legacy artifact-pending flow. That flow is separate from release acceptance.
 
-- missing image metadata -> `artifact_pending`;
-- missing registry manifest -> `artifact_pending`;
-- valid image metadata and manifest -> build and artifact records;
-- `auto_deploy_staging=true` metadata -> deployment intent.
+A terminal RELEASE result is registered only after manifest, SBOM, and in-toto
+provenance bytes match every signed descriptor and lineage binding. The
+artifact identity is `repository@sha256:digest`; any signed image tag is stored
+only as evidence. CI success never creates a deployment intent or mutates
+desired state. Promotion is a separately authorized control-plane action.
 
 ### Seeding the Pipeline Policy Row
 
@@ -268,13 +260,27 @@ every startup:
 hiveci:
   enabled: true
   trusted_ci_pubkeys:
-    - "<hive-ci-runner-pubkey>"
+    - "<hive-ci-dispatcher-pubkey>"
+  trusted_release_attestors:
+    - "<hive-ci-release-attestor-pubkey>"
   policies:
     - repo_coordinate: "30617:<grasp-gitea-pubkey>:chebizarro/bahia"
-      workflow_path: ".github/workflows/hive-ci-build.yml"
+      workflow_path: ".gitea/workflows/release.yml"
       service_name: bahia
       environment_name: edge-01
-      metadata: {}
+      metadata:
+        workflow_digest: "<sha256-hex-from-signed-5401>"
+        policy_digest: "<policy-digest-from-signed-5401>"
+        review_policy: "<review-policy-from-signed-5401>"
+        source_repo_identity: "gitea.example/chebizarro/bahia"
+        release_image_repository: "harbor.example/chebizarro/bahia"
+        release_attestors:
+          - "<hive-ci-release-attestor-pubkey>"
+        rollback_compatibility:
+          compatible_from_digests:
+            - "sha256:<currently-staged-manifest>"
+        health_contract: {type: http, path: /health, timeout_seconds: 10}
+        readiness_contract: {type: http, path: /ready, timeout_seconds: 15}
 ```
 
 The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
@@ -289,23 +295,47 @@ docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       GROUP BY 1, 2 ORDER BY 4 DESC;"
 ```
 
+All six release constraints above are mandatory and exact-match. Omitting a
+constraint, using an empty attestor list, or leaving placeholder values causes
+RELEASE registration to fail closed. The rollback and health/readiness objects
+are also required before a later canary promotion can be authorized.
+
 After adding the config, restart Bahia.  The startup log will show
 `hiveci pipeline policy ensured` for each configured policy.
 
 #### Operator SQL script (ad-hoc / pre-config)
 
 `scripts/seed_hiveci_pipeline_policy.sql` provides a standalone operator path
-for creating the policy row without restarting Bahia.  It uses the same
-idempotent insert pattern:
+for creating or hardening the policy row without restarting Bahia. It reconciles
+an existing matching row in place and inserts only when none exists, including
+when `branch_pattern` is NULL:
 
 ```bash
 REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
 SERVICE_NAME="bahia"
 ENV_NAME="edge-01"
+WORKFLOW_DIGEST="<sha256-hex-from-5401>"
+POLICY_DIGEST="<policy-digest-from-5401>"
+REVIEW_POLICY="<review-policy-from-5401>"
+SOURCE_REPO="<gitea-host/org/repo>"
+IMAGE_REPO="<harbor-host/project/repo>"
+RELEASE_ATTESTOR="<release-attestor-pubkey>"
+PREVIOUS_DIGEST="sha256:<currently-staged-manifest>"
+HEALTH_PATH="/health"
+READINESS_PATH="/ready"
 
 sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
     -e "s|:SERVICE_NAME:|$SERVICE_NAME|g" \
     -e "s|:ENV_NAME:|$ENV_NAME|g" \
+    -e "s|:WORKFLOW_DIGEST:|$WORKFLOW_DIGEST|g" \
+    -e "s|:POLICY_DIGEST:|$POLICY_DIGEST|g" \
+    -e "s|:REVIEW_POLICY:|$REVIEW_POLICY|g" \
+    -e "s|:SOURCE_REPO:|$SOURCE_REPO|g" \
+    -e "s|:IMAGE_REPO:|$IMAGE_REPO|g" \
+    -e "s|:RELEASE_ATTESTOR:|$RELEASE_ATTESTOR|g" \
+    -e "s|:PREVIOUS_DIGEST:|$PREVIOUS_DIGEST|g" \
+    -e "s|:HEALTH_PATH:|$HEALTH_PATH|g" \
+    -e "s|:READINESS_PATH:|$READINESS_PATH|g" \
   scripts/seed_hiveci_pipeline_policy.sql \
   | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
       exec -T postgres psql -U bahia -d bahia
@@ -314,23 +344,11 @@ sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
 The script also includes discovery queries for repo coordinates, services,
 environments, and existing policies.
 
-#### Enabling auto-deploy (later)
+#### Promotion authorization
 
-Only after step 8 of the Implementation Order is verified:
-
-```bash
-REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
-
-docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
-  exec -T postgres psql -U bahia -d bahia -c "
-UPDATE hiveci_pipeline_policies
-SET    metadata   = '{\"auto_deploy_staging\": true, \"staging_environment\": \"edge-01\"}'::jsonb,
-       updated_at = now()
-WHERE  repo_coordinate = '${REPO_COORD}'
-  AND  workflow_path   = '.github/workflows/hive-ci-build.yml';"
-```
-
-Or update the config `metadata` field and restart.
+Do not enable promotion through Hive-CI policy metadata. Registered digests are
+eligible inputs to the separate signed promotion-intent control-plane path;
+until an authorized intent is accepted, no environment desired state changes.
 
 ### Implementation Order
 
@@ -342,7 +360,7 @@ Or update the config `metadata` field and restart.
 6. ✅ Script for `hiveci_pipeline_policies` row available; run seeder once
    repo coordinate is known (see §Seeding above).
 7. Verify Bahia creates the artifact instead of `artifact_pending`.
-8. Enable auto-deploy policy only after artifact registration is stable.
+8. Submit a separately signed, RBAC-authorized ContextVM `service/deploy` promotion intent and verify the staged canary before any wider rollout.
 
 ## Retirement Condition For Immediate Relief
 

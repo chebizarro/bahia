@@ -20,25 +20,35 @@ type ImageInspection struct {
 	MediaType     string            `json:"media_type,omitempty"`
 	Size          int64             `json:"size,omitempty"`
 	ScanStatus    string            `json:"scan_status,omitempty"`
-	Signatures    []string          `json:"signatures,omitempty"`    // cosign/sigstore signature digests
-	SBOMRef       string            `json:"sbom_ref,omitempty"`      // attached SBOM artifact reference
+	Signatures    []string          `json:"signatures,omitempty"`     // cosign/sigstore signature digests
+	SBOMRef       string            `json:"sbom_ref,omitempty"`       // attached SBOM artifact reference
 	ProvenanceRef string            `json:"provenance_ref,omitempty"` // SLSA provenance artifact reference
-	Annotations   map[string]string `json:"annotations,omitempty"`   // OCI manifest annotations
+	Annotations   map[string]string `json:"annotations,omitempty"`    // OCI manifest annotations
 }
 
 // Referrer represents an OCI referrer (signature, SBOM, attestation, etc.)
 // linked to a manifest via the OCI Referrers API.
 type Referrer struct {
-	Digest        string            `json:"digest"`
-	MediaType     string            `json:"mediaType"`
-	ArtifactType  string            `json:"artifactType"`
-	Size          int64             `json:"size"`
-	Annotations   map[string]string `json:"annotations,omitempty"`
+	Digest       string            `json:"digest"`
+	MediaType    string            `json:"mediaType"`
+	ArtifactType string            `json:"artifactType"`
+	Size         int64             `json:"size"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
 }
 
 // ImageInspector provides rich image inspection capabilities beyond simple
 // existence checks. Implementations exist for generic OCI, GHCR, Docker Hub,
 // and Harbor registries.
+type ImmutableObject struct {
+	Content   []byte
+	MediaType string
+	Size      int64
+}
+
+type DigestObjectResolver interface {
+	ResolveObjectByDigest(context.Context, string, string, string, int64) (ImmutableObject, error)
+}
+
 type ImageInspector interface {
 	// InspectImage returns detailed information about an image reference.
 	// repo is the full repository path (e.g. "library/nginx" or "myorg/myapp").

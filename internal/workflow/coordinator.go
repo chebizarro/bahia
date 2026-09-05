@@ -3,6 +3,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -89,6 +90,10 @@ func NewCoordinator(
 
 // CoordinatorOption configures optional Coordinator dependencies.
 type CoordinatorOption func(*Coordinator)
+
+func WithDeploymentLoomClient(client deploymentLoomClient) CoordinatorOption {
+	return func(c *Coordinator) { c.loom = client }
+}
 
 // WithWorkerPolicy enables environment-specific worker selection.
 func WithWorkerPolicy(wp *service.WorkerPolicyService) CoordinatorOption {
@@ -207,9 +212,17 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		return fmt.Errorf("getting environment for intent: %w", err)
 	}
 
+	releasePromotion := intent.Metadata["release_promotion"] == true
 	resolvedImage := strings.TrimSpace(artifact.ImageRepo)
-	if tag := strings.TrimSpace(artifact.ImageTag); tag != "" {
-		resolvedImage = resolvedImage + ":" + tag
+	if releasePromotion {
+		if env.DeployStrategy != domain.DeployStrategyCanary || artifact.ImageTag != "" ||
+			intent.Metadata["promotion_strategy"] != "canary" ||
+			intent.Metadata["artifact_digest"] != artifact.ImageDigest {
+			return fmt.Errorf("authorized release promotion no longer satisfies canary digest binding")
+		}
+		resolvedImage += "@" + artifact.ImageDigest
+	} else if tag := strings.TrimSpace(artifact.ImageTag); tag != "" {
+		resolvedImage += ":" + tag
 	}
 
 	unit, err := c.resolveDeploymentUnit(ctx, intent, env)
@@ -219,7 +232,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	if isRouteOnlyIntent(intent) {
 		return c.executeRouteOnlyDeployment(ctx, intent, svc, env, unit)
 	}
-	if unit != nil && !deploymentUnitDispatchesViaLoom(unit) {
+	if unit != nil && !deploymentUnitDispatchesViaLoom(unit) && !releasePromotion {
 		return c.executeDirectRuntimeDeployment(ctx, intent, svc, env, unit)
 	}
 	if intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
@@ -255,6 +268,26 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}
 
 	// Submit the deploy job to Loom.
+	jobParams := map[string]string{}
+	if releasePromotion {
+		contractParams, err := releasePromotionContractParams(intent.Metadata)
+		if err != nil {
+			return err
+		}
+		jobParams = map[string]string{
+			"rollout_strategy": "canary", "canary_weight": "10",
+			"release_identity":         strings.TrimSpace(fmt.Sprint(intent.Metadata["release_identity"])),
+			"previous_artifact_digest": strings.TrimSpace(fmt.Sprint(intent.Metadata["previous_artifact_digest"])),
+			"health_contract":          contractParams["health_contract"],
+			"readiness_contract":       contractParams["readiness_contract"],
+		}
+		if unit != nil {
+			jobParams["deployment_unit_key"] = unit.Key
+			if unit.ID != uuid.Nil {
+				jobParams["deployment_unit_id"] = unit.ID.String()
+			}
+		}
+	}
 	jobReq := loom.JobRequest{
 		ID:           uuid.New().String(),
 		Type:         "deploy",
@@ -263,6 +296,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		Environment:  env.Name,
 		Service:      svc.Name,
 		WorkerPubkey: workerPubkey,
+		Params:       jobParams,
 	}
 	applyLoomDeploymentUnitRuntimeConfig(&jobReq, unit)
 
@@ -426,6 +460,31 @@ func durationFromRuntimeConfig(config map[string]any, key string) time.Duration 
 		return 0
 	}
 	return duration
+}
+
+func releasePromotionContractParams(metadata map[string]any) (map[string]string, error) {
+	encoded := make(map[string]string, 2)
+	for _, key := range []string{"health_contract", "readiness_contract"} {
+		raw, ok := metadata[key]
+		if !ok || raw == nil {
+			return nil, fmt.Errorf("authorized release promotion is missing %s", key)
+		}
+		payload, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("encode authorized release promotion %s: %w", key, err)
+		}
+		var contract map[string]any
+		if err := json.Unmarshal(payload, &contract); err != nil {
+			return nil, fmt.Errorf("decode authorized release promotion %s: %w", key, err)
+		}
+		kind := strings.TrimSpace(fmt.Sprint(contract["type"]))
+		timeout, timeoutOK := contract["timeout_seconds"].(float64)
+		if kind == "" || !timeoutOK || timeout <= 0 {
+			return nil, fmt.Errorf("authorized release promotion %s is not concrete", key)
+		}
+		encoded[key] = string(payload)
+	}
+	return encoded, nil
 }
 
 func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context, intentID uuid.UUID, workerPubkey string, decision service.WorkerAdmissionDecision) error {

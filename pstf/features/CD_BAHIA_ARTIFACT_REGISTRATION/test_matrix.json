@@ -1,0 +1,42 @@
+{
+  "feature_id": "CD_BAHIA_ARTIFACT_REGISTRATION",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "go test ./internal/adapters/hiveci ./internal/pipeline ./internal/service",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC5"],
+      "coverage": [
+        "producer-accurate release parsing and signature validation",
+        "worker and repository policy lineage",
+        "manifest, SBOM, provenance evidence verification",
+        "registration replay/conflict",
+        "registration audit and no promotion side effect"
+      ]
+    },
+    {
+      "id": "T2",
+      "command": "go test ./internal/controlplane ./internal/workflow",
+      "acceptance_criteria": ["AC4", "AC5"],
+      "coverage": [
+        "generated bahia.deploy.v2 ContextVM handler",
+        "RBAC and staged canary policy binding",
+        "durable exact replay and conflicting replay",
+        "rollback and health/readiness contracts",
+        "repository@sha256 digest-only Loom canary",
+        "signed promotion audit outbox"
+      ]
+    },
+    {
+      "id": "T3",
+      "command": "go test ./...",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "coverage": ["full Go regression suite"]
+    },
+    {
+      "id": "T4",
+      "command": "go build ./...",
+      "acceptance_criteria": ["AC1", "AC4"],
+      "coverage": ["full Go build"]
+    }
+  ]
+}

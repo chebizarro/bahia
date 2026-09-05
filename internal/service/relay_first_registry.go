@@ -355,6 +355,26 @@ func (r *RelayFirstRegistry) RegisterArtifact(ctx context.Context, a *domain.Art
 func (r *RelayFirstRegistry) RegisterVerifiedArtifact(ctx context.Context, a *domain.Artifact, proof ArtifactVerificationProof) error {
 	return r.delegate.RegisterVerifiedArtifact(ctx, a, proof)
 }
+func (r *RelayFirstRegistry) RegisterReleaseArtifact(ctx context.Context, a *domain.Artifact, proof ReleaseArtifactVerificationProof) error {
+	return r.delegate.RegisterReleaseArtifact(ctx, a, proof)
+}
+
+// RegisterReleaseArtifactWithAudit preserves the atomic build/artifact/audit
+// boundary used by Hive-CI registration. Release artifacts have no separate
+// relay-first canonical state event; their signed decision evidence is written
+// to the delegate's durable Nostr outbox in the same transaction.
+func (r *RelayFirstRegistry) RegisterReleaseArtifactWithAudit(
+	ctx context.Context,
+	build *domain.Build,
+	artifact *domain.Artifact,
+	proof ReleaseArtifactVerificationProof,
+	prepareAudit ReleaseArtifactAuditPreparer,
+) error {
+	if r == nil || r.delegate == nil {
+		return fmt.Errorf("registry delegate is not configured")
+	}
+	return r.delegate.RegisterReleaseArtifactWithAudit(ctx, build, artifact, proof, prepareAudit)
+}
 func (r *RelayFirstRegistry) GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {
 	return r.delegate.GetArtifact(ctx, id)
 }

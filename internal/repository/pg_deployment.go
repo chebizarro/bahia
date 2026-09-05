@@ -101,6 +101,30 @@ func (r *PgDeploymentIntentRepository) GetByID(ctx context.Context, id uuid.UUID
 	return di, nil
 }
 
+func (r *PgDeploymentIntentRepository) GetByReleasePromotionKey(
+	ctx context.Context,
+	serviceID, environmentID uuid.UUID,
+	requester, idempotencyKey string,
+) (*domain.DeploymentIntent, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+intentColumns+` FROM deployment_intents
+		WHERE service_id = $1
+		AND environment_id = $2
+		AND metadata->>'release_promotion' = 'true'
+		AND metadata->>'promotion_requester' = $3
+		AND metadata->>'promotion_idempotency_key' = $4
+		LIMIT 1
+	`, serviceID, environmentID, requester, idempotencyKey)
+	di, err := r.scanIntent(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying release promotion idempotency key: %w", err)
+	}
+	return di, nil
+}
+
 func (r *PgDeploymentIntentRepository) GetByHiveResultEventID(ctx context.Context, eventID string) (*domain.DeploymentIntent, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT `+intentColumns+` FROM deployment_intents

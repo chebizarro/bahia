@@ -7,6 +7,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -57,6 +58,8 @@ type ServiceDeployCommand struct {
 	RequestedBy      string
 	SourceKind       string
 	Metadata         map[string]any
+	Strategy         string
+	Parameters       map[string]any
 	IdempotencyKey   string
 	AgentID          string
 }
@@ -178,18 +181,22 @@ func (p *ServiceCommandPublisher) PublishServiceUpdateRequest(ctx context.Contex
 }
 
 func (p *ServiceCommandPublisher) PublishDeployRequest(ctx context.Context, cmd ServiceDeployCommand) (*ServiceCommandReceipt, error) {
-	content := map[string]any{"service_id": cmd.ServiceID.String(), "environment_id": cmd.EnvironmentID.String(), "artifact_id": cmd.ArtifactID.String()}
+	payload := cascadia.BahiaDeployV2Payload{
+		ServiceId: cmd.ServiceID.String(), EnvironmentId: cmd.EnvironmentID.String(), ArtifactId: cmd.ArtifactID.String(),
+		Strategy: strings.TrimSpace(cmd.Strategy), Parameters: cmd.Parameters,
+	}
+	if err := payload.Validate(); err != nil {
+		return nil, err
+	}
+	content := map[string]any{"service_id": payload.ServiceId, "environment_id": payload.EnvironmentId, "artifact_id": payload.ArtifactId}
+	if payload.Strategy != "" {
+		content["strategy"] = payload.Strategy
+	}
+	if len(payload.Parameters) > 0 {
+		content["parameters"] = payload.Parameters
+	}
 	if cmd.DeploymentUnitID != nil && *cmd.DeploymentUnitID != uuid.Nil {
 		content["deployment_unit_id"] = cmd.DeploymentUnitID.String()
-	}
-	if cmd.RequestedBy != "" {
-		content["requested_by"] = cmd.RequestedBy
-	}
-	if cmd.SourceKind != "" {
-		content["source_kind"] = cmd.SourceKind
-	}
-	if len(cmd.Metadata) > 0 {
-		content["metadata"] = cmd.Metadata
 	}
 	tags := nostr.Tags{{"service", cmd.ServiceID.String()}, {"environment", cmd.EnvironmentID.String()}, {"artifact", cmd.ArtifactID.String()}}
 	if cmd.DeploymentUnitID != nil && *cmd.DeploymentUnitID != uuid.Nil {

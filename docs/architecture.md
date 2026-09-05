@@ -117,7 +117,7 @@ Bahia serves as an OCI-compatible internal registry.
 Authentication includes NIP-98, service accounts, and anonymous pull from allowed CIDRs.
 
 ### Hive-CI bridge
-The Hive-CI bridge subscribes to workflow events and turns them into build/artifact/deployment state.
+The Hive-CI bridge subscribes to workflow events and registers verified build artifacts. Deployment promotion is a separate authority: CI success cannot create an intent or change desired state.
 
 ```text
 Hive-CI (canonical dispatch)     Hive-CI (canonical result)
@@ -130,12 +130,15 @@ Workflow Run  ────▶  Workflow Result
        │  (Bahia)    │
        └──────┬──────┘
               │
-    ┌─────────┼─────────┐
-    ▼         ▼         ▼
- Build    Artifact   Intent
-              │
-              ▼
-         OCI Registry
+         ┌────┴────┐
+         ▼         ▼
+       Build    Artifact
+                   │
+                   ▼
+              OCI Registry
+
+A separately authorized promotion intent may later reference the registered
+digest; it is not emitted by the Hive-CI bridge.
 ```
 
 ### Runtime and reconcile layer

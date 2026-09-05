@@ -21,6 +21,11 @@ var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 var errPromotionGateBlocked = errors.New("promotion gate blocked")
 
+type ReleaseRegistrationAuditor interface {
+	AuditReleaseRegistration(context.Context, domain.HiveCIAcceptedRelease, *domain.Artifact, string, error) error
+	PrepareReleaseRegistrationAudit(context.Context, domain.HiveCIAcceptedRelease, *domain.Artifact, string, error) (*repository.NostrEventRecord, error)
+}
+
 type artifactRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
 	UpdateBuildStatus(context.Context, uuid.UUID, domain.BuildStatus) error
@@ -48,6 +53,7 @@ type Bridge struct {
 	desiredState      desiredStateBuilder
 	logger            *zap.Logger
 	autoRegister      bool
+	releaseAuditor    ReleaseRegistrationAuditor
 }
 
 func NewBridge(
@@ -80,6 +86,88 @@ func (b *Bridge) SetDesiredStateBuilder(builder desiredStateBuilder) {
 	if b != nil {
 		b.desiredState = builder
 	}
+}
+
+func (b *Bridge) SetReleaseRegistrationAuditor(auditor ReleaseRegistrationAuditor) {
+	b.releaseAuditor = auditor
+}
+
+// RegisterAcceptedRelease converts the validated release boundary into one
+// digest-only Bahia artifact. It deliberately has no deployment-intent or
+// desired-state dependency.
+func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) (artifact *domain.Artifact, err error) {
+	defer func() {
+		if err == nil || b == nil || b.releaseAuditor == nil {
+			return
+		}
+		if auditErr := b.releaseAuditor.AuditReleaseRegistration(ctx, release, artifact, "rejected", err); auditErr != nil {
+			err = fmt.Errorf("%v; persist rejection audit: %w", err, auditErr)
+		}
+	}()
+	if b == nil || b.registry == nil || b.buildRepo == nil || b.serviceRepo == nil || b.artifactRepo == nil {
+		return nil, fmt.Errorf("Hive-CI release artifact registration is not configured")
+	}
+	policy := release.Policy
+	if policy.ID == uuid.Nil || policy.ID.String() != release.PolicyID || policy.ServiceID == uuid.Nil ||
+		policy.RepoCoordinate != release.Result.Lineage.RepoAddress || policy.WorkflowPath != release.Workflow {
+		return nil, fmt.Errorf("accepted release policy snapshot is incomplete or conflicts with lineage")
+	}
+	svc, err := b.serviceRepo.GetByID(ctx, policy.ServiceID)
+	if err != nil {
+		return nil, fmt.Errorf("load release service: %w", err)
+	}
+	if svc == nil || strings.TrimSpace(svc.ArtifactRepo) != release.Result.Manifest.Repository {
+		return nil, fmt.Errorf("release repository does not match the policy service artifact repository")
+	}
+	build, err := b.buildRepo.GetByCISystemRunID(ctx, domain.CISystemHiveCI, release.Result.Lineage.WorkflowRunEventID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup release build: %w", err)
+	}
+	if build == nil {
+		build = &domain.Build{
+			ServiceID: policy.ServiceID, GitSHA: release.Result.Lineage.Commit, GitRef: release.Branch,
+			CISystem: domain.CISystemHiveCI, CIRunID: release.Result.Lineage.WorkflowRunEventID,
+			SourceEventID: release.Result.Lineage.WorkflowRunEventID, Status: domain.BuildStatusSucceeded,
+			Metadata: map[string]any{
+				"source": "hiveci_release", "release_identity": release.Result.ReleaseIdentity,
+				"release_result_event_id": release.ResultEventID, "lineage": release.Result.Lineage,
+			},
+		}
+	} else if build.ServiceID != policy.ServiceID || build.Status != domain.BuildStatusSucceeded ||
+		!strings.EqualFold(build.GitSHA, release.Result.Lineage.Commit) {
+		return nil, fmt.Errorf("existing release build conflicts with accepted lineage")
+	}
+	artifact = &domain.Artifact{
+		BuildID: build.ID, ServiceID: policy.ServiceID,
+		ImageRepo:   release.Result.Manifest.Repository,
+		ImageDigest: release.Result.Manifest.Digest,
+		ImageTag:    "",
+	}
+	if b.releaseAuditor == nil {
+		return nil, fmt.Errorf("release registration audit is not configured")
+	}
+	atomicRegistry, ok := b.registry.(interface {
+		RegisterReleaseArtifactWithAudit(
+			context.Context,
+			*domain.Build,
+			*domain.Artifact,
+			service.ReleaseArtifactVerificationProof,
+			service.ReleaseArtifactAuditPreparer,
+		) error
+	})
+	if !ok {
+		return nil, fmt.Errorf("atomic digest-only release artifact registry is not configured")
+	}
+	if err := atomicRegistry.RegisterReleaseArtifactWithAudit(
+		ctx, build, artifact,
+		service.ReleaseArtifactVerificationProof{Release: release, VerifiedAt: time.Now().UTC()},
+		func(committed *domain.Artifact) (*repository.NostrEventRecord, error) {
+			return b.releaseAuditor.PrepareReleaseRegistrationAudit(ctx, release, committed, "accepted", nil)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("register accepted release artifact with audit: %w", err)
+	}
+	return artifact, nil
 }
 
 // ProcessResult consumes a newly persisted signed Hive-CI result.
@@ -385,7 +473,6 @@ func stripRegistryHost(imageRepo string) string {
 	}
 	return imageRepo
 }
-
 func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.HiveCIPipelinePolicy, _ *domain.HiveCIWorkflowRun, result *domain.HiveCIWorkflowResult, artifact *domain.Artifact) error {
 	if policy == nil || policy.Metadata == nil || b.intentRepo == nil || b.envRepo == nil || b.registry == nil || artifact == nil {
 		return nil

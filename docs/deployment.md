@@ -437,23 +437,78 @@ Enable automatic CI event ingestion:
 hiveci:
   enabled: true
   
-  # Trusted CI dispatcher pubkeys for external Hive-CI kind-5401 workflow-run events
+  # Trusted CI dispatcher pubkeys for signed kind-5401 workflow-run evidence
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
+
+  # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results
+  trusted_release_attestors:
+    - <hive-ci-release-attestor-pubkey>
   
-  # Verify successful CI results and register one immutable artifact
+  # Verify successful ordinary CI results and register one immutable artifact
   auto_register_builds: true
 
   # Advanced signed manual artifact registration (disabled by default)
   allow_manual_artifact_registration: false
   
-  # Auto-deploy to staging environment
-  auto_deploy_staging_environment: edge-01-staging
+  # CI registration never promotes; promotion requires a separately
+  # authorized promotion intent.
+
+  # Each release policy must explicitly bind workflow_digest, policy_digest,
+  # review_policy, source_repo_identity, release_image_repository, and a
+  # non-empty release_attestors list. Missing constraints fail closed.
   
   # Retry configuration
   retry_interval: 30s
   max_retries: 10
 ```
+
+### Promoting a registered release
+
+A successful CI result only registers evidence. Promotion is a separate ContextVM
+kind `25910` mutation using generated method schema `bahia.deploy.v2`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "promote-release-identity",
+  "method": "service/deploy",
+  "params": {
+    "service_id": "<service-uuid>",
+    "environment_id": "<staged-environment-uuid>",
+    "deployment_unit_id": "<deployment-unit-uuid>",
+    "artifact_id": "<registered-artifact-uuid>",
+    "strategy": "canary",
+    "idempotency_key": "promote-release-identity",
+    "parameters": {
+      "release_identity": "hiveci-release:v1:<sha256>",
+      "artifact_digest": "sha256:<registered-manifest-digest>",
+      "previous_artifact_digest": "sha256:<current-desired-digest>"
+    }
+  }
+}
+```
+
+For fully-qualified producer repositories such as
+`harbor.example/project/image`, Bahia must have a configured registry/Harbor
+adapter whose authority matches the repository. It retrieves the manifest,
+SBOM, and provenance bytes through the OCI Distribution API by their signed
+digests. If that byte-capable resolver is absent, unreachable, unauthorized, or
+returns missing/mismatched bytes, registration fails closed; Bahia never falls
+back to a tag or to metadata-only existence checks. OCI blob responses do not
+carry descriptor media types, so SBOM/provenance media types remain bound to the
+signed descriptors while bytes, digest, size, and document structure are
+verified.
+
+Bahia accepts the mutation only when the signer has deployment permission, the
+pipeline policy binds the exact service and staged environment, the environment
+strategy is `canary`, all registered manifest/SBOM/provenance and signed lineage
+evidence remains complete, rollback compatibility names the current artifact,
+and concrete health/readiness contracts are present. The resulting Loom job uses
+`repository@sha256:digest`; the signed producer tag is never a deployment input.
+Exact replays return the existing intent and conflicting replays fail closed.
+Every accepted or rejected promotion decision is written as signed kind `4903`
+audit evidence through the durable Nostr outbox.
 
 ## Monitoring
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
@@ -18,24 +19,26 @@ import (
 )
 
 type EncryptedServiceHandlersConfig struct {
-	Registry         *service.RegistryService
-	RuntimeLifecycle *service.RuntimeLifecycleService
-	Policy           *service.PolicyService
-	PublicRoutes     *service.PublicRoutePlanner
-	Services         repository.ServiceRepository
-	DeploymentUnits  repository.DeploymentUnitRepository
-	RBAC             *auth.RBAC
-	Logger           *zap.Logger
+	Registry          *service.RegistryService
+	RuntimeLifecycle  *service.RuntimeLifecycleService
+	Policy            *service.PolicyService
+	PublicRoutes      *service.PublicRoutePlanner
+	Services          repository.ServiceRepository
+	DeploymentUnits   repository.DeploymentUnitRepository
+	RBAC              *auth.RBAC
+	ReleasePromotions *ReleasePromotionAuthorizer
+	Logger            *zap.Logger
 }
 
 type encryptedServiceHandlers struct {
-	registry         *service.RegistryService
-	runtimeLifecycle *service.RuntimeLifecycleService
-	policy           *service.PolicyService
-	publicRoutes     *service.PublicRoutePlanner
-	deploymentUnits  repository.DeploymentUnitRepository
-	authorizer       encryptedTenantAuthorizer
-	logger           *zap.Logger
+	registry          *service.RegistryService
+	runtimeLifecycle  *service.RuntimeLifecycleService
+	policy            *service.PolicyService
+	publicRoutes      *service.PublicRoutePlanner
+	deploymentUnits   repository.DeploymentUnitRepository
+	authorizer        encryptedTenantAuthorizer
+	releasePromotions *ReleasePromotionAuthorizer
+	logger            *zap.Logger
 }
 
 // RegisterServiceContextVMHandlers wires the signer-first service deployment
@@ -45,13 +48,14 @@ func RegisterServiceContextVMHandlers(transport *EncryptedRequestTransport, cfg 
 		return
 	}
 	h := &encryptedServiceHandlers{
-		registry:         cfg.Registry,
-		runtimeLifecycle: cfg.RuntimeLifecycle,
-		policy:           cfg.Policy,
-		publicRoutes:     cfg.PublicRoutes,
-		deploymentUnits:  cfg.DeploymentUnits,
-		authorizer:       encryptedTenantAuthorizer{services: cfg.Services, environments: cfg.Registry, rbac: cfg.RBAC},
-		logger:           cfg.Logger,
+		registry:          cfg.Registry,
+		runtimeLifecycle:  cfg.RuntimeLifecycle,
+		policy:            cfg.Policy,
+		publicRoutes:      cfg.PublicRoutes,
+		deploymentUnits:   cfg.DeploymentUnits,
+		authorizer:        encryptedTenantAuthorizer{services: cfg.Services, environments: cfg.Registry, rbac: cfg.RBAC},
+		releasePromotions: cfg.ReleasePromotions,
+		logger:            cfg.Logger,
 	}
 	if h.logger == nil {
 		h.logger = zap.NewNop()
@@ -169,7 +173,7 @@ func optionalUUIDsEqual(left, right *uuid.UUID) bool {
 	return *left == *right
 }
 
-func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVMRequest) (any, error) {
+func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVMRequest) (result any, err error) {
 	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -177,6 +181,28 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
 		return nil, fmt.Errorf("decode service/deploy params: %w", err)
 	}
+	generatedPayload := cascadia.BahiaDeployV2Payload{
+		ServiceId: params.ServiceID.String(), EnvironmentId: params.EnvironmentID.String(), ArtifactId: params.ArtifactID.String(),
+		Strategy: strings.TrimSpace(params.Strategy), Parameters: params.Parameters,
+	}
+	if err := generatedPayload.Validate(); err != nil {
+		return nil, fmt.Errorf("validate bahia.deploy.v2 payload: %w", err)
+	}
+	promotionRequested := generatedPayload.Strategy == "canary" || stringParam(generatedPayload.Parameters, "release_identity") != ""
+	promotionDecision := ReleasePromotionDecision{IdempotencyKey: effectiveIdempotencyKey(request, params.IdempotencyKey)}
+	if request.Event != nil {
+		promotionDecision.Requester = request.Event.PubKey.Hex()
+		promotionDecision.RequestEventID = request.Event.ID.Hex()
+	}
+	promotionAcceptedAudit := false
+	defer func() {
+		if !promotionRequested || err == nil || promotionAcceptedAudit || h.releasePromotions == nil {
+			return
+		}
+		if auditErr := h.releasePromotions.Audit(ctx, promotionDecision, "rejected", err); auditErr != nil {
+			err = fmt.Errorf("%v; persist promotion rejection audit: %w", err, auditErr)
+		}
+	}()
 	if params.ServiceID == uuid.Nil || params.EnvironmentID == uuid.Nil || params.ArtifactID == uuid.Nil {
 		return nil, fmt.Errorf("service_id, environment_id, and artifact_id are required")
 	}
@@ -228,6 +254,34 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		return nil, fmt.Errorf("deployment blocked by policy: %s", summarizePolicyBlockReason(evaluation))
 	}
 
+	if promotionRequested {
+		if h.releasePromotions == nil {
+			return nil, fmt.Errorf("registered release promotion control plane is not configured")
+		}
+		promotionDecision, err = h.releasePromotions.Authorize(
+			ctx, request.Event, generatedPayload.Parameters, serviceID, environmentID, artifactID,
+			generatedPayload.Strategy, effectiveIdempotencyKey(request, params.IdempotencyKey), env,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if promotionDecision.ExistingIntent != nil {
+			if err = h.releasePromotions.Audit(ctx, promotionDecision, "accepted", nil); err != nil {
+				return nil, fmt.Errorf("persist promotion replay audit: %w", err)
+			}
+			promotionAcceptedAudit = true
+			existing := promotionDecision.ExistingIntent
+			return map[string]any{
+				"status": string(existing.Status), "intent_id": existing.ID.String(),
+				"service_id": serviceID.String(), "environment_id": environmentID.String(),
+				"artifact_id": artifactID.String(), "artifact_digest": promotionDecision.ArtifactDigest,
+				"desired_state_hash": existing.DesiredHash, "strategy": "canary",
+				"idempotency_key": promotionDecision.IdempotencyKey, "replay": true,
+				"message": "authorized canary promotion intent already exists",
+			}, nil
+		}
+	}
+
 	requestedBy, metadata, approvalMetadata, artifactDigest, target, err := h.deploymentIntentMetadata(
 		ctx,
 		request,
@@ -241,6 +295,13 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	if err != nil {
 		return nil, err
 	}
+	sourceKind := domain.SourceKindEventTriggered
+	if promotionRequested {
+		for key, value := range promotionDecision.Metadata {
+			metadata[key] = value
+		}
+		approvalMetadata["promotion"] = promotionDecision.Metadata
+	}
 
 	intent := &domain.DeploymentIntent{
 		ID:               uuid.New(),
@@ -249,14 +310,50 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		DeploymentUnitID: desiredState.DeploymentUnitID,
 		ArtifactID:       artifactID,
 		RequestedBy:      requestedBy,
-		SourceKind:       domain.SourceKindEventTriggered,
+		SourceKind:       sourceKind,
 		ApprovalMetadata: approvalMetadata,
 		Metadata:         metadata,
 		DesiredState:     desiredState,
 		DesiredHash:      desiredState.DesiredHash,
 	}
-	if err := h.registry.CreateDeploymentIntent(ctx, intent); err != nil {
-		return nil, fmt.Errorf("create deployment intent: %w", err)
+	if promotionRequested {
+		err = h.registry.CreateDeploymentIntentWithAudit(ctx, intent, func() (*repository.NostrEventRecord, error) {
+			return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "accepted", nil)
+		})
+		if err == nil {
+			promotionAcceptedAudit = true
+		}
+	} else {
+		err = h.registry.CreateDeploymentIntent(ctx, intent)
+	}
+	if err != nil {
+		createErr := err
+		if promotionRequested {
+			replayDecision, replayErr := h.releasePromotions.Authorize(
+				ctx, request.Event, generatedPayload.Parameters, serviceID, environmentID, artifactID,
+				generatedPayload.Strategy, effectiveIdempotencyKey(request, params.IdempotencyKey), env,
+			)
+			if replayErr != nil {
+				return nil, replayErr
+			}
+			if replayDecision.ExistingIntent != nil {
+				promotionDecision = replayDecision
+				if err = h.releasePromotions.Audit(ctx, promotionDecision, "accepted", nil); err != nil {
+					return nil, fmt.Errorf("persist promotion replay audit: %w", err)
+				}
+				promotionAcceptedAudit = true
+				existing := replayDecision.ExistingIntent
+				return map[string]any{
+					"status": string(existing.Status), "intent_id": existing.ID.String(),
+					"service_id": serviceID.String(), "environment_id": environmentID.String(),
+					"artifact_id": artifactID.String(), "artifact_digest": replayDecision.ArtifactDigest,
+					"desired_state_hash": existing.DesiredHash, "strategy": "canary",
+					"idempotency_key": replayDecision.IdempotencyKey, "replay": true,
+					"message": "authorized canary promotion intent already exists",
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("create deployment intent: %w", createErr)
 	}
 
 	message := "deployment approved and queued"
@@ -274,6 +371,8 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		"deployment_target":  target,
 		"desired_state_hash": desiredState.DesiredHash,
 		"idempotency_key":    effectiveIdempotencyKey(request, params.IdempotencyKey),
+		"strategy":           generatedPayload.Strategy,
+		"replay":             false,
 		"message":            message,
 	}, nil
 }
@@ -698,7 +797,7 @@ func (h *encryptedServiceHandlers) reject(ctx context.Context, request ContextVM
 	return h.decide(ctx, request, "reject")
 }
 
-func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (any, error) {
+func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (result any, err error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -723,6 +822,31 @@ func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVM
 	if intent == nil {
 		return nil, fmt.Errorf("deployment intent not found")
 	}
+	promotionIntent, _ := intent.Metadata["release_promotion"].(bool)
+	promotionDecision := ReleasePromotionDecision{}
+	promotionAuditCompleted := false
+	if promotionIntent {
+		if h.releasePromotions == nil || request.Event == nil {
+			return nil, fmt.Errorf("registered release promotion audit is not configured")
+		}
+		promotionDecision = ReleasePromotionDecision{
+			ReleaseIdentity:        strings.TrimSpace(fmt.Sprint(intent.Metadata["release_identity"])),
+			ArtifactDigest:         strings.TrimSpace(fmt.Sprint(intent.Metadata["artifact_digest"])),
+			PreviousArtifactDigest: strings.TrimSpace(fmt.Sprint(intent.Metadata["previous_artifact_digest"])),
+			IdempotencyKey:         effectiveIdempotencyKey(request, params.IdempotencyKey),
+			Requester:              request.Event.PubKey.Hex(), RequestEventID: request.Event.ID.Hex(),
+			Fingerprint: strings.TrimSpace(fmt.Sprint(intent.Metadata["promotion_fingerprint"])),
+			Metadata:    intent.Metadata, ExistingIntent: intent,
+		}
+		defer func() {
+			if err == nil || promotionAuditCompleted {
+				return
+			}
+			if auditErr := h.releasePromotions.Audit(ctx, promotionDecision, "rejected", err); auditErr != nil {
+				err = fmt.Errorf("%v; persist protected promotion rejection audit: %w", err, auditErr)
+			}
+		}()
+	}
 	if _, _, err := h.authorizer.authorizeServiceEnvironment(
 		ctx,
 		request.Event,
@@ -744,9 +868,23 @@ func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVM
 		if evaluation != nil && (!evaluation.Allowed || evaluation.Blockers > 0) {
 			return nil, fmt.Errorf("deployment blocked by current policy: %s", summarizePolicyBlockReason(evaluation))
 		}
-		err = h.registry.ApproveDeploymentIntent(ctx, params.IntentID)
+		if promotionIntent {
+			err = h.registry.DecideDeploymentIntentWithAudit(ctx, params.IntentID, true, func() (*repository.NostrEventRecord, error) {
+				return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "approved", nil)
+			})
+			promotionAuditCompleted = err == nil
+		} else {
+			err = h.registry.ApproveDeploymentIntent(ctx, params.IntentID)
+		}
 	} else {
-		err = h.registry.RejectDeploymentIntent(ctx, params.IntentID)
+		if promotionIntent {
+			err = h.registry.DecideDeploymentIntentWithAudit(ctx, params.IntentID, false, func() (*repository.NostrEventRecord, error) {
+				return h.releasePromotions.PrepareAudit(ctx, promotionDecision, "rejected", nil)
+			})
+			promotionAuditCompleted = err == nil
+		} else {
+			err = h.registry.RejectDeploymentIntent(ctx, params.IntentID)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s deployment intent: %w", decision, err)

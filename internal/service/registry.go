@@ -748,6 +748,11 @@ var immutableArtifactDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // ArtifactVerificationProof is produced only after a build-result registrar has
 // resolved the immutable manifest from Bahia's embedded OCI layout or a
 // configured external registry.
+type ReleaseArtifactVerificationProof struct {
+	Release    domain.HiveCIAcceptedRelease
+	VerifiedAt time.Time
+}
+
 type ArtifactVerificationProof struct {
 	Source                 string
 	ManifestDigest         string
@@ -811,6 +816,130 @@ func (s *RegistryService) RegisterArtifact(ctx context.Context, a *domain.Artifa
 		"tag": a.ImageTag, "state": "verified", "verified_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	return s.persistArtifact(ctx, a)
+}
+
+type ReleaseArtifactAuditPreparer func(*domain.Artifact) (*repository.NostrEventRecord, error)
+
+// RegisterReleaseArtifactWithAudit atomically persists the release build,
+// digest-only artifact, and signed audit outbox evidence.
+func (s *RegistryService) RegisterReleaseArtifactWithAudit(
+	ctx context.Context,
+	build *domain.Build,
+	artifact *domain.Artifact,
+	proof ReleaseArtifactVerificationProof,
+	prepareAudit ReleaseArtifactAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || build == nil || artifact == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic release registration and audit are not configured")
+	}
+	buildCreated := false
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Services == nil || repos.Builds == nil || repos.Artifacts == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("release registration transaction repositories are not configured")
+		}
+		existing, err := repos.Builds.GetByCISystemRunID(ctx, build.CISystem, build.CIRunID)
+		if err != nil {
+			return fmt.Errorf("lookup release build in transaction: %w", err)
+		}
+		if existing != nil {
+			if existing.ServiceID != build.ServiceID || existing.Status != domain.BuildStatusSucceeded ||
+				!strings.EqualFold(existing.GitSHA, build.GitSHA) {
+				return fmt.Errorf("existing release build conflicts with accepted lineage")
+			}
+			*build = *existing
+		} else if err := repos.Builds.Create(ctx, build); err != nil {
+			return fmt.Errorf("register release build in transaction: %w", err)
+		} else {
+			buildCreated = true
+		}
+		artifact.BuildID = build.ID
+		txRegistry := *s
+		txRegistry.services = repos.Services
+		txRegistry.builds = repos.Builds
+		txRegistry.artifacts = repos.Artifacts
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if err := txRegistry.RegisterReleaseArtifact(ctx, artifact, proof); err != nil {
+			return err
+		}
+		audit, err := prepareAudit(artifact)
+		if err != nil {
+			return fmt.Errorf("prepare release registration audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist release registration audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("release registration audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if buildCreated {
+		s.publisher.Publish(ctx, events.Event{
+			Type: events.EventBuildRegistered, EntityID: build.ID.String(), Data: build,
+		})
+	}
+	s.publishArtifactRegistered(ctx, artifact)
+	return nil
+}
+
+// RegisterReleaseArtifact registers an accepted Hive-CI RELEASE strictly by
+// its immutable manifest digest. The producer's optional tag is retained only
+// inside signed evidence metadata and is never an artifact lookup key.
+func (s *RegistryService) RegisterReleaseArtifact(ctx context.Context, a *domain.Artifact, proof ReleaseArtifactVerificationProof) error {
+	if err := s.validateArtifactBindingMode(ctx, a, false); err != nil {
+		return err
+	}
+	release := proof.Release
+	if a.ImageDigest != release.Result.Manifest.Digest || a.ImageRepo != release.Result.Manifest.Repository {
+		return fmt.Errorf("accepted release manifest does not match artifact identity")
+	}
+	if a.ImageTag != "" {
+		return fmt.Errorf("release artifacts must not persist a mutable image tag")
+	}
+	a.ManifestMediaType = release.Result.Manifest.MediaType
+	size := release.Result.Manifest.Size
+	a.SizeBytes = &size
+	a.SBOMURL = release.Result.SBOM.Repository + "@" + release.Result.SBOM.Digest
+	a.SignatureRef = release.ResultEventID
+	a.ScanStatus = domain.ScanStatusUnknown
+	verifiedAt := proof.VerifiedAt.UTC()
+	if proof.VerifiedAt.IsZero() {
+		verifiedAt = time.Now().UTC()
+	}
+	a.Metadata = map[string]any{
+		"registration_mode":          "hiveci_release_digest",
+		"promotion_authority":        "required",
+		"ci_mutates_desired_state":   false,
+		"signed_image_tag":           release.Result.ImageTag,
+		"release_identity":           release.Result.ReleaseIdentity,
+		"release_result_event_id":    release.ResultEventID,
+		"release_attestor":           release.Attestor,
+		"release_content_digest":     release.ContentDigest,
+		"signed_release_event":       release.SignedEvent,
+		"signed_workflow_run_event":  release.WorkflowRunSignedEvent,
+		"lineage":                    release.Result.Lineage,
+		"execution":                  release.Result.Execution,
+		"policy":                     release.Policy,
+		"worker_admission":           release.WorkerAdmissionEvidence,
+		"rollback_compatibility":     release.RollbackCompatibility,
+		"health_readiness_contracts": release.HealthReadinessContracts,
+		"verification": map[string]any{
+			"source": "oci_digest", "state": "verified", "verified_at": verifiedAt.Format(time.RFC3339Nano),
+			"manifest": release.Result.Manifest, "sbom": release.Result.SBOM, "provenance": release.Result.Provenance,
+		},
+	}
+	if err := s.persistArtifact(ctx, a); err != nil {
+		return err
+	}
+	if a.Metadata["release_identity"] != release.Result.ReleaseIdentity ||
+		a.Metadata["release_content_digest"] != release.ContentDigest {
+		return fmt.Errorf("existing artifact conflicts with accepted release lineage")
+	}
+	return nil
 }
 
 // RegisterVerifiedArtifact persists a build result only when the caller
@@ -878,6 +1007,10 @@ func (s *RegistryService) RegisterVerifiedArtifact(ctx context.Context, a *domai
 }
 
 func (s *RegistryService) validateArtifactBinding(ctx context.Context, a *domain.Artifact) error {
+	return s.validateArtifactBindingMode(ctx, a, true)
+}
+
+func (s *RegistryService) validateArtifactBindingMode(ctx context.Context, a *domain.Artifact, requireTag bool) error {
 	if a == nil {
 		return fmt.Errorf("artifact is required")
 	}
@@ -887,7 +1020,7 @@ func (s *RegistryService) validateArtifactBinding(ctx context.Context, a *domain
 	if a.BuildID == uuid.Nil || a.ServiceID == uuid.Nil {
 		return fmt.Errorf("build_id and service_id are required")
 	}
-	if a.ImageRepo == "" || a.ImageTag == "" {
+	if a.ImageRepo == "" || (requireTag && a.ImageTag == "") {
 		return fmt.Errorf("image repository and build-produced tag are required")
 	}
 	if !immutableArtifactDigest.MatchString(a.ImageDigest) {
@@ -1016,6 +1149,152 @@ func (s *RegistryService) ListArtifactsByBuild(ctx context.Context, buildID uuid
 
 // --- Deployment Intent operations ---
 
+type DeploymentDecisionAuditPreparer func() (*repository.NostrEventRecord, error)
+
+// CreateDeploymentIntentWithAudit atomically persists an intent, any authorized
+// desired-state transition, and its signed audit outbox evidence.
+func (s *RegistryService) CreateDeploymentIntentWithAudit(
+	ctx context.Context,
+	intent *domain.DeploymentIntent,
+	prepareAudit DeploymentDecisionAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || intent == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic deployment intent and audit are not configured")
+	}
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Services == nil || repos.Environments == nil || repos.Artifacts == nil ||
+			repos.Intents == nil || repos.State == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("deployment intent transaction repositories are not configured")
+		}
+		txRegistry := *s
+		txRegistry.services = repos.Services
+		txRegistry.environments = repos.Environments
+		txRegistry.artifacts = repos.Artifacts
+		txRegistry.intents = repos.Intents
+		txRegistry.state = repos.State
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if err := txRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
+			return err
+		}
+		audit, err := prepareAudit()
+		if err != nil {
+			return fmt.Errorf("prepare deployment decision audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist deployment decision audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("deployment decision audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{Type: events.EventDeploymentIntentCreated, EntityID: intent.ID.String(), Data: intent})
+	if intent.Status == domain.IntentStatusApproved {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: intent.ID.String(),
+			},
+		})
+		s.publisher.Publish(ctx, events.Event{
+			Type: events.EventDeploymentIntentApproved, EntityID: intent.ID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: intent.ID.String(),
+			},
+		})
+	}
+	return nil
+}
+
+// DecideDeploymentIntentWithAudit atomically applies a protected promotion
+// approval/rejection and records the signed decision evidence.
+func (s *RegistryService) DecideDeploymentIntentWithAudit(
+	ctx context.Context,
+	id uuid.UUID,
+	approve bool,
+	prepareAudit DeploymentDecisionAuditPreparer,
+) error {
+	if s == nil || s.txExecutor == nil || prepareAudit == nil {
+		return fmt.Errorf("atomic deployment decision and audit are not configured")
+	}
+	var intent *domain.DeploymentIntent
+	stateChanged := approve
+	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.Intents == nil || repos.State == nil || repos.NostrEvents == nil {
+			return fmt.Errorf("deployment decision transaction repositories are not configured")
+		}
+		var err error
+		intent, err = repos.Intents.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if intent == nil {
+			return fmt.Errorf("deployment intent %s not found", id)
+		}
+		txRegistry := *s
+		txRegistry.intents = repos.Intents
+		txRegistry.state = repos.State
+		txRegistry.publisher = &events.NoopPublisher{}
+		txRegistry.txExecutor = nil
+		if approve {
+			err = txRegistry.ApproveDeploymentIntent(ctx, id)
+		} else {
+			before, stateErr := repos.State.Get(ctx, intent.ServiceID, intent.EnvironmentID)
+			if stateErr != nil {
+				return stateErr
+			}
+			stateChanged = before != nil && before.DesiredIntentID != nil && *before.DesiredIntentID == id
+			err = txRegistry.RejectDeploymentIntent(ctx, id)
+		}
+		if err != nil {
+			return err
+		}
+		audit, err := prepareAudit()
+		if err != nil {
+			return fmt.Errorf("prepare deployment approval audit: %w", err)
+		}
+		inserted, err := repos.NostrEvents.Record(ctx, audit)
+		if err != nil {
+			return fmt.Errorf("persist deployment approval audit: %w", err)
+		}
+		if !inserted {
+			return fmt.Errorf("deployment approval audit event conflicts with existing outbox evidence")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if stateChanged {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+				ArtifactID: intent.ArtifactID.String(), IntentID: id.String(),
+			},
+		})
+	}
+	eventType := events.EventDeploymentIntentRejected
+	if approve {
+		eventType = events.EventDeploymentIntentApproved
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type: eventType, EntityID: id.String(),
+		Data: events.ResourceData{
+			ServiceID: intent.ServiceID.String(), EnvironmentID: intent.EnvironmentID.String(),
+			ArtifactID: intent.ArtifactID.String(), IntentID: id.String(),
+		},
+	})
+	return nil
+}
+
 // CreateDeploymentIntent creates a new deployment intent and updates the environment service state.
 func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain.DeploymentIntent) error {
 	// Validate referenced entities exist.
@@ -1065,32 +1344,12 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return err
 	}
 
-	// Update the environment service state desired linkage, preserving
-	// observation/run/health fields the new intent has not touched (the
-	// repository Upsert replaces every column).
-	state, stateErr := s.loadOrInitEnvironmentServiceState(ctx, di.ServiceID, di.EnvironmentID)
-	if stateErr == nil {
-		state.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, di)
-		state.DesiredArtifactID = &di.ArtifactID
-		state.DesiredIntentID = &di.ID
-		state.DesiredRuntimeState = di.DesiredState
-		state.DesiredHash = di.DesiredHash
-		state.DriftStatus = domain.DriftStatusDeploying
-		stateErr = s.state.Upsert(ctx, state)
-	}
-	if stateErr != nil {
-		s.logger.Error("failed to update environment service state", zap.Error(stateErr))
-	} else {
-		s.publisher.Publish(ctx, events.Event{
-			Type:     events.EventEnvironmentServiceStateChanged,
-			EntityID: di.ServiceID.String() + ":" + di.EnvironmentID.String(),
-			Data: events.ResourceData{
-				ServiceID:     di.ServiceID.String(),
-				EnvironmentID: di.EnvironmentID.String(),
-				ArtifactID:    di.ArtifactID.String(),
-				IntentID:      di.ID.String(),
-			},
-		})
+	// Pending or rejected intents are proposals only. Desired state advances
+	// exclusively after the intent has crossed the authorization boundary.
+	if di.Status == domain.IntentStatusApproved {
+		if err := s.advanceDesiredStateForIntent(ctx, di); err != nil {
+			return err
+		}
 	}
 
 	s.publisher.Publish(ctx, events.Event{
@@ -1120,12 +1379,69 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 	return nil
 }
 
+func (s *RegistryService) advanceDesiredStateForIntent(ctx context.Context, di *domain.DeploymentIntent) error {
+	if di == nil || di.Status != domain.IntentStatusApproved {
+		return fmt.Errorf("only approved deployment intents may advance desired state")
+	}
+	// Preserve observation/run/health fields that the authorized intent does not
+	// change; the repository Upsert replaces every column.
+	state, err := s.loadOrInitEnvironmentServiceState(ctx, di.ServiceID, di.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("load environment service state for authorized deployment: %w", err)
+	}
+	state.DeploymentUnitID = deploymentUnitIDForRunIntent(nil, di)
+	state.DesiredArtifactID = &di.ArtifactID
+	state.DesiredIntentID = &di.ID
+	state.DesiredRuntimeState = di.DesiredState
+	state.DesiredHash = di.DesiredHash
+	state.DriftStatus = domain.DriftStatusDeploying
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return fmt.Errorf("advance authorized deployment desired state: %w", err)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: di.ServiceID.String() + ":" + di.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(),
+			ArtifactID: di.ArtifactID.String(), IntentID: di.ID.String(),
+		},
+	})
+	return nil
+}
+
 func (s *RegistryService) GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
 	return s.intents.GetByID(ctx, id)
 }
 
 func (s *RegistryService) UpdateDeploymentIntentDesiredState(ctx context.Context, id uuid.UUID, desiredState *domain.DesiredServiceSpec, desiredHash string) error {
 	return s.intents.UpdateDesiredState(ctx, id, desiredState, desiredHash)
+}
+
+type releasePromotionIntentLookup interface {
+	GetByReleasePromotionKey(context.Context, uuid.UUID, uuid.UUID, string, string) (*domain.DeploymentIntent, error)
+}
+
+func (s *RegistryService) GetDeploymentIntentByReleasePromotionKey(
+	ctx context.Context,
+	serviceID, environmentID uuid.UUID,
+	requester, idempotencyKey string,
+) (*domain.DeploymentIntent, error) {
+	if lookup, ok := s.intents.(releasePromotionIntentLookup); ok {
+		return lookup.GetByReleasePromotionKey(ctx, serviceID, environmentID, requester, idempotencyKey)
+	}
+	intents, err := s.intents.ListByServiceEnv(ctx, serviceID, environmentID, 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	for index := range intents {
+		intent := &intents[index]
+		if intent.Metadata["release_promotion"] == true &&
+			intent.Metadata["promotion_requester"] == requester &&
+			intent.Metadata["promotion_idempotency_key"] == idempotencyKey {
+			return intent, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *RegistryService) ListDeploymentIntents(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
@@ -1219,6 +1535,12 @@ func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.U
 	}
 
 	if err := s.transitionDeploymentIntentDecision(ctx, id, domain.ApprovalStatusApproved, domain.IntentStatusApproved); err != nil {
+		return err
+	}
+	authorized := *di
+	authorized.ApprovalStatus = domain.ApprovalStatusApproved
+	authorized.Status = domain.IntentStatusApproved
+	if err := s.advanceDesiredStateForIntent(ctx, &authorized); err != nil {
 		return err
 	}
 

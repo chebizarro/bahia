@@ -1,0 +1,28 @@
+{
+  "feature_id": "CD_BAHIA_ARTIFACT_REGISTRATION",
+  "title": "Register accepted Hive-CI releases and separately authorize staged canaries",
+  "task_id": "cd-bahia-artifact-registration-20260821",
+  "intended_behavior": [
+    "Bahia consumes only signed successful terminal RELEASE kind-5402 results whose tags and content match the grasp-gitea producer contract.",
+    "Accepted releases register exactly one artifact by immutable manifest digest with complete signed 5402, trusted 5401, worker admission, policy, SBOM, provenance, rollback, health, and readiness lineage.",
+    "CI registration never creates a deployment intent or changes desired state.",
+    "A separately signed and RBAC-authorized ContextVM kind-25910 service/deploy mutation using bahia.deploy.v2 may create a staged canary from the registered digest.",
+    "Registration and promotion accept/reject decisions produce signed kind-4903 evidence in the durable outbox."
+  ],
+  "scope": {
+    "included": [
+      "Hive-CI release ingestion and replay validation",
+      "digest-only artifact registration",
+      "ContextVM service/deploy promotion authorization",
+      "canary Loom coordination",
+      "signed audit evidence"
+    ],
+    "excluded": [
+      "mutable tag copying or deployment",
+      "CI-authorized production promotion",
+      "live relay, Harbor, or worker integration tests",
+      "automatic widening of a successful canary"
+    ]
+  },
+  "contract_gap": "cascadia-go v1.2.1 has generated generic 5401/5402 kind constants but no generated release-provenance payload/tag binding for the producer-specific terminal RELEASE shape; Bahia centralizes the mirrored adapter contract instead of scattering numeric aliases."
+}

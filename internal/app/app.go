@@ -843,13 +843,14 @@ func New(cfg *config.Config) (*App, error) {
 	// OCI Registry wiring.
 	var ociHandler http.Handler
 	var ociRepo repository.OCIRegistryRepository
+	var ociSvc *service.OCIRegistryService
 	if cfg.OCI.Enabled {
 		pgOCIRepo := repository.NewPgOCIRepository(pool)
 		ociRepo = pgOCIRepo
 		if blossomClient == nil {
 			return nil, fmt.Errorf("OCI registry requires Blossom servers to be configured")
 		}
-		ociSvc, err := service.NewOCIRegistryService(cfg.OCI, pgOCIRepo, pgOCIRepo, blossomClient, logger)
+		ociSvc, err = service.NewOCIRegistryService(cfg.OCI, pgOCIRepo, pgOCIRepo, blossomClient, logger)
 		if err != nil {
 			return nil, fmt.Errorf("create oci registry service: %w", err)
 		}
@@ -886,6 +887,31 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
+		if len(cfg.HiveCI.TrustedReleaseAttestors) > 0 {
+			if ociSvc == nil {
+				return nil, fmt.Errorf("Hive-CI release registration requires Bahia OCI registry evidence resolution")
+			}
+			if controlPlaneSigner == nil {
+				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
+			}
+			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, nostrEventRepo)
+			releaseEvidence := hiveciAdapter.NewRepositoryReleaseEvidence(
+				nostrEventRepo, hiveRepo, workerRepo, hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector),
+			)
+			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
+				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
+			)
+			bridge.SetReleaseRegistrationAuditor(releaseAudit)
+			hiveSub.SetReleaseAuditor(releaseAudit)
+			hiveSub.SetReleaseEvidenceRecorder(nostrEventRepo)
+			hiveSub.SetReleaseIngestor(releaseIngestor, func(ctx context.Context, commit domain.HiveCIReleaseCommitResult) {
+				if _, err := bridge.RegisterAcceptedRelease(ctx, commit.Release); err != nil {
+					logger.Error("register accepted Hive-CI release artifact failed",
+						zap.String("release_identity", commit.Release.Result.ReleaseIdentity),
+						zap.Bool("replay", commit.Replay), zap.Error(err))
+				}
+			})
+		}
 		hiveSub.SetRunConsumer(func(ctx context.Context, run hiveciAdapter.WorkflowRunDispatch) {
 			if !run.Release {
 				return
@@ -1439,15 +1465,18 @@ func New(cfg *config.Config) (*App, error) {
 			ConfigFabric:    configFabricSvc,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, nostrEventRepo)
+		releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
-			Registry:         registry,
-			RuntimeLifecycle: runtimeLifecycleSvc,
-			Policy:           policySvc,
-			PublicRoutes:     publicRoutePlanner,
-			Services:         serviceRepo,
-			DeploymentUnits:  deploymentUnitRepo,
-			RBAC:             tenantRBAC,
-			Logger:           logger,
+			Registry:          registry,
+			RuntimeLifecycle:  runtimeLifecycleSvc,
+			Policy:            policySvc,
+			PublicRoutes:      publicRoutePlanner,
+			Services:          serviceRepo,
+			DeploymentUnits:   deploymentUnitRepo,
+			RBAC:              tenantRBAC,
+			ReleasePromotions: releasePromotionAuthorizer,
+			Logger:            logger,
 		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
