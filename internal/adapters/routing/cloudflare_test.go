@@ -157,13 +157,16 @@ func TestCloudflareVerifyHTTPSReportsNoPublicDNSRecordBeforeHTTP(t *testing.T) {
 	resolverAddr, _ := startTestDNSResponder(t, func(uint16, int) (byte, bool) { return 3, false })
 	backend, err := NewCloudflareBackend(CloudflareConfig{
 		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
-		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: 25 * time.Millisecond,
+		// Generous window: under parallel full-suite load the stub UDP resolver
+		// can need well over 25ms per round trip; the loop still exits only at
+		// the deadline, so this bounds test duration (tracked flake bahia-uwh8e).
+		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: 500 * time.Millisecond,
 		VerifyResolverAddr: resolverAddr,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewCloudflareBackend: %v", err)
 	}
-	backend.verifyBackoff = time.Millisecond
+	backend.verifyBackoff = 5 * time.Millisecond
 	var httpAttempts atomic.Int32
 	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		httpAttempts.Add(1)
