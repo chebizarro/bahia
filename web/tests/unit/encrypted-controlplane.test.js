@@ -541,10 +541,12 @@ describe('encrypted controlplane transport', () => {
     await expect(promise).resolves.toMatchObject({ result: { ok: true } });
   });
 
-  it('fires the short ack timeout on silence when progress ack is advertised', async () => {
+  it('keeps waiting for the terminal result when the advertised progress ack is missing', async () => {
     vi.useFakeTimers();
     systemMock.currentSystemInfo.mockReturnValue(progressAckDiscovery());
+    let handlers;
     client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
       expect(nextHandlers.onEvent).toEqual(expect.any(Function));
       return vi.fn();
     });
@@ -556,13 +558,22 @@ describe('encrypted controlplane transport', () => {
       ackTimeoutMs: 10,
       workTimeoutMs: 100
     });
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
 
-    const rejection = expect(promise).rejects.toThrow('no service acknowledged within 10ms — check service-pubkey discovery / relay auth');
     await flushAsync();
     expect(client.publish).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(11);
+    expect(settled).toBe(false);
 
-    await rejection;
+    const requestEventId = client.publish.mock.calls[0][0].id;
+    await handlers.onEvent(resultEvent(module, requestEventId, {
+      jsonrpc: '2.0',
+      id: 'ctx-silent',
+      result: { ok: true }
+    }));
+
+    await expect(promise).resolves.toMatchObject({ result: { ok: true } });
   });
 
   it('keeps the backward-compatible single work timeout when progress ack is not advertised', async () => {

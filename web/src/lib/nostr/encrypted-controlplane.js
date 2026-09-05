@@ -178,7 +178,8 @@ function waitForResult(requestEventId, { contextVMRequestId, servicePubkey, sign
 
     if (requireProgressAck && Number.isFinite(ackTimeoutMs) && ackTimeoutMs > 0) {
       ackTimer = setTimeout(() => {
-        settle(reject, new Error(`ContextVM request no service acknowledged within ${ackTimeoutMs}ms — check service-pubkey discovery / relay auth`));
+        ackTimer = null;
+        console.warn(`ContextVM request no service acknowledged within ${ackTimeoutMs}ms; continuing to wait for terminal result`);
       }, ackTimeoutMs);
     }
 
