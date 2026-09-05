@@ -265,6 +265,54 @@ describe('controlplane store', () => {
     expect(store.controlplaneConnection.status).toBe('live');
   });
 
+  it('routes legacy-kind canonical controlplane snapshots into core collections', async () => {
+    await bootstrapWithEose();
+    const cpStateTags = (domain, legacyKind, d, extra = []) => canonicalTags(domain, 'bahia.cp-state.v1', [
+      ['legacy_kind', legacyKind],
+      ['d', d],
+      ['deleted', 'false'],
+      ...extra
+    ]);
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'legacy-service-registry',
+      kind: CAS_STATE_KIND,
+      pubkey: 'b'.repeat(64),
+      tags: cpStateTags('service', '31962', 'svc-legacy'),
+      content: { id: 'svc-legacy', name: 'Legacy Service', deleted: false }
+    }))).toBe(true);
+    expect(store.applyControlplaneEvent(event({
+      id: 'legacy-environment-registry',
+      kind: CAS_STATE_KIND,
+      pubkey: 'b'.repeat(64),
+      tags: cpStateTags('environment', '31963', 'env-legacy'),
+      content: { id: 'env-legacy', name: 'Legacy Environment', deleted: false }
+    }))).toBe(true);
+    expect(store.applyControlplaneEvent(event({
+      id: 'legacy-service-state',
+      kind: CAS_STATE_KIND,
+      pubkey: 'b'.repeat(64),
+      tags: cpStateTags('service', '31961', 'svc-legacy:env-legacy', [
+        ['service', 'svc-legacy'],
+        ['environment', 'env-legacy']
+      ]),
+      content: {
+        service_id: 'svc-legacy',
+        environment_id: 'env-legacy',
+        drift_status: 'in_sync',
+        deleted: false
+      }
+    }))).toBe(true);
+
+    expect(store.services).toEqual([expect.objectContaining({ id: 'svc-legacy', name: 'Legacy Service' })]);
+    expect(store.environments).toEqual([expect.objectContaining({ id: 'env-legacy', name: 'Legacy Environment' })]);
+    expect(store.states).toEqual([expect.objectContaining({
+      service_id: 'svc-legacy',
+      environment_id: 'env-legacy',
+      drift_status: 'in_sync'
+    })]);
+  });
+
   it('requires EOSE from every connected bootstrap relay before marking live', async () => {
     discoveryMock.getBootstrapSeed.mockReturnValueOnce({
       relay_urls: ['wss://relay-one.example', 'wss://relay-two.example'],
