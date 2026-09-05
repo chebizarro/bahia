@@ -1731,7 +1731,9 @@ func contextVMParams(payload any, progressToken string) (map[string]any, error) 
 	}
 	params := map[string]any{}
 	if len(content) > 0 && string(content) != "null" {
-		if err := json.Unmarshal(content, &params); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(string(content)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&params); err != nil {
 			params["value"] = payload
 		}
 	}

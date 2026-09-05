@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,119 @@ func TestContextVMRequestClientPlainRoundTripSerializesMethodAndParams(t *testin
 	}
 	if payload["address"] != "192.0.2.1" {
 		t.Fatalf("result = %#v", payload)
+	}
+}
+
+func TestContextVMParamsPreservesNestedJSONNumbers(t *testing.T) {
+	const serial int64 = 1757100000123456789
+	params, err := contextVMParams(map[string]any{
+		"serial": serial,
+		"zone": map[string]any{
+			"ttl":          int64(300),
+			"serial_floor": serial - 1,
+		},
+		"records": []any{map[string]any{"ttl": int64(600), "serial": serial}},
+	}, "precision-test")
+	if err != nil {
+		t.Fatalf("contextVMParams() error = %v", err)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal ContextVM params: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"serial":1757100000123456789`) ||
+		!strings.Contains(string(encoded), `"serial_floor":1757100000123456788`) {
+		t.Fatalf("ContextVM params rounded large integers: %s", encoded)
+	}
+	if got, ok := params["serial"].(json.Number); !ok || got.String() != "1757100000123456789" {
+		t.Fatalf("serial = %#v (%T), want exact json.Number", params["serial"], params["serial"])
+	}
+	zone, ok := params["zone"].(map[string]any)
+	if !ok || zone["ttl"] != json.Number("300") || zone["serial_floor"] != json.Number("1757100000123456788") {
+		t.Fatalf("nested zone numbers = %#v", params["zone"])
+	}
+	records, ok := params["records"].([]any)
+	if !ok || len(records) != 1 {
+		t.Fatalf("nested records = %#v", params["records"])
+	}
+	record, ok := records[0].(map[string]any)
+	if !ok || record["ttl"] != json.Number("600") || record["serial"] != json.Number("1757100000123456789") {
+		t.Fatalf("nested record numbers = %#v", records[0])
+	}
+
+	fallback, err := contextVMParams([]int64{serial}, "fallback-test")
+	if err != nil {
+		t.Fatalf("contextVMParams() non-object error = %v", err)
+	}
+	fallbackJSON, err := json.Marshal(fallback)
+	if err != nil {
+		t.Fatalf("marshal non-object fallback: %v", err)
+	}
+	if !strings.Contains(string(fallbackJSON), `"value":[1757100000123456789]`) ||
+		!strings.Contains(string(fallbackJSON), `"_meta":{"progressToken":"fallback-test"}`) {
+		t.Fatalf("non-object fallback or progress metadata changed or rounded: %s", fallbackJSON)
+	}
+}
+
+func TestContextVMRequestClientPreservesLargeIntegersEndToEnd(t *testing.T) {
+	const serial int64 = 1757100000123456789
+	senderSecret := nostr.Generate()
+	recipientSecret := nostr.Generate()
+	transport := newFakeOperatorTransport()
+	zeroRetries := 0
+	client, err := NewContextVMRequestClient(ContextVMRequestConfig{
+		Transport:       transport,
+		Signer:          keyer.NewPlainKeySigner(senderSecret),
+		SenderPubkey:    senderSecret.Public().Hex(),
+		RecipientPubkey: recipientSecret.Public().Hex(),
+		ResultTimeout:   time.Second,
+		ResultRetries:   &zeroRetries,
+	})
+	if err != nil {
+		t.Fatalf("NewContextVMRequestClient() error = %v", err)
+	}
+
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		var rpc struct {
+			ID     string          `json:"id"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(event.Content), &rpc); err != nil {
+			t.Fatalf("decode published ContextVM request: %v", err)
+		}
+		if !strings.Contains(string(rpc.Params), `"serial":1757100000123456789`) ||
+			!strings.Contains(string(rpc.Params), `"values":[1757100000123456789]`) {
+			t.Fatalf("published params rounded large integers: %s", rpc.Params)
+		}
+		transport.events <- signedContextVMResult(t, recipientSecret.Hex(), event, map[string]any{
+			"serial": serial,
+			"nested": map[string]any{"values": []int64{serial}},
+		})
+		return 1, nil
+	}
+
+	result, err := client.Request(context.Background(), "dns/sync", map[string]any{
+		"serial": serial,
+		"nested": map[string]any{"values": []int64{serial}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if !strings.Contains(result.Content, `"serial":1757100000123456789`) ||
+		!strings.Contains(result.Content, `"values":[1757100000123456789]`) {
+		t.Fatalf("result rounded large integers: %s", result.Content)
+	}
+	var decoded struct {
+		Serial int64 `json:"serial"`
+		Nested struct {
+			Values []int64 `json:"values"`
+		} `json:"nested"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
+		t.Fatalf("decode exact result: %v", err)
+	}
+	if decoded.Serial != serial || len(decoded.Nested.Values) != 1 || decoded.Nested.Values[0] != serial {
+		t.Fatalf("decoded result = %#v, want exact serial %d", decoded, serial)
 	}
 }
 

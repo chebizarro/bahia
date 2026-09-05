@@ -136,7 +136,19 @@ dns:
     services: true
     environment_zones:
       edge-01-production: sharegap.net
+    host_overrides:
+      edge-01-docker: 192.168.40.104
 ```
+
+`host_overrides` is mandatory for this rollout: map `edge-01-docker` to the
+edge-01 LAN address (`192.168.40.104`), and map each other Bahia-managed
+deployment-unit endpoint alias to its concrete LAN IP or fully qualified DNS
+name. Docker observations identify the runtime by endpoint alias, so without
+this mapping Astillero would project as
+`CNAME astillero.sharegap.net -> edge-01-docker`; the bare target is not
+resolvable and returns `NXDOMAIN`. Bahia now skips such unsafe records, so an
+omitted mapping leaves Astillero without a managed record rather than creating
+a useless one.
 
 `agent_relays` defaults to the control-plane relays when omitted. Send
 `SIGHUP` to the Bahia server; DNS changes apply through whole-application
@@ -171,8 +183,9 @@ byte-identical after repeated syncs).
    ```
 
    While both the manual line and the Bahia include define
-   `astillero.sharegap.net`, dnsmasq serves the union; confirm the answer
-   matches the Bahia-projected address (the deployed observation host).
+   `astillero.sharegap.net`, dnsmasq serves the union; confirm the answer is
+   `192.168.40.104`, the value configured for `edge-01-docker` in
+   `dns.projection.host_overrides`.
 
 3. Only after Bahia-managed resolution of `astillero.sharegap.net` is
    verified, delete **only** the one `astillero` line from

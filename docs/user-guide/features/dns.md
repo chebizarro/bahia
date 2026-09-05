@@ -121,6 +121,17 @@ Bahia automatically projects endpoints from:
 - **Workers** — Available workers
 - **FIPS mesh** — Federated identity nodes
 
+For service observations, `dns.projection.host_overrides` translates a runtime-observed host or deployment-unit endpoint alias into a concrete IP address or fully qualified hostname before Bahia selects the DNS record type. IP overrides produce `A` or `AAAA` records; fully qualified hostname overrides produce `CNAME` records. Configure an override for every Bahia-managed endpoint alias that is not itself resolvable:
+
+```yaml
+dns:
+  projection:
+    host_overrides:
+      edge-01-docker: 192.168.40.104
+```
+
+Bahia never emits a `CNAME` to a bare single-label target such as `edge-01-docker`. Without a matching override, it skips that service record and logs a warning rather than publishing a record whose target will return `NXDOMAIN`.
+
 ### Endpoint Families
 
 | Family | Source |

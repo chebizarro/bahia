@@ -130,6 +130,13 @@ type ContextVMJSONRPCResponse = cascontextvm.Response
 
 type ContextVMJSONRPCNotification = cascontextvm.Notification
 
+type persistedContextVMJSONRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *JSONRPCError   `json:"error,omitempty"`
+}
+
 // ContextVMResponseEnvelope is the lossless, authenticated response shape
 // delivered after the shared ContextVM ingress has validated the event,
 // unwrapped its envelope, applied replay/routing gates, and deduplicated it.
@@ -1053,9 +1060,14 @@ func (t *EncryptedRequestTransport) cachedContextVMResponse(ctx context.Context,
 	if record == nil {
 		return ContextVMJSONRPCResponse{}, false
 	}
-	if err := json.Unmarshal(record.Response, &response); err != nil {
+	var persisted persistedContextVMJSONRPCResponse
+	if err := json.Unmarshal(record.Response, &persisted); err != nil {
 		t.logger.Error("decode persisted ContextVM response failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
 		return ContextVMJSONRPCResponse{}, false
+	}
+	response = ContextVMJSONRPCResponse{JSONRPC: persisted.JSONRPC, ID: persisted.ID, Error: persisted.Error}
+	if len(persisted.Result) > 0 {
+		response.Result = persisted.Result
 	}
 	t.contextVMMu.Lock()
 	t.contextVMDedup.put(key, response)

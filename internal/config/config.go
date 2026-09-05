@@ -200,6 +200,7 @@ type DNSProjectionConfig struct {
 	MeshEndpoints     bool              `koanf:"mesh_endpoints"`
 	CapabilityAliases bool              `koanf:"capability_aliases"`
 	EnvironmentZones  map[string]string `koanf:"environment_zones"`
+	HostOverrides     map[string]string `koanf:"host_overrides"`
 	WorkerZone        string            `koanf:"worker_zone"`
 	MeshZone          string            `koanf:"mesh_zone"`
 }
@@ -2179,6 +2180,21 @@ func (c *Config) validateDNS() error {
 	}
 	if c.DNS.Projection.EnvironmentZones == nil {
 		c.DNS.Projection.EnvironmentZones = map[string]string{}
+	}
+	if c.DNS.Projection.HostOverrides == nil {
+		c.DNS.Projection.HostOverrides = map[string]string{}
+	}
+	for rawHost, rawTarget := range c.DNS.Projection.HostOverrides {
+		host := strings.TrimSpace(rawHost)
+		target := strings.TrimSpace(rawTarget)
+		if host == "" {
+			return fmt.Errorf("config validation failed: dns.projection.host_overrides keys must not be empty")
+		}
+		if net.ParseIP(target) == nil {
+			if _, err := domain.NormalizePublicHostname(target); err != nil {
+				return fmt.Errorf("config validation failed: dns.projection.host_overrides.%s must be an IP address or fully qualified DNS name", host)
+			}
+		}
 	}
 	if !c.DNS.Enabled {
 		return nil

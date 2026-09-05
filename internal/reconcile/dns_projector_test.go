@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestDNSProjectorProjectionRulesAndRecordTypes(t *testing.T) {
@@ -98,6 +100,107 @@ func TestDNSProjectorProjectionRulesAndRecordTypes(t *testing.T) {
 	assertRecord(t, recordsByZone["edge.example"], "gpu-node.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
 	assertRecord(t, recordsByZone["edge.example"], "l40s.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
 	assertRecord(t, recordsByZone["edge.example"], "l40s.gpu.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
+}
+
+func TestDNSProjectorServiceHostOverridesAndBareHostSafety(t *testing.T) {
+	ctx := context.Background()
+	envID := uuid.New()
+	astilleroID := uuid.New()
+	apiID := uuid.New()
+
+	tests := []struct {
+		name          string
+		hostOverrides map[string]string
+		wantType      domain.DNSRecordType
+		wantValue     string
+		wantAstillero bool
+		wantWarning   bool
+	}{
+		{
+			name:          "IP override produces A record",
+			hostOverrides: map[string]string{"edge-01-docker": "192.168.40.104"},
+			wantType:      domain.DNSRecordTypeA,
+			wantValue:     "192.168.40.104",
+			wantAstillero: true,
+		},
+		{
+			name:        "no override skips bare alias",
+			wantWarning: true,
+		},
+		{
+			name:          "FQDN override produces CNAME",
+			hostOverrides: map[string]string{"edge-01-docker": "edge-01.sharegap.net"},
+			wantType:      domain.DNSRecordTypeCNAME,
+			wantValue:     "edge-01.sharegap.net",
+			wantAstillero: true,
+		},
+		{
+			name:          "IPv6 override produces AAAA record",
+			hostOverrides: map[string]string{"edge-01-docker": "2001:db8::104"},
+			wantType:      domain.DNSRecordTypeAAAA,
+			wantValue:     "2001:db8::104",
+			wantAstillero: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testDNSConfig()
+			cfg.Projection = config.DNSProjectionConfig{
+				Services:         true,
+				EnvironmentZones: map[string]string{"prod": "prod.example"},
+				HostOverrides:    tt.hostOverrides,
+			}
+			core, logs := observer.New(zap.WarnLevel)
+			projector := NewDNSProjector(
+				&fakeServiceRepo{services: []domain.Service{
+					{ID: astilleroID, Name: "astillero", RuntimeType: domain.RuntimeTypeDocker},
+					{ID: apiID, Name: "api", RuntimeType: domain.RuntimeTypeDocker},
+				}},
+				&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+				&fakeStateRepo{states: []domain.EnvironmentServiceState{
+					{ServiceID: astilleroID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync},
+					{ServiceID: apiID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync},
+				}},
+				&fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{
+					dnsTestStateKey(astilleroID, envID): {ServiceID: astilleroID, EnvironmentID: envID, ObservedHost: "edge-01-docker", HealthStatus: domain.HealthStatusHealthy},
+					dnsTestStateKey(apiID, envID):       {ServiceID: apiID, EnvironmentID: envID, ObservedHost: "192.168.40.105", HealthStatus: domain.HealthStatusHealthy},
+				}},
+				nil, nil, nil,
+				cfg,
+				zap.New(core),
+			)
+
+			recordsByZone, err := projector.ProjectZoneRecords(ctx)
+			if err != nil {
+				t.Fatalf("ProjectZoneRecords returned error: %v", err)
+			}
+			records := recordsByZone["prod.example"]
+			assertRecord(t, records, "api.prod.example", domain.DNSRecordTypeA, "192.168.40.105")
+			if tt.wantAstillero {
+				assertRecord(t, records, "astillero.prod.example", tt.wantType, tt.wantValue)
+			} else {
+				for _, record := range records {
+					if record.FQDN == "astillero.prod.example" {
+						t.Fatalf("bare observed host produced record: %#v", record)
+					}
+				}
+			}
+
+			warnings := logs.FilterMessage("observed host is not a resolvable DNS target; configure dns.projection.host_overrides")
+			if tt.wantWarning {
+				if warnings.Len() != 1 {
+					t.Fatalf("warning count = %d, want 1: %#v", warnings.Len(), logs.All())
+				}
+				fields := warnings.All()[0].ContextMap()
+				if fields["service"] != "astillero" || fields["host"] != "edge-01-docker" {
+					t.Fatalf("warning fields = %#v", fields)
+				}
+			} else if warnings.Len() != 0 {
+				t.Fatalf("unexpected unresolvable-host warning: %#v", warnings.All())
+			}
+		})
+	}
 }
 
 func TestDNSProjectorMeshEndpointsProjectFIPSOverlayAAAARecords(t *testing.T) {

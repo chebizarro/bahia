@@ -244,8 +244,8 @@ func TestDnsmasqAgentBackendEndToEndAstilleroFlow(t *testing.T) {
 		t.Fatalf("Health through in-process agent: %v", err)
 	}
 	syncResult := shim.lastSyncResult()
-	if syncResult.Serial <= 0 || !syncResult.Changed {
-		t.Fatalf("sync result = %#v, want positive serial and changed=true", syncResult)
+	if syncResult.Serial <= 1<<53 || !syncResult.Changed {
+		t.Fatalf("sync result = %#v, want UnixNano-scale serial above JSON float64's exact integer range and changed=true", syncResult)
 	}
 	health := shim.healthResult(t)
 	if health.LastApplySerial != syncResult.Serial {
@@ -441,7 +441,9 @@ func (r *e2eEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Env
 func (r *e2eEnvironmentRepo) Update(context.Context, *domain.Environment) error { return nil }
 func (r *e2eEnvironmentRepo) Delete(context.Context, uuid.UUID) error           { return nil }
 
-type e2eStateRepo struct{ states []domain.EnvironmentServiceState }
+type e2eStateRepo struct {
+	states []domain.EnvironmentServiceState
+}
 
 func (r *e2eStateRepo) Upsert(context.Context, *domain.EnvironmentServiceState) error { return nil }
 func (r *e2eStateRepo) Get(context.Context, uuid.UUID, uuid.UUID) (*domain.EnvironmentServiceState, error) {

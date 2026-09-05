@@ -1158,6 +1158,7 @@ func TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays(t *testin
 }
 
 func TestContextVMTransport_PersistedResponseReplaysAfterRestart(t *testing.T) {
+	const serial int64 = 1757100000123456789
 	store := newMemoryContextVMResponseStore()
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	firstPublisher := &mockEncryptedPublisher{}
@@ -1165,7 +1166,7 @@ func TestContextVMTransport_PersistedResponseReplaysAfterRestart(t *testing.T) {
 	firstCalls := 0
 	firstTransport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
 		firstCalls++
-		return map[string]any{"run_id": "run-1"}, nil
+		return map[string]any{"run_id": "run-1", "serial": serial}, nil
 	})
 	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"before-restart","method":"backup/run","params":{"_meta":{"progressToken":"backup-restart"}}}`)
 	firstTransport.HandleEvent(context.Background(), first)
@@ -1186,7 +1187,11 @@ func TestContextVMTransport_PersistedResponseReplaysAfterRestart(t *testing.T) {
 	if len(secondPublisher.events) != 1 {
 		t.Fatalf("restart replay events = %d, want one terminal response", len(secondPublisher.events))
 	}
-	response := contextVMResponse(t, secondPublisher.events[0])
+	replayed := secondPublisher.events[0]
+	if !strings.Contains(replayed.Content, `"serial":1757100000123456789`) {
+		t.Fatalf("persisted response replay rounded large serial: %s", replayed.Content)
+	}
+	response := contextVMResponse(t, replayed)
 	if string(response.ID) != `"after-restart"` || response.Error != nil {
 		t.Fatalf("persisted response replay = %+v", response)
 	}

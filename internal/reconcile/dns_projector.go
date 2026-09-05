@@ -154,6 +154,7 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 	zoneVisibilities := p.zoneVisibilities()
 	recordsByZone := make(map[string][]domain.DNSRecord)
 	aliasCandidatesByZone := make(map[string]map[string]capabilityAliasCandidate)
+	warnedUnresolvableZone := make(map[string]bool)
 	for _, endpoint := range endpoints {
 		zoneVisibility, hasZoneVisibility := zoneVisibilities[endpoint.Zone]
 		if hasZoneVisibility && !dnsEndpointVisibleInZone(endpoint, zoneVisibility, zoneVisibilities) {
@@ -169,11 +170,22 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 		if ttl <= 0 {
 			ttl = 300
 		}
+		recordType := dnsRecordType(endpoint.Address)
+		if recordType == domain.DNSRecordTypeCNAME && !plausibleDNSHostname(endpoint.Address) {
+			if !warnedUnresolvableZone[endpoint.Zone] {
+				p.logger.Warn("observed host is not a resolvable DNS target; configure dns.projection.host_overrides",
+					zap.String("service", endpoint.Name),
+					zap.String("host", endpoint.Address),
+				)
+				warnedUnresolvableZone[endpoint.Zone] = true
+			}
+			continue
+		}
 		recordsByZone[endpoint.Zone] = append(recordsByZone[endpoint.Zone], domain.DNSRecord{
 			Zone:             endpoint.Zone,
 			Name:             endpoint.Name,
 			FQDN:             endpoint.FQDN,
-			Type:             dnsRecordType(endpoint.Address),
+			Type:             recordType,
 			Value:            endpoint.Address,
 			TTL:              ttl,
 			SourceCoordinate: endpoint.Coordinate,
@@ -310,6 +322,10 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 		if observation == nil || observation.HealthStatus != domain.HealthStatusHealthy || strings.TrimSpace(observation.ObservedHost) == "" {
 			continue
 		}
+		address := strings.TrimSpace(observation.ObservedHost)
+		if override, ok := p.cfg.Projection.HostOverrides[address]; ok {
+			address = strings.TrimSpace(override)
+		}
 		name := dnsLabel(service.Name)
 		endpoints = append(endpoints, domain.DNSEndpoint{
 			ServiceID:      uuidPtr(service.ID),
@@ -318,7 +334,7 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 			Environment:    strings.TrimSpace(environment.Name),
 			Zone:           zone,
 			FQDN:           fqdn(name, zone),
-			Address:        strings.TrimSpace(observation.ObservedHost),
+			Address:        address,
 			Runtime:        string(service.RuntimeType),
 			Health:         observation.HealthStatus,
 			DriftStatus:    state.DriftStatus,
@@ -1020,6 +1036,11 @@ func dnsRecordType(address string) domain.DNSRecordType {
 		return domain.DNSRecordTypeA
 	}
 	return domain.DNSRecordTypeAAAA
+}
+
+func plausibleDNSHostname(address string) bool {
+	_, err := domain.NormalizePublicHostname(address)
+	return err == nil
 }
 
 func sortDNSRecords(records []domain.DNSRecord) {

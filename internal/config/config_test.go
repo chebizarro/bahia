@@ -2619,6 +2619,36 @@ func TestDNSValidationEnabled(t *testing.T) {
 		}
 	})
 
+	t.Run("host overrides accept IPs and fully qualified names", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Projection.HostOverrides = map[string]string{
+			"edge-01-docker": "192.168.40.104",
+			"edge-02-docker": "2001:db8::104",
+			"edge-03-docker": "edge-03.sharegap.net",
+		}
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("valid host overrides rejected: %v", err)
+		}
+	})
+
+	for _, tt := range []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{name: "host override key must not be empty", overrides: map[string]string{" ": "192.168.40.104"}},
+		{name: "host override target must not be empty", overrides: map[string]string{"edge-01-docker": ""}},
+		{name: "host override target must not be a bare name", overrides: map[string]string{"edge-01-docker": "edge-01"}},
+		{name: "host override target must be a valid hostname", overrides: map[string]string{"edge-01-docker": "edge_01.sharegap.net"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validDNSConfig()
+			cfg.DNS.Projection.HostOverrides = tt.overrides
+			if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "dns.projection.host_overrides") {
+				t.Fatalf("expected host_overrides validation error, got %v", err)
+			}
+		})
+	}
+
 	t.Run("default ttl required", func(t *testing.T) {
 		cfg := validDNSConfig()
 		cfg.DNS.DefaultTTL = 0
