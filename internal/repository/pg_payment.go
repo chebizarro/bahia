@@ -48,7 +48,7 @@ func (r *PgPaymentRepository) Create(ctx context.Context, p *domain.PaymentRecor
 	p.UpdatedAt = now
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO payments (
+		INSERT INTO payment_records (
 			id, deployment_run_id, worker_pubkey, mint_url, amount_sats,
 			token_hash, direction, status, error_message, metadata,
 			created_at, updated_at
@@ -72,7 +72,7 @@ func (r *PgPaymentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domai
 		SELECT id, deployment_run_id, worker_pubkey, mint_url, amount_sats,
 			token_hash, direction, status, error_message, metadata,
 			created_at, updated_at
-		FROM payments WHERE id = $1
+		FROM payment_records WHERE id = $1
 	`, id).Scan(
 		&p.ID, &p.DeploymentRunID, &p.WorkerPubkey, &p.MintURL, &p.AmountSats,
 		&p.TokenHash, &direction, &status, &p.ErrorMessage, &metadataJSON,
@@ -95,7 +95,7 @@ func (r *PgPaymentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domai
 // UpdateStatus updates the status and optional error message of a payment.
 func (r *PgPaymentRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.PaymentStatus, errorMsg string) error {
 	_, err := r.pool.Exec(ctx, `
-		UPDATE payments SET status = $1, error_message = $2, updated_at = now()
+		UPDATE payment_records SET status = $1, error_message = $2, updated_at = now()
 		WHERE id = $3
 	`, string(status), errorMsg, id)
 	if err != nil {
@@ -110,7 +110,7 @@ func (r *PgPaymentRepository) ListByRun(ctx context.Context, runID uuid.UUID) ([
 		SELECT id, deployment_run_id, worker_pubkey, mint_url, amount_sats,
 			token_hash, direction, status, error_message, metadata,
 			created_at, updated_at
-		FROM payments WHERE deployment_run_id = $1
+		FROM payment_records WHERE deployment_run_id = $1
 		ORDER BY created_at ASC
 	`, runID)
 	if err != nil {
@@ -131,7 +131,7 @@ func (r *PgPaymentRepository) GetByTokenHash(ctx context.Context, tokenHash stri
 		SELECT id, deployment_run_id, worker_pubkey, mint_url, amount_sats,
 			token_hash, direction, status, error_message, metadata,
 			created_at, updated_at
-		FROM payments WHERE token_hash = $1
+		FROM payment_records WHERE token_hash = $1
 	`, tokenHash).Scan(
 		&p.ID, &p.DeploymentRunID, &p.WorkerPubkey, &p.MintURL, &p.AmountSats,
 		&p.TokenHash, &direction, &status, &p.ErrorMessage, &metadataJSON,
@@ -161,7 +161,7 @@ func (r *PgPaymentRepository) ListByWorker(ctx context.Context, workerPubkey str
 		SELECT id, deployment_run_id, worker_pubkey, mint_url, amount_sats,
 			token_hash, direction, status, error_message, metadata,
 			created_at, updated_at
-		FROM payments WHERE worker_pubkey = $1
+		FROM payment_records WHERE worker_pubkey = $1
 		ORDER BY created_at DESC LIMIT $2
 	`, workerPubkey, limit)
 	if err != nil {
@@ -176,7 +176,7 @@ func (r *PgPaymentRepository) ListByWorker(ctx context.Context, workerPubkey str
 func (r *PgPaymentRepository) GetTotalPaidToWorker(ctx context.Context, workerPubkey string) (int64, error) {
 	var total int64
 	err := r.pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_sats), 0) FROM payments
+		SELECT COALESCE(SUM(amount_sats), 0) FROM payment_records
 		WHERE worker_pubkey = $1 AND direction = $2 AND status IN ($3, $4)
 	`, workerPubkey, string(domain.PaymentDirectionPayment),
 		string(domain.PaymentStatusSent), string(domain.PaymentStatusRedeemed)).Scan(&total)
