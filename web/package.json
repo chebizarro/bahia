@@ -42,7 +42,7 @@
     "marked": "^18.0.5",
     "nostr-tools": "2.23.3",
     "qrcode": "^1.5.4",
-    "wheelhouse": "file:../../wheelhouse",
+    "wheelhouse": "file:./vendor/wheelhouse",
     "zod": "^4.4.2"
   }
 }

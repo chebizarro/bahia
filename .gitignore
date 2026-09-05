@@ -48,3 +48,7 @@ web/playwright-report/
 web/test-results/
 # Production integration credentials (never commit)
 test/integration/.env.integration
+
+# Vendored wheelhouse build (pre-publish); dist/ is deliberately tracked here.
+!web/vendor/wheelhouse/dist/
+!web/vendor/wheelhouse/dist/**

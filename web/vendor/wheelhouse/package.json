@@ -1,0 +1,30 @@
+{
+  "name": "wheelhouse",
+  "version": "0.1.0",
+  "description": "Safe Svelte renderer for Cascadia Nostr dashboard-widget events",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/wheelhouse.js"
+    },
+    "./style.css": "./dist/wheelhouse.css"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "zod": "^4.5.4"
+  },
+  "peerDependencies": {
+    "svelte": "^5.57.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "_vendored_from": "https://git.sharegap.net/cascadia/wheelhouse.git @ 9799ca4 (vendored until published; refresh: git archive from wheelhouse checkout)"
+}
