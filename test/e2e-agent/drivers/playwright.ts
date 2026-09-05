@@ -195,7 +195,10 @@ export class PlaywrightDriver {
   async isDashboardLoaded(): Promise<boolean> {
     const page = this.getPage();
     try {
-      await page.waitForSelector('body', { timeout: 5000 });
+      const dashboard = page.getByTestId('dashboard-root');
+      await dashboard.waitFor({ state: 'visible', timeout: 5000 });
+      await dashboard.getByRole('heading', { name: 'Dashboard', exact: true }).waitFor({ state: 'visible' });
+      await dashboard.getByRole('button', { name: 'Create Service' }).waitFor({ state: 'visible' });
       return true;
     } catch {
       return false;

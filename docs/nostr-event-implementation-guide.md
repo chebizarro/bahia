@@ -470,3 +470,7 @@ Before adding or changing Nostr event code:
 - [ ] Create Beads for deferred work rather than leaving comments or TODOs.
 
 If the implementation wants a new event kind, stop and write the kind-allocation justification first. In most cases the correct fix is a ContextVM method, NIP-51 list, NIP-38 status, `30900` projection, `30078` app data event, NIP-58 badge, or ContextVM discovery announcement.
+
+### Managed-instance supervisor observables
+
+The managed-instance health projector subscribes to internal runtime health, recovery, and maintenance events. It publishes NIP-38 kind `30315` status with schema `bahia.status.managed-instance-health.v1` and stable `d=runtime:instance:<service>:<environment>:<deployment-unit>:<sha256(runtime-target)>`, kind `30900` current state with schema `bahia.state.managed-instance-health.v1`, and immutable kind `4903` audit facts with schema `bahia.audit.managed-instance-health.v1`. Evidence is sanitized before projection and publication uses the signed durable outbox/relay-OK path. No polling or new event kind is introduced.

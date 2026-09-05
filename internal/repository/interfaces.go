@@ -91,6 +91,47 @@ type RuntimeObservationRepository interface {
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit int) ([]domain.RuntimeObservation, error)
 }
 
+// ManagedInstanceHealthListOptions bounds and scopes managed-instance health collection reads.
+type ManagedInstanceHealthListOptions struct {
+	OrgID         uuid.UUID
+	ServiceID     uuid.UUID
+	EnvironmentID uuid.UUID
+	UnhealthyOnly bool
+	ActiveAt      time.Time
+	Limit         int
+	Offset        int
+}
+
+// ManagedInstanceHealthListItem combines a health snapshot with its active maintenance override.
+type ManagedInstanceHealthListItem struct {
+	Health              domain.ManagedInstanceHealth
+	MaintenanceOverride *domain.MaintenanceOverride
+}
+
+// ManagedInstanceHealthRepository manages current health, append-only observations,
+// correlated recovery attempts, and maintenance overrides for managed runtime targets.
+type ManagedInstanceHealthRepository interface {
+	UpsertHealth(ctx context.Context, health *domain.ManagedInstanceHealth) error
+	UpsertHealthWithEvent(ctx context.Context, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) error
+	GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	ListHealth(ctx context.Context, options ManagedInstanceHealthListOptions) ([]ManagedInstanceHealthListItem, error)
+	ListAllHealth(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
+	ListHealthByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
+	ListHealthByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ManagedInstanceHealth, error)
+	ListUnhealthy(ctx context.Context) ([]domain.ManagedInstanceHealth, error)
+
+	AppendHealthEvent(ctx context.Context, event *domain.ManagedInstanceHealthEvent) error
+	ListRecentHealthEvents(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.ManagedInstanceHealthEvent, error)
+	RecordRecoveryAttempt(ctx context.Context, attempt *domain.RecoveryAttempt) (bool, error)
+	CompleteRecoveryAttempt(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string) (bool, error)
+	CompleteRecoveryAttemptWithHealthEvent(ctx context.Context, correlationID string, result domain.RecoveryAttemptResult, evidence string, health *domain.ManagedInstanceHealth, event *domain.ManagedInstanceHealthEvent) (bool, error)
+	ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error)
+
+	CreateMaintenanceOverride(ctx context.Context, override *domain.MaintenanceOverride) error
+	ClearMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey) error
+	GetActiveMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey, at time.Time) (*domain.MaintenanceOverride, error)
+}
+
 // DeploymentPolicyRepository manages deployment policy records.
 type DeploymentPolicyRepository interface {
 	Create(ctx context.Context, p *domain.DeploymentPolicy) error

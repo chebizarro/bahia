@@ -138,3 +138,7 @@ Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD
 - [Deployments](deployments.md) — Deployment outcomes
 - [Security](security.md) — OSV breach notifications
 - [Organizations](organizations.md) — Tenant membership and access
+
+## Managed-instance alerts
+
+Notification channel filters may include `runtime.instance_health_changed`, `runtime.recovery_requested`, `runtime.recovery_completed`, `runtime.recovery_failed`, `runtime.recovery_budget_exhausted`, and `runtime.maintenance_changed`. Recovery/error/budget alerts are immediate. Warning delivery follows the instance policy's minimum interval.

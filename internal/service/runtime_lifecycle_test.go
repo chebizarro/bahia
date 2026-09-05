@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -156,6 +157,43 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	}
 	if rt.deployOpts.Environment["API_TOKEN"] != "global-token" {
 		t.Fatalf("effective global secret not merged: %#v", rt.deployOpts.Environment)
+	}
+}
+
+func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
+	ctx := context.Background()
+	serviceID, envID := uuid.New(), uuid.New()
+	secretValue := `pa"ss\word`
+	repo := newMockSecretRepo()
+	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	ciphertext, err := encryptor.Encrypt(secretValue, domain.EncryptionAES256)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if err := repo.Create(ctx, &domain.ServiceSecret{ServiceID: serviceID, EnvironmentID: &envID, Name: "TOKEN", EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	encoded, err := json.Marshal(secretValue)
+	if err != nil {
+		t.Fatalf("marshal secret: %v", err)
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: encryptor}
+
+	got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped))
+	if strings.Contains(got, secretValue) || strings.Contains(got, escaped) {
+		t.Fatalf("scrubbed runtime error leaked secret: %q", got)
+	}
+	if got != "raw=[REDACTED] escaped=[REDACTED]" {
+		t.Fatalf("scrubbed runtime error = %q", got)
+	}
+
+	lifecycle.secretEncryptor = nil
+	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s", secretValue)); got != runtimeActionErrorDetailsWithheld {
+		t.Fatalf("redaction dependency failure returned %q, want withheld", got)
 	}
 }
 

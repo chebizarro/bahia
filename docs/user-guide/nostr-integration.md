@@ -750,3 +750,7 @@ Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6
 - [Core Concepts](core-concepts.md) — Data model
 - [MCP Tools](mcp-tools.md) — Tool invocation
 - [Control Planes](../control-planes.md) — Full specification
+
+### Managed-instance health projection
+
+Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.

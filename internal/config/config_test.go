@@ -8,8 +8,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+func TestSupervisionDefaultsAndValidation(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Supervision.Enabled || !cfg.Supervision.ObserveOnly || cfg.Supervision.Interval != 30*time.Second || cfg.Supervision.ObservationTimeout != 30*time.Second || cfg.Supervision.MemoryThreshold != 0.9 {
+		t.Fatalf("unexpected safe supervision defaults: %+v", cfg.Supervision)
+	}
+	cfg.Supervision.Enabled = true
+	cfg.Supervision.Instances = []SupervisionInstanceConfig{{ServiceID: uuid.NewString(), EnvironmentID: uuid.NewString(), DeploymentUnitID: uuid.NewString(), RuntimeTargetName: "api", SupervisorType: "docker", DesiredRunning: true, RestartMaxAttempts: 3, RestartWindow: time.Hour, BackoffBase: time.Minute, BackoffCap: 10 * time.Minute}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid supervision config: %v", err)
+	}
+	cfg.Supervision.Interval = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid interval")
+	}
+	cfg.Supervision.Interval = 30 * time.Second
+	cfg.Supervision.ObservationTimeout = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid observation timeout")
+	}
+}
 
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()
@@ -906,6 +928,7 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
   workspace_gitea_url: "https://git.example/"
   workspace_private_key_ref: "secret://souls/openclaw/nostr-private-key"
   workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory-mcp-url"
+  agent_memory_task_id_file: " /var/lib/bahia/agent-memory/task-ids.json "
   workspace_gateway_port: 18781
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
@@ -965,6 +988,9 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	}
 	if cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef != "config://souls/agent-memory-mcp-url" {
 		t.Fatalf("SoulFactory workspace_agent_memory_mcp_url_ref = %q", cfg.SoulFactory.WorkspaceAgentMemoryMCPURLRef)
+	}
+	if cfg.SoulFactory.AgentMemoryTaskIDFile != "/var/lib/bahia/agent-memory/task-ids.json" {
+		t.Fatalf("SoulFactory agent_memory_task_id_file = %q", cfg.SoulFactory.AgentMemoryTaskIDFile)
 	}
 	if cfg.SoulFactory.WorkspaceGatewayPort != 18781 {
 		t.Fatalf("SoulFactory workspace_gateway_port = %d", cfg.SoulFactory.WorkspaceGatewayPort)

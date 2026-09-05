@@ -460,3 +460,7 @@ The legacy 311xx command bridge and Bahia-specific request/status/result/read-mo
 | 31102 intent create | ContextVM `service/deploy` or `service/update` method |
 | 31103/31104 approval/rejection | ContextVM approval method for the relevant domain |
 | 31105 rollback | ContextVM `service/rollback` method |
+
+### Managed-instance health projection
+
+Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.

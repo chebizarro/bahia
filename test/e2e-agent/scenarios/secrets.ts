@@ -95,9 +95,12 @@ export const createSecretNIP44: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - serviceStart));
       
-      const serviceId = service.data!.id;
+      const serviceId = service.data.id;
       
       // Step 2: Create secret with NIP-44 encryption
       const secretStart = Date.now();
@@ -109,8 +112,6 @@ export const createSecretNIP44: Scenario = {
           encryption_method: 'nip44',
         }),
       });
-      steps.push(step('Create NIP-44 encrypted secret', 'passed', Date.now() - secretStart));
-      
       if (!secret.data) {
         throw new Error('Secret creation did not return data');
       }
@@ -126,6 +127,7 @@ export const createSecretNIP44: Scenario = {
       if (secretData.value || secretData.encrypted_value) {
         throw new Error('Secret value exposed in response');
       }
+      steps.push(step('Create NIP-44 encrypted secret', 'passed', Date.now() - secretStart));
       
       return {
         name: this.name,
@@ -177,6 +179,9 @@ export const createSecretAES256: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - serviceStart));
       
       // Step 2: Create secret with AES-256-GCM
@@ -190,13 +195,12 @@ export const createSecretAES256: Scenario = {
           encryption_method: 'aes256gcm',
         }),
       });
-      steps.push(step('Create AES-256 encrypted secret', 'passed', Date.now() - secretStart));
-      
       const secretData = secret.data as any;
       
-      if (secretData.encryption_method !== 'aes256gcm') {
-        throw new Error(`Expected encryption_method 'aes256gcm', got '${secretData.encryption_method}'`);
+      if (secretData?.encryption_method !== 'aes256gcm') {
+        throw new Error(`Expected encryption_method 'aes256gcm', got '${secretData?.encryption_method}'`);
       }
+      steps.push(step('Create AES-256 encrypted secret', 'passed', Date.now() - secretStart));
       
       return {
         name: this.name,
@@ -247,9 +251,12 @@ export const listServiceSecrets: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - serviceStart));
       
-      const serviceId = service.data!.id;
+      const serviceId = service.data.id;
       const apiUrl = (drivers.api as any).baseUrl;
       
       // Step 2: Create multiple secrets
@@ -273,8 +280,6 @@ export const listServiceSecrets: Scenario = {
       // Step 3: List secrets
       const listStart = Date.now();
       const result = await secretRequest<any[]>(apiUrl, `/api/v1/services/${serviceId}/secrets`);
-      steps.push(step('List secrets', 'passed', Date.now() - listStart));
-      
       if (!Array.isArray(result.data)) {
         throw new Error('List secrets did not return an array');
       }
@@ -288,6 +293,7 @@ export const listServiceSecrets: Scenario = {
       if (exposedSecrets.length > 0) {
         throw new Error('Secret values exposed in list response');
       }
+      steps.push(step('List secrets', 'passed', Date.now() - listStart));
       
       return {
         name: this.name,
@@ -337,6 +343,9 @@ export const updateSecret: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       
       const apiUrl = (drivers.api as any).baseUrl;
       const secret = await secretRequest(apiUrl, `/api/v1/services/${service.data!.id}/secrets`, {
@@ -346,10 +355,12 @@ export const updateSecret: Scenario = {
           value: 'original-value',
         }),
       });
+      const secretId = (secret.data as any)?.id;
+      const originalVersion = (secret.data as any)?.version;
+      if (!secretId || typeof originalVersion !== 'number') {
+        throw new Error('Secret creation did not return an ID and version');
+      }
       steps.push(step('Setup service and secret', 'passed', Date.now() - setupStart));
-      
-      const secretId = (secret.data as any).id;
-      const originalVersion = (secret.data as any).version;
       
       // Step 2: Update secret
       const updateStart = Date.now();
@@ -363,13 +374,12 @@ export const updateSecret: Scenario = {
           }),
         }
       );
-      steps.push(step('Update secret', 'passed', Date.now() - updateStart));
-      
       // Step 3: Verify version incremented
       const newVersion = (updated.data as any).version;
       if (newVersion <= originalVersion) {
         throw new Error(`Version not incremented: ${originalVersion} -> ${newVersion}`);
       }
+      steps.push(step('Update secret', 'passed', Date.now() - updateStart));
       
       return {
         name: this.name,
@@ -420,6 +430,9 @@ export const deleteSecret: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       
       const apiUrl = (drivers.api as any).baseUrl;
       const secret = await secretRequest(apiUrl, `/api/v1/services/${service.data!.id}/secrets`, {
@@ -429,9 +442,11 @@ export const deleteSecret: Scenario = {
           value: 'to-be-deleted',
         }),
       });
+      const secretId = (secret.data as any)?.id;
+      if (!secretId) {
+        throw new Error('Secret creation did not return an ID');
+      }
       steps.push(step('Setup service and secret', 'passed', Date.now() - setupStart));
-      
-      const secretId = (secret.data as any).id;
       
       // Step 2: Delete secret
       const deleteStart = Date.now();
@@ -442,12 +457,9 @@ export const deleteSecret: Scenario = {
           method: 'DELETE',
         }
       );
-      steps.push(step('Delete secret', 'passed', Date.now() - deleteStart));
-      
       // Step 3: Verify deletion - list should not include deleted secret
       const verifyStart = Date.now();
       const remaining = await secretRequest<any[]>(apiUrl, `/api/v1/services/${service.data!.id}/secrets`);
-      steps.push(step('Verify deletion', 'passed', Date.now() - verifyStart));
       
       if (Array.isArray(remaining.data)) {
         const stillExists = remaining.data.find((s: any) => s.id === secretId);
@@ -455,6 +467,8 @@ export const deleteSecret: Scenario = {
           throw new Error('Secret still exists after deletion');
         }
       }
+      steps.push(step('Delete secret', 'passed', Date.now() - deleteStart));
+      steps.push(step('Verify deletion', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
@@ -511,6 +525,9 @@ export const environmentScopedSecrets: Scenario = {
         name: `prod-${Date.now()}`,
         protected: true,
       });
+      if (!service.data?.id || !devEnv.data?.id || !prodEnv.data?.id) {
+        throw new Error('Service and environment setup did not return all IDs');
+      }
       steps.push(step('Setup service and environments', 'passed', Date.now() - setupStart));
       
       const apiUrl = (drivers.api as any).baseUrl;
@@ -534,8 +551,6 @@ export const environmentScopedSecrets: Scenario = {
           environment_id: prodEnv.data!.id,
         }),
       });
-      steps.push(step('Create env-scoped secrets', 'passed', Date.now() - createStart));
-      
       // Step 3: Verify environment scoping
       if ((devSecret.data as any).environment_id !== devEnv.data!.id) {
         throw new Error('Dev secret not scoped to dev environment');
@@ -544,6 +559,7 @@ export const environmentScopedSecrets: Scenario = {
       if ((prodSecret.data as any).environment_id !== prodEnv.data!.id) {
         throw new Error('Prod secret not scoped to prod environment');
       }
+      steps.push(step('Create env-scoped secrets', 'passed', Date.now() - createStart));
       
       return {
         name: this.name,

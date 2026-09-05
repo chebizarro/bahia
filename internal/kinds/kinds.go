@@ -158,7 +158,8 @@ const (
 	NIP38Status         = cascadia.NIP38_USER_STATUS
 	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
 	CASControlState     = cascadia.CAS_CP_STATE
-	ConfigACLList       = cascadia.NIP51_TASK_COLLECTION
+
+	ConfigACLList = cascadia.NIP51_TASK_COLLECTION
 	// ConfigPolicy mirrors cascadia-nips/generated/go.NIP78_APP_DATA; cascadia-go v1.2.1 predates that generated symbol.
 	ConfigPolicy = 30078
 )

@@ -19,8 +19,6 @@ import (
 //   - Control-plane request/response kinds are owned and audited by the reactor.
 //   - The subscriber tracks non-reactor operational streams: worker catalog updates,
 //     Hive-CI/Loom events, and assistant relay status/result events.
-//   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
-//     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
 	// Canonical Bahia observables and config-fabric desired state.
 	kinds.ConfigACLList,

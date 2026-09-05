@@ -1,5 +1,12 @@
 const BASE_URL = '/api/v1';
 
+function instanceHealthPath(key) {
+  const serviceId = encodeURIComponent(key.service_id);
+  const environmentId = encodeURIComponent(key.environment_id);
+  const deploymentUnitId = encodeURIComponent(key.deployment_unit_id);
+  return `/services/${serviceId}/environments/${environmentId}/managed-instances/${deploymentUnitId}`;
+}
+
 export class BahiaClient {
   constructor() {
     this.authProvider = null;
@@ -84,6 +91,33 @@ export class BahiaClient {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     return data.data;
+  }
+
+  listInstanceHealth(params = {}) {
+    return this.fetch(`/instance-health${this.query(params)}`).then((result) => result ?? []);
+  }
+
+  getInstanceHealth(key) {
+    return this.fetch(`${instanceHealthPath(key)}/health${this.query({ runtime_target_name: key.runtime_target_name })}`);
+  }
+
+  listInstanceHealthEvents(key, limit = 50) {
+    return this.fetch(`${instanceHealthPath(key)}/health/events${this.query({ runtime_target_name: key.runtime_target_name, limit })}`).then((result) => result ?? []);
+  }
+
+  listInstanceRecoveryAttempts(key, limit = 50) {
+    return this.fetch(`${instanceHealthPath(key)}/health/recovery-attempts${this.query({ runtime_target_name: key.runtime_target_name, limit })}`).then((result) => result ?? []);
+  }
+
+  setInstanceMaintenance(key, payload) {
+    return this.fetch(`${instanceHealthPath(key)}/maintenance${this.query({ runtime_target_name: key.runtime_target_name })}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  clearInstanceMaintenance(key) {
+    return this.fetch(`${instanceHealthPath(key)}/maintenance${this.query({ runtime_target_name: key.runtime_target_name })}`, { method: 'DELETE' });
   }
 
   listConfigFabricDrift() {

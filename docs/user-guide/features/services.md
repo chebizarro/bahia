@@ -151,6 +151,8 @@ The artifact image is not typed into the runtime definition. Bahia derives an im
 
 The same normalized managed definition is projected by the backend into the canonical non-secret desired state used for preview, hashing, persistence, rendering, policy, and apply. Browser code does not independently calculate the desired-state hash.
 
+Every signed `service/update` request must include `expected_updated_at` from the service revision currently displayed to the operator. Bahia locks and compares the persisted revision before publishing or storing the update; a stale revision returns JSON-RPC conflict code `-32009` without changing service state, so the client must refresh before retrying.
+
 ## Managed Public Hostnames
 
 The Deploy wizard has a separate **Public route** step. Enable Bahia-managed HTTPS, then enter a fully qualified hostname, the container target port exposed by the signed runtime configuration, and an HTTPS health path. The final review shows the exact non-secret proxied CNAME, remote Tunnel ingress, proxy origin, TLS expectation, provider configuration hash, ordered operations, and compensation plan. Those fields are part of the desired-state hash and the signed deploy request.
@@ -284,3 +286,7 @@ Historical `31961`/`31962` read models are startup migration inputs only.
 - [Deployments](deployments.md) — Deploying services
 - [Artifacts](artifacts.md) — Container images
 - [Policies](policies.md) — Approval rules
+
+## Managed-instance health and recovery
+
+When supervision is enabled, Bahia observes configured targets and Bahia-managed deployment units without rebuilding images or changing configuration. Automatic recovery restarts only the exact unhealthy target, obeys desired-stopped intent, maintenance overrides, restart budgets, exponential backoff, and the shared runtime apply lock. Operators can set or clear a maintenance override through the supervisor service; these changes and recovery attempts are durable audit facts.

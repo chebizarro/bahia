@@ -5,11 +5,11 @@
 Item 3 signer-first Nostr control-plane and MCP surface wiring.
 
 Item 1 foundation was completed in commit `9bb6298`.
-Item 2 backend abstraction/service core was completed in commit `8e2194f`.
+Item 2 delivered control-plane plumbing plus skeleton Nexus/Pulp adapters in commit `8e2194f`; drift observation is not yet implemented for those adapters.
 
 ## Verification status
 
-Verified locally on 2026-05-06.
+Control-plane plumbing and skeleton adapter behavior verified locally on 2026-05-06. This report does not claim production-complete Nexus/Pulp drift observation.
 
 ## Evidence
 
@@ -33,7 +33,7 @@ Verified locally on 2026-05-06.
 - Extended inbound Nostr subscriber and relay-sidecar policy to admit/audit package request and projection kinds.
 - Extended promotion/publication status vocabulary with the required first-class statuses: pending, approved, running, succeeded, failed, rejected, rolled_back.
 
-## Prior Item 2 behavior retained
+## Prior Item 2 control-plane plumbing and skeleton behavior retained
 
 - Added a pluggable package backend contract with capabilities advertising the requested formats: npm, pypi, conan, deb, rpm, pub, go_modules, and gradle.
 - Added backend packages:
@@ -43,23 +43,24 @@ Verified locally on 2026-05-06.
   - shared contract in `internal/backends/packagebackend`
   - construction compatibility layer in `internal/backends/factory`
 - Added package service/policy logic for repository creation/deletion, artifact publish/store, promotion, yank, and drift-oriented observation helpers.
-- Added deterministic tests for filesystem mock lifecycle, Nexus/Pulp HTTP skeleton behavior, service policy checks, digest/size verification, promotion approval, idempotent same-digest publish, yanking, and source overflow rejection.
+- Added deterministic tests for filesystem mock lifecycle, Nexus/Pulp HTTP skeleton behavior, service policy checks, digest/size verification, promotion approval, idempotent same-digest publish, yanking, and source overflow rejection. These tests do not establish independent backend checksum/drift observation.
 
 ## Current limitations / deferred work
 
 CLI package commands remain intentionally deferred to Item 4 per the user boundary.
 
-Nexus and Pulp adapters are meaningful skeletons behind the interface, but production deployment details remain HITL decisions:
+Nexus and Pulp adapters are meaningful skeletons behind the interface. Both advertise `CanObserveDrift = false`; independent backend checksum retrieval and byte-level drift observation are not implemented. Production deployment details also remain unresolved:
 
-- exact Nexus API/version and auth wiring;
-- exact Pulp file plugin/version and publication/distribution workflow;
-- production secret/TLS resolver integration for `auth_secret_ref`, `tls_secret_ref`, and `secret_refs`.
+- exact Nexus API/version and checksum workflow (`bahia-1zqhl`);
+- exact Pulp file plugin/version and checksum/publication/distribution workflow (`bahia-1zqhl`);
+- production authentication resolver integration for `auth_secret_ref` and `secret_refs` (`bahia-v8b6c`);
+- production TLS resolver integration for `tls_secret_ref` (`bahia-rf5of`).
 
 The Item 2 factory explicitly rejects unwired secret refs instead of silently ignoring them.
 
 ## Review follow-up
 
-Oracle review identified and this patch fixed four backend/service risks before completion:
+The original Oracle review identified four backend/service risks; the patch addressed them within the limited control-plane-plumbing and skeleton-adapter scope:
 
 - HTTP backend secret/TLS references are no longer silently ignored by the factory;
 - Pulp repository ensure now propagates distribution setup failures;

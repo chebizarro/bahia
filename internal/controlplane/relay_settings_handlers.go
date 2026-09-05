@@ -500,7 +500,7 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	if err != nil {
 		return err
 	}
-	tags := nostr.Tags{{"d", RelaySettingsDTag}, {"domain", RelaySettingsDomain}, {"entity", "relay-policy"}, {"schema", RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}
+	tags := nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {"entity", "relay-policy"}, {kinds.CASControlStateTagSchema, RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}
 	if req.Event.ID != (nostr.ID{}) {
 		tags = append(tags, nostr.Tag{"e", req.Event.ID.Hex(), "", "request"})
 	}

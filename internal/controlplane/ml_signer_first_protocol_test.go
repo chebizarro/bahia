@@ -32,7 +32,9 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 			t.Fatalf("AI/ML legacy command/result kind[%d]=%d, want %d", i, kind, want)
 		}
 		if kind >= 5000 && kind <= 7000 {
-			t.Fatalf("AI/ML command/result kind %d must not collide with NIP-90 DVM range", kind)
+			// This preserves the historical AI/ML namespace separation from the retired
+			// legacy DVM allocation. Loom, Hive-CI, and SoulFactory are explicit fleet-local exceptions.
+			t.Fatalf("AI/ML command/result kind %d unexpectedly entered the retired legacy DVM allocation", kind)
 		}
 	}
 

@@ -30,6 +30,9 @@ export const createDeploymentIntent: Scenario = {
         artifact_repo: 'registry.example.com/test/app',
         runtime_type: 'docker',
       });
+      if (!service.data?.id) {
+        throw new Error('Service creation did not return an ID');
+      }
       steps.push(step('Create service', 'passed', Date.now() - serviceStart));
       
       // Step 2: Create environment
@@ -38,6 +41,9 @@ export const createDeploymentIntent: Scenario = {
         name: `deploy-env-${Date.now()}`,
         protected: false,
       });
+      if (!environment.data?.id) {
+        throw new Error('Environment creation did not return an ID');
+      }
       steps.push(step('Create environment', 'passed', Date.now() - envStart));
       
       // Step 3: Create a build (required for artifact)
@@ -49,6 +55,9 @@ export const createDeploymentIntent: Scenario = {
         ci_run_id: `run-${Date.now()}`,
         status: 'succeeded',
       });
+      if (!build.data?.id) {
+        throw new Error('Build creation did not return an ID');
+      }
       steps.push(step('Create build', 'passed', Date.now() - buildStart));
       
       // Step 4: Register an artifact (required for deployment intent)
@@ -60,6 +69,9 @@ export const createDeploymentIntent: Scenario = {
         image_tag: 'v1.0.0',
         image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
       });
+      if (!artifact.data?.id) {
+        throw new Error('Artifact registration did not return an ID');
+      }
       steps.push(step('Register artifact', 'passed', Date.now() - artifactStart));
       
       // Step 5: Create deployment intent
@@ -70,11 +82,10 @@ export const createDeploymentIntent: Scenario = {
         artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
-      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
-      
       if (!intent.data) {
         throw new Error('Deployment intent creation did not return data');
       }
+      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
       
       return {
         name: this.name,
@@ -124,6 +135,9 @@ export const approveDeploymentIntent: Scenario = {
         name: `approve-env-${Date.now()}`,
         protected: true, // Protected environment requires approval
       });
+      if (!service.data?.id || !environment.data?.id) {
+        throw new Error('Service and environment setup did not return both IDs');
+      }
       steps.push(step('Setup service and environment', 'passed', Date.now() - setupStart));
       
       // Step 2: Create build and artifact
@@ -142,6 +156,9 @@ export const approveDeploymentIntent: Scenario = {
         image_tag: 'v1.0.0',
         image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
       });
+      if (!build.data?.id || !artifact.data?.id) {
+        throw new Error('Build and artifact creation did not return both IDs');
+      }
       steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
       
       // Step 3: Create deployment intent
@@ -152,14 +169,13 @@ export const approveDeploymentIntent: Scenario = {
         artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
-      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
-      
       // Note: intent.data might be the intent ID or full object depending on API response
       const intentId = typeof intent.data === 'string' ? intent.data : (intent.data as any)?.id;
       
       if (!intentId) {
         throw new Error('Could not extract intent ID from response');
       }
+      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
       
       // Step 4: Approve the intent
       const approveStart = Date.now();
@@ -169,13 +185,11 @@ export const approveDeploymentIntent: Scenario = {
       // Step 5: Verify approval
       const verifyStart = Date.now();
       const fetchedIntent = await drivers.api.getDeploymentIntent(intentId);
-      steps.push(step('Verify approval', 'passed', Date.now() - verifyStart));
-      
-      // Check if status indicates approval (status might be 'approved' or similar)
       const status = (fetchedIntent.data as any)?.status;
-      if (status && status !== 'approved' && status !== 'pending_deployment') {
-        console.warn(`Warning: Intent status is "${status}", expected "approved" or "pending_deployment"`);
+      if (status !== 'approved') {
+        throw new Error(`Intent status is "${String(status)}", expected "approved"`);
       }
+      steps.push(step('Verify approval', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
@@ -224,6 +238,9 @@ export const rejectDeploymentIntent: Scenario = {
         name: `reject-env-${Date.now()}`,
         protected: true,
       });
+      if (!service.data?.id || !environment.data?.id) {
+        throw new Error('Service and environment setup did not return both IDs');
+      }
       steps.push(step('Setup service and environment', 'passed', Date.now() - setupStart));
       
       // Step 2: Create build and artifact
@@ -242,6 +259,9 @@ export const rejectDeploymentIntent: Scenario = {
         image_tag: 'v1.0.0',
         image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
       });
+      if (!build.data?.id || !artifact.data?.id) {
+        throw new Error('Build and artifact creation did not return both IDs');
+      }
       steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
       
       // Step 3: Create deployment intent
@@ -252,24 +272,25 @@ export const rejectDeploymentIntent: Scenario = {
         artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
-      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
-      
       const intentId = typeof intent.data === 'string' ? intent.data : (intent.data as any)?.id;
+      if (!intentId) {
+        throw new Error('Could not extract intent ID from response');
+      }
+      steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
       
       // Step 4: Reject the intent
       const rejectStart = Date.now();
       await drivers.api.rejectDeploymentIntent(intentId, 'Failed security scan');
       steps.push(step('Reject deployment intent', 'passed', Date.now() - rejectStart));
       
-      // Step 4: Verify rejection
+      // Step 5: Verify rejection
       const verifyStart = Date.now();
       const fetchedIntent = await drivers.api.getDeploymentIntent(intentId);
-      steps.push(step('Verify rejection', 'passed', Date.now() - verifyStart));
-      
       const status = (fetchedIntent.data as any)?.status;
-      if (status && status !== 'rejected') {
-        console.warn(`Warning: Intent status is "${status}", expected "rejected"`);
+      if (status !== 'rejected') {
+        throw new Error(`Intent status is "${String(status)}", expected "rejected"`);
       }
+      steps.push(step('Verify rejection', 'passed', Date.now() - verifyStart));
       
       return {
         name: this.name,
@@ -292,11 +313,11 @@ export const rejectDeploymentIntent: Scenario = {
 };
 
 /**
- * Test: Full deployment workflow
+ * Test: Deployment intent creation workflow
  */
 export const fullDeploymentWorkflow: Scenario = {
-  name: 'Full Deployment Workflow',
-  description: 'Complete deployment workflow: create intent, approve, deploy',
+  name: 'Deployment Intent Creation Workflow',
+  description: 'Create the service, environment, artifact, and deployment intent, then verify the intent exists',
   tags: ['deployments', 'api', 'integration', 'workflow'],
   
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
@@ -313,8 +334,11 @@ export const fullDeploymentWorkflow: Scenario = {
       });
       const environment = await drivers.api.createEnvironment({
         name: `workflow-env-${Date.now()}`,
-        protected: false, // Non-protected for simpler workflow
+        protected: false,
       });
+      if (!service.data?.id || !environment.data?.id) {
+        throw new Error('Service and environment setup did not return both IDs');
+      }
       steps.push(step('Setup', 'passed', Date.now() - setupStart));
       
       // Create build and artifact
@@ -333,6 +357,9 @@ export const fullDeploymentWorkflow: Scenario = {
         image_tag: 'v1.0.0',
         image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
       });
+      if (!build.data?.id || !artifact.data?.id) {
+        throw new Error('Build and artifact creation did not return both IDs');
+      }
       steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
       
       // Create intent
@@ -343,25 +370,19 @@ export const fullDeploymentWorkflow: Scenario = {
         artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
-      steps.push(step('Create intent', 'passed', Date.now() - intentStart));
-      
       const intentId = typeof intent.data === 'string' ? intent.data : (intent.data as any)?.id;
+      if (!intentId) {
+        throw new Error('Could not extract intent ID from response');
+      }
+      steps.push(step('Create intent', 'passed', Date.now() - intentStart));
       
       // Get intent to verify creation
       const getIntentStart = Date.now();
       const fetchedIntent = await drivers.api.getDeploymentIntent(intentId);
-      steps.push(step('Fetch intent', 'passed', Date.now() - getIntentStart));
-      
       if (!fetchedIntent.data) {
         throw new Error('Intent not found after creation');
       }
-      
-      // Approve (if needed based on environment protection)
-      if (environment.data!.protected) {
-        const approveStart = Date.now();
-        await drivers.api.approveDeploymentIntent(intentId);
-        steps.push(step('Approve intent', 'passed', Date.now() - approveStart));
-      }
+      steps.push(step('Fetch intent', 'passed', Date.now() - getIntentStart));
       
       return {
         name: this.name,

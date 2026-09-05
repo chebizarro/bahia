@@ -107,6 +107,10 @@ sbom:
     enabled: false
     binary_path: "cdxgen"
 
+soul_factory:
+  # Durable local identity mapping used by the agent-memory adapter across restarts.
+  agent_memory_task_id_file: "/var/lib/bahia/agent-memory/task-ids.json"
+
 assistant:
   # The assistant uses the multi-step agentic loop by default in audited permission mode.
   # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
@@ -269,3 +273,7 @@ curl http://localhost:8080/.well-known/nostr.json
 In the web UI, open **Settings → Relays** (`/settings/relays`) to inspect persistent operator relay policy, validate local browser relay URLs, and reconnect the local browser session. Reconnect results explicitly report whether all, some, or no configured local browser relays connected.
 
 See [Troubleshooting](troubleshooting.md) for more solutions.
+
+### Managed-instance supervision
+
+`supervision.enabled` starts local runtime health checks. Recovery is safe by default: `supervision.observe_only` defaults to `true`. Configure `interval`, `memory_threshold`, and explicit `instances`; Bahia-managed desired deployment units are also discovered from durable environment-service state. Each explicit instance identifies its service, environment, deployment unit, exact runtime target, supervisor type, desired-running intent, probe, restart budget, backoff, and warning interval.

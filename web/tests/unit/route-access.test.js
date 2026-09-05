@@ -47,6 +47,41 @@ describe('route access', () => {
     });
   });
 
+  it('requires authentication for operational and delivery surfaces', () => {
+    const auditedPrefixes = [
+      '/builds',
+      '/packages',
+      '/backup',
+      '/continuity',
+      '/dns',
+      '/security',
+      '/ml',
+      '/environment-states'
+    ];
+
+    for (const pathname of auditedPrefixes) {
+      expect(routeAccessConfig.protectedPrefixes).toContain(pathname);
+      expect(getRouteAccess(pathname)).toMatchObject({
+        pathname,
+        protectedRoute: true,
+        requiredRoles: [],
+        requiresRestCompatibility: false
+      });
+      expect(canAccessRoute({ pathname, authState: {}, isAuthenticated: false })).toMatchObject({
+        protectedRoute: true,
+        authorized: false,
+        roleAuthorized: false,
+        compatibilityAuthorized: false
+      });
+      expect(canAccessRoute({ pathname, authState: {}, isAuthenticated: true })).toMatchObject({
+        protectedRoute: true,
+        authorized: true,
+        roleAuthorized: true,
+        compatibilityAuthorized: true
+      });
+    }
+  });
+
   it('denies protected routes to unauthenticated users and allows public routes', () => {
     expect(canAccessRoute({ pathname: '/souls', authState: {}, isAuthenticated: false })).toMatchObject({
       protectedRoute: true,

@@ -53,13 +53,12 @@ export const listWorkers: Scenario = {
       const listStart = Date.now();
       const apiUrl = (drivers.api as any).baseUrl;
       const result = await workerRequest<any[]>(apiUrl, '/api/v1/workers');
-      steps.push(step('List workers', 'passed', Date.now() - listStart));
-      
       // Workers list might be empty/null if no workers have registered
       const workers = result.data ?? [];
       if (!Array.isArray(workers)) {
         throw new Error('List workers did not return an array');
       }
+      steps.push(step('List workers', 'passed', Date.now() - listStart));
       
       return {
         name: this.name,
@@ -102,8 +101,6 @@ export const listWorkersByStatus: Scenario = {
       for (const status of statuses) {
         const filterStart = Date.now();
         const result = await workerRequest<any[]>(apiUrl, `/api/v1/workers?status=${status}`);
-        steps.push(step(`Filter by status: ${status}`, 'passed', Date.now() - filterStart));
-        
         // Handle null as empty array (no workers with that status)
         const workers = result.data ?? [];
         if (!Array.isArray(workers)) {
@@ -117,6 +114,7 @@ export const listWorkersByStatus: Scenario = {
             throw new Error(`Found ${invalidWorkers.length} workers with wrong status`);
           }
         }
+        steps.push(step(`Filter by status: ${status}`, 'passed', Date.now() - filterStart));
       }
       
       return {
@@ -156,9 +154,12 @@ export const getWorkerByPubkey: Scenario = {
       // Step 1: List workers to get a pubkey
       const listStart = Date.now();
       const workers = await workerRequest<any[]>(apiUrl, '/api/v1/workers');
+      if (!Array.isArray(workers.data)) {
+        throw new Error('List workers did not return an array');
+      }
       steps.push(step('List workers', 'passed', Date.now() - listStart));
       
-      if (!Array.isArray(workers.data) || workers.data.length === 0) {
+      if (workers.data.length === 0) {
         // No workers registered, skip test
         return {
           name: this.name,
@@ -174,8 +175,6 @@ export const getWorkerByPubkey: Scenario = {
       // Step 2: Get specific worker
       const getStart = Date.now();
       const worker = await workerRequest(apiUrl, `/api/v1/workers/${testPubkey}`);
-      steps.push(step('Get worker by pubkey', 'passed', Date.now() - getStart));
-      
       if (!worker.data) {
         throw new Error('Worker not found');
       }
@@ -183,6 +182,7 @@ export const getWorkerByPubkey: Scenario = {
       if ((worker.data as any).pubkey !== testPubkey) {
         throw new Error('Returned worker has wrong pubkey');
       }
+      steps.push(step('Get worker by pubkey', 'passed', Date.now() - getStart));
       
       return {
         name: this.name,
@@ -222,9 +222,12 @@ export const getWorkerPricing: Scenario = {
       // Step 1: List workers to get a pubkey
       const listStart = Date.now();
       const workers = await workerRequest<any[]>(apiUrl, '/api/v1/workers');
+      if (!Array.isArray(workers.data)) {
+        throw new Error('List workers did not return an array');
+      }
       steps.push(step('List workers', 'passed', Date.now() - listStart));
       
-      if (!Array.isArray(workers.data) || workers.data.length === 0) {
+      if (workers.data.length === 0) {
         return {
           name: this.name,
           status: 'skipped',
@@ -239,8 +242,6 @@ export const getWorkerPricing: Scenario = {
       // Step 2: Get worker pricing
       const pricingStart = Date.now();
       const pricing = await workerRequest(apiUrl, `/api/v1/workers/${testPubkey}/pricing`);
-      steps.push(step('Get worker pricing', 'passed', Date.now() - pricingStart));
-      
       if (!pricing.data) {
         throw new Error('No pricing data returned');
       }
@@ -250,6 +251,7 @@ export const getWorkerPricing: Scenario = {
       if (typeof pricingData !== 'object') {
         throw new Error('Pricing data is not an object');
       }
+      steps.push(step('Get worker pricing', 'passed', Date.now() - pricingStart));
       
       return {
         name: this.name,

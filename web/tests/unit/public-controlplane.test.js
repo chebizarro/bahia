@@ -182,6 +182,7 @@ describe('public controlplane command helpers', () => {
   it('uses the desired-state hash to idempotently persist managed service configuration', async () => {
     const hash = `sha256:${'c'.repeat(64)}`;
     await api.updateService('svc-1', {
+      expected_updated_at: '2026-08-29T12:00:00Z',
       managed_runtime_config: { schema_version: '1', service_name: 'web' },
       idempotency_key: hash
     });
@@ -189,7 +190,7 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
       operation: 'service/update',
       requestId: hash,
-      payload: expect.objectContaining({ id: 'svc-1', idempotency_key: hash })
+      payload: expect.objectContaining({ id: 'svc-1', expected_updated_at: '2026-08-29T12:00:00Z', idempotency_key: hash })
     }));
   });
 

@@ -68,10 +68,22 @@ func (r *PgServiceRepository) scanService(row pgx.Row) (*domain.Service, error) 
 }
 
 func (r *PgServiceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
+	return r.getByID(ctx, id, false)
+}
+
+// GetByIDForUpdate loads and locks a service row for a revision-checked update.
+func (r *PgServiceRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
+	return r.getByID(ctx, id, true)
+}
+
+func (r *PgServiceRepository) getByID(ctx context.Context, id uuid.UUID, forUpdate bool) (*domain.Service, error) {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " FOR UPDATE"
+	}
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
-		FROM services WHERE id = $1
-	`, id)
+		FROM services WHERE id = $1`+lockClause, id)
 	svc, err := r.scanService(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {

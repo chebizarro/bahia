@@ -124,7 +124,7 @@ Options:
   --mcp-url <url>           MCP JSON-RPC URL (default: BAHIA_E2E_MCP_URL or http://localhost:8080/mcp)
   --heal                    Enable self-healing loop
   --max-iterations <n>      Max healing attempts (default: 3)
-  --approve-fixes           Require approval before applying each fix
+  --approve-fixes           Prompt to approve applying each proposed fix
   --help                    Show this help
 `);
 }
@@ -151,7 +151,7 @@ async function main(): Promise<void> {
       const healing = await runSelfHealingLoop({
         runner: parsed.options,
         maxIterations: parsed.maxIterations,
-        requireApproval: parsed.approveFixes,
+        requireApproval: true,
         approveFix: parsed.approveFixes ? askForFixApproval : undefined,
       });
 
@@ -161,6 +161,7 @@ async function main(): Promise<void> {
       }
 
       const report = finalIteration.report;
+      console.log(`\nSelf-healing outcome: ${healing.status}`);
 
       if (parsed.json) {
         const jsonReport = toJSON(report);

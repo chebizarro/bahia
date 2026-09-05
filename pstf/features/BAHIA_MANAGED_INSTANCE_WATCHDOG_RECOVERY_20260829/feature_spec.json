@@ -1,0 +1,6 @@
+{
+  "feature_id": "BAHIA_MANAGED_INSTANCE_WATCHDOG_RECOVERY_20260829",
+  "stage": 4,
+  "intent": "Observe Bahia-managed runtime instances, persist health transitions, perform policy-bounded exact-target recovery, project canonical Nostr observables, and expose tenant-scoped operator health and maintenance workflows.",
+  "constraints": ["observe_only defaults true", "local health-check timers only", "Nostr projection is subscription-driven", "no image rebuild or configuration mutation", "health reads are tenant scoped", "maintenance changes require authenticated operator identity"]
+}

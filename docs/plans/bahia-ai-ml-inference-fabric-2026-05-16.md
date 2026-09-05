@@ -188,7 +188,7 @@ Extend the control-plane reactor/projector/subscriber for new AI/ML kinds. Do no
 
 ## Nostr Event Namespace
 
-Keep existing LLM kinds stable as the LLM compatibility namespace. Do not use the `5000-7000` range for new Bahia AI/ML events: NIP-90 reserves `5000-5999` for Data Vending Machine job requests, `6000-6999` for job results, and `7000` for feedback (`nips/90.md:13-22`). Introduce a separate AI/ML family using addressable command events and replaceable read models. Treat `38390-38399` and `31980-31989` as a public spec candidate track, but do not let standardization block implementation phases; implementation should document field names, compatibility notes, and migration risks as the candidate namespace evolves.
+Historical namespace decision (superseded 2026-08-01): this plan originally kept new Bahia AI/ML events outside `5000-7000` because that range was then allocated to NIP-90 Data Vending Machine requests, results, and feedback. NIP-90 is now retired, so range avoidance is no longer an active constraint; fleet-local Loom, Hive-CI, and SoulFactory kinds within that allocation remain independent protocols. Keep existing LLM kinds stable as the LLM compatibility namespace. The proposed `38390-38399` and `31980-31989` families are retained only as legacy/migration inventory; production AI/ML transport uses ContextVM `25910` plus canonical observable state.
 
 ### Addressable/read-model events
 
@@ -421,7 +421,7 @@ Acceptance: a user can pull a model from GitHub, convert/build it in a container
 
 - Update `docs/control-planes.md` with phase-1 `38390-38399` command/result kinds and `31980-31989` read models.
 - Update `docs/protocol-compatibility.md` to state that REST/MCP are compatibility/tooling surfaces and Nostr remains completion truth.
-- Document why new AI/ML events avoid NIP-90's `5000-7000` range.
+- Historical (superseded 2026-08-01): record why the original AI/ML candidate namespace avoided the then-active NIP-90 `5000-7000` allocation; this is not a current constraint.
 - Create PSTF artifacts for signer-first protocol, recovery/serialization, fail-closed provenance, HF→vLLM, and ONNX→RKNN.
 
 Gate: event namespace, acceptance criteria, and test matrix are approved before code changes.

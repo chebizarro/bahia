@@ -61,6 +61,7 @@ type UpdateServiceRequest struct {
 	RuntimeType              *string                      `json:"runtime_type,omitempty"`
 	ManagedRuntimeConfig     *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
 	AdoptedPublicEnvironment map[string]string            `json:"adopted_public_environment,omitempty"`
+	ExpectedUpdatedAt        *time.Time                   `json:"expected_updated_at"`
 	IdempotencyKey           string                       `json:"idempotency_key,omitempty"`
 }
 

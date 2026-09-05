@@ -1,0 +1,11 @@
+{
+  "feature_id": "FP_BAHIA_ARCANA_02_TARGET_UI",
+  "criteria": [
+    {"id":"AC1","statement":"The browser creates and lists explicit Bahia-managed Compose deployment units through signed ContextVM environment mutations.","verification":["web/tests/e2e/environments-crud-smoke.spec.js","web/tests/unit/public-controlplane.test.js"]},
+    {"id":"AC2","statement":"Deployment-unit edits submit the complete explicit unit set with the canonical expected_updated_at revision, preserving unedited units and omitting server-only fields.","verification":["web/tests/e2e/environments-crud-smoke.spec.js","web/tests/unit/deployment-units.test.js"]},
+    {"id":"AC3","statement":"Deployment-unit serialization and validation reject duplicate keys, missing revisions, mixed runtimes, non-Bahia-managed ownership, and raw endpoint URLs.","verification":["web/tests/e2e/environments-crud-smoke.spec.js","web/tests/unit/deployment-units.test.js","web/tests/unit/public-controlplane.test.js"]},
+    {"id":"AC4","statement":"A multi-unit Compose environment requires explicit deployment-unit selection before deployment can continue.","verification":["web/tests/e2e/deployment-unit-targeting.spec.js","web/tests/unit/deployment-units.test.js"]},
+    {"id":"AC5","statement":"The selected deployment_unit_id is carried unchanged through policy preview and the signed service/deploy request, including the unit tag and resulting intent.","verification":["web/tests/e2e/deployment-unit-targeting.spec.js","web/tests/unit/public-controlplane.test.js"]},
+    {"id":"AC6","statement":"The UI exposes endpoint_ref aliases only and fails closed for invalid unit ownership or targeting without displaying Docker host URLs, certificate paths, keys, or credentials.","verification":["web/tests/e2e/deployment-unit-targeting.spec.js","web/tests/unit/deployment-units.test.js"]}
+  ]
+}

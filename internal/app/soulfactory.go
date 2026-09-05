@@ -155,7 +155,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 			AuthHeaderName:            cfg.Qdrant.AuthHeaderName,
 			AllowUnauthenticatedLocal: cfg.Qdrant.AllowUnauthenticatedLocal,
 		},
-		AgentMemory:            agentmemory.Config{},
+		AgentMemory:            soulFactoryAgentMemoryConfig(sf),
 		NIP05Relays:            cfg.SoulFactory.NIP05Relays,
 		NIP29Groups:            soulFactoryNIP29Groups(cfg.SoulFactory.NIP29Groups),
 		CommunikeysCommunities: soulFactoryCommunikeysCommunities(cfg.SoulFactory.CommunikeysCommunities),
@@ -354,6 +354,10 @@ func configuredBlossomServers(cfg config.BlossomConfig) []string {
 		servers = append(servers, strings.TrimSpace(cfg.URL))
 	}
 	return servers
+}
+
+func soulFactoryAgentMemoryConfig(cfg config.SoulFactoryConfig) agentmemory.Config {
+	return agentmemory.Config{TaskIDFile: cfg.AgentMemoryTaskIDFile}
 }
 
 func firstConfiguredBlossomServer(cfg config.BlossomConfig) string {

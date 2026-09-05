@@ -53,7 +53,9 @@ describe('nav model helpers', () => {
 
     expect(NAV_LINKS).toEqual(expect.arrayContaining([
       expect.objectContaining({ href: '/souls', label: 'Souls', docTopic: 'features-souls' }),
+      expect.objectContaining({ href: '/continuity', label: 'Continuity', docTopic: 'features-continuity' }),
       expect.objectContaining({ href: '/dns', label: 'DNS', docTopic: 'features-dns' }),
+      expect.objectContaining({ href: '/events', label: 'Events', docTopic: 'features-events' }),
       expect.objectContaining({ href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' }),
       expect.objectContaining({ href: '/notifications', label: 'Notifications', docTopic: 'features-notifications' }),
       expect.objectContaining({ href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }),
@@ -116,6 +118,8 @@ describe('nav model helpers', () => {
       { href: '/services', label: 'Services', docTopic: 'features-services' },
       { href: '/deployments', label: 'Deployments', docTopic: 'features-deployments' },
       { href: '/fleet-health', label: 'Fleet Health', docTopic: 'features-fleet-health' },
+      { href: '/continuity', label: 'Continuity', docTopic: 'features-continuity' },
+      { href: '/events', label: 'Events', docTopic: 'features-events' },
       { href: '/llm', label: 'LLM', docTopic: 'features-llm-routes' },
       { href: '/ml', label: 'Inference', docTopic: 'features-ml-models' }
     ]));

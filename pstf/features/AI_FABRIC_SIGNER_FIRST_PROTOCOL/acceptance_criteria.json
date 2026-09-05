@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC-SFP-001",
-      "description": "AI/ML legacy command/result constants retain the phase-1 38390-38399 namespace and avoid NIP-90 reserved 5000-7000 ranges, while production signer-first publishing uses canonical ContextVM events instead of reviving those legacy kinds.",
+      "description": "AI/ML legacy command/result constants retain the phase-1 38390-38399 namespace and remain separate from the retired legacy DVM allocation as historical compatibility inventory, while production signer-first publishing uses canonical ContextVM events instead of reviving those legacy kinds; Loom, Hive-CI, and SoulFactory kinds in 5000-7000 remain independent fleet-local protocols.",
       "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md; docs/nostr-event-implementation-guide.md",
       "plan_sections": [
         "Phase 0 — Contract and PSTF gate",

@@ -30,6 +30,7 @@ type Config struct {
 	Loom           LoomConfig                `koanf:"loom"`
 	Nostr          NostrConfig               `koanf:"nostr"`
 	Reconcile      ReconcileConfig           `koanf:"reconcile"`
+	Supervision    SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
 	Runtime        RuntimeConfig             `koanf:"runtime"`
 	Log            LogConfig                 `koanf:"log"`
 	Auth           AuthConfig                `koanf:"auth"`
@@ -224,6 +225,7 @@ type SoulFactoryConfig struct {
 	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
 	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
 	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	AgentMemoryTaskIDFile           string                 `koanf:"agent_memory_task_id_file" yaml:"agent_memory_task_id_file"`
 	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
 	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled"`
 	OpenClawSignetStateDir          string                 `koanf:"openclaw_signet_state_dir" yaml:"openclaw_signet_state_dir"`
@@ -787,6 +789,29 @@ type HiveCIPolicyConfig struct {
 	Metadata        map[string]any `koanf:"metadata" yaml:"metadata"`
 }
 
+// HiveCIInitiatorConfig configures the fleet Gitea private-mirror and
+// Hive-CI build initiation adapter. When Enabled, all fields except
+// RepoAnnouncementAddr and RelayHint are required; the GitHub credential is
+// never configured here — it is resolved per request from an opaque
+// server-side secret reference.
+type HiveCIInitiatorConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// GiteaBaseURL is the fleet Gitea API base URL, e.g. https://git.fleet.internal
+	GiteaBaseURL string `koanf:"gitea_base_url"`
+	// GiteaToken is the fleet Gitea admin token used for mirror provisioning.
+	GiteaToken string `koanf:"gitea_token"`
+	// MirrorOwner is the Gitea org/user that owns private mirrors.
+	MirrorOwner string `koanf:"mirror_owner"`
+	// WorkflowPath is the Hive-CI workflow file invoked for builds.
+	WorkflowPath string `koanf:"workflow_path"`
+	// SourceCloneURL optionally overrides the upstream clone URL.
+	SourceCloneURL string `koanf:"source_clone_url"`
+	// RepoAnnouncementAddr optionally carries the NIP-34 30617 address of the mirror.
+	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
+	// RelayHint is attached to published run-request/evidence events.
+	RelayHint string `koanf:"relay_hint"`
+}
+
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
 	Enabled                         bool                 `koanf:"enabled"`
@@ -796,7 +821,8 @@ type HiveCIConfig struct {
 	AutoDeployStagingEnvironment    string               `koanf:"auto_deploy_staging_environment"`
 	RetryInterval                   time.Duration        `koanf:"retry_interval"`
 	MaxRetries                      int                  `koanf:"max_retries"`
-	Policies                        []HiveCIPolicyConfig `koanf:"policies" yaml:"policies"`
+	Policies                        []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
+	Initiator                       HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -849,6 +875,36 @@ func defaultWorkerPressureConfig() WorkerPressureConfig {
 		QueueWarningRatio:   0.80,
 		QueueCriticalRatio:  1.0,
 	}
+}
+
+// SupervisionConfig controls local managed-instance health checks and recovery.
+type SupervisionConfig struct {
+	Enabled            bool                        `koanf:"enabled" yaml:"enabled"`
+	ObserveOnly        bool                        `koanf:"observe_only" yaml:"observe_only"`
+	Interval           time.Duration               `koanf:"interval" yaml:"interval"`
+	ObservationTimeout time.Duration               `koanf:"observation_timeout" yaml:"observation_timeout"`
+	MemoryThreshold    float64                     `koanf:"memory_threshold" yaml:"memory_threshold"`
+	Instances          []SupervisionInstanceConfig `koanf:"instances" yaml:"instances"`
+}
+
+// SupervisionInstanceConfig identifies one explicitly configured managed instance.
+type SupervisionInstanceConfig struct {
+	ServiceID          string        `koanf:"service_id" yaml:"service_id"`
+	EnvironmentID      string        `koanf:"environment_id" yaml:"environment_id"`
+	DeploymentUnitID   string        `koanf:"deployment_unit_id" yaml:"deployment_unit_id"`
+	RuntimeTargetName  string        `koanf:"runtime_target_name" yaml:"runtime_target_name"`
+	Host               string        `koanf:"host" yaml:"host"`
+	SupervisorType     string        `koanf:"supervisor_type" yaml:"supervisor_type"`
+	DesiredRunning     bool          `koanf:"desired_running" yaml:"desired_running"`
+	DockerHost         string        `koanf:"docker_host" yaml:"docker_host"`
+	ComposeDir         string        `koanf:"compose_dir" yaml:"compose_dir"`
+	ProbeURL           string        `koanf:"probe_url" yaml:"probe_url"`
+	ProbeTimeout       time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	RestartMaxAttempts int           `koanf:"restart_max_attempts" yaml:"restart_max_attempts"`
+	RestartWindow      time.Duration `koanf:"restart_window" yaml:"restart_window"`
+	BackoffBase        time.Duration `koanf:"backoff_base" yaml:"backoff_base"`
+	BackoffCap         time.Duration `koanf:"backoff_cap" yaml:"backoff_cap"`
+	WarningMinInterval time.Duration `koanf:"warning_min_interval" yaml:"warning_min_interval"`
 }
 
 // Defaults returns a Config with sensible default values.
@@ -908,6 +964,14 @@ func Defaults() *Config {
 		Reconcile: ReconcileConfig{
 			Interval: 60 * time.Second,
 			Enabled:  true,
+		},
+		Supervision: SupervisionConfig{
+			Enabled:            false,
+			ObserveOnly:        true,
+			Interval:           30 * time.Second,
+			ObservationTimeout: 30 * time.Second,
+			MemoryThreshold:    0.90,
+			Instances:          []SupervisionInstanceConfig{},
 		},
 		Runtime: RuntimeConfig{
 			Type:         "docker",
@@ -1181,6 +1245,9 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.validateSupervision(); err != nil {
+		return err
+	}
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))
 	switch mode {
 	case "full", "degraded", "emergency":
@@ -1247,6 +1314,20 @@ func (c *Config) validate() error {
 	}
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
+	}
+	if c.HiveCI.Initiator.Enabled {
+		if strings.TrimSpace(c.HiveCI.Initiator.GiteaBaseURL) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.gitea_base_url is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.GiteaToken) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.gitea_token is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.MirrorOwner) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.mirror_owner is required when hiveci.initiator.enabled=true")
+		}
+		if strings.TrimSpace(c.HiveCI.Initiator.WorkflowPath) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.workflow_path is required when hiveci.initiator.enabled=true")
+		}
 	}
 	if c.Cashu.Enabled {
 		return fmt.Errorf("config validation failed: cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
@@ -1317,6 +1398,48 @@ func (c *Config) validate() error {
 }
 
 const bundledOCIServiceAccountHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
+func (c *Config) validateSupervision() error {
+	if !c.Supervision.Enabled {
+		return nil
+	}
+	if c.Supervision.Interval <= 0 {
+		return fmt.Errorf("config validation failed: supervision.interval must be > 0")
+	}
+	if c.Supervision.ObservationTimeout <= 0 {
+		return fmt.Errorf("config validation failed: supervision.observation_timeout must be > 0")
+	}
+	if c.Supervision.MemoryThreshold <= 0 || c.Supervision.MemoryThreshold > 1 {
+		return fmt.Errorf("config validation failed: supervision.memory_threshold must be > 0 and <= 1")
+	}
+	for i := range c.Supervision.Instances {
+		spec := &c.Supervision.Instances[i]
+		if _, err := uuid.Parse(strings.TrimSpace(spec.ServiceID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].service_id must be a UUID", i)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(spec.EnvironmentID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].environment_id must be a UUID", i)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(spec.DeploymentUnitID)); err != nil {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].deployment_unit_id must be a UUID", i)
+		}
+		if strings.TrimSpace(spec.RuntimeTargetName) == "" {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].runtime_target_name is required", i)
+		}
+		switch domain.InstanceSupervisorType(strings.TrimSpace(spec.SupervisorType)) {
+		case domain.InstanceSupervisorDocker, domain.InstanceSupervisorCompose, domain.InstanceSupervisorSystemd, domain.InstanceSupervisorUserSystemd:
+		default:
+			return fmt.Errorf("config validation failed: supervision.instances[%d].supervisor_type is invalid", i)
+		}
+		if spec.RestartMaxAttempts <= 0 || spec.RestartMaxAttempts > 500 || spec.RestartWindow <= 0 || spec.BackoffBase <= 0 || spec.BackoffCap < spec.BackoffBase {
+			return fmt.Errorf("config validation failed: supervision.instances[%d] recovery budget/backoff is invalid", i)
+		}
+		if spec.ProbeURL != "" && spec.ProbeTimeout <= 0 {
+			return fmt.Errorf("config validation failed: supervision.instances[%d].probe_timeout must be > 0", i)
+		}
+	}
+	return nil
+}
 
 func (c *Config) validateProductionSecurity() error {
 	c.Server.Host = strings.TrimSpace(c.Server.Host)
@@ -2391,6 +2514,7 @@ func (c *Config) validateSoulFactory() error {
 	sf.WorkspaceTemplateDir = strings.TrimSpace(sf.WorkspaceTemplateDir)
 	sf.WorkspacePrivateKeyRef = strings.TrimSpace(sf.WorkspacePrivateKeyRef)
 	sf.WorkspaceAgentMemoryMCPURLRef = strings.TrimSpace(sf.WorkspaceAgentMemoryMCPURLRef)
+	sf.AgentMemoryTaskIDFile = strings.TrimSpace(sf.AgentMemoryTaskIDFile)
 	sf.OpenClawSignetStateDir = strings.TrimSpace(sf.OpenClawSignetStateDir)
 	sf.OpenClawSignetClientKeyDir = strings.TrimSpace(sf.OpenClawSignetClientKeyDir)
 	sf.OpenClawSignetContainer = strings.TrimSpace(sf.OpenClawSignetContainer)

@@ -7,7 +7,7 @@
       "criteria_ids": ["AC-SFP-001"],
       "type": "unit",
       "level": "protocol",
-      "description": "Verify AI/ML legacy command/result constants occupy exactly 38390-38399 and avoid the NIP-90 5000-7000 range.",
+      "description": "Verify AI/ML legacy command/result constants occupy exactly 38390-38399 and remain separate from the retired legacy DVM allocation; fleet-local Loom, Hive-CI, and SoulFactory kinds in 5000-7000 are independent protocol exceptions.",
       "status": "passed",
       "evidence": ["go test ./internal/controlplane -run 'TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing'"]
     },

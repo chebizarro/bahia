@@ -26,6 +26,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	dnsAdapter "github.com/openagentsinc/bahia/internal/adapters/dns"
+	giteaAdapter "github.com/openagentsinc/bahia/internal/adapters/gitea"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -67,26 +68,27 @@ import (
 
 // App holds all application components.
 type App struct {
-	Config             *config.Config
-	Logger             *zap.Logger
-	DB                 *pgxpool.Pool
-	Registry           *service.RegistryService
-	MLRegistry         *service.MLRegistryService
-	LLMRegistry        *service.LLMRegistryService
-	HTTPServer         *http.Server
-	Publisher          events.Publisher
-	Coordinator        *workflow.Coordinator
-	Reconciler         *reconcile.Reconciler
-	NostrPub           *nostrAdapter.Publisher
-	Telemetry          *telemetry.Provider
-	Background         *BackgroundManager
-	toolCoordinator    *service.ToolProvisioningCoordinator
-	relayPools         []*nostrAdapter.RelayPool
-	ModePolicy         *ModePolicy
-	Health             *HealthProvider
-	RelayFirstRegistry *service.RelayFirstRegistry
-	SoulFactory        *soulfactory.Reactor
-	soulFactoryCloser  func() error
+	Config                    *config.Config
+	Logger                    *zap.Logger
+	DB                        *pgxpool.Pool
+	Registry                  *service.RegistryService
+	MLRegistry                *service.MLRegistryService
+	LLMRegistry               *service.LLMRegistryService
+	HTTPServer                *http.Server
+	Publisher                 events.Publisher
+	Coordinator               *workflow.Coordinator
+	Reconciler                *reconcile.Reconciler
+	ManagedInstanceSupervisor *service.ManagedInstanceSupervisor
+	NostrPub                  *nostrAdapter.Publisher
+	Telemetry                 *telemetry.Provider
+	Background                *BackgroundManager
+	toolCoordinator           *service.ToolProvisioningCoordinator
+	relayPools                []*nostrAdapter.RelayPool
+	ModePolicy                *ModePolicy
+	Health                    *HealthProvider
+	RelayFirstRegistry        *service.RelayFirstRegistry
+	SoulFactory               *soulfactory.Reactor
+	soulFactoryCloser         func() error
 }
 
 var (
@@ -184,6 +186,7 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsPolicyRepo repository.DNSPolicyRepository
 	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
 	var contextVMResponseStore repository.ContextVMResponseStore
+	var managedInstanceHealthRepo repository.ManagedInstanceHealthRepository
 
 	if dbAvailable {
 		serviceRepo = repository.NewPgServiceRepository(pool)
@@ -205,6 +208,7 @@ func New(cfg *config.Config) (*App, error) {
 		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
 		secretRepo = repository.NewPgSecretRepository(pool)
 		deploymentUnitRepo = repository.NewPgDeploymentUnitRepository(pool)
+		managedInstanceHealthRepo = repository.NewPgManagedInstanceHealthRepository(pool)
 		orgRepo = repository.NewPgOrganizationRepository(pool)
 		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
 		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
@@ -374,13 +378,17 @@ func New(cfg *config.Config) (*App, error) {
 			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)
 	}
+	var runtimeApplyLock *service.RuntimeApplyLock
+	if dbAvailable {
+		runtimeApplyLock = service.NewRuntimeApplyLock(pool, logger)
+	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
 		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleDeploymentUnits(deploymentUnitRepo))
-		if dbAvailable {
-			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(service.NewRuntimeApplyLock(pool, logger)))
+		if runtimeApplyLock != nil {
+			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(runtimeApplyLock))
 		}
 		runtimeLifecycleSvc = service.NewRuntimeLifecycleService(
 			registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger,
@@ -420,6 +428,21 @@ func New(cfg *config.Config) (*App, error) {
 		)
 	}
 
+	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
+	if cfg.Supervision.Enabled && managedInstanceHealthRepo != nil && runtimeApplyLock != nil {
+		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
+		if specErr != nil {
+			return nil, specErr
+		}
+		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
+		source := &service.RepositorySupervisionSpecSource{Configured: configuredSpecs, States: stateRepo, Services: serviceRepo, Environments: envRepo, Units: deploymentUnitRepo, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
+		}
+		service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger)
+	}
+
 	// Telemetry.
 	telemetryProvider := telemetry.Setup(telemetry.Config{
 		Enabled:      cfg.Telemetry.Enabled,
@@ -433,6 +456,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
+	if managedInstanceSupervisor != nil {
+		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerTier(Tier2), RunnerRequired(false))
+	}
 	if loomSignetManager != nil {
 		bgManager.RegisterWithOptions(loomSignetManager, RunnerTier(Tier1), RunnerRequired(false))
 	}
@@ -1360,7 +1386,31 @@ func New(cfg *config.Config) (*App, error) {
 		// The build request contract is registered even while the fleet Gitea
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
+		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
+		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil {
+			hiveCIBuildStarter = giteaAdapter.NewInitiator(
+				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
+				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
+				controlPlanePool,
+				controlPlaneSigner,
+				giteaAdapter.NewMemoryInitiationStore(),
+				giteaAdapter.InitiatorConfig{
+					MirrorOwner:          cfg.HiveCI.Initiator.MirrorOwner,
+					WorkflowPath:         cfg.HiveCI.Initiator.WorkflowPath,
+					SourceCloneURL:       cfg.HiveCI.Initiator.SourceCloneURL,
+					RepoAnnouncementAddr: cfg.HiveCI.Initiator.RepoAnnouncementAddr,
+					RelayHint:            cfg.HiveCI.Initiator.RelayHint,
+				},
+				logger,
+			)
+			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
+				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
+				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
+				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
+			)
+		}
 		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+			Starter:           hiveCIBuildStarter,
 			Registry:          registry,
 			Builds:            buildRepo,
 			ArtifactRegistrar: buildResultRegistrar,
@@ -1503,6 +1553,8 @@ func New(cfg *config.Config) (*App, error) {
 			Environments:     envRepo,
 			DeploymentUnits:  deploymentUnitRepo,
 			EnvStates:        stateRepo,
+			InstanceHealth:   managedInstanceHealthRepo,
+			InstanceOperator: managedInstanceSupervisor,
 			RuntimeResolver:  runtimeResolver,
 			Payments:         paymentSvc,
 			SBOMs:            sbomRepo,
@@ -1545,26 +1597,27 @@ func New(cfg *config.Config) (*App, error) {
 	), RunnerTier(Tier1), RunnerRequired(false))
 
 	application := &App{
-		Config:             cfg,
-		Logger:             logger,
-		DB:                 pool,
-		Registry:           registry,
-		MLRegistry:         mlRegistry,
-		LLMRegistry:        llmRegistry,
-		HTTPServer:         httpServer,
-		Publisher:          publisher,
-		Coordinator:        coord,
-		Reconciler:         rec,
-		NostrPub:           nostrPub,
-		Telemetry:          telemetryProvider,
-		Background:         bgManager,
-		toolCoordinator:    toolCoordinator,
-		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
-		ModePolicy:         policy,
-		Health:             healthProvider,
-		RelayFirstRegistry: relayFirstRegistry,
-		SoulFactory:        soulFactoryReactorFromRuntime(soulFactoryRuntime),
-		soulFactoryCloser:  soulFactoryCloserFromRuntime(soulFactoryRuntime),
+		Config:                    cfg,
+		Logger:                    logger,
+		DB:                        pool,
+		Registry:                  registry,
+		MLRegistry:                mlRegistry,
+		LLMRegistry:               llmRegistry,
+		HTTPServer:                httpServer,
+		Publisher:                 publisher,
+		Coordinator:               coord,
+		Reconciler:                rec,
+		ManagedInstanceSupervisor: managedInstanceSupervisor,
+		NostrPub:                  nostrPub,
+		Telemetry:                 telemetryProvider,
+		Background:                bgManager,
+		toolCoordinator:           toolCoordinator,
+		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
+		ModePolicy:                policy,
+		Health:                    healthProvider,
+		RelayFirstRegistry:        relayFirstRegistry,
+		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
+		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 	}
 	soulFactoryRuntimeReleased = true
 	return application, nil
@@ -1582,6 +1635,61 @@ func soulFactoryCloserFromRuntime(runtime *soulFactoryRuntime) func() error {
 		return nil
 	}
 	return runtime.close
+}
+
+func defaultSupervisionPolicy(observeOnly bool) domain.RecoveryPolicy {
+	return domain.RecoveryPolicy{Enabled: true, ObserveOnly: observeOnly, RestartBudget: domain.RestartBudget{MaxAttempts: 3, Window: time.Hour}, BackoffBase: time.Minute, BackoffCap: 10 * time.Minute, AlertPolicy: domain.RecoveryAlertPolicy{ImmediateSeverities: []domain.AlertSeverity{domain.AlertSeverityError, domain.AlertSeverityCritical}, WarningMinInterval: 15 * time.Minute}}
+}
+
+func configuredSupervisionSpecs(cfg config.SupervisionConfig, logger *zap.Logger) ([]service.SupervisionSpec, error) {
+	result := make([]service.SupervisionSpec, 0, len(cfg.Instances))
+	for i, item := range cfg.Instances {
+		serviceID, err := uuid.Parse(item.ServiceID)
+		if err != nil {
+			return nil, fmt.Errorf("parse supervision instance %d service: %w", i, err)
+		}
+		environmentID, err := uuid.Parse(item.EnvironmentID)
+		if err != nil {
+			return nil, fmt.Errorf("parse supervision instance %d environment: %w", i, err)
+		}
+		unitID := uuid.Nil
+		if strings.TrimSpace(item.DeploymentUnitID) != "" {
+			unitID, err = uuid.Parse(item.DeploymentUnitID)
+			if err != nil {
+				return nil, fmt.Errorf("parse supervision instance %d deployment unit: %w", i, err)
+			}
+		}
+		supervisor := domain.InstanceSupervisorType(item.SupervisorType)
+		var observer runtime.HealthObserver
+		var controller runtime.ManagedInstanceController
+		switch supervisor {
+		case domain.InstanceSupervisorDocker:
+			adapter := runtime.NewDockerObserver(item.DockerHost, logger)
+			observer, controller = adapter, adapter
+		case domain.InstanceSupervisorCompose:
+			adapter := runtime.NewComposeRuntimeWithDockerHost(item.ComposeDir, item.DockerHost, logger)
+			observer, controller = adapter, adapter
+		case domain.InstanceSupervisorSystemd, domain.InstanceSupervisorUserSystemd:
+			adapter, adapterErr := runtime.NewSystemdObserver(supervisor)
+			if adapterErr != nil {
+				return nil, adapterErr
+			}
+			observer, controller = adapter, adapter
+		default:
+			return nil, fmt.Errorf("unsupported supervision instance %d supervisor %q", i, supervisor)
+		}
+		policy := defaultSupervisionPolicy(cfg.ObserveOnly)
+		policy.RestartBudget = domain.RestartBudget{MaxAttempts: item.RestartMaxAttempts, Window: item.RestartWindow}
+		policy.BackoffBase, policy.BackoffCap = item.BackoffBase, item.BackoffCap
+		policy.AlertPolicy.WarningMinInterval = item.WarningMinInterval
+		spec := service.SupervisionSpec{Key: domain.ManagedInstanceKey{ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: unitID, RuntimeTargetName: item.RuntimeTargetName}, Host: item.Host, SupervisorType: supervisor, RecoveryPolicy: policy, DesiredRunning: item.DesiredRunning, Observer: observer, Controller: controller, MemoryThresholdRatio: cfg.MemoryThreshold}
+		if strings.TrimSpace(item.ProbeURL) != "" {
+			probe := runtime.HTTPProbeConfig{URL: item.ProbeURL, Timeout: item.ProbeTimeout, ExpectedStatusMin: http.StatusOK, ExpectedStatusMax: 299}
+			spec.ProbeConfig, spec.Prober = &probe, runtime.HTTPProber{}
+		}
+		result = append(result, spec)
+	}
+	return result, nil
 }
 
 func configuredMode(mode string) Mode {

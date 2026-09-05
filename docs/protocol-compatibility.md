@@ -153,7 +153,7 @@ The app is idempotent and may run every startup. Non-dry-run migration requires 
 
 ### Loom Protocol Events
 
-Bahia integrates with Loom as an external distributed compute protocol. These kinds are not Bahia legacy control-plane ranges.
+Bahia integrates with Loom as an external distributed compute protocol. Loom owns these fleet-local kinds independently of Bahia's control-plane namespaces; their numeric placement inside the retired legacy DVM allocation does not make them DVM semantics.
 
 | Kind | Name | Direction | Description |
 |------|------|-----------|-------------|
@@ -166,7 +166,7 @@ If Bahia exposes Loom-derived state to Bahia clients, it projects that state int
 
 ### Hive-CI Protocol Events
 
-Bahia's CI/deployment bridge is aligned to the Hive-CI protocol and its Loom execution hand-off.
+Bahia's CI/deployment bridge is aligned to the Hive-CI protocol and its Loom execution hand-off. Hive-CI owns kinds `5401` and `5402` as a fleet-local protocol, independent of the retired legacy DVM allocation.
 
 | Kind | Name | Direction | Description |
 |------|------|-----------|-------------|
@@ -174,7 +174,6 @@ Bahia's CI/deployment bridge is aligned to the Hive-CI protocol and its Loom exe
 | `5402` | Workflow Result | Inbound | Trusted build outcome fact |
 | `5100` | Loom Job Request | Outbound | Actual compute dispatch for build/deploy work |
 
-`5900` is not part of Bahia's Hive-CI integration; it belongs to an older NIP-90 DVM CI runner path.
 
 ---
 
@@ -190,3 +189,7 @@ Clients and agents should:
 6. Treat ContextVM responses as acknowledgments, not durable long-running completion.
 7. Avoid REST polling and legacy-kind subscriptions for runtime truth, including legacy SBOM kind `30079`.
 8. Treat desired-state metadata as optional and sanitized; never expect public relay events to expose secret plaintext, generated Compose env-file contents, or raw Docker endpoint credentials.
+
+### Managed-instance health projection
+
+Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.

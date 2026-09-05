@@ -500,6 +500,7 @@
 
     try {
       const payload = {
+        expected_updated_at: service.updated_at,
         name: editForm.name.trim(),
         repo_url: editForm.repositorySelection?.repoUrl || '',
         artifact_repo: editForm.artifact_repo.trim(),
@@ -700,6 +701,7 @@
         throw new Error('Review the canonical desired state before signing and submitting');
       }
       await updateService(serviceId, {
+        expected_updated_at: service.updated_at,
         managed_runtime_config: deployManagedConfigPreview,
         idempotency_key: desiredHash
       });

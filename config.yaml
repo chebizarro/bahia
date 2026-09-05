@@ -154,3 +154,8 @@ direct_runtime_actions:
   allowed_subjects: []
   allowed_pubkeys: []
   allowed_emails: []
+
+soul_factory:
+  enabled: false
+  # Durable identity for agent-memory tasks across Bahia process restarts.
+  agent_memory_task_id_file: "./data/soulfactory/agent-memory-task-ids.json"
