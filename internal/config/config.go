@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,16 +123,17 @@ type FIPSConfig struct {
 
 // EdgeRoutingConfig controls signed public hostname provisioning through a managed provider.
 type EdgeRoutingConfig struct {
-	Enabled       bool                      `koanf:"enabled" yaml:"enabled"`
-	Provider      string                    `koanf:"provider" yaml:"provider"`
-	BackendRef    string                    `koanf:"backend_ref" yaml:"backend_ref"`
-	APIBaseURL    string                    `koanf:"api_base_url" yaml:"api_base_url"`
-	APITokenRef   string                    `koanf:"api_token_ref" yaml:"api_token_ref"`
-	AccountID     string                    `koanf:"account_id" yaml:"account_id"`
-	TunnelID      string                    `koanf:"tunnel_id" yaml:"tunnel_id"`
-	VerifyTimeout time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout"`
-	Zones         []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
-	Origins       []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
+	Enabled        bool                      `koanf:"enabled" yaml:"enabled"`
+	Provider       string                    `koanf:"provider" yaml:"provider"`
+	BackendRef     string                    `koanf:"backend_ref" yaml:"backend_ref"`
+	APIBaseURL     string                    `koanf:"api_base_url" yaml:"api_base_url"`
+	APITokenRef    string                    `koanf:"api_token_ref" yaml:"api_token_ref"`
+	AccountID      string                    `koanf:"account_id" yaml:"account_id"`
+	TunnelID       string                    `koanf:"tunnel_id" yaml:"tunnel_id"`
+	VerifyTimeout  time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout"`
+	VerifyResolver string                    `koanf:"verify_resolver" yaml:"verify_resolver"`
+	Zones          []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
+	Origins        []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
 }
 
 type EdgeRoutingZoneConfig struct {
@@ -2308,6 +2310,21 @@ func (c *Config) validateEdgeRouting() error {
 	r.APITokenRef = strings.TrimSpace(r.APITokenRef)
 	r.AccountID = strings.TrimSpace(r.AccountID)
 	r.TunnelID = strings.TrimSpace(r.TunnelID)
+	r.VerifyResolver = strings.TrimSpace(r.VerifyResolver)
+	if r.VerifyResolver == "" {
+		r.VerifyResolver = "1.1.1.1:53"
+	} else if strings.EqualFold(r.VerifyResolver, "system") {
+		r.VerifyResolver = "system"
+	} else {
+		host, port, err := net.SplitHostPort(r.VerifyResolver)
+		if err != nil || strings.TrimSpace(host) == "" {
+			return fmt.Errorf("config validation failed: edge_routing.verify_resolver must be system or host:port with a numeric port")
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return fmt.Errorf("config validation failed: edge_routing.verify_resolver must be system or host:port with a numeric port")
+		}
+	}
 	if r.Provider != "cloudflare_tunnel" {
 		return fmt.Errorf("config validation failed: edge_routing.provider must be cloudflare_tunnel")
 	}

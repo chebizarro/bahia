@@ -2,11 +2,15 @@ package routing
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -44,6 +48,171 @@ func writeCFResult(t *testing.T, w http.ResponseWriter, result any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{"success": true, "result": result}); err != nil {
 		t.Fatalf("encode response: %v", err)
+	}
+}
+
+func startTestDNSResponder(t *testing.T, response func(qtype uint16, aAttempt int) (rcode byte, answer bool)) (string, *atomic.Int32) {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen UDP DNS: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var aQueries atomic.Int32
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, client, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			query := append([]byte(nil), buf[:n]...)
+			questionEnd := 12
+			for questionEnd < len(query) && query[questionEnd] != 0 {
+				questionEnd += int(query[questionEnd]) + 1
+			}
+			questionEnd += 5 // root label plus QTYPE and QCLASS
+			if len(query) < 12 || questionEnd > len(query) {
+				continue
+			}
+			qtype := binary.BigEndian.Uint16(query[questionEnd-4 : questionEnd-2])
+			aAttempt := int(aQueries.Load())
+			if qtype == 1 {
+				aAttempt = int(aQueries.Add(1))
+			}
+			rcode, answer := response(qtype, aAttempt)
+			flags := uint16(0x8180) | uint16(rcode&0x0f)
+			result := make([]byte, 12, 64)
+			copy(result[0:2], query[0:2])
+			binary.BigEndian.PutUint16(result[2:4], flags)
+			binary.BigEndian.PutUint16(result[4:6], 1)
+			if answer && qtype == 1 {
+				binary.BigEndian.PutUint16(result[6:8], 1)
+			}
+			result = append(result, query[12:questionEnd]...)
+			if answer && qtype == 1 {
+				result = append(result, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01)
+				result = append(result, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 127, 0, 0, 1)
+			}
+			_, _ = conn.WriteToUDP(result, client)
+		}
+	}()
+	return conn.LocalAddr().String(), &aQueries
+}
+
+func TestNewVerifyTransportSystemUsesSystemResolver(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen TCP: %v", err)
+	}
+	defer listener.Close()
+
+	transport, resolver := newVerifyTransport("system")
+	defer transport.CloseIdleConnections()
+	if resolver != nil {
+		t.Fatal("system resolver mode created a custom resolver")
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
+	if err != nil {
+		t.Fatalf("system-resolved dial: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestNewVerifyTransportUsesCustomResolver(t *testing.T) {
+	resolverAddr, queries := startTestDNSResponder(t, func(qtype uint16, _ int) (byte, bool) {
+		return 0, qtype == 1
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen TCP: %v", err)
+	}
+	defer listener.Close()
+
+	transport, resolver := newVerifyTransport(resolverAddr)
+	defer transport.CloseIdleConnections()
+	if resolver == nil {
+		t.Fatal("custom resolver mode did not create a resolver")
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", net.JoinHostPort("verify-target.test", port))
+	if err != nil {
+		t.Fatalf("custom-resolved dial: %v", err)
+	}
+	_ = conn.Close()
+	if queries.Load() == 0 {
+		t.Fatal("custom DNS responder received no A query")
+	}
+}
+
+func TestCloudflareVerifyHTTPSReportsNoPublicDNSRecordBeforeHTTP(t *testing.T) {
+	resolverAddr, _ := startTestDNSResponder(t, func(uint16, int) (byte, bool) { return 3, false })
+	backend, err := NewCloudflareBackend(CloudflareConfig{
+		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
+		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: 25 * time.Millisecond,
+		VerifyResolverAddr: resolverAddr,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCloudflareBackend: %v", err)
+	}
+	backend.verifyBackoff = time.Millisecond
+	var httpAttempts atomic.Int32
+	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpAttempts.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})}
+	plan := cloudflareTestPlan()
+	plan.Hostname = "verify-target.test"
+
+	err = backend.verifyHTTPS(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "public DNS has no record for verify-target.test (resolver "+resolverAddr+")") {
+		t.Fatalf("verifyHTTPS error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "last HTTP failure: not attempted") {
+		t.Fatalf("verifyHTTPS error lacks HTTP detail: %v", err)
+	}
+	if httpAttempts.Load() != 0 {
+		t.Fatalf("HTTP attempts = %d, want 0", httpAttempts.Load())
+	}
+}
+
+func TestCloudflareVerifyHTTPSRetriesDNSUntilRecordAppears(t *testing.T) {
+	resolverAddr, queries := startTestDNSResponder(t, func(qtype uint16, aAttempt int) (byte, bool) {
+		return 0, qtype == 1 && aAttempt >= 2
+	})
+	backend, err := NewCloudflareBackend(CloudflareConfig{
+		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
+		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: time.Second,
+		VerifyResolverAddr: resolverAddr,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewCloudflareBackend: %v", err)
+	}
+	backend.verifyBackoff = time.Millisecond
+	var httpAttempts atomic.Int32
+	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpAttempts.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})}
+	plan := cloudflareTestPlan()
+	plan.Hostname = "verify-target.test"
+
+	if err := backend.verifyHTTPS(context.Background(), plan); err != nil {
+		t.Fatalf("verifyHTTPS: %v", err)
+	}
+	if queries.Load() < 2 {
+		t.Fatalf("A queries = %d, want at least 2", queries.Load())
+	}
+	if httpAttempts.Load() != 1 {
+		t.Fatalf("HTTP attempts = %d, want 1 after DNS appeared", httpAttempts.Load())
 	}
 }
 
@@ -293,6 +462,8 @@ func TestCloudflareApplyRetainsTunnelWhenDNSCompensationFails(t *testing.T) {
 	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: make(http.Header)}, nil
 	})}
+	backend.cfg.VerifyTimeout = 10 * time.Millisecond
+	backend.verifyBackoff = time.Millisecond
 
 	err = backend.Apply(context.Background(), plan)
 	if err == nil || !strings.Contains(err.Error(), "DNS compensation failed and tunnel ingress was retained for retry") {
@@ -372,6 +543,8 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 	backend.verifyClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: make(http.Header)}, nil
 	})}
+	backend.cfg.VerifyTimeout = 10 * time.Millisecond
+	backend.verifyBackoff = time.Millisecond
 
 	err = backend.Apply(context.Background(), plan)
 	if err == nil || !strings.Contains(err.Error(), "previous public route restored") {

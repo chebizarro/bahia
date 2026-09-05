@@ -175,6 +175,7 @@ edge_routing:
   account_id: "<Cloudflare account ID>"
   tunnel_id: "<remote-managed Tunnel UUID>"
   verify_timeout: 30s
+  verify_resolver: 1.1.1.1:53
   zones:
     - name: example.com
       zone_id: "<Cloudflare zone ID>"
@@ -187,7 +188,7 @@ edge_routing:
       allowed_ports: [8080]
 ```
 
-The referenced credential may be a raw API token or a JSON secret containing `api_token`, `token`, or `APIToken`. It is resolved only on the Bahia server and never appears in route previews or provider errors. Direct runtime actions must also be enabled because public routes target an explicit Bahia-managed deployment unit.
+The referenced credential may be a raw API token or a JSON secret containing `api_token`, `token`, or `APIToken`. It is resolved only on the Bahia server and never appears in route previews or provider errors. `verify_resolver` defaults to the public resolver `1.1.1.1:53`, ensuring managed HTTPS verification resolves and exercises the public Cloudflare edge rather than a split-horizon LAN origin; set it explicitly to `system` only to opt back into host resolver behavior. Direct runtime actions must also be enabled because public routes target an explicit Bahia-managed deployment unit.
 
 ## Service Actions
 

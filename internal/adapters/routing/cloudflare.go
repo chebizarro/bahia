@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,20 +20,23 @@ import (
 )
 
 type CloudflareConfig struct {
-	APIBaseURL    string
-	APIToken      string
-	AccountID     string
-	TunnelID      string
-	ZoneIDs       map[string]string
-	Timeout       time.Duration
-	VerifyTimeout time.Duration
+	APIBaseURL         string
+	APIToken           string
+	AccountID          string
+	TunnelID           string
+	ZoneIDs            map[string]string
+	Timeout            time.Duration
+	VerifyTimeout      time.Duration
+	VerifyResolverAddr string
 }
 
 type CloudflareBackend struct {
-	cfg          CloudflareConfig
-	client       *http.Client
-	verifyClient *http.Client
-	applyMu      sync.Mutex
+	cfg            CloudflareConfig
+	client         *http.Client
+	verifyClient   *http.Client
+	verifyResolver *net.Resolver
+	verifyBackoff  time.Duration
+	applyMu        sync.Mutex
 }
 
 func NewCloudflareBackend(cfg CloudflareConfig, client *http.Client) (*CloudflareBackend, error) {
@@ -55,9 +59,9 @@ func NewCloudflareBackend(cfg CloudflareConfig, client *http.Client) (*Cloudflar
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
-	verifyTransport := http.DefaultTransport.(*http.Transport).Clone()
-	return &CloudflareBackend{cfg: cfg, client: client, verifyClient: &http.Client{
-		Timeout:   cfg.VerifyTimeout,
+	cfg.VerifyResolverAddr = strings.TrimSpace(cfg.VerifyResolverAddr)
+	verifyTransport, verifyResolver := newVerifyTransport(cfg.VerifyResolverAddr)
+	return &CloudflareBackend{cfg: cfg, client: client, verifyResolver: verifyResolver, verifyBackoff: 2 * time.Second, verifyClient: &http.Client{
 		Transport: verifyTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 0 && !strings.EqualFold(req.URL.Hostname(), via[0].URL.Hostname()) {
@@ -69,6 +73,24 @@ func NewCloudflareBackend(cfg CloudflareConfig, client *http.Client) (*Cloudflar
 			return nil
 		},
 	}}, nil
+}
+
+func newVerifyTransport(resolverAddr string) (*http.Transport, *net.Resolver) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if strings.TrimSpace(resolverAddr) == "" || strings.EqualFold(strings.TrimSpace(resolverAddr), "system") {
+		return transport, nil
+	}
+	resolverAddress := strings.TrimSpace(resolverAddr)
+	resolverDialer := &net.Dialer{}
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return resolverDialer.DialContext(ctx, network, resolverAddress)
+		},
+	}
+	transportDialer := &net.Dialer{Resolver: resolver}
+	transport.DialContext = transportDialer.DialContext
+	return transport, resolver
 }
 
 type cfEnvelope struct {
@@ -315,20 +337,81 @@ func (b *CloudflareBackend) restoreDNS(ctx context.Context, plan *domain.Desired
 }
 
 func (b *CloudflareBackend) verifyHTTPS(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+plan.Hostname+plan.Proxy.HealthPath, nil)
-	if err != nil {
-		return err
+	verifyCtx, cancel := context.WithTimeout(ctx, b.cfg.VerifyTimeout)
+	defer cancel()
+
+	var lastDNSError, lastHTTPError error
+	for {
+		if b.verifyResolver != nil {
+			addresses, err := b.verifyResolver.LookupIPAddr(verifyCtx, plan.Hostname)
+			if err != nil {
+				var dnsErr *net.DNSError
+				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+					lastDNSError = fmt.Errorf("public DNS has no record for %s (resolver %s)", plan.Hostname, b.cfg.VerifyResolverAddr)
+				} else {
+					lastDNSError = fmt.Errorf("public DNS resolution failed for %s (resolver %s): %w", plan.Hostname, b.cfg.VerifyResolverAddr, err)
+				}
+			} else if len(addresses) == 0 {
+				lastDNSError = fmt.Errorf("public DNS has no record for %s (resolver %s)", plan.Hostname, b.cfg.VerifyResolverAddr)
+			} else {
+				lastDNSError = nil
+				req, err := http.NewRequestWithContext(verifyCtx, http.MethodGet, "https://"+plan.Hostname+plan.Proxy.HealthPath, nil)
+				if err != nil {
+					return err
+				}
+				lastHTTPError = b.doVerifyRequest(req)
+				if lastHTTPError == nil {
+					return nil
+				}
+			}
+		} else {
+			req, err := http.NewRequestWithContext(verifyCtx, http.MethodGet, "https://"+plan.Hostname+plan.Proxy.HealthPath, nil)
+			if err != nil {
+				return err
+			}
+			lastHTTPError = b.doVerifyRequest(req)
+			if lastHTTPError == nil {
+				return nil
+			}
+		}
+
+		timer := time.NewTimer(b.verifyBackoff)
+		select {
+		case <-verifyCtx.Done():
+			timer.Stop()
+			return verifyFailure(lastDNSError, lastHTTPError)
+		case <-timer.C:
+		}
 	}
+}
+
+func (b *CloudflareBackend) doVerifyRequest(req *http.Request) error {
 	resp, err := b.verifyClient.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if err := resp.Body.Close(); err != nil {
+		return fmt.Errorf("close health response: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("health endpoint returned HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func verifyFailure(lastDNSError, lastHTTPError error) error {
+	dnsDetail := "none"
+	if lastDNSError != nil {
+		dnsDetail = lastDNSError.Error()
+	}
+	httpDetail := "none"
+	if lastHTTPError != nil {
+		httpDetail = lastHTTPError.Error()
+	} else if lastDNSError != nil {
+		httpDetail = "not attempted because public DNS resolution failed"
+	}
+	return fmt.Errorf("HTTPS verification failed: last DNS failure: %s; last HTTP failure: %s", dnsDetail, httpDetail)
 }
 
 func (b *CloudflareBackend) do(ctx context.Context, method, path string, body any, out any) error {
