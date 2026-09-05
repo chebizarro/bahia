@@ -15,7 +15,7 @@ import (
 func newTestSubscription() *gonostr.Subscription {
 	return &gonostr.Subscription{
 		Events:            make(chan gonostr.Event, 4),
-		EndOfStoredEvents: make(chan struct{}),
+		EndOfStoredEvents: make(chan gonostr.EndOfStoredEvent),
 		ClosedReason:      make(chan string, 1),
 	}
 }

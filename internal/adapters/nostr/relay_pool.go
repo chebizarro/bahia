@@ -902,7 +902,7 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 	defer s.workerDone(relaySub.relayURL, group)
 
 	sub := relaySub.sub
-	var eoseCh <-chan struct{}
+	var eoseCh <-chan nostr.EndOfStoredEvent
 	var eventsCh <-chan nostr.Event
 	var closedCh <-chan string
 	if sub != nil {
@@ -1249,7 +1249,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 		go func(rs relaySubscription) {
 			defer eventsWg.Done()
 			s := rs.sub
-			var eoseCh <-chan struct{}
+			var eoseCh <-chan nostr.EndOfStoredEvent
 			var eventsCh <-chan nostr.Event
 			var closedCh <-chan string
 			if s != nil {

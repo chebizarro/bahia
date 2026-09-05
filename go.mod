@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	cuelang.org/go v0.11.0
-	fiatjaf.com/nostr v0.0.0-20260611214214-c4534c716026
+	fiatjaf.com/nostr v0.0.0-20260902034142-316ef6591fa2
 	git.sharegap.net/cascadia/cascadia-go v1.4.0
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
