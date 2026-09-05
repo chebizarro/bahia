@@ -27,6 +27,20 @@ export function normalizeRelays(relays) {
   return out;
 }
 
+function browserIsHttps() {
+  const protocol = globalThis?.location?.protocol || globalThis?.window?.location?.protocol || '';
+  return protocol === 'https:';
+}
+
+export function browserSafeRelayUrl(relay) {
+  if (!browserIsHttps()) return true;
+  try {
+    return new URL(relay).protocol === 'wss:';
+  } catch {
+    return false;
+  }
+}
+
 export function publishAccepted(result) {
   return result?.sent === true && result?.accepted === true;
 }
@@ -126,7 +140,10 @@ export function throwIfSignalAborted(signal, fallback) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.contextvm_relays || systemInfo?.nostr?.browser_relays);
+  return normalizeRelays([
+    ...(systemInfo?.nostr?.contextvm_relays || []),
+    ...(systemInfo?.nostr?.browser_relays || [])
+  ]).filter(browserSafeRelayUrl);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
