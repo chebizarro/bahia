@@ -126,6 +126,7 @@ describe('encrypted controlplane transport', () => {
     module?.disconnectEncryptedControlplane?.();
     nostrClientMock.activeClient = null;
     delete globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS;
+    delete globalThis.location;
   });
 
   it('uses standard Bahia relays for ContextVM requests when the feature is enabled', () => {
@@ -133,7 +134,7 @@ describe('encrypted controlplane transport', () => {
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
-  it('prefers discovered ContextVM relays for encrypted ContextVM requests', () => {
+  it('uses all discovered ContextVM and browser relays for encrypted ContextVM requests', () => {
     const info = {
       features: {
         encrypted_nostr_requests: true
@@ -145,7 +146,31 @@ describe('encrypted controlplane transport', () => {
       }
     };
 
-    expect(module.encryptedRelayUrlsFromSystemInfo(info)).toEqual(['wss://contextvm.example']);
+    expect(module.encryptedRelayUrlsFromSystemInfo(info)).toEqual(['wss://contextvm.example', 'wss://public.example']);
+    expect(module.encryptedRequestsAvailable(info)).toBe(true);
+  });
+
+  it('filters insecure LAN ContextVM relays for HTTPS pages while preserving multiple secure relays', () => {
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { protocol: 'https:' }
+    });
+
+    const info = {
+      features: {
+        encrypted_nostr_requests: true
+      },
+      nostr: {
+        service_pubkey: SERVICE_PUBKEY,
+        browser_relays: ['wss://bahia.sharegap.net/relay'],
+        contextvm_relays: ['ws://192.168.40.104:3337/', 'wss://relay.sharegap.net/']
+      }
+    };
+
+    expect(module.encryptedRelayUrlsFromSystemInfo(info)).toEqual([
+      'wss://relay.sharegap.net/',
+      'wss://bahia.sharegap.net/relay'
+    ]);
     expect(module.encryptedRequestsAvailable(info)).toBe(true);
   });
 
@@ -262,7 +287,7 @@ describe('encrypted controlplane transport', () => {
         browser_relays: ['wss://relay.example'],
         contextvm_relays: ['wss://contextvm.example']
       }
-    })).toEqual(['wss://contextvm.example']);
+    })).toEqual(['wss://contextvm.example', 'wss://relay.example']);
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
@@ -292,6 +317,24 @@ describe('encrypted controlplane transport', () => {
     await expect(module.publishEncryptedRequest({ event })).resolves.toMatchObject({ requestEventId: 'request-id' });
 
     expect(order).toEqual(['subscribe', 'publish']);
+  });
+
+  it('reuses one shared transport while concurrent startup requests are still connecting', async () => {
+    let releaseConnect;
+    const connectPromise = new Promise((resolve) => {
+      releaseConnect = () => resolve({ connected: 1 });
+    });
+    client.connect.mockReturnValue(connectPromise);
+
+    const first = module.requestEncryptedResult({ operation: 'payments.history', payload: {}, workTimeoutMs: 10 });
+    const second = module.requestEncryptedResult({ operation: 'orgs.list', payload: {}, workTimeoutMs: 10 });
+    await flushAsync();
+
+    expect(nostrClientMock.createNostrPoolClient).toHaveBeenCalledTimes(1);
+    expect(client.connect).toHaveBeenCalledTimes(2);
+
+    releaseConnect();
+    await Promise.allSettled([first, second]);
   });
 
   it('preserves prebuilt event publishing when the requester is unauthenticated', async () => {
@@ -498,10 +541,12 @@ describe('encrypted controlplane transport', () => {
     await expect(promise).resolves.toMatchObject({ result: { ok: true } });
   });
 
-  it('fires the short ack timeout on silence when progress ack is advertised', async () => {
+  it('keeps waiting for the terminal result when the advertised progress ack is missing', async () => {
     vi.useFakeTimers();
     systemMock.currentSystemInfo.mockReturnValue(progressAckDiscovery());
+    let handlers;
     client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
       expect(nextHandlers.onEvent).toEqual(expect.any(Function));
       return vi.fn();
     });
@@ -513,13 +558,22 @@ describe('encrypted controlplane transport', () => {
       ackTimeoutMs: 10,
       workTimeoutMs: 100
     });
+    let settled = false;
+    promise.then(() => { settled = true; }, () => { settled = true; });
 
-    const rejection = expect(promise).rejects.toThrow('no service acknowledged within 10ms — check service-pubkey discovery / relay auth');
     await flushAsync();
     expect(client.publish).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(11);
+    expect(settled).toBe(false);
 
-    await rejection;
+    const requestEventId = client.publish.mock.calls[0][0].id;
+    await handlers.onEvent(resultEvent(module, requestEventId, {
+      jsonrpc: '2.0',
+      id: 'ctx-silent',
+      result: { ok: true }
+    }));
+
+    await expect(promise).resolves.toMatchObject({ result: { ok: true } });
   });
 
   it('keeps the backward-compatible single work timeout when progress ack is not advertised', async () => {

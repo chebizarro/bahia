@@ -51,10 +51,10 @@ const pendingRequests = new Map(); // requestEventId -> { resolve, reject, servi
 function ensureSharedTransport() {
   const relays = encryptedRelayUrlsFromSystemInfo();
   const servicePubkey = servicePubkeyFromSystemInfo();
-  if (sharedTransport?.connected && relaysMatch(sharedTransport.relays, relays) && sharedTransport.servicePubkey === servicePubkey) {
+  if (sharedTransport && relaysMatch(sharedTransport.relays, relays) && sharedTransport.servicePubkey === servicePubkey) {
     return sharedTransport;
   }
-  // Relays changed or not connected — rebuild
+  // Relays or service identity changed — rebuild.
   teardownSharedSubscription();
   if (sharedTransport) {
     sharedTransport.disconnect();
@@ -178,7 +178,8 @@ function waitForResult(requestEventId, { contextVMRequestId, servicePubkey, sign
 
     if (requireProgressAck && Number.isFinite(ackTimeoutMs) && ackTimeoutMs > 0) {
       ackTimer = setTimeout(() => {
-        settle(reject, new Error(`ContextVM request no service acknowledged within ${ackTimeoutMs}ms — check service-pubkey discovery / relay auth`));
+        ackTimer = null;
+        console.warn(`ContextVM request no service acknowledged within ${ackTimeoutMs}ms; continuing to wait for terminal result`);
       }, ackTimeoutMs);
     }
 

@@ -13,6 +13,7 @@ export const paymentHistoryState = $state({
 let paymentSubscription = null;
 let paymentSubscriptionGeneration = 0;
 let subscribedPaymentQuery = { worker: '', limit: 50 };
+const inFlightPaymentHistoryRequests = new Map();
 
 function unwrapEncryptedResult(response) {
   const envelope = response?.result;
@@ -27,6 +28,7 @@ export function resetPaymentHistory() {
   paymentHistoryState.loading = false;
   paymentHistoryState.error = null;
   paymentHistoryState.loadedWorker = '';
+  inFlightPaymentHistoryRequests.clear();
 }
 
 async function ensureEncryptedPaymentHistoryRequests() {
@@ -48,16 +50,30 @@ export async function requestPaymentHistoryRecords({ worker, limit = 50 } = {}) 
   if (!workerPubkey) {
     return [];
   }
+  const normalizedLimit = Number(limit) || 50;
+  const cacheKey = `${workerPubkey}:${normalizedLimit}`;
+  const existing = inFlightPaymentHistoryRequests.get(cacheKey);
+  if (existing) return existing;
 
-  await ensureEncryptedPaymentHistoryRequests();
+  const request = (async () => {
+    await ensureEncryptedPaymentHistoryRequests();
 
-  const response = await requestEncryptedResult({
-    operation: 'payments.history',
-    payload: { worker: workerPubkey, limit: Number(limit) || 50 },
-    tags: [['domain', 'payments']]
-  });
-  const records = unwrapEncryptedResult(response);
-  return Array.isArray(records) ? records : [];
+    const response = await requestEncryptedResult({
+      operation: 'payments.history',
+      payload: { worker: workerPubkey, limit: normalizedLimit },
+      tags: [['domain', 'payments']]
+    });
+    const records = unwrapEncryptedResult(response);
+    return Array.isArray(records) ? records : [];
+  })();
+  inFlightPaymentHistoryRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlightPaymentHistoryRequests.get(cacheKey) === request) {
+      inFlightPaymentHistoryRequests.delete(cacheKey);
+    }
+  }
 }
 
 export function unsubscribeFromPaymentHistoryUpdates() {

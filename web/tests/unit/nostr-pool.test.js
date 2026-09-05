@@ -20,6 +20,20 @@ function createPool(relays = []) {
 }
 
 describe('PoolBackedClient connect lifecycle', () => {
+  it('leaves automatic relay reconnect disabled so Bahia owns browser backoff', () => {
+    const createdOptions = [];
+    const poolFactory = vi.fn((options) => {
+      createdOptions.push(options);
+      return createPool();
+    });
+
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], poolFactory });
+
+    expect(poolFactory).toHaveBeenCalledWith({ enableReconnect: false });
+    expect(createdOptions).toEqual([{ enableReconnect: false }]);
+    expect(client.pool.enableReconnect).toBe(false);
+  });
+
   it('reuses an in-flight eager connection for the same relay set', async () => {
     const relay = createRelay('wss://relay.example', { connected: false });
     const pool = createPool([relay]);

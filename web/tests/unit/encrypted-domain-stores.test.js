@@ -100,6 +100,43 @@ describe('encrypted payments/orgs stores', () => {
     expect(paymentsStore.paymentHistoryState.loadedWorker).toBe('');
   });
 
+  it('coalesces concurrent payment history requests for the same worker and limit', async () => {
+    let resolveRequest;
+    encryptedRequests.requestEncryptedResult.mockReturnValue(new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+
+    const first = paymentsStore.requestPaymentHistoryRecords({ worker: ' worker-a ', limit: 25 });
+    const second = paymentsStore.requestPaymentHistoryRecords({ worker: 'worker-a', limit: 25 });
+
+    await vi.waitFor(() => expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledTimes(1));
+    resolveRequest({
+      result: {
+        status: 'ok',
+        payload: [{ id: 'pay-1', worker_pubkey: 'worker-a', amount_sats: 42 }]
+      }
+    });
+
+    await expect(first).resolves.toEqual([{ id: 'pay-1', worker_pubkey: 'worker-a', amount_sats: 42 }]);
+    await expect(second).resolves.toEqual([{ id: 'pay-1', worker_pubkey: 'worker-a', amount_sats: 42 }]);
+  });
+
+  it('does not coalesce payment history requests for different workers', async () => {
+    encryptedRequests.requestEncryptedResult.mockResolvedValue({
+      result: {
+        status: 'ok',
+        payload: []
+      }
+    });
+
+    await Promise.all([
+      paymentsStore.requestPaymentHistoryRecords({ worker: 'worker-a', limit: 25 }),
+      paymentsStore.requestPaymentHistoryRecords({ worker: 'worker-b', limit: 25 })
+    ]);
+
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledTimes(2);
+  });
+
   it('loads payment history through ContextVM requests only', async () => {
     encryptedRequests.requestEncryptedResult.mockResolvedValue({
       result: {
