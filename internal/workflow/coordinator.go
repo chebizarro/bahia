@@ -131,7 +131,7 @@ func (c *Coordinator) RecoverNonTerminalRuns(ctx context.Context) error {
 		case strings.TrimSpace(run.LoomJobID) == "runtime:direct":
 			c.startDirectRuntimeRecovery(&run)
 			recovered++
-		case strings.TrimSpace(run.LoomJobID) == "runtime:route-only":
+		case domain.IsRouteOnlyDeploymentRun(&run):
 			c.startRouteOnlyRecovery(&run)
 			recovered++
 		case c.loom != nil && isLoomDeploymentJob(run.LoomJobID):
@@ -624,7 +624,7 @@ func (c *Coordinator) executeRouteOnlyDeployment(
 	run := &domain.DeploymentRun{
 		DeploymentIntentID: intent.ID,
 		DeploymentUnitID:   &unitID,
-		LoomJobID:          "runtime:route-only",
+		LoomJobID:          domain.RouteOnlyDeploymentRunLoomJobID,
 		Status:             domain.RunStatusQueued,
 		StartedAt:          &now,
 		Metadata: map[string]any{

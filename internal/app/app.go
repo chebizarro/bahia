@@ -426,7 +426,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
-		reconcilerOpts := []reconcile.Option{}
+		reconcilerOpts := []reconcile.Option{
+			reconcile.WithDeploymentHistory(intentRepo, runRepo),
+		}
 		if runtimeLifecycleSvc != nil {
 			reconcilerOpts = append(reconcilerOpts, reconcile.WithAutoRemediationDeployer(runtimeLifecycleSvc))
 		}

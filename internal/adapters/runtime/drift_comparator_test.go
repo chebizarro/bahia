@@ -45,9 +45,9 @@ func driftTestDesiredSpec(imageRef string) *domain.DesiredServiceSpec {
 // state is attached.
 func testObservation(hash string, health domain.HealthStatus) *domain.RuntimeObservation {
 	obs := &domain.RuntimeObservation{
-		ID:            uuid.New(),
-		HealthStatus:  health,
-		Source:        "test",
+		ID:           uuid.New(),
+		HealthStatus: health,
+		Source:       "test",
 	}
 	if hash != "" {
 		obs.NormalizedState = &domain.NormalizedObservation{
@@ -103,6 +103,26 @@ func TestCompareDrift_InSync_Starting(t *testing.T) {
 	}
 	if state.Status != domain.DriftStatusInSync {
 		t.Errorf("Status = %q, want %q (starting health should be acceptable)", state.Status, domain.DriftStatusInSync)
+	}
+}
+
+func TestCompareDrift_RouteCarryingDesiredAcceptsPreRouteHash(t *testing.T) {
+	t.Parallel()
+	spec := driftTestDesiredSpec("nginx:1.25")
+	preRouteHash := spec.DesiredHash
+	spec.PublicRoute = &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}
+	spec.ComputeDesiredHash()
+	observer := &fakeDriftObserver{obs: testObservation(preRouteHash, domain.HealthStatusHealthy)}
+
+	state, err := CompareDrift(context.Background(), spec, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != domain.DriftStatusInSync {
+		t.Fatalf("Status = %q, want in_sync", state.Status)
+	}
+	if state.DesiredHash != spec.DesiredHash || state.ObservedHash != preRouteHash {
+		t.Fatalf("unexpected convergence hashes: %#v", state)
 	}
 }
 

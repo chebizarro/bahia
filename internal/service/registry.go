@@ -1859,11 +1859,19 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 					DriftStatus:   domain.DriftStatusUnknown,
 				}
 			}
+			routeOnlyCurrentIntent := state.DesiredIntentID != nil && *state.DesiredIntentID == intent.ID
 			state.DeploymentUnitID = deploymentUnitIDForRunIntent(dr, intent)
 			state.DesiredArtifactID = &intent.ArtifactID
 			state.DesiredIntentID = &intent.ID
 			state.DesiredRuntimeState = intent.DesiredState
 			state.DesiredHash = intent.DesiredHash
+			if domain.IsRouteOnlyDeploymentRun(dr) && routeOnlyCurrentIntent {
+				// Route changes are not runtime-observable: Compose containers retain
+				// the pre-route desired-hash label and Docker observations have no route
+				// hash. Mark success immediately; later observations remain converged by
+				// accepting the canonical route-free runtime hash.
+				state.DriftStatus = domain.DriftStatusInSync
+			}
 			state.LastSuccessfulRunID = &id
 			state.LastReconciledAt = &now
 			if err := s.state.Upsert(ctx, state); err != nil {
@@ -1951,7 +1959,7 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 		observedHash := observedStateHash(obs)
 		if desiredHash == "" || observedHash == "" {
 			state.DriftStatus = domain.DriftStatusUnknown
-		} else if desiredHash != observedHash {
+		} else if desiredHash != observedHash && (state.DesiredRuntimeState == nil || !state.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)) {
 			state.DriftStatus = domain.DriftStatusDrifted
 		} else if observationHealthOK(obs.HealthStatus) {
 			state.DriftStatus = domain.DriftStatusInSync
