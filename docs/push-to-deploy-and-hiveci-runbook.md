@@ -279,8 +279,13 @@ hiveci:
   trusted_loom_worker_pubkeys:
     - "<loom-worker-5402-signer-hex>"
   policies:
+    # Map the RELEASE workflow, not ci.yml. grasp-gitea publishes one 5401 per
+    # discovered workflow file, but only .gitea/workflows/release.yml builds and
+    # pushes an image and prints BAHIA_ARTIFACT. A policy pointing at ci.yml
+    # would map a workflow that can never carry artifact identity, and the
+    # release result would then be rejected as unmapped_repository.
     - repo_coordinate: "30617:<repository-owner-pubkey>:<astillero-repository-id>"
-      workflow_path: ".gitea/workflows/ci.yml"
+      workflow_path: ".gitea/workflows/release.yml"
       branch_pattern: "main"
       service_name: astillero
       environment_name: edge-01-production
@@ -293,9 +298,20 @@ harbor:
 ```
 
 The existing `astillero` service must have `artifact_repo` equal to the 5402
-`image_repo` exactly. The workflow must print the `BAHIA_ARTIFACT` marker shown
-above; the current Astillero CI workflow otherwise produces no artifact
-identity for Bahia to register.
+`image_repo` exactly. Astillero's `.gitea/workflows/release.yml` sets
+`IMAGE_REPO: harbor.sharegap.net/cascadia/astillero`; if the service is
+registered with a different `artifact_repo`, change one side so the two match
+exactly, or the pipeline bridge rejects the result.
+
+That release workflow is the piece that makes automatic registration possible:
+it builds and pushes the immutable image (supplying the `cascadia-go` and
+`drydock` named build contexts the Dockerfile requires), resolves the pushed
+manifest digest, and prints exactly one `BAHIA_ARTIFACT` line for Loom to copy
+into the signed 5402. Astillero's older `ci.yml` only builds and tests, so it
+produces no artifact identity and should not be mapped by a pipeline policy.
+
+Registration is not promotion. A registered artifact is digest-pinned and
+inert until a separately authorized Bahia deployment promotes it.
 
 Do not add `trusted_release_attestors` for the ordinary Loom result path. That
 key enables the stricter second RELEASE-5402 verifier and additionally requires

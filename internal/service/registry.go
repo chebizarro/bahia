@@ -777,7 +777,7 @@ type ArtifactVerificationProof struct {
 // same immutable manifest digest supplied by the operator.
 func (s *RegistryService) RegisterArtifact(ctx context.Context, a *domain.Artifact) error {
 	if !s.allowManualArtifactRegistration {
-		return fmt.Errorf("manual artifact registration is disabled by policy")
+		return fmt.Errorf("manual artifact registration is disabled by policy: artifacts are expected to be CI-attested through the Hive CI path (a signed kind 5402 carrying image_repo, image_tag, and image_digest registers a digest-pinned artifact automatically); set hiveci.allow_manual_artifact_registration=true only to deliberately re-enable the operator-reviewed path")
 	}
 	if err := s.validateArtifactBinding(ctx, a); err != nil {
 		return err
