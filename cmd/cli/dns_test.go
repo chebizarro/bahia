@@ -39,11 +39,11 @@ func TestDNSSubcommandsBuildTypedRequests(t *testing.T) {
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) { return fake, nil })
 	defer restoreFactory()
 
-	executeDNSCommand(t, "zone-create", "--name", "prod.example", "--visibility", "external", "--backend-ref", "powerdns-prod", "--ttl", "300")
+	executeDNSCommand(t, "zone-create", "--name", "prod.example", "--visibility", "external", "--backend-ref", "powerdns-prod", "--ttl", "300", "--authoritative")
 	executeDNSCommand(t, "policy-apply", "--file", policyPath)
 	executeDNSCommand(t, "record-set", "--zone", "prod.example", "--name", "api", "--type", "A", "--value", "192.0.2.10", "--ttl", "60", "--reason", "incident pin", "--expires-at", expiresAt)
 
-	if zoneRequest.Name != "prod.example" || zoneRequest.Visibility != domain.ZoneVisibilityExternal || zoneRequest.BackendRef != "powerdns-prod" || zoneRequest.TTL != 300 {
+	if zoneRequest.Name != "prod.example" || zoneRequest.Visibility != domain.ZoneVisibilityExternal || zoneRequest.BackendRef != "powerdns-prod" || zoneRequest.TTL != 300 || !zoneRequest.Authoritative {
 		t.Fatalf("zone request = %#v", zoneRequest)
 	}
 	if policyRequest.Name != "edge-routing" || !policyRequest.Enabled || len(policyRequest.Rules) != 1 || policyRequest.Rules[0].Action.Visibility != domain.ZoneVisibilityEdge {

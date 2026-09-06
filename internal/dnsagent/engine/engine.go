@@ -18,6 +18,7 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -50,6 +51,12 @@ type Config struct {
 	Runner     CommandRunner
 	Reload     ReloadConfig
 	Logger     *slog.Logger
+}
+
+// ZoneSnapshot is the DNS state observed in a Bahia-owned dnsmasq include.
+type ZoneSnapshot struct {
+	Records       []domain.DNSRecord
+	Authoritative bool
 }
 
 // Engine atomically manages one include file per zone. It only creates,
@@ -116,6 +123,11 @@ func RenderZone(zone domain.DNSZone, records []domain.DNSRecord) ([]byte, error)
 	buffer.WriteString("# Zone: ")
 	buffer.WriteString(zone.Name)
 	buffer.WriteByte('\n')
+	if zone.Authoritative {
+		buffer.WriteString("local=/")
+		buffer.WriteString(zone.Name)
+		buffer.WriteString("/\n")
+	}
 	for _, record := range sortedRecords(records) {
 		directive, err := RenderDirective(zone, record)
 		if err != nil {
@@ -129,11 +141,11 @@ func RenderZone(zone domain.DNSZone, records []domain.DNSRecord) ([]byte, error)
 
 // RenderDirective renders one record in Bahia's established dnsmasq format.
 func RenderDirective(zone domain.DNSZone, record domain.DNSRecord) (string, error) {
-	record.Zone = strings.TrimSpace(record.Zone)
+	record.Zone = domain.NormalizeDNSZoneName(record.Zone)
 	if record.Zone == "" {
 		record.Zone = zone.Name
 	}
-	if record.Zone != zone.Name {
+	if record.Zone != domain.NormalizeDNSZoneName(zone.Name) {
 		return "", fmt.Errorf("DNS record %q zone %q does not match sync zone %q", record.FQDN, record.Zone, zone.Name)
 	}
 	fqdn := strings.Trim(strings.ToLower(strings.TrimSpace(record.FQDN)), ".")
@@ -178,9 +190,9 @@ func RenderDirective(zone domain.DNSZone, record domain.DNSRecord) (string, erro
 
 // ParseZoneFile parses Bahia-supported directives from a dnsmasq include file.
 // Comments, blank lines, and unsupported directives are ignored.
-func ParseZoneFile(zone domain.DNSZone, data []byte) ([]domain.DNSRecord, error) {
+func ParseZoneFile(zone domain.DNSZone, data []byte) (ZoneSnapshot, error) {
 	if err := domain.ValidateDNSZone(&zone); err != nil {
-		return nil, err
+		return ZoneSnapshot{}, err
 	}
 	return parseZone(zone, bytes.NewReader(data), nil)
 }
@@ -208,18 +220,18 @@ func (e *Engine) ApplyZone(ctx context.Context, zone domain.DNSZone, records []d
 	if err != nil {
 		return err
 	}
-	previousData, previousMode, previousExists, err := readPrevious(path)
+	previous, err := captureDNSMasqSnapshot(path)
 	if err != nil {
 		return err
 	}
-	if err := writeAtomic(ctx, dir, path, zone.Name, data, 0o644); err != nil {
+	if err := writeAtomic(ctx, path, zone.Name, data, 0o644); err != nil {
 		return err
 	}
 
 	if len(e.reload.PreReloadCheck) > 0 {
 		if err := e.runner(ctx, append([]string(nil), e.reload.PreReloadCheck...)); err != nil {
 			checkErr := fmt.Errorf("validate dnsmasq after syncing zone %q: %w", zone.Name, err)
-			if rollbackErr := restore(path, previousData, previousMode, previousExists); rollbackErr != nil {
+			if rollbackErr := atomicfile.Restore(path, ".dnsmasq-rollback-*.tmp", previous); rollbackErr != nil {
 				return errors.Join(checkErr, fmt.Errorf("restore previous dnsmasq config for zone %q: %w", zone.Name, rollbackErr))
 			}
 			return checkErr
@@ -228,14 +240,14 @@ func (e *Engine) ApplyZone(ctx context.Context, zone domain.DNSZone, records []d
 
 	strategy := e.SelectedReloadStrategy()
 	if len(strategy) == 0 {
-		if rollbackErr := restore(path, previousData, previousMode, previousExists); rollbackErr != nil {
+		if rollbackErr := atomicfile.Restore(path, ".dnsmasq-rollback-*.tmp", previous); rollbackErr != nil {
 			return errors.Join(fmt.Errorf("DNS dnsmasq reload strategy is required"), fmt.Errorf("restore previous dnsmasq config for zone %q: %w", zone.Name, rollbackErr))
 		}
 		return fmt.Errorf("DNS dnsmasq reload strategy is required")
 	}
 	if err := e.runner(ctx, strategy); err != nil {
 		reloadErr := fmt.Errorf("reload dnsmasq after syncing zone %q: %w", zone.Name, err)
-		if rollbackErr := restore(path, previousData, previousMode, previousExists); rollbackErr != nil {
+		if rollbackErr := atomicfile.Restore(path, ".dnsmasq-rollback-*.tmp", previous); rollbackErr != nil {
 			return errors.Join(reloadErr, fmt.Errorf("restore previous dnsmasq config for zone %q: %w", zone.Name, rollbackErr))
 		}
 		if rollbackReloadErr := e.runner(ctx, strategy); rollbackReloadErr != nil {
@@ -248,38 +260,38 @@ func (e *Engine) ApplyZone(ctx context.Context, zone domain.DNSZone, records []d
 
 // ListZone reads and parses the Bahia-owned include file for zone. Missing zone
 // files produce an empty record list.
-func (e *Engine) ListZone(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error) {
+func (e *Engine) ListZone(ctx context.Context, zone domain.DNSZone) (ZoneSnapshot, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return ZoneSnapshot{}, err
 	}
 	if err := domain.ValidateDNSZone(&zone); err != nil {
-		return nil, err
+		return ZoneSnapshot{}, err
 	}
 	path, err := e.zonePath(zone.Name)
 	if err != nil {
-		return nil, err
+		return ZoneSnapshot{}, err
 	}
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return []domain.DNSRecord{}, nil
+		return ZoneSnapshot{Records: []domain.DNSRecord{}}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read dnsmasq zone config %q: %w", path, err)
+		return ZoneSnapshot{}, fmt.Errorf("read dnsmasq zone config %q: %w", path, err)
 	}
 	defer file.Close()
-	records, err := parseZone(zone, file, ctx)
+	snapshot, err := parseZone(zone, file, ctx)
 	if err != nil {
 		var lineErr *parseLineError
 		if errors.As(err, &lineErr) {
-			return nil, fmt.Errorf("parse dnsmasq zone config %q line %d: %w", path, lineErr.line, lineErr.err)
+			return ZoneSnapshot{}, fmt.Errorf("parse dnsmasq zone config %q line %d: %w", path, lineErr.line, lineErr.err)
 		}
 		var scannerErr *zoneScanError
 		if errors.As(err, &scannerErr) {
-			return nil, fmt.Errorf("scan dnsmasq zone config %q: %w", path, scannerErr.err)
+			return ZoneSnapshot{}, fmt.Errorf("scan dnsmasq zone config %q: %w", path, scannerErr.err)
 		}
-		return nil, err
+		return ZoneSnapshot{}, err
 	}
-	return records, nil
+	return snapshot, nil
 }
 
 // HealthCheck verifies that the include directory exists, is a directory, and
@@ -313,7 +325,7 @@ func (e *Engine) HealthCheck(ctx context.Context) error {
 // SanitizeFileName converts a zone name into the stable filename component used
 // by existing Bahia dnsmasq installations.
 func SanitizeFileName(zoneName string) string {
-	zoneName = strings.TrimSpace(zoneName)
+	zoneName = domain.NormalizeDNSZoneName(zoneName)
 	var builder strings.Builder
 	lastWasDash := false
 	for _, r := range zoneName {
@@ -401,87 +413,50 @@ func validateDirectory(dir string) error {
 	return nil
 }
 
-func writeAtomic(ctx context.Context, dir, path, zoneName string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(dir, "."+SanitizeFileName(zoneName)+"-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create dnsmasq zone config temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write dnsmasq zone config temp file: %w", err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod dnsmasq zone config temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync dnsmasq zone config temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close dnsmasq zone config temp file: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace dnsmasq zone config %q: %w", path, err)
-	}
-	committed = true
-	return nil
-}
-
-func readPrevious(path string) ([]byte, os.FileMode, bool, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, 0o644, false, nil
-	}
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("read previous dnsmasq zone config %q: %w", path, err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("stat previous dnsmasq zone config %q: %w", path, err)
-	}
-	return data, info.Mode().Perm(), true, nil
-}
-
-func restore(path string, data []byte, mode os.FileMode, existed bool) error {
-	if !existed {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+func writeAtomic(ctx context.Context, path, zoneName string, data []byte, mode os.FileMode) error {
+	err := atomicfile.WriteFile(ctx, path, "."+SanitizeFileName(zoneName)+"-*.tmp", data, mode)
+	if err == nil {
 		return nil
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".dnsmasq-rollback-*.tmp")
-	if err != nil {
+	var operationErr *atomicfile.Error
+	if !errors.As(err, &operationErr) {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) //nolint:errcheck
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
+	switch operationErr.Operation {
+	case atomicfile.OperationCreateTemp:
+		return fmt.Errorf("create dnsmasq zone config temp file: %w", operationErr.Err)
+	case atomicfile.OperationWrite:
+		return fmt.Errorf("write dnsmasq zone config temp file: %w", operationErr.Err)
+	case atomicfile.OperationChmod:
+		return fmt.Errorf("chmod dnsmasq zone config temp file: %w", operationErr.Err)
+	case atomicfile.OperationSync:
+		return fmt.Errorf("sync dnsmasq zone config temp file: %w", operationErr.Err)
+	case atomicfile.OperationClose:
+		return fmt.Errorf("close dnsmasq zone config temp file: %w", operationErr.Err)
+	case atomicfile.OperationRename:
+		return fmt.Errorf("replace dnsmasq zone config %q: %w", path, operationErr.Err)
+	default:
 		return err
 	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
+}
+
+func captureDNSMasqSnapshot(path string) (atomicfile.Snapshot, error) {
+	snapshot, err := atomicfile.Capture(path, 0o644)
+	if err == nil {
+		return snapshot, nil
 	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
+	var operationErr *atomicfile.Error
+	if !errors.As(err, &operationErr) {
+		return atomicfile.Snapshot{}, err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	switch operationErr.Operation {
+	case atomicfile.OperationRead:
+		return atomicfile.Snapshot{}, fmt.Errorf("read previous dnsmasq zone config %q: %w", path, operationErr.Err)
+	case atomicfile.OperationStat:
+		return atomicfile.Snapshot{}, fmt.Errorf("stat previous dnsmasq zone config %q: %w", path, operationErr.Err)
+	default:
+		return atomicfile.Snapshot{}, err
 	}
-	return os.Rename(tmpName, path)
 }
 
 type parseLineError struct {
@@ -497,33 +472,48 @@ type zoneScanError struct{ err error }
 func (e *zoneScanError) Error() string { return fmt.Sprintf("scan dnsmasq zone config: %v", e.err) }
 func (e *zoneScanError) Unwrap() error { return e.err }
 
-func parseZone(zone domain.DNSZone, reader io.Reader, ctx context.Context) ([]domain.DNSRecord, error) {
-	records := []domain.DNSRecord{}
+func parseZone(zone domain.DNSZone, reader io.Reader, ctx context.Context) (ZoneSnapshot, error) {
+	snapshot := ZoneSnapshot{Records: []domain.DNSRecord{}}
 	scanner := bufio.NewScanner(reader)
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
 		if ctx != nil {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return ZoneSnapshot{}, err
 			}
 		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if localZone, ok := parseLocalDirective(line); ok {
+			if localZone == domain.NormalizeDNSZoneName(zone.Name) {
+				snapshot.Authoritative = true
+			}
+			continue
+		}
 		record, ok, err := parseDirective(zone, line)
 		if err != nil {
-			return nil, &parseLineError{line: lineNumber, err: err}
+			return ZoneSnapshot{}, &parseLineError{line: lineNumber, err: err}
 		}
 		if ok {
-			records = append(records, record)
+			snapshot.Records = append(snapshot.Records, record)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, &zoneScanError{err: err}
+		return ZoneSnapshot{}, &zoneScanError{err: err}
 	}
-	return sortedRecords(records), nil
+	snapshot.Records = sortedRecords(snapshot.Records)
+	return snapshot, nil
+}
+
+func parseLocalDirective(line string) (string, bool) {
+	if !strings.HasPrefix(line, "local=/") || !strings.HasSuffix(line, "/") {
+		return "", false
+	}
+	zoneName := domain.NormalizeDNSZoneName(strings.TrimSuffix(strings.TrimPrefix(line, "local=/"), "/"))
+	return zoneName, zoneName != ""
 }
 
 func parseDirective(zone domain.DNSZone, line string) (domain.DNSRecord, bool, error) {
@@ -609,7 +599,7 @@ func sortedRecords(records []domain.DNSRecord) []domain.DNSRecord {
 
 func fqdnFromRecordName(name, zoneName string) string {
 	name = strings.Trim(strings.ToLower(strings.TrimSpace(name)), ".")
-	zoneName = strings.Trim(strings.ToLower(strings.TrimSpace(zoneName)), ".")
+	zoneName = domain.NormalizeDNSZoneName(zoneName)
 	if name == "" || name == "@" {
 		return zoneName
 	}
@@ -618,7 +608,7 @@ func fqdnFromRecordName(name, zoneName string) string {
 
 func relativeDNSName(fqdn, zoneName string) string {
 	fqdn = strings.Trim(strings.ToLower(strings.TrimSpace(fqdn)), ".")
-	zoneName = strings.Trim(strings.ToLower(strings.TrimSpace(zoneName)), ".")
+	zoneName = domain.NormalizeDNSZoneName(zoneName)
 	if fqdn == zoneName {
 		return "@"
 	}

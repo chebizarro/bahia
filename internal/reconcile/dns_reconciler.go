@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,18 @@ const (
 type DNSBackend interface {
 	ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error)
 	SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error
+}
+
+// DNSZoneStateObserver optionally exposes backend-specific zone state that must
+// converge alongside records. Backends that do not implement it are unchanged.
+type DNSZoneStateObserver interface {
+	ListZoneState(ctx context.Context, zone domain.DNSZone) (records []domain.DNSRecord, authoritative bool, err error)
+}
+
+type dnsAuthoritySyncState struct {
+	zone                 domain.DNSZone
+	awaitingVerification bool
+	suppressed           bool
 }
 
 // DNSBackendResolver resolves configured backend references to DNS backends.
@@ -57,6 +70,7 @@ type DNSReconciler struct {
 	triggerCh      chan struct{}
 	debounce       time.Duration
 	runMu          sync.Mutex
+	authoritySyncs map[string]dnsAuthoritySyncState
 }
 
 func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver DNSBackendResolver, interval time.Duration, logger *zap.Logger, publisher ...events.Publisher) *DNSReconciler {
@@ -70,7 +84,7 @@ func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver 
 	if len(publisher) > 0 {
 		pub = publisher[0]
 	}
-	return &DNSReconciler{projector: projector, zones: append([]domain.DNSZone(nil), zones...), resolver: resolver, interval: interval, logger: logger, publisher: pub, triggerCh: make(chan struct{}, dnsReconcileTriggerBuffer), debounce: dnsReconcileDebounceWindow}
+	return &DNSReconciler{projector: projector, zones: append([]domain.DNSZone(nil), zones...), resolver: resolver, interval: interval, logger: logger, publisher: pub, triggerCh: make(chan struct{}, dnsReconcileTriggerBuffer), debounce: dnsReconcileDebounceWindow, authoritySyncs: make(map[string]dnsAuthoritySyncState)}
 }
 
 func (r *DNSReconciler) Name() string { return "dns-reconciler" }
@@ -156,6 +170,17 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 	changed := 0
 	unchanged := 0
 	for _, zone := range zones {
+		zoneKey := domain.NormalizeDNSZoneName(zone.Name)
+		zoneDefinition := zone
+		zoneDefinition.Name = zoneKey
+		zoneDefinition.BackendRef = strings.TrimSpace(zoneDefinition.BackendRef)
+		authorityState, hasAuthorityState := r.authoritySyncs[zoneKey]
+		if hasAuthorityState && authorityState.zone != zoneDefinition {
+			delete(r.authoritySyncs, zoneKey)
+			authorityState = dnsAuthoritySyncState{}
+			hasAuthorityState = false
+		}
+
 		backend, ok := r.resolver.Resolve(zone.BackendRef)
 		if !ok {
 			r.logger.Warn("DNS backend not found", zap.String("zone", zone.Name), zap.String("backend_ref", zone.BackendRef))
@@ -170,7 +195,15 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 			desired = applyDNSRecordOverrides(zone, desired, overrides)
 		}
 		sortDNSRecords(desired)
-		actual, err := backend.ListRecords(ctx, zone)
+		authorityInSync := true
+		var actual []domain.DNSRecord
+		if observer, ok := backend.(DNSZoneStateObserver); ok {
+			var observedAuthoritative bool
+			actual, observedAuthoritative, err = observer.ListZoneState(ctx, zone)
+			authorityInSync = observedAuthoritative == zone.Authoritative
+		} else {
+			actual, err = backend.ListRecords(ctx, zone)
+		}
 		if err != nil {
 			r.logger.Warn("DNS backend list records failed", zap.String("zone", zone.Name), zap.Error(err))
 			continue
@@ -179,16 +212,37 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 		sortDNSRecords(actual)
 
 		diff := diffDNSRecords(actual, desired)
-		if diff.empty() {
+		authorityOnlyDrift := diff.empty() && !authorityInSync
+		if authorityInSync {
+			delete(r.authoritySyncs, zoneKey)
+		}
+		if diff.empty() && authorityInSync {
 			unchanged++
 			r.logger.Info("DNS zone unchanged", zap.String("zone", zone.Name), zap.Int("records", len(desired)))
 			continue
+		}
+		if authorityOnlyDrift && hasAuthorityState {
+			switch {
+			case authorityState.awaitingVerification:
+				r.logger.Warn(fmt.Sprintf("zone %q authority not converging — dns agent may predate authoritative-zone support; upgrade the agent", zone.Name))
+				authorityState.awaitingVerification = false
+				authorityState.suppressed = true
+				r.authoritySyncs[zoneKey] = authorityState
+				unchanged++
+				continue
+			case authorityState.suppressed:
+				unchanged++
+				continue
+			}
 		}
 
 		r.emitDriftDetected(ctx, zone, diff)
 		if err := backend.SyncZone(ctx, zone, desired); err != nil {
 			r.logger.Warn("DNS backend sync zone failed", zap.String("zone", zone.Name), zap.Error(err))
 			continue
+		}
+		if authorityOnlyDrift {
+			r.authoritySyncs[zoneKey] = dnsAuthoritySyncState{zone: zoneDefinition, awaitingVerification: true}
 		}
 		changed++
 		r.emitRecordChanges(ctx, zone, diff)
@@ -203,7 +257,7 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 func (r *DNSReconciler) reconcileZones(ctx context.Context) ([]domain.DNSZone, error) {
 	zonesByName := make(map[string]domain.DNSZone, len(r.zones))
 	for _, zone := range r.zones {
-		zonesByName[zone.Name] = zone
+		zonesByName[domain.NormalizeDNSZoneName(zone.Name)] = zone
 	}
 	if r.zoneSource != nil {
 		persisted, err := r.zoneSource.List(ctx)
@@ -211,7 +265,7 @@ func (r *DNSReconciler) reconcileZones(ctx context.Context) ([]domain.DNSZone, e
 			return nil, err
 		}
 		for _, zone := range persisted {
-			zonesByName[zone.Name] = zone
+			zonesByName[domain.NormalizeDNSZoneName(zone.Name)] = zone
 		}
 	}
 	zones := make([]domain.DNSZone, 0, len(zonesByName))

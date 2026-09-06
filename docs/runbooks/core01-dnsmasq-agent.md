@@ -1,12 +1,14 @@
-# Runbook: bahia-dns-agent on core-01 (LAN dnsmasq authority)
+# Runbook: centralized internal DNS and HTTPS guards for core-01/edge-01
 
 This runbook deploys `bahia-dns-agent` on **core-01 (192.168.40.1)**, the LAN
-resolver running dnsmasq, and switches Bahia's internal `sharegap.net`
-projection for `edge-01-production` from local-filesystem dnsmasq management to
-the relay-backed `dnsmasq_agent` backend. Bahia (on edge-01) and the agent (on
-core-01) communicate only over Nostr relays via ContextVM kind `25910`
-JSON-RPC (schema `bahia.dnsagent.v1`); no SSH, REST, or port-forwarding
-between the hosts is required.
+resolver running dnsmasq, and moves both split-DNS authority and the edge-01
+LAN HTTPS vhost under Bahia's centralized ownership. Bahia's internal
+`sharegap.net` projection uses the relay-backed `dnsmasq_agent` backend, while
+the signed route plan carries both external Cloudflare and internal nginx
+outputs. Bahia (on edge-01) and the DNS agent (on core-01) communicate only
+over Nostr relays via ContextVM kind `25910` JSON-RPC (schema
+`bahia.dnsagent.v1`); no SSH, REST, or port-forwarding between the hosts is
+required.
 
 Reference material:
 
@@ -124,6 +126,7 @@ dns:
       visibility: internal
       backend: core01-dnsmasq
       ttl: 300
+      authoritative: true
   backends:
     core01-dnsmasq:
       type: dnsmasq_agent
@@ -138,7 +141,27 @@ dns:
       edge-01-production: sharegap.net
     host_overrides:
       edge-01-docker: 192.168.40.104
+
+internal_routing:
+  enabled: true
+  provider: nginx
+  include_dir: /etc/nginx/conf.d
+  file_prefix: bahia-
+  test_command: [nginx, -t]
+  reload_command: [nginx, -s, reload]
+  cert_file: /etc/letsencrypt/live/astillero.sharegap.net/fullchain.pem
+  key_file: /etc/letsencrypt/live/astillero.sharegap.net/privkey.pem
+  zones:
+    - sharegap.net
 ```
+
+`authoritative: true` makes Bahia manage `local=/sharegap.net/` in the zone include. This prevents unanswered query types such as AAAA, HTTPS, and SVCB from being forwarded to public DNS and leaking public Cloudflare/ECH records into the split-DNS path.
+
+`internal_routing.enabled: true` makes the same signed route plan drive the
+Bahia-owned nginx vhost on edge-01 after Cloudflare succeeds. The certificate
+and key must already exist and be readable. Bahia writes only
+`bahia-<hostname>.conf`, validates with `nginx -t`, reloads nginx, and restores
+the previous owned file automatically if validation or reload fails.
 
 `host_overrides` is mandatory for this rollout: map `edge-01-docker` to the
 edge-01 LAN address (`192.168.40.104`), and map each other Bahia-managed
@@ -173,8 +196,9 @@ byte-identical after repeated syncs).
    ```
 
 2. Enable the backend (step 4) and let the `dns-reconciler` project the
-   Astillero record. Verify the Bahia-managed include appeared and that all
-   **manual** names still resolve exactly as in the baseline:
+   Astillero record and `local=/sharegap.net/` authority guard. Verify the
+   Bahia-managed include appeared and that all **manual** names still resolve
+   exactly as in the baseline:
 
    ```sh
    ssh core-01 cat /etc/dnsmasq.d/bahia-sharegap-net.conf
@@ -187,20 +211,51 @@ byte-identical after repeated syncs).
    `192.168.40.104`, the value configured for `edge-01-docker` in
    `dns.projection.host_overrides`.
 
-3. Only after Bahia-managed resolution of `astillero.sharegap.net` is
-   verified, delete **only** the one `astillero` line from
-   `sharegap-splitdns.conf` (leave every other manual record), then reload
-   dnsmasq and re-verify:
+3. Explicitly enable `authoritative: true`, reload Bahia, and verify
+   `local=/sharegap.net/` appears in `bahia-sharegap-net.conf`. Only after both
+   Bahia-managed resolution of `astillero.sharegap.net` and that managed guard
+   are verified, delete **only** the one `astillero` record and any manual
+   `local=/sharegap.net/` guard from `sharegap-splitdns.conf` (leave every other
+   manual record). The next Bahia reconcile repairs a missing managed guard;
+   reload dnsmasq after editing the manual file and re-verify:
 
    ```sh
-   ssh core-01   # edit /etc/dnsmasq.d/sharegap-splitdns.conf, remove only the astillero line
+   ssh core-01   # remove only the astillero record and manual local=/sharegap.net/ guard
    ssh core-01 systemctl reload dnsmasq
    dig @192.168.40.1 astillero.sharegap.net
    ```
 
-## 6. Rollback — [operator]
+## 6. Migration: move the edge-01 nginx vhost to Bahia — [operator]
 
-To return to fully manual management:
+Perform this after the DNS guard is healthy; it is independently reversible.
+
+1. Capture the current manual nginx source and behavior before enabling the
+   guard:
+
+   ```sh
+   nginx -T > /root/nginx-before-bahia.txt
+   curl --resolve astillero.sharegap.net:443:192.168.40.104 -fsS https://astillero.sharegap.net/health
+   ```
+
+2. Ensure the configured certificate and key exist, then enable
+   `internal_routing` from step 4 and reload Bahia. Submit or re-approve the
+   Astillero signed route attachment with its internal output enabled. Verify
+   `/etc/nginx/conf.d/bahia-astillero.sharegap.net.conf` exists, `nginx -t`
+   succeeds, and the forced-LAN HTTPS request still succeeds. The composite
+   applies Cloudflare first and nginx second; a failed nginx activation restores
+   nginx and then compensates Cloudflare.
+
+3. Only after the Bahia-owned vhost is active, remove the old hand-applied
+   Astillero nginx vhost, run `nginx -t`, reload nginx, and repeat the forced-LAN
+   request. Do not remove unrelated manual vhosts.
+
+## 7. Rollback — [operator]
+
+The two guards can be rolled back independently.
+
+### DNS authority rollback
+
+To return internal DNS to fully manual management:
 
 1. Stop the agent, or remove/disable the Bahia include:
 
@@ -228,7 +283,24 @@ on the agent side and surfaces the error to Bahia
 (`TestDnsmasqAgentBackendReloadFailureRollsBackAndRecovers`); this section is
 only for deliberately abandoning Bahia management.
 
-## 7. Ongoing verification — [operator]
+### Internal HTTPS rollback
+
+1. Restore the saved manual Astillero vhost, validate it with `nginx -t`, and
+   keep it ready without reloading.
+2. Submit/approve the signed route attachment with `--internal=false`. Bahia
+   removes its owned vhost and validates/reloads nginx; then reload the restored
+   manual configuration and verify the forced-LAN HTTPS request.
+3. Disable `internal_routing`, reload Bahia, and confirm the manual vhost is the
+   only active `server_name astillero.sharegap.net` definition. Do not simply
+   disable the backend first: that would leave the last Bahia-owned include on
+   disk with no backend available to remove it.
+
+A failed nginx validation or reload during normal apply restores the exact prior
+Bahia-owned file and active configuration automatically. If the later nginx
+stage fails after Cloudflare applied, composite compensation restores Cloudflare
+as well.
+
+## 8. Ongoing verification — [operator]
 
 - `dig @192.168.40.1 astillero.sharegap.net` — traceable to Bahia state: the
   answer must match the address in `bahia-sharegap-net.conf`, whose content is

@@ -1,11 +1,11 @@
 # Managed DNS and HTTPS Routes
 
-This guide documents the signer-first operator flow for taking an existing Bahia-managed Docker or Compose service from artifact deployment to internal DNS and a managed external HTTPS hostname. The service must expose an HTTP health endpoint.
+This guide documents the signer-first operator flow for making Bahia the central owner of one service hostname across three outputs: external Cloudflare DNS/Tunnel routing, authoritative internal DNS, and internal HTTPS termination. It takes an existing Bahia-managed Docker or Compose service from artifact deployment to a single managed hostname. The service must expose an HTTP health endpoint.
 
 The worked example uses **Astillero** in `edge-01-production`:
 
 - public hostname: `astillero.sharegap.net`
-- existing origin: `http://127.0.0.1:18088`
+- existing origin: `http://192.168.40.104:18088`
 - health endpoint: `/health`
 - final user URL: `https://astillero.sharegap.net/` (no port)
 
@@ -28,6 +28,7 @@ dns:
       visibility: internal
       backend: lan-dnsmasq
       ttl: 300
+      authoritative: true
   backends:
     lan-dnsmasq:
       type: dnsmasq
@@ -57,9 +58,21 @@ edge_routing:
       ttl: 300
   origins:
     - deployment_unit_id: 00000000-0000-4000-8000-000000000003
-      host: 127.0.0.1
+      host: 192.168.40.104
       allowed_ports:
         - 18088
+
+internal_routing:
+  enabled: true
+  provider: nginx
+  include_dir: /etc/nginx/conf.d
+  file_prefix: bahia-
+  test_command: [nginx, -t]
+  reload_command: [nginx, -s, reload]
+  cert_file: /etc/letsencrypt/live/astillero.sharegap.net/fullchain.pem
+  key_file: /etc/letsencrypt/live/astillero.sharegap.net/privkey.pem
+  zones:
+    - sharegap.net
 ```
 
 When the dnsmasq resolver runs on a **different host** than Bahia — the edge-01/core-01 topology, where core-01 (`192.168.40.1`) is the LAN resolver — use the `dnsmasq_agent` backend instead of `dnsmasq`. Bahia then sends signed ContextVM kind `25910` requests (schema `bahia.dnsagent.v1`) over the configured relays to a `bahia-dns-agent` process on the resolver host; that agent owns only the `bahia-*` include files, applies them atomically under a monotonic serial, and rolls back automatically when a dnsmasq reload fails. Existing manually managed include files on the resolver are never touched.
@@ -75,9 +88,13 @@ When the dnsmasq resolver runs on a **different host** than Bahia — the edge-0
       agent_timeout: 30s
 ```
 
-Deployment of the agent itself (key generation, allowlist, reload command, migration from manual records, rollback) is covered by the [core-01 dnsmasq agent runbook](../../runbooks/core01-dnsmasq-agent.md). The rest of this guide is identical for both backends.
+Deployment of the agent itself (key generation, allowlist, reload command, migration from manual records, rollback) is covered by the [core-01/edge-01 centralized guards runbook](../../runbooks/core01-dnsmasq-agent.md). Follow its ordered cutover: first enable the authoritative DNS flag and verify the Bahia-owned `local=/sharegap.net/` line before removing the hand-applied guard; then enable `internal_routing` and verify the Bahia-owned vhost before removing the hand-applied nginx vhost. Each guard has an independent rollback. The rest of this guide is identical for both DNS backends.
 
 `api_token_ref` is an opaque SecretRef UUID. Store the Cloudflare API token through Bahia's secret-management path; never put the token itself in this file. `allowed_org_ids` limits which organizations may claim the zone. Each origin allowlists one deployment unit, host, and set of ports; `route-attach` is rejected when a request falls outside those boundaries. A protected zone also requires a protected environment.
+
+Together, this configuration establishes one ownership boundary: the DNS reconciler owns the internal A record and `local=/sharegap.net/` guard, while one signed route plan owns both the external Cloudflare CNAME/Tunnel output and the internal HTTPS vhost for `astillero.sharegap.net`. The desired-state hash covers both route outputs, and composite apply/compensation keeps them coordinated.
+
+`internal_routing` makes the edge-01 LAN vhost part of that same signed route plan. Its include directory and certificate paths must be absolute; the certificate and key must already exist and be readable on edge-01 for startup health and route checks to pass. The shown argv commands are executed without a shell. Bahia owns only `/etc/nginx/conf.d/bahia-astillero.sharegap.net.conf`, identified by its header, and refuses to overwrite a foreign collision. It atomically writes the vhost, runs `nginx -t`, then reloads. A test or reload failure restores the exact prior bytes and re-tests/reloads the restored configuration.
 
 `verify_resolver` defaults to the public resolver `1.1.1.1:53`. This is intentional on edge-01: its split-horizon system DNS can resolve the public hostname directly to the LAN origin, which would bypass Cloudflare and could let verification pass even when the public record is absent. Bahia first resolves the hostname through the configured public resolver and then uses that same resolver for the HTTPS connection, while retaining the public hostname for TLS SNI and certificate verification. Set `verify_resolver: system` only when host-resolver behavior is explicitly desired.
 
@@ -142,7 +159,7 @@ No DNS mutation command is required for the normal service path. With `dns.proje
 astillero.sharegap.net. 300 IN A 10.20.0.88
 ```
 
-The exact address comes from the runtime observation; do not hardcode it in the operator flow. Confirm that `/health` lists the `dns-reconciler` runner and that `/ready` succeeds before relying on the projection:
+With `authoritative: true`, the same managed include also contains `local=/sharegap.net/`; the reconciler observes and repairs that guard independently of record drift so unanswered internal query types do not escape to public DNS. The exact address comes from the runtime observation; do not hardcode it in the operator flow. Confirm that `/health` lists the `dns-reconciler` runner and that `/ready` succeeds before relying on the projection:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/health
@@ -164,6 +181,7 @@ bahia deployments route-attach \
   --upstream-port 18088 \
   --health-path /health \
   --tls managed \
+  --internal \
   --idempotency-key route:astillero:sharegap
 ```
 
@@ -175,7 +193,9 @@ bahia deployments approve \
   --idempotency-key approve:astillero:route
 ```
 
-Bahia updates the managed Cloudflare Tunnel ingress and DNS record and verifies the HTTPS health path. Public DNS resolution and the HTTPS request retry with bounded backoff only until `verify_timeout`; a missing public record is reported separately from an edge HTTP failure. If verification fails, the routing backend compensates by restoring the previous public route state and the route-only run fails. These verification changes affect only how the health check resolves the hostname; compensation and rollback semantics are unchanged.
+By default `--internal` is automatic: Bahia includes the internal stanza whenever `internal_routing` is enabled and the hostname is inside an allowed internal zone. Use `--internal=false` only for an explicit opt-out.
+
+Bahia updates and verifies the managed Cloudflare Tunnel ingress and DNS record first, then writes/tests/reloads the nginx vhost `astillero.sharegap.net -> http://192.168.40.104:18088`. Public DNS resolution and the HTTPS request retry with bounded backoff only until `verify_timeout`; a missing public record is reported separately from an edge HTTP failure. If nginx fails after Cloudflare succeeds, nginx restores its prior file state and the composite withdraws/restores the Cloudflare mutation in reverse order. A rollback plan with a changed internal stanza replaces the owned vhost; a plan with no stanza removes the owned file and reloads nginx. The route-only run fails if compensation cannot complete.
 
 ## 6. Verify the result
 
@@ -183,13 +203,15 @@ Bahia updates the managed Cloudflare Tunnel ingress and DNS record and verifies 
 curl -fsS http://127.0.0.1:8080/ready
 curl -fsS https://astillero.sharegap.net/health
 curl -fsS https://astillero.sharegap.net/
+# Force the LAN edge address to prove split-DNS nginx service independently:
+curl --resolve astillero.sharegap.net:443:192.168.40.104 -fsS https://astillero.sharegap.net/health
 ```
 
 The final user experience is `https://astillero.sharegap.net/` without an exposed port. Apply the same flow to any Bahia-managed Docker or Compose service by changing the service/environment/unit IDs, mapped zone, allowed origin, hostname, and health path.
 
 ## Operational boundary
 
-For this workflow:
+After the one-time manual-guard migration in the linked runbook, steady-state operation has this boundary:
 
 - no direct SQL changes;
 - no manual Docker, Compose, nginx, or cloudflared edits;
@@ -204,3 +226,4 @@ Use signed Bahia commands and configured SecretRefs so desired state, policy dec
 - [Deployments](../features/deployments.md)
 - [DNS](../features/dns.md)
 - [CLI reference](../cli-reference.md)
+- [core-01/edge-01 centralized guards runbook](../../runbooks/core01-dnsmasq-agent.md)

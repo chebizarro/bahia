@@ -20,6 +20,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	dnsadapter "github.com/openagentsinc/bahia/internal/adapters/dns"
+	routingadapter "github.com/openagentsinc/bahia/internal/adapters/routing"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	dnsagent "github.com/openagentsinc/bahia/internal/dnsagent/agent"
@@ -374,17 +375,19 @@ func TestDNSReconcilerConvergesRemoteAgentInclude(t *testing.T) {
 		nil, nil, nil,
 		config.DNSConfig{
 			Enabled: true, DefaultTTL: 300,
-			Zones:      []config.DNSZoneConfig{{Name: "sharegap.net", Visibility: "internal", Backend: "core-01", TTL: 300}},
+			Zones:      []config.DNSZoneConfig{{Name: "sharegap.net", Visibility: "internal", Backend: "core-01", TTL: 300, Authoritative: true}},
 			Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"edge-01-production": "sharegap.net"}},
 		},
 		zap.NewNop(),
 	)
-	reconciler := reconcile.NewDNSReconciler(projector, []domain.DNSZone{e2eZone()}, reconcileResolverBridge{resolver: staticResolver}, 0, zap.NewNop())
+	zone := e2eZone()
+	zone.Authoritative = true
+	reconciler := reconcile.NewDNSReconciler(projector, []domain.DNSZone{zone}, reconcileResolverBridge{resolver: staticResolver}, 0, zap.NewNop())
 
 	if err := reconciler.ReconcileOnce(ctx); err != nil {
 		t.Fatalf("first ReconcileOnce: %v", err)
 	}
-	wantInclude := e2eManagedIncludeHeader + "address=/astillero.sharegap.net/192.168.40.104\n"
+	wantInclude := e2eManagedIncludeHeader + "local=/sharegap.net/\naddress=/astillero.sharegap.net/192.168.40.104\n"
 	if got := readInclude(t, harness.includePath()); got != wantInclude {
 		t.Fatalf("include after reconcile = %q, want %q", got, wantInclude)
 	}
@@ -402,6 +405,174 @@ func TestDNSReconcilerConvergesRemoteAgentInclude(t *testing.T) {
 	}
 	if *harness.reloadCalls != 1 {
 		t.Fatalf("reload calls after second reconcile = %d, want still 1", *harness.reloadCalls)
+	}
+
+	// Authority is part of observed zone state, not a synthetic record. If the
+	// guard is hand-deleted while records remain identical, reconciliation must
+	// still restore it and reload dnsmasq.
+	withoutAuthority := strings.Replace(wantInclude, "local=/sharegap.net/\n", "", 1)
+	if err := os.WriteFile(harness.includePath(), []byte(withoutAuthority), 0o644); err != nil {
+		t.Fatalf("remove authoritative guard: %v", err)
+	}
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("third ReconcileOnce after authority drift: %v", err)
+	}
+	if got := readInclude(t, harness.includePath()); got != wantInclude {
+		t.Fatalf("include after authority drift repair = %q, want %q", got, wantInclude)
+	}
+	if *harness.reloadCalls != 2 {
+		t.Fatalf("reload calls after authority drift repair = %d, want 2", *harness.reloadCalls)
+	}
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("fourth ReconcileOnce after authority convergence: %v", err)
+	}
+	if *harness.reloadCalls != 2 {
+		t.Fatalf("reload calls after authority convergence = %d, want still 2", *harness.reloadCalls)
+	}
+}
+
+type crossGuardCloudflareBackend struct {
+	checked *domain.DesiredPublicRoutePlan
+	applied *domain.DesiredPublicRoutePlan
+}
+
+func (b *crossGuardCloudflareBackend) Check(_ context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
+		return err
+	}
+	if plan.Provider != "cloudflare_tunnel" || plan.DNS.Name != plan.Hostname || !plan.DNS.Proxied {
+		return fmt.Errorf("Cloudflare output is incomplete")
+	}
+	b.checked = plan
+	return nil
+}
+
+func (b *crossGuardCloudflareBackend) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	_, err := b.ApplyWithCompensation(ctx, plan)
+	return err
+}
+
+func (b *crossGuardCloudflareBackend) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (routingadapter.Compensation, error) {
+	if err := b.Check(ctx, plan); err != nil {
+		return nil, err
+	}
+	b.applied = plan
+	return func(context.Context) error { return nil }, nil
+}
+
+func TestCentralizedOwnershipGuardsEndToEndAstillero(t *testing.T) {
+	ctx := context.Background()
+	dnsBackend, _, harness := newE2EBackend(t)
+	staticResolver, err := dnsadapter.NewStaticResolver(dnsadapter.BackendRegistration{Ref: "core-01", Backend: dnsBackend})
+	if err != nil {
+		t.Fatalf("construct static DNS resolver: %v", err)
+	}
+
+	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
+	projector := reconcile.NewDNSProjector(
+		&e2eServiceRepo{services: []domain.Service{{ID: serviceID, Name: "astillero", RuntimeType: domain.RuntimeTypeCompose}}},
+		&e2eEnvironmentRepo{environments: []domain.Environment{{ID: environmentID, Name: "edge-01-production"}}},
+		&e2eStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: environmentID, DriftStatus: domain.DriftStatusInSync}}},
+		&e2eObservationRepo{latest: &domain.RuntimeObservation{ServiceID: serviceID, EnvironmentID: environmentID, ObservedHost: "192.168.40.104", HealthStatus: domain.HealthStatusHealthy}},
+		nil, nil, nil,
+		config.DNSConfig{
+			Enabled: true, DefaultTTL: 300,
+			Zones:      []config.DNSZoneConfig{{Name: "sharegap.net", Visibility: "internal", Backend: "core-01", TTL: 300, Authoritative: true}},
+			Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"edge-01-production": "sharegap.net"}},
+		},
+		zap.NewNop(),
+	)
+	zone := e2eZone()
+	zone.Authoritative = true
+	dnsReconciler := reconcile.NewDNSReconciler(projector, []domain.DNSZone{zone}, reconcileResolverBridge{resolver: staticResolver}, 0, zap.NewNop())
+	if err := dnsReconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("reconcile authoritative Astillero DNS through remote agent: %v", err)
+	}
+	wantInclude := e2eManagedIncludeHeader + "local=/sharegap.net/\naddress=/astillero.sharegap.net/192.168.40.104\n"
+	if got := readInclude(t, harness.includePath()); got != wantInclude {
+		t.Fatalf("central DNS include = %q, want %q", got, wantInclude)
+	}
+
+	routeDir := t.TempDir()
+	certFile := filepath.Join(routeDir, "fullchain.pem")
+	keyFile := filepath.Join(routeDir, "privkey.pem")
+	if err := os.WriteFile(certFile, []byte("test certificate"), 0o600); err != nil {
+		t.Fatalf("write test certificate: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("test key"), 0o600); err != nil {
+		t.Fatalf("write test key: %v", err)
+	}
+	var nginxCommands []string
+	nginx, err := routingadapter.NewNginxBackend(routingadapter.NginxConfig{
+		IncludeDir: routeDir, FilePrefix: "bahia-",
+		TestCommand: []string{"nginx", "-t"}, ReloadCommand: []string{"nginx", "-s", "reload"},
+		CertFile: certFile, KeyFile: keyFile, ConfigHash: "sha256:internal-routing",
+		Runner: func(_ context.Context, argv []string) error {
+			nginxCommands = append(nginxCommands, strings.Join(argv, " "))
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("construct nginx backend: %v", err)
+	}
+	cloudflare := &crossGuardCloudflareBackend{}
+	composite, err := routingadapter.NewCompositeBackend(cloudflare, nginx)
+	if err != nil {
+		t.Fatalf("construct composite route backend: %v", err)
+	}
+
+	hostname := "astillero.sharegap.net"
+	plan := &domain.DesiredPublicRoutePlan{
+		SchemaVersion: domain.PublicRouteSchemaVersion,
+		ServiceID:     serviceID, EnvironmentID: environmentID, DeploymentUnitID: unitID,
+		Hostname: hostname, Zone: "sharegap.net", BackendRef: "cloudflare-production",
+		Provider: "cloudflare_tunnel", ProviderConfigHash: "sha256:cloudflare-routing",
+		DNS: domain.DesiredPublicRouteDNS{
+			Type: "CNAME", Name: hostname, Value: "fleet-tunnel.example.net", TTL: 300,
+			Proxied: true, SourceCoordinate: domain.PublicRouteCoordinate(serviceID, environmentID, unitID),
+		},
+		Tunnel: domain.DesiredPublicRouteTunnel{TunnelRef: "fleet-tunnel", Hostname: hostname, OriginURL: "http://192.168.40.104:18088"},
+		Proxy: domain.DesiredPublicRouteProxy{
+			HostMatch: hostname, UpstreamScheme: "http", UpstreamHost: "192.168.40.104", UpstreamPort: 18088, HealthPath: "/health",
+		},
+		TLS: domain.DesiredPublicRouteTLS{Mode: "managed", Provider: "cloudflare"},
+		InternalHTTPS: &domain.DesiredInternalHTTPSPlan{
+			SchemaVersion: domain.InternalHTTPSPlanSchemaVersion, Hostname: hostname, Listen: "443 ssl",
+			UpstreamURL: "http://192.168.40.104:18088", CertFile: certFile, KeyFile: keyFile, ConfigHash: "sha256:internal-routing",
+			Apply:    []domain.DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "upsert_and_reload", Summary: "install internal HTTPS vhost"}},
+			Rollback: []domain.DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "restore_or_remove_and_reload", Summary: "restore internal HTTPS vhost"}},
+		},
+		Operations: []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply"}, {Order: 2, Resource: "cloudflare", Action: "upsert"}},
+		Rollback:   []domain.DesiredPublicRouteChange{{Order: 1, Resource: "cloudflare", Action: "restore"}},
+	}
+	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
+		t.Fatalf("validate combined route plan: %v", err)
+	}
+	spec := &domain.DesiredServiceSpec{SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: serviceID, EnvironmentID: environmentID, PublicRoute: plan}
+	combinedHash := spec.ComputeDesiredHash()
+	plan.DNS.Value = "changed-tunnel.example.net"
+	externalHash := spec.ComputeDesiredHash()
+	plan.DNS.Value = "fleet-tunnel.example.net"
+	plan.InternalHTTPS.ConfigHash = "sha256:changed-internal-routing"
+	internalHash := spec.ComputeDesiredHash()
+	plan.InternalHTTPS.ConfigHash = "sha256:internal-routing"
+	if combinedHash == externalHash || combinedHash == internalHash {
+		t.Fatalf("desired hash did not cover both Cloudflare and InternalHTTPS outputs: combined=%s external=%s internal=%s", combinedHash, externalHash, internalHash)
+	}
+
+	if err := composite.Apply(ctx, plan); err != nil {
+		t.Fatalf("apply combined Cloudflare and internal HTTPS route: %v", err)
+	}
+	if cloudflare.checked != plan || cloudflare.applied != plan {
+		t.Fatal("composite did not pass the combined signed plan through the Cloudflare backend")
+	}
+	vhostPath := filepath.Join(routeDir, "bahia-astillero.sharegap.net.conf")
+	vhost := readInclude(t, vhostPath)
+	if !strings.Contains(vhost, "server_name astillero.sharegap.net;") || !strings.Contains(vhost, "proxy_pass http://192.168.40.104:18088;") {
+		t.Fatalf("managed internal HTTPS vhost is incomplete:\n%s", vhost)
+	}
+	if got := strings.Join(nginxCommands, ","); got != "nginx -t,nginx -s reload" {
+		t.Fatalf("nginx activation commands = %q", got)
 	}
 }
 

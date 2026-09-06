@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 )
 
-const PublicRouteSchemaVersion = "1"
+const (
+	PublicRouteSchemaVersion       = "1"
+	InternalHTTPSPlanSchemaVersion = "1"
+)
 
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
@@ -40,6 +44,7 @@ type DesiredPublicRoutePlan struct {
 	Tunnel             DesiredPublicRouteTunnel   `json:"tunnel"`
 	Proxy              DesiredPublicRouteProxy    `json:"proxy"`
 	TLS                DesiredPublicRouteTLS      `json:"tls"`
+	InternalHTTPS      *DesiredInternalHTTPSPlan  `json:"internal_https,omitempty"`
 	Operations         []DesiredPublicRouteChange `json:"operations"`
 	Rollback           []DesiredPublicRouteChange `json:"rollback"`
 }
@@ -70,6 +75,21 @@ type DesiredPublicRouteProxy struct {
 type DesiredPublicRouteTLS struct {
 	Mode     string `json:"mode"`
 	Provider string `json:"provider"`
+}
+
+// DesiredInternalHTTPSPlan describes the exact non-secret nginx vhost state
+// approved together with the public Cloudflare route. Certificate contents are
+// never embedded; only operator-configured absolute file paths are signed.
+type DesiredInternalHTTPSPlan struct {
+	SchemaVersion string                     `json:"schema_version"`
+	Hostname      string                     `json:"hostname"`
+	Listen        string                     `json:"listen"`
+	UpstreamURL   string                     `json:"upstream_url"`
+	CertFile      string                     `json:"cert_file"`
+	KeyFile       string                     `json:"key_file"`
+	ConfigHash    string                     `json:"config_hash"`
+	Apply         []DesiredPublicRouteChange `json:"apply"`
+	Rollback      []DesiredPublicRouteChange `json:"rollback"`
 }
 
 type DesiredPublicRouteChange struct {
@@ -166,6 +186,28 @@ func ValidateDesiredPublicRoute(plan *DesiredPublicRoutePlan) error {
 	if err != nil || origin.Scheme != plan.Proxy.UpstreamScheme || origin.Hostname() != plan.Proxy.UpstreamHost || origin.Port() != fmt.Sprintf("%d", plan.Proxy.UpstreamPort) || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return fmt.Errorf("public route tunnel origin must match the proxy upstream")
 	}
+	if plan.InternalHTTPS != nil {
+		internal := plan.InternalHTTPS
+		if internal.SchemaVersion != InternalHTTPSPlanSchemaVersion || internal.Hostname != plan.Hostname {
+			return fmt.Errorf("internal HTTPS hostname and schema version must match the public route")
+		}
+		if internal.Listen != "443 ssl" {
+			return fmt.Errorf("internal HTTPS listen must be 443 ssl")
+		}
+		internalOrigin, err := url.Parse(internal.UpstreamURL)
+		if err != nil || internalOrigin.Scheme != plan.Proxy.UpstreamScheme || internalOrigin.Hostname() != plan.Proxy.UpstreamHost || internalOrigin.Port() != fmt.Sprintf("%d", plan.Proxy.UpstreamPort) || internalOrigin.Path != "" || internalOrigin.RawQuery != "" || internalOrigin.Fragment != "" || internalOrigin.User != nil {
+			return fmt.Errorf("internal HTTPS upstream must match the public route proxy upstream")
+		}
+		if !filepath.IsAbs(internal.CertFile) || !filepath.IsAbs(internal.KeyFile) || strings.TrimSpace(internal.ConfigHash) == "" {
+			return fmt.Errorf("internal HTTPS certificate path, key path, and config hash are required")
+		}
+		if err := validateRouteChanges("internal HTTPS apply", internal.Apply); err != nil {
+			return err
+		}
+		if err := validateRouteChanges("internal HTTPS rollback", internal.Rollback); err != nil {
+			return err
+		}
+	}
 	if len(plan.Operations) == 0 || len(plan.Rollback) == 0 {
 		return fmt.Errorf("public route apply and rollback operations are required")
 	}
@@ -177,6 +219,18 @@ func ValidateDesiredPublicRoute(plan *DesiredPublicRoutePlan) error {
 	for i, operation := range plan.Rollback {
 		if operation.Order != i+1 || operation.Resource == "" || operation.Action == "" {
 			return fmt.Errorf("public route rollback operations must be complete and sequential")
+		}
+	}
+	return nil
+}
+
+func validateRouteChanges(label string, changes []DesiredPublicRouteChange) error {
+	if len(changes) == 0 {
+		return fmt.Errorf("%s change descriptions are required", label)
+	}
+	for i, change := range changes {
+		if change.Order != i+1 || strings.TrimSpace(change.Resource) == "" || strings.TrimSpace(change.Action) == "" || strings.TrimSpace(change.Summary) == "" {
+			return fmt.Errorf("%s change descriptions must be complete and sequential", label)
 		}
 	}
 	return nil

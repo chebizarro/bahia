@@ -96,3 +96,32 @@ func TestPublicRouteIsPartOfDesiredStateHash(t *testing.T) {
 		t.Fatalf("public route did not affect desired hash: %s %s %s", withoutRoute, withRoute, changedRoute)
 	}
 }
+
+func TestInternalHTTPSPlanIsValidatedAndCoveredByDesiredHash(t *testing.T) {
+	plan := validPublicRoutePlan()
+	spec := &DesiredServiceSpec{SchemaVersion: DesiredStateSchemaVersion, ServiceID: uuid.New(), EnvironmentID: uuid.New(), PublicRoute: plan}
+	withoutInternal := spec.ComputeDesiredHash()
+	plan.InternalHTTPS = &DesiredInternalHTTPSPlan{
+		SchemaVersion: InternalHTTPSPlanSchemaVersion,
+		Hostname:      plan.Hostname,
+		Listen:        "443 ssl",
+		UpstreamURL:   plan.Tunnel.OriginURL,
+		CertFile:      "/etc/letsencrypt/live/example/fullchain.pem",
+		KeyFile:       "/etc/letsencrypt/live/example/privkey.pem",
+		ConfigHash:    "sha256:internal",
+		Apply:         []DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "upsert_and_reload", Summary: "install the internal vhost"}},
+		Rollback:      []DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "restore_or_remove_and_reload", Summary: "restore the prior internal vhost"}},
+	}
+	if err := ValidateDesiredPublicRoute(plan); err != nil {
+		t.Fatalf("valid internal HTTPS plan rejected: %v", err)
+	}
+	withInternal := spec.ComputeDesiredHash()
+	plan.InternalHTTPS.UpstreamURL = "http://edge-01.internal:9090"
+	changedInternal := spec.ComputeDesiredHash()
+	if withoutInternal == withInternal || withInternal == changedInternal {
+		t.Fatalf("internal HTTPS stanza did not affect desired hash: %s %s %s", withoutInternal, withInternal, changedInternal)
+	}
+	if err := ValidateDesiredPublicRoute(plan); err == nil || !strings.Contains(err.Error(), "must match") {
+		t.Fatalf("mismatched internal upstream error = %v", err)
+	}
+}

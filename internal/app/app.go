@@ -363,12 +363,13 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var publicRoutePlanner *service.PublicRoutePlanner
+	var internalRouteBackend *routingAdapter.NginxBackend
 	if cfg.EdgeRouting.Enabled {
-		publicRoutePlanner, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, secretRepo, secretEncryptor)
+		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretRepo, secretEncryptor)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
-		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef))
+		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
 	}
 
 	// Adopted workload orchestration and direct runtime lifecycle services.
@@ -495,6 +496,16 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager, Tier1)
+	if internalRouteBackend != nil {
+		healthProvider.RegisterCheck("internal_routing", int(Tier1), func() HealthCheck {
+			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready", Tier: int(Tier1)}
+			if err := internalRouteBackend.HealthCheck(context.Background()); err != nil {
+				check.Status = HealthStatusFail
+				check.Message = err.Error()
+			}
+			return check
+		})
+	}
 	if !dbAvailable && policy.RequestedTier > Tier1 {
 		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerTier(Tier1), RunnerRequired(false))
 	}
@@ -2584,17 +2595,17 @@ func (a dnsRepositoryPersistenceAdapter) ListOverridesByZone(ctx context.Context
 	return a.overrides.ListByZone(ctx, zoneName)
 }
 
-func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, secretRepo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) (*service.PublicRoutePlanner, error) {
+func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, internalCfg config.InternalRoutingConfig, secretRepo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) (*service.PublicRoutePlanner, *routingAdapter.NginxBackend, error) {
 	resolver := secretsAdapter.NewResolver(secretRepo, encryptor)
 	tokenPayload, err := resolver.ResolveSecret(ctx, cfg.APITokenRef)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Cloudflare API token reference: %w", err)
+		return nil, nil, fmt.Errorf("resolve Cloudflare API token reference: %w", err)
 	}
 	token := strings.TrimSpace(tokenPayload)
 	if strings.HasPrefix(token, "{") {
 		var credentials map[string]any
 		if err := json.Unmarshal([]byte(token), &credentials); err != nil {
-			return nil, fmt.Errorf("decode Cloudflare credential bundle")
+			return nil, nil, fmt.Errorf("decode Cloudflare credential bundle")
 		}
 		for _, key := range []string{"api_token", "token", "APIToken"} {
 			if value, ok := credentials[key].(string); ok && strings.TrimSpace(value) != "" {
@@ -2604,7 +2615,7 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		}
 	}
 	if token == "" || strings.HasPrefix(token, "{") {
-		return nil, fmt.Errorf("Cloudflare credential secret does not contain an API token")
+		return nil, nil, fmt.Errorf("Cloudflare credential secret does not contain an API token")
 	}
 	zoneIDs := make(map[string]string, len(cfg.Zones))
 	zones := make([]service.PublicRouteZone, 0, len(cfg.Zones))
@@ -2613,7 +2624,7 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		for _, raw := range z.AllowedOrgIDs {
 			id, err := uuid.Parse(raw)
 			if err != nil {
-				return nil, fmt.Errorf("parse allowed organization ID: %w", err)
+				return nil, nil, fmt.Errorf("parse allowed organization ID: %w", err)
 			}
 			allowed = append(allowed, id)
 		}
@@ -2624,21 +2635,50 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 	for _, o := range cfg.Origins {
 		id, err := uuid.Parse(o.DeploymentUnitID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		origins = append(origins, service.PublicRouteOrigin{DeploymentUnitID: id, Host: o.Host, AllowedPorts: append([]int(nil), o.AllowedPorts...)})
 	}
-	backend, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout, VerifyResolverAddr: cfg.VerifyResolver}, nil)
+	cloudflare, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout, VerifyResolverAddr: cfg.VerifyResolver}, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sanitized, _ := json.Marshal(struct {
 		Provider, APIBaseURL, AccountID, TunnelID, BackendRef string
 		Zones                                                 []config.EdgeRoutingZoneConfig
 		Origins                                               []config.EdgeRoutingOriginConfig
 	}{cfg.Provider, cfg.APIBaseURL, cfg.AccountID, cfg.TunnelID, cfg.BackendRef, cfg.Zones, cfg.Origins})
-	configHash := domain.PublicRouteProviderConfigHash(string(sanitized))
-	return service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com", Zones: zones, Origins: origins, ConfigHash: configHash}, routingAdapter.StaticResolver{cfg.BackendRef: backend})
+	plannerConfig := service.PublicRoutePlannerConfig{
+		Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com",
+		Zones: zones, Origins: origins, ConfigHash: domain.PublicRouteProviderConfigHash(string(sanitized)),
+	}
+	var backend routingAdapter.Backend = cloudflare
+	var nginx *routingAdapter.NginxBackend
+	if internalCfg.Enabled {
+		internalSanitized, _ := json.Marshal(internalCfg)
+		internalHash := domain.PublicRouteProviderConfigHash(string(internalSanitized))
+		nginx, err = routingAdapter.NewNginxBackend(routingAdapter.NginxConfig{
+			IncludeDir: internalCfg.IncludeDir, FilePrefix: internalCfg.FilePrefix,
+			TestCommand: internalCfg.TestCommand, ReloadCommand: internalCfg.ReloadCommand,
+			CertFile: internalCfg.CertFile, KeyFile: internalCfg.KeyFile, ConfigHash: internalHash,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		backend, err = routingAdapter.NewCompositeBackend(cloudflare, nginx)
+		if err != nil {
+			return nil, nil, err
+		}
+		plannerConfig.InternalHTTPS = &service.InternalHTTPSPlannerConfig{
+			Provider: internalCfg.Provider, Listen: "443 ssl", CertFile: internalCfg.CertFile,
+			KeyFile: internalCfg.KeyFile, ConfigHash: internalHash, Zones: append([]string(nil), internalCfg.Zones...),
+		}
+	}
+	planner, err := service.NewPublicRoutePlanner(plannerConfig, routingAdapter.StaticResolver{cfg.BackendRef: backend})
+	if err != nil {
+		return nil, nil, err
+	}
+	return planner, nginx, nil
 }
 
 // buildDNSRuntime returns the configured zones and backend resolver plus the
@@ -2664,10 +2704,11 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			ttl = cfg.DefaultTTL
 		}
 		zone := domain.DNSZone{
-			Name:       strings.TrimSpace(zoneConfig.Name),
-			Visibility: domain.ZoneVisibility(strings.TrimSpace(zoneConfig.Visibility)),
-			BackendRef: strings.TrimSpace(zoneConfig.Backend),
-			TTL:        ttl,
+			Name:          strings.TrimSpace(zoneConfig.Name),
+			Visibility:    domain.ZoneVisibility(strings.TrimSpace(zoneConfig.Visibility)),
+			BackendRef:    strings.TrimSpace(zoneConfig.Backend),
+			TTL:           ttl,
+			Authoritative: zoneConfig.Authoritative,
 		}
 		if err := domain.ValidateDNSZone(&zone); err != nil {
 			return nil, nil, nil, fmt.Errorf("configuring DNS zone %q: %w", zoneConfig.Name, err)

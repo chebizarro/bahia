@@ -159,6 +159,41 @@ func TestPublicRoutePlannerAstilleroUsesPublishedHostPort(t *testing.T) {
 	}
 }
 
+func TestPublicRoutePlannerInternalHTTPSAutoOptOutAndZoneAllowlist(t *testing.T) {
+	planner, _, svc, env, desired := publicRouteFixture(t)
+	planner.cfg.InternalHTTPS = &InternalHTTPSPlannerConfig{
+		Provider: "nginx", Listen: "443 ssl",
+		CertFile: "/etc/letsencrypt/live/example/fullchain.pem", KeyFile: "/etc/letsencrypt/live/example/privkey.pem",
+		ConfigHash: "sha256:internal", Zones: []string{"example.com"},
+	}
+
+	plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())
+	if err != nil {
+		t.Fatalf("automatic internal plan: %v", err)
+	}
+	if plan.InternalHTTPS == nil || plan.InternalHTTPS.UpstreamURL != "http://edge-01.internal:8080" || plan.InternalHTTPS.ConfigHash != "sha256:internal" {
+		t.Fatalf("internal HTTPS plan = %#v", plan.InternalHTTPS)
+	}
+
+	optOut := false
+	plan, _, err = planner.PlanWithOptions(context.Background(), svc, env, desired, routeRequest(), PublicRoutePlanOptions{Internal: &optOut})
+	if err != nil {
+		t.Fatalf("internal opt-out plan: %v", err)
+	}
+	if plan.InternalHTTPS != nil {
+		t.Fatalf("opt-out populated internal HTTPS: %#v", plan.InternalHTTPS)
+	}
+
+	planner.cfg.InternalHTTPS.Zones = []string{"other.example"}
+	plan, _, err = planner.Plan(context.Background(), svc, env, desired, routeRequest())
+	if err != nil {
+		t.Fatalf("zone-not-allowed plan: %v", err)
+	}
+	if plan.InternalHTTPS != nil {
+		t.Fatalf("zone-not-allowed populated internal HTTPS: %#v", plan.InternalHTTPS)
+	}
+}
+
 func TestPublicRoutePlannerApplyFailsClosedOnConfigurationChange(t *testing.T) {
 	planner, backend, svc, env, desired := publicRouteFixture(t)
 	plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())

@@ -587,14 +587,14 @@ func TestDeploymentsRouteAttachCommandBuildsSignedRouteRequest(t *testing.T) {
 	root.SetArgs([]string{
 		"deployments", "route-attach", "--service", "service-1", "--environment", "environment-1",
 		"--deployment-unit", "unit-1", "--hostname", "api.example.com", "--upstream-port", "8080",
-		"--health-path", "/healthz", "--idempotency-key", "route:1",
+		"--health-path", "/healthz", "--internal=false", "--idempotency-key", "route:1",
 	})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute route-attach: %v", err)
 	}
 	if captured.ServiceID != "service-1" || captured.EnvironmentID != "environment-1" || captured.DeploymentUnitID != "unit-1" ||
 		captured.PublicRoute.Hostname != "api.example.com" || captured.PublicRoute.UpstreamScheme != "http" || captured.PublicRoute.UpstreamPort != 8080 ||
-		captured.PublicRoute.HealthPath != "/healthz" || captured.PublicRoute.TLS != "managed" || captured.IdempotencyKey != "route:1" {
+		captured.PublicRoute.HealthPath != "/healthz" || captured.PublicRoute.TLS != "managed" || captured.Internal == nil || *captured.Internal || captured.IdempotencyKey != "route:1" {
 		t.Fatalf("captured route attach = %#v", captured)
 	}
 }

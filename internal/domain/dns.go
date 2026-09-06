@@ -82,10 +82,11 @@ type DNSEndpoint struct {
 
 // DNSZone defines a managed DNS zone and its backend binding.
 type DNSZone struct {
-	Name       string         `json:"name"`
-	Visibility ZoneVisibility `json:"visibility"`
-	BackendRef string         `json:"backend_ref"`
-	TTL        int            `json:"ttl"`
+	Name          string         `json:"name"`
+	Visibility    ZoneVisibility `json:"visibility"`
+	BackendRef    string         `json:"backend_ref"`
+	TTL           int            `json:"ttl"`
+	Authoritative bool           `json:"authoritative"`
 }
 
 // DNSBackendState is a materialized DNS backend read model for Nostr projection.
@@ -262,11 +263,18 @@ func ValidateDNSEndpoint(endpoint *DNSEndpoint) error {
 	return nil
 }
 
+// NormalizeDNSZoneName returns the canonical key and render name for DNS zones.
+// strings.ToLower performs Unicode-aware case folding, matching the names that
+// ValidateDNSZone permits.
+func NormalizeDNSZoneName(name string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(name)), ".")
+}
+
 func ValidateDNSZone(zone *DNSZone) error {
 	if zone == nil {
 		return fmt.Errorf("%w: DNS zone must not be nil", ErrInvalidValue)
 	}
-	zone.Name = strings.TrimSpace(zone.Name)
+	zone.Name = NormalizeDNSZoneName(zone.Name)
 	zone.BackendRef = strings.TrimSpace(zone.BackendRef)
 	if err := ValidateRequiredString(zone.Name, "name"); err != nil {
 		return err

@@ -23,40 +23,41 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Mode           string                    `koanf:"mode" yaml:"mode"`
-	DevMode        bool                      `koanf:"dev_mode" yaml:"dev_mode"`
-	Server         ServerConfig              `koanf:"server"`
-	DB             DBConfig                  `koanf:"db"`
-	Harbor         HarborConfig              `koanf:"harbor"`
-	Loom           LoomConfig                `koanf:"loom"`
-	Nostr          NostrConfig               `koanf:"nostr"`
-	Reconcile      ReconcileConfig           `koanf:"reconcile"`
-	Supervision    SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
-	Runtime        RuntimeConfig             `koanf:"runtime"`
-	Log            LogConfig                 `koanf:"log"`
-	Auth           AuthConfig                `koanf:"auth"`
-	Adoption       AdoptionConfig            `koanf:"adoption"`
-	DirectRuntime  DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
-	CORS           CORSConfig                `koanf:"cors"`
-	Blossom        BlossomConfig             `koanf:"blossom"`
-	SBOM           SBOMConfig                `koanf:"sbom" yaml:"sbom"`
-	OCI            OCIServerConfig           `koanf:"oci"`
-	HiveCI         HiveCIConfig              `koanf:"hiveci"`
-	Cashu          CashuConfig               `koanf:"cashu"`
-	Qdrant         QdrantConfig              `koanf:"qdrant"`
-	Telemetry      TelemetryConfig           `koanf:"telemetry"`
-	WorkerPressure WorkerPressureConfig      `koanf:"worker_pressure"`
-	WorkerCleanup  WorkerCleanupConfig       `koanf:"worker_cleanup"`
-	Hygiene        HygieneConfig             `koanf:"hygiene" yaml:"hygiene"`
-	Notifications  NotificationsConfig       `koanf:"notifications"`
-	Registry       RegistryAdapterConfig     `koanf:"registry"`
-	LLM            LLMControlplaneConfig     `koanf:"llm"`
-	Packages       PackageControlplaneConfig `koanf:"packages"`
-	Assistant      AssistantConfig           `koanf:"assistant"`
-	DNS            DNSConfig                 `koanf:"dns"`
-	EdgeRouting    EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
-	FIPS           FIPSConfig                `koanf:"fips"`
-	SoulFactory    SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
+	Mode            string                    `koanf:"mode" yaml:"mode"`
+	DevMode         bool                      `koanf:"dev_mode" yaml:"dev_mode"`
+	Server          ServerConfig              `koanf:"server"`
+	DB              DBConfig                  `koanf:"db"`
+	Harbor          HarborConfig              `koanf:"harbor"`
+	Loom            LoomConfig                `koanf:"loom"`
+	Nostr           NostrConfig               `koanf:"nostr"`
+	Reconcile       ReconcileConfig           `koanf:"reconcile"`
+	Supervision     SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
+	Runtime         RuntimeConfig             `koanf:"runtime"`
+	Log             LogConfig                 `koanf:"log"`
+	Auth            AuthConfig                `koanf:"auth"`
+	Adoption        AdoptionConfig            `koanf:"adoption"`
+	DirectRuntime   DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
+	CORS            CORSConfig                `koanf:"cors"`
+	Blossom         BlossomConfig             `koanf:"blossom"`
+	SBOM            SBOMConfig                `koanf:"sbom" yaml:"sbom"`
+	OCI             OCIServerConfig           `koanf:"oci"`
+	HiveCI          HiveCIConfig              `koanf:"hiveci"`
+	Cashu           CashuConfig               `koanf:"cashu"`
+	Qdrant          QdrantConfig              `koanf:"qdrant"`
+	Telemetry       TelemetryConfig           `koanf:"telemetry"`
+	WorkerPressure  WorkerPressureConfig      `koanf:"worker_pressure"`
+	WorkerCleanup   WorkerCleanupConfig       `koanf:"worker_cleanup"`
+	Hygiene         HygieneConfig             `koanf:"hygiene" yaml:"hygiene"`
+	Notifications   NotificationsConfig       `koanf:"notifications"`
+	Registry        RegistryAdapterConfig     `koanf:"registry"`
+	LLM             LLMControlplaneConfig     `koanf:"llm"`
+	Packages        PackageControlplaneConfig `koanf:"packages"`
+	Assistant       AssistantConfig           `koanf:"assistant"`
+	DNS             DNSConfig                 `koanf:"dns"`
+	EdgeRouting     EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
+	InternalRouting InternalRoutingConfig     `koanf:"internal_routing" yaml:"internal_routing"`
+	FIPS            FIPSConfig                `koanf:"fips"`
+	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
 }
 
 // SBOMConfig controls SBOM generation adapters.
@@ -150,6 +151,20 @@ type EdgeRoutingOriginConfig struct {
 	AllowedPorts     []int  `koanf:"allowed_ports" yaml:"allowed_ports"`
 }
 
+// InternalRoutingConfig controls an optional Bahia-owned nginx vhost for LAN
+// HTTPS access to the same upstream approved by the public route plan.
+type InternalRoutingConfig struct {
+	Enabled       bool     `koanf:"enabled" yaml:"enabled"`
+	Provider      string   `koanf:"provider" yaml:"provider"`
+	IncludeDir    string   `koanf:"include_dir" yaml:"include_dir"`
+	FilePrefix    string   `koanf:"file_prefix" yaml:"file_prefix"`
+	TestCommand   []string `koanf:"test_command" yaml:"test_command"`
+	ReloadCommand []string `koanf:"reload_command" yaml:"reload_command"`
+	CertFile      string   `koanf:"cert_file" yaml:"cert_file"`
+	KeyFile       string   `koanf:"key_file" yaml:"key_file"`
+	Zones         []string `koanf:"zones" yaml:"zones"`
+}
+
 // DNSConfig controls DNS orchestration projection and backend settings.
 type DNSConfig struct {
 	Enabled           bool                        `koanf:"enabled"`
@@ -162,10 +177,11 @@ type DNSConfig struct {
 
 // DNSZoneConfig binds a managed DNS zone to a configured backend.
 type DNSZoneConfig struct {
-	Name       string `koanf:"name"`
-	Visibility string `koanf:"visibility"`
-	Backend    string `koanf:"backend"`
-	TTL        int    `koanf:"ttl"`
+	Name          string `koanf:"name"`
+	Visibility    string `koanf:"visibility"`
+	Backend       string `koanf:"backend"`
+	TTL           int    `koanf:"ttl"`
+	Authoritative bool   `koanf:"authoritative"`
 }
 
 // DNSBackendConfig describes one DNS backend connector.
@@ -1387,6 +1403,9 @@ func (c *Config) validate() error {
 	if err := c.validateEdgeRouting(); err != nil {
 		return err
 	}
+	if err := c.validateInternalRouting(); err != nil {
+		return err
+	}
 	if err := c.validateFIPS(); err != nil {
 		return err
 	}
@@ -2470,6 +2489,72 @@ func (c *Config) validateEdgeRouting() error {
 				return fmt.Errorf("config validation failed: edge_routing.origins[%d] has invalid port", i)
 			}
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateInternalRouting() error {
+	r := &c.InternalRouting
+	if !r.Enabled {
+		return nil
+	}
+	if !c.EdgeRouting.Enabled {
+		return fmt.Errorf("config validation failed: edge_routing.enabled=true is required when internal_routing.enabled=true")
+	}
+	r.Provider = strings.ToLower(strings.TrimSpace(r.Provider))
+	if r.Provider != "nginx" {
+		return fmt.Errorf("config validation failed: internal_routing.provider must be nginx")
+	}
+	r.IncludeDir = filepath.Clean(strings.TrimSpace(r.IncludeDir))
+	r.CertFile = filepath.Clean(strings.TrimSpace(r.CertFile))
+	r.KeyFile = filepath.Clean(strings.TrimSpace(r.KeyFile))
+	if !filepath.IsAbs(r.IncludeDir) {
+		return fmt.Errorf("config validation failed: internal_routing.include_dir must be an absolute path")
+	}
+	if !filepath.IsAbs(r.CertFile) || !filepath.IsAbs(r.KeyFile) {
+		return fmt.Errorf("config validation failed: internal_routing.cert_file and key_file must be absolute paths")
+	}
+	r.FilePrefix = strings.TrimSpace(r.FilePrefix)
+	if r.FilePrefix == "" {
+		r.FilePrefix = "bahia-"
+	}
+	if filepath.Base(r.FilePrefix) != r.FilePrefix || strings.ContainsAny(r.FilePrefix, `/\\`) {
+		return fmt.Errorf("config validation failed: internal_routing.file_prefix must be a filename prefix")
+	}
+	if len(r.TestCommand) == 0 {
+		r.TestCommand = []string{"nginx", "-t"}
+	}
+	if len(r.ReloadCommand) == 0 {
+		r.ReloadCommand = []string{"nginx", "-s", "reload"}
+	}
+	for _, entry := range []struct {
+		label   string
+		command []string
+	}{
+		{label: "test_command", command: r.TestCommand},
+		{label: "reload_command", command: r.ReloadCommand},
+	} {
+		for i := range entry.command {
+			entry.command[i] = strings.TrimSpace(entry.command[i])
+			if entry.command[i] == "" {
+				return fmt.Errorf("config validation failed: internal_routing.%s argv entries must not be empty", entry.label)
+			}
+		}
+	}
+	if len(r.Zones) == 0 {
+		return fmt.Errorf("config validation failed: internal_routing.zones requires at least one zone")
+	}
+	seen := make(map[string]struct{}, len(r.Zones))
+	for i := range r.Zones {
+		zone, err := domain.NormalizePublicHostname(r.Zones[i])
+		if err != nil {
+			return fmt.Errorf("config validation failed: internal_routing.zones[%d]: %w", i, err)
+		}
+		if _, exists := seen[zone]; exists {
+			return fmt.Errorf("config validation failed: duplicate internal routing zone %s", zone)
+		}
+		seen[zone] = struct{}{}
+		r.Zones[i] = zone
 	}
 	return nil
 }

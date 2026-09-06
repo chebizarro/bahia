@@ -108,21 +108,27 @@ func (b *DnsmasqAgentBackend) Health(ctx context.Context) error {
 }
 
 func (b *DnsmasqAgentBackend) ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error) {
+	records, _, err := b.ListZoneState(ctx, zone)
+	return records, err
+}
+
+func (b *DnsmasqAgentBackend) ListZoneState(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, bool, error) {
 	var result protocol.ListResult
 	if err := b.request(ctx, protocol.MethodList, protocol.ListParams{Schema: protocol.Schema, Zone: zone}, &result); err != nil {
-		return nil, fmt.Errorf("DNS agent list request for zone %q: %w", zone.Name, err)
+		return nil, false, fmt.Errorf("DNS agent list request for zone %q: %w", zone.Name, err)
 	}
 	if err := protocol.ValidateSchema(result.Schema); err != nil {
-		return nil, fmt.Errorf("DNS agent list response for zone %q: %w", zone.Name, err)
+		return nil, false, fmt.Errorf("DNS agent list response for zone %q: %w", zone.Name, err)
 	}
 	// Seed the serial floor with the agent's revealed serial so the first sync
 	// after a restart starts above it even if the local clock stepped back.
-	b.recordAgentSerial(zone.Name, result.Serial)
-	return result.Records, nil
+	b.recordAgentSerial(domain.NormalizeDNSZoneName(zone.Name), result.Serial)
+	return result.Records, result.Authoritative, nil
 }
 
 func (b *DnsmasqAgentBackend) SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {
-	serial := b.nextSerial(zone.Name)
+	zoneKey := domain.NormalizeDNSZoneName(zone.Name)
+	serial := b.nextSerial(zoneKey)
 	result, err := b.syncOnce(ctx, zone, records, serial)
 	if err != nil {
 		return err
@@ -133,8 +139,8 @@ func (b *DnsmasqAgentBackend) SyncZone(ctx context.Context, zone domain.DNSZone,
 		// slower clock). Adopt the agent's serial as the local floor and retry
 		// once so zone updates recover immediately instead of waiting for wall
 		// time to catch up.
-		b.recordAgentSerial(zone.Name, result.Serial)
-		serial = b.nextSerial(zone.Name)
+		b.recordAgentSerial(zoneKey, result.Serial)
+		serial = b.nextSerial(zoneKey)
 		result, err = b.syncOnce(ctx, zone, records, serial)
 		if err != nil {
 			return err

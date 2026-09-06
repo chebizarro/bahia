@@ -50,6 +50,9 @@ type ListResult struct {
 	Schema  string             `json:"schema"`
 	Records []domain.DNSRecord `json:"records"`
 	Serial  int64              `json:"serial"`
+	// Authoritative is additive within bahia.dnsagent.v1: older backends ignore
+	// the field, while older agents omit it and therefore decode as false.
+	Authoritative bool `json:"authoritative"`
 }
 
 type SyncParams struct {

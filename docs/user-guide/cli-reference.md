@@ -141,7 +141,11 @@ bahia deployments deploy --service svc-123 --environment env-456 --artifact art-
 # Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
 bahia deployments route-attach --service svc-123 --environment env-456 \
   --deployment-unit unit-789 --hostname api.example.com \
-  --upstream-port 8080 --health-path /healthz
+  --upstream-port 8080 --health-path /healthz --internal
+# Internal HTTPS is automatic when configured and zone-allowed; opt out explicitly:
+bahia deployments route-attach --service svc-123 --environment env-456 \
+  --deployment-unit unit-789 --hostname public-only.example.com \
+  --upstream-port 8080 --health-path /healthz --internal=false
 
 # Submit signer-first rollback intent
 bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current

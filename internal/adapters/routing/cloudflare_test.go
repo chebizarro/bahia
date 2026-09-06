@@ -60,7 +60,9 @@ func startTestDNSResponder(t *testing.T, response func(qtype uint16, aAttempt in
 	t.Cleanup(func() { _ = conn.Close() })
 
 	var aQueries atomic.Int32
+	ready := make(chan struct{})
 	go func() {
+		close(ready)
 		buf := make([]byte, 512)
 		for {
 			n, client, err := conn.ReadFromUDP(buf)
@@ -98,6 +100,7 @@ func startTestDNSResponder(t *testing.T, response func(qtype uint16, aAttempt in
 			_, _ = conn.WriteToUDP(result, client)
 		}
 	}()
+	<-ready
 	return conn.LocalAddr().String(), &aQueries
 }
 
@@ -154,12 +157,11 @@ func TestNewVerifyTransportUsesCustomResolver(t *testing.T) {
 }
 
 func TestCloudflareVerifyHTTPSReportsNoPublicDNSRecordBeforeHTTP(t *testing.T) {
-	resolverAddr, _ := startTestDNSResponder(t, func(uint16, int) (byte, bool) { return 3, false })
+	resolverAddr, queries := startTestDNSResponder(t, func(uint16, int) (byte, bool) { return 3, false })
 	backend, err := NewCloudflareBackend(CloudflareConfig{
 		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
-		// Generous window: under parallel full-suite load the stub UDP resolver
-		// can need well over 25ms per round trip; the loop still exits only at
-		// the deadline, so this bounds test duration (tracked flake bahia-uwh8e).
+		// The in-process responder returns NXDOMAIN immediately; the loop remains
+		// bounded while preserving that actionable result at the final deadline.
 		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: 500 * time.Millisecond,
 		VerifyResolverAddr: resolverAddr,
 	}, nil)
@@ -177,7 +179,7 @@ func TestCloudflareVerifyHTTPSReportsNoPublicDNSRecordBeforeHTTP(t *testing.T) {
 
 	err = backend.verifyHTTPS(context.Background(), plan)
 	if err == nil || !strings.Contains(err.Error(), "public DNS has no record for verify-target.test (resolver "+resolverAddr+")") {
-		t.Fatalf("verifyHTTPS error = %v", err)
+		t.Fatalf("verifyHTTPS error = %v (A queries=%d)", err, queries.Load())
 	}
 	if !strings.Contains(err.Error(), "last HTTP failure: not attempted") {
 		t.Fatalf("verifyHTTPS error lacks HTTP detail: %v", err)

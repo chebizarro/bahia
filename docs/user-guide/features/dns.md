@@ -18,10 +18,10 @@ A **Zone** defines a DNS namespace:
 
 ```yaml
 name: "services.example.com"
-backend_id: "backend-123"
-soa:
-  ttl: 3600
-  refresh: 7200
+visibility: "internal"
+backend: "dnsmasq-main"
+ttl: 3600
+authoritative: true
 ```
 
 ### DNS Endpoint
@@ -68,12 +68,14 @@ Navigate to **DNS** in the sidebar:
 The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments. The corresponding `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are always registered. When DNS orchestration is disabled or has no configured runtime, they return JSON-RPC `-32000` with the exact message `DNS orchestration is not enabled; set dns.enabled and configure a backend` instead of method-not-found.
 
 ```bash
-bahia dns zone-create --name prod.example --visibility external --backend-ref powerdns-prod --ttl 300
+bahia dns zone-create --name prod.example --visibility internal --backend-ref dnsmasq-main --ttl 300 --authoritative
 bahia dns policy-apply --file dns-policy.json
 bahia dns record-set --zone prod.example --name api --type A --value 192.0.2.10 --ttl 60 --reason "incident pin"
 bahia dns drift-remediate --zone prod.example
 bahia dns drift-remediate
 ```
+
+For dnsmasq and `dnsmasq_agent` zones, `authoritative: true` renders a managed `local=/<zone>/` guard so unanswered query types are not forwarded upstream. The default is `false`, preserving existing forwarding behavior.
 
 For external MCP embeddings with authorization configured, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools remain available as listed in the [MCP reference](../mcp-tools.md).
 

@@ -526,10 +526,11 @@ type ArtifactCommandResult struct {
 
 // DNSZoneCreateRequest is the signer-first dns/zone-create payload.
 type DNSZoneCreateRequest struct {
-	Name       string                `json:"name"`
-	Visibility domain.ZoneVisibility `json:"visibility"`
-	BackendRef string                `json:"backend_ref"`
-	TTL        int                   `json:"ttl"`
+	Name          string                `json:"name"`
+	Visibility    domain.ZoneVisibility `json:"visibility"`
+	BackendRef    string                `json:"backend_ref"`
+	TTL           int                   `json:"ttl"`
+	Authoritative bool                  `json:"authoritative"`
 }
 
 // DNSPolicyApplyRequest is the signer-first dns/policy-apply payload.
@@ -620,6 +621,7 @@ type RouteAttachRequest struct {
 	EnvironmentID    string                    `json:"environment_id"`
 	DeploymentUnitID string                    `json:"deployment_unit_id,omitempty"`
 	PublicRoute      domain.PublicRouteRequest `json:"public_route"`
+	Internal         *bool                     `json:"internal,omitempty"`
 	IdempotencyKey   string                    `json:"idempotency_key,omitempty"`
 }
 
@@ -814,7 +816,7 @@ func (c *OperatorControlPlaneClient) RegisterArtifactNostr(ctx context.Context, 
 
 // DNSZoneCreate publishes a signer-first dns/zone-create mutation and awaits its correlated acknowledgment.
 func (c *OperatorControlPlaneClient) DNSZoneCreate(ctx context.Context, req DNSZoneCreateRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
-	zone := domain.DNSZone{Name: req.Name, Visibility: req.Visibility, BackendRef: req.BackendRef, TTL: req.TTL}
+	zone := domain.DNSZone{Name: req.Name, Visibility: req.Visibility, BackendRef: req.BackendRef, TTL: req.TTL, Authoritative: req.Authoritative}
 	if err := domain.ValidateDNSZone(&zone); err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "validate DNS zone-create request", RequestAccepted: false, Cause: err}
 	}

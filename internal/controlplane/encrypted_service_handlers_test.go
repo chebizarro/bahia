@@ -141,8 +141,9 @@ func newRouteAttachFixture(t *testing.T, envProtected, zoneProtected bool) *rout
 	}
 	planner, err := service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{
 		Provider: "cloudflare_tunnel", TunnelRef: "tunnel-1", DNSTarget: "tunnel.example.net", ConfigHash: "sha256:config",
-		Zones:   []service.PublicRouteZone{{Name: "example.com", BackendRef: "cloudflare", AllowedOrgIDs: []uuid.UUID{orgID}, Protected: zoneProtected, TTL: 300}},
-		Origins: []service.PublicRouteOrigin{{DeploymentUnitID: unitID, Host: "127.0.0.1", AllowedPorts: []int{8080}}},
+		Zones:         []service.PublicRouteZone{{Name: "example.com", BackendRef: "cloudflare", AllowedOrgIDs: []uuid.UUID{orgID}, Protected: zoneProtected, TTL: 300}},
+		Origins:       []service.PublicRouteOrigin{{DeploymentUnitID: unitID, Host: "127.0.0.1", AllowedPorts: []int{8080}}},
+		InternalHTTPS: &service.InternalHTTPSPlannerConfig{Provider: "nginx", Listen: "443 ssl", CertFile: "/etc/nginx/tls/fullchain.pem", KeyFile: "/etc/nginx/tls/privkey.pem", ConfigHash: "sha256:internal", Zones: []string{"example.com"}},
 	}, routing.StaticResolver{"cloudflare": routeAttachBackend{}})
 	if err != nil {
 		t.Fatalf("new route planner: %v", err)
@@ -168,9 +169,13 @@ func (f *routeAttachFixture) request(t *testing.T, serviceID uuid.UUID, route do
 }
 
 func (f *routeAttachFixture) requestForUnit(t *testing.T, serviceID uuid.UUID, unitID *uuid.UUID, route domain.PublicRouteRequest) ContextVMRequest {
+	return f.requestForUnitWithInternal(t, serviceID, unitID, route, nil)
+}
+
+func (f *routeAttachFixture) requestForUnitWithInternal(t *testing.T, serviceID uuid.UUID, unitID *uuid.UUID, route domain.PublicRouteRequest, internal *bool) ContextVMRequest {
 	t.Helper()
 	params, err := json.Marshal(dto.ServiceRouteAttachRequest{
-		ServiceID: serviceID, EnvironmentID: f.environmentID, DeploymentUnitID: unitID, PublicRoute: &route,
+		ServiceID: serviceID, EnvironmentID: f.environmentID, DeploymentUnitID: unitID, PublicRoute: &route, Internal: internal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -392,9 +397,27 @@ func TestRouteAttachCreatesSignedIntentFromCurrentDesiredState(t *testing.T) {
 	if attached.DesiredHash == fixture.originalHash || attached.DesiredHash != attached.DesiredState.DesiredHash {
 		t.Fatalf("route hash = %q state hash = %q original = %q", attached.DesiredHash, attached.DesiredState.DesiredHash, fixture.originalHash)
 	}
-	if attached.ArtifactID != attached.DesiredState.ArtifactID || attached.DesiredState.PublicRoute.Hostname != "api.example.com" {
-		t.Fatalf("route attachment did not preserve current artifact/spec: %#v", attached)
+	if attached.ArtifactID != attached.DesiredState.ArtifactID || attached.DesiredState.PublicRoute.Hostname != "api.example.com" || attached.DesiredState.PublicRoute.InternalHTTPS == nil {
+		t.Fatalf("route attachment did not preserve current artifact/spec or auto-plan internal HTTPS: %#v", attached)
 	}
+}
+
+func TestRouteAttachInternalFalseOptsOutOfPlannerDerivedStanza(t *testing.T) {
+	fixture := newRouteAttachFixture(t, false, false)
+	internal := false
+	request := fixture.requestForUnitWithInternal(t, fixture.serviceID, &fixture.unitID, validRouteAttachRequest(), &internal)
+	if _, err := fixture.handlers.routeAttach(context.Background(), request); err != nil {
+		t.Fatalf("routeAttach: %v", err)
+	}
+	for _, intent := range fixture.intentRepo.intents {
+		if intent.Metadata["contextvm_method"] == ContextVMMethodServiceRouteAttach {
+			if intent.DesiredState == nil || intent.DesiredState.PublicRoute == nil || intent.DesiredState.PublicRoute.InternalHTTPS != nil {
+				t.Fatalf("internal opt-out intent = %#v", intent)
+			}
+			return
+		}
+	}
+	t.Fatal("route attachment intent not created")
 }
 
 func TestRouteAttachAllowsDockerDeploymentUnits(t *testing.T) {

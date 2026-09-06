@@ -545,6 +545,11 @@ func deployCommands() *cobra.Command {
 			upstreamPort, _ := cmd.Flags().GetInt("upstream-port")
 			healthPath, _ := cmd.Flags().GetString("health-path")
 			tlsMode, _ := cmd.Flags().GetString("tls")
+			internal, _ := cmd.Flags().GetBool("internal")
+			var internalOverride *bool
+			if cmd.Flags().Changed("internal") {
+				internalOverride = &internal
+			}
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 			result, err := runRouteAttachNostr(cmd, client.RouteAttachRequest{
 				ServiceID:        serviceID,
@@ -554,6 +559,7 @@ func deployCommands() *cobra.Command {
 					Hostname: hostname, UpstreamScheme: upstreamScheme, UpstreamPort: upstreamPort,
 					HealthPath: healthPath, TLS: tlsMode,
 				},
+				Internal:       internalOverride,
 				IdempotencyKey: idempotencyKey,
 			})
 			if err != nil {
@@ -574,6 +580,7 @@ func deployCommands() *cobra.Command {
 	routeAttachCmd.Flags().Int("upstream-port", 0, "Existing service upstream port")
 	routeAttachCmd.Flags().String("health-path", "", "HTTPS verification health path")
 	routeAttachCmd.Flags().String("tls", "managed", "TLS mode (managed)")
+	routeAttachCmd.Flags().Bool("internal", true, "Automatically attach configured internal HTTPS routing; set --internal=false to opt out")
 	routeAttachCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	for _, flag := range []string{"service", "environment", "deployment-unit", "hostname", "upstream-port", "health-path"} {
 		_ = routeAttachCmd.MarkFlagRequired(flag)
