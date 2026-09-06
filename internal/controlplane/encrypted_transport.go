@@ -867,6 +867,22 @@ func (t *EncryptedRequestTransport) publishContextVMResponse(_ context.Context, 
 	published, outcomes, err := publishContextVMResultAttempt(retryCtx, t.responder.publisher, *publishEvent)
 	if published > 0 {
 		cancel()
+		// Accepted by at least one relay, but a relay that REJECTED it may be
+		// exactly the one the operator subscribes on — in which case the
+		// request completes server-side and the caller waits forever. Treating
+		// partial success as silent success made that failure undiagnosable, so
+		// surface every rejection with the payload size, which is the usual
+		// cause for large results such as deployment previews.
+		if rejected := rejectedRelayOutcomes(outcomes); len(rejected) > 0 {
+			t.logger.Warn("ContextVM response rejected by some relays",
+				zap.String("event_id", requestID),
+				zap.String("method", method),
+				zap.String("recipient_pubkey_prefix", pubkeyPrefix(requestPubkey)),
+				zap.Int("accepted_relays", published),
+				zap.Int("payload_bytes", contextVMEventSize(publishEvent)),
+				zap.Strings("relay_rejections", rejected),
+			)
+		}
 		return
 	}
 	failure := newContextVMResultPublishFailure(1, outcomes, err)
