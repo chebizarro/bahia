@@ -228,6 +228,29 @@ If backend and web stay as separate images, either:
 
 The simpler production path is one canonical backend/control-plane image through Hive CI, while the immediate relief workflow handles the split backend/web local-image deployment until retirement.
 
+### Never Mutate The Database
+
+Bahia production state is never repaired with SQL. Direct inserts or updates to
+`builds`, `artifacts`, `deployment_intents`, or `environment_service_state`
+bypass policy, authorization, verification, and the signed audit trail, and they
+produce rows no operator can later explain.
+
+If live reality and Bahia disagree, use a governed path:
+
+- The image came from CI: fix the release workflow so a signed 5402 carries
+  `BAHIA_ARTIFACT`, then let Bahia register the artifact automatically.
+- The image is already running and has no artifact: use
+  `bahia artifacts import-observed`, which records governed build/artifact
+  lineage for the digest Bahia observes running. It is gated by
+  `hiveci.allow_live_artifact_import` (default `false`), verifies the observed
+  digest and Bahia identity labels, and writes build and artifact atomically so a
+  refusal leaves no partial rows.
+- Desired state is stale: run a reviewed `deployments preview` and `deployments
+  deploy --expected-desired-state-hash`. Importing provenance never promotes it.
+
+If none of those paths fit, that is a product gap to file, not a reason to open
+a database console.
+
 ### Bahia Requirements
 
 Bahia needs:

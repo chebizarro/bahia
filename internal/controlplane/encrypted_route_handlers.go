@@ -19,6 +19,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -44,6 +45,7 @@ const (
 	ContextVMMethodEnvironmentUpdate       = "environment/update"
 	ContextVMMethodEnvironmentDelete       = "environment/delete"
 	ContextVMMethodArtifactRegister        = "artifact/register"
+	ContextVMMethodArtifactImportObserved  = "artifact/import-observed"
 
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
@@ -70,6 +72,7 @@ type RegistryMutationBackend interface {
 	CreateService(ctx context.Context, svc *domain.Service) error
 	UpdateService(ctx context.Context, svc *domain.Service) error
 	UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error
+	ImportObservedArtifact(ctx context.Context, in service.ImportObservedArtifactInput) (*service.ImportObservedArtifactResult, error)
 	DeleteService(ctx context.Context, id uuid.UUID, force bool) error
 	CreateEnvironment(ctx context.Context, env *domain.Environment) error
 	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
@@ -156,6 +159,72 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentUpdate, h.UpdateEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegister, h.RegisterArtifact)
+	transport.RegisterContextVMHandler(ContextVMMethodArtifactImportObserved, h.ImportObservedArtifact)
+}
+
+// ImportObservedArtifact records an already-running, observation-verified image
+// as governed build/artifact lineage so an operator never needs to edit the
+// database to bridge missing artifact state. It deliberately leaves desired
+// state alone: aligning it stays a separate, reviewed deployment.
+func (h *EncryptedRouteHandlers) ImportObservedArtifact(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.registry == nil {
+		return nil, fmt.Errorf("artifact registry mutation handling is not configured")
+	}
+	var payload dto.ImportObservedArtifactRequest
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	if payload.ServiceID == uuid.Nil || payload.EnvironmentID == uuid.Nil {
+		return nil, fmt.Errorf("service_id and environment_id are required")
+	}
+	if payload.DeploymentUnitID != nil && *payload.DeploymentUnitID == uuid.Nil {
+		return nil, fmt.Errorf("deployment_unit_id must not be nil")
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
+	// Authorize the environment too: the payload names one, and every other
+	// service+environment mutation proves the operator owns both.
+	if _, _, err := authorizer.authorizeServiceEnvironment(
+		ctx, request.Event, payload.ServiceID, payload.EnvironmentID,
+		domain.PermWriteServices, domain.PermWriteServices,
+	); err != nil {
+		return nil, err
+	}
+	requestedBy := ""
+	if request.Event != nil {
+		requestedBy = strings.TrimSpace(request.Event.PubKey.Hex())
+	}
+	result, err := h.registry.ImportObservedArtifact(ctx, service.ImportObservedArtifactInput{
+		ServiceID:        payload.ServiceID,
+		EnvironmentID:    payload.EnvironmentID,
+		DeploymentUnitID: payload.DeploymentUnitID,
+		ImageRepo:        strings.TrimSpace(payload.ImageRepo),
+		ImageTag:         strings.TrimSpace(payload.ImageTag),
+		ImageDigest:      strings.TrimSpace(payload.ImageDigest),
+		GitSHA:           strings.TrimSpace(payload.GitSHA),
+		GitRef:           strings.TrimSpace(payload.GitRef),
+		RequestedBy:      requestedBy,
+	})
+	if err != nil {
+		return nil, err
+	}
+	response := map[string]any{
+		"status":            result.Status,
+		"artifact":          result.Artifact,
+		"observed_digest":   result.ObservedDigest,
+		"observation_id":    result.ObservationID.String(),
+		"registry_verified": result.RegistryVerified,
+		"verified_labels":   result.VerifiedLabels,
+		"desired_state":     result.DesiredStateNote,
+		"idempotency_key":   effectiveIdempotencyKey(request, payload.IdempotencyKey),
+	}
+	if result.Artifact != nil {
+		response["artifact_id"] = result.Artifact.ID.String()
+	}
+	if result.Build != nil {
+		response["build"] = result.Build
+		response["build_id"] = result.Build.ID.String()
+	}
+	return response, nil
 }
 
 func (h *EncryptedRouteHandlers) RegisterArtifact(ctx context.Context, request ContextVMRequest) (any, error) {

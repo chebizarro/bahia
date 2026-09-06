@@ -53,6 +53,7 @@ type RegistryService struct {
 	txExecutor                      repository.TxExecutor
 	verifier                        ImageVerifier
 	allowManualArtifactRegistration bool
+	allowLiveArtifactImport         bool
 	publisher                       events.Publisher
 	logger                          *zap.Logger
 }
@@ -73,6 +74,16 @@ func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
 func WithManualArtifactRegistration(allowed bool) RegistryOption {
 	return func(s *RegistryService) {
 		s.allowManualArtifactRegistration = allowed
+	}
+}
+
+// WithLiveArtifactImport controls the operator path that imports an
+// already-running, observation-verified image as governed build/artifact
+// lineage. Production defaults should pass false so CI-attested provenance
+// stays the norm; it exists so operators never need direct database mutation.
+func WithLiveArtifactImport(allowed bool) RegistryOption {
+	return func(s *RegistryService) {
+		s.allowLiveArtifactImport = allowed
 	}
 }
 
