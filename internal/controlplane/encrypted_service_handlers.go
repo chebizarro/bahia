@@ -416,7 +416,7 @@ func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request Cont
 	if _, err := h.resolveRouteAttachDeploymentUnit(ctx, current, env); err != nil {
 		return nil, err
 	}
-	plan, _, err := h.publicRoutes.Plan(ctx, svc, env, desiredState, *params.PublicRoute)
+	plan, _, err := h.publicRoutes.PlanWithOptions(ctx, svc, env, desiredState, *params.PublicRoute, service.PublicRoutePlanOptions{Internal: params.Internal})
 	if err != nil {
 		return nil, fmt.Errorf("plan public route: %w", err)
 	}

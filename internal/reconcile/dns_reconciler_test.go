@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestDNSReconcilerAddOnlyDiffSyncsZone(t *testing.T) {
@@ -88,6 +90,38 @@ func TestDNSReconcilerNoOpWhenSnapshotsMatch(t *testing.T) {
 	}
 	if backend.syncCallCount() != 0 {
 		t.Fatalf("sync calls = %d, want 0", backend.syncCallCount())
+	}
+}
+
+func TestDNSReconcilerSuppressesNonConvergingAuthoritySyncs(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, expected := testReconcilerProjector()
+	zone.Authoritative = true
+	backend := &fakeAuthorityBackend{fakeDNSBackend: &fakeDNSBackend{records: expected}}
+	core, logs := observer.New(zap.WarnLevel)
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, zap.New(core))
+
+	for i := 0; i < 4; i++ {
+		if err := reconciler.ReconcileOnce(ctx); err != nil {
+			t.Fatalf("ReconcileOnce %d returned error: %v", i+1, err)
+		}
+	}
+	if got := backend.syncCallCount(); got != 1 {
+		t.Fatalf("authority-only sync calls = %d, want exactly 1", got)
+	}
+	const warning = "zone \"prod.example\" authority not converging — dns agent may predate authoritative-zone support; upgrade the agent"
+	if entries := logs.FilterMessage(warning).All(); len(entries) != 1 {
+		t.Fatalf("authority convergence warnings = %#v, want exactly one %q", logs.All(), warning)
+	}
+
+	backend.mu.Lock()
+	backend.records = nil
+	backend.mu.Unlock()
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce with record drift returned error: %v", err)
+	}
+	if got := backend.syncCallCount(); got != 2 {
+		t.Fatalf("sync calls after record drift = %d, want 2", got)
 	}
 }
 
@@ -312,6 +346,18 @@ func testReconcilerProjector() (*DNSProjector, domain.DNSZone, []domain.DNSRecor
 	zone := domain.DNSZone{Name: "prod.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "test", TTL: 120}
 	expected := []domain.DNSRecord{{Zone: zone.Name, Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: "10.0.0.10", TTL: 120, SourceCoordinate: "endpoint:service:api:prod"}}
 	return projector, zone, expected
+}
+
+type fakeAuthorityBackend struct {
+	*fakeDNSBackend
+	authoritative bool
+}
+
+func (b *fakeAuthorityBackend) ListZoneState(context.Context, domain.DNSZone) ([]domain.DNSRecord, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.listCalls++
+	return append([]domain.DNSRecord(nil), b.records...), b.authoritative, nil
 }
 
 type fakeDNSBackend struct {

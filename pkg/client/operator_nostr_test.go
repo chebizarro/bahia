@@ -29,10 +29,10 @@ func TestOperatorDNSRequestConstruction(t *testing.T) {
 		{
 			name: "zone create", method: controlplane.ContextVMMethodDNSZoneCreate,
 			run: func(ctx context.Context, c *OperatorControlPlaneClient) (*DNSCommandResult, error) {
-				return c.DNSZoneCreate(ctx, DNSZoneCreateRequest{Name: "prod.example", Visibility: "external", BackendRef: "powerdns-prod", TTL: 300}, nil)
+				return c.DNSZoneCreate(ctx, DNSZoneCreateRequest{Name: "prod.example", Visibility: "external", BackendRef: "powerdns-prod", TTL: 300, Authoritative: true}, nil)
 			},
 			assert: func(t *testing.T, rpc contextVMRPCRequest) {
-				if rpc.Params["name"] != "prod.example" || rpc.Params["visibility"] != "external" || rpc.Params["backend_ref"] != "powerdns-prod" || rpc.Params["ttl"] != float64(300) {
+				if rpc.Params["name"] != "prod.example" || rpc.Params["visibility"] != "external" || rpc.Params["backend_ref"] != "powerdns-prod" || rpc.Params["ttl"] != float64(300) || rpc.Params["authoritative"] != true {
 					t.Fatalf("zone params = %#v", rpc.Params)
 				}
 			},
@@ -150,9 +150,11 @@ func TestOperatorRouteAttachRequestConstruction(t *testing.T) {
 		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"status": "approved", "intent_id": "intent-1", "desired_state_hash": "sha256:route"})
 		return 1, nil
 	}
+	internal := false
 	result, err := client.RouteAttach(context.Background(), RouteAttachRequest{
 		ServiceID: "service-1", EnvironmentID: "environment-1", DeploymentUnitID: "unit-1",
 		PublicRoute:    domain.PublicRouteRequest{Hostname: "API.Example.COM.", UpstreamScheme: "http", UpstreamPort: 8080, HealthPath: "/healthz", TLS: "managed"},
+		Internal:       &internal,
 		IdempotencyKey: "route:attach:1",
 	}, nil)
 	if err != nil {
@@ -167,7 +169,7 @@ func TestOperatorRouteAttachRequestConstruction(t *testing.T) {
 		t.Fatalf("method = %q", rpc.Method)
 	}
 	route, _ := rpc.Params["public_route"].(map[string]any)
-	if rpc.Params["service_id"] != "service-1" || rpc.Params["environment_id"] != "environment-1" || rpc.Params["deployment_unit_id"] != "unit-1" || route["hostname"] != "api.example.com" || route["upstream_port"] != float64(8080) {
+	if rpc.Params["service_id"] != "service-1" || rpc.Params["environment_id"] != "environment-1" || rpc.Params["deployment_unit_id"] != "unit-1" || route["hostname"] != "api.example.com" || route["upstream_port"] != float64(8080) || rpc.Params["internal"] != false {
 		t.Fatalf("route attach params = %#v", rpc.Params)
 	}
 	assertTagValue(t, published.Tags, "hostname", "api.example.com")

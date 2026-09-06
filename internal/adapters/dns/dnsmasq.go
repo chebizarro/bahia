@@ -55,7 +55,16 @@ func (b *DnsmasqBackend) Health(ctx context.Context) error {
 }
 
 func (b *DnsmasqBackend) ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error) {
-	return b.engine().ListZone(ctx, zone)
+	records, _, err := b.ListZoneState(ctx, zone)
+	return records, err
+}
+
+func (b *DnsmasqBackend) ListZoneState(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, bool, error) {
+	snapshot, err := b.engine().ListZone(ctx, zone)
+	if err != nil {
+		return nil, false, err
+	}
+	return snapshot.Records, snapshot.Authoritative, nil
 }
 
 func (b *DnsmasqBackend) SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {

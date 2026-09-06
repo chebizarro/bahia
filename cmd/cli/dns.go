@@ -26,8 +26,9 @@ func dnsZoneCreateCommand() *cobra.Command {
 			visibility, _ := cmd.Flags().GetString("visibility")
 			backendRef, _ := cmd.Flags().GetString("backend-ref")
 			ttl, _ := cmd.Flags().GetInt("ttl")
+			authoritative, _ := cmd.Flags().GetBool("authoritative")
 			result, err := runDNSZoneCreate(cmd, client.DNSZoneCreateRequest{
-				Name: name, Visibility: domain.ZoneVisibility(visibility), BackendRef: backendRef, TTL: ttl,
+				Name: name, Visibility: domain.ZoneVisibility(visibility), BackendRef: backendRef, TTL: ttl, Authoritative: authoritative,
 			})
 			if err != nil {
 				return err
@@ -39,6 +40,7 @@ func dnsZoneCreateCommand() *cobra.Command {
 	cmd.Flags().String("visibility", "", "Zone visibility: internal, external, edge, or mesh")
 	cmd.Flags().String("backend-ref", "", "Configured DNS backend reference")
 	cmd.Flags().Int("ttl", 0, "Default zone TTL in seconds")
+	cmd.Flags().Bool("authoritative", false, "Answer authoritatively for the zone without forwarding unanswered query types")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("visibility")
 	_ = cmd.MarkFlagRequired("backend-ref")

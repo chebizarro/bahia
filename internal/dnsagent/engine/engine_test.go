@@ -217,12 +217,101 @@ func TestRenderAndParsePreserveEstablishedFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseZoneFile returned error: %v", err)
 	}
-	renderedAgain, err := RenderZone(zone, parsed)
+	if parsed.Authoritative {
+		t.Fatal("non-authoritative golden parsed as authoritative")
+	}
+	renderedAgain, err := RenderZone(zone, parsed.Records)
 	if err != nil {
 		t.Fatalf("RenderZone(parsed) returned error: %v", err)
 	}
 	if string(renderedAgain) != golden {
 		t.Fatalf("parse/render round trip changed bytes:\ngot:\n%s\nwant:\n%s", renderedAgain, golden)
+	}
+}
+
+func TestRenderAndParseAuthoritativeZone(t *testing.T) {
+	zone := testZone()
+	zone.Authoritative = true
+	const golden = "# Managed by Bahia. Manual changes may be replaced.\n" +
+		"# Zone: prod.cascadia\n" +
+		"local=/prod.cascadia/\n" +
+		"srv-host=_http._tcp.embeddings.prod.cascadia,10.0.1.50,8080,10,100\n" +
+		"address=/api.prod.cascadia/::1\n" +
+		"address=/drydock-review.prod.cascadia/10.0.1.44\n" +
+		"cname=llm.prod.cascadia,drydock-review.prod.cascadia\n"
+
+	rendered, err := RenderZone(zone, testRecords())
+	if err != nil {
+		t.Fatalf("RenderZone returned error: %v", err)
+	}
+	if string(rendered) != golden {
+		t.Fatalf("authoritative rendered bytes differ:\ngot:\n%s\nwant:\n%s", rendered, golden)
+	}
+	snapshot, err := ParseZoneFile(zone, rendered)
+	if err != nil {
+		t.Fatalf("ParseZoneFile returned error: %v", err)
+	}
+	if !snapshot.Authoritative {
+		t.Fatal("authoritative local directive was not detected")
+	}
+	renderedAgain, err := RenderZone(zone, snapshot.Records)
+	if err != nil {
+		t.Fatalf("RenderZone(parsed) returned error: %v", err)
+	}
+	if !reflect.DeepEqual(renderedAgain, rendered) {
+		t.Fatalf("authoritative parse/render round trip changed bytes:\ngot:\n%s\nwant:\n%s", renderedAgain, rendered)
+	}
+}
+
+func TestAuthoritativeZoneNameNormalization(t *testing.T) {
+	tests := []struct {
+		name     string
+		zoneName string
+		wantName string
+	}{
+		{name: "mixed case", zoneName: "Example.com", wantName: "example.com"},
+		{name: "trailing dot", zoneName: "example.com.", wantName: "example.com"},
+		{name: "unicode case", zoneName: "ÉXAMPLE.com.", wantName: "éxample.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			zone := testZone()
+			zone.Name = tt.zoneName
+			zone.Authoritative = true
+			want := "# Managed by Bahia. Manual changes may be replaced.\n# Zone: " + tt.wantName + "\nlocal=/" + tt.wantName + "/\n"
+
+			rendered, err := RenderZone(zone, nil)
+			if err != nil {
+				t.Fatalf("RenderZone returned error: %v", err)
+			}
+			if string(rendered) != want {
+				t.Fatalf("rendered = %q, want %q", rendered, want)
+			}
+			snapshot, err := ParseZoneFile(zone, rendered)
+			if err != nil {
+				t.Fatalf("ParseZoneFile returned error: %v", err)
+			}
+			if !snapshot.Authoritative {
+				t.Fatalf("normalized local directive was not detected for %q", tt.zoneName)
+			}
+			renderedAgain, err := RenderZone(zone, snapshot.Records)
+			if err != nil {
+				t.Fatalf("RenderZone(parsed) returned error: %v", err)
+			}
+			if !reflect.DeepEqual(renderedAgain, rendered) {
+				t.Fatalf("normalized round trip changed bytes: got %q want %q", renderedAgain, rendered)
+			}
+		})
+	}
+}
+
+func TestParseZoneFileIgnoresOtherLocalZone(t *testing.T) {
+	snapshot, err := ParseZoneFile(testZone(), []byte("local=/other.example/\n"))
+	if err != nil {
+		t.Fatalf("ParseZoneFile returned error: %v", err)
+	}
+	if snapshot.Authoritative {
+		t.Fatal("other zone local directive marked zone authoritative")
 	}
 }
 

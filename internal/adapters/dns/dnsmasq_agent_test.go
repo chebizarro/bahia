@@ -93,22 +93,22 @@ func TestDnsmasqAgentHealth(t *testing.T) {
 	})
 }
 
-func TestDnsmasqAgentListRecordsDecodesResult(t *testing.T) {
+func TestDnsmasqAgentListZoneStateDecodesResult(t *testing.T) {
 	zone := dnsmasqAgentTestZone()
 	want := []domain.DNSRecord{{Zone: zone.Name, Name: "api", FQDN: "api.example.test", Type: domain.DNSRecordTypeA, Value: "10.0.0.4", TTL: 60}}
 	requester := &fakeContextVMRequester{resultFn: func(method string, params any) (any, error) {
 		if method != protocol.MethodList || params.(protocol.ListParams).Zone != zone {
 			t.Fatalf("request = %q %#v", method, params)
 		}
-		return protocol.ListResult{Schema: protocol.Schema, Records: want, Serial: 7}, nil
+		return protocol.ListResult{Schema: protocol.Schema, Records: want, Serial: 7, Authoritative: true}, nil
 	}}
 	backend, _ := NewDnsmasqAgentBackend(requester)
-	got, err := backend.ListRecords(context.Background(), zone)
+	got, authoritative, err := backend.ListZoneState(context.Background(), zone)
 	if err != nil {
-		t.Fatalf("list records: %v", err)
+		t.Fatalf("list zone state: %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("records = %#v, want %#v", got, want)
+	if !reflect.DeepEqual(got, want) || !authoritative {
+		t.Fatalf("state = records %#v authoritative %t, want records %#v authoritative", got, authoritative, want)
 	}
 }
 

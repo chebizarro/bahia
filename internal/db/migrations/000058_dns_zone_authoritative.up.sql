@@ -1,0 +1,2 @@
+ALTER TABLE dns_zones
+    ADD COLUMN authoritative BOOLEAN NOT NULL DEFAULT FALSE;

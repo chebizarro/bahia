@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,13 +29,29 @@ type PublicRouteOrigin struct {
 	AllowedPorts     []int
 }
 
-type PublicRoutePlannerConfig struct {
+type InternalHTTPSPlannerConfig struct {
 	Provider   string
-	TunnelRef  string
-	DNSTarget  string
-	Zones      []PublicRouteZone
-	Origins    []PublicRouteOrigin
+	Listen     string
+	CertFile   string
+	KeyFile    string
 	ConfigHash string
+	Zones      []string
+}
+
+type PublicRoutePlannerConfig struct {
+	Provider      string
+	TunnelRef     string
+	DNSTarget     string
+	Zones         []PublicRouteZone
+	Origins       []PublicRouteOrigin
+	ConfigHash    string
+	InternalHTTPS *InternalHTTPSPlannerConfig
+}
+
+type PublicRoutePlanOptions struct {
+	// Internal is tri-state: nil or true selects automatic internal HTTPS when
+	// configured for the hostname; false explicitly opts out.
+	Internal *bool
 }
 
 type PublicRoutePlanner struct {
@@ -49,10 +66,26 @@ func NewPublicRoutePlanner(cfg PublicRoutePlannerConfig, backends routing.Resolv
 	if len(cfg.Zones) == 0 || len(cfg.Origins) == 0 {
 		return nil, fmt.Errorf("public routing zones and origins are required")
 	}
+	if internal := cfg.InternalHTTPS; internal != nil {
+		if internal.Provider != "nginx" || internal.Listen != "443 ssl" || !filepath.IsAbs(internal.CertFile) || !filepath.IsAbs(internal.KeyFile) || strings.TrimSpace(internal.ConfigHash) == "" || len(internal.Zones) == 0 {
+			return nil, fmt.Errorf("internal HTTPS routing requires nginx, listen 443 ssl, absolute certificate paths, config hash, and zones")
+		}
+		for i, zone := range internal.Zones {
+			normalized, err := domain.NormalizePublicHostname(zone)
+			if err != nil {
+				return nil, fmt.Errorf("internal HTTPS zone %q: %w", zone, err)
+			}
+			internal.Zones[i] = normalized
+		}
+	}
 	return &PublicRoutePlanner{cfg: cfg, backends: backends}, nil
 }
 
 func (p *PublicRoutePlanner) Plan(ctx context.Context, svc *domain.Service, env *domain.Environment, desired *domain.DesiredServiceSpec, request domain.PublicRouteRequest) (*domain.DesiredPublicRoutePlan, bool, error) {
+	return p.PlanWithOptions(ctx, svc, env, desired, request, PublicRoutePlanOptions{})
+}
+
+func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Service, env *domain.Environment, desired *domain.DesiredServiceSpec, request domain.PublicRouteRequest, options PublicRoutePlanOptions) (*domain.DesiredPublicRoutePlan, bool, error) {
 	if p == nil {
 		return nil, false, fmt.Errorf("public route provisioning is not configured")
 	}
@@ -98,6 +131,20 @@ func (p *PublicRoutePlanner) Plan(ctx context.Context, svc *domain.Service, env 
 		Operations: []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply_and_verify", Summary: "apply the signed runtime state and verify container health"}, {Order: 2, Resource: "tunnel_proxy", Action: "upsert", Summary: "route " + req.Hostname + " to " + originURL}, {Order: 3, Resource: "dns", Action: "upsert", Summary: "publish proxied CNAME " + req.Hostname + " -> " + p.cfg.DNSTarget}, {Order: 4, Resource: "https", Action: "verify", Summary: "verify managed TLS and GET " + req.HealthPath}},
 		Rollback:   []domain.DesiredPublicRouteChange{{Order: 1, Resource: "dns", Action: "restore_or_withdraw", Summary: "restore the prior DNS record or withdraw the new hostname"}, {Order: 2, Resource: "tunnel_proxy", Action: "restore", Summary: "restore the prior remote tunnel ingress configuration"}, {Order: 3, Resource: "application", Action: "restore", Summary: "restore and observe the prior desired runtime state"}},
 	}
+	if p.internalHTTPSAllowed(req.Hostname, options.Internal) {
+		internal := p.cfg.InternalHTTPS
+		plan.InternalHTTPS = &domain.DesiredInternalHTTPSPlan{
+			SchemaVersion: domain.InternalHTTPSPlanSchemaVersion,
+			Hostname:      req.Hostname,
+			Listen:        internal.Listen,
+			UpstreamURL:   originURL,
+			CertFile:      internal.CertFile,
+			KeyFile:       internal.KeyFile,
+			ConfigHash:    internal.ConfigHash,
+			Apply:         []domain.DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "upsert_and_reload", Summary: "serve internal HTTPS for " + req.Hostname + " and proxy to " + originURL}},
+			Rollback:      []domain.DesiredPublicRouteChange{{Order: 1, Resource: "nginx_vhost", Action: "restore_or_remove_and_reload", Summary: "restore the prior Bahia-owned nginx vhost or remove the newly created file"}},
+		}
+	}
 	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
 		return nil, false, err
 	}
@@ -117,6 +164,9 @@ func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPubl
 	}
 	if plan.ProviderConfigHash != p.cfg.ConfigHash {
 		return fmt.Errorf("public route provider configuration changed after review")
+	}
+	if plan.InternalHTTPS != nil && (p.cfg.InternalHTTPS == nil || plan.InternalHTTPS.ConfigHash != p.cfg.InternalHTTPS.ConfigHash) {
+		return fmt.Errorf("internal routing configuration changed after review")
 	}
 	backend, ok := p.backends.Resolve(plan.BackendRef)
 	if !ok {
@@ -144,6 +194,19 @@ func (p *PublicRoutePlanner) resolveOrigin(id uuid.UUID) (PublicRouteOrigin, boo
 	}
 	return PublicRouteOrigin{}, false
 }
+
+func (p *PublicRoutePlanner) internalHTTPSAllowed(hostname string, requested *bool) bool {
+	if (requested != nil && !*requested) || p.cfg.InternalHTTPS == nil {
+		return false
+	}
+	for _, zone := range p.cfg.InternalHTTPS.Zones {
+		if domain.HostnameWithinZone(hostname, zone) {
+			return true
+		}
+	}
+	return false
+}
+
 func uuidAllowed(id uuid.UUID, ids []uuid.UUID) bool {
 	for _, candidate := range ids {
 		if candidate == id {

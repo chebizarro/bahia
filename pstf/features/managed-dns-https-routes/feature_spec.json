@@ -1,24 +1,42 @@
 {
   "feature_id": "managed-dns-https-routes",
-  "beads": ["bahia-l1o46", "bahia-3kbce"],
-  "external_ledger_item": "bahia-managed-https-dns-routes-20260903",
-  "title": "Signer-first managed internal DNS and external HTTPS routes",
+  "beads": ["bahia-l1o46", "bahia-3kbce", "bahia-ex2ri", "bahia-kkk56"],
+  "external_ledger_item": "bahia-deployed-artifact-dns-routes-20260904",
+  "title": "Bahia centralized ownership of external routes, internal DNS authority, and internal HTTPS",
   "intended_behavior": [
     "An operator creates or updates a service and deploys an artifact through signed ContextVM commands.",
     "Healthy in-sync services are projected into the DNS zone mapped from their environment and reconciled by an operational backend.",
+    "An authoritative internal zone renders and observes its dnsmasq local=/zone/ guard alongside projected records, including through the remote dnsmasq_agent path, so guard-only drift is repaired.",
     "An operator can attach a managed HTTPS route to an existing deployed service without reconverging its artifact.",
-    "The route is covered by the signed desired-state hash, policy approval is honored, and provider failure restores previous route state.",
+    "One reviewed route plan can contain both the Cloudflare route and an optional versioned internal HTTPS nginx route, all covered by the signed desired-state hash.",
+    "The planner automatically adds the internal route only for configured allowed zones and permits an explicit route-attach opt-out.",
+    "The composite applies Cloudflare before nginx and compensates in reverse order if nginx validation or reload fails.",
+    "The nginx adapter manages one ownership-marked file per hostname atomically, rejects foreign-file collisions, and restores or removes the file when an older plan is restored.",
+    "The Astillero acceptance flow proves Bahia centrally owns external Cloudflare output, authoritative internal DNS, and internal HTTPS for the same hostname.",
+    "Operator documentation migrates each hand-applied guard only after its Bahia-owned replacement is verified and provides an independent rollback for each guard.",
     "Apex DNS overrides use the managed zone apex without duplicating the zone suffix.",
     "Operator documentation provides validated dnsmasq and Cloudflare Tunnel configuration with placeholder SecretRef UUIDs and honest SIGHUP reconstruction semantics."
   ],
   "scope": [
+    "internal/adapters/dns/dnsmasq_agent_e2e_test.go",
     "internal/reconcile/dns_reconciler.go",
     "internal/reconcile/dns_reconciler_test.go",
     "internal/workflow/managed_dns_https_routes_e2e_test.go",
+    "internal/domain/public_route.go",
+    "internal/service/public_route.go",
+    "internal/adapters/routing",
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/controlplane/encrypted_service_handlers.go",
+    "internal/workflow/coordinator_test.go",
+    "pkg/client/operator_nostr.go",
+    "cmd/cli/main.go",
+    "docs/runbooks/core01-dnsmasq-agent.md",
     "docs/user-guide/guides/managed-dns-and-https-routes.md",
     "docs/user-guide/index.md",
     "docs/user-guide/features/dns.md",
-    "docs/user-guide/features/services.md"
+    "docs/user-guide/features/services.md",
+    "docs/user-guide/cli-reference.md"
   ],
   "deferred": []
 }

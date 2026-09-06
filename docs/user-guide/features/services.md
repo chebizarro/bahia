@@ -159,7 +159,7 @@ The Deploy wizard has a separate **Public route** step. Enable Bahia-managed HTT
 
 Bahia rejects hostnames outside configured zones, organizations not authorized for a zone, unmanaged DNS or Tunnel collisions, ports that are not both configured and exposed, TLS passthrough, and protected-zone use from an unprotected environment. Protected zones continue through deployment approval before any app or route mutation.
 
-The production provider uses the Cloudflare API for the fleet's remote-managed Tunnel and proxied DNS. It does not edit connector files, nginx, or Cloudflare configuration files on disk. The planned route is non-secret desired state and participates in the signed desired-state hash. Application health is verified before publication; provider mutations are snapshot-backed and compensated on failure, and HTTPS must return a 2xx response before the deployment succeeds.
+The production public provider uses the Cloudflare API for the fleet's remote-managed Tunnel and proxied DNS; it does not edit connector or Cloudflare configuration files on disk. When `internal_routing` is enabled for the hostname's zone, the same signed plan also contains a versioned `internal_https` stanza and Bahia manages one ownership-marked nginx include on its host. The planned public and internal routes are non-secret desired state and participate in one signed desired-state hash. Application health is verified before publication; provider mutations are snapshot-backed and compensated on failure, and public HTTPS must return a 2xx response before the deployment succeeds.
 
 For an already deployed service, `service/route-attach` creates a new signed intent from the current desired service specification, adds the planned route, and executes only the routing/HTTPS verification phase. It does not rebuild or reconverge the artifact or container. Protected environments still require deployment approval, and all zone, organization, origin, and port allowlists are enforced before an intent is created. See [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md) for the complete signer-first operator flow and an operational dnsmasq configuration.
 
@@ -187,6 +187,23 @@ edge_routing:
       host: edge-01.internal
       allowed_ports: [8080]
 ```
+
+Optionally attach LAN HTTPS to the same reviewed route intent:
+
+```yaml
+internal_routing:
+  enabled: true
+  provider: nginx
+  include_dir: /etc/nginx/conf.d
+  file_prefix: bahia-
+  test_command: [nginx, -t]
+  reload_command: [nginx, -s, reload]
+  cert_file: /etc/letsencrypt/live/example.com/fullchain.pem
+  key_file: /etc/letsencrypt/live/example.com/privkey.pem
+  zones: [example.com]
+```
+
+`include_dir`, `cert_file`, and `key_file` must be absolute. Certificate and key presence/readability are checked by startup health rather than config parsing, so configuration can be reviewed off-host. Commands are argv arrays executed directly without a shell. The file prefix defaults to `bahia-`; test and reload default to the values shown. Bahia writes `include_dir/<prefix><hostname>.conf` atomically, refuses a pre-existing file without its ownership header, tests before reload, and restores/re-activates the exact prior file on failure. Applying a reviewed plan without `internal_https` removes an existing Bahia-owned file and reloads nginx, which makes rollback to a pre-internal-routing plan convergent without touching foreign vhosts.
 
 The referenced credential may be a raw API token or a JSON secret containing `api_token`, `token`, or `APIToken`. It is resolved only on the Bahia server and never appears in route previews or provider errors. `verify_resolver` defaults to the public resolver `1.1.1.1:53`, ensuring managed HTTPS verification resolves and exercises the public Cloudflare edge rather than a split-horizon LAN origin; set it explicitly to `system` only to opt back into host resolver behavior. Direct runtime actions must also be enabled because public routes target an explicit Bahia-managed deployment unit.
 

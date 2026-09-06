@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
+	routingadapter "github.com/openagentsinc/bahia/internal/adapters/routing"
 	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -469,6 +470,36 @@ func (s *stubPublicRouteLifecycle) Apply(_ context.Context, plan *domain.Desired
 	s.calls++
 	s.plan = plan
 	return s.err
+}
+
+type workflowCompositePublic struct{ events *[]string }
+
+func (s *workflowCompositePublic) Check(context.Context, *domain.DesiredPublicRoutePlan) error {
+	return nil
+}
+func (s *workflowCompositePublic) Apply(context.Context, *domain.DesiredPublicRoutePlan) error {
+	return nil
+}
+func (s *workflowCompositePublic) ApplyWithCompensation(context.Context, *domain.DesiredPublicRoutePlan) (routingadapter.Compensation, error) {
+	*s.events = append(*s.events, "cloudflare")
+	return func(context.Context) error {
+		*s.events = append(*s.events, "cloudflare-rollback")
+		return nil
+	}, nil
+}
+
+type workflowCompositeInternal struct {
+	events      *[]string
+	sawInternal bool
+}
+
+func (s *workflowCompositeInternal) Check(context.Context, *domain.DesiredPublicRoutePlan) error {
+	return nil
+}
+func (s *workflowCompositeInternal) Apply(_ context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	*s.events = append(*s.events, "nginx")
+	s.sawInternal = plan != nil && plan.InternalHTTPS != nil
+	return nil
 }
 
 type unitRuntimeResolver struct {
@@ -1717,6 +1748,53 @@ func TestExecuteDeployment_RouteOnlySkipsArtifactConvergence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecuteDeploymentRouteOnlyRunsCompositeCloudflareThenInternal(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "edge-compose", RuntimeType: domain.RuntimeTypeCompose,
+		EndpointRef: "edge-01", ComposeDir: "/srv/bahia/app", ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	plan := &domain.DesiredPublicRoutePlan{
+		Hostname: "api.example.com",
+		InternalHTTPS: &domain.DesiredInternalHTTPSPlan{
+			SchemaVersion: domain.InternalHTTPSPlanSchemaVersion,
+			Hostname:      "api.example.com",
+		},
+	}
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		ArtifactID: art.ID, StableServiceKey: "api", PublicRoute: plan,
+	}
+	desired.ComputeDesiredHash()
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered, DesiredState: desired, DesiredHash: desired.DesiredHash,
+		Metadata: map[string]any{"contextvm_method": "service/route-attach"},
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	internalBackend := &workflowCompositeInternal{events: &events}
+	composite, err := routingadapter.NewCompositeBackend(&workflowCompositePublic{events: &events}, internalBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	if err := coordExecuteRouteOnly(registry, unitRepo, lifecycle, composite, intent.ID); err != nil {
+		t.Fatalf("ExecuteDeployment: %v", err)
+	}
+	if strings.Join(events, ",") != "cloudflare,nginx" || !internalBackend.sawInternal || lifecycle.calls != 0 {
+		t.Fatalf("composite events=%v saw internal=%v lifecycle calls=%d", events, internalBackend.sawInternal, lifecycle.calls)
 	}
 }
 

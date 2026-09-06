@@ -170,6 +170,7 @@ type ServiceRouteAttachRequest struct {
 	EnvironmentID    uuid.UUID                  `json:"environment_id"`
 	DeploymentUnitID *uuid.UUID                 `json:"deployment_unit_id,omitempty"`
 	PublicRoute      *domain.PublicRouteRequest `json:"public_route"`
+	Internal         *bool                      `json:"internal,omitempty"`
 	IdempotencyKey   string                     `json:"idempotency_key,omitempty"`
 }
 

@@ -138,6 +138,24 @@ func TestDnsmasqBackendListRecordsParsesDirectives(t *testing.T) {
 	}
 }
 
+func TestDnsmasqBackendListZoneStateIncludesAuthority(t *testing.T) {
+	rootDir := t.TempDir()
+	backend := NewDnsmasqBackend(DnsmasqConfig{ConfigDir: rootDir, ReloadCommand: "reload"})
+	backend.commandExecutor = &mockDnsmasqCommandExecutor{}
+	zone := dnsmasqTestZone()
+	zone.Authoritative = true
+	if err := backend.SyncZone(context.Background(), zone, nil); err != nil {
+		t.Fatalf("SyncZone returned error: %v", err)
+	}
+	records, authoritative, err := backend.ListZoneState(context.Background(), zone)
+	if err != nil {
+		t.Fatalf("ListZoneState returned error: %v", err)
+	}
+	if len(records) != 0 || !authoritative {
+		t.Fatalf("zone state = records %#v authoritative %t, want no records and authoritative", records, authoritative)
+	}
+}
+
 func TestDnsmasqBackendAtomicFileReplacement(t *testing.T) {
 	rootDir := t.TempDir()
 	executor := &mockDnsmasqCommandExecutor{}

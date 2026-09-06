@@ -156,31 +156,38 @@ func (b *CloudflareBackend) Check(ctx context.Context, plan *domain.DesiredPubli
 }
 
 func (b *CloudflareBackend) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	_, err := b.ApplyWithCompensation(ctx, plan)
+	return err
+}
+
+// ApplyWithCompensation applies the Cloudflare mutation and returns an inverse
+// that restores the exact tunnel and owned DNS state captured before apply.
+func (b *CloudflareBackend) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (Compensation, error) {
 	b.applyMu.Lock()
 	defer b.applyMu.Unlock()
 	if err := b.Check(ctx, plan); err != nil {
-		return err
+		return nil, err
 	}
 	previousConfig, err := b.getTunnelConfig(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	previousIngress, err := tunnelIngress(previousConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	previousDNS, err := b.listDNS(ctx, plan)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	desiredIngress := upsertIngress(previousIngress, plan.Hostname, plan.Tunnel.OriginURL)
 	desiredConfig, err := cloneTunnelConfig(previousConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	desiredConfig["ingress"] = desiredIngress
 	if err := b.putTunnelConfig(ctx, desiredConfig); err != nil {
-		return fmt.Errorf("apply tunnel ingress: %w", err)
+		return nil, fmt.Errorf("apply tunnel ingress: %w", err)
 	}
 	dnsChanged := false
 	rollback := func(cause error) error {
@@ -197,13 +204,27 @@ func (b *CloudflareBackend) Apply(ctx context.Context, plan *domain.DesiredPubli
 		return fmt.Errorf("%w; previous public route restored", cause)
 	}
 	if err := b.upsertDNS(ctx, plan, previousDNS); err != nil {
-		return rollback(fmt.Errorf("publish DNS: %w", err))
+		return nil, rollback(fmt.Errorf("publish DNS: %w", err))
 	}
 	dnsChanged = true
 	if err := b.verifyHTTPS(ctx, plan); err != nil {
-		return rollback(fmt.Errorf("verify managed HTTPS: %w", err))
+		return nil, rollback(fmt.Errorf("verify managed HTTPS: %w", err))
 	}
-	return nil
+	compensate := func(compensationCtx context.Context) error {
+		b.applyMu.Lock()
+		defer b.applyMu.Unlock()
+		if compensationCtx == nil {
+			compensationCtx = context.Background()
+		}
+		if err := b.restoreDNS(compensationCtx, plan, previousDNS); err != nil {
+			return fmt.Errorf("restore Cloudflare DNS: %w", err)
+		}
+		if err := b.putTunnelConfig(compensationCtx, previousConfig); err != nil {
+			return fmt.Errorf("restore Cloudflare tunnel after DNS withdrawal: %w", err)
+		}
+		return nil
+	}
+	return compensate, nil
 }
 
 func (b *CloudflareBackend) validatePlan(plan *domain.DesiredPublicRoutePlan) error {
@@ -345,6 +366,11 @@ func (b *CloudflareBackend) verifyHTTPS(ctx context.Context, plan *domain.Desire
 		if b.verifyResolver != nil {
 			addresses, err := b.verifyResolver.LookupIPAddr(verifyCtx, plan.Hostname)
 			if err != nil {
+				// Do not replace an actionable DNS result from an earlier attempt
+				// with the overall verification deadline from the final lookup.
+				if verifyCtx.Err() != nil && lastDNSError != nil {
+					return verifyFailure(lastDNSError, lastHTTPError)
+				}
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 					lastDNSError = fmt.Errorf("public DNS has no record for %s (resolver %s)", plan.Hostname, b.cfg.VerifyResolverAddr)

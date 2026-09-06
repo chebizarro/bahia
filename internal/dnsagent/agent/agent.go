@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/dnsagent/protocol"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 const stateSchema = "bahia.dnsagent.state.v1"
@@ -152,11 +153,11 @@ func (a *Agent) ListHandler(ctx context.Context, request controlplane.ContextVMR
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	records, err := a.engine.ListZone(ctx, params.Zone)
+	snapshot, err := a.engine.ListZone(ctx, params.Zone)
 	if err != nil {
 		return nil, err
 	}
-	return protocol.ListResult{Schema: protocol.Schema, Records: records, Serial: a.state.ZoneSerials[zoneName]}, nil
+	return protocol.ListResult{Schema: protocol.Schema, Records: snapshot.Records, Serial: a.state.ZoneSerials[zoneName], Authoritative: snapshot.Authoritative}, nil
 }
 
 func (a *Agent) SyncHandler(ctx context.Context, request controlplane.ContextVMRequest) (any, error) {
@@ -254,7 +255,7 @@ func (a *Agent) validateRequestEnvelope(request controlplane.ContextVMRequest) e
 }
 
 func (a *Agent) requireAllowedZone(zone string) (string, error) {
-	normalized := normalizeZone(zone)
+	normalized := domain.NormalizeDNSZoneName(zone)
 	if _, ok := a.allowed[normalized]; !ok {
 		return "", fmt.Errorf("zone %q not allowed by agent allowlist", zone)
 	}
@@ -271,7 +272,7 @@ func decodeParams(request controlplane.ContextVMRequest, out any) error {
 func normalizeAllowedZones(zones []string) ([]string, map[string]struct{}, error) {
 	allowed := make(map[string]struct{}, len(zones))
 	for _, zone := range zones {
-		normalized := normalizeZone(zone)
+		normalized := domain.NormalizeDNSZoneName(zone)
 		if normalized == "" {
 			continue
 		}
@@ -286,10 +287,6 @@ func normalizeAllowedZones(zones []string) ([]string, map[string]struct{}, error
 	}
 	sort.Strings(normalized)
 	return normalized, allowed, nil
-}
-
-func normalizeZone(zone string) string {
-	return strings.Trim(strings.ToLower(strings.TrimSpace(zone)), ".")
 }
 
 func loadState(path string) (persistentState, error) {

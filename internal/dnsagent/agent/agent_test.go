@@ -123,6 +123,26 @@ func TestHealthListSyncRoundTrip(t *testing.T) {
 	}
 }
 
+func TestListExposesObservedAuthoritativeState(t *testing.T) {
+	service := newTestService(t, false)
+	zone := testZone()
+	zone.Authoritative = true
+	_, err := service.agent.SyncHandler(context.Background(), requestWithParams(t, protocol.SyncParams{
+		Schema: protocol.Schema, Zone: zone, Records: testRecords("10.0.0.7"), Serial: 1,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listAny, err := service.agent.ListHandler(context.Background(), requestWithParams(t, protocol.ListParams{Schema: protocol.Schema, Zone: zone}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list := listAny.(protocol.ListResult); !list.Authoritative {
+		t.Fatalf("list result did not expose authoritative state: %+v", list)
+	}
+}
+
 func TestAllowlistAndSchemaRejections(t *testing.T) {
 	service := newTestService(t, false)
 	zone := testZone()

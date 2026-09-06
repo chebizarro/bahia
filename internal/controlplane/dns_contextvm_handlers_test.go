@@ -32,7 +32,7 @@ func TestDNSContextVMZoneCreateRejectsUnknownBackendBeforePersistence(t *testing
 
 func TestDNSContextVMZoneCreatePersistsKnownBackend(t *testing.T) {
 	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
-	params, err := json.Marshal(domain.DNSZone{Name: "new.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "primary", TTL: 60})
+	params, err := json.Marshal(domain.DNSZone{Name: "new.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "primary", TTL: 60, Authoritative: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestDNSContextVMZoneCreatePersistsKnownBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zoneCreate returned error: %v", err)
 	}
-	if len(operator.zonesCreated) != 1 || operator.zonesCreated[0].BackendRef != "primary" {
+	if len(operator.zonesCreated) != 1 || operator.zonesCreated[0].BackendRef != "primary" || !operator.zonesCreated[0].Authoritative {
 		t.Fatalf("persisted zones = %#v", operator.zonesCreated)
 	}
 	if len(operator.reconciled) != 1 || operator.reconciled[0] != "new.example" {
