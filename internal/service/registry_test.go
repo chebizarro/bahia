@@ -2167,8 +2167,17 @@ func TestRegisterArtifactRefusesManualPathWhenPolicyDisabled(t *testing.T) {
 		BuildID: build.ID, ServiceID: svc.ID, ImageRepo: svc.ArtifactRepo, ImageTag: "v1",
 		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
-	if err := registry.RegisterArtifact(ctx, artifact); err == nil || !strings.Contains(err.Error(), "disabled by policy") {
+	err := registry.RegisterArtifact(ctx, artifact)
+	if err == nil || !strings.Contains(err.Error(), "disabled by policy") {
 		t.Fatalf("manual registration policy error = %v", err)
+	}
+	// The refusal must stay actionable: an operator hitting this boundary needs
+	// the config key that governs it and the CI-attested path it steers toward,
+	// otherwise the only remaining move is direct database projection.
+	for _, want := range []string{"hiveci.allow_manual_artifact_registration", "5402", "Hive CI"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("manual registration policy error %q does not mention %q", err.Error(), want)
+		}
 	}
 }
 
