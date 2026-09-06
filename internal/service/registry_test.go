@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // --- Mock Repositories ---
@@ -1769,7 +1770,7 @@ func TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks(t *testin
 	obs = &domain.RuntimeObservation{
 		ServiceID:           svc.ID,
 		EnvironmentID:       env.ID,
-		ObservedImageDigest: "sha256:other-artifact",
+		ObservedImageDigest: "sha256:" + strings.Repeat("b", 64),
 		HealthStatus:        domain.HealthStatusHealthy,
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC().Add(time.Second),
@@ -1779,6 +1780,80 @@ func TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks(t *testin
 	}
 	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusDrifted {
 		t.Fatalf("mismatched artifact digest drift status = %q, want %q", got, domain.DriftStatusDrifted)
+	}
+}
+
+func TestRecordObservation_DesiredStateEmptyHashUsesArtifactDigestFallback(t *testing.T) {
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name            string
+		desiredArtifact bool
+		observedDigest  string
+		health          domain.HealthStatus
+		want            domain.DriftStatus
+	}{
+		{name: "match healthy", desiredArtifact: true, observedDigest: "registry.example/api@" + digestA, health: domain.HealthStatusHealthy, want: domain.DriftStatusInSync},
+		{name: "match starting", desiredArtifact: true, observedDigest: strings.Repeat("a", 64), health: domain.HealthStatusStarting, want: domain.DriftStatusDeploying},
+		{name: "match unhealthy", desiredArtifact: true, observedDigest: digestA, health: domain.HealthStatusUnhealthy, want: domain.DriftStatusDrifted},
+		{name: "mismatch healthy", desiredArtifact: true, observedDigest: digestB, health: domain.HealthStatusHealthy, want: domain.DriftStatusDrifted},
+		{name: "mismatch starting", desiredArtifact: true, observedDigest: digestB, health: domain.HealthStatusStarting, want: domain.DriftStatusDrifted},
+		{name: "mismatch unhealthy", desiredArtifact: true, observedDigest: digestB, health: domain.HealthStatusUnhealthy, want: domain.DriftStatusDrifted},
+		{name: "missing artifact healthy", observedDigest: digestA, health: domain.HealthStatusHealthy, want: domain.DriftStatusUnknown},
+		{name: "missing observed digest", desiredArtifact: true, health: domain.HealthStatusHealthy, want: domain.DriftStatusUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry, _, _, _, artifactRepo, _, _, _, stateRepo := newTestRegistryAll()
+			svc, env := seedServiceAndEnv(t, registry)
+			artifactID := uuid.New()
+			if test.desiredArtifact {
+				artifactRepo.artifacts[artifactID] = &domain.Artifact{ID: artifactID, ServiceID: svc.ID, ImageDigest: digestA}
+			}
+			stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DesiredArtifactID: &artifactID,
+				DesiredHash: "sha256:desired-state-hash", DriftStatus: domain.DriftStatusUnknown,
+			}
+			obs := &domain.RuntimeObservation{
+				ServiceID: svc.ID, EnvironmentID: env.ID, ObservedImageDigest: test.observedDigest,
+				HealthStatus: test.health, Source: "docker", ObservedAt: time.Now().UTC(),
+			}
+			if err := registry.RecordObservation(context.Background(), obs); err != nil {
+				t.Fatalf("RecordObservation() error = %v", err)
+			}
+			if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != test.want {
+				t.Fatalf("drift status = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecordObservationLogsDecisionOnStatusChange(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	core, logs := observer.New(zap.InfoLevel)
+	registry.logger = zap.New(core)
+	svc, env := seedServiceAndEnv(t, registry)
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DesiredHash: "sha256:desired-state",
+		DriftStatus: domain.DriftStatusInSync,
+	}
+	obs := &domain.RuntimeObservation{
+		ServiceID: svc.ID, EnvironmentID: env.ID, NormalizedHash: "sha256:observed-state",
+		HealthStatus: domain.HealthStatusHealthy, Source: "docker", ObservedAt: time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(context.Background(), obs); err != nil {
+		t.Fatalf("RecordObservation() error = %v", err)
+	}
+	entries := logs.FilterMessage("runtime drift decision changed from in_sync").All()
+	if len(entries) != 1 || entries[0].Level != zap.WarnLevel {
+		t.Fatalf("warn decision logs = %#v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["branch"] != "hash-compare" || fields["status"] != string(domain.DriftStatusDrifted) || fields["observation_source"] != "docker" {
+		t.Fatalf("unexpected decision fields: %#v", fields)
+	}
+	if fields["desired_hash_prefix"] != "sha256:desir" || fields["observed_hash_prefix"] != "sha256:obser" {
+		t.Fatalf("hashes were not prefix-limited: %#v", fields)
 	}
 }
 

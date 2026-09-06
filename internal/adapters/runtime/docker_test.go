@@ -233,6 +233,9 @@ func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
 	if obs.ObservedImageRepo != "registry.example/api" {
 		t.Fatalf("expected repo from repo digest, got %q", obs.ObservedImageRepo)
 	}
+	if obs.NormalizedHash != "" {
+		t.Fatalf("expected empty normalized hash without desired label, got %q", obs.NormalizedHash)
+	}
 }
 
 func TestDockerObservePrefersRunningBahiaManagedContainerOverLegacyServiceLabel(t *testing.T) {
@@ -253,7 +256,7 @@ func TestDockerObservePrefersRunningBahiaManagedContainerOverLegacyServiceLabel(
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[
 				{"Id":"rollback-container","Names":["/bahia-env-harbormaster-watch-rollback"],"Image":"registry.example/harbormaster-watch:old","ImageID":"sha256:rollbackdigest","State":"exited","Labels":{"bahia.service":"harbormaster-watch"}},
-				{"Id":"current-container","Names":["/bahia-env-harbormaster-watch"],"Image":"registry.example/harbormaster-watch:current","ImageID":"sha256:currentdigest","State":"running","Labels":{"bahia.managed":"true"}}
+				{"Id":"current-container","Names":["/bahia-env-harbormaster-watch"],"Image":"registry.example/harbormaster-watch:current","ImageID":"sha256:currentdigest","State":"running","Labels":{"bahia.managed":"true","bahia.desired_hash":"sha256:desired-state"}}
 			]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:currentdigest/json":
 			w.Header().Set("Content-Type", "application/json")
@@ -281,6 +284,9 @@ func TestDockerObservePrefersRunningBahiaManagedContainerOverLegacyServiceLabel(
 	}
 	if obs.ObservedImageDigest != "sha256:currentrepo" {
 		t.Fatalf("expected current repo digest, got %q", obs.ObservedImageDigest)
+	}
+	if obs.NormalizedHash != "sha256:desired-state" {
+		t.Fatalf("expected normalized hash from desired label, got %q", obs.NormalizedHash)
 	}
 }
 

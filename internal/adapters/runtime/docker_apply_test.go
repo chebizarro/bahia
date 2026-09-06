@@ -980,9 +980,13 @@ func TestApplyDesiredState_ContainerConfigPassedCorrectly(t *testing.T) {
 		t.Errorf("container name = %q, want bahia-22222222-my-api", call.Name)
 	}
 
-	// Check image is in the body.
+	// Check image and convergence label are in the create request.
 	if image, ok := call.Body["Image"].(string); !ok || image != spec.ImageRef {
 		t.Errorf("Image = %v, want %s", call.Body["Image"], spec.ImageRef)
+	}
+	labels, ok := call.Body["Labels"].(map[string]any)
+	if !ok || labels["bahia.desired_hash"] != spec.DesiredHash {
+		t.Fatalf("Labels.bahia.desired_hash = %v, want %s", labels["bahia.desired_hash"], spec.DesiredHash)
 	}
 }
 
