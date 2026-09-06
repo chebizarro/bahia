@@ -71,11 +71,8 @@ func CompareDrift(ctx context.Context, spec *domain.DesiredServiceSpec, observer
 		return nil, fmt.Errorf("drift comparator: desired service spec is nil")
 	}
 
-	desiredHash := spec.DesiredHash
-	if desiredHash == "" {
-		// Compute if not already set.
-		desiredHash = spec.ComputeDesiredHash()
-	}
+	desiredHashes := spec.RuntimeConvergenceHashes()
+	desiredHash := desiredHashes[0]
 
 	// Attempt observation — failures produce unknown, not error.
 	obs, err := observer.ObserveForDrift(ctx, spec)
@@ -114,8 +111,16 @@ func CompareDrift(ctx context.Context, spec *domain.DesiredServiceSpec, observer
 		}, nil
 	}
 
-	// Compare hashes.
-	if desiredHash != observedHash {
+	// Compare against every hash that represents the same runtime state. Public
+	// route configuration is not observable from the container runtime.
+	hashesMatch := false
+	for _, candidate := range desiredHashes {
+		if candidate == observedHash {
+			hashesMatch = true
+			break
+		}
+	}
+	if !hashesMatch {
 		return &DriftState{
 			Status:       domain.DriftStatusDrifted,
 			DesiredHash:  desiredHash,

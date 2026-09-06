@@ -1738,6 +1738,10 @@ func TestExecuteDeployment_RouteOnlySkipsArtifactConvergence(t *testing.T) {
 			if routes.calls != 1 || routes.plan != plan {
 				t.Fatalf("route apply calls=%d plan=%#v", routes.calls, routes.plan)
 			}
+			state, err := stateRepo.Get(ctx, svc.ID, env.ID)
+			if err != nil || state == nil || state.DriftStatus != domain.DriftStatusInSync {
+				t.Fatalf("route-only end state = %#v, err=%v; want in_sync", state, err)
+			}
 			for _, run := range runRepo.runs {
 				if run.LoomJobID != "runtime:route-only" || run.Status != domain.RunStatusSucceeded {
 					t.Fatalf("route-only run = %#v", run)

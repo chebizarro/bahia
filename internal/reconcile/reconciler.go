@@ -34,6 +34,8 @@ type Reconciler struct {
 	units        repository.DeploymentUnitRepository
 	observations repository.RuntimeObservationRepository
 	state        repository.EnvironmentServiceStateRepository
+	intents      repository.DeploymentIntentRepository
+	runs         repository.DeploymentRunRepository
 	resolver     runtimeResolver
 	publisher    events.Publisher
 	interval     time.Duration
@@ -49,6 +51,15 @@ type Option func(*Reconciler)
 func WithAutoRemediationDeployer(deployer AutoRemediationDeployer) Option {
 	return func(r *Reconciler) {
 		r.deployer = deployer
+	}
+}
+
+// WithDeploymentHistory enables repair of route-only runs completed before the
+// completion path began transitioning their service state to in_sync.
+func WithDeploymentHistory(intents repository.DeploymentIntentRepository, runs repository.DeploymentRunRepository) Option {
+	return func(r *Reconciler) {
+		r.intents = intents
+		r.runs = runs
 	}
 }
 
@@ -167,8 +178,13 @@ func (r *Reconciler) reconcileMode(env *domain.Environment, unit *domain.Deploym
 }
 
 func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
-	// Skip entries currently deploying.
+	// Deploying entries remain excluded from runtime observation. The sole
+	// exception repairs route-only runs completed before their success path
+	// explicitly transitioned state to in_sync.
 	if currentState.DriftStatus == domain.DriftStatusDeploying {
+		if err := r.repairStuckRouteOnlyState(ctx, currentState); err != nil {
+			return err
+		}
 		return nil
 	}
 	if currentState.ReconcileBackoffUntil != nil && currentState.ReconcileBackoffUntil.After(time.Now().UTC()) {
@@ -240,7 +256,11 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		}
 		acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
 		if currentState.DesiredHash != "" && observedHash != "" {
-			if currentState.DesiredHash == observedHash && acceptableHealth {
+			hashesMatch := currentState.DesiredHash == observedHash
+			if currentState.DesiredRuntimeState != nil {
+				hashesMatch = hashesMatch || currentState.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)
+			}
+			if hashesMatch && acceptableHealth {
 				newDrift = domain.DriftStatusInSync
 			} else {
 				newDrift = r.driftStatusForMode(mode)
@@ -310,6 +330,74 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		return r.autoApplyDesiredState(ctx, currentState)
 	}
 	return nil
+}
+
+func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
+	if r.intents == nil || r.runs == nil || currentState.DesiredIntentID == nil {
+		return nil
+	}
+	intent, err := r.intents.GetByID(ctx, *currentState.DesiredIntentID)
+	if err != nil {
+		return err
+	}
+	if intent == nil || intent.Status != domain.IntentStatusDeployed {
+		return nil
+	}
+	runs, err := r.runs.ListByIntent(ctx, intent.ID)
+	if err != nil {
+		return err
+	}
+	latest := latestDeploymentRun(runs)
+	if latest == nil || latest.Status != domain.RunStatusSucceeded || !domain.IsRouteOnlyDeploymentRun(latest) {
+		return nil
+	}
+
+	// Reload immediately before the write so only DriftStatus is merged into the
+	// latest observation, run-linkage, and reconcile-health fields.
+	state, err := r.state.Get(ctx, currentState.ServiceID, currentState.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.DriftStatus != domain.DriftStatusDeploying || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
+		return nil
+	}
+	state.DriftStatus = domain.DriftStatusInSync
+	if err := r.state.Upsert(ctx, state); err != nil {
+		return err
+	}
+	r.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: state.ServiceID.String() + ":" + state.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     state.ServiceID.String(),
+			EnvironmentID: state.EnvironmentID.String(),
+			IntentID:      intent.ID.String(),
+			RunID:         latest.ID.String(),
+		},
+	})
+	r.logger.Info("repaired route-only service state stuck in deploying",
+		zap.String("service_id", state.ServiceID.String()),
+		zap.String("environment_id", state.EnvironmentID.String()),
+		zap.String("intent_id", intent.ID.String()),
+		zap.String("run_id", latest.ID.String()),
+	)
+	return nil
+}
+
+func latestDeploymentRun(runs []domain.DeploymentRun) *domain.DeploymentRun {
+	if len(runs) == 0 {
+		return nil
+	}
+	latest := &runs[0]
+	for i := 1; i < len(runs); i++ {
+		candidate := &runs[i]
+		if candidate.CreatedAt.After(latest.CreatedAt) ||
+			(candidate.CreatedAt.Equal(latest.CreatedAt) && candidate.UpdatedAt.After(latest.UpdatedAt)) ||
+			(candidate.CreatedAt.Equal(latest.CreatedAt) && candidate.UpdatedAt.Equal(latest.UpdatedAt) && candidate.ID.String() > latest.ID.String()) {
+			latest = candidate
+		}
+	}
+	return latest
 }
 
 func (r *Reconciler) publishDriftDetected(ctx context.Context, currentState *domain.EnvironmentServiceState, svc *domain.Service, env *domain.Environment, extra map[string]string) {

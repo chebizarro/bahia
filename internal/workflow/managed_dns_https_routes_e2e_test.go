@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/routing"
+	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -127,6 +129,40 @@ func TestManagedDNSAndHTTPSRouteFlow(t *testing.T) {
 	if routingBackend.current != "astillero.sharegap.net" || routingBackend.calls != 1 || runtimeLifecycle.calls != 1 {
 		t.Fatalf("route apply state=%q route calls=%d runtime calls=%d", routingBackend.current, routingBackend.calls, runtimeLifecycle.calls)
 	}
+	state, err = stateRepo.Get(ctx, svc.ID, env.ID)
+	if err != nil || state == nil || state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("route-only service state = %#v, err=%v; want in_sync", state, err)
+	}
+	state.LastReconciledAt = nil
+	reconcilePublisher := &managedRouteEventPublisher{}
+	autoDeployer := &managedRouteAutoDeployer{}
+	runtimeReconciler := reconcile.NewReconciler(
+		svcRepo, envRepo, artRepo, unitRepo, managedRouteObservationRepo{}, stateRepo,
+		&unitRuntimeResolver{rt: &managedRouteObservedRuntime{hash: deployedState.DesiredHash}},
+		reconcilePublisher, time.Millisecond, zap.NewNop(), reconcile.WithAutoRemediationDeployer(autoDeployer),
+	)
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	runtimeReconciler.Run(cancelledCtx)
+	state, err = stateRepo.Get(ctx, svc.ID, env.ID)
+	if err != nil || state == nil || state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("pre-route runtime observation regressed route-only state: state=%#v err=%v", state, err)
+	}
+	if autoDeployer.calls != 0 {
+		t.Fatalf("pre-route runtime observation triggered %d full redeploys", autoDeployer.calls)
+	}
+	for _, event := range reconcilePublisher.events {
+		if event.Type == events.EventDriftDetected {
+			t.Fatalf("pre-route runtime observation published drift: %#v", event)
+		}
+	}
+	dnsBackend.records = nil
+	if err := dnsReconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("project internal DNS after route-only success: %v", err)
+	}
+	if len(dnsBackend.records) != 1 || dnsBackend.records[0].FQDN != "astillero.sharegap.net" || dnsBackend.records[0].Value != "10.20.0.88" {
+		t.Fatalf("route-only success did not restore DNS projection eligibility: %#v", dnsBackend.records)
+	}
 
 	routingBackend.fail = true
 	routingBackend.current = "previous.sharegap.net"
@@ -146,6 +182,44 @@ func TestManagedDNSAndHTTPSRouteFlow(t *testing.T) {
 	if routingBackend.current != "previous.sharegap.net" || routingBackend.calls != 2 || runtimeLifecycle.calls != 1 {
 		t.Fatalf("failed route compensation state=%q route calls=%d runtime calls=%d", routingBackend.current, routingBackend.calls, runtimeLifecycle.calls)
 	}
+}
+
+type managedRouteEventPublisher struct {
+	events []events.Event
+}
+
+func (p *managedRouteEventPublisher) Publish(_ context.Context, event events.Event) {
+	p.events = append(p.events, event)
+}
+func (*managedRouteEventPublisher) Subscribe(events.EventType, events.Handler) {}
+
+type managedRouteAutoDeployer struct {
+	calls int
+}
+
+func (d *managedRouteAutoDeployer) AutoRemediateDesiredState(context.Context, uuid.UUID, uuid.UUID, service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	d.calls++
+	return &domain.RuntimeObservation{}, nil
+}
+
+type managedRouteObservedRuntime struct {
+	hash string
+}
+
+func (*managedRouteObservedRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeCompose }
+func (r *managedRouteObservedRuntime) Observe(_ context.Context, serviceID, environmentID uuid.UUID, _ string) (*domain.RuntimeObservation, error) {
+	return &domain.RuntimeObservation{
+		ServiceID: serviceID, EnvironmentID: environmentID,
+		NormalizedHash: r.hash, HealthStatus: domain.HealthStatusHealthy,
+		ObservedAt: time.Now().UTC(),
+	}, nil
+}
+func (*managedRouteObservedRuntime) Deploy(context.Context, string, string, runtimeadapter.DeployOptions) error {
+	return nil
+}
+func (*managedRouteObservedRuntime) Undeploy(context.Context, string) error { return nil }
+func (*managedRouteObservedRuntime) StreamLogs(context.Context, string, runtimeadapter.LogOptions) (<-chan runtimeadapter.LogEntry, error) {
+	return nil, nil
 }
 
 type managedRouteObservationRepo struct {

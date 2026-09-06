@@ -1013,6 +1013,141 @@ func TestCompleteDeploymentRunPreservesHealthyInSyncObservation(t *testing.T) {
 	}
 }
 
+func TestCompleteDeploymentRunRouteOnlySetsInSyncAndPreservesStateFields(t *testing.T) {
+	registry, _, _, _, _, intentRepo, _, _, stateRepo := newTestRegistryAll()
+	publisher := &capturePublisher{}
+	registry.publisher = publisher
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:route-only")
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		DesiredHash: "sha256:route-carrying",
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
+		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intent.ID,
+		LoomJobID:          domain.RouteOnlyDeploymentRunLoomJobID,
+		Metadata:           map[string]any{"execution_mode": "cli"},
+	}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	observationID := uuid.New()
+	previousRunID := uuid.New()
+	backoffUntil := time.Now().Add(time.Minute).UTC()
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DesiredArtifactID: &artifact.ID, DesiredIntentID: &intent.ID,
+		DesiredRuntimeState: desired, DesiredHash: desired.DesiredHash,
+		CurrentObservationID: &observationID, LastSuccessfulRunID: &previousRunID,
+		DriftStatus:              domain.DriftStatusDeploying,
+		ReconcileFailureMetadata: map[string]any{"reason": "transient"},
+		ReconcileBackoffUntil:    &backoffUntil, ReconcileConsecutiveFailures: 2,
+	}
+	publisher.events = nil
+
+	if err := registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		t.Fatal(err)
+	}
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("route-only completion drift = %q, want in_sync", state.DriftStatus)
+	}
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != observationID ||
+		state.LastSuccessfulRunID == nil || *state.LastSuccessfulRunID != run.ID {
+		t.Fatalf("route-only completion lost observation/run linkage: %#v", state)
+	}
+	if state.ReconcileFailureMetadata["reason"] != "transient" || state.ReconcileBackoffUntil == nil ||
+		!state.ReconcileBackoffUntil.Equal(backoffUntil) || state.ReconcileConsecutiveFailures != 2 {
+		t.Fatalf("route-only completion lost reconcile health fields: %#v", state)
+	}
+	stateChanged := 0
+	for _, event := range publisher.events {
+		if event.Type == events.EventEnvironmentServiceStateChanged {
+			stateChanged++
+		}
+	}
+	if stateChanged != 1 {
+		t.Fatalf("environment service state changed events = %d, want 1", stateChanged)
+	}
+}
+
+func TestCompleteDeploymentRunOrdinarySuccessPreservesDeployingDrift(t *testing.T) {
+	registry, _, _, _, _, intentRepo, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:ordinary")
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intent.ID,
+		LoomJobID:          "runtime:direct",
+		Metadata:           map[string]any{"execution_mode": "route-only"},
+	}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DriftStatus: domain.DriftStatusDeploying,
+	}
+	if err := registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusDeploying {
+		t.Fatalf("ordinary completion drift = %q, want unchanged deploying", got)
+	}
+}
+
+func TestCompleteDeploymentRunStaleRouteOnlyIntentDoesNotSetInSync(t *testing.T) {
+	registry, _, _, _, _, intentRepo, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:stale-route")
+	oldIntent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: artifact.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindEventTriggered,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, oldIntent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[oldIntent.ID].Status = domain.IntentStatusApproved
+	run := &domain.DeploymentRun{DeploymentIntentID: oldIntent.ID, LoomJobID: domain.RouteOnlyDeploymentRunLoomJobID}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	newIntentID := uuid.New()
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DesiredIntentID: &newIntentID,
+		DriftStatus: domain.DriftStatusDeploying,
+	}
+
+	if err := registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusDeploying {
+		t.Fatalf("stale route-only completion drift = %q, want unchanged deploying", got)
+	}
+}
+
 func TestCreateDeploymentIntentPreservesObservationLinkage(t *testing.T) {
 	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
 	ctx := context.Background()
@@ -1507,6 +1642,39 @@ func TestRecordObservation_DesiredStateHashMatchHealthy_SetsInSync(t *testing.T)
 	}
 	if got := obsRepo.observations[obs.ID].NormalizedHash; got != desiredHash {
 		t.Fatalf("persisted normalized hash = %q, want %q", got, desiredHash)
+	}
+}
+
+func TestRecordObservationRouteCarryingDesiredAcceptsPreRouteHashAcrossPasses(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+	svc, env := seedServiceAndEnv(t, registry)
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: uuid.New(),
+		StableServiceKey: "api",
+	}
+	preRouteHash := desired.ComputeDesiredHash()
+	desired.PublicRoute = &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}
+	desired.ComputeDesiredHash()
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID: svc.ID, EnvironmentID: env.ID,
+		DesiredRuntimeState: desired, DesiredHash: desired.DesiredHash,
+		DriftStatus: domain.DriftStatusInSync,
+	}
+
+	for pass := 0; pass < 2; pass++ {
+		obs := &domain.RuntimeObservation{
+			ServiceID: svc.ID, EnvironmentID: env.ID,
+			NormalizedHash: preRouteHash, HealthStatus: domain.HealthStatusHealthy,
+			ObservedAt: time.Now().UTC().Add(time.Duration(pass) * time.Second),
+		}
+		if err := registry.RecordObservation(ctx, obs); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusInSync {
+			t.Fatalf("pass %d drift = %q, want in_sync", pass, got)
+		}
 	}
 }
 

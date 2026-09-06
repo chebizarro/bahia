@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -312,6 +313,14 @@ type DeploymentIntent struct {
 	CreatedAt          time.Time              `json:"created_at"`
 	ApprovedAt         *time.Time             `json:"approved_at,omitempty"`
 	UpdatedAt          time.Time              `json:"updated_at"`
+}
+
+const RouteOnlyDeploymentRunLoomJobID = "runtime:route-only"
+
+// IsRouteOnlyDeploymentRun reports whether a deployment run uses the durable
+// route-only execution sentinel persisted by the workflow coordinator.
+func IsRouteOnlyDeploymentRun(run *DeploymentRun) bool {
+	return run != nil && strings.TrimSpace(run.LoomJobID) == RouteOnlyDeploymentRunLoomJobID
 }
 
 // DeploymentRun represents a concrete deployment execution attempt.

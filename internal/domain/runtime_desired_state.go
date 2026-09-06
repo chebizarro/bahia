@@ -957,6 +957,58 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 	return s.DesiredHash
 }
 
+// RuntimeConvergenceHashes returns every desired hash that represents the same
+// runtime configuration. Route-carrying specs also accept the canonical hash of
+// the same spec without PublicRoute because route state is applied outside the
+// container runtime. Hash computation uses deep copies and never mutates s.
+func (s *DesiredServiceSpec) RuntimeConvergenceHashes() []string {
+	if s == nil {
+		return nil
+	}
+	fullHash := strings.TrimSpace(s.DesiredHash)
+	if fullHash == "" {
+		fullHash = deepCopyDesiredServiceSpec(s).ComputeDesiredHash()
+	}
+	hashes := []string{fullHash}
+	if s.PublicRoute == nil {
+		return hashes
+	}
+	withoutRoute := deepCopyDesiredServiceSpec(s)
+	withoutRoute.PublicRoute = nil
+	runtimeHash := withoutRoute.ComputeDesiredHash()
+	if runtimeHash != fullHash {
+		hashes = append(hashes, runtimeHash)
+	}
+	return hashes
+}
+
+// MatchesRuntimeConvergenceHash reports whether an observed runtime hash is one
+// of the canonical convergence hashes for the desired service spec.
+func (s *DesiredServiceSpec) MatchesRuntimeConvergenceHash(observedHash string) bool {
+	observedHash = strings.TrimSpace(observedHash)
+	if observedHash == "" {
+		return false
+	}
+	for _, desiredHash := range s.RuntimeConvergenceHashes() {
+		if desiredHash == observedHash {
+			return true
+		}
+	}
+	return false
+}
+
+func deepCopyDesiredServiceSpec(spec *DesiredServiceSpec) *DesiredServiceSpec {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		panic(fmt.Sprintf("domain: failed to copy desired service spec: %v", err))
+	}
+	var copied DesiredServiceSpec
+	if err := json.Unmarshal(data, &copied); err != nil {
+		panic(fmt.Sprintf("domain: failed to decode desired service spec copy: %v", err))
+	}
+	return &copied
+}
+
 // ContainsPlaintextSecret returns true if any SecretRef contains a value that
 // is not a REDACTED(...) placeholder. This is a safety check to prevent
 // accidental persistence of plaintext secrets.

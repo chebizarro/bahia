@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,6 +95,41 @@ func TestPublicRouteIsPartOfDesiredStateHash(t *testing.T) {
 
 	if withoutRoute == withRoute || withRoute == changedRoute {
 		t.Fatalf("public route did not affect desired hash: %s %s %s", withoutRoute, withRoute, changedRoute)
+	}
+}
+
+func TestRuntimeConvergenceHashesIncludeRouteFreeHashWithoutMutation(t *testing.T) {
+	spec := &DesiredServiceSpec{
+		SchemaVersion: DesiredStateSchemaVersion,
+		ServiceID:     uuid.New(), EnvironmentID: uuid.New(), ArtifactID: uuid.New(),
+		Ports: []string{"9090:9090", "8080:8080"}, PublicRoute: validPublicRoutePlan(),
+	}
+	originalPorts := append([]string(nil), spec.Ports...)
+	withoutRoute := *spec
+	withoutRoute.Ports = append([]string(nil), spec.Ports...)
+	withoutRoute.PublicRoute = nil
+	wantRuntimeHash := withoutRoute.ComputeDesiredHash()
+
+	hashes := spec.RuntimeConvergenceHashes()
+	if len(hashes) != 2 || hashes[1] != wantRuntimeHash || hashes[0] == hashes[1] {
+		t.Fatalf("runtime convergence hashes = %#v, want distinct full and route-free hashes", hashes)
+	}
+	if spec.DesiredHash != "" || spec.PublicRoute == nil || !slices.Equal(spec.Ports, originalPorts) {
+		t.Fatalf("RuntimeConvergenceHashes mutated original spec: %#v", spec)
+	}
+	if !spec.MatchesRuntimeConvergenceHash(wantRuntimeHash) {
+		t.Fatal("route-free runtime hash was not accepted")
+	}
+}
+
+func TestRuntimeConvergenceHashesDeduplicateSchemaWithoutRouteHashing(t *testing.T) {
+	spec := &DesiredServiceSpec{
+		SchemaVersion: "3", ServiceID: uuid.New(), EnvironmentID: uuid.New(), ArtifactID: uuid.New(),
+		PublicRoute: validPublicRoutePlan(),
+	}
+	spec.ComputeDesiredHash()
+	if hashes := spec.RuntimeConvergenceHashes(); len(hashes) != 1 || hashes[0] != spec.DesiredHash {
+		t.Fatalf("schema v3 convergence hashes = %#v, want one deduplicated hash", hashes)
 	}
 }
 
