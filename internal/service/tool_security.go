@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/security"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/strutil"
 	"go.uber.org/zap"
 )
 
@@ -380,48 +381,12 @@ func typosquatCandidate(tool domain.ResolvedTool) string {
 		if name == p {
 			continue
 		}
-		d := levenshteinDistance(name, p)
+		d := strutil.LevenshteinDistance(name, p)
 		if d == 1 {
 			return popular
 		}
 	}
 	return ""
-}
-
-func levenshteinDistance(a, b string) int {
-	ra := []rune(a)
-	rb := []rune(b)
-	if len(ra) == 0 {
-		return len(rb)
-	}
-	if len(rb) == 0 {
-		return len(ra)
-	}
-
-	prev := make([]int, len(rb)+1)
-	curr := make([]int, len(rb)+1)
-	for j := 0; j <= len(rb); j++ {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ra); i++ {
-		curr[0] = i
-		for j := 1; j <= len(rb); j++ {
-			cost := 0
-			if ra[i-1] != rb[j-1] {
-				cost = 1
-			}
-			curr[j] = minInt(minInt(curr[j-1]+1, prev[j]+1), prev[j-1]+cost)
-		}
-		copy(prev, curr)
-	}
-	return prev[len(rb)]
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func (s *ToolSecurityService) getJSON(ctx context.Context, rawURL string, out any) error {

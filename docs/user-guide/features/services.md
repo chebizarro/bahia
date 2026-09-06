@@ -198,12 +198,26 @@ internal_routing:
   file_prefix: bahia-
   test_command: [nginx, -t]
   reload_command: [nginx, -s, reload]
+  command_env: []
   cert_file: /etc/letsencrypt/live/example.com/fullchain.pem
   key_file: /etc/letsencrypt/live/example.com/privkey.pem
   zones: [example.com]
 ```
 
-`include_dir`, `cert_file`, and `key_file` must be absolute. Certificate and key presence/readability are checked by startup health rather than config parsing, so configuration can be reviewed off-host. Commands are argv arrays executed directly without a shell. The file prefix defaults to `bahia-`; test and reload default to the values shown. Bahia writes `include_dir/<prefix><hostname>.conf` atomically, refuses a pre-existing file without its ownership header, tests before reload, and restores/re-activates the exact prior file on failure. Applying a reviewed plan without `internal_https` removes an existing Bahia-owned file and reloads nginx, which makes rollback to a pre-internal-routing plan convergent without touching foreign vhosts.
+`include_dir`, `cert_file`, and `key_file` must be absolute. Certificate and key presence/readability are checked by startup health rather than config parsing, so configuration can be reviewed off-host. Commands are argv arrays executed directly without a shell. `command_env` accepts `KEY=VALUE` entries that are applied to both commands; startup and apply logs expose only their keys. Unknown `internal_routing` keys fail configuration loading. The file prefix defaults to `bahia-`; test and reload default to the values shown. Bahia writes `include_dir/<prefix><hostname>.conf` atomically, refuses a pre-existing file without its ownership header, tests before reload, and restores/re-activates the exact prior file on failure. Applying a reviewed plan without `internal_https` removes an existing Bahia-owned file and reloads nginx, which makes rollback to a pre-internal-routing plan convergent without touching foreign vhosts.
+
+### Containerized nginx
+
+When nginx is a container on the same Docker daemon available to Bahia, configure the exact container name in direct argv form:
+
+```yaml
+test_command: [docker, exec, nginx, nginx, -t]
+reload_command: [docker, exec, nginx, nginx, -s, reload]
+```
+
+For nginx on a remote daemon, put the daemon selection directly in each reviewed argv, for example `["docker", "--host", "tcp://edge-01:2375", "exec", "nginx", "nginx", "-t"]`, or keep the shorter `docker exec` argv and set `command_env: ["DOCKER_HOST=tcp://edge-01:2375"]`. The Bahia image ships `docker-cli`, and the provided Compose deployment mounts `/var/run/docker.sock`; consequently, an unqualified `docker exec` addresses the Docker daemon on Bahia's own host, not an nginx container on another host.
+
+The complete `internal_routing` configuration, including `command_env`, is hashed into the reviewed internal-HTTPS plan. If any of it changes after review, apply rejects the stale plan with `internal routing configuration changed after review`; re-attach the route to produce and review a new plan before applying it.
 
 The referenced credential may be a raw API token or a JSON secret containing `api_token`, `token`, or `APIToken`. It is resolved only on the Bahia server and never appears in route previews or provider errors. `verify_resolver` defaults to the public resolver `1.1.1.1:53`, ensuring managed HTTPS verification resolves and exercises the public Cloudflare edge rather than a split-horizon LAN origin; set it explicitly to `system` only to opt back into host resolver behavior. Direct runtime actions must also be enabled because public routes target an explicit Bahia-managed deployment unit.
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/strutil"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -160,6 +161,7 @@ type InternalRoutingConfig struct {
 	FilePrefix    string   `koanf:"file_prefix" yaml:"file_prefix"`
 	TestCommand   []string `koanf:"test_command" yaml:"test_command"`
 	ReloadCommand []string `koanf:"reload_command" yaml:"reload_command"`
+	CommandEnv    []string `koanf:"command_env" yaml:"command_env"`
 	CertFile      string   `koanf:"cert_file" yaml:"cert_file"`
 	KeyFile       string   `koanf:"key_file" yaml:"key_file"`
 	Zones         []string `koanf:"zones" yaml:"zones"`
@@ -177,11 +179,12 @@ type DNSConfig struct {
 
 // DNSZoneConfig binds a managed DNS zone to a configured backend.
 type DNSZoneConfig struct {
-	Name          string `koanf:"name"`
-	Visibility    string `koanf:"visibility"`
-	Backend       string `koanf:"backend"`
-	TTL           int    `koanf:"ttl"`
-	Authoritative bool   `koanf:"authoritative"`
+	Name                    string `koanf:"name"`
+	Visibility              string `koanf:"visibility"`
+	Backend                 string `koanf:"backend"`
+	TTL                     int    `koanf:"ttl"`
+	Authoritative           bool   `koanf:"authoritative"`
+	AllowEmptyAuthoritative bool   `koanf:"allow_empty_authoritative"`
 }
 
 // DNSBackendConfig describes one DNS backend connector.
@@ -1216,6 +1219,9 @@ func Load(configPath string) (*Config, error) {
 	if err := rejectRemovedEncryptedRequestKeys(k); err != nil {
 		return nil, err
 	}
+	if err := rejectUnknownInternalRoutingKeys(k); err != nil {
+		return nil, err
+	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
@@ -1229,6 +1235,38 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func rejectUnknownInternalRoutingKeys(k *koanf.Koanf) error {
+	known := map[string]struct{}{
+		"enabled": {}, "provider": {}, "include_dir": {}, "file_prefix": {},
+		"test_command": {}, "reload_command": {}, "command_env": {},
+		"cert_file": {}, "key_file": {}, "zones": {},
+	}
+	for _, key := range k.Keys() {
+		if !strings.HasPrefix(key, "internal_routing.") {
+			continue
+		}
+		field := strings.TrimPrefix(key, "internal_routing.")
+		if _, ok := known[field]; ok {
+			continue
+		}
+		hint := "enabled"
+		if field == "check_command" {
+			hint = "test_command"
+		} else {
+			bestDistance := -1
+			for candidate := range known {
+				distance := strutil.LevenshteinDistance(field, candidate)
+				if bestDistance == -1 || distance < bestDistance || distance == bestDistance && candidate < hint {
+					bestDistance = distance
+					hint = candidate
+				}
+			}
+		}
+		return fmt.Errorf("unknown internal_routing key %q (did you mean %q?)", field, hint)
+	}
+	return nil
 }
 
 func applyAssistantFlatCompat(k *koanf.Koanf, cfg *Config) {
@@ -2497,6 +2535,15 @@ func (c *Config) validateInternalRouting() error {
 	r := &c.InternalRouting
 	if !r.Enabled {
 		return nil
+	}
+	for i, entry := range r.CommandEnv {
+		if strings.IndexByte(entry, 0) >= 0 {
+			return fmt.Errorf("config validation failed: internal_routing.command_env[%d] must be KEY=VALUE", i)
+		}
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !strutil.ValidEnvironmentKey(key) {
+			return fmt.Errorf("config validation failed: internal_routing.command_env[%d] must be KEY=VALUE with a non-empty valid key", i)
+		}
 	}
 	if !c.EdgeRouting.Enabled {
 		return fmt.Errorf("config validation failed: edge_routing.enabled=true is required when internal_routing.enabled=true")

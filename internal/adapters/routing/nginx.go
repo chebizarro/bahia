@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/strutil"
+	"go.uber.org/zap"
 )
 
 const nginxOwnershipHeader = "# Managed by Bahia internal routing v1; DO NOT EDIT."
@@ -21,21 +24,27 @@ const nginxOwnershipHeader = "# Managed by Bahia internal routing v1; DO NOT EDI
 // ArgvRunner executes one already-tokenized command without a shell.
 type ArgvRunner func(ctx context.Context, argv []string) error
 
+// EnvArgvRunner executes one already-tokenized command with explicit environment additions.
+type EnvArgvRunner func(ctx context.Context, argv, commandEnv []string) error
+
 type NginxConfig struct {
 	IncludeDir    string
 	FilePrefix    string
 	TestCommand   []string
 	ReloadCommand []string
+	CommandEnv    []string
 	CertFile      string
 	KeyFile       string
 	ConfigHash    string
 	Runner        ArgvRunner
+	EnvRunner     EnvArgvRunner
+	Logger        *zap.Logger
 }
 
 // NginxBackend manages exactly one Bahia-owned nginx include per hostname.
 type NginxBackend struct {
 	cfg     NginxConfig
-	runner  ArgvRunner
+	runner  EnvArgvRunner
 	applyMu sync.Mutex
 }
 
@@ -62,26 +71,80 @@ func NewNginxBackend(cfg NginxConfig) (*NginxBackend, error) {
 			}
 		}
 	}
-	runner := cfg.Runner
+	runner := cfg.EnvRunner
+	if runner == nil && cfg.Runner != nil {
+		runner = func(ctx context.Context, argv, _ []string) error {
+			return cfg.Runner(ctx, argv)
+		}
+	}
 	if runner == nil {
 		runner = runArgv
 	}
+	for i, entry := range cfg.CommandEnv {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !strutil.ValidEnvironmentKey(key) || strings.IndexByte(entry, 0) >= 0 {
+			return nil, fmt.Errorf("nginx command environment entry %d must be KEY=VALUE with a non-empty valid key", i)
+		}
+	}
 	cfg.TestCommand = append([]string(nil), cfg.TestCommand...)
 	cfg.ReloadCommand = append([]string(nil), cfg.ReloadCommand...)
+	cfg.CommandEnv = append([]string(nil), cfg.CommandEnv...)
+	if cfg.Logger == nil {
+		cfg.Logger = zap.NewNop()
+	}
+	cfg.Logger.Info("effective internal nginx routing commands",
+		zap.Strings("test_argv", cfg.TestCommand),
+		zap.Strings("reload_argv", cfg.ReloadCommand),
+		zap.Strings("command_env_keys", commandEnvKeys(cfg.CommandEnv)),
+	)
 	return &NginxBackend{cfg: cfg, runner: runner}, nil
 }
 
-func runArgv(ctx context.Context, argv []string) error {
+func formatArgv(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = strconv.Quote(arg)
+	}
+	return "[" + strings.Join(quoted, ",") + "]"
+}
+
+func commandEnvKeys(commandEnv []string) []string {
+	keys := make([]string, 0, len(commandEnv))
+	for _, entry := range commandEnv {
+		key, _, _ := strings.Cut(entry, "=")
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func runArgv(ctx context.Context, argv, commandEnv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("command argv is empty")
 	}
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Env = append(os.Environ(), commandEnv...)
 	if output, err := command.CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message != "" {
-			return fmt.Errorf("%s: %w", message, err)
-		}
-		return err
+		return fmt.Errorf("command argv %s failed: %w; output=%q", formatArgv(argv), err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (b *NginxBackend) runCommand(ctx context.Context, step string, argv []string) error {
+	argv = append([]string(nil), argv...)
+	commandEnv := append([]string(nil), b.cfg.CommandEnv...)
+	b.cfg.Logger.Info("executing internal nginx route command",
+		zap.String("step", step),
+		zap.Strings("argv", argv),
+		zap.Strings("command_env_keys", commandEnvKeys(commandEnv)),
+	)
+	if err := b.runner(ctx, argv, commandEnv); err != nil {
+		wrapped := fmt.Errorf("internal nginx %s command argv %s failed: %w", step, formatArgv(argv), err)
+		b.cfg.Logger.Error("internal nginx route command failed",
+			zap.String("step", step),
+			zap.Strings("argv", argv),
+			zap.Error(wrapped),
+		)
+		return wrapped
 	}
 	return nil
 }
@@ -203,11 +266,11 @@ func (b *NginxBackend) Apply(ctx context.Context, plan *domain.DesiredPublicRout
 		}
 	}
 
-	if err := b.runner(ctx, append([]string(nil), b.cfg.TestCommand...)); err != nil {
+	if err := b.runCommand(ctx, "test", b.cfg.TestCommand); err != nil {
 		cause := fmt.Errorf("validate nginx after converging internal route %q: %w", plan.Hostname, err)
 		return b.restoreAndActivate(path, previous, cause)
 	}
-	if err := b.runner(ctx, append([]string(nil), b.cfg.ReloadCommand...)); err != nil {
+	if err := b.runCommand(ctx, "reload", b.cfg.ReloadCommand); err != nil {
 		cause := fmt.Errorf("reload nginx after converging internal route %q: %w", plan.Hostname, err)
 		return b.restoreAndActivate(path, previous, cause)
 	}
@@ -220,10 +283,10 @@ func (b *NginxBackend) restoreAndActivate(path string, snapshot atomicfile.Snaps
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := b.runner(cleanupCtx, append([]string(nil), b.cfg.TestCommand...)); err != nil {
+	if err := b.runCommand(cleanupCtx, "rollback-test", b.cfg.TestCommand); err != nil {
 		return errors.Join(cause, fmt.Errorf("validate nginx after restoring previous vhost: %w", err))
 	}
-	if err := b.runner(cleanupCtx, append([]string(nil), b.cfg.ReloadCommand...)); err != nil {
+	if err := b.runCommand(cleanupCtx, "rollback-reload", b.cfg.ReloadCommand); err != nil {
 		return errors.Join(cause, fmt.Errorf("reload nginx after restoring previous vhost: %w", err))
 	}
 	return fmt.Errorf("%w; previous internal route restored", cause)

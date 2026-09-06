@@ -69,6 +69,7 @@ internal_routing:
   file_prefix: bahia-
   test_command: [nginx, -t]
   reload_command: [nginx, -s, reload]
+  command_env: []
   cert_file: /etc/letsencrypt/live/astillero.sharegap.net/fullchain.pem
   key_file: /etc/letsencrypt/live/astillero.sharegap.net/privkey.pem
   zones:
@@ -94,7 +95,20 @@ Deployment of the agent itself (key generation, allowlist, reload command, migra
 
 Together, this configuration establishes one ownership boundary: the DNS reconciler owns the internal A record and `local=/sharegap.net/` guard, while one signed route plan owns both the external Cloudflare CNAME/Tunnel output and the internal HTTPS vhost for `astillero.sharegap.net`. The desired-state hash covers both route outputs, and composite apply/compensation keeps them coordinated.
 
-`internal_routing` makes the edge-01 LAN vhost part of that same signed route plan. Its include directory and certificate paths must be absolute; the certificate and key must already exist and be readable on edge-01 for startup health and route checks to pass. The shown argv commands are executed without a shell. Bahia owns only `/etc/nginx/conf.d/bahia-astillero.sharegap.net.conf`, identified by its header, and refuses to overwrite a foreign collision. It atomically writes the vhost, runs `nginx -t`, then reloads. A test or reload failure restores the exact prior bytes and re-tests/reloads the restored configuration.
+`internal_routing` makes the edge-01 LAN vhost part of that same signed route plan. Its include directory and certificate paths must be absolute; the certificate and key must already exist and be readable on edge-01 for startup health and route checks to pass. The shown argv commands are executed without a shell. `command_env` accepts validated `KEY=VALUE` entries for both commands, and diagnostics log only their keys. Unknown keys in this block fail configuration loading. Bahia owns only `/etc/nginx/conf.d/bahia-astillero.sharegap.net.conf`, identified by its header, and refuses to overwrite a foreign collision. It atomically writes the vhost, runs `nginx -t`, then reloads. A test or reload failure restores the exact prior bytes and re-tests/reloads the restored configuration.
+
+### Containerized nginx
+
+For nginx running as a container on the same Docker daemon, name that container in both argv arrays:
+
+```yaml
+test_command: [docker, exec, nginx, nginx, -t]
+reload_command: [docker, exec, nginx, nginx, -s, reload]
+```
+
+For a remote daemon, either encode the endpoint in each argv, such as `["docker", "--host", "tcp://edge-01:2375", "exec", "nginx", "nginx", "-t"]`, or use the same-daemon argv with `command_env: ["DOCKER_HOST=tcp://edge-01:2375"]`. Bahia's image includes `docker-cli`, and the supplied Compose file mounts `/var/run/docker.sock`, so an unqualified Docker command uses the daemon on Bahia's own host. It cannot reach a container on a different daemon merely because the container name is correct.
+
+The internal-routing configuration hash covers the test argv, reload argv, and `command_env`. Changing any of these after an operator reviewed the plan causes apply to reject it as `internal routing configuration changed after review`; run `service/route-attach` again and review the replacement plan before applying it.
 
 `verify_resolver` defaults to the public resolver `1.1.1.1:53`. This is intentional on edge-01: its split-horizon system DNS can resolve the public hostname directly to the LAN origin, which would bypass Cloudflare and could let verification pass even when the public record is absent. Bahia first resolves the hostname through the configured public resolver and then uses that same resolver for the HTTPS connection, while retaining the public hostname for TLS SNI and certificate verification. Set `verify_resolver: system` only when host-resolver behavior is explicitly desired.
 

@@ -127,6 +127,7 @@ dns:
       backend: core01-dnsmasq
       ttl: 300
       authoritative: true
+      allow_empty_authoritative: false
   backends:
     core01-dnsmasq:
       type: dnsmasq_agent
@@ -149,13 +150,14 @@ internal_routing:
   file_prefix: bahia-
   test_command: [nginx, -t]
   reload_command: [nginx, -s, reload]
+  command_env: []
   cert_file: /etc/letsencrypt/live/astillero.sharegap.net/fullchain.pem
   key_file: /etc/letsencrypt/live/astillero.sharegap.net/privkey.pem
   zones:
     - sharegap.net
 ```
 
-`authoritative: true` makes Bahia manage `local=/sharegap.net/` in the zone include. This prevents unanswered query types such as AAAA, HTTPS, and SVCB from being forwarded to public DNS and leaking public Cloudflare/ECH records into the split-DNS path.
+`authoritative: true` makes Bahia manage `local=/sharegap.net/` in the zone include. This prevents unanswered query types such as AAAA, HTTPS, and SVCB from being forwarded to public DNS and leaking public Cloudflare/ECH records into the split-DNS path. With the default `allow_empty_authoritative: false`, Bahia refuses to replace a non-empty authoritative include with an empty projected record set, preserving the last listed records during transient projection loss. Set the option to `true` only for an intentional empty authoritative-zone teardown.
 
 `internal_routing.enabled: true` makes the same signed route plan drive the
 Bahia-owned nginx vhost on edge-01 after Cloudflare succeeds. The certificate
@@ -228,6 +230,19 @@ byte-identical after repeated syncs).
 ## 6. Migration: move the edge-01 nginx vhost to Bahia — [operator]
 
 Perform this after the DNS guard is healthy; it is independently reversible.
+
+### Containerized nginx
+
+If edge-01 nginx is a container on the same Docker daemon that Bahia uses, configure the exact container name in both commands:
+
+```yaml
+test_command: [docker, exec, nginx, nginx, -t]
+reload_command: [docker, exec, nginx, nginx, -s, reload]
+```
+
+For nginx on a remote daemon, either specify the daemon in each argv—for example `["docker", "--host", "tcp://edge-01:2375", "exec", "nginx", "nginx", "-t"]`—or keep `docker exec` and set `command_env: ["DOCKER_HOST=tcp://edge-01:2375"]`. The Bahia image ships `docker-cli`, and the provided Compose deployment mounts `/var/run/docker.sock`; without `--host` or `DOCKER_HOST`, Docker therefore addresses Bahia's own host daemon. Confirm the target nginx container exists on that daemon before attachment.
+
+Bahia logs the effective test/reload argv and only the configured environment keys, never environment values. These values are part of the reviewed internal-routing configuration hash. A config change after review makes the plan stale and apply returns `internal routing configuration changed after review`; re-attach the route and review the new plan before applying it.
 
 1. Capture the current manual nginx source and behavior before enabling the
    guard:

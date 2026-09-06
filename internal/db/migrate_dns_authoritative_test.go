@@ -12,6 +12,8 @@ func TestEmbeddedDNSZoneAuthoritativeMigrationUpAndDown(t *testing.T) {
 	}{
 		{file: "migrations/000058_dns_zone_authoritative.up.sql", required: []string{"ADD COLUMN authoritative BOOLEAN NOT NULL DEFAULT FALSE"}},
 		{file: "migrations/000058_dns_zone_authoritative.down.sql", required: []string{"DROP COLUMN authoritative"}},
+		{file: "migrations/000059_dns_zone_allow_empty_authoritative.up.sql", required: []string{"ADD COLUMN allow_empty_authoritative BOOLEAN NOT NULL DEFAULT FALSE"}},
+		{file: "migrations/000059_dns_zone_allow_empty_authoritative.down.sql", required: []string{"DROP COLUMN allow_empty_authoritative"}},
 	}
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
