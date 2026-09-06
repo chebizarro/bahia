@@ -2,7 +2,9 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -120,4 +122,30 @@ func publishContextVMResultAttempt(ctx context.Context, publisher NostrEventPubl
 		outcome += " error=" + err.Error()
 	}
 	return published, []string{outcome}, err
+}
+
+// rejectedRelayOutcomes returns the per-relay outcomes that did not accept the
+// event. Callers use it to surface partial delivery, which is otherwise
+// invisible because publication succeeds when any single relay accepts.
+func rejectedRelayOutcomes(outcomes []string) []string {
+	rejected := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if strings.Contains(outcome, "accepted=false") {
+			rejected = append(rejected, outcome)
+		}
+	}
+	return rejected
+}
+
+// contextVMEventSize reports the serialized size of a response event so an
+// oversized payload is obvious in logs when a relay refuses it.
+func contextVMEventSize(event *nostr.Event) int {
+	if event == nil {
+		return 0
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
 }

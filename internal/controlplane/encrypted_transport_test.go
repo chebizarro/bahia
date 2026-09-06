@@ -1254,7 +1254,11 @@ func TestContextVMTransport_ResponsePublishesToEveryConfiguredRelay(t *testing.T
 func TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry(t *testing.T) {
 	publisher := &partialDetailedPublisher{}
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
+	// A relay that rejects the response may be the very one the operator
+	// subscribes on, so partial delivery must be reported even though
+	// publication "succeeded" on another relay.
+	core, logs := observer.New(zap.WarnLevel)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.New(core), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
 	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"rolled_back": true}, nil
 	})
@@ -1264,6 +1268,30 @@ func TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry(t *test
 
 	if publisher.detailedCalls != 1 {
 		t.Fatalf("terminal detailed publish calls = %d, want 1", publisher.detailedCalls)
+	}
+	entries := logs.FilterMessage("ContextVM response rejected by some relays").All()
+	if len(entries) != 1 {
+		t.Fatalf("partial-rejection warnings = %d, want 1", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	// zap renders string arrays as []any through ContextMap.
+	rejections := fmt.Sprint(fields["relay_rejections"])
+	if !strings.Contains(rejections, "wss://rejected.example") {
+		t.Fatalf("relay_rejections = %v, want the rejecting relay named", rejections)
+	}
+	if !strings.Contains(rejections, "rate-limited") {
+		t.Fatalf("rejection reason lost: %v", rejections)
+	}
+	if strings.Contains(rejections, "wss://accepted.example") {
+		t.Fatalf("accepted relay must not be reported as a rejection: %v", rejections)
+	}
+	// Payload size is reported because an oversized result is the usual cause
+	// of a relay refusing a large deployment preview.
+	if size, ok := fields["payload_bytes"].(int64); !ok || size <= 0 {
+		t.Fatalf("payload_bytes = %v, want a positive size", fields["payload_bytes"])
+	}
+	if method, _ := fields["method"].(string); method != ContextVMMethodServiceRollback {
+		t.Fatalf("method = %q, want %q", method, ContextVMMethodServiceRollback)
 	}
 }
 
