@@ -125,6 +125,89 @@ func TestDNSReconcilerSuppressesNonConvergingAuthoritySyncs(t *testing.T) {
 	}
 }
 
+func TestDNSReconcilerRefusesDestructiveEmptyAuthoritativeSyncOncePerTransition(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, actual := testReconcilerProjector()
+	zone.Authoritative = true
+	projector.states.(*fakeStateRepo).states[0].DriftStatus = domain.DriftStatusDrifted
+	backend := &fakeDNSBackend{records: cloneDNSRecords(actual)}
+	publisher := &captureDNSPublisher{}
+	core, logs := observer.New(zap.DebugLevel)
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, zap.New(core), publisher)
+
+	for pass := 1; pass <= 2; pass++ {
+		if err := reconciler.ReconcileOnce(ctx); err != nil {
+			t.Fatalf("ReconcileOnce refusal pass %d returned error: %v", pass, err)
+		}
+	}
+	if got := backend.syncCallCount(); got != 0 {
+		t.Fatalf("sync calls while authoritative projection empty = %d, want 0", got)
+	}
+	assertRecordsEqual(t, backend.records, actual)
+	const warning = "refusing to sync authoritative zone \"prod.example\" to empty record set (currently 1 records); projection may be transiently degraded — set allow_empty_authoritative to force"
+	if entries := logs.FilterMessage(warning).All(); len(entries) != 1 {
+		t.Fatalf("empty-sync refusal warnings = %#v, want exactly one %q", logs.All(), warning)
+	}
+	assertEventCount(t, publisher.eventsOfType(dnsEventDriftDetected), 2)
+	assertEventCount(t, publisher.eventsOfType(dnsEventZoneSyncRefused), 2)
+	assertEventCount(t, publisher.eventsOfType(dnsEventZoneSynced), 0)
+	refused := eventData(t, publisher.eventsOfType(dnsEventZoneSyncRefused)[0])
+	if refused["status"] != "refused_empty_authoritative" || refused["actual_count"] != 1 || refused["desired_count"] != 0 {
+		t.Fatalf("unexpected refused-sync payload: %#v", refused)
+	}
+	if entries := logs.FilterMessage("DNS zone sync decision").All(); len(entries) != 2 {
+		t.Fatalf("sync decision logs = %#v, want one per pass", entries)
+	}
+
+	projector.states.(*fakeStateRepo).states[0].DriftStatus = domain.DriftStatusInSync
+	backend.mu.Lock()
+	backend.records[0].Value = "10.0.0.99"
+	backend.mu.Unlock()
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce recovery returned error: %v", err)
+	}
+	if got := backend.syncCallCount(); got != 1 {
+		t.Fatalf("sync calls after projection recovery = %d, want 1", got)
+	}
+	if _, warned := reconciler.emptySyncRefusals[domain.NormalizeDNSZoneName(zone.Name)]; warned {
+		t.Fatal("empty-sync warned state was not cleared on recovery")
+	}
+}
+
+func TestDNSReconcilerAllowEmptyAuthoritativeSyncsEmptyProjection(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, actual := testReconcilerProjector()
+	zone.Authoritative = true
+	zone.AllowEmptyAuthoritative = true
+	projector.states.(*fakeStateRepo).states[0].DriftStatus = domain.DriftStatusDrifted
+	backend := &fakeDNSBackend{records: cloneDNSRecords(actual)}
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, nil)
+
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce returned error: %v", err)
+	}
+	if got := backend.syncCallCount(); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
+	}
+	assertRecordsEqual(t, backend.syncedRecords(), nil)
+}
+
+func TestDNSReconcilerNonAuthoritativeZoneStillSyncsEmptyProjection(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, actual := testReconcilerProjector()
+	projector.states.(*fakeStateRepo).states[0].DriftStatus = domain.DriftStatusDrifted
+	backend := &fakeDNSBackend{records: cloneDNSRecords(actual)}
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, nil)
+
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce returned error: %v", err)
+	}
+	if got := backend.syncCallCount(); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
+	}
+	assertRecordsEqual(t, backend.syncedRecords(), nil)
+}
+
 func TestDNSReconcilerDiffPreservesMultiValueRRsets(t *testing.T) {
 	actual := []domain.DNSRecord{
 		{Zone: "prod.example", Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: "10.0.0.10", TTL: 120},

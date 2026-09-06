@@ -15,12 +15,14 @@ import (
 type recordingArgvRunner struct {
 	path     string
 	calls    [][]string
+	envs     [][]string
 	contents [][]byte
 	failAt   map[int]error
 }
 
-func (r *recordingArgvRunner) run(_ context.Context, argv []string) error {
+func (r *recordingArgvRunner) run(_ context.Context, argv, commandEnv []string) error {
 	r.calls = append(r.calls, append([]string(nil), argv...))
+	r.envs = append(r.envs, append([]string(nil), commandEnv...))
 	data, _ := os.ReadFile(r.path)
 	r.contents = append(r.contents, data)
 	return r.failAt[len(r.calls)]
@@ -53,7 +55,8 @@ func nginxBackendFixture(t *testing.T) (*NginxBackend, *domain.DesiredPublicRout
 	runner := &recordingArgvRunner{path: path, failAt: map[int]error{}}
 	backend, err := NewNginxBackend(NginxConfig{
 		IncludeDir: dir, FilePrefix: "bahia-", TestCommand: []string{"nginx", "-t"}, ReloadCommand: []string{"nginx", "-s", "reload"},
-		CertFile: certFile, KeyFile: keyFile, ConfigHash: "sha256:internal", Runner: runner.run,
+		CommandEnv: []string{"DOCKER_HOST=tcp://docker.example:2375", "TOKEN=secret"},
+		CertFile:   certFile, KeyFile: keyFile, ConfigHash: "sha256:internal", EnvRunner: runner.run,
 	})
 	if err != nil {
 		t.Fatalf("NewNginxBackend: %v", err)
@@ -68,6 +71,10 @@ func TestNginxApplyWritesOwnedDeterministicVhostThenTestsAndReloads(t *testing.T
 	}
 	if !reflect.DeepEqual(runner.calls, [][]string{{"nginx", "-t"}, {"nginx", "-s", "reload"}}) {
 		t.Fatalf("commands = %#v", runner.calls)
+	}
+	wantEnv := [][]string{{"DOCKER_HOST=tcp://docker.example:2375", "TOKEN=secret"}, {"DOCKER_HOST=tcp://docker.example:2375", "TOKEN=secret"}}
+	if !reflect.DeepEqual(runner.envs, wantEnv) {
+		t.Fatalf("command environments = %#v, want %#v", runner.envs, wantEnv)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -97,6 +104,9 @@ func TestNginxTestFailureRestoresBeforeAnyReload(t *testing.T) {
 	err := backend.Apply(context.Background(), plan)
 	if err == nil || !strings.Contains(err.Error(), "previous internal route restored") {
 		t.Fatalf("Apply error = %v", err)
+	}
+	if !strings.Contains(err.Error(), `argv ["nginx","-t"]`) {
+		t.Fatalf("Apply error = %v, want exact test argv", err)
 	}
 	got, _ := os.ReadFile(path)
 	if !reflect.DeepEqual(got, previous) {
@@ -165,6 +175,28 @@ func TestNginxAbsentInternalPlanRemovesOwnedVhostAndReloads(t *testing.T) {
 	}
 	if len(runner.calls) != 4 {
 		t.Fatalf("commands = %#v", runner.calls)
+	}
+}
+
+func TestNewNginxBackendRejectsInvalidCommandEnvironmentKey(t *testing.T) {
+	backend, _, _, _ := nginxBackendFixture(t)
+	cfg := backend.cfg
+	cfg.CommandEnv = []string{"DOCKER-HOST=tcp://docker.example:2375"}
+	_, err := NewNginxBackend(cfg)
+	if err == nil || !strings.Contains(err.Error(), "non-empty valid key") {
+		t.Fatalf("NewNginxBackend error = %v, want invalid environment key rejection", err)
+	}
+}
+
+func TestRunArgvFailureIncludesArgvAndTrimmedCombinedOutput(t *testing.T) {
+	err := runArgv(context.Background(), []string{"/bin/sh", "-c", `printf '  nginx failed  \n' >&2; exit 7`}, []string{"DOCKER_HOST=tcp://docker.example:2375"})
+	if err == nil {
+		t.Fatal("runArgv error = nil")
+	}
+	for _, want := range []string{`command argv ["/bin/sh","-c",`, `output="nginx failed"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("runArgv error = %q, want %q", err, want)
+		}
 	}
 }
 

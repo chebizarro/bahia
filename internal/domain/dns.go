@@ -82,11 +82,12 @@ type DNSEndpoint struct {
 
 // DNSZone defines a managed DNS zone and its backend binding.
 type DNSZone struct {
-	Name          string         `json:"name"`
-	Visibility    ZoneVisibility `json:"visibility"`
-	BackendRef    string         `json:"backend_ref"`
-	TTL           int            `json:"ttl"`
-	Authoritative bool           `json:"authoritative"`
+	Name                    string         `json:"name"`
+	Visibility              ZoneVisibility `json:"visibility"`
+	BackendRef              string         `json:"backend_ref"`
+	TTL                     int            `json:"ttl"`
+	Authoritative           bool           `json:"authoritative"`
+	AllowEmptyAuthoritative bool           `json:"allow_empty_authoritative"`
 }
 
 // DNSBackendState is a materialized DNS backend read model for Nostr projection.

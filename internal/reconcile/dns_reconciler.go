@@ -18,6 +18,7 @@ const (
 	dnsEventZoneSynced           events.EventType = "dns.zone_synced"
 	dnsEventRecordChanged        events.EventType = "dns.record_changed"
 	dnsEventDriftDetected        events.EventType = "dns.drift_detected"
+	dnsEventZoneSyncRefused      events.EventType = "dns.zone_sync_refused"
 	dnsEventEndpointRegistered   events.EventType = "dns.endpoint_registered"
 	dnsEventEndpointDeregistered events.EventType = "dns.endpoint_deregistered"
 	dnsReconcileDebounceWindow                    = 5 * time.Second
@@ -59,18 +60,19 @@ type DNSRecordOverrideSource interface {
 
 // DNSReconciler compares projected DNS records with backend snapshots and syncs drift.
 type DNSReconciler struct {
-	projector      *DNSProjector
-	zones          []domain.DNSZone
-	resolver       DNSBackendResolver
-	interval       time.Duration
-	logger         *zap.Logger
-	publisher      events.Publisher
-	zoneSource     DNSZoneSource
-	overrideSource DNSRecordOverrideSource
-	triggerCh      chan struct{}
-	debounce       time.Duration
-	runMu          sync.Mutex
-	authoritySyncs map[string]dnsAuthoritySyncState
+	projector         *DNSProjector
+	zones             []domain.DNSZone
+	resolver          DNSBackendResolver
+	interval          time.Duration
+	logger            *zap.Logger
+	publisher         events.Publisher
+	zoneSource        DNSZoneSource
+	overrideSource    DNSRecordOverrideSource
+	triggerCh         chan struct{}
+	debounce          time.Duration
+	runMu             sync.Mutex
+	authoritySyncs    map[string]dnsAuthoritySyncState
+	emptySyncRefusals map[string]domain.DNSZone
 }
 
 func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver DNSBackendResolver, interval time.Duration, logger *zap.Logger, publisher ...events.Publisher) *DNSReconciler {
@@ -84,7 +86,7 @@ func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver 
 	if len(publisher) > 0 {
 		pub = publisher[0]
 	}
-	return &DNSReconciler{projector: projector, zones: append([]domain.DNSZone(nil), zones...), resolver: resolver, interval: interval, logger: logger, publisher: pub, triggerCh: make(chan struct{}, dnsReconcileTriggerBuffer), debounce: dnsReconcileDebounceWindow, authoritySyncs: make(map[string]dnsAuthoritySyncState)}
+	return &DNSReconciler{projector: projector, zones: append([]domain.DNSZone(nil), zones...), resolver: resolver, interval: interval, logger: logger, publisher: pub, triggerCh: make(chan struct{}, dnsReconcileTriggerBuffer), debounce: dnsReconcileDebounceWindow, authoritySyncs: make(map[string]dnsAuthoritySyncState), emptySyncRefusals: make(map[string]domain.DNSZone)}
 }
 
 func (r *DNSReconciler) Name() string { return "dns-reconciler" }
@@ -213,6 +215,19 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 
 		diff := diffDNSRecords(actual, desired)
 		authorityOnlyDrift := diff.empty() && !authorityInSync
+		r.logger.Debug("DNS zone sync decision", zap.String("zone", zone.Name), zap.Int("desired_records", len(desired)), zap.Int("actual_records", len(actual)), zap.Bool("record_drift", !diff.empty()), zap.Bool("authority_in_sync", authorityInSync))
+		refuseEmptySync := zone.Authoritative && !zone.AllowEmptyAuthoritative && len(actual) > 0 && len(desired) == 0
+		if refuseEmptySync {
+			r.emitDriftDetected(ctx, zone, diff)
+			if warnedZone, warned := r.emptySyncRefusals[zoneKey]; !warned || warnedZone != zoneDefinition {
+				r.logger.Warn(fmt.Sprintf("refusing to sync authoritative zone %q to empty record set (currently %d records); projection may be transiently degraded — set allow_empty_authoritative to force", zone.Name, len(actual)), zap.Int("desired_records", len(desired)), zap.Int("actual_records", len(actual)))
+				r.emptySyncRefusals[zoneKey] = zoneDefinition
+			}
+			r.emitZoneSyncRefused(ctx, zone, len(actual), len(desired), diff)
+			unchanged++
+			continue
+		}
+		delete(r.emptySyncRefusals, zoneKey)
 		if authorityInSync {
 			delete(r.authoritySyncs, zoneKey)
 		}
@@ -454,6 +469,19 @@ func (r *DNSReconciler) emitDriftDetected(ctx context.Context, zone domain.DNSZo
 	r.publish(ctx, dnsEventDriftDetected, zone.Name, map[string]any{
 		"zone":          zone.Name,
 		"backend_ref":   zone.BackendRef,
+		"added_count":   len(diff.added),
+		"deleted_count": len(diff.deleted),
+		"updated_count": len(diff.updated),
+	})
+}
+
+func (r *DNSReconciler) emitZoneSyncRefused(ctx context.Context, zone domain.DNSZone, actualCount, desiredCount int, diff dnsRecordDiff) {
+	r.publish(ctx, dnsEventZoneSyncRefused, zone.Name, map[string]any{
+		"zone":          zone.Name,
+		"backend_ref":   zone.BackendRef,
+		"status":        "refused_empty_authoritative",
+		"actual_count":  actualCount,
+		"desired_count": desiredCount,
 		"added_count":   len(diff.added),
 		"deleted_count": len(diff.deleted),
 		"updated_count": len(diff.updated),

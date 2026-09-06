@@ -22,6 +22,7 @@ visibility: "internal"
 backend: "dnsmasq-main"
 ttl: 3600
 authoritative: true
+allow_empty_authoritative: false
 ```
 
 ### DNS Endpoint
@@ -76,6 +77,8 @@ bahia dns drift-remediate
 ```
 
 For dnsmasq and `dnsmasq_agent` zones, `authoritative: true` renders a managed `local=/<zone>/` guard so unanswered query types are not forwarded upstream. The default is `false`, preserving existing forwarding behavior.
+
+Authoritative zones also refuse a destructive transition from a non-empty listed record set to an empty projected record set. The reconciler leaves the existing backend include unchanged, emits drift plus a `dns.zone_sync_refused` status event, and warns once until projection recovers. Set `allow_empty_authoritative: true` only when an intentional authoritative-zone teardown must be allowed; non-authoritative zones continue to permit empty syncs.
 
 For external MCP embeddings with authorization configured, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools remain available as listed in the [MCP reference](../mcp-tools.md).
 

@@ -43,35 +43,37 @@ func TestPgDNSZoneRepositoryPersistsMeshVisibility(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 	repo := newPgDNSZoneRepositoryWithDB(mock)
-	zone := &domain.DNSZone{Name: "mesh.example", Visibility: domain.ZoneVisibilityMesh, BackendRef: "mesh-dns", TTL: 60, Authoritative: true}
+	zone := &domain.DNSZone{Name: "mesh.example", Visibility: domain.ZoneVisibilityMesh, BackendRef: "mesh-dns", TTL: 60, Authoritative: true, AllowEmptyAuthoritative: true}
 
-	mock.ExpectExec("INSERT INTO dns_zones").WithArgs(zone.Name, domain.ZoneVisibilityMesh, zone.BackendRef, zone.TTL, zone.Authoritative).WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+	mock.ExpectExec("INSERT INTO dns_zones").WithArgs(zone.Name, domain.ZoneVisibilityMesh, zone.BackendRef, zone.TTL, zone.Authoritative, zone.AllowEmptyAuthoritative).WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	require.NoError(t, repo.Create(ctx, zone))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgDNSZoneRepositoryReadsAuthoritative(t *testing.T) {
+func TestPgDNSZoneRepositoryReadsAuthoritativeAndAllowEmpty(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
 	repo := newPgDNSZoneRepositoryWithDB(mock)
-	columns := []string{"name", "visibility", "backend_ref", "ttl", "authoritative"}
+	columns := []string{"name", "visibility", "backend_ref", "ttl", "authoritative", "allow_empty_authoritative"}
 
-	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative FROM dns_zones WHERE name").WithArgs("prod.example").WillReturnRows(
-		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true),
+	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones WHERE name").WithArgs("prod.example").WillReturnRows(
+		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true),
 	)
 	zone, err := repo.Get(ctx, "prod.example")
 	require.NoError(t, err)
 	require.True(t, zone.Authoritative)
+	require.True(t, zone.AllowEmptyAuthoritative)
 
-	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative FROM dns_zones ORDER BY name").WillReturnRows(
-		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true),
+	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones ORDER BY name").WillReturnRows(
+		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true),
 	)
 	zones, err := repo.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, zones, 1)
 	require.True(t, zones[0].Authoritative)
+	require.True(t, zones[0].AllowEmptyAuthoritative)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -84,7 +86,7 @@ func TestPgDNSZoneAndOverrideRepositoriesPersistAndListActive(t *testing.T) {
 	overrides := newPgDNSRecordOverrideRepositoryWithDB(mock)
 	zone := &domain.DNSZone{Name: "prod.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "primary", TTL: 120}
 
-	mock.ExpectExec("INSERT INTO dns_zones").WithArgs(zone.Name, zone.Visibility, zone.BackendRef, zone.TTL, zone.Authoritative).WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+	mock.ExpectExec("INSERT INTO dns_zones").WithArgs(zone.Name, zone.Visibility, zone.BackendRef, zone.TTL, zone.Authoritative, zone.AllowEmptyAuthoritative).WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	require.NoError(t, zones.Create(ctx, zone))
 
 	expiresAt := time.Now().UTC().Add(time.Hour)

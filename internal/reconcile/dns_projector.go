@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,18 +59,31 @@ const (
 )
 
 // DNSProjector derives DNS endpoints and records from authoritative infrastructure state.
+type dnsServiceProjectionKey struct {
+	serviceID     uuid.UUID
+	environmentID uuid.UUID
+}
+
+type dnsServiceProjection struct {
+	service string
+	zone    string
+}
+
 type DNSProjector struct {
-	services         repository.ServiceRepository
-	environments     repository.EnvironmentRepository
-	states           repository.EnvironmentServiceStateRepository
-	observations     repository.RuntimeObservationRepository
-	llmSource        LLMDNSProjectionSource
-	mlSource         MLDNSProjectionSource
-	workers          WorkerDNSProjectionSource
-	policySource     DNSPolicySource
-	continuityStatus ContinuityStatusReader
-	cfg              config.DNSConfig
-	logger           *zap.Logger
+	services             repository.ServiceRepository
+	environments         repository.EnvironmentRepository
+	states               repository.EnvironmentServiceStateRepository
+	observations         repository.RuntimeObservationRepository
+	llmSource            LLMDNSProjectionSource
+	mlSource             MLDNSProjectionSource
+	workers              WorkerDNSProjectionSource
+	policySource         DNSPolicySource
+	continuityStatus     ContinuityStatusReader
+	cfg                  config.DNSConfig
+	logger               *zap.Logger
+	projectionMu         sync.Mutex
+	projectedServices    map[dnsServiceProjectionKey]dnsServiceProjection
+	warnedProjectionLoss map[dnsServiceProjectionKey]bool
 }
 
 func NewDNSProjector(services repository.ServiceRepository, environments repository.EnvironmentRepository, states repository.EnvironmentServiceStateRepository, observations repository.RuntimeObservationRepository, llmSource LLMDNSProjectionSource, mlSource MLDNSProjectionSource, workers WorkerDNSProjectionSource, cfg config.DNSConfig, logger *zap.Logger, policySources ...DNSPolicySource) *DNSProjector {
@@ -80,7 +94,7 @@ func NewDNSProjector(services repository.ServiceRepository, environments reposit
 	if len(policySources) > 0 {
 		policySource = policySources[0]
 	}
-	return &DNSProjector{services: services, environments: environments, states: states, observations: observations, llmSource: llmSource, mlSource: mlSource, workers: workers, policySource: policySource, cfg: cfg, logger: logger}
+	return &DNSProjector{services: services, environments: environments, states: states, observations: observations, llmSource: llmSource, mlSource: mlSource, workers: workers, policySource: policySource, cfg: cfg, logger: logger, projectedServices: make(map[dnsServiceProjectionKey]dnsServiceProjection), warnedProjectionLoss: make(map[dnsServiceProjectionKey]bool)}
 }
 
 func (p *DNSProjector) SetContinuityStatusReader(reader ContinuityStatusReader) {
@@ -273,33 +287,51 @@ func (p *DNSProjector) environmentsByID(ctx context.Context) (map[uuid.UUID]doma
 }
 
 func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID map[uuid.UUID]domain.Service, envsByID map[uuid.UUID]domain.Environment, projectedAt time.Time) ([]domain.DNSEndpoint, error) {
+	p.projectionMu.Lock()
+	defer p.projectionMu.Unlock()
+
 	states, err := p.states.ListAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list service states for DNS projection: %w", err)
 	}
 	endpoints := make([]domain.DNSEndpoint, 0, len(states))
+	currentProjections := make(map[dnsServiceProjectionKey]dnsServiceProjection, len(p.projectedServices))
+	for key, projection := range p.projectedServices {
+		currentProjections[key] = projection
+	}
+	seenProjectionKeys := make(map[dnsServiceProjectionKey]struct{}, len(states))
 	var workersByPubKey map[string]domain.Worker
 	for _, state := range states {
-		if state.DriftStatus != domain.DriftStatusInSync {
-			continue
-		}
+		projectionKey := dnsServiceProjectionKey{serviceID: state.ServiceID, environmentID: state.EnvironmentID}
+		seenProjectionKeys[projectionKey] = struct{}{}
 		service, ok := servicesByID[state.ServiceID]
 		if !ok {
+			p.warnServiceProjectionLoss(projectionKey, "service_missing")
 			continue
 		}
 		environment, ok := envsByID[state.EnvironmentID]
 		if !ok {
+			p.warnServiceProjectionLoss(projectionKey, "environment_missing")
 			continue
 		}
 		zone, ok := p.zoneForEnvironment(environment.Name)
 		if !ok {
-			p.logger.Warn("DNS service projection skipped because environment has no zone mapping", zap.String("environment", environment.Name), zap.String("service", service.Name))
+			_, wasProjected := p.projectedServices[projectionKey]
+			p.warnServiceProjectionLoss(projectionKey, "zone_mapping_missing")
+			if !wasProjected {
+				p.logger.Warn("DNS service projection skipped because environment has no zone mapping", zap.String("environment", environment.Name), zap.String("service", service.Name))
+			}
+			continue
+		}
+		if state.DriftStatus != domain.DriftStatusInSync {
+			p.warnServiceProjectionLoss(projectionKey, "drift_status", zap.String("drift_status", string(state.DriftStatus)))
 			continue
 		}
 		status, hasContinuityStatus := p.serviceContinuityStatus(service)
 		if hasContinuityStatus {
 			switch status.ActiveProfile {
 			case domain.ContinuityModeOffline:
+				p.warnServiceProjectionLoss(projectionKey, "continuity mode "+string(status.ActiveProfile), zap.String("continuity_mode", string(status.ActiveProfile)))
 				continue
 			case domain.ContinuityModeDegraded, domain.ContinuityModeEmergency:
 				if workersByPubKey == nil {
@@ -311,6 +343,10 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 				endpoint, ok := p.continuityServiceEndpoint(service, environment, state, zone, *status, workersByPubKey, projectedAt)
 				if ok {
 					endpoints = append(endpoints, endpoint)
+					currentProjections[projectionKey] = dnsServiceProjection{service: service.Name, zone: zone}
+					delete(p.warnedProjectionLoss, projectionKey)
+				} else {
+					p.warnServiceProjectionLoss(projectionKey, "continuity mode "+string(status.ActiveProfile), zap.String("continuity_mode", string(status.ActiveProfile)))
 				}
 				continue
 			}
@@ -319,7 +355,16 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 		if err != nil {
 			return nil, fmt.Errorf("get latest runtime observation for DNS projection: %w", err)
 		}
-		if observation == nil || observation.HealthStatus != domain.HealthStatusHealthy || strings.TrimSpace(observation.ObservedHost) == "" {
+		if observation == nil {
+			p.warnServiceProjectionLoss(projectionKey, "observation_missing")
+			continue
+		}
+		if observation.HealthStatus != domain.HealthStatusHealthy {
+			p.warnServiceProjectionLoss(projectionKey, "observation_health", zap.String("observation_health", string(observation.HealthStatus)))
+			continue
+		}
+		if strings.TrimSpace(observation.ObservedHost) == "" {
+			p.warnServiceProjectionLoss(projectionKey, "observed_host_empty")
 			continue
 		}
 		address := strings.TrimSpace(observation.ObservedHost)
@@ -341,8 +386,26 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 			Source:         "service_state",
 			MaterializedAt: projectedAt,
 		})
+		currentProjections[projectionKey] = dnsServiceProjection{service: service.Name, zone: zone}
+		delete(p.warnedProjectionLoss, projectionKey)
 	}
+	for key := range p.projectedServices {
+		if _, seen := seenProjectionKeys[key]; !seen {
+			p.warnServiceProjectionLoss(key, "service_state_missing")
+		}
+	}
+	p.projectedServices = currentProjections
 	return endpoints, nil
+}
+
+func (p *DNSProjector) warnServiceProjectionLoss(key dnsServiceProjectionKey, reason string, fields ...zap.Field) {
+	previous, wasProjected := p.projectedServices[key]
+	if !wasProjected || p.warnedProjectionLoss[key] {
+		return
+	}
+	fields = append([]zap.Field{zap.String("service", previous.service), zap.String("zone", previous.zone), zap.String("reason", reason)}, fields...)
+	p.logger.Warn("DNS service projection became ineligible", fields...)
+	p.warnedProjectionLoss[key] = true
 }
 
 func (p *DNSProjector) serviceContinuityStatus(service domain.Service) (*ContinuityStatus, bool) {

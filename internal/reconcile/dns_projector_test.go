@@ -431,6 +431,105 @@ func TestDNSProjectorHardwareAliasesRequireWorkerProjection(t *testing.T) {
 	}
 }
 
+func TestDNSProjectorWarnsOnceWhenProjectedServiceBecomesIneligibleAndClearsOnRecovery(t *testing.T) {
+	tests := []struct {
+		name        string
+		reason      string
+		makeLost    func(*fakeStateRepo, *fakeObservationRepo, string)
+		makeHealthy func(*fakeStateRepo, *fakeObservationRepo, string)
+	}{
+		{
+			name: "drift status", reason: "drift_status",
+			makeLost: func(states *fakeStateRepo, _ *fakeObservationRepo, _ string) {
+				states.states[0].DriftStatus = domain.DriftStatusDrifted
+			},
+			makeHealthy: func(states *fakeStateRepo, _ *fakeObservationRepo, _ string) {
+				states.states[0].DriftStatus = domain.DriftStatusInSync
+			},
+		},
+		{
+			name: "observation missing", reason: "observation_missing",
+			makeLost: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				delete(observations.latest, key)
+			},
+			makeHealthy: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				observations.latest[key] = &domain.RuntimeObservation{ObservedHost: "10.0.0.10", HealthStatus: domain.HealthStatusHealthy}
+			},
+		},
+		{
+			name: "observation health", reason: "observation_health",
+			makeLost: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				observations.latest[key].HealthStatus = domain.HealthStatusUnhealthy
+			},
+			makeHealthy: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				observations.latest[key].HealthStatus = domain.HealthStatusHealthy
+			},
+		},
+		{
+			name: "empty observed host", reason: "observed_host_empty",
+			makeLost: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				observations.latest[key].ObservedHost = " "
+			},
+			makeHealthy: func(_ *fakeStateRepo, observations *fakeObservationRepo, key string) {
+				observations.latest[key].ObservedHost = "10.0.0.10"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			envID := uuid.New()
+			serviceID := uuid.New()
+			stateRepo := &fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}}
+			observationKey := dnsTestStateKey(serviceID, envID)
+			observationRepo := &fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{
+				observationKey: {ServiceID: serviceID, EnvironmentID: envID, ObservedHost: "10.0.0.10", HealthStatus: domain.HealthStatusHealthy},
+			}}
+			core, logs := observer.New(zap.WarnLevel)
+			projector := NewDNSProjector(
+				&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+				&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+				stateRepo,
+				observationRepo,
+				nil, nil, nil,
+				config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"prod": "prod.example"}}},
+				zap.New(core),
+			)
+
+			if _, err := projector.ListDNSEndpoints(ctx); err != nil {
+				t.Fatalf("initial projection returned error: %v", err)
+			}
+			tt.makeLost(stateRepo, observationRepo, observationKey)
+			for pass := 1; pass <= 2; pass++ {
+				if endpoints, err := projector.ListDNSEndpoints(ctx); err != nil || len(endpoints) != 0 {
+					t.Fatalf("loss projection pass %d = %#v, err %v; want no endpoints", pass, endpoints, err)
+				}
+			}
+			entries := logs.FilterMessage("DNS service projection became ineligible").All()
+			if len(entries) != 1 {
+				t.Fatalf("projection-loss warnings = %#v, want exactly one", logs.All())
+			}
+			fields := entries[0].ContextMap()
+			if fields["service"] != "api" || fields["zone"] != "prod.example" || fields["reason"] != tt.reason {
+				t.Fatalf("projection-loss warning fields = %#v", fields)
+			}
+
+			tt.makeHealthy(stateRepo, observationRepo, observationKey)
+			if endpoints, err := projector.ListDNSEndpoints(ctx); err != nil || len(endpoints) != 1 {
+				t.Fatalf("recovery projection = %#v, err %v; want one endpoint", endpoints, err)
+			}
+			tt.makeLost(stateRepo, observationRepo, observationKey)
+			if _, err := projector.ListDNSEndpoints(ctx); err != nil {
+				t.Fatalf("second loss transition returned error: %v", err)
+			}
+			if entries := logs.FilterMessage("DNS service projection became ineligible").All(); len(entries) != 2 {
+				t.Fatalf("warnings after recovery and second loss = %#v, want 2", logs.All())
+			}
+		})
+	}
+}
+
 func TestDNSProjectorDuplicateCoordinateDetection(t *testing.T) {
 	projector := NewDNSProjector(
 		&fakeServiceRepo{},
@@ -449,6 +548,66 @@ func TestDNSProjectorDuplicateCoordinateDetection(t *testing.T) {
 	_, err := projector.ListDNSEndpoints(context.Background())
 	if err == nil {
 		t.Fatal("expected duplicate coordinate error")
+	}
+}
+
+func TestDNSProjectorContinuityLossWarnsOnceAndRecoveryAllowsLaterHealthWarning(t *testing.T) {
+	ctx := context.Background()
+	envID := uuid.New()
+	serviceID := uuid.New()
+	stateRepo := &fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}}
+	observationKey := dnsTestStateKey(serviceID, envID)
+	observationRepo := &fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{
+		observationKey: {ServiceID: serviceID, EnvironmentID: envID, ObservedHost: "10.0.0.10", HealthStatus: domain.HealthStatusHealthy},
+	}}
+	continuity := fakeContinuityStatusReader{}
+	core, logs := observer.New(zap.WarnLevel)
+	projector := NewDNSProjector(
+		&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+		stateRepo,
+		observationRepo,
+		nil, nil, nil,
+		config.DNSConfig{DefaultTTL: 300, Zones: []config.DNSZoneConfig{{Name: "prod.example", TTL: 120}}, Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"prod": "prod.example"}}},
+		zap.New(core),
+	)
+	projector.SetContinuityStatusReader(continuity)
+
+	assertZoneRecordCount := func(want int) {
+		t.Helper()
+		records, err := projector.ProjectZoneRecords(ctx)
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		if got := len(records["prod.example"]); got != want {
+			t.Fatalf("projected record count = %d, want %d: %#v", got, want, records)
+		}
+	}
+
+	assertZoneRecordCount(1)
+	continuity["api"] = ContinuityStatus{ServiceKey: "api", ActiveProfile: domain.ContinuityModeOffline, OperationState: "steady"}
+	assertZoneRecordCount(0)
+	assertZoneRecordCount(0)
+	entries := logs.FilterMessage("DNS service projection became ineligible").All()
+	if len(entries) != 1 {
+		t.Fatalf("continuity-loss warnings = %#v, want exactly one", logs.All())
+	}
+	fields := entries[0].ContextMap()
+	if fields["service"] != "api" || fields["zone"] != "prod.example" || fields["reason"] != "continuity mode offline" || fields["continuity_mode"] != "offline" {
+		t.Fatalf("continuity-loss warning fields = %#v", fields)
+	}
+
+	delete(continuity, "api")
+	assertZoneRecordCount(1)
+	observationRepo.latest[observationKey].HealthStatus = domain.HealthStatusUnhealthy
+	assertZoneRecordCount(0)
+	entries = logs.FilterMessage("DNS service projection became ineligible").All()
+	if len(entries) != 2 {
+		t.Fatalf("warnings after recovery and health loss = %#v, want 2", logs.All())
+	}
+	fields = entries[1].ContextMap()
+	if fields["reason"] != "observation_health" || fields["observation_health"] != string(domain.HealthStatusUnhealthy) {
+		t.Fatalf("health-loss warning fields = %#v", fields)
 	}
 }
 
