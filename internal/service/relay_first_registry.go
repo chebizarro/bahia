@@ -97,6 +97,16 @@ func (r *RelayFirstRegistry) UpdateService(ctx context.Context, svc *domain.Serv
 	return r.delegate.UpdateService(ctx, svc)
 }
 
+// ImportObservedArtifact delegates the operator live-import path. It records
+// governed build/artifact lineage for an already-running image and makes no
+// desired-state change, so there is no relay-first projection to coordinate.
+func (r *RelayFirstRegistry) ImportObservedArtifact(ctx context.Context, in ImportObservedArtifactInput) (*ImportObservedArtifactResult, error) {
+	if r.delegate == nil {
+		return nil, fmt.Errorf("registry delegate is not configured")
+	}
+	return r.delegate.ImportObservedArtifact(ctx, in)
+}
+
 // UpdateServiceWithExpectedRevision checks the persisted revision under lock
 // before publishing and committing the signed service update.
 func (r *RelayFirstRegistry) UpdateServiceWithExpectedRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time) error {

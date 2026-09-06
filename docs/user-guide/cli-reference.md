@@ -292,6 +292,45 @@ bahia orgs members add org-123 npub1member... --role deployer
 bahia orgs members remove org-123 npub1member...
 ```
 
+### Importing an already-running image
+
+Bahia governs images that CI attested. When an image is already running but has
+no Bahia artifact — for example a locally built image deployed before its
+release workflow existed — an authorized operator can import it as governed
+lineage. **Never edit the database to bridge missing artifact or build state.**
+
+```bash
+# Import the image Bahia currently observes running for a service
+bahia artifacts import-observed \
+  --service <service-id> \
+  --environment <environment-id> \
+  --deployment-unit <deployment-unit-id> \
+  --image-repo astillero \
+  --image-tag 2729a7c \
+  --image-digest sha256:<observed-manifest-digest>
+```
+
+The digest must match what Bahia itself observes running: the control plane, not
+the operator, is the authority for what exists. The command also verifies the
+observed container's `bahia.service_id`, `bahia.environment_id`, and
+`bahia.deployment_unit_id` labels when present, and refuses if a registry that
+knows the repository reports a different digest.
+
+Importing provenance never deploys or promotes it. Desired state is unchanged;
+align it afterwards with a reviewed deployment:
+
+```bash
+bahia deployments preview --service <service-id> --environment <environment-id> --artifact <artifact-id>
+bahia deployments deploy  --service <service-id> --environment <environment-id> --artifact <artifact-id> \
+  --expected-desired-state-hash <hash-from-preview>
+```
+
+The path is governed by `hiveci.allow_live_artifact_import` (default `false`).
+When it is disabled the command fails before writing anything and names both the
+config key and the Hive CI alternative. Prefer the Hive CI path whenever the
+image came from CI: a signed kind 5402 carrying `BAHIA_ARTIFACT` registers a
+digest-pinned artifact automatically.
+
 ### Package repositories and artifacts
 
 ```bash

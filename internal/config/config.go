@@ -845,16 +845,21 @@ type HiveCIInitiatorConfig struct {
 
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                         bool                  `koanf:"enabled"`
-	TrustedCIPubkeys                []string              `koanf:"trusted_ci_pubkeys"`
-	TrustedLoomWorkerPubkeys        []string              `koanf:"trusted_loom_worker_pubkeys"`
-	TrustedReleaseAttestors         []string              `koanf:"trusted_release_attestors"`
-	AutoRegisterBuilds              bool                  `koanf:"auto_register_builds"`
-	AllowManualArtifactRegistration bool                  `koanf:"allow_manual_artifact_registration"`
-	RetryInterval                   time.Duration         `koanf:"retry_interval"`
-	MaxRetries                      int                   `koanf:"max_retries"`
-	Policies                        []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
-	Initiator                       HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
+	Enabled                         bool     `koanf:"enabled"`
+	TrustedCIPubkeys                []string `koanf:"trusted_ci_pubkeys"`
+	TrustedLoomWorkerPubkeys        []string `koanf:"trusted_loom_worker_pubkeys"`
+	TrustedReleaseAttestors         []string `koanf:"trusted_release_attestors"`
+	AutoRegisterBuilds              bool     `koanf:"auto_register_builds"`
+	AllowManualArtifactRegistration bool     `koanf:"allow_manual_artifact_registration"`
+	// AllowLiveArtifactImport permits authorized operators to import an
+	// already-running, observation-verified image as governed build/artifact
+	// lineage. It exists so bridging live reality never requires direct
+	// database mutation; CI-attested registration remains the norm.
+	AllowLiveArtifactImport bool                  `koanf:"allow_live_artifact_import"`
+	RetryInterval           time.Duration         `koanf:"retry_interval"`
+	MaxRetries              int                   `koanf:"max_retries"`
+	Policies                []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
+	Initiator               HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -1115,6 +1120,7 @@ func Defaults() *Config {
 			Enabled:                         false,
 			AutoRegisterBuilds:              true,
 			AllowManualArtifactRegistration: false,
+			AllowLiveArtifactImport:         false,
 			RetryInterval:                   30 * time.Second,
 			MaxRetries:                      10,
 		},

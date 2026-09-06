@@ -24,6 +24,7 @@ type cliOperatorClient interface {
 	CreateServiceNostr(context.Context, client.CreateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	UpdateServiceNostr(context.Context, client.UpdateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
+	ImportObservedArtifactNostr(context.Context, client.ImportObservedArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error)
 	DNSZoneCreate(context.Context, client.DNSZoneCreateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSPolicyApply(context.Context, client.DNSPolicyApplyRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
@@ -126,6 +127,15 @@ func runServiceUpdateNostr(cmd *cobra.Command, req client.UpdateServiceNostrRequ
 	}
 	defer op.Close()
 	return op.UpdateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service update"))
+}
+
+func runArtifactImportObservedNostr(cmd *cobra.Command, req client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.ImportObservedArtifactNostr(cmd.Context(), req, operatorStatusCallback(cmd, "artifact import-observed"))
 }
 
 func runArtifactRegisterNostr(cmd *cobra.Command, req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {

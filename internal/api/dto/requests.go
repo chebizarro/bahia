@@ -148,6 +148,22 @@ type RegisterArtifactRequest struct {
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
+// ImportObservedArtifactRequest asks Bahia to record an already-running,
+// observation-verified image as governed build/artifact lineage. There is no
+// build_id: the lineage is created for the operator, which is the whole point
+// of the path. It never changes desired state.
+type ImportObservedArtifactRequest struct {
+	ServiceID        uuid.UUID  `json:"service_id"`
+	EnvironmentID    uuid.UUID  `json:"environment_id"`
+	DeploymentUnitID *uuid.UUID `json:"deployment_unit_id,omitempty"`
+	ImageRepo        string     `json:"image_repo"`
+	ImageTag         string     `json:"image_tag"`
+	ImageDigest      string     `json:"image_digest"`
+	GitSHA           string     `json:"git_sha,omitempty"`
+	GitRef           string     `json:"git_ref,omitempty"`
+	IdempotencyKey   string     `json:"idempotency_key,omitempty"`
+}
+
 // ServiceDeployRequest is the signer-first request to create and, when
 // policy permits, execute a deployment intent. RequestedBy is intentionally
 // absent: handlers derive it from the verified request event.

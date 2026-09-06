@@ -747,23 +747,24 @@ func writeTempFile(t *testing.T, content string) string {
 }
 
 type fakeCLIOperatorClient struct {
-	closeClient           func()
-	restartErr            error
-	policyCreate          func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-	serviceCreate         func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
-	serviceUpdate         func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
-	artifactRegister      func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
-	dnsZoneCreate         func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
-	dnsPolicyApply        func(client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error)
-	dnsRecordSet          func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error)
-	dnsDriftRemediate     func(client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error)
-	environmentCreate     func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
-	environmentGetDetails func(string) (*client.EnvironmentDetails, error)
-	environmentUpdate     func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
-	deploymentIntent      func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
-	deploymentPreview     func(client.DeploymentPreviewNostrRequest) (map[string]any, error)
-	routeAttach           func(client.RouteAttachRequest) (*client.DeploymentCommandResult, error)
-	deploymentApproval    func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
+	artifactImportObserved func(client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error)
+	closeClient            func()
+	restartErr             error
+	policyCreate           func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
+	serviceCreate          func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
+	serviceUpdate          func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
+	artifactRegister       func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
+	dnsZoneCreate          func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
+	dnsPolicyApply         func(client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error)
+	dnsRecordSet           func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error)
+	dnsDriftRemediate      func(client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error)
+	environmentCreate      func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	environmentGetDetails  func(string) (*client.EnvironmentDetails, error)
+	environmentUpdate      func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
+	deploymentIntent       func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
+	deploymentPreview      func(client.DeploymentPreviewNostrRequest) (map[string]any, error)
+	routeAttach            func(client.RouteAttachRequest) (*client.DeploymentCommandResult, error)
+	deploymentApproval     func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
 }
 
 func (f fakeCLIOperatorClient) Close() {
@@ -783,6 +784,13 @@ func (f fakeCLIOperatorClient) UpdateServiceNostr(_ context.Context, req client.
 	}
 	return nil, errors.New("not implemented")
 }
+func (f fakeCLIOperatorClient) ImportObservedArtifactNostr(_ context.Context, req client.ImportObservedArtifactNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error) {
+	if f.artifactImportObserved != nil {
+		return f.artifactImportObserved(req)
+	}
+	return &client.ImportObservedArtifactResult{Status: "imported"}, nil
+}
+
 func (f fakeCLIOperatorClient) RegisterArtifactNostr(_ context.Context, req client.RegisterArtifactNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error) {
 	if f.artifactRegister != nil {
 		return f.artifactRegister(req)

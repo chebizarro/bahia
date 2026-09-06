@@ -16,6 +16,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -198,6 +199,16 @@ type fakeEncryptedRegistryMutations struct {
 	artifacts       []*domain.Artifact
 	environments    map[uuid.UUID]*domain.Environment
 	deploymentUnits map[uuid.UUID][]*domain.DeploymentUnit
+	importObserved  func(service.ImportObservedArtifactInput) (*service.ImportObservedArtifactResult, error)
+	importCalls     []service.ImportObservedArtifactInput
+}
+
+func (r *fakeEncryptedRegistryMutations) ImportObservedArtifact(_ context.Context, in service.ImportObservedArtifactInput) (*service.ImportObservedArtifactResult, error) {
+	r.importCalls = append(r.importCalls, in)
+	if r.importObserved != nil {
+		return r.importObserved(in)
+	}
+	return &service.ImportObservedArtifactResult{Status: "imported", Artifact: &domain.Artifact{ID: uuid.New()}}, nil
 }
 
 func (r *fakeEncryptedRegistryMutations) RegisterArtifact(_ context.Context, artifact *domain.Artifact) error {
@@ -1148,5 +1159,91 @@ func TestEncryptedRouteHandlers_VerifyArtifactSignaturesStoresCounts(t *testing.
 	}
 	if len(sigRepo.records) != 2 || !sigRepo.records[0].Verified {
 		t.Fatalf("signatures not stored/normalized: %#v", sigRepo.records)
+	}
+}
+
+func TestEncryptedRouteHandlers_ImportObservedArtifactAuthorizesAndForwards(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	serviceRecord := &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "astillero",
+		ArtifactRepo: "astillero", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker,
+	}
+	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: serviceRecord}}
+	artifactID := uuid.New()
+	registry := &fakeEncryptedRegistryMutations{
+		createdServices: []*domain.Service{serviceRecord},
+		environments: map[uuid.UUID]*domain.Environment{
+			environmentID: {ID: environmentID, OrgID: orgID, Name: "edge-01-production"},
+		},
+		importObserved: func(in service.ImportObservedArtifactInput) (*service.ImportObservedArtifactResult, error) {
+			return &service.ImportObservedArtifactResult{
+				Status:           "imported",
+				Artifact:         &domain.Artifact{ID: artifactID, ServiceID: in.ServiceID, ImageDigest: in.ImageDigest},
+				ObservedDigest:   in.ImageDigest,
+				DesiredStateNote: "desired state unchanged",
+			}, nil
+		},
+	}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
+		Registry: registry, Services: services,
+		RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop(),
+	})
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	params := json.RawMessage(`{"service_id":"` + serviceID.String() + `","environment_id":"` + environmentID.String() +
+		`","image_repo":"astillero","image_tag":"2729a7c","image_digest":"` + digest + `"}`)
+
+	result, err := h.ImportObservedArtifact(context.Background(), ContextVMRequest{
+		Event: encryptedRequesterEvent(t),
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err != nil {
+		t.Fatalf("ImportObservedArtifact() error = %v", err)
+	}
+	response, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("result type = %T", result)
+	}
+	if response["status"] != "imported" || response["artifact_id"] != artifactID.String() {
+		t.Fatalf("import response = %#v", response)
+	}
+	// The operator identity must reach the service layer as durable evidence.
+	if len(registry.importCalls) != 1 || registry.importCalls[0].RequestedBy == "" {
+		t.Fatalf("import calls = %#v", registry.importCalls)
+	}
+	if registry.importCalls[0].ImageDigest != digest {
+		t.Fatalf("forwarded digest = %q, want %q", registry.importCalls[0].ImageDigest, digest)
+	}
+
+	// An operator outside the service organization must be refused before any
+	// service-layer call happens.
+	before := len(registry.importCalls)
+	_, err = h.ImportObservedArtifact(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{PubKey: nostr.Generate().Public()},
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("unauthorized error = %v, want access denied", err)
+	}
+	if len(registry.importCalls) != before {
+		t.Fatal("unauthorized request reached the service layer")
+	}
+
+	// An environment owned by another organization must also be refused, even
+	// for an operator authorized on the service.
+	foreignEnv := uuid.New()
+	registry.environments[foreignEnv] = &domain.Environment{ID: foreignEnv, OrgID: uuid.New(), Name: "other-org"}
+	_, err = h.ImportObservedArtifact(context.Background(), ContextVMRequest{
+		Event: encryptedRequesterEvent(t),
+		RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"service_id":"` + serviceID.String() +
+			`","environment_id":"` + foreignEnv.String() + `","image_repo":"astillero","image_tag":"t","image_digest":"` + digest + `"}`)},
+	})
+	if err == nil {
+		t.Fatal("expected refusal for an environment in another organization")
+	}
+	if len(registry.importCalls) != before {
+		t.Fatal("cross-org environment reached the service layer")
 	}
 }

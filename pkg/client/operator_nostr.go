@@ -514,6 +514,35 @@ type RegisterArtifactNostrRequest struct {
 	IdempotencyKey    string         `json:"idempotency_key,omitempty"`
 }
 
+// ImportObservedArtifactNostrRequest imports an already-running,
+// observation-verified image as governed lineage. There is no build id: Bahia
+// creates the lineage, which is the reason this path exists.
+type ImportObservedArtifactNostrRequest struct {
+	ServiceID        string `json:"service_id"`
+	EnvironmentID    string `json:"environment_id"`
+	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+	ImageRepo        string `json:"image_repo"`
+	ImageTag         string `json:"image_tag"`
+	ImageDigest      string `json:"image_digest"`
+	GitSHA           string `json:"git_sha,omitempty"`
+	GitRef           string `json:"git_ref,omitempty"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+}
+
+// ImportObservedArtifactResult reports imported lineage. DesiredState restates
+// that importing provenance never promotes it.
+type ImportObservedArtifactResult struct {
+	Status           string           `json:"status,omitempty"`
+	Artifact         *domain.Artifact `json:"artifact,omitempty"`
+	ArtifactID       string           `json:"artifact_id,omitempty"`
+	BuildID          string           `json:"build_id,omitempty"`
+	ObservedDigest   string           `json:"observed_digest,omitempty"`
+	ObservationID    string           `json:"observation_id,omitempty"`
+	RegistryVerified bool             `json:"registry_verified,omitempty"`
+	VerifiedLabels   []string         `json:"verified_labels,omitempty"`
+	DesiredState     string           `json:"desired_state,omitempty"`
+}
+
 // ArtifactCommandResult is the terminal acknowledgment for signer-first artifact registration.
 type ArtifactCommandResult struct {
 	Status     string           `json:"status,omitempty"`
@@ -807,6 +836,53 @@ func (c *OperatorControlPlaneClient) RegisterArtifactNostr(ctx context.Context, 
 	}
 	if result.Status == "" {
 		result.Status = "registered"
+	}
+	if result.ArtifactID == "" && result.Artifact != nil {
+		result.ArtifactID = result.Artifact.ID.String()
+	}
+	return &result, nil
+}
+
+// ImportObservedArtifactNostr publishes a signed artifact/import-observed
+// request. The digest is proven by Bahia's own runtime observation, so the
+// operator cannot assert an image the control plane has not seen running.
+func (c *OperatorControlPlaneClient) ImportObservedArtifactNostr(ctx context.Context, req ImportObservedArtifactNostrRequest, onStatus func(OperatorStatusEvent)) (*ImportObservedArtifactResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
+	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
+	req.ImageRepo = strings.TrimSpace(req.ImageRepo)
+	req.ImageTag = strings.TrimSpace(req.ImageTag)
+	req.ImageDigest = strings.TrimSpace(req.ImageDigest)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"service_id", req.ServiceID},
+		{"environment_id", req.EnvironmentID},
+		{"image_repo", req.ImageRepo},
+		{"image_tag", req.ImageTag},
+		{"image_digest", req.ImageDigest},
+	} {
+		if field.value == "" {
+			return nil, &ControlPlaneRequestError{Phase: "validate artifact import request", RequestAccepted: false, Cause: fmt.Errorf("%s is required", field.name)}
+		}
+	}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"digest", req.ImageDigest}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodArtifactImportObserved,
+		Tags:    tags,
+		Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result ImportObservedArtifactResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode artifact import result: %w", err)
 	}
 	if result.ArtifactID == "" && result.Artifact != nil {
 		result.ArtifactID = result.Artifact.ID.String()
