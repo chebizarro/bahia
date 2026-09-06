@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/driftdecision"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	runtimeService "github.com/openagentsinc/bahia/internal/service"
@@ -248,14 +249,20 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	}
 
 	// Determine drift status.
+	previousDrift := currentState.DriftStatus
 	newDrift := domain.DriftStatusUnknown
+	desiredHash := currentState.DesiredHash
+	observedHash := obs.NormalizedHash
+	if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
+		observedHash = obs.NormalizedState.ObservationHash
+	}
+	desiredDigest := ""
+	observedDigest := domain.NormalizeImageDigest(obs.ObservedImageDigest)
+	decisionBranch := "early-out"
 	if currentState.DesiredHash != "" || currentState.DesiredRuntimeState != nil {
-		observedHash := obs.NormalizedHash
-		if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
-			observedHash = obs.NormalizedState.ObservationHash
-		}
 		acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
 		if currentState.DesiredHash != "" && observedHash != "" {
+			decisionBranch = "hash-compare"
 			hashesMatch := currentState.DesiredHash == observedHash
 			if currentState.DesiredRuntimeState != nil {
 				hashesMatch = hashesMatch || currentState.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)
@@ -270,37 +277,25 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 				})
 			}
 		} else if observedHash == "" && currentState.DesiredArtifactID != nil {
-			desired, err := r.artifacts.GetByID(ctx, *currentState.DesiredArtifactID)
-			if err == nil && desired != nil && desired.ImageDigest != "" && obs.ObservedImageDigest != "" {
-				if obs.ObservedImageDigest == desired.ImageDigest && acceptableHealth {
-					newDrift = domain.DriftStatusInSync
-				} else {
-					newDrift = r.driftStatusForMode(mode)
-					r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
-						"desired_digest":  desired.ImageDigest,
-						"observed_digest": obs.ObservedImageDigest,
-					})
-				}
+			decisionBranch = "digest-fallback"
+			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
+			newDrift = r.digestFallbackStatus(desiredDigest, observedDigest, obs.HealthStatus, mode)
+			if newDrift == domain.DriftStatusDrifted || newDrift == domain.DriftStatusRemediationNeeded {
+				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+					"desired_digest":  desiredDigest,
+					"observed_digest": observedDigest,
+				})
 			}
 		}
 	} else if currentState.DesiredArtifactID != nil {
-		desired, err := r.artifacts.GetByID(ctx, *currentState.DesiredArtifactID)
-		if err == nil && desired != nil {
-			acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
-			if obs.ObservedImageDigest == desired.ImageDigest && acceptableHealth {
-				newDrift = domain.DriftStatusInSync
-			} else {
-				newDrift = r.driftStatusForMode(mode)
-				r.logger.Warn("drift detected",
-					zap.String("service", svc.Name),
-					zap.String("desired_digest", desired.ImageDigest),
-					zap.String("observed_digest", obs.ObservedImageDigest),
-				)
-				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
-					"desired_digest":  desired.ImageDigest,
-					"observed_digest": obs.ObservedImageDigest,
-				})
-			}
+		decisionBranch = "digest-fallback"
+		desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
+		newDrift = r.digestFallbackStatus(desiredDigest, observedDigest, obs.HealthStatus, mode)
+		if newDrift == domain.DriftStatusDrifted || newDrift == domain.DriftStatusRemediationNeeded {
+			r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+				"desired_digest":  desiredDigest,
+				"observed_digest": observedDigest,
+			})
 		}
 	}
 
@@ -317,6 +312,19 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 
 	if err := r.state.Upsert(ctx, currentState); err != nil {
 		return err
+	}
+	if newDrift != domain.DriftStatusInSync && newDrift != previousDrift {
+		if desiredDigest == "" && currentState.DesiredArtifactID != nil {
+			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
+		}
+		driftdecision.Log(r.logger, driftdecision.LogInput{
+			Service: svc.Name, Environment: env.Name,
+			ServiceID: currentState.ServiceID, EnvironmentID: currentState.EnvironmentID,
+			Status: currentState.DriftStatus, PreviousStatus: previousDrift, Branch: decisionBranch,
+			DesiredHash: desiredHash, ObservedHash: observedHash,
+			DesiredDigest: desiredDigest, ObservedDigest: observedDigest,
+			Health: obs.HealthStatus, ObservationID: obs.ID, Source: obs.Source,
+		})
 	}
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
@@ -422,6 +430,14 @@ func (r *Reconciler) driftStatusForMode(mode domain.ReconcileMode) domain.DriftS
 		return domain.DriftStatusRemediationNeeded
 	}
 	return domain.DriftStatusDrifted
+}
+
+func (r *Reconciler) digestFallbackStatus(desiredDigest, observedDigest string, health domain.HealthStatus, mode domain.ReconcileMode) domain.DriftStatus {
+	status := domain.ArtifactDigestDriftStatus(desiredDigest, observedDigest, health, domain.DriftStatusInSync)
+	if status == domain.DriftStatusDrifted {
+		return r.driftStatusForMode(mode)
+	}
+	return status
 }
 
 func (r *Reconciler) autoApplyDesiredState(ctx context.Context, currentState *domain.EnvironmentServiceState) error {

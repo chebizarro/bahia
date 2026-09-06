@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+)
+
+var (
+	reconcileDesiredDigest  = "sha256:" + strings.Repeat("a", 64)
+	reconcileObservedDigest = "sha256:" + strings.Repeat("b", 64)
 )
 
 type mockObservationRepo struct {
@@ -296,13 +302,13 @@ func TestReconcilerObserveOnlyRecordsDriftWithoutRemediation(t *testing.T) {
 		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID},
 	}}
 	obsRepo := &mockObservationRepo{}
-	rt := &mockRuntime{observeDigest: "sha256:observed"}
+	rt := &mockRuntime{observeDigest: reconcileObservedDigest}
 	pub := &mockPublisher{}
 
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		obsRepo,
 		stateRepo,
@@ -324,6 +330,146 @@ func TestReconcilerObserveOnlyRecordsDriftWithoutRemediation(t *testing.T) {
 	require.Empty(t, rt.deployed)
 	require.Empty(t, rt.undeployed)
 	rt.mu.Unlock()
+}
+
+func TestReconcilerDigestMatchStartingRemainsObservable(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID, DesiredHash: "sha256:desired-state"},
+	}}
+	observations := &mockObservationRepo{}
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}}, observations, stateRepo,
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: reconcileDesiredDigest, observeHealth: domain.HealthStatusStarting}},
+		&mockPublisher{}, time.Minute, zap.NewNop(),
+	)
+	for pass := 0; pass < 2; pass++ {
+		if err := reconciler.reconcileOne(context.Background(), stateRepo.states[stateKey]); err != nil {
+			t.Fatalf("pass %d reconcileOne() error = %v", pass, err)
+		}
+		if got := stateRepo.states[stateKey].DriftStatus; got != domain.DriftStatusInSync {
+			t.Fatalf("pass %d drift status = %q, want in_sync", pass, got)
+		}
+	}
+	if len(observations.observations) != 2 {
+		t.Fatalf("observation count = %d, want 2", len(observations.observations))
+	}
+}
+
+func TestReconcilerDeletedContainerDriftsAndAutoApplies(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID, DesiredHash: "sha256:desired-state", DriftStatus: domain.DriftStatusInSync},
+	}}
+	publisher := &mockPublisher{}
+	deployer := &mockAutoRemediationDeployer{}
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}}, &mockObservationRepo{}, stateRepo,
+		&mockRuntimeResolver{rt: &mockRuntime{observeHealth: domain.HealthStatusStopped}}, publisher,
+		time.Minute, zap.NewNop(), WithAutoRemediationDeployer(deployer),
+	)
+	if err := reconciler.reconcileOne(context.Background(), stateRepo.states[stateKey]); err != nil {
+		t.Fatalf("reconcileOne() error = %v", err)
+	}
+	if got := stateRepo.states[stateKey].DriftStatus; got != domain.DriftStatusDrifted {
+		t.Fatalf("drift status = %q, want drifted", got)
+	}
+	if deployer.calls != 1 {
+		t.Fatalf("auto-remediation calls = %d, want 1", deployer.calls)
+	}
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	driftEvents := 0
+	for _, event := range publisher.events {
+		if event.Type == events.EventDriftDetected {
+			driftEvents++
+		}
+	}
+	if driftEvents != 1 {
+		t.Fatalf("drift event count = %d, want 1", driftEvents)
+	}
+}
+
+func TestReconcilerHealthyEmptyDigestIsUnknown(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID, DesiredHash: "sha256:desired-state", DriftStatus: domain.DriftStatusInSync},
+	}}
+	publisher := &mockPublisher{}
+	deployer := &mockAutoRemediationDeployer{}
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}}, &mockObservationRepo{}, stateRepo,
+		&mockRuntimeResolver{rt: &mockRuntime{observeHealth: domain.HealthStatusHealthy}}, publisher,
+		time.Minute, zap.NewNop(), WithAutoRemediationDeployer(deployer),
+	)
+	if err := reconciler.reconcileOne(context.Background(), stateRepo.states[stateKey]); err != nil {
+		t.Fatalf("reconcileOne() error = %v", err)
+	}
+	if got := stateRepo.states[stateKey].DriftStatus; got != domain.DriftStatusUnknown {
+		t.Fatalf("drift status = %q, want unknown", got)
+	}
+	if deployer.calls != 0 {
+		t.Fatalf("auto-remediation calls = %d, want 0", deployer.calls)
+	}
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	for _, event := range publisher.events {
+		if event.Type == events.EventDriftDetected {
+			t.Fatalf("unexpected drift event: %#v", event)
+		}
+	}
+}
+
+func TestReconcilerLogsDigestFallbackDecisionOnStatusChange(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	stateKey := stateMapKey(serviceID, envID)
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID, DesiredHash: "sha256:desired-state", DriftStatus: domain.DriftStatusInSync},
+	}}
+	core, logs := observer.New(zap.InfoLevel)
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
+		&mockObservationRepo{}, stateRepo,
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "registry.example/api@" + reconcileObservedDigest}},
+		&mockPublisher{}, time.Minute, zap.New(core),
+	)
+	if err := reconciler.reconcileOne(context.Background(), stateRepo.states[stateKey]); err != nil {
+		t.Fatalf("reconcileOne() error = %v", err)
+	}
+	entries := logs.FilterMessage("runtime drift decision changed from in_sync").All()
+	if len(entries) != 1 || entries[0].Level != zap.WarnLevel {
+		t.Fatalf("warn decision logs = %#v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["branch"] != "digest-fallback" || fields["status"] != string(domain.DriftStatusDrifted) || fields["service"] != "api" || fields["environment"] != "prod" || fields["observation_source"] != "mock" {
+		t.Fatalf("unexpected decision fields: %#v", fields)
+	}
+	if fields["desired_digest_prefix"] != "sha256:aaaaa" || fields["observed_digest_prefix"] != "sha256:bbbbb" {
+		t.Fatalf("digest prefixes were not bounded: %#v", fields)
+	}
 }
 
 type mockAutoRemediationDeployer struct {
@@ -355,11 +501,11 @@ func TestReconcilerApprovalRequiredMarksRemediationNeededWithoutInternalDeploy(t
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeApprovalRequired}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		obsRepo,
 		stateRepo,
-		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: reconcileObservedDigest}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -388,11 +534,11 @@ func TestReconcilerAutoApplyUsesSharedDesiredStateHelper(t *testing.T) {
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
-		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: reconcileObservedDigest}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -425,11 +571,11 @@ func TestReconcilerAutoApplyRestoresStoppedDesiredService(t *testing.T) {
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
-		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:desired", observeHealth: domain.HealthStatusStopped}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: reconcileDesiredDigest, observeHealth: domain.HealthStatusStopped}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),
@@ -456,7 +602,7 @@ func TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff(t *testing.T) {
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
 		&mockObservationRepo{},
 		stateRepo,
@@ -576,7 +722,7 @@ func TestReconcilerDeploymentUnitLoadErrorSkipsCycle(t *testing.T) {
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeAutoApply}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}, err: fmt.Errorf("unit store unavailable")},
 		obsRepo,
 		stateRepo,
@@ -643,11 +789,11 @@ func TestReconcilerSkipsDisabledDeploymentUnit(t *testing.T) {
 	reconciler := NewReconciler(
 		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
-		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:desired"}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{artifactID: {ID: artifactID, ServiceID: serviceID, ImageDigest: reconcileDesiredDigest}}},
 		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unitID: {ID: unitID, EnvironmentID: envID, Key: "blue", RuntimeType: domain.RuntimeTypeDocker, ReconcileMode: domain.ReconcileModeDisabled, OwnershipMode: domain.OwnershipModeBahiaManaged}}},
 		obsRepo,
 		stateRepo,
-		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: "sha256:observed"}},
+		&mockRuntimeResolver{rt: &mockRuntime{observeDigest: reconcileObservedDigest}},
 		&mockPublisher{},
 		time.Minute,
 		zap.NewNop(),

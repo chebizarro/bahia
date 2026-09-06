@@ -284,6 +284,7 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		ObservedHost:        firstNonEmptyString(o.observedHost, o.host),
 		HealthStatus:        health,
 		Source:              "docker",
+		NormalizedHash:      strings.TrimSpace(container.Labels["bahia.desired_hash"]),
 		ObservedAt:          time.Now().UTC(),
 	}, nil
 }

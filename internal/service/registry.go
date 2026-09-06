@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/driftdecision"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -1949,41 +1950,41 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 			EnvironmentID: obs.EnvironmentID,
 		}
 	}
+	previousDrift := state.DriftStatus
 	state.CurrentObservationID = &obs.ID
 
-	// Determine drift. Desired-state-managed rows compare the desired hash
-	// against the normalized observed hash. Legacy artifact-managed rows keep
-	// the existing artifact-digest comparison path.
+	// Determine drift. Desired-state-managed rows compare hashes when both are
+	// present and fall back to the desired artifact digest for pre-stamping
+	// runtimes that cannot report the desired hash.
+	desiredHash := ""
+	observedHash := observedStateHash(obs)
+	desiredDigest := ""
+	observedDigest := domain.NormalizeImageDigest(obs.ObservedImageDigest)
+	decisionBranch := "early-out"
 	if desiredStateManaged(state) {
-		desiredHash := desiredStateHash(state)
-		observedHash := observedStateHash(obs)
-		if desiredHash == "" || observedHash == "" {
-			state.DriftStatus = domain.DriftStatusUnknown
-		} else if desiredHash != observedHash && (state.DesiredRuntimeState == nil || !state.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)) {
-			state.DriftStatus = domain.DriftStatusDrifted
-		} else if observationHealthOK(obs.HealthStatus) {
-			state.DriftStatus = domain.DriftStatusInSync
-		} else if obs.HealthStatus == domain.HealthStatusStarting {
-			state.DriftStatus = domain.DriftStatusDeploying
+		desiredHash = desiredStateHash(state)
+		if desiredHash != "" && observedHash != "" {
+			decisionBranch = "hash-compare"
+			if desiredHash != observedHash && (state.DesiredRuntimeState == nil || !state.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)) {
+				state.DriftStatus = domain.DriftStatusDrifted
+			} else if observationHealthOK(obs.HealthStatus) {
+				state.DriftStatus = domain.DriftStatusInSync
+			} else if obs.HealthStatus == domain.HealthStatusStarting {
+				state.DriftStatus = domain.DriftStatusDeploying
+			} else {
+				state.DriftStatus = domain.DriftStatusDrifted
+			}
+		} else if observedHash == "" && state.DesiredArtifactID != nil {
+			decisionBranch = "digest-fallback"
+			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, s.artifacts, state.DesiredArtifactID, s.logger)
+			state.DriftStatus = domain.ArtifactDigestDriftStatus(desiredDigest, observedDigest, obs.HealthStatus, domain.DriftStatusDeploying)
 		} else {
-			state.DriftStatus = domain.DriftStatusDrifted
+			state.DriftStatus = domain.DriftStatusUnknown
 		}
 	} else if state.DesiredArtifactID != nil {
-		desired, err := s.artifacts.GetByID(ctx, *state.DesiredArtifactID)
-		if err != nil {
-			s.logger.Error("failed to fetch desired artifact for drift check",
-				zap.String("artifact_id", state.DesiredArtifactID.String()),
-				zap.Error(err),
-			)
-			// Don't fail the observation; mark drift as unknown and continue.
-			state.DriftStatus = domain.DriftStatusUnknown
-		} else if desired != nil && desired.ImageDigest == obs.ObservedImageDigest && observationHealthOK(obs.HealthStatus) {
-			state.DriftStatus = domain.DriftStatusInSync
-		} else if desired != nil && desired.ImageDigest == obs.ObservedImageDigest && obs.HealthStatus == domain.HealthStatusStarting {
-			state.DriftStatus = domain.DriftStatusDeploying
-		} else {
-			state.DriftStatus = domain.DriftStatusDrifted
-		}
+		decisionBranch = "digest-fallback"
+		desiredDigest = driftdecision.DesiredArtifactDigest(ctx, s.artifacts, state.DesiredArtifactID, s.logger)
+		state.DriftStatus = domain.ArtifactDigestDriftStatus(desiredDigest, observedDigest, obs.HealthStatus, domain.DriftStatusDeploying)
 	}
 
 	now := time.Now().UTC()
@@ -2004,6 +2005,19 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 	})
 	if !advanced {
 		return nil
+	}
+	if state.DriftStatus != domain.DriftStatusInSync && state.DriftStatus != previousDrift {
+		if desiredDigest == "" && state.DesiredArtifactID != nil {
+			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, s.artifacts, state.DesiredArtifactID, s.logger)
+		}
+		driftdecision.Log(s.logger, driftdecision.LogInput{
+			Service: state.ServiceID.String(), Environment: state.EnvironmentID.String(),
+			ServiceID: state.ServiceID, EnvironmentID: state.EnvironmentID,
+			Status: state.DriftStatus, PreviousStatus: previousDrift, Branch: decisionBranch,
+			DesiredHash: desiredHash, ObservedHash: observedHash,
+			DesiredDigest: desiredDigest, ObservedDigest: observedDigest,
+			Health: obs.HealthStatus, ObservationID: obs.ID, Source: obs.Source,
+		})
 	}
 	s.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
