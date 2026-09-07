@@ -43,6 +43,17 @@
         "internal/service/route_canary_gate.go",
         "internal/service/route_canary_test.go:TestGateSkipsVerificationWhenPolicyDerivesNoTargets"
       ]
+    },
+    {
+      "id": "D5",
+      "statement": "Migration 000060 pinned the route canary classification set in CHECK constraints on route_canary_state and route_canary_events. The health_path_not_discriminating classification added for D3 was never admitted by those constraints. Build, vet and the full test suite were green because nothing connects a Go constant to a SQL CHECK constraint. On the live candidate built from 67118759 the service started healthy and then every route canary supervisor upsert failed with SQLSTATE 23514, forcing an operator rollback to 66bb4834.",
+      "status": "fixed",
+      "fix": "Added versioned migration 000061_route_canary_health_path_classification, which drops the generated 000060 constraints by locating them in pg_constraint rather than assuming a naming convention, and re-adds explicitly named constraints including the new value. 000060 was left untouched because it is already applied in production. The down migration normalizes withdrawn state rows to route_ok and deletes affected lineage rows, since an append-only event must not be restated as something never observed.",
+      "prevention": "Added internal/db/route_canary_constraint_conformance_test.go, which replays the route canary migrations in order, computes the value set left in force, and asserts it matches domain.AllRouteCanaryClassifications, AllRouteCanaryPerspectives and AllRouteCanaryTransitions in both directions. Verified by removing 000061 and observing the test fail with the SQLSTATE 23514 explanation. domain.Valid now derives from the same enumeration so the list cannot drift from validation either.",
+      "verification": [
+        "internal/db/migrations/000061_route_canary_health_path_classification.up.sql",
+        "internal/db/route_canary_constraint_conformance_test.go:TestRouteCanaryClassificationsMatchDatabaseConstraint"
+      ]
     }
   ]
 }

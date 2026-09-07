@@ -113,3 +113,29 @@ The gate criterion is still unproven live. A valid re-test needs a route that ge
 3. Keep the bad health path but enable `detect_catch_all` + `require_discriminating_health_path` → `health_path_not_discriminating` blocks.
 
 Option 3 most closely matches the original intent. Note it will also block the *current* `/health` route for Astillero, since that path is itself non-discriminating — which is the correct signal, but means the health endpoint should be fixed first.
+
+---
+
+# Addendum 2 — live candidate rollback 2026-09-07 (defect D5)
+
+The operator rebased the route canary work onto live Bahia `66bb4834` (integration commit `67118759`), built `local/bahia-controlplane:route-canaries-67118759`, and deployed it. The service started healthy, then the route canary supervisor failed every upsert with **SQLSTATE 23514** (check violation). The operator rolled back to `66bb4834` through timestamped compose/config backups and correctly declined to alter the constraint by hand.
+
+## Root cause
+
+Migration `000060` pinned the classification set in CHECK constraints on `route_canary_state` and `route_canary_events`. The `health_path_not_discriminating` classification added while fixing D3 was never admitted by those constraints.
+
+Every repository gate was green, because **nothing in the type system connects a Go constant to a SQL CHECK constraint**. That is the real failure: the defect was undetectable by the checks in place.
+
+## Fix
+
+`000061_route_canary_health_path_classification` widens both constraints. `000060` is already applied in production and is therefore immutable; it was not edited. The migration locates the generated `000060` constraints via `pg_constraint` rather than assuming PostgreSQL's naming convention, and re-adds them under explicit names so future values can be admitted by name.
+
+## Prevention
+
+`internal/db/route_canary_constraint_conformance_test.go` replays the route canary migrations in filename order, computes the value set left in force, and asserts bidirectional agreement with the domain enumerations — catching both a Go value the database would reject and a database value Go no longer defines.
+
+Its own sensitivity was verified: removing `000061` makes it fail with the SQLSTATE 23514 explanation, so a green result is meaningful.
+
+## Deployment note
+
+This is an additive constraint widening with no data migration. It must be applied before or with the candidate that emits the new classification. Rolling the application back past `000061` without running its down migration would leave rows the older binary's constraints reject.

@@ -158,6 +158,18 @@ route_canaries:
 
 Canary settings are control-plane policy, not signed desired state. Changing an expectation does not invalidate an already-deployed route plan hash.
 
+## Schema
+
+Route canary classifications are constrained in the database. A classification
+added in Go without a matching migration is rejected at runtime with SQLSTATE
+23514, which is exactly how a live candidate was rolled back on 2026-09-07.
+
+`internal/db/route_canary_constraint_conformance_test.go` now pins the Go
+enumerations to the effective migration constraints in both directions, so this
+fails at test time rather than in production. When adding a classification, add
+a new versioned migration widening the constraint — never edit an applied
+migration in place.
+
 ## API
 
 All endpoints are tier-2 gated.

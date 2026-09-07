@@ -111,10 +111,16 @@ func (c RouteCanaryClassification) FailingForTarget(target RouteCanaryTarget) bo
 	return c.Failing()
 }
 
-// Valid reports whether the classification is a known value.
-func (c RouteCanaryClassification) Valid() bool {
-	switch c {
-	case RouteCanaryClassificationRouteOK,
+// AllRouteCanaryClassifications is the authoritative list of classifications.
+//
+// It is the single source of truth for validation and for the database
+// constraint conformance check. Adding a classification without widening the
+// corresponding CHECK constraint once caused every supervisor upsert to fail
+// with SQLSTATE 23514 on a live candidate, so the two are now pinned together
+// by a test rather than by memory.
+func AllRouteCanaryClassifications() []RouteCanaryClassification {
+	return []RouteCanaryClassification{
+		RouteCanaryClassificationRouteOK,
 		RouteCanaryClassificationDNSUnresolved,
 		RouteCanaryClassificationConnectFailed,
 		RouteCanaryClassificationTLSInvalid,
@@ -122,11 +128,36 @@ func (c RouteCanaryClassification) Valid() bool {
 		RouteCanaryClassificationUpstreamError,
 		RouteCanaryClassificationStatusMismatch,
 		RouteCanaryClassificationBodyMismatch,
-		RouteCanaryClassificationHealthPathNotDiscriminating:
-		return true
-	default:
-		return false
+		RouteCanaryClassificationHealthPathNotDiscriminating,
 	}
+}
+
+// AllRouteCanaryPerspectives is the authoritative list of perspectives.
+func AllRouteCanaryPerspectives() []RouteCanaryPerspective {
+	return []RouteCanaryPerspective{
+		RouteCanaryPerspectivePublicEdge,
+		RouteCanaryPerspectiveInternalLAN,
+	}
+}
+
+// AllRouteCanaryTransitions is the authoritative list of transitions.
+func AllRouteCanaryTransitions() []RouteCanaryTransition {
+	return []RouteCanaryTransition{
+		RouteCanaryTransitionNone,
+		RouteCanaryTransitionOpened,
+		RouteCanaryTransitionRecovered,
+		RouteCanaryTransitionClassificationChanged,
+	}
+}
+
+// Valid reports whether the classification is a known value.
+func (c RouteCanaryClassification) Valid() bool {
+	for _, known := range AllRouteCanaryClassifications() {
+		if c == known {
+			return true
+		}
+	}
+	return false
 }
 
 // RouteCanaryTarget is one fully resolved, provider-neutral check. Targets are
