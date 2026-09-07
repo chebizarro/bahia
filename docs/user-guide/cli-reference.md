@@ -135,6 +135,17 @@ Omitting `--units-file` leaves the unit set unchanged on update. Supplying a fil
 ### Deployments
 
 ```bash
+# Preview a managed desired state and review its authoritative hash.
+# --compact returns only the hash plus a structural summary for cases where
+# the full preview is too large to deliver over relays. The hash is identical
+# and authoritative in both modes. Environment variable values are never
+# included in the summary (only sorted key names). Compact mode prints a
+# human-readable evidence summary in table format without requiring -o json.
+bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
+  --managed-runtime-config-file runtime.json
+bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
+  --managed-runtime-config-file runtime.json --compact
+
 # Submit signer-first deployment intent
 bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
 

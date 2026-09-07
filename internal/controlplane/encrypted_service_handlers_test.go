@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -535,4 +536,587 @@ func TestRouteAttachProtectedZoneRejectsUnprotectedEnvironment(t *testing.T) {
 	if len(fixture.intentRepo.intents) != 1 {
 		t.Fatalf("protected-zone violation created an intent: %d", len(fixture.intentRepo.intents))
 	}
+}
+
+func TestCompactDeployPreviewPayloadSize(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	envVars := map[string]string{
+		"APP_ENV":                     "production",
+		"DB_HOST":                     "db-primary.internal.example.com",
+		"DB_PORT":                     "5432",
+		"DB_NAME":                     "app_production",
+		"DB_USER":                     "app_user",
+		"REDIS_URL":                   "redis://redis.internal:6379/0",
+		"LOG_LEVEL":                   "info",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel-collector.internal:4317",
+		"METRICS_PORT":                "9090",
+		"CACHE_TTL_SECONDS":           "3600",
+		"MAX_CONNECTIONS":             "100",
+		"RATE_LIMIT_RPS":              "500",
+		"GRACEFUL_SHUTDOWN_SECONDS":   "30",
+		"FEATURE_FLAG_EXPERIMENTAL":   "true",
+		"TRACING_SAMPLE_RATE":         "0.1",
+		"NODE_NAME":                   "worker-01",
+	}
+
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "production-app",
+		Ports:         []string{"127.0.0.1:18080:8080", "127.0.0.1:19090:9090"},
+		Environment:   envVars,
+		Healthcheck: &domain.ManagedHTTPHealthcheck{
+			Protocol: "http", Method: "GET", Path: "/healthz", Port: 8080,
+			Interval: "30s", Timeout: "5s", Retries: 3,
+		},
+		RestartPolicy: "unless-stopped",
+		Volumes:       []string{"/srv/bahia/production-app/data:/data", "/srv/bahia/production-app/logs:/var/log/app"},
+		PullPolicy:    "always",
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "prod-docker",
+		RuntimeConfig:  map[string]any{"type": "docker", "host_alias": "prod-docker", "management_mode": "direct_runtime"},
+		DeployStrategy: domain.DeployStrategyReplace,
+	}
+
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "production-app", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environment}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID,
+		ImageRepo: "ghcr.io/org/production-app", ImageTag: "v3.2.1",
+		ImageDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
+		ID: unitID, EnvironmentID: environmentID, Key: "prod-compose", RuntimeType: domain.RuntimeTypeCompose,
+		OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeAutoApply,
+	}}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	planner, err := service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{
+		Provider: "cloudflare_tunnel", TunnelRef: "tunnel-1", DNSTarget: "tunnel.example.net", ConfigHash: "sha256:config",
+		Zones:   []service.PublicRouteZone{{Name: "example.com", BackendRef: "cloudflare", AllowedOrgIDs: []uuid.UUID{orgID}, TTL: 300}},
+		Origins: []service.PublicRouteOrigin{{DeploymentUnitID: unitID, Host: "127.0.0.1", AllowedPorts: []int{18080}}},
+		InternalHTTPS: &service.InternalHTTPSPlannerConfig{
+			Provider: "nginx", Listen: "443 ssl", CertFile: "/etc/nginx/tls/fullchain.pem", KeyFile: "/etc/nginx/tls/privkey.pem",
+			ConfigHash: "sha256:internal", Zones: []string{"example.com"},
+		},
+	}, routing.StaticResolver{"cloudflare": routeAttachBackend{}})
+	if err != nil {
+		t.Fatalf("configure public route planner: %v", err)
+	}
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, publicRoutes: planner, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)},
+		logger:     zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+	publicRoute := &domain.PublicRouteRequest{
+		Hostname: "production-app.example.com", UpstreamScheme: "http", UpstreamPort: 18080,
+		HealthPath: "/healthz", TLS: "managed",
+	}
+
+	previewParams, err := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, PublicRoute: publicRoute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fullResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: previewParams},
+	})
+	if err != nil {
+		t.Fatalf("full previewDeploy: %v", err)
+	}
+	fullBytes, err := json.Marshal(fullResult)
+	if err != nil {
+		t.Fatalf("marshal full result: %v", err)
+	}
+	fullSize := len(fullBytes)
+
+	compactParams, err := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, PublicRoute: publicRoute, Compact: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: compactParams},
+	})
+	if err != nil {
+		t.Fatalf("compact previewDeploy: %v", err)
+	}
+	compactBytes, err := json.Marshal(compactResult)
+	if err != nil {
+		t.Fatalf("marshal compact result: %v", err)
+	}
+	compactSize := len(compactBytes)
+
+	t.Logf("Production-scale full: %d bytes, compact: %d bytes", fullSize, compactSize)
+
+	if compactSize > 4096 {
+		t.Fatalf("production-scale compact size %d exceeds absolute limit 4096", compactSize)
+	}
+	if maxCompact := fullSize * 40 / 100; compactSize > maxCompact {
+		t.Fatalf("compact size %d exceeds 40%% of full size %d (max %d)", compactSize, fullSize, maxCompact)
+	}
+}
+
+func TestCompactDeployPreviewPayloadSizeExtreme(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	envVars := make(map[string]string, 120)
+	for i := 0; i < 120; i++ {
+		envVars[fmt.Sprintf("ENV_VAR_%03d", i)] = fmt.Sprintf("value-is-%d-with-padding-to-make-it-realistic-for-production-configs", i)
+	}
+	volumes := make([]string, 20)
+	for i := 0; i < 20; i++ {
+		volumes[i] = fmt.Sprintf("/srv/mounts/vol-%02d:/container/path/vol-%02d:ro", i, i)
+	}
+	ports := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		ports[i] = fmt.Sprintf("127.0.0.1:%d:%d", 10000+i, 8080+i)
+	}
+	labels := make(map[string]string, 60)
+	for i := 0; i < 60; i++ {
+		labels[fmt.Sprintf("label.key.%02d", i)] = fmt.Sprintf("label-value-%02d-with-some-length", i)
+	}
+
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "extreme-app",
+		Ports:         ports,
+		Environment:   envVars,
+		Healthcheck: &domain.ManagedHTTPHealthcheck{
+			Protocol: "http", Method: "GET", Path: "/healthz", Port: 8080,
+		},
+		RestartPolicy: "always",
+		Volumes:       volumes,
+		PullPolicy:    "always",
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "extreme-env",
+		RuntimeConfig:  map[string]any{"management_mode": "direct_runtime"},
+		DeployStrategy: domain.DeployStrategyReplace,
+	}
+
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "extreme-app", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environment}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID,
+		ImageRepo: "ghcr.io/extreme-app", ImageTag: "v1",
+		ImageDigest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
+		ID: unitID, EnvironmentID: environmentID, Key: "extreme-unit", RuntimeType: domain.RuntimeTypeCompose,
+		OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeAutoApply,
+	}}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)},
+		logger:     zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+
+	compactParams, err := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, Compact: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: compactParams},
+	})
+	if err != nil {
+		t.Fatalf("extreme compact previewDeploy: %v", err)
+	}
+	compactBytes, err := json.Marshal(compactResult)
+	if err != nil {
+		t.Fatalf("marshal extreme compact result: %v", err)
+	}
+	compactSize := len(compactBytes)
+
+	payload := compactResult.(map[string]any)
+	summary := payload["desired_state_summary"].(*desiredStateSummary)
+
+	t.Logf("Extreme-scale compact: %d bytes (env_keys=%d/%d truncated=%v, volumes=%d/%d truncated=%v, ports=%d/%d truncated=%v, labels=%d/%d truncated=%v)",
+		compactSize, len(summary.EnvKeys), summary.EnvKeyCount, summary.EnvKeysTruncated,
+		len(summary.Volumes), 20, summary.VolumesTruncated,
+		len(summary.Ports), 10, summary.PortsTruncated,
+		len(summary.LabelKeys), summary.LabelsCount, summary.LabelKeysTruncated)
+
+	if compactSize > 16384 {
+		t.Fatalf("extreme-scale compact size %d exceeds absolute limit 16384", compactSize)
+	}
+	if !summary.EnvKeysTruncated {
+		t.Fatalf("expected env_keys_truncated=true with 120 env keys, got false (len=%d)", len(summary.EnvKeys))
+	}
+	if len(summary.EnvKeys) > maxSummaryEnvKeys {
+		t.Fatalf("env_keys not capped: len=%d > max=%d", len(summary.EnvKeys), maxSummaryEnvKeys)
+	}
+	if summary.LabelKeysTruncated {
+		t.Fatalf("label_keys_truncated should be false for 60 labels (max=%d)", maxSummaryLabelKeys)
+	}
+}
+
+func TestCompactDeployPreviewHashPreservation(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "hash-test", Ports: []string{"127.0.0.1:8080:8080"},
+		Environment:   map[string]string{"FOO": "bar", "SECRET_TOKEN": "sensitive-value-12345"},
+		RestartPolicy: "always", PullPolicy: "always",
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "hash-env", DeployStrategy: domain.DeployStrategyReplace,
+		RuntimeConfig: map[string]any{"management_mode": "direct_runtime"},
+	}
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "hash-test", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environment}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID, ImageRepo: "hash-repo", ImageTag: "v1",
+		ImageDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
+		ID: unitID, EnvironmentID: environmentID, Key: "hash-unit", RuntimeType: domain.RuntimeTypeCompose,
+		OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeAutoApply,
+	}}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)},
+		logger:     zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+
+	fullParams, _ := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed,
+	})
+	fullResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: fullParams},
+	})
+	if err != nil {
+		t.Fatalf("full previewDeploy: %v", err)
+	}
+	fullHash := fullResult.(map[string]any)["desired_state_hash"].(string)
+
+	compactParams, _ := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, Compact: true,
+	})
+	compactResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: compactParams},
+	})
+	if err != nil {
+		t.Fatalf("compact previewDeploy: %v", err)
+	}
+	compactHash := compactResult.(map[string]any)["desired_state_hash"].(string)
+
+	if fullHash != compactHash {
+		t.Fatalf("hash mismatch: full=%q compact=%q", fullHash, compactHash)
+	}
+}
+
+func TestCompactDeployPreviewSummaryEvidence(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "summary-test", Ports: []string{"127.0.0.1:8080:8080"},
+		Environment:   map[string]string{"A": "1", "B": "2"},
+		Healthcheck:   &domain.ManagedHTTPHealthcheck{Protocol: "http", Method: "GET", Path: "/ready", Port: 8080},
+		RestartPolicy: "unless-stopped",
+		Volumes:       []string{"/srv/app/data:/data", "/srv/app/config:/config:ro"},
+		PullPolicy:    "always",
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "summary-env", DeployStrategy: domain.DeployStrategyReplace,
+		RuntimeConfig: map[string]any{"management_mode": "direct_runtime"},
+	}
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "summary-test", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environment}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID, ImageRepo: "summary-repo", ImageTag: "v1",
+		ImageDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
+		ID: unitID, EnvironmentID: environmentID, Key: "summary-unit", RuntimeType: domain.RuntimeTypeCompose,
+		OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeAutoApply,
+	}}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	planner, err := service.NewPublicRoutePlanner(service.PublicRoutePlannerConfig{
+		Provider: "cloudflare_tunnel", TunnelRef: "tunnel-1", DNSTarget: "tunnel.example.net", ConfigHash: "sha256:config",
+		Zones:   []service.PublicRouteZone{{Name: "example.com", BackendRef: "cloudflare", AllowedOrgIDs: []uuid.UUID{orgID}, TTL: 300}},
+		Origins: []service.PublicRouteOrigin{{DeploymentUnitID: unitID, Host: "127.0.0.1", AllowedPorts: []int{8080}}},
+		InternalHTTPS: &service.InternalHTTPSPlannerConfig{
+			Provider: "nginx", Listen: "443 ssl", CertFile: "/etc/nginx/tls/fullchain.pem", KeyFile: "/etc/nginx/tls/privkey.pem",
+			ConfigHash: "sha256:internal", Zones: []string{"example.com"},
+		},
+	}, routing.StaticResolver{"cloudflare": routeAttachBackend{}})
+	if err != nil {
+		t.Fatalf("configure public route planner: %v", err)
+	}
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, publicRoutes: planner, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)},
+		logger:     zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+
+	compactParams, _ := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, Compact: true,
+		PublicRoute: &domain.PublicRouteRequest{Hostname: "summary.example.com", UpstreamScheme: "http", UpstreamPort: 8080, HealthPath: "/ready", TLS: "managed"},
+	})
+	compactResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: compactParams},
+	})
+	if err != nil {
+		t.Fatalf("compact previewDeploy: %v", err)
+	}
+	payload := compactResult.(map[string]any)
+	summary, ok := payload["desired_state_summary"].(*desiredStateSummary)
+	if !ok || summary == nil {
+		t.Fatalf("desired_state_summary not present or wrong type: %T", payload["desired_state_summary"])
+	}
+
+	hasVolume := false
+	for _, v := range summary.Volumes {
+		if v == "/srv/app/data:/data" {
+			hasVolume = true
+			break
+		}
+	}
+	if !hasVolume {
+		t.Fatalf("volume /srv/app/data:/data not found in summary.Volumes: %v", summary.Volumes)
+	}
+
+	if summary.Healthcheck == nil || !summary.Healthcheck.Enabled || summary.Healthcheck.Path != "/ready" {
+		t.Fatalf("healthcheck evidence missing: %#v", summary.Healthcheck)
+	}
+
+	if summary.PublicRoute == nil {
+		t.Fatal("public route summary missing")
+	}
+	if summary.PublicRoute.Hostname != "summary.example.com" {
+		t.Fatalf("public route hostname: %q", summary.PublicRoute.Hostname)
+	}
+	if summary.PublicRoute.DNSName != "summary.example.com" {
+		t.Fatalf("DNS name: %q", summary.PublicRoute.DNSName)
+	}
+	if summary.PublicRoute.DNSType != "CNAME" {
+		t.Fatalf("DNS type: %q", summary.PublicRoute.DNSType)
+	}
+	if summary.PublicRoute.DNSTTL != 300 {
+		t.Fatalf("DNS TTL: %d", summary.PublicRoute.DNSTTL)
+	}
+	if !summary.PublicRoute.Proxied {
+		t.Fatal("expected proxied=true")
+	}
+	if summary.PublicRoute.TLSMode != "managed" {
+		t.Fatalf("TLS mode: %q", summary.PublicRoute.TLSMode)
+	}
+	if summary.PublicRoute.TunnelOriginURL == "" {
+		t.Fatal("tunnel origin URL missing")
+	}
+	if summary.PublicRoute.ProxyUpstream == "" {
+		t.Fatal("proxy upstream missing")
+	}
+	if summary.PublicRoute.ProxyHealthPath != "/ready" {
+		t.Fatalf("proxy health path: %q", summary.PublicRoute.ProxyHealthPath)
+	}
+	if summary.PublicRoute.OperationsCount < 1 {
+		t.Fatalf("operations count %d < 1", summary.PublicRoute.OperationsCount)
+	}
+	if summary.PublicRoute.RollbackCount < 1 {
+		t.Fatalf("rollback count %d < 1", summary.PublicRoute.RollbackCount)
+	}
+
+	if summary.InternalHTTPS == nil || !summary.InternalHTTPS.Enabled {
+		t.Fatal("internal_https not reflected")
+	}
+	if summary.InternalHTTPS.Listen == "" {
+		t.Fatal("internal_https listen missing")
+	}
+	if summary.InternalHTTPS.CertPath == "" || summary.InternalHTTPS.KeyPath == "" {
+		t.Fatal("internal_https cert/key paths missing")
+	}
+
+	if summary.RestartPolicy != "unless-stopped" {
+		t.Fatalf("restart_policy: %q", summary.RestartPolicy)
+	}
+	if summary.PullPolicy != "always" {
+		t.Fatalf("pull_policy: %q", summary.PullPolicy)
+	}
+	if summary.ImageRef == "" {
+		t.Fatal("image_ref missing")
+	}
+	if _, ok := payload["policy"]; !ok {
+		t.Fatal("policy not present in compact response")
+	}
+	if summary.EnvKeyCount != 2 || len(summary.EnvKeys) != 2 {
+		t.Fatalf("env keys: count=%d keys=%v", summary.EnvKeyCount, summary.EnvKeys)
+	}
+}
+
+func TestCompactDeployPreviewExcludesEnvValues(t *testing.T) {
+	ctx := context.Background()
+	orgID, serviceID, environmentID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	const sentinelValue = "prod-secret-key-must-not-leak-2026"
+	managed := &domain.ManagedRuntimeConfig{
+		SchemaVersion: domain.ManagedRuntimeConfigSchemaVersion,
+		ServiceName:   "secret-test", Ports: []string{"127.0.0.1:3000:3000"},
+		Environment: map[string]string{
+			"NODE_ENV":  "production",
+			"API_TOKEN": sentinelValue,
+			"DB_URL":    "postgres://admin:" + sentinelValue + "@db.internal:5432/app",
+		},
+		RestartPolicy: "always", PullPolicy: "always",
+	}
+	managed = domain.NormalizeManagedRuntimeConfig(managed)
+	environment := &domain.Environment{
+		ID: environmentID, OrgID: orgID, Name: "secret-env", DeployStrategy: domain.DeployStrategyReplace,
+		RuntimeConfig: map[string]any{"management_mode": "direct_runtime"},
+	}
+	svcRepo := &testServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, Name: "secret-test", RuntimeType: domain.RuntimeTypeCompose,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed},
+	}}
+	envRepo := &testEnvironmentRepo{environment: environment}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{
+		ID: artifactID, ServiceID: serviceID, ImageRepo: "secret-repo", ImageTag: "v1",
+		ImageDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+	}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &testBuildRepo{}, artifactRepo, intentRepo,
+		&testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}, &testObservationRepo{}, stateRepo, nil,
+		&events.NoopPublisher{}, zap.NewNop(),
+	)
+	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
+		ID: unitID, EnvironmentID: environmentID, Key: "secret-unit", RuntimeType: domain.RuntimeTypeCompose,
+		OwnershipMode: domain.OwnershipModeBahiaManaged, ReconcileMode: domain.ReconcileModeAutoApply,
+	}}
+	lifecycle := service.NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, nil, &events.NoopPublisher{}, zap.NewNop(),
+		service.WithRuntimeLifecycleDeploymentUnits(unitRepo),
+	)
+	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	handlers := &encryptedServiceHandlers{
+		registry: registry, runtimeLifecycle: lifecycle, policy: policy, deploymentUnits: unitRepo,
+		authorizer: encryptedTenantAuthorizer{services: svcRepo, environments: registry, rbac: encryptedAdminRBAC(t, orgID)},
+		logger:     zap.NewNop(),
+	}
+	requestEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
+
+	compactParams, _ := json.Marshal(dto.ServiceDeployPreviewRequest{
+		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
+		ArtifactID: artifactID, ManagedRuntimeConfig: managed, Compact: true,
+	})
+	compactResult, err := handlers.previewDeploy(ctx, ContextVMRequest{
+		Event: requestEvent,
+		RPC:   ContextVMJSONRPCRequest{Method: ContextVMMethodServiceDeployPreview, Params: compactParams},
+	})
+	if err != nil {
+		t.Fatalf("compact previewDeploy: %v", err)
+	}
+	compactJSON, err := json.Marshal(compactResult)
+	if err != nil {
+		t.Fatalf("marshal compact result: %v", err)
+	}
+
+	if strings.Contains(string(compactJSON), sentinelValue) {
+		t.Fatalf("compact response leaked sentinel env value: %s", sentinelValue)
+	}
+
+	payload := compactResult.(map[string]any)
+	summary, _ := payload["desired_state_summary"].(*desiredStateSummary)
+	if summary == nil {
+		t.Fatal("desired_state_summary missing")
+	}
+	for _, k := range summary.EnvKeys {
+		if k == "API_TOKEN" {
+			return
+		}
+	}
+	t.Fatalf("API_TOKEN key not present in compact summary env_keys: %v", summary.EnvKeys)
 }

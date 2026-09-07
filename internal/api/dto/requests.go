@@ -210,6 +210,7 @@ type ServiceDeployPreviewRequest struct {
 	ArtifactID           uuid.UUID                    `json:"artifact_id"`
 	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config"`
 	PublicRoute          *domain.PublicRouteRequest   `json:"public_route,omitempty"`
+	Compact              bool                         `json:"compact,omitempty"`
 	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
 }
 

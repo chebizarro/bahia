@@ -452,12 +452,14 @@ func deployCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			compact, _ := cmd.Flags().GetBool("compact")
 			result, err := runDeploymentPreviewNostr(cmd, client.DeploymentPreviewNostrRequest{
 				ServiceID:            serviceID,
 				EnvironmentID:        envID,
 				DeploymentUnitID:     deploymentUnitID,
 				ArtifactID:           artifactID,
 				ManagedRuntimeConfig: runtimeConfig,
+				Compact:              compact,
 				IdempotencyKey:       idempotencyKey,
 			})
 			if err != nil {
@@ -472,6 +474,36 @@ func deployCommands() *cobra.Command {
 			} else {
 				fmt.Println("✓ Deployment preview ready")
 			}
+			if isCompact, _ := result["compact"].(bool); isCompact {
+				if summaryRaw, ok := result["desired_state_summary"]; ok && summaryRaw != nil {
+					summary := summaryRaw.(map[string]any)
+					fmt.Printf("  Image:        %v\n", summary["image_ref"])
+					fmt.Printf("  Ports:        %v\n", summary["ports"])
+					fmt.Printf("  Volumes:      %v\n", summary["volumes"])
+					if hc, ok := summary["healthcheck"].(map[string]any); ok && hc != nil {
+						if enabled, _ := hc["enabled"].(bool); enabled {
+							fmt.Printf("  Healthcheck:  %v (port %v)\n", hc["path"], hc["port"])
+						}
+					}
+					if route, ok := summary["public_route"].(map[string]any); ok && route != nil {
+						fmt.Printf("  Public Route: %v\n", route["hostname"])
+					}
+					if internal, ok := summary["internal_https"].(map[string]any); ok && internal != nil {
+						if enabled, _ := internal["enabled"].(bool); enabled {
+							fmt.Printf("  Internal HTTPS: %v\n", internal["hostname"])
+						}
+					}
+					fmt.Printf("  Env Keys:     %v\n", summary["env_key_count"])
+					if policyRaw, ok := result["policy"]; ok && policyRaw != nil {
+						policy := policyRaw.(map[string]any)
+						if allowed, _ := policy["allowed"].(bool); allowed {
+							fmt.Printf("  Policy:       allowed\n")
+						} else {
+							fmt.Printf("  Policy:       blocked (%v warnings, %v blockers)\n", policy["warnings"], policy["blockers"])
+						}
+					}
+				}
+			}
 			return nil
 		},
 	}
@@ -481,6 +513,7 @@ func deployCommands() *cobra.Command {
 	previewCmd.Flags().String("artifact", "", "Artifact ID")
 	previewCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
 	previewCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	previewCmd.Flags().Bool("compact", false, "Return a compact reviewed hash plus structural summary for cases where the full preview is too large to deliver over relays")
 	_ = previewCmd.MarkFlagRequired("service")
 	_ = previewCmd.MarkFlagRequired("environment")
 	_ = previewCmd.MarkFlagRequired("artifact")

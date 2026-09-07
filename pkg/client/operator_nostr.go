@@ -685,6 +685,7 @@ type DeploymentPreviewNostrRequest struct {
 	DeploymentUnitID     string         `json:"deployment_unit_id,omitempty"`
 	ArtifactID           string         `json:"artifact_id"`
 	ManagedRuntimeConfig map[string]any `json:"managed_runtime_config"`
+	Compact              bool           `json:"compact,omitempty"`
 	IdempotencyKey       string         `json:"idempotency_key,omitempty"`
 }
 
@@ -1075,6 +1076,9 @@ func (c *OperatorControlPlaneClient) PreviewDeploymentNostr(ctx context.Context,
 		"environment_id":         req.EnvironmentID,
 		"artifact_id":            req.ArtifactID,
 		"managed_runtime_config": req.ManagedRuntimeConfig,
+	}
+	if req.Compact {
+		payload["compact"] = true
 	}
 	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.ArtifactID}}
 	if req.DeploymentUnitID != "" {

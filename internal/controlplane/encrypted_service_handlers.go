@@ -125,6 +125,25 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 	if err != nil {
 		return nil, fmt.Errorf("evaluate deployment policy: %w", err)
 	}
+	if params.Compact {
+		currentHash := ""
+		if currentDesiredState != nil {
+			currentHash = currentDesiredState.DesiredHash
+		}
+		return map[string]any{
+			"service_id":                 params.ServiceID.String(),
+			"environment_id":             params.EnvironmentID.String(),
+			"artifact_id":                params.ArtifactID.String(),
+			"deployment_unit_id":         desiredState.DeploymentUnitID,
+			"desired_state_hash":         desiredState.DesiredHash,
+			"current_desired_state_hash": currentHash,
+			"policy":                     evaluation,
+			"route_approval_required":    routeApprovalRequired,
+			"idempotency_key":            effectiveIdempotencyKey(request, params.IdempotencyKey),
+			"compact":                    true,
+			"desired_state_summary":      buildDesiredStateSummary(desiredState),
+		}, nil
+	}
 	return map[string]any{
 		"service_id":              params.ServiceID.String(),
 		"environment_id":          params.EnvironmentID.String(),
