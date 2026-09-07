@@ -371,7 +371,7 @@ func TestMapDockerState(t *testing.T) {
 		{"running", domain.HealthStatusHealthy},
 		{"Running", domain.HealthStatusHealthy},
 		{"created", domain.HealthStatusStarting},
-		{"restarting", domain.HealthStatusStarting},
+		{"restarting", domain.HealthStatusUnhealthy},
 		{"exited", domain.HealthStatusStopped},
 		{"dead", domain.HealthStatusStopped},
 		{"removing", domain.HealthStatusStopped},
