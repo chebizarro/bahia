@@ -68,6 +68,17 @@ const (
 	// RouteCanaryClassificationBodyMismatch means status assertions held but the
 	// configured expected body substring was absent.
 	RouteCanaryClassificationBodyMismatch RouteCanaryClassification = "body_mismatch"
+	// RouteCanaryClassificationHealthPathNotDiscriminating means the health path
+	// returned the same response as a deliberately bogus control path, so the
+	// check proves only that something answered, not that the intended
+	// application answered.
+	//
+	// This is the catch-all case: a single-page application that serves its shell
+	// with HTTP 200 for every path makes a health-path assertion vacuous. The
+	// route may well be fine, which is why this is a warning by default, but the
+	// canary cannot vouch for it and must say so rather than imply confidence it
+	// does not have.
+	RouteCanaryClassificationHealthPathNotDiscriminating RouteCanaryClassification = "health_path_not_discriminating"
 )
 
 // Failing reports whether the classification represents a failed route
@@ -76,11 +87,28 @@ const (
 // opening an outage or blocking a deployment.
 func (c RouteCanaryClassification) Failing() bool {
 	switch c {
-	case RouteCanaryClassificationRouteOK, RouteCanaryClassificationTLSExpiring:
+	case RouteCanaryClassificationRouteOK,
+		RouteCanaryClassificationTLSExpiring,
+		RouteCanaryClassificationHealthPathNotDiscriminating:
 		return false
 	default:
 		return true
 	}
+}
+
+// FailingForTarget reports whether the classification should fail this specific
+// target. It differs from Failing only for warning classifications that a target
+// has been configured to treat as errors.
+//
+// A non-discriminating health path is a warning by default because serving a
+// catch-all is legitimate for many applications. An operator who needs the check
+// to actually mean something sets RequireDiscriminatingHealthPath, which
+// promotes it to a failure.
+func (c RouteCanaryClassification) FailingForTarget(target RouteCanaryTarget) bool {
+	if c == RouteCanaryClassificationHealthPathNotDiscriminating {
+		return target.RequireDiscriminatingHealthPath
+	}
+	return c.Failing()
 }
 
 // Valid reports whether the classification is a known value.
@@ -93,7 +121,8 @@ func (c RouteCanaryClassification) Valid() bool {
 		RouteCanaryClassificationTLSExpiring,
 		RouteCanaryClassificationUpstreamError,
 		RouteCanaryClassificationStatusMismatch,
-		RouteCanaryClassificationBodyMismatch:
+		RouteCanaryClassificationBodyMismatch,
+		RouteCanaryClassificationHealthPathNotDiscriminating:
 		return true
 	default:
 		return false
@@ -118,6 +147,23 @@ type RouteCanaryTarget struct {
 	ExpectedBodyContains string                 `json:"expected_body_contains,omitempty"`
 	TLSMinDaysRemaining  int                    `json:"tls_min_days_remaining,omitempty"`
 	Timeout              time.Duration          `json:"timeout"`
+	// ControlPath is a deliberately bogus path used as a negative control. When
+	// set, the probe also requests it; if the health path is indistinguishable
+	// from it, the health assertion is proving nothing.
+	ControlPath string `json:"control_path,omitempty"`
+	// RequireDiscriminatingHealthPath promotes a non-discriminating health path
+	// from a warning to a failure for this target.
+	RequireDiscriminatingHealthPath bool `json:"require_discriminating_health_path,omitempty"`
+}
+
+// ControlURL renders the absolute URL of the negative-control request.
+func (t RouteCanaryTarget) ControlURL() string {
+	if t.ControlPath == "" {
+		return ""
+	}
+	control := t
+	control.Path = t.ControlPath
+	return control.URL()
 }
 
 // URL renders the absolute request URL for the target. The port is omitted when
@@ -223,6 +269,40 @@ type RouteCanaryObservation struct {
 	Duration time.Duration `json:"duration"`
 	// ObservedAt is when the probe started.
 	ObservedAt time.Time `json:"observed_at"`
+	// BodyFingerprint is a hash of the bounded body, used to compare the health
+	// response against the negative control without storing two bodies.
+	BodyFingerprint string `json:"body_fingerprint,omitempty"`
+	// Control is the negative-control observation, when one was requested.
+	Control *RouteControlObservation `json:"control,omitempty"`
+}
+
+// RouteControlObservation is the result of requesting a deliberately bogus path.
+//
+// Its only purpose is to establish whether the health path discriminates. If a
+// path that should not exist answers identically to the health path, the health
+// path is not evidence about the application behind the route.
+type RouteControlObservation struct {
+	Performed       bool   `json:"performed"`
+	Connected       bool   `json:"connected"`
+	StatusCode      int    `json:"status_code,omitempty"`
+	BodyFingerprint string `json:"body_fingerprint,omitempty"`
+}
+
+// Indistinguishable reports whether the health response and the control response
+// cannot be told apart.
+//
+// Both status and body must match. Comparing bodies avoids false positives on
+// applications that legitimately return the same status for everything but
+// different content, and any difference at all is treated as discriminating so
+// that dynamic content never produces a spurious warning.
+func (o RouteCanaryObservation) Indistinguishable() bool {
+	if o.Control == nil || !o.Control.Performed || !o.Control.Connected || !o.Connected {
+		return false
+	}
+	if o.Control.StatusCode != o.StatusCode {
+		return false
+	}
+	return o.BodyFingerprint != "" && o.BodyFingerprint == o.Control.BodyFingerprint
 }
 
 // ClassifyRouteObservation reduces a raw observation to a single classification.
@@ -255,6 +335,12 @@ func ClassifyRouteObservation(observation RouteCanaryObservation, now time.Time)
 	if observation.Target.ExpectedBodyContains != "" && !observation.BodyMatched {
 		return RouteCanaryClassificationBodyMismatch
 	}
+	// An explicit body assertion that held is real evidence about the
+	// application, so it outranks the catch-all warning: the operator has
+	// already proven the response is the intended one.
+	if observation.Target.ExpectedBodyContains == "" && observation.Indistinguishable() {
+		return RouteCanaryClassificationHealthPathNotDiscriminating
+	}
 	if observation.Target.TLSMinDaysRemaining > 0 &&
 		observation.TLS.HandshakeCompleted &&
 		!observation.TLS.NotAfter.IsZero() &&
@@ -273,23 +359,38 @@ func ClassifyRouteObservation(observation RouteCanaryObservation, now time.Time)
 // too. The first failing observation in precedence order is reported so that
 // operators see the most actionable cause. A warning classification is reported
 // only when nothing is failing.
-func ReduceRouteObservations(observations []RouteCanaryObservation, now time.Time) (RouteCanaryClassification, RouteCanaryPerspective, bool) {
+func ReduceRouteObservations(observations []RouteCanaryObservation, now time.Time) (RouteCanaryReduction, bool) {
 	if len(observations) == 0 {
-		return RouteCanaryClassificationRouteOK, "", false
+		return RouteCanaryReduction{Classification: RouteCanaryClassificationRouteOK}, false
 	}
 	worst := RouteCanaryClassificationRouteOK
-	worstPerspective := observations[0].Target.Perspective
+	worstObservation := observations[0]
 	worstRank := -1
 	for _, observation := range observations {
 		classification := ClassifyRouteObservation(observation, now)
 		rank := routeClassificationRank(classification)
 		if rank > worstRank {
 			worst = classification
-			worstPerspective = observation.Target.Perspective
+			worstObservation = observation
 			worstRank = rank
 		}
 	}
-	return worst, worstPerspective, true
+	return RouteCanaryReduction{
+		Classification: worst,
+		Perspective:    worstObservation.Target.Perspective,
+		// Failing is target-aware so a warning the operator has configured as
+		// mandatory is treated as a failure for that route only.
+		Failing:     worst.FailingForTarget(worstObservation.Target),
+		Observation: worstObservation,
+	}, true
+}
+
+// RouteCanaryReduction is the single verdict derived from every perspective.
+type RouteCanaryReduction struct {
+	Classification RouteCanaryClassification
+	Perspective    RouteCanaryPerspective
+	Failing        bool
+	Observation    RouteCanaryObservation
 }
 
 // routeClassificationRank orders classifications by severity so a reduction over
@@ -301,20 +402,22 @@ func routeClassificationRank(classification RouteCanaryClassification) int {
 		return 0
 	case RouteCanaryClassificationTLSExpiring:
 		return 1
-	case RouteCanaryClassificationBodyMismatch:
+	case RouteCanaryClassificationHealthPathNotDiscriminating:
 		return 2
-	case RouteCanaryClassificationStatusMismatch:
+	case RouteCanaryClassificationBodyMismatch:
 		return 3
-	case RouteCanaryClassificationUpstreamError:
+	case RouteCanaryClassificationStatusMismatch:
 		return 4
-	case RouteCanaryClassificationConnectFailed:
+	case RouteCanaryClassificationUpstreamError:
 		return 5
-	case RouteCanaryClassificationTLSInvalid:
+	case RouteCanaryClassificationConnectFailed:
 		return 6
-	case RouteCanaryClassificationDNSUnresolved:
+	case RouteCanaryClassificationTLSInvalid:
 		return 7
-	default:
+	case RouteCanaryClassificationDNSUnresolved:
 		return 8
+	default:
+		return 9
 	}
 }
 
@@ -423,6 +526,7 @@ const (
 func EvaluateRouteCanary(
 	previous RouteCanaryState,
 	classification RouteCanaryClassification,
+	failing bool,
 	perspective RouteCanaryPerspective,
 	reason string,
 	tlsNotAfter *time.Time,
@@ -439,7 +543,6 @@ func EvaluateRouteCanary(
 		next.TLSNotAfter = tlsNotAfter
 	}
 
-	failing := classification.Failing()
 	if failing {
 		next.ConsecutiveFailures = previous.ConsecutiveFailures + 1
 		next.ConsecutiveSuccesses = 0
@@ -447,9 +550,10 @@ func EvaluateRouteCanary(
 	} else {
 		next.ConsecutiveSuccesses = previous.ConsecutiveSuccesses + 1
 		next.ConsecutiveFailures = 0
-		if classification == RouteCanaryClassificationTLSExpiring {
+		switch classification {
+		case RouteCanaryClassificationTLSExpiring, RouteCanaryClassificationHealthPathNotDiscriminating:
 			next.FailureReason = SanitizeEvidence(reason)
-		} else {
+		default:
 			next.FailureReason = ""
 		}
 	}
@@ -522,6 +626,12 @@ func DescribeRouteObservation(observation RouteCanaryObservation, classification
 	case RouteCanaryClassificationBodyMismatch:
 		return SanitizeEvidence(fmt.Sprintf("%s: HTTP %d but response body did not contain the expected marker",
 			target.Describe(), observation.StatusCode))
+	case RouteCanaryClassificationHealthPathNotDiscriminating:
+		return SanitizeEvidence(fmt.Sprintf(
+			"%s: health path returned HTTP %d with the same body as control path %s, so it does not discriminate; "+
+				"this route serves a catch-all and the health path proves only that something answered. "+
+				"Configure a real health endpoint or expected_body_contains to make this check meaningful",
+			target.Describe(), observation.StatusCode, target.ControlPath))
 	default:
 		return SanitizeEvidence(fmt.Sprintf("%s: unclassified route failure", target.Describe()))
 	}

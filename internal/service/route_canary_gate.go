@@ -105,12 +105,18 @@ func (g *RouteCanaryGate) Apply(ctx context.Context, plan *domain.DesiredPublicR
 	}
 
 	verdict, verified, verifyErr := g.verify(ctx, plan)
-	if verifyErr == nil && (!verified || !verdict.Failing()) {
-		// Either the policy derives no targets for this route, or every
-		// perspective passed. Record the healthy observation and keep the route.
-		if verified {
-			g.record(ctx, plan, verdict)
-		}
+	if verifyErr == nil && !verified {
+		// The policy derived no targets, so nothing was actually verified. That
+		// is a legitimate configuration outcome, but it must never be silent:
+		// an operator watching a gate that passes has to be able to tell
+		// "checked and healthy" apart from "checked nothing".
+		g.logger.Warn("route canary gate verified nothing; policy derived no targets for this route",
+			zap.String("route", domain.RouteCanaryKeyForPlan(plan).Coordinate()),
+			zap.String("hostname", plan.Hostname))
+		return nil
+	}
+	if verifyErr == nil && !verdict.Failing() {
+		g.record(ctx, plan, verdict)
 		return nil
 	}
 
@@ -191,6 +197,7 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 	next, transition := domain.EvaluateRouteCanary(
 		prior,
 		verdict.Classification,
+		verdict.Failing(),
 		verdict.Perspective,
 		verdict.Reason,
 		verdict.TLSNotAfter,

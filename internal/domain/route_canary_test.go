@@ -159,7 +159,7 @@ func TestTLSExpiringDoesNotOpenAnOutage(t *testing.T) {
 	thresholds := RouteCanaryThresholds{FailureThreshold: 1, SuccessThreshold: 1}
 	for i := 0; i < 5; i++ {
 		var transition RouteCanaryTransition
-		state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationTLSExpiring,
+		state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationTLSExpiring, RouteCanaryClassificationTLSExpiring.Failing(),
 			RouteCanaryPerspectivePublicEdge, "expires soon", nil, thresholds, now)
 		if state.Open {
 			t.Fatalf("tls_expiring opened an outage (transition %q)", transition)
@@ -183,15 +183,18 @@ func TestReduceRouteObservationsRequiresEveryPerspective(t *testing.T) {
 		{Target: baseTarget(), Resolved: true, Connected: true, TLS: healthy, StatusCode: 502},
 	}
 
-	classification, perspective, ok := ReduceRouteObservations(observations, now)
+	reduction, ok := ReduceRouteObservations(observations, now)
 	if !ok {
 		t.Fatal("expected a reduction")
 	}
-	if classification != RouteCanaryClassificationUpstreamError {
-		t.Fatalf("got %q, want %q", classification, RouteCanaryClassificationUpstreamError)
+	if reduction.Classification != RouteCanaryClassificationUpstreamError {
+		t.Fatalf("got %q, want %q", reduction.Classification, RouteCanaryClassificationUpstreamError)
 	}
-	if perspective != RouteCanaryPerspectivePublicEdge {
-		t.Fatalf("got perspective %q, want %q", perspective, RouteCanaryPerspectivePublicEdge)
+	if reduction.Perspective != RouteCanaryPerspectivePublicEdge {
+		t.Fatalf("got perspective %q, want %q", reduction.Perspective, RouteCanaryPerspectivePublicEdge)
+	}
+	if !reduction.Failing {
+		t.Fatal("an upstream error must be failing")
 	}
 }
 
@@ -211,12 +214,12 @@ func TestReduceRouteObservationsDetectsBrokenInternalPathWhileEdgeIsFine(t *test
 		{Target: internalTarget, Resolved: true, Connected: true, TLS: healthy, StatusCode: 502},
 	}
 
-	classification, perspective, _ := ReduceRouteObservations(observations, now)
-	if classification != RouteCanaryClassificationUpstreamError {
-		t.Fatalf("got %q, want %q", classification, RouteCanaryClassificationUpstreamError)
+	reduction, _ := ReduceRouteObservations(observations, now)
+	if reduction.Classification != RouteCanaryClassificationUpstreamError {
+		t.Fatalf("got %q, want %q", reduction.Classification, RouteCanaryClassificationUpstreamError)
 	}
-	if perspective != RouteCanaryPerspectiveInternalLAN {
-		t.Fatalf("got perspective %q, want %q", perspective, RouteCanaryPerspectiveInternalLAN)
+	if reduction.Perspective != RouteCanaryPerspectiveInternalLAN {
+		t.Fatalf("got perspective %q, want %q", reduction.Perspective, RouteCanaryPerspectiveInternalLAN)
 	}
 }
 
@@ -229,12 +232,12 @@ func TestEvaluateRouteCanaryHysteresis(t *testing.T) {
 	state := RouteCanaryState{}
 
 	// Two failures of differing class must not open yet.
-	state, transition := EvaluateRouteCanary(state, RouteCanaryClassificationUpstreamError,
+	state, transition := EvaluateRouteCanary(state, RouteCanaryClassificationUpstreamError, RouteCanaryClassificationUpstreamError.Failing(),
 		RouteCanaryPerspectivePublicEdge, "502", nil, thresholds, now)
 	if state.Open || transition == RouteCanaryTransitionOpened {
 		t.Fatal("opened after one failure")
 	}
-	state, _ = EvaluateRouteCanary(state, RouteCanaryClassificationDNSUnresolved,
+	state, _ = EvaluateRouteCanary(state, RouteCanaryClassificationDNSUnresolved, RouteCanaryClassificationDNSUnresolved.Failing(),
 		RouteCanaryPerspectivePublicEdge, "nxdomain", nil, thresholds, now)
 	if state.Open {
 		t.Fatal("opened after two failures")
@@ -244,7 +247,7 @@ func TestEvaluateRouteCanaryHysteresis(t *testing.T) {
 	}
 
 	// The third consecutive failure, of a third class, opens the outage.
-	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationConnectFailed,
+	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationConnectFailed, RouteCanaryClassificationConnectFailed.Failing(),
 		RouteCanaryPerspectivePublicEdge, "refused", nil, thresholds, now)
 	if !state.Open || transition != RouteCanaryTransitionOpened {
 		t.Fatalf("expected opened, got open=%v transition=%q", state.Open, transition)
@@ -254,14 +257,14 @@ func TestEvaluateRouteCanaryHysteresis(t *testing.T) {
 	}
 
 	// One success must not clear it.
-	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationRouteOK,
+	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationRouteOK, RouteCanaryClassificationRouteOK.Failing(),
 		RouteCanaryPerspectivePublicEdge, "", nil, thresholds, now)
 	if !state.Open {
 		t.Fatalf("cleared after one success (transition %q)", transition)
 	}
 
 	// The second consecutive success clears it.
-	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationRouteOK,
+	state, transition = EvaluateRouteCanary(state, RouteCanaryClassificationRouteOK, RouteCanaryClassificationRouteOK.Failing(),
 		RouteCanaryPerspectivePublicEdge, "", nil, thresholds, now)
 	if state.Open || transition != RouteCanaryTransitionRecovered {
 		t.Fatalf("expected recovered, got open=%v transition=%q", state.Open, transition)
@@ -283,7 +286,7 @@ func TestEvaluateRouteCanaryNormalizesThresholds(t *testing.T) {
 	now := time.Now()
 	state := RouteCanaryState{}
 	// Zero-valued thresholds must fall back to defaults, not to "open on first".
-	state, _ = EvaluateRouteCanary(state, RouteCanaryClassificationUpstreamError,
+	state, _ = EvaluateRouteCanary(state, RouteCanaryClassificationUpstreamError, RouteCanaryClassificationUpstreamError.Failing(),
 		RouteCanaryPerspectivePublicEdge, "502", nil, RouteCanaryThresholds{}, now)
 	if state.Open {
 		t.Fatal("zero thresholds opened an outage on the first failure")
@@ -295,7 +298,7 @@ func TestEvaluateRouteCanaryNormalizesThresholds(t *testing.T) {
 func TestEvaluateRouteCanarySanitizesFailureReason(t *testing.T) {
 	now := time.Now()
 	secret := "failed with Authorization: Bearer supersecrettokenvalue"
-	state, _ := EvaluateRouteCanary(RouteCanaryState{}, RouteCanaryClassificationConnectFailed,
+	state, _ := EvaluateRouteCanary(RouteCanaryState{}, RouteCanaryClassificationConnectFailed, RouteCanaryClassificationConnectFailed.Failing(),
 		RouteCanaryPerspectivePublicEdge, secret, nil, RouteCanaryThresholds{}, now)
 	if state.FailureReason == secret {
 		t.Fatal("failure reason was stored unsanitized")
@@ -386,5 +389,180 @@ func TestDescribeRouteObservationIsEmptyWhenHealthy(t *testing.T) {
 	}
 	if reason := DescribeRouteObservation(observation, RouteCanaryClassificationRouteOK, now); reason != "" {
 		t.Fatalf("expected no reason for a healthy route, got %q", reason)
+	}
+}
+
+// --- Regression: the 2026-09-07 live gate finding ---
+//
+// A route-only attach was submitted for Astillero with a deliberately wrong
+// health path, expecting the gate to block it. The gate allowed the deploy.
+// A read-only probe of the live host explained why: Astillero serves a
+// single-page-application catch-all, so /health and a garbage path both return
+// HTTP 200 with a byte-identical body. The gate was not bypassed - it correctly
+// observed a route that was serving. The real defect is that a health path
+// which discriminates nothing was indistinguishable from a healthy one.
+
+func catchAllObservation(target RouteCanaryTarget) RouteCanaryObservation {
+	// Health path and control path answer identically, as the live host does.
+	return RouteCanaryObservation{
+		Target: target, Resolved: true, Connected: true, StatusCode: 200,
+		BodyFingerprint: "2cb952770280df2c",
+		TLS: RouteCanaryTLSObservation{
+			HandshakeCompleted: true, ChainVerified: true,
+			NotAfter: time.Now().Add(90 * 24 * time.Hour),
+		},
+		Control: &RouteControlObservation{
+			Performed: true, Connected: true, StatusCode: 200,
+			BodyFingerprint: "2cb952770280df2c",
+		},
+	}
+}
+
+func TestCatchAllHealthPathIsReportedNotSilentlyPassed(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+
+	got := ClassifyRouteObservation(catchAllObservation(target), time.Now())
+	if got != RouteCanaryClassificationHealthPathNotDiscriminating {
+		t.Fatalf("got %q, want health_path_not_discriminating", got)
+	}
+}
+
+// A discriminating health path must not be flagged: the control path answering
+// differently is exactly what proves the check is meaningful.
+func TestDiscriminatingHealthPathIsRouteOK(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+
+	observation := catchAllObservation(target)
+	observation.Control.StatusCode = 404
+	observation.Control.BodyFingerprint = "ffffffffffffffff"
+
+	if got := ClassifyRouteObservation(observation, time.Now()); got != RouteCanaryClassificationRouteOK {
+		t.Fatalf("got %q, want route_ok", got)
+	}
+}
+
+// Differing bodies alone are enough to prove discrimination, so an application
+// that returns 200 for everything but varies content is not flagged.
+func TestSameStatusDifferentBodyIsDiscriminating(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+
+	observation := catchAllObservation(target)
+	observation.Control.BodyFingerprint = "0123456789abcdef"
+
+	if got := ClassifyRouteObservation(observation, time.Now()); got != RouteCanaryClassificationRouteOK {
+		t.Fatalf("got %q, want route_ok", got)
+	}
+}
+
+// By default a catch-all is a warning, not an outage: serving a shell for every
+// path is legitimate, and promoting it to an outage would page operators for
+// working routes and roll back healthy deployments.
+func TestCatchAllIsWarningByDefault(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+	observations := []RouteCanaryObservation{catchAllObservation(target)}
+
+	reduction, ok := ReduceRouteObservations(observations, time.Now())
+	if !ok {
+		t.Fatal("expected a reduction")
+	}
+	if reduction.Classification != RouteCanaryClassificationHealthPathNotDiscriminating {
+		t.Fatalf("got %q", reduction.Classification)
+	}
+	if reduction.Failing {
+		t.Fatal("a catch-all must not fail by default; it would roll back working routes")
+	}
+
+	state := RouteCanaryState{}
+	for i := 0; i < 5; i++ {
+		state, _ = EvaluateRouteCanary(state, reduction.Classification, reduction.Failing,
+			reduction.Perspective, "catch-all", nil, RouteCanaryThresholds{FailureThreshold: 1, SuccessThreshold: 1}, time.Now())
+		if state.Open {
+			t.Fatal("catch-all opened an outage by default")
+		}
+	}
+	if state.FailureReason == "" {
+		t.Fatal("the warning must still be recorded so an operator can act on it")
+	}
+}
+
+// An operator who needs the health check to actually mean something opts in,
+// and then the same condition blocks.
+func TestCatchAllFailsWhenDiscriminationRequired(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+	target.RequireDiscriminatingHealthPath = true
+
+	reduction, _ := ReduceRouteObservations([]RouteCanaryObservation{catchAllObservation(target)}, time.Now())
+	if !reduction.Failing {
+		t.Fatal("require_discriminating_health_path must make a catch-all fail")
+	}
+}
+
+// An explicit body assertion is real evidence about the application, so it
+// outranks the catch-all warning.
+func TestExplicitBodyAssertionSuppressesCatchAllWarning(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+	target.ExpectedBodyContains = "astillero-ok"
+
+	observation := catchAllObservation(target)
+	observation.BodyMatched = true
+
+	if got := ClassifyRouteObservation(observation, time.Now()); got != RouteCanaryClassificationRouteOK {
+		t.Fatalf("got %q, want route_ok", got)
+	}
+}
+
+// A genuinely broken route must still outrank the catch-all warning.
+func TestUpstreamErrorOutranksCatchAllWarning(t *testing.T) {
+	target := baseTarget()
+	target.ControlPath = "/.bahia-route-canary-control/abcd1234"
+
+	observation := catchAllObservation(target)
+	observation.StatusCode = 502
+	observation.Control.StatusCode = 502
+
+	if got := ClassifyRouteObservation(observation, time.Now()); got != RouteCanaryClassificationUpstreamError {
+		t.Fatalf("got %q, want upstream_error", got)
+	}
+}
+
+func TestRequireDiscriminationWithoutDetectionIsRejected(t *testing.T) {
+	policy := RouteCanaryPolicy{
+		Enabled: true, ProbeTimeout: time.Second,
+		ExpectedStatusMin: 200, ExpectedStatusMax: 299,
+		RequireDiscriminatingHealthPath: true, DetectCatchAll: false,
+	}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("requiring discrimination without performing the control probe must be rejected")
+	}
+}
+
+func TestDeriveAssignsUniqueControlPaths(t *testing.T) {
+	policy := RouteCanaryPolicy{
+		Enabled: true, ProbeTimeout: time.Second,
+		ExpectedStatusMin: 200, ExpectedStatusMax: 299, DetectCatchAll: true,
+	}
+	plan := &DesiredPublicRoutePlan{Hostname: "git.example.net", Proxy: DesiredPublicRouteProxy{HealthPath: "/healthz"}}
+
+	first, err := DeriveRouteCanaryTargets(plan, policy)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	second, _ := DeriveRouteCanaryTargets(plan, policy)
+	if first[0].ControlPath == "" {
+		t.Fatal("detect_catch_all must assign a control path")
+	}
+	// A fixed control path could be cached or special-cased, silently disabling
+	// the negative control.
+	if first[0].ControlPath == second[0].ControlPath {
+		t.Fatal("control paths must be unpredictable across derivations")
+	}
+	if first[0].ControlURL() != "https://git.example.net"+first[0].ControlPath {
+		t.Fatalf("unexpected control URL %q", first[0].ControlURL())
 	}
 }

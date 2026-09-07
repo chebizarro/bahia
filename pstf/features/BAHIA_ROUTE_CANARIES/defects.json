@@ -6,14 +6,43 @@
       "statement": "NginxBackend restored the previous vhost when its own test or reload failed, but exposed no inverse for a successful apply. A route that installed cleanly yet did not serve traffic could be detected as broken with no way to restore the working vhost.",
       "status": "fixed",
       "fix": "NginxBackend and CompositeBackend gained ApplyWithCompensation; PublicRoutePlanner gained ApplyWithCompensation that fails loudly when a backend cannot produce an inverse.",
-      "verification": ["internal/adapters/routing/nginx.go","internal/adapters/routing/composite.go","internal/service/public_route.go"]
+      "verification": [
+        "internal/adapters/routing/nginx.go",
+        "internal/adapters/routing/composite.go",
+        "internal/service/public_route.go"
+      ]
     },
     {
       "id": "D2",
       "statement": "DNS-plus-HTTPS route verification existed only inside CloudflareBackend.verifyHTTPS. Any second verification path would have duplicated the resolver and dial logic, which is the class of divergence that produced this outage.",
       "status": "fixed",
       "fix": "Extracted a single shared resolver/dial-override transport builder into internal/httpclient, consumed by the route prober. It is built on hardenTransport so TLS verification cannot be disabled on any probe path.",
-      "verification": ["internal/httpclient/probe_transport.go","internal/adapters/runtime/route_probe.go"]
+      "verification": [
+        "internal/httpclient/probe_transport.go",
+        "internal/adapters/runtime/route_probe.go"
+      ]
+    },
+    {
+      "id": "D3",
+      "statement": "The canary could not detect a non-discriminating health path. Against a catch-all application that serves its shell with HTTP 200 for every path, the health-path assertion proves only that something answered, and a wrong health path is indistinguishable from a correct one. Found during live validation on 2026-09-07: a route-only attach for Astillero with health path /__route_canary_expected_failure__ was allowed by the gate. Read-only probes confirmed astillero.sharegap.net returns a byte-identical 2252-byte body for /health, the deliberately bad path, and a random path, so the route genuinely was serving and the gate evaluated it correctly. The defect is the missing negative control, not a gate bypass.",
+      "status": "fixed",
+      "fix": "Added an optional negative-control probe (detect_catch_all). Each probe additionally requests a random unpredictable control path and fingerprints both bodies; an indistinguishable pair is classified health_path_not_discriminating. Warning by default because serving a catch-all is legitimate, promotable to a blocking failure via require_discriminating_health_path. An explicit expected_body_contains that holds is real evidence and suppresses the warning.",
+      "verification": [
+        "internal/domain/route_canary_test.go:TestCatchAllHealthPathIsReportedNotSilentlyPassed",
+        "internal/adapters/runtime/route_probe_test.go:TestProbeRouteDetectsCatchAllServer",
+        "internal/service/route_canary_test.go:TestGateBlocksCatchAllWhenDiscriminationRequired",
+        "internal/service/route_canary_test.go:TestGateAllowsCatchAllRouteByDefault"
+      ]
+    },
+    {
+      "id": "D4",
+      "statement": "When the policy derived no targets for a route, the gate returned success indistinguishably from having verified a healthy route. An operator who had just watched a gate fail to block had no way to tell 'checked and healthy' from 'checked nothing'.",
+      "status": "fixed",
+      "fix": "The no-target path is now a separate branch that logs a warning naming the route coordinate and hostname, and does not record a canary state that would imply verification occurred.",
+      "verification": [
+        "internal/service/route_canary_gate.go",
+        "internal/service/route_canary_test.go:TestGateSkipsVerificationWhenPolicyDerivesNoTargets"
+      ]
     }
   ]
 }

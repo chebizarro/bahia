@@ -43,6 +43,41 @@ Failures are classified by the outermost layer that broke, so you see the most a
 | `status_mismatch` | The response status fell outside the expected range. |
 | `body_mismatch` | Status was acceptable but the expected body marker was absent. |
 | `tls_expiring` | The route works, but the certificate expires soon. This is a **warning**: it never opens an outage and never blocks a deployment. |
+| `health_path_not_discriminating` | The health path returned the same response as a deliberately bogus control path, so the check proves only that *something* answered. A **warning** by default. |
+
+### Catch-all routes and why the health path may prove nothing
+
+A single-page application typically serves its shell with HTTP 200 for **every**
+path, including paths that do not exist. Against such a service a health-path
+check is close to vacuous: a wrong path, a stale upstream still serving the
+shell, and a perfectly healthy service all look identical.
+
+This was found live on 2026-09-07. `astillero.sharegap.net/health` returned a
+byte-identical body to a randomly generated garbage path, meaning the configured
+health path was not a health endpoint at all — it was the SPA catch-all.
+
+Set `detect_catch_all: true` and each probe additionally requests a random
+control path that nothing should serve. If the health response is
+indistinguishable from it — same status *and* same body — the canary reports
+`health_path_not_discriminating` instead of implying a confidence it does not
+have.
+
+Any difference at all counts as discriminating, so applications that return the
+same status for everything but vary their content are not flagged.
+
+This is a **warning** by default, because serving a catch-all is legitimate and
+promoting it to an outage would page operators about working routes and roll
+back healthy deployments. Two ways to make the check meaningful:
+
+- point the route at a real health endpoint, or
+- set `expected_body_contains` to something only the intended application
+  returns — an explicit body assertion is real evidence and suppresses the
+  warning.
+
+Set `require_discriminating_health_path: true` to promote it to a failure, which
+also makes it **block deployments**. Note this will block a route whose health
+path is a catch-all even when that route is serving correctly — which is the
+point, but it is disruptive, so stage it.
 
 ### Service healthy, route broken
 
@@ -61,6 +96,21 @@ When `gate_enabled` is set, a deployment that attaches or changes a route must p
 Rollback runs on a context that outlives a cancelled deployment, so cancelling a run cannot strand a route that was already proven broken.
 
 A failure that occurs while *applying* to the provider is reported as a provider failure, not a canary failure - the gate does not probe or roll back a route whose apply never succeeded.
+
+### What the gate can and cannot catch
+
+The gate blocks a route that does not **serve**: bad status, upstream 502/503/504,
+DNS failure, untrusted TLS, missing body marker.
+
+It does not, by default, catch a route that serves the *wrong thing* with a 200.
+Against a catch-all application a wrong health path still returns 200, so the
+gate will correctly allow it. If you need a misconfigured health path to be
+caught, enable `detect_catch_all` together with
+`require_discriminating_health_path`, or set `expected_body_contains`.
+
+If the policy derives no targets for a route, the gate has verified nothing. It
+allows the deployment but logs a warning at `route-canary-gate`, so
+"checked and healthy" is never silently confused with "checked nothing".
 
 ## Periodic probing
 
@@ -90,6 +140,12 @@ route_canaries:
   expected_status_max: 299
   expected_body_contains: ""
   tls_min_days_remaining: 14
+  # Also request a random control path each probe. If the health path answers
+  # identically, report health_path_not_discriminating instead of route_ok.
+  detect_catch_all: true
+  # Promote that warning to a failure, which also blocks deployments.
+  # Requires detect_catch_all.
+  require_discriminating_health_path: false
   # Public-edge checks use this resolver so they cannot be satisfied by
   # split-horizon LAN DNS. Use "system" for the host resolver.
   public_resolver: "1.1.1.1:53"
@@ -147,7 +203,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 |---|---|---|
 | `route.canary_outage_opened` | critical | A route outage is declared. |
 | `route.canary_recovered` | info | An open outage clears. |
-| `route.canary_classification_changed` | error / warning | The route is still failing but for a different reason, or a warning appeared or cleared. |
+| `route.canary_classification_changed` | error / warning | The route is still failing but for a different reason, or a warning appeared or cleared (including `health_path_not_discriminating`). |
 
 Payloads carry the container-level status observed at the same moment, so a notification about a broken route also tells you whether the service behind it was fine.
 

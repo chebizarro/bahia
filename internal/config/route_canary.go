@@ -65,14 +65,17 @@ func (c RouteCanaryConfig) Policy() domain.RouteCanaryPolicy {
 		resolver = ""
 	}
 	return domain.RouteCanaryPolicy{
-		Enabled:               normalized.Enabled,
-		ProbeTimeout:          normalized.ProbeTimeout,
-		ExpectedStatusMin:     normalized.ExpectedStatusMin,
-		ExpectedStatusMax:     normalized.ExpectedStatusMax,
-		ExpectedBodyContains:  normalized.ExpectedBodyContains,
-		TLSMinDaysRemaining:   normalized.TLSMinDaysRemaining,
-		PublicResolverAddr:    resolver,
-		InternalDialAddresses: dialAddresses,
+		Enabled:              normalized.Enabled,
+		ProbeTimeout:         normalized.ProbeTimeout,
+		ExpectedStatusMin:    normalized.ExpectedStatusMin,
+		ExpectedStatusMax:    normalized.ExpectedStatusMax,
+		ExpectedBodyContains: normalized.ExpectedBodyContains,
+		TLSMinDaysRemaining:  normalized.TLSMinDaysRemaining,
+		DetectCatchAll:       normalized.DetectCatchAll,
+
+		RequireDiscriminatingHealthPath: normalized.RequireDiscriminatingHealthPath,
+		PublicResolverAddr:              resolver,
+		InternalDialAddresses:           dialAddresses,
 		Thresholds: domain.RouteCanaryThresholds{
 			FailureThreshold: normalized.FailureThreshold,
 			SuccessThreshold: normalized.SuccessThreshold,
@@ -98,6 +101,9 @@ func (c *Config) validateRouteCanaries() error {
 	}
 	if normalized.TLSMinDaysRemaining < 0 {
 		return fmt.Errorf("config validation failed: route_canaries.tls_min_days_remaining must not be negative")
+	}
+	if normalized.RequireDiscriminatingHealthPath && !normalized.DetectCatchAll {
+		return fmt.Errorf("config validation failed: route_canaries.require_discriminating_health_path requires detect_catch_all=true")
 	}
 	if resolver := normalized.PublicResolver; resolver != "" && !strings.EqualFold(resolver, "system") {
 		host, port, err := net.SplitHostPort(resolver)

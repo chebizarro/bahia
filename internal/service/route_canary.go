@@ -88,12 +88,13 @@ type RouteCanaryVerdict struct {
 	Reason         string
 	Observations   []domain.RouteCanaryObservation
 	TLSNotAfter    *time.Time
+	// IsFailing is target-aware, so a warning an operator has configured as
+	// mandatory for this route counts as a failure here.
+	IsFailing bool
 }
 
 // Failing reports whether the verdict represents a broken route.
-func (v RouteCanaryVerdict) Failing() bool {
-	return v.Classification.Failing()
-}
+func (v RouteCanaryVerdict) Failing() bool { return v.IsFailing }
 
 // Evaluate probes every derived target for the plan once and reduces the result.
 //
@@ -118,27 +119,22 @@ func (e *RouteCanaryEvaluator) Evaluate(ctx context.Context, plan *domain.Desire
 		observations = append(observations, observation)
 	}
 
-	classification, perspective, ok := domain.ReduceRouteObservations(observations, now)
+	reduction, ok := domain.ReduceRouteObservations(observations, now)
 	if !ok {
 		return RouteCanaryVerdict{}, false, nil
 	}
 
 	verdict := RouteCanaryVerdict{
 		Key:            domain.RouteCanaryKeyForPlan(plan),
-		Classification: classification,
-		Perspective:    perspective,
+		Classification: reduction.Classification,
+		Perspective:    reduction.Perspective,
 		Observations:   observations,
+		IsFailing:      reduction.Failing,
+		Reason:         domain.DescribeRouteObservation(reduction.Observation, reduction.Classification, now),
 	}
-	for _, observation := range observations {
-		if observation.Target.Perspective != perspective {
-			continue
-		}
-		verdict.Reason = domain.DescribeRouteObservation(observation, classification, now)
-		if observation.TLS.HandshakeCompleted && !observation.TLS.NotAfter.IsZero() {
-			notAfter := observation.TLS.NotAfter
-			verdict.TLSNotAfter = &notAfter
-		}
-		break
+	if tls := reduction.Observation.TLS; tls.HandshakeCompleted && !tls.NotAfter.IsZero() {
+		notAfter := tls.NotAfter
+		verdict.TLSNotAfter = &notAfter
 	}
 	return verdict, true, nil
 }
@@ -275,6 +271,7 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 	next, transition := domain.EvaluateRouteCanary(
 		prior,
 		verdict.Classification,
+		verdict.Failing(),
 		verdict.Perspective,
 		verdict.Reason,
 		verdict.TLSNotAfter,

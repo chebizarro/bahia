@@ -312,3 +312,103 @@ func TestProbeRouteSanitizesResponseBody(t *testing.T) {
 		t.Fatalf("stored body evidence was not sanitized: %q", observation.Body)
 	}
 }
+
+// TestProbeRouteDetectsCatchAllServer reproduces the live Astillero condition at
+// the adapter layer: a single-page-application server that answers every path
+// with an identical 200 shell. The probe must observe that the control path is
+// indistinguishable from the health path.
+func TestProbeRouteDetectsCatchAllServer(t *testing.T) {
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<!doctype html><html><body>app shell</body></html>"))
+	}))
+	defer server.Close()
+
+	target := httpTarget(t, server)
+	target.ControlPath = "/.bahia-route-canary-control/deadbeef"
+
+	observation, err := RouteProber{}.ProbeRoute(context.Background(), target)
+	if err != nil {
+		t.Fatalf("probe error: %v", err)
+	}
+	if len(requested) != 2 {
+		t.Fatalf("expected health and control requests, got %v", requested)
+	}
+	if observation.Control == nil || !observation.Control.Performed || !observation.Control.Connected {
+		t.Fatalf("control probe was not performed: %+v", observation.Control)
+	}
+	if !observation.Indistinguishable() {
+		t.Fatal("identical catch-all responses were not detected as indistinguishable")
+	}
+	if got := domain.ClassifyRouteObservation(observation, time.Now()); got != domain.RouteCanaryClassificationHealthPathNotDiscriminating {
+		t.Fatalf("got %q, want health_path_not_discriminating", got)
+	}
+}
+
+// A server with a real health endpoint must not be flagged.
+func TestProbeRouteDiscriminatingServerIsRouteOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	target := httpTarget(t, server)
+	target.Path = "/healthz"
+	target.ControlPath = "/.bahia-route-canary-control/deadbeef"
+
+	observation, err := RouteProber{}.ProbeRoute(context.Background(), target)
+	if err != nil {
+		t.Fatalf("probe error: %v", err)
+	}
+	if observation.Indistinguishable() {
+		t.Fatal("a real health endpoint was wrongly flagged as a catch-all")
+	}
+	if got := domain.ClassifyRouteObservation(observation, time.Now()); got != domain.RouteCanaryClassificationRouteOK {
+		t.Fatalf("got %q, want route_ok", got)
+	}
+}
+
+// A control probe that cannot be completed must never turn into a route
+// failure; the health verdict stands on its own.
+func TestProbeRouteControlFailureDoesNotFailTheRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
+		// Hijack the connection so the control request fails at transport level.
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer server.Close()
+
+	target := httpTarget(t, server)
+	target.Path = "/healthz"
+	target.ControlPath = "/.bahia-route-canary-control/deadbeef"
+
+	observation, err := RouteProber{}.ProbeRoute(context.Background(), target)
+	if err != nil {
+		t.Fatalf("probe error: %v", err)
+	}
+	if observation.Indistinguishable() {
+		t.Fatal("an unusable control must not be treated as indistinguishable")
+	}
+	if got := domain.ClassifyRouteObservation(observation, time.Now()); got != domain.RouteCanaryClassificationRouteOK {
+		t.Fatalf("got %q, want route_ok", got)
+	}
+}
