@@ -4,6 +4,7 @@ package reconcile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +43,19 @@ type Reconciler struct {
 	interval     time.Duration
 	logger       *zap.Logger
 	deployer     AutoRemediationDeployer
+	// startingTimeout bounds how long a unit may report "starting" before
+	// reconcile stops treating it as progress. Zero selects the default.
+	startingTimeout time.Duration
+}
+
+// WithStartingTimeout bounds how long a deploying unit may report "starting"
+// before reconcile treats it as failing to come up.
+func WithStartingTimeout(d time.Duration) Option {
+	return func(r *Reconciler) {
+		if d > 0 {
+			r.startingTimeout = d
+		}
+	}
 }
 
 // Option configures reconciliation behavior.
@@ -260,15 +274,55 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	observedDigest := domain.NormalizeImageDigest(obs.ObservedImageDigest)
 	decisionBranch := "early-out"
 	if currentState.DesiredHash != "" || currentState.DesiredRuntimeState != nil {
-		acceptableHealth := obs.HealthStatus == domain.HealthStatusHealthy || obs.HealthStatus == domain.HealthStatusStarting
 		if currentState.DesiredHash != "" && observedHash != "" {
 			decisionBranch = "hash-compare"
 			hashesMatch := currentState.DesiredHash == observedHash
 			if currentState.DesiredRuntimeState != nil {
 				hashesMatch = hashesMatch || currentState.DesiredRuntimeState.MatchesRuntimeConvergenceHash(observedHash)
 			}
-			if hashesMatch && acceptableHealth {
-				newDrift = domain.DriftStatusInSync
+			if hashesMatch {
+				// A matching desired hash proves the intended CONFIG is applied.
+				// It says nothing about whether the container actually came up,
+				// so convergence additionally requires acceptable runtime health.
+				// Without this, a crash-looping container reports in_sync.
+				observedAt := time.Now().UTC()
+				switch obs.HealthStatus {
+				case domain.HealthStatusHealthy:
+					newDrift = domain.DriftStatusInSync
+				case domain.HealthStatusStarting:
+					markStarting(currentState, observedAt)
+					if r.startingTimeoutExceeded(currentState, observedAt) {
+						newDrift = r.driftStatusForMode(mode)
+						r.recordStartingTimeout(currentState, obs, observedAt)
+						r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+							"desired_hash":  currentState.DesiredHash,
+							"observed_hash": observedHash,
+							"health_status": string(obs.HealthStatus),
+						})
+					} else {
+						// Still within the startup budget: pending, not failed.
+						//
+						// Deliberately NOT DriftStatusDeploying. reconcileOne
+						// early-returns for units already marked deploying, so
+						// parking a starting container there would be a terminal
+						// trap: health would never be re-evaluated, the startup
+						// budget could never elapse, and a container that later
+						// became healthy would never converge. "unknown" keeps
+						// the unit in the reconcile loop while refusing to claim
+						// success.
+						newDrift = domain.DriftStatusUnknown
+					}
+				default:
+					newDrift = r.driftStatusForMode(mode)
+					recordUnhealthyEvidence(currentState, obs, fmt.Sprintf(
+						"desired configuration is applied but the runtime is %s; the deployment is not healthy",
+						obs.HealthStatus))
+					r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+						"desired_hash":  currentState.DesiredHash,
+						"observed_hash": observedHash,
+						"health_status": string(obs.HealthStatus),
+					})
+				}
 			} else {
 				newDrift = r.driftStatusForMode(mode)
 				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
@@ -425,6 +479,91 @@ func (r *Reconciler) publishDriftDetected(ctx context.Context, currentState *dom
 	})
 }
 
+const (
+	// startingSinceKey marks when the current non-converged episode first saw a
+	// "starting" unit. It lives in ReconcileFailureMetadata because that map is
+	// the reconciler's durable non-converged diagnostics channel and is cleared
+	// automatically once the unit reaches in_sync, so the marker cannot leak
+	// across episodes.
+	startingSinceKey = "starting_since"
+	// unhealthyEvidenceKey carries the operator-facing reason a unit is not
+	// converging.
+	unhealthyEvidenceKey = "unhealthy_evidence"
+
+	// defaultStartingTimeout bounds "starting" before it is treated as failure.
+	defaultStartingTimeout = 10 * time.Minute
+)
+
+func (r *Reconciler) effectiveStartingTimeout() time.Duration {
+	if r.startingTimeout > 0 {
+		return r.startingTimeout
+	}
+	return defaultStartingTimeout
+}
+
+// markStarting records the first observation of a starting unit in this episode.
+// It never overwrites an existing marker, because the elapsed time must be
+// measured from when the unit began starting, not from the latest reconcile.
+func markStarting(state *domain.EnvironmentServiceState, now time.Time) {
+	if state.ReconcileFailureMetadata == nil {
+		state.ReconcileFailureMetadata = map[string]any{}
+	}
+	if _, ok := state.ReconcileFailureMetadata[startingSinceKey]; ok {
+		return
+	}
+	state.ReconcileFailureMetadata[startingSinceKey] = now.UTC().Format(time.RFC3339)
+}
+
+// startingTimeoutExceeded reports whether a unit has been starting for longer
+// than the configured bound.
+//
+// It fails SAFE: with no usable marker the unit is treated as still starting, so
+// a missing or unparseable timestamp can never manufacture a spurious failure.
+func (r *Reconciler) startingTimeoutExceeded(state *domain.EnvironmentServiceState, now time.Time) bool {
+	raw, ok := state.ReconcileFailureMetadata[startingSinceKey]
+	if !ok {
+		return false
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return false
+	}
+	since, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return false
+	}
+	return now.UTC().Sub(since.UTC()) > r.effectiveStartingTimeout()
+}
+
+// recordStartingTimeout surfaces a unit that never became healthy.
+func (r *Reconciler) recordStartingTimeout(state *domain.EnvironmentServiceState, obs *domain.RuntimeObservation, now time.Time) {
+	evidence := fmt.Sprintf("container did not become healthy within %s; last observed health %s",
+		r.effectiveStartingTimeout(), obs.HealthStatus)
+	recordUnhealthyEvidence(state, obs, evidence)
+	r.logger.Warn("deploying unit exceeded startup health timeout",
+		zap.String("service_id", state.ServiceID.String()),
+		zap.String("environment_id", state.EnvironmentID.String()),
+		zap.String("health_status", string(obs.HealthStatus)),
+		zap.Duration("startup_timeout", r.effectiveStartingTimeout()),
+		zap.String("evidence", evidence))
+}
+
+// recordUnhealthyEvidence stores why a unit is not converging, including the raw
+// runtime verdict, so operators can read the cause from normal state output
+// instead of inspecting the database or the container host.
+func recordUnhealthyEvidence(state *domain.EnvironmentServiceState, obs *domain.RuntimeObservation, reason string) {
+	if state.ReconcileFailureMetadata == nil {
+		state.ReconcileFailureMetadata = map[string]any{}
+	}
+	state.ReconcileFailureMetadata[unhealthyEvidenceKey] = reason
+	state.ReconcileFailureMetadata["observed_health"] = string(obs.HealthStatus)
+	for _, key := range []string{"docker_state", "docker_status"} {
+		if value, ok := obs.Metadata[key]; ok {
+			state.ReconcileFailureMetadata[key] = value
+		}
+	}
+}
+
 func (r *Reconciler) driftStatusForMode(mode domain.ReconcileMode) domain.DriftStatus {
 	if mode == domain.ReconcileModeApprovalRequired {
 		return domain.DriftStatusRemediationNeeded
@@ -433,6 +572,11 @@ func (r *Reconciler) driftStatusForMode(mode domain.ReconcileMode) domain.DriftS
 }
 
 func (r *Reconciler) digestFallbackStatus(desiredDigest, observedDigest string, health domain.HealthStatus, mode domain.ReconcileMode) domain.DriftStatus {
+	// "starting" keeps its existing observe-only verdict here on purpose. This
+	// weaker digest-only path has no desired-state hash, and flapping it would
+	// change convergence for every legacy observe-only environment. The incident
+	// this gate addresses is caught upstream: a crash-looping container now
+	// observes as unhealthy, which this function already reports as drifted.
 	status := domain.ArtifactDigestDriftStatus(desiredDigest, observedDigest, health, domain.DriftStatusInSync)
 	if status == domain.DriftStatusDrifted {
 		return r.driftStatusForMode(mode)

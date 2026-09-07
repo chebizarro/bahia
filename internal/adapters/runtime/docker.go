@@ -274,6 +274,13 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		o.logger.Debug("failed to inspect docker image for digest", zap.String("image_id", container.ImageID), zap.Error(err))
 	}
 	health := mapDockerState(container.State)
+	// A running container whose configured healthcheck is failing must not be
+	// reported healthy; the coarse container state cannot express that. Only
+	// refine the "running" verdict so a restarting or exited container is never
+	// masked by a stale health suffix.
+	if reported, stated := dockerHealthFromStatus(container.Status); stated && health == domain.HealthStatusHealthy {
+		health = reported
+	}
 
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
@@ -284,8 +291,14 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		ObservedHost:        firstNonEmptyString(o.observedHost, o.host),
 		HealthStatus:        health,
 		Source:              "docker",
-		NormalizedHash:      strings.TrimSpace(container.Labels["bahia.desired_hash"]),
-		ObservedAt:          time.Now().UTC(),
+		// Carry the raw runtime verdict so a non-converged reconcile can explain
+		// itself to an operator without a database or docker inspect round trip.
+		Metadata: map[string]any{
+			"docker_state":  container.State,
+			"docker_status": domain.SanitizeEvidence(container.Status),
+		},
+		NormalizedHash: strings.TrimSpace(container.Labels["bahia.desired_hash"]),
+		ObservedAt:     time.Now().UTC(),
 	}, nil
 }
 
@@ -1096,12 +1109,34 @@ func extractDigest(imageID string) string {
 	return imageID
 }
 
+// dockerHealthFromStatus extracts the healthcheck verdict Docker embeds in the
+// list-API status string, for example "Up 2 minutes (unhealthy)".
+//
+// The list API does not expose State.Health, so this suffix is the only health
+// signal available without a per-container inspect on every observation. A
+// container with no configured healthcheck has no suffix, which is reported as
+// "not stated" so such services keep converging on container state alone.
+func dockerHealthFromStatus(status string) (domain.HealthStatus, bool) {
+	lower := strings.ToLower(status)
+	switch {
+	case strings.Contains(lower, "(healthy)"):
+		return domain.HealthStatusHealthy, true
+	case strings.Contains(lower, "(unhealthy)"):
+		return domain.HealthStatusUnhealthy, true
+	case strings.Contains(lower, "health: starting"):
+		return domain.HealthStatusStarting, true
+	}
+	return "", false
+}
+
 func mapDockerState(state string) domain.HealthStatus {
 	switch strings.ToLower(state) {
 	case "running":
 		return domain.HealthStatusHealthy
-	case "created", "restarting":
+	case "created":
 		return domain.HealthStatusStarting
+	case "restarting":
+		return domain.HealthStatusUnhealthy
 	case "exited", "dead", "removing":
 		return domain.HealthStatusStopped
 	case "paused":
