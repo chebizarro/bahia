@@ -413,7 +413,57 @@ func New(cfg *config.Config) (*App, error) {
 		workflow.WithWorkerPolicy(workerPolicySvc),
 		workflow.WithDeploymentUnitRouting(deploymentUnitRepo, runtimeLifecycleSvc),
 	}
-	if publicRoutePlanner != nil {
+
+	// Route canaries. Converging a routing provider only proves configuration
+	// was accepted, not that the route serves traffic, so managed routes are
+	// verified end to end and watched continuously.
+	var routeCanarySupervisor *service.RouteCanarySupervisor
+	var routeCanaryStore service.RouteCanaryRepository
+	var routeCanaryReader handlers.RouteCanaryReader
+	var routeCanaryHealthReader handlers.RouteInstanceHealthReader
+	if publicRoutePlanner != nil && cfg.RouteCanaries.Enabled {
+		if dbAvailable && pool != nil {
+			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
+			routeCanaryStore = pgRouteCanaries
+			routeCanaryReader = pgRouteCanaries
+		}
+		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
+		if evalErr != nil {
+			return nil, fmt.Errorf("configuring route canary evaluator: %w", evalErr)
+		}
+		var routeHealthSource service.RouteInstanceHealthSource
+		if managedInstanceHealthRepo != nil {
+			healthSource := service.NewManagedInstanceRouteHealthSource(managedInstanceHealthRepo)
+			routeHealthSource = healthSource
+			routeCanaryHealthReader = healthSource
+		}
+		canaryCfg := cfg.RouteCanaries.Normalized()
+
+		// The gate decorates the planner rather than being spliced into the
+		// coordinator, so the route-only and combined deploy paths are both
+		// verified through the single apply call each already makes.
+		if canaryCfg.GateEnabled {
+			gate, gateErr := service.NewRouteCanaryGate(publicRoutePlanner, routeCanaryEvaluator, routeCanaryStore, routeHealthSource,
+				service.RouteCanaryGateConfig{Timeout: canaryCfg.GateTimeout, RetryInterval: canaryCfg.GateRetryInterval}, logger)
+			if gateErr != nil {
+				return nil, fmt.Errorf("configuring route canary gate: %w", gateErr)
+			}
+			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(gate))
+		} else {
+			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
+		}
+
+		// Periodic probing needs somewhere to record verdicts; without a
+		// database there is no durable outage state to maintain.
+		if routeCanaryStore != nil && stateRepo != nil {
+			routeCanarySupervisor, err = service.NewRouteCanarySupervisor(
+				service.NewDesiredStateRoutePlanSource(stateRepo),
+				routeCanaryStore, routeCanaryEvaluator, routeHealthSource, publisher, canaryCfg.Interval, logger)
+			if err != nil {
+				return nil, fmt.Errorf("configuring route canary supervisor: %w", err)
+			}
+		}
+	} else if publicRoutePlanner != nil {
 		coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
 	}
 	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger, coordinatorOptions...)
@@ -470,6 +520,9 @@ func New(cfg *config.Config) (*App, error) {
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
 	if managedInstanceSupervisor != nil {
 		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerTier(Tier2), RunnerRequired(false))
+	}
+	if routeCanarySupervisor != nil {
+		bgManager.RegisterWithOptions(routeCanarySupervisor, RunnerTier(Tier2), RunnerRequired(false))
 	}
 	if loomSignetManager != nil {
 		bgManager.RegisterWithOptions(loomSignetManager, RunnerTier(Tier1), RunnerRequired(false))
@@ -1628,6 +1681,8 @@ func New(cfg *config.Config) (*App, error) {
 			DeploymentUnits:  deploymentUnitRepo,
 			EnvStates:        stateRepo,
 			InstanceHealth:   managedInstanceHealthRepo,
+			RouteCanaries:    routeCanaryReader,
+			RouteHealth:      routeCanaryHealthReader,
 			InstanceOperator: managedInstanceSupervisor,
 			RuntimeResolver:  runtimeResolver,
 			Payments:         paymentSvc,
