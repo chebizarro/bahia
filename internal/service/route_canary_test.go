@@ -497,3 +497,115 @@ func TestGateRejectsBackendWithoutCompensation(t *testing.T) {
 		t.Logf("gate surfaced the missing compensation: %v", err)
 	}
 }
+
+// --- Regression: the 2026-09-07 live gate finding ---
+
+func statusMismatchObservation(status int) domain.RouteCanaryObservation {
+	observation := healthyObservation()
+	observation.StatusCode = status
+	return observation
+}
+
+// TestGateBlocksGenuinelyBrokenRouteOnStatusMismatch closes the question the
+// live test could not answer. The live attempt used a wrong health path against
+// a catch-all SPA, which returned HTTP 200, so the route really was serving and
+// the gate correctly allowed it. When the route actually returns a bad status,
+// the gate blocks and rolls back.
+func TestGateBlocksGenuinelyBrokenRouteOnStatusMismatch(t *testing.T) {
+	for _, status := range []int{404, 500, 403} {
+		prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{
+			domain.RouteCanaryPerspectivePublicEdge: statusMismatchObservation(status),
+		}}
+		applier := &stubRouteApplier{}
+		gate := newTestGate(t, prober, applier, newMemoryRouteCanaryRepo(), nil)
+
+		err := gate.Apply(context.Background(), testRoutePlan())
+		if err == nil {
+			t.Fatalf("status %d: gate accepted a route outside the expected range", status)
+		}
+		if !errors.Is(err, ErrRouteCanaryGateFailed) {
+			t.Fatalf("status %d: not classified as a gate failure: %v", status, err)
+		}
+		if applier.compensated != 1 {
+			t.Fatalf("status %d: expected rollback, got %d", status, applier.compensated)
+		}
+	}
+}
+
+func catchAllObservationFor(require bool) domain.RouteCanaryObservation {
+	observation := healthyObservation()
+	observation.BodyFingerprint = "2cb952770280df2c"
+	observation.Control = &domain.RouteControlObservation{
+		Performed: true, Connected: true, StatusCode: 200, BodyFingerprint: "2cb952770280df2c",
+	}
+	return observation
+}
+
+// A catch-all route deploys by default: it is serving, and blocking it would
+// roll back working deployments.
+func TestGateAllowsCatchAllRouteByDefault(t *testing.T) {
+	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{
+		domain.RouteCanaryPerspectivePublicEdge: catchAllObservationFor(false),
+	}}
+	applier := &stubRouteApplier{}
+	repo := newMemoryRouteCanaryRepo()
+
+	policy := testRouteCanaryPolicy()
+	policy.DetectCatchAll = true
+	evaluator, err := NewRouteCanaryEvaluator(prober, policy)
+	if err != nil {
+		t.Fatalf("evaluator: %v", err)
+	}
+	gate, err := NewRouteCanaryGate(applier, evaluator, repo, nil,
+		RouteCanaryGateConfig{Timeout: 50 * time.Millisecond, RetryInterval: 5 * time.Millisecond}, nil)
+	if err != nil {
+		t.Fatalf("gate: %v", err)
+	}
+	if err := gate.Apply(context.Background(), testRoutePlan()); err != nil {
+		t.Fatalf("gate blocked a serving catch-all route by default: %v", err)
+	}
+	if applier.compensated != 0 {
+		t.Fatal("a serving route must not be rolled back by default")
+	}
+	// The weakness must still be recorded so an operator can see the check is
+	// not proving anything.
+	state, _ := repo.GetState(context.Background(), domain.RouteCanaryKeyForPlan(testRoutePlan()))
+	if state == nil || state.Classification != domain.RouteCanaryClassificationHealthPathNotDiscriminating {
+		t.Fatalf("catch-all was not recorded: %+v", state)
+	}
+	if state.Open {
+		t.Fatal("catch-all must not open an outage by default")
+	}
+}
+
+// With require_discriminating_health_path the same route is blocked, which is
+// the behavior the live gate test was reaching for.
+func TestGateBlocksCatchAllWhenDiscriminationRequired(t *testing.T) {
+	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{
+		domain.RouteCanaryPerspectivePublicEdge: catchAllObservationFor(true),
+	}}
+	applier := &stubRouteApplier{}
+
+	policy := testRouteCanaryPolicy()
+	policy.DetectCatchAll = true
+	policy.RequireDiscriminatingHealthPath = true
+	evaluator, err := NewRouteCanaryEvaluator(prober, policy)
+	if err != nil {
+		t.Fatalf("evaluator: %v", err)
+	}
+	gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil,
+		RouteCanaryGateConfig{Timeout: 50 * time.Millisecond, RetryInterval: 5 * time.Millisecond}, nil)
+	if err != nil {
+		t.Fatalf("gate: %v", err)
+	}
+	err = gate.Apply(context.Background(), testRoutePlan())
+	if err == nil {
+		t.Fatal("gate allowed a non-discriminating health path despite require_discriminating_health_path")
+	}
+	if !errors.Is(err, ErrRouteCanaryGateFailed) {
+		t.Fatalf("not classified as a gate failure: %v", err)
+	}
+	if applier.compensated != 1 {
+		t.Fatalf("expected rollback, got %d", applier.compensated)
+	}
+}

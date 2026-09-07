@@ -200,6 +200,14 @@ type RouteCanaryConfig struct {
 	// TLSMinDaysRemaining warns when a leaf certificate expires sooner than this.
 	// Zero disables the warning; chain validity is always required.
 	TLSMinDaysRemaining int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
+	// DetectCatchAll also requests a deliberately bogus control path on each
+	// probe. If the health path answers identically, the health check is
+	// proving nothing and that is reported rather than passing silently.
+	DetectCatchAll bool `koanf:"detect_catch_all" yaml:"detect_catch_all"`
+	// RequireDiscriminatingHealthPath promotes a non-discriminating health path
+	// from a warning to a failure, which makes it block deployments. Requires
+	// detect_catch_all.
+	RequireDiscriminatingHealthPath bool `koanf:"require_discriminating_health_path" yaml:"require_discriminating_health_path"`
 	// PublicResolver is the DNS server used for public-edge checks, so an edge
 	// check cannot be satisfied by split-horizon LAN DNS. "system" or empty uses
 	// the host resolver.

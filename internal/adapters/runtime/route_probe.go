@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -135,8 +137,52 @@ func (RouteProber) ProbeRoute(ctx context.Context, target domain.RouteCanaryTarg
 		observation.BodyMatched = strings.Contains(string(body), target.ExpectedBodyContains)
 	}
 	observation.Body = domain.SanitizeEvidence(string(body))
+	observation.BodyFingerprint = fingerprintBody(body)
+
+	// Negative control: request a path nothing should serve. If it answers
+	// identically, the health path is not evidence about the application.
+	if target.ControlPath != "" {
+		observation.Control = probeControl(probeCtx, client, target)
+	}
+
 	observation.Duration = time.Since(started)
 	return observation, nil
+}
+
+// fingerprintBody hashes the bounded body so two responses can be compared
+// without retaining both, and without putting response content in evidence.
+func fingerprintBody(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:8])
+}
+
+// probeControl requests the negative-control path.
+//
+// A control failure is never itself a route failure: if the control cannot be
+// requested, the comparison is simply unavailable and the health verdict stands
+// on its own.
+func probeControl(ctx context.Context, client *http.Client, target domain.RouteCanaryTarget) *domain.RouteControlObservation {
+	control := &domain.RouteControlObservation{Performed: true}
+	request, err := http.NewRequestWithContext(ctx, target.Method, target.ControlURL(), nil)
+	if err != nil {
+		return control
+	}
+	if header := strings.TrimSpace(target.HostHeader); header != "" {
+		request.Host = header
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return control
+	}
+	defer response.Body.Close()
+	control.Connected = true
+	control.StatusCode = response.StatusCode
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxRouteProbeBodyBytes))
+	if err != nil {
+		return control
+	}
+	control.BodyFingerprint = fingerprintBody(body)
+	return control
 }
 
 // resolveTargetHost reports whether the hostname resolves, using the probe's

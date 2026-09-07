@@ -1,14 +1,105 @@
 {
   "feature_id": "BAHIA_ROUTE_CANARIES",
   "criteria": [
-    {"id":"AC1","statement":"A managed service that is healthy at the container level while its route returns HTTP 502 produces an open route outage distinctly classified as upstream_error, carrying the observed healthy container status.","verification":["internal/service/route_canary_test.go:TestSupervisorOpensOutageWhileContainerIsHealthy","internal/domain/route_canary_test.go:TestClassifyRouteObservationUpstreamErrorIsDistinctFromRouteDown"]},
-    {"id":"AC2","statement":"A deployment whose post-deploy route canary fails is blocked and the route is rolled back through the routing backend's own compensation, with the failure classified as a canary gate failure rather than a provider failure.","verification":["internal/service/route_canary_test.go:TestGateRollsBackRouteThatDoesNotServeTraffic","internal/service/route_canary_test.go:TestGatePropagatesApplyFailureWithoutProbing"]},
-    {"id":"AC3","statement":"An open route outage clears when the route returns, recording recovery and dropping the stale failure reason.","verification":["internal/service/route_canary_test.go:TestSupervisorClearsOutageWhenRouteReturns","internal/domain/route_canary_test.go:TestEvaluateRouteCanaryHysteresis"]},
-    {"id":"AC4","statement":"Checks are repo-configured and reproducible: hostname, protocol, path, expected status, expected body, TLS expiry window, public resolver, and internal split-DNS addresses all come from configuration, validated at startup when enabled.","verification":["internal/config/route_canary.go","internal/domain/route_canary_targets_test.go:TestDeriveRouteCanaryTargetsAddsInternalLANTarget","internal/domain/route_canary_targets_test.go:TestRouteCanaryPolicyValidateRejectsBadConfig"]},
-    {"id":"AC5","statement":"Cloudflare edge and LAN/split-DNS perspectives are both checked where applicable, and a failure in either opens the outage.","verification":["internal/domain/route_canary_test.go:TestReduceRouteObservationsRequiresEveryPerspective","internal/domain/route_canary_test.go:TestReduceRouteObservationsDetectsBrokenInternalPathWhileEdgeIsFine","internal/adapters/runtime/route_probe_test.go:TestProbeRouteResolveToPinsTheDialAddress"]},
-    {"id":"AC6","statement":"TLS assertions verify a real chain for the canonical hostname and verification is never disabled, including when the dial address is pinned for a LAN check.","verification":["internal/adapters/runtime/route_probe_test.go:TestProbeRouteRejectsUntrustedTLS","internal/httpclient/probe_transport.go","internal/adapters/runtime/route_probe.go"]},
-    {"id":"AC7","statement":"No secrets reach logs or durable evidence: response bodies and errors are bounded and sanitized, while body assertions match the raw body so redaction cannot change assertion semantics.","verification":["internal/adapters/runtime/route_probe_test.go:TestProbeRouteSanitizesResponseBody","internal/domain/route_canary_test.go:TestEvaluateRouteCanarySanitizesFailureReason"]},
-    {"id":"AC8","statement":"Route outage state and append-only failure lineage are operator-visible over the API alongside the container-level status, with no reliance on manual host commands.","verification":["internal/api/handlers/route_canary.go","internal/api/router/router.go","internal/repository/pg_route_canary.go","internal/db/migrations/000060_route_canary.up.sql"]},
-    {"id":"AC9","statement":"A certificate nearing expiry is surfaced as a warning that never opens an outage and never blocks a deployment.","verification":["internal/domain/route_canary_test.go:TestTLSExpiringDoesNotOpenAnOutage"]}
+    {
+      "id": "AC1",
+      "statement": "A managed service that is healthy at the container level while its route returns HTTP 502 produces an open route outage distinctly classified as upstream_error, carrying the observed healthy container status.",
+      "verification": [
+        "internal/service/route_canary_test.go:TestSupervisorOpensOutageWhileContainerIsHealthy",
+        "internal/domain/route_canary_test.go:TestClassifyRouteObservationUpstreamErrorIsDistinctFromRouteDown"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "A deployment whose post-deploy route canary fails is blocked and the route is rolled back through the routing backend's own compensation, with the failure classified as a canary gate failure rather than a provider failure.",
+      "verification": [
+        "internal/service/route_canary_test.go:TestGateRollsBackRouteThatDoesNotServeTraffic",
+        "internal/service/route_canary_test.go:TestGatePropagatesApplyFailureWithoutProbing"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "An open route outage clears when the route returns, recording recovery and dropping the stale failure reason.",
+      "verification": [
+        "internal/service/route_canary_test.go:TestSupervisorClearsOutageWhenRouteReturns",
+        "internal/domain/route_canary_test.go:TestEvaluateRouteCanaryHysteresis"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Checks are repo-configured and reproducible: hostname, protocol, path, expected status, expected body, TLS expiry window, public resolver, and internal split-DNS addresses all come from configuration, validated at startup when enabled.",
+      "verification": [
+        "internal/config/route_canary.go",
+        "internal/domain/route_canary_targets_test.go:TestDeriveRouteCanaryTargetsAddsInternalLANTarget",
+        "internal/domain/route_canary_targets_test.go:TestRouteCanaryPolicyValidateRejectsBadConfig"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Cloudflare edge and LAN/split-DNS perspectives are both checked where applicable, and a failure in either opens the outage.",
+      "verification": [
+        "internal/domain/route_canary_test.go:TestReduceRouteObservationsRequiresEveryPerspective",
+        "internal/domain/route_canary_test.go:TestReduceRouteObservationsDetectsBrokenInternalPathWhileEdgeIsFine",
+        "internal/adapters/runtime/route_probe_test.go:TestProbeRouteResolveToPinsTheDialAddress"
+      ]
+    },
+    {
+      "id": "AC6",
+      "statement": "TLS assertions verify a real chain for the canonical hostname and verification is never disabled, including when the dial address is pinned for a LAN check.",
+      "verification": [
+        "internal/adapters/runtime/route_probe_test.go:TestProbeRouteRejectsUntrustedTLS",
+        "internal/httpclient/probe_transport.go",
+        "internal/adapters/runtime/route_probe.go"
+      ]
+    },
+    {
+      "id": "AC7",
+      "statement": "No secrets reach logs or durable evidence: response bodies and errors are bounded and sanitized, while body assertions match the raw body so redaction cannot change assertion semantics.",
+      "verification": [
+        "internal/adapters/runtime/route_probe_test.go:TestProbeRouteSanitizesResponseBody",
+        "internal/domain/route_canary_test.go:TestEvaluateRouteCanarySanitizesFailureReason"
+      ]
+    },
+    {
+      "id": "AC8",
+      "statement": "Route outage state and append-only failure lineage are operator-visible over the API alongside the container-level status, with no reliance on manual host commands.",
+      "verification": [
+        "internal/api/handlers/route_canary.go",
+        "internal/api/router/router.go",
+        "internal/repository/pg_route_canary.go",
+        "internal/db/migrations/000060_route_canary.up.sql"
+      ]
+    },
+    {
+      "id": "AC9",
+      "statement": "A certificate nearing expiry is surfaced as a warning that never opens an outage and never blocks a deployment.",
+      "verification": [
+        "internal/domain/route_canary_test.go:TestTLSExpiringDoesNotOpenAnOutage"
+      ]
+    },
+    {
+      "id": "AC10",
+      "statement": "A health path that returns the same response as a deliberately bogus control path is reported as health_path_not_discriminating rather than route_ok, as a warning by default and as a blocking failure when require_discriminating_health_path is set.",
+      "verification": [
+        "internal/domain/route_canary_test.go:TestCatchAllHealthPathIsReportedNotSilentlyPassed",
+        "internal/domain/route_canary_test.go:TestCatchAllIsWarningByDefault",
+        "internal/service/route_canary_test.go:TestGateBlocksCatchAllWhenDiscriminationRequired"
+      ]
+    },
+    {
+      "id": "AC11",
+      "statement": "The gate blocks and rolls back a route returning a status outside the expected range, confirming enforcement works for genuinely broken routes.",
+      "verification": [
+        "internal/service/route_canary_test.go:TestGateBlocksGenuinelyBrokenRouteOnStatusMismatch"
+      ]
+    },
+    {
+      "id": "AC12",
+      "statement": "A gate run that verified nothing because the policy derived no targets is logged rather than silently reported as success.",
+      "verification": [
+        "internal/service/route_canary_gate.go",
+        "internal/service/route_canary_test.go:TestGateSkipsVerificationWhenPolicyDerivesNoTargets"
+      ]
+    }
   ]
 }

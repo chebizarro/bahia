@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strconv"
@@ -28,6 +30,13 @@ type RouteCanaryPolicy struct {
 	// TLSMinDaysRemaining raises the tls_expiring warning below this many days.
 	// Zero disables expiry warning while still requiring a verifiable chain.
 	TLSMinDaysRemaining int
+	// DetectCatchAll makes each probe also request a deliberately bogus control
+	// path, so a health path that answers identically to garbage is reported
+	// instead of being mistaken for evidence the application is healthy.
+	DetectCatchAll bool
+	// RequireDiscriminatingHealthPath promotes a non-discriminating health path
+	// from a warning to a failure, which also makes it block deployments.
+	RequireDiscriminatingHealthPath bool
 	// PublicResolverAddr is the DNS server used for the public_edge perspective,
 	// so an edge check cannot be satisfied by split-horizon LAN DNS. Empty means
 	// the system resolver.
@@ -56,6 +65,11 @@ func (p RouteCanaryPolicy) Validate() error {
 	}
 	if p.TLSMinDaysRemaining < 0 {
 		return fmt.Errorf("route canary policy: tls_min_days_remaining must not be negative")
+	}
+	// Requiring a discriminating health path is only meaningful if the control
+	// probe that detects one is actually performed.
+	if p.RequireDiscriminatingHealthPath && !p.DetectCatchAll {
+		return fmt.Errorf("route canary policy: require_discriminating_health_path requires detect_catch_all")
 	}
 	if p.PublicResolverAddr != "" && !strings.EqualFold(p.PublicResolverAddr, "system") {
 		if _, _, err := net.SplitHostPort(p.PublicResolverAddr); err != nil {
@@ -137,6 +151,15 @@ func DeriveRouteCanaryTargets(plan *DesiredPublicRoutePlan, policy RouteCanaryPo
 		ExpectedBodyContains: policy.ExpectedBodyContains,
 		TLSMinDaysRemaining:  policy.TLSMinDaysRemaining,
 		Timeout:              policy.ProbeTimeout,
+
+		RequireDiscriminatingHealthPath: policy.RequireDiscriminatingHealthPath,
+	}
+	if policy.DetectCatchAll {
+		controlPath, err := newRouteCanaryControlPath()
+		if err != nil {
+			return nil, err
+		}
+		base.ControlPath = controlPath
 	}
 
 	publicTarget := base
@@ -200,4 +223,17 @@ func RouteCanaryKeyForPlan(plan *DesiredPublicRoutePlan) RouteCanaryKey {
 		key.DeploymentUnitID = &unit
 	}
 	return key
+}
+
+// newRouteCanaryControlPath builds a path that no application should serve.
+//
+// The random suffix matters: a fixed path could be special-cased, cached, or
+// coincidentally routed, any of which would silently disable the negative
+// control. A fresh value each time keeps the control honest.
+func newRouteCanaryControlPath() (string, error) {
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("route canary: generate control path: %w", err)
+	}
+	return "/.bahia-route-canary-control/" + hex.EncodeToString(suffix), nil
 }

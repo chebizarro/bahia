@@ -66,3 +66,50 @@ Independent validation should confirm, on the live fleet:
 2. Deliberately stopping the origin behind a managed route opens an `upstream_error` outage with `service_healthy_route_broken` true while the container remains healthy.
 3. Restoring the origin clears the outage.
 4. A route-attach intent whose route does not serve is blocked and rolled back by the gate.
+
+---
+
+# Addendum — live validation 2026-09-07 (candidate `eb877c49`)
+
+Live validation was performed by the authorized operator, not by me. Reported outcome:
+
+| Check | Result |
+|---|---|
+| Candidate live and healthy | PASS |
+| Baseline canary state reaches `route_ok` | PASS |
+| Controlled internal nginx fault opens `upstream_error` while Astillero stays container-healthy | PASS |
+| Restoring nginx clears the outage back to `route_ok` | PASS |
+| Bad-health-path route-only attach blocked by the gate | **FAIL — deployed instead of blocked** |
+
+## Root cause of the gate result
+
+The gate was **not** bypassed. Read-only probes of the live host explain the outcome:
+
+```
+/health                            -> HTTP 200, 2252 bytes, sha256 2cb95277…
+/__route_canary_expected_failure__ -> HTTP 200, 2252 bytes, sha256 2cb95277…
+/definitely-not-a-real-path-9f3c   -> HTTP 200, 2252 bytes, sha256 2cb95277…
+```
+
+Astillero serves a single-page-application catch-all: every path returns a byte-identical 200 shell. The "bad" route therefore genuinely served traffic. The gate probed it, observed HTTP 200 inside the default 200–299 range with no body assertion configured, classified `route_ok`, and correctly allowed the deploy.
+
+Two consequences, both real:
+
+1. The test could not have failed the gate as designed, because it did not construct a broken route.
+2. More seriously, the configured health path for Astillero is **not a health endpoint** — it is the catch-all shell. Every canary on that route was therefore near-vacuous. The `upstream_error` detection worked only because nginx itself returned a real 502.
+
+## Fixes (defects D3, D4)
+
+- Negative-control probe (`detect_catch_all`), new classification `health_path_not_discriminating`, warning by default and blocking under `require_discriminating_health_path`.
+- The no-targets gate path is now logged instead of silently succeeding.
+- Added `TestGateBlocksGenuinelyBrokenRouteOnStatusMismatch` (404/500/403) to close the question the live test could not answer: the gate does block and roll back genuinely broken routes.
+
+## Remaining live validation
+
+The gate criterion is still unproven live. A valid re-test needs a route that genuinely fails to serve — not merely an unusual path on a catch-all. Options:
+
+1. Point the route at a port with nothing listening → `connect_failed`.
+2. Point the upstream at a service returning a non-2xx → `status_mismatch`.
+3. Keep the bad health path but enable `detect_catch_all` + `require_discriminating_health_path` → `health_path_not_discriminating` blocks.
+
+Option 3 most closely matches the original intent. Note it will also block the *current* `/health` route for Astillero, since that path is itself non-discriminating — which is the correct signal, but means the health endpoint should be fixed first.
