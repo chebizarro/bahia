@@ -57,6 +57,7 @@ type Config struct {
 	DNS             DNSConfig                 `koanf:"dns"`
 	EdgeRouting     EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
 	InternalRouting InternalRoutingConfig     `koanf:"internal_routing" yaml:"internal_routing"`
+	RouteCanaries   RouteCanaryConfig         `koanf:"route_canaries" yaml:"route_canaries"`
 	FIPS            FIPSConfig                `koanf:"fips"`
 	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
 }
@@ -165,6 +166,47 @@ type InternalRoutingConfig struct {
 	CertFile      string   `koanf:"cert_file" yaml:"cert_file"`
 	KeyFile       string   `koanf:"key_file" yaml:"key_file"`
 	Zones         []string `koanf:"zones" yaml:"zones"`
+}
+
+// RouteCanaryConfig controls end-to-end verification of Bahia-managed routes.
+//
+// Converging a routing provider only proves configuration was accepted. Route
+// canaries prove the route actually serves traffic, from the public edge and,
+// where configured, from the LAN under split DNS.
+type RouteCanaryConfig struct {
+	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	// Interval is how often every managed route is re-probed.
+	Interval time.Duration `koanf:"interval" yaml:"interval"`
+	// ProbeTimeout bounds a single probe.
+	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	// GateTimeout bounds post-deploy verification, including retries while the
+	// route propagates.
+	GateTimeout time.Duration `koanf:"gate_timeout" yaml:"gate_timeout"`
+	// GateRetryInterval is the delay between post-deploy verification attempts.
+	GateRetryInterval time.Duration `koanf:"gate_retry_interval" yaml:"gate_retry_interval"`
+	// GateEnabled blocks and rolls back a deployment whose route fails
+	// verification. Disabling it keeps detection while removing enforcement.
+	GateEnabled bool `koanf:"gate_enabled" yaml:"gate_enabled"`
+	// FailureThreshold is how many consecutive failing observations open an
+	// outage during periodic probing.
+	FailureThreshold int `koanf:"failure_threshold" yaml:"failure_threshold"`
+	// SuccessThreshold is how many consecutive healthy observations clear one.
+	SuccessThreshold int `koanf:"success_threshold" yaml:"success_threshold"`
+	// ExpectedStatusMin and ExpectedStatusMax bound an acceptable response.
+	ExpectedStatusMin int `koanf:"expected_status_min" yaml:"expected_status_min"`
+	ExpectedStatusMax int `koanf:"expected_status_max" yaml:"expected_status_max"`
+	// ExpectedBodyContains, when set, must appear in the bounded response body.
+	ExpectedBodyContains string `koanf:"expected_body_contains" yaml:"expected_body_contains"`
+	// TLSMinDaysRemaining warns when a leaf certificate expires sooner than this.
+	// Zero disables the warning; chain validity is always required.
+	TLSMinDaysRemaining int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
+	// PublicResolver is the DNS server used for public-edge checks, so an edge
+	// check cannot be satisfied by split-horizon LAN DNS. "system" or empty uses
+	// the host resolver.
+	PublicResolver string `koanf:"public_resolver" yaml:"public_resolver"`
+	// InternalDialAddresses maps a DNS zone to the LAN IP that serves its
+	// hostnames, enabling the internal split-DNS perspective for that zone.
+	InternalDialAddresses map[string]string `koanf:"internal_dial_addresses" yaml:"internal_dial_addresses"`
 }
 
 // DNSConfig controls DNS orchestration projection and backend settings.
@@ -1445,6 +1487,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateEdgeRouting(); err != nil {
+		return err
+	}
+	if err := c.validateRouteCanaries(); err != nil {
 		return err
 	}
 	if err := c.validateInternalRouting(); err != nil {
