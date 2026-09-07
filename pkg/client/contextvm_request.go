@@ -50,7 +50,7 @@ func WithContextVMRequestLogger(logger *zap.Logger) ContextVMRequestOption {
 type ContextVMRequestClient struct {
 	relays            []string
 	signer            nostr.Signer
-	keyer             nostr.Keyer
+	cipher            contextVMCipherSigner
 	pubkey            string
 	transport         ContextVMRelayTransport
 	servicePubkey     string
@@ -88,10 +88,10 @@ func NewContextVMRequestClient(cfg ContextVMRequestConfig, clientOptions ...Cont
 	if _, err := nostr.PubKeyFromHex(recipientPubkey); err != nil {
 		return nil, fmt.Errorf("parse ContextVM recipient pubkey: %w", err)
 	}
-	var encryptionKeyer nostr.Keyer
+	var cipherSigner contextVMCipherSigner
 	if cfg.Encrypted {
 		var ok bool
-		encryptionKeyer, ok = cfg.Signer.(nostr.Keyer)
+		cipherSigner, ok = cfg.Signer.(contextVMCipherSigner)
 		if !ok {
 			return nil, fmt.Errorf("encrypted ContextVM requests require a signer with NIP-44 encrypt and decrypt support")
 		}
@@ -127,7 +127,7 @@ func NewContextVMRequestClient(cfg ContextVMRequestConfig, clientOptions ...Cont
 	return &ContextVMRequestClient{
 		relays:            relays,
 		signer:            cfg.Signer,
-		keyer:             encryptionKeyer,
+		cipher:            cipherSigner,
 		pubkey:            senderPubkey,
 		transport:         transport,
 		servicePubkey:     recipientPubkey,
@@ -157,7 +157,7 @@ func (c *ContextVMRequestClient) Request(ctx context.Context, method string, par
 	if method == "" {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
 	}
-	if c.encrypted && (c.keyer == nil || c.servicePubkey == "") {
+	if c.encrypted && (c.cipher == nil || c.servicePubkey == "") {
 		return nil, &ControlPlaneRequestError{Phase: "configure encrypted operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("encrypted ContextVM requests require recipient pubkey and NIP-44 signer support")}
 	}
 	payloadContent, err := json.Marshal(params)

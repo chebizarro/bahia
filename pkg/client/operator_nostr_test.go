@@ -1160,7 +1160,7 @@ func TestOperatorEncryptedRetryAcceptsReplyCorrelatedToFirstWrapper(t *testing.T
 	serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
 	transport := newFakeOperatorTransport()
 	client := &OperatorControlPlaneClient{
-		relays: []string{"wss://relay.example"}, signer: operatorKeyer, keyer: operatorKeyer,
+		relays: []string{"wss://relay.example"}, signer: operatorKeyer, cipher: operatorKeyer,
 		pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
 		transport: transport, encrypted: true, resultTimeout: time.Millisecond, resultRetries: 1,
 	}
@@ -1230,7 +1230,7 @@ func TestOperatorEncryptedRoundTripLocalAndRemoteSigner(t *testing.T) {
 			serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
 			transport := newFakeOperatorTransport()
 			client := &OperatorControlPlaneClient{
-				relays: []string{"wss://relay.example"}, signer: signer, keyer: signer,
+				relays: []string{"wss://relay.example"}, signer: signer, cipher: signer,
 				pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
 				transport: transport, encrypted: true, resultTimeout: time.Second,
 			}
@@ -1267,7 +1267,7 @@ func TestOperatorEncryptedReplyRejectsWrongOuterCorrelationAndInvalidInnerProven
 	transport := newFakeOperatorTransport()
 	localKeyer := keyer.NewPlainKeySigner(operatorSecret)
 	client := &OperatorControlPlaneClient{
-		relays: []string{"wss://relay.example"}, signer: localKeyer, keyer: localKeyer,
+		relays: []string{"wss://relay.example"}, signer: localKeyer, cipher: localKeyer,
 		pubkey: operatorSecret.Public().Hex(), servicePubkey: serviceSecret.Public().Hex(),
 		transport: transport, encrypted: true, resultTimeout: time.Second,
 	}
@@ -1508,7 +1508,7 @@ func newTestOperatorClient(t *testing.T, privateKey string, transport operatorRe
 	secret := mustOperatorTestSecret(t, normalized)
 	localKeyer := keyer.NewPlainKeySigner(secret)
 	pubkey := secret.Public().Hex()
-	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: localKeyer, keyer: localKeyer, pubkey: pubkey, transport: transport}
+	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: localKeyer, cipher: localKeyer, pubkey: pubkey, transport: transport}
 }
 
 func decodePublishedContextVMRequest(t *testing.T, event nostr.Event) contextVMRPCRequest {

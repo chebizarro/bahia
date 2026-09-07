@@ -307,7 +307,7 @@ type OperatorControlPlaneClient struct {
 	relays            []string
 	privateKey        string
 	signer            canonicalnostr.Signer
-	keyer             canonicalnostr.Keyer
+	cipher            contextVMCipherSigner
 	pubkey            string
 	transport         operatorRelayTransport
 	servicePubkey     string
@@ -328,7 +328,7 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig, clientOptions
 	}
 	privateKey := strings.TrimSpace(cfg.PrivateKey)
 	signer := cfg.Signer
-	var encryptionKeyer canonicalnostr.Keyer
+	var cipherSigner contextVMCipherSigner
 	pubkey := strings.TrimSpace(cfg.Pubkey)
 	var poolOptions []nostrpool.RelayPoolOption
 	if signer != nil {
@@ -340,7 +340,7 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig, clientOptions
 		}
 		if cfg.Encrypted {
 			var ok bool
-			encryptionKeyer, ok = signer.(canonicalnostr.Keyer)
+			cipherSigner, ok = signer.(contextVMCipherSigner)
 			if !ok {
 				return nil, fmt.Errorf("encrypted operator requests require a signer with NIP-44 encrypt and decrypt support")
 			}
@@ -358,7 +358,7 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig, clientOptions
 		}
 		localKeyer := keyer.NewPlainKeySigner(secret)
 		signer = localKeyer
-		encryptionKeyer = localKeyer
+		cipherSigner = localKeyer
 		pubkey = secret.Public().Hex()
 		poolOptions = append(poolOptions, nostrpool.WithPrivateKey(privateKey))
 	}
@@ -392,7 +392,7 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig, clientOptions
 		relays:            relays,
 		privateKey:        privateKey,
 		signer:            signer,
-		keyer:             encryptionKeyer,
+		cipher:            cipherSigner,
 		pubkey:            pubkey,
 		transport:         &relayPoolOperatorTransport{pool: pool},
 		servicePubkey:     servicePubkey,
@@ -1432,7 +1432,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	core := &ContextVMRequestClient{
 		relays:            c.relays,
 		signer:            c.signer,
-		keyer:             c.keyer,
+		cipher:            c.cipher,
 		pubkey:            c.pubkey,
 		transport:         c.transport,
 		servicePubkey:     c.servicePubkey,
@@ -1459,7 +1459,7 @@ func (c *ContextVMRequestClient) prepareOperatorAttempt(ctx context.Context, inn
 		}
 		return inner, []nostr.Filter{filter}, priorOuterIDs, nil
 	}
-	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, c.keyer, c.servicePubkey, inner, cascontextvm.StoredGiftWrap)
+	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, nip59KeyerAdapter{c.cipher}, c.servicePubkey, inner, cascontextvm.StoredGiftWrap)
 	if err != nil {
 		return nil, nil, priorOuterIDs, err
 	}
@@ -1681,7 +1681,7 @@ func (c *ContextVMRequestClient) validateOperatorReply(ctx context.Context, repl
 	if (reply.Kind != nostr.Kind(controlplane.KindContextVMGiftWrap) && reply.Kind != nostr.Kind(controlplane.KindContextVMEphemeralWrap)) || !correlatesToAny(reply, outerRequestIDs, c.pubkey) {
 		return nil
 	}
-	plaintext, err := c.keyer.Decrypt(ctx, reply.Content, reply.PubKey)
+	plaintext, err := c.cipher.Decrypt(ctx, reply.Content, reply.PubKey)
 	if err != nil {
 		return nil
 	}

@@ -292,6 +292,24 @@ bahia orgs members add org-123 npub1member... --role deployer
 bahia orgs members remove org-123 npub1member...
 ```
 
+### Encrypted operator requests with a remote signer
+
+`--encrypted` wraps operator requests in NIP-59 and requires the signer to
+perform NIP-44 only. A Signet/NIP-46 bunker signer therefore works without any
+local key material:
+
+```bash
+bahia --nostr-bunker-file /etc/bahia/signer-bunker-url \
+  --service-pubkey <bahia-service-pubkey> \
+  --encrypted \
+  artifacts import-observed --service ... --environment ... \
+  --image-repo ... --image-tag ... --image-digest sha256:...
+```
+
+Bahia's ContextVM transport never uses NIP-04, so a signer that implements only
+the modern cipher is fully supported. Private key material is never required,
+printed, or passed in argv: the bunker URI is read from a file.
+
 ### Importing an already-running image
 
 Bahia governs images that CI attested. When an image is already running but has
