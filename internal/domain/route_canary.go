@@ -475,8 +475,8 @@ func EvaluateRouteCanary(
 
 // RouteCanaryEvent is one append-only lineage record for a managed route.
 type RouteCanaryEvent struct {
-	ID                     uuid.UUID                 `json:"id"`
-	RouteCanaryKey         RouteCanaryKey            `json:"key"`
+	ID uuid.UUID `json:"id"`
+	RouteCanaryKey
 	Transition             RouteCanaryTransition     `json:"transition"`
 	PreviousClassification RouteCanaryClassification `json:"previous_classification,omitempty"`
 	Classification         RouteCanaryClassification `json:"classification"`

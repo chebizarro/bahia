@@ -159,20 +159,56 @@ func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Se
 }
 
 func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	backend, err := p.resolveValidatedBackend(plan)
+	if err != nil {
+		return err
+	}
+	return backend.Apply(ctx, plan)
+}
+
+// ApplyWithCompensation applies the plan and returns the inverse of a successful
+// apply, so an orchestrator can withdraw a route that converged at the providers
+// but failed a post-deploy canary gate.
+//
+// It fails loudly when the resolved backend cannot produce an inverse. Silently
+// applying a route that cannot be rolled back would let a gate detect an outage
+// it has no way to undo.
+func (p *PublicRoutePlanner) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (routing.Compensation, error) {
+	backend, err := p.resolveValidatedBackend(plan)
+	if err != nil {
+		return nil, err
+	}
+	compensating, ok := backend.(routing.CompensatingBackend)
+	if !ok {
+		return nil, fmt.Errorf("public route backend %q does not support rollback", plan.BackendRef)
+	}
+	compensation, err := compensating.ApplyWithCompensation(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+	if compensation == nil {
+		return nil, fmt.Errorf("public route backend %q returned no compensation", plan.BackendRef)
+	}
+	return compensation, nil
+}
+
+// resolveValidatedBackend re-validates that the reviewed plan still matches live
+// provider configuration, then resolves its backend.
+func (p *PublicRoutePlanner) resolveValidatedBackend(plan *domain.DesiredPublicRoutePlan) (routing.Backend, error) {
 	if p == nil || plan == nil {
-		return fmt.Errorf("public route plan is required")
+		return nil, fmt.Errorf("public route plan is required")
 	}
 	if plan.ProviderConfigHash != p.cfg.ConfigHash {
-		return fmt.Errorf("public route provider configuration changed after review")
+		return nil, fmt.Errorf("public route provider configuration changed after review")
 	}
 	if plan.InternalHTTPS != nil && (p.cfg.InternalHTTPS == nil || plan.InternalHTTPS.ConfigHash != p.cfg.InternalHTTPS.ConfigHash) {
-		return fmt.Errorf("internal routing configuration changed after review")
+		return nil, fmt.Errorf("internal routing configuration changed after review")
 	}
 	backend, ok := p.backends.Resolve(plan.BackendRef)
 	if !ok {
-		return fmt.Errorf("public route backend %q is not configured", plan.BackendRef)
+		return nil, fmt.Errorf("public route backend %q is not configured", plan.BackendRef)
 	}
-	return backend.Apply(ctx, plan)
+	return backend, nil
 }
 
 func (p *PublicRoutePlanner) resolveZone(host string) (PublicRouteZone, bool) {
