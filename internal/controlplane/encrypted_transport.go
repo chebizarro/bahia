@@ -69,6 +69,7 @@ const (
 	ContextVMMethodDNSPolicyApply             = "dns/policy-apply"
 	ContextVMMethodDNSRecordSet               = "dns/record-set"
 	ContextVMMethodDNSDriftRemediate          = "dns/drift-remediate"
+	ContextVMMethodDNSOverrideRetire          = "dns/override-retire"
 	ContextVMMethodBackupRepositoryRegister   = "backup/repository-register"
 	ContextVMMethodBackupPolicyApply          = "backup/policy-apply"
 	ContextVMMethodBackupRecipeApply          = "backup/recipe-apply"

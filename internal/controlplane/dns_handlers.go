@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,9 +20,11 @@ const (
 	dnsActionRecordOverride  = "dns_record_override"
 	dnsActionDriftRemediate  = "dns_drift_remediate"
 	dnsActionBackendRegister = "dns_backend_register"
+	dnsActionOverrideRetire  = "dns_override_retire"
 
 	dnsUnsupportedDynamicZoneCreation = "Phase-1 DNS runtime is config-backed; dynamic durable zone creation is unavailable"
 	dnsUnsupportedRecordOverride      = "current DNS backend interface has no record-level mutation primitive and no override persistence exists"
+	dnsUnsupportedOverrideRetire      = "current DNS persistence backend cannot retire an existing record override"
 	dnsUnsupportedPolicyApply         = "DNS policy persistence and application are unavailable in Phase-1 DNS runtime"
 	dnsUnsupportedBackendRegister     = "Phase-1 DNS runtime is config-backed; dynamic durable backend registration is unavailable"
 )
@@ -38,6 +41,55 @@ type DNSPersistenceOperator interface {
 	CreateZone(ctx context.Context, zone domain.DNSZone) error
 	CreateOverride(ctx context.Context, override domain.DNSRecordOverride) error
 	ListOverridesByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error)
+}
+
+// DNSOverrideRetirementOperator is an OPTIONAL capability bolted alongside
+// DNSPersistenceOperator rather than folded into it.
+//
+// Widening DNSPersistenceOperator would silently demote every existing
+// implementation that has not yet grown these methods: the handlers type-assert
+// that interface, so a stale implementor would start failing zone-create and
+// record-set as "unsupported" too, not just retirement. Keeping retirement in a
+// separate assertion means a backend that cannot retire loses exactly one
+// operation and nothing else.
+type DNSOverrideRetirementOperator interface {
+	GetOverride(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error)
+	ExpireOverride(ctx context.Context, id uuid.UUID, at time.Time, reason string) error
+}
+
+// errDNSOverrideNotFound signals that no DNS record override exists for an ID.
+var errDNSOverrideNotFound = errors.New("dns record override not found")
+
+// dnsOverrideRetirement describes the effect of a retirement request.
+type dnsOverrideRetirement struct {
+	Override        *domain.DNSRecordOverride
+	RetiredAt       time.Time
+	AlreadyInactive bool
+}
+
+// retireDNSOverride expires a DNS record override idempotently.
+//
+// An override is inactive once its expiry is at or before now, which is exactly
+// the predicate the override read path uses. Retiring an already-inactive
+// override therefore performs no write and reports the ORIGINAL retirement
+// instant: repeating the call must not move the recorded retirement time, or the
+// audit trail would drift on every retry. An override whose expiry is still in
+// the future is active and is brought forward to now.
+func retireDNSOverride(ctx context.Context, retirer DNSOverrideRetirementOperator, id uuid.UUID, now time.Time, reason string) (dnsOverrideRetirement, error) {
+	existing, err := retirer.GetOverride(ctx, id)
+	if err != nil {
+		return dnsOverrideRetirement{}, err
+	}
+	if existing == nil {
+		return dnsOverrideRetirement{}, errDNSOverrideNotFound
+	}
+	if existing.ExpiresAt != nil && !existing.ExpiresAt.After(now) {
+		return dnsOverrideRetirement{Override: existing, RetiredAt: existing.ExpiresAt.UTC(), AlreadyInactive: true}, nil
+	}
+	if err := retirer.ExpireOverride(ctx, id, now, reason); err != nil {
+		return dnsOverrideRetirement{Override: existing}, err
+	}
+	return dnsOverrideRetirement{Override: existing, RetiredAt: now}, nil
 }
 
 type DNSPolicyRepositoryProvider interface {
@@ -70,6 +122,8 @@ func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 		r.handleDNSPolicyApply(ctx, event)
 	case KindDNSBackendRegisterRequest:
 		r.publishDNSUnsupported(ctx, event, KindDNSBackendRegisterResult, dnsActionBackendRegister, dnsUnsupportedBackendRegister)
+	case KindDNSOverrideRetireRequest:
+		r.handleDNSOverrideRetire(ctx, event)
 	default:
 		r.logger.Warn("unexpected DNS control-plane kind", "kind", event.Kind, "event_id", event.ID)
 	}
@@ -211,6 +265,70 @@ func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Even
 		return
 	}
 	_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "success", "completed", "DNS record override persisted; reconcile completed", map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
+}
+
+func (r *Reactor) handleDNSOverrideRetire(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey.Hex()) {
+		logger.Warn("unauthorized DNS override retire request")
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	retirer, _ := r.dnsOperator.(DNSOverrideRetirementOperator)
+	if retirer == nil {
+		r.publishDNSUnsupported(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, dnsUnsupportedOverrideRetire)
+		return
+	}
+	var params struct {
+		OverrideID string `json:"override_id"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &params); err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "parse_error", fmt.Sprintf("invalid DNS override retire JSON content: %v", err), nil)
+		return
+	}
+	params.Reason = strings.TrimSpace(params.Reason)
+	params.OverrideID = strings.TrimSpace(params.OverrideID)
+	if params.OverrideID == "" || params.Reason == "" {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "validation_error", "override_id and reason are required", nil)
+		return
+	}
+	overrideID, err := uuid.Parse(params.OverrideID)
+	if err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "validation_error", fmt.Sprintf("invalid override_id: %v", err), nil)
+		return
+	}
+	retirement, err := retireDNSOverride(ctx, retirer, overrideID, time.Now().UTC(), params.Reason)
+	if errors.Is(err, errDNSOverrideNotFound) {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "not_found", fmt.Sprintf("DNS record override %s not found", params.OverrideID), map[string]any{"override_id": params.OverrideID})
+		return
+	}
+	if err != nil {
+		logger.Warn("DNS override retire failed", "override_id", params.OverrideID, "error", err)
+		details := map[string]any{"override_id": params.OverrideID}
+		if retirement.Override != nil {
+			details["zone"] = retirement.Override.ZoneName
+		}
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "persist_failed", err.Error(), details)
+		return
+	}
+	existing := retirement.Override
+	alreadyInactive := retirement.AlreadyInactive
+	now := retirement.RetiredAt
+	if err := r.publishDNSOperationStatus(ctx, event, dnsActionOverrideRetire, "reconciling", "DNS override retired; reconcile requested", existing.ZoneName); err != nil {
+		logger.Warn("publish DNS override retire status failed", "error", err)
+	}
+	if err := r.dnsOperator.ReconcileZone(ctx, existing.ZoneName); err != nil {
+		logger.Warn("DNS override retire reconcile failed", "zone", existing.ZoneName, "override_id", params.OverrideID, "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "error", "reconcile_failed", err.Error(), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName})
+		return
+	}
+	operatorPubkey := event.PubKey.Hex()
+	if alreadyInactive {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "success", "already_inactive", fmt.Sprintf("DNS record override %s was already inactive", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey})
+		return
+	}
+	_ = r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, dnsActionOverrideRetire, "success", "completed", fmt.Sprintf("DNS record override %s retired; reconcile completed", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey})
 }
 
 func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) {

@@ -329,8 +329,9 @@ func buildManifest() map[int]Disposition {
 	addIntent(kinds.DNSRecordOverrideRequest, "dns", "record-set")
 	addIntent(kinds.DNSDriftRemediateRequest, "dns", "drift-remediate")
 	addIntent(kinds.DNSBackendRegisterRequest, "dns", "backend-register")
+	addIntent(kinds.DNSOverrideRetireRequest, "dns", "override-retire")
 	addStatus(kinds.DNSOperationStatus, "dns")
-	for _, kind := range []int{kinds.DNSZoneCreateResult, kinds.DNSPolicyApplyResult, kinds.DNSRecordOverrideResult, kinds.DNSDriftRemediateResult, kinds.DNSBackendRegisterResult} {
+	for _, kind := range []int{kinds.DNSZoneCreateResult, kinds.DNSPolicyApplyResult, kinds.DNSRecordOverrideResult, kinds.DNSDriftRemediateResult, kinds.DNSBackendRegisterResult, kinds.DNSOverrideRetireResult} {
 		addResult(kind, "dns")
 	}
 

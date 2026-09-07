@@ -758,6 +758,7 @@ type fakeCLIOperatorClient struct {
 	dnsPolicyApply         func(client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error)
 	dnsRecordSet           func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error)
 	dnsDriftRemediate      func(client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error)
+	dnsOverrideRetire      func(client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error)
 	environmentCreate      func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	environmentGetDetails  func(string) (*client.EnvironmentDetails, error)
 	environmentUpdate      func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
@@ -818,6 +819,13 @@ func (f fakeCLIOperatorClient) DNSRecordSet(_ context.Context, req client.DNSRec
 func (f fakeCLIOperatorClient) DNSDriftRemediate(_ context.Context, req client.DNSDriftRemediateRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
 	if f.dnsDriftRemediate != nil {
 		return f.dnsDriftRemediate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (f fakeCLIOperatorClient) DNSOverrideRetire(_ context.Context, req client.DNSOverrideRetireRequest, _ func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error) {
+	if f.dnsOverrideRetire != nil {
+		return f.dnsOverrideRetire(req)
 	}
 	return nil, errors.New("not implemented")
 }

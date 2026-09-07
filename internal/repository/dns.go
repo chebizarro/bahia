@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -31,4 +32,5 @@ type DNSRecordOverrideRepository interface {
 	Get(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error)
 	ListByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	Expire(ctx context.Context, id uuid.UUID, at time.Time) error
 }

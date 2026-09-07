@@ -23,7 +23,7 @@ package kinds
 import cascadia "git.sharegap.net/cascadia/cascadia-go"
 
 // =============================================================================
-// DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)
+// DNS Control-Plane Kinds (5941-5946, 6941, 7941-7946)
 // =============================================================================
 
 const (
@@ -32,6 +32,7 @@ const (
 	DNSRecordOverrideRequest  = 5943
 	DNSDriftRemediateRequest  = 5944
 	DNSBackendRegisterRequest = 5945
+	DNSOverrideRetireRequest  = 5946
 
 	DNSOperationStatus = 6941
 
@@ -40,6 +41,7 @@ const (
 	DNSRecordOverrideResult  = 7943
 	DNSDriftRemediateResult  = 7944
 	DNSBackendRegisterResult = 7945
+	DNSOverrideRetireResult  = 7946
 )
 
 // =============================================================================

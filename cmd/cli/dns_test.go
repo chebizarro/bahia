@@ -73,6 +73,43 @@ func TestDNSDriftRemediateWithAndWithoutZone(t *testing.T) {
 	}
 }
 
+func TestDNSOverrideRetireCommandBuildsTypedRequest(t *testing.T) {
+	setupDNSCLIEnv(t)
+	var retireRequest client.DNSOverrideRetireRequest
+	fake := fakeCLIOperatorClient{
+		dnsOverrideRetire: func(req client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
+			retireRequest = req
+			return &client.DNSCommandResult{Status: "success"}, nil
+		},
+	}
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) { return fake, nil })
+	defer restoreFactory()
+
+	overrideID := "1273e277-dfa7-4459-a452-89598eeca4a2"
+	executeDNSCommand(t, "override-retire", "--override-id", overrideID, "--reason", "acceptance complete")
+	if retireRequest.OverrideID != overrideID || retireRequest.Reason != "acceptance complete" {
+		t.Fatalf("retire request = %#v", retireRequest)
+	}
+}
+
+func TestDNSOverrideRetireCommandReturnsNonZeroForFailureStatusError(t *testing.T) {
+	setupDNSCLIEnv(t)
+	want := errors.New(`dns/override-retire failed with status "error": override not found`)
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{dnsOverrideRetire: func(client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
+			return nil, want
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(dnsCommands())
+	root.SetArgs([]string{"dns", "override-retire", "--override-id", "1273e277-dfa7-4459-a452-89598eeca4a2", "--reason", "test"})
+	if err := root.ExecuteContext(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
 func TestDNSCommandReturnsNonZeroForFailureStatusError(t *testing.T) {
 	setupDNSCLIEnv(t)
 	want := errors.New(`dns/record-set failed with status "error": unknown DNS zone prod.example`)

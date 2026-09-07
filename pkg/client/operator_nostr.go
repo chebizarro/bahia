@@ -593,6 +593,12 @@ type DNSDriftRemediateRequest struct {
 	Zone string `json:"zone,omitempty"`
 }
 
+// DNSOverrideRetireRequest is the signer-first dns/override-retire payload.
+type DNSOverrideRetireRequest struct {
+	OverrideID string `json:"override_id"`
+	Reason     string `json:"reason"`
+}
+
 // DNSCommandResult is the terminal acknowledgment for signer-first DNS mutations.
 type DNSCommandResult struct {
 	Action     string `json:"action,omitempty"`
@@ -934,6 +940,19 @@ func (c *OperatorControlPlaneClient) DNSDriftRemediate(ctx context.Context, req 
 		tags = append(tags, nostr.Tag{"zone", req.Zone})
 	}
 	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSDriftRemediate, tags, req, onStatus)
+}
+
+// DNSOverrideRetire publishes a signer-first dns/override-retire mutation and awaits its correlated acknowledgment.
+func (c *OperatorControlPlaneClient) DNSOverrideRetire(ctx context.Context, req DNSOverrideRetireRequest, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
+	req.OverrideID = strings.TrimSpace(req.OverrideID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.OverrideID == "" || req.Reason == "" {
+		return nil, &ControlPlaneRequestError{Phase: "validate DNS override-retire request", RequestAccepted: false, Cause: fmt.Errorf("override_id and reason are required")}
+	}
+	if _, err := uuid.Parse(req.OverrideID); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate DNS override-retire request", RequestAccepted: false, Cause: fmt.Errorf("invalid override_id: %v", err)}
+	}
+	return c.publishDNSCommand(ctx, controlplane.ContextVMMethodDNSOverrideRetire, nostr.Tags{{"override_id", req.OverrideID}}, req, onStatus)
 }
 
 func (c *OperatorControlPlaneClient) publishDNSCommand(ctx context.Context, method string, tags nostr.Tags, payload any, onStatus func(OperatorStatusEvent)) (*DNSCommandResult, error) {
