@@ -44,6 +44,8 @@ type RouterDeps struct {
 	DeploymentUnits  repository.DeploymentUnitRepository
 	EnvStates        repository.EnvironmentServiceStateRepository
 	InstanceHealth   repository.ManagedInstanceHealthRepository
+	RouteCanaries    handlers.RouteCanaryReader
+	RouteHealth      handlers.RouteInstanceHealthReader
 	InstanceOperator handlers.InstanceMaintenanceOperator
 	RuntimeResolver  runtimeadapter.RuntimeResolver
 	Payments         *service.PaymentService
@@ -158,6 +160,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
+	var routeCanaryH *handlers.RouteCanaryHandler
+	if deps.RouteCanaries != nil {
+		routeCanaryH = handlers.NewRouteCanaryHandler(deps.RouteCanaries, deps.RouteHealth)
+	}
 	var instanceHealthH *handlers.InstanceHealthHandler
 	if deps.InstanceHealth != nil && deps.Services != nil && deps.Environments != nil {
 		instanceHealthH = handlers.NewInstanceHealthHandler(deps.InstanceHealth, deps.Services, deps.Environments, deps.InstanceOperator)
@@ -260,6 +266,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health", instanceHealthH.Get)
 				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/events", instanceHealthH.ListEvents)
 				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/recovery-attempts", instanceHealthH.ListRecoveryAttempts)
+			}
+
+			// Managed route canaries (read)
+			if routeCanaryH != nil {
+				routeRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/route-canaries", routeCanaryH.List)
+				r.With(tier2Gate, routeRBAC).Get("/services/{serviceId}/environments/{envId}/routes/{hostname}/canary", routeCanaryH.Get)
+				r.With(tier2Gate, routeRBAC).Get("/services/{serviceId}/environments/{envId}/routes/{hostname}/canary/events", routeCanaryH.ListEvents)
 			}
 
 			// Repository CI lookup (read)
