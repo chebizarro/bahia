@@ -58,6 +58,22 @@ type cliNIP46Signer struct {
 	pubkey string
 }
 
+// cliEncryptedCapableSigner mirrors the capability pkg/client requires for
+// encrypted ContextVM operator requests: NIP-59 sealing needs SignEvent plus
+// NIP-44 Encrypt, and the correlated response needs NIP-44 Decrypt. It
+// deliberately excludes the deprecated NIP-04 pair, whose absence previously
+// rejected this signer and pushed operators toward a raw local nsec.
+type cliEncryptedCapableSigner interface {
+	canonicalnostr.Signer
+
+	Encrypt(ctx context.Context, plaintext string, recipient canonicalnostr.PubKey) (string, error)
+	Decrypt(ctx context.Context, base64ciphertext string, sender canonicalnostr.PubKey) (string, error)
+}
+
+// Compile-time guarantee that --encrypted keeps working with a Signet/NIP-46
+// bunker signer that holds no local key material.
+var _ cliEncryptedCapableSigner = (*cliNIP46Signer)(nil)
+
 func (s *cliNIP46Signer) GetPublicKey(_ context.Context) (canonicalnostr.PubKey, error) {
 	if s == nil || s.pubkey == "" {
 		return canonicalnostr.PubKey{}, fmt.Errorf("NIP-46 signer public key is not configured")
