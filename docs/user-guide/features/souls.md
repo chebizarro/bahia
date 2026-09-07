@@ -291,9 +291,10 @@ soul_factory:
       id: fleet-ops
     - relay: wss://groups.example.com
       id: fleet-dev
-  communikeys_communities: # optional; controller-owned kind-30000 section ACLs
-    - pubkey: "<64-char Signet/controller community pubkey>"
-      sections: [General, Apps, Chat]
+  communikeys_communities: # optional; Communikeys V2 section membership grants for new souls
+    - definition_address: "32222:<owner-pubkey>:<community-id>" # exact community branch
+      list_author: "<64-char Signet/controller pubkey>" # delegated profile-list signer
+      purposes: [general, apps, chat] # section-purpose tokens, not display names
   concord_communities: # optional; CORD-05 Direct Invites for encrypted backup communities
     - community_id: "<64-char self-certifying Concord community id>"
       invite_bundle_env: "FLEET_CONCORD_INVITE" # or invite_bundle_file / invite_bundle_sealed_file (absolute paths)
@@ -316,7 +317,7 @@ When enabled, Bahia starts a Nostr-native Soul Factory reactor and one generic a
 
 When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
 
-When `communikeys_communities` is configured, the Signet/controller key must own the named community pubkey and its existing kind-`30000` section profile lists must be reachable through the SoulFactory relays. During Signet provisioning, Bahia reads each exact admin-authored list through EOSE, preserves its tags and content, adds the new soul's `p` tag, republishes the replacement with the controller, and requires relay `OK`. Provisioning fails closed on missing lists, invalid ownership, AUTH failure, or rejection. Badges remain engagement-only and never grant Communikeys write access.
+When `communikeys_communities` is configured, each entry names an exact Communikeys V2 community branch by its definition address (`32222:<owner>:<communityId>`) plus the delegated list author — the Signet/controller key that signs the section profile lists. The community ID is opaque and is never a signer; the controller is an ordinary delegated signer referenced by the definition, not the community identity. During Signet provisioning, Bahia loads the owner-signed definition, verifies each computed `30000:<listAuthor>:<communityId>-<purpose>[.<shard>]` coordinate is referenced inside a definition `content` section, reads each exact delegated-author list through EOSE, preserves its tags and content, adds the new soul's `p` tag, republishes the replacement with the controller, and requires relay `OK`. Provisioning fails closed on missing definitions, unreferenced coordinates, missing lists, list-author mismatches, AUTH failure, or rejection. Badges remain engagement-only and never grant Communikeys write access.
 
 When `concord_communities` is configured, each entry references CORD-05 CommunityInvite JSON through either an environment-variable name or an absolute mounted-secret file path; Bahia does not accept inline `community_root` or channel keys. Bahia verifies the bundle's self-certifying `community_id`, current control/channel material, size and relay bounds, then uses the Signet-held staff identity to NIP-44-encrypt a kind-`3313` rumor and sign its kind-`13` seal. A single-use key signs the outer kind-`1059` wrap with `p=<new soul>` and `k=3313`. Every bundle relay must also be configured as a SoulFactory relay; Bahia authenticates and publishes to that declared set, and every relay must return an accepted `OK` or provisioning aborts. Bahia additionally resolves the recipient's giftwrap inbox per CORD-05 §6 — their kind-`10050` DM relay list when one exists, their NIP-65 read relays otherwise — and publishes there too, requiring at least one inbox relay to accept. A freshly provisioned agent has published neither list yet, so its invite rides the community relays alone. The agent's Concord client must watch at least one of those relays. A delivered Direct Invite cannot be revoked; removing accidental access requires CORD-06 key rotation/refounding.
 

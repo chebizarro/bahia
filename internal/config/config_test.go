@@ -930,6 +930,7 @@ func TestLoadSBOMCdxgenConfigFromYAML(t *testing.T) {
 func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	controller := strings.Repeat("a", 64)
 	authorized := strings.Repeat("b", 64)
+	communityID := strings.Repeat("f", 64)
 	concordID := strings.Repeat("d", 64)
 	sealedConcordID := strings.Repeat("e", 64)
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -948,10 +949,12 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
     - relay: "wss://groups.example"
       id: "fleet-dev"
   communikeys_communities:
-    - pubkey: " ` + controller + ` "
-      sections: [" Apps ", "Apps", "Chat"]
-    - pubkey: "` + controller + `"
-      sections: ["Chat", "Threads"]
+    - definition_address: " 32222:` + controller + `:` + communityID + ` "
+      list_author: " ` + controller + ` "
+      purposes: [" apps ", "apps", "chat"]
+    - definition_address: "32222:` + controller + `:` + communityID + `"
+      list_author: "` + controller + `"
+      purposes: ["chat", "threads"]
   concord_communities:
     - community_id: " ` + strings.ToUpper(concordID) + ` "
       invite_bundle_env: " FLEET_CONCORD_INVITE "
@@ -998,7 +1001,10 @@ func TestLoadSoulFactoryConfigFromYAMLAndEnv(t *testing.T) {
 	if got := cfg.SoulFactory.NIP29Groups; len(got) != 1 || got[0].Relay != "wss://groups.example" || got[0].ID != "fleet-dev" {
 		t.Fatalf("SoulFactory NIP-29 groups = %#v", got)
 	}
-	if got := cfg.SoulFactory.CommunikeysCommunities; len(got) != 1 || got[0].Pubkey != controller || strings.Join(got[0].Sections, ",") != "Apps,Chat,Threads" {
+	if got := cfg.SoulFactory.CommunikeysCommunities; len(got) != 1 ||
+		got[0].DefinitionAddress != "32222:"+controller+":"+communityID ||
+		got[0].ListAuthor != controller || got[0].Shard != 1 ||
+		strings.Join(got[0].Purposes, ",") != "apps,chat,threads" {
 		t.Fatalf("SoulFactory Communikeys communities = %#v", got)
 	}
 	if got := cfg.SoulFactory.ConcordCommunities; len(got) != 2 || got[0].CommunityID != concordID || got[0].InviteBundleEnv != "FLEET_CONCORD_INVITE" ||
@@ -1158,22 +1164,55 @@ func TestLoadRejectsInvalidSoulFactoryConfig(t *testing.T) {
 			want: "soul_factory.llm_base_url must be an API origin without a path",
 		},
 		{
-			name: "invalid Communikeys community pubkey",
+			name: "Communikeys bare pubkey is not a definition address",
 			yaml: `soul_factory:
   communikeys_communities:
-    - pubkey: "not-hex"
-      sections: ["Apps"]
+    - definition_address: "` + validPubkey + `"
+      list_author: "` + validPubkey + `"
+      purposes: ["apps"]
 `,
-			want: "soul_factory.communikeys_communities[0].pubkey",
+			want: "soul_factory.communikeys_communities[0].definition_address must have the form 32222:<owner-pubkey>:<community-id>",
 		},
 		{
-			name: "Communikeys community without sections",
+			name: "invalid Communikeys list author",
 			yaml: `soul_factory:
   communikeys_communities:
-    - pubkey: "` + validPubkey + `"
-      sections: []
+    - definition_address: "32222:` + validPubkey + `:` + validPubkey + `"
+      list_author: "not-hex"
+      purposes: ["apps"]
 `,
-			want: "soul_factory.communikeys_communities[0].sections requires at least one section",
+			want: "soul_factory.communikeys_communities[0].list_author must be 64 hex characters",
+		},
+		{
+			name: "Communikeys community without purposes",
+			yaml: `soul_factory:
+  communikeys_communities:
+    - definition_address: "32222:` + validPubkey + `:` + validPubkey + `"
+      list_author: "` + validPubkey + `"
+      purposes: []
+`,
+			want: "soul_factory.communikeys_communities[0].purposes requires at least one section purpose",
+		},
+		{
+			name: "Communikeys uppercase purpose",
+			yaml: `soul_factory:
+  communikeys_communities:
+    - definition_address: "32222:` + validPubkey + `:` + validPubkey + `"
+      list_author: "` + validPubkey + `"
+      purposes: ["General"]
+`,
+			want: "must be a lowercase token of letters, digits, and single hyphens",
+		},
+		{
+			name: "Communikeys negative shard",
+			yaml: `soul_factory:
+  communikeys_communities:
+    - definition_address: "32222:` + validPubkey + `:` + validPubkey + `"
+      list_author: "` + validPubkey + `"
+      purposes: ["apps"]
+      shard: -1
+`,
+			want: "soul_factory.communikeys_communities[0].shard must be 0/1 (unsharded) or >= 2",
 		},
 		{
 			name: "invalid Concord community id",

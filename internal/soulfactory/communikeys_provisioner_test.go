@@ -26,7 +26,7 @@ func TestFullProvisionerAssignsAndRecordsCommunikeysAfterSignet(t *testing.T) {
 	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, slog.Default())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
-	assigner := &recordingCommunikeysAssigner{assigned: []string{"30000:" + signer.pubkey + ":Apps"}}
+	assigner := &recordingCommunikeysAssigner{assigned: []string{"30000:" + signer.pubkey + ":" + opaqueCommunityID + "-apps"}}
 	full.communikeysMembership = assigner
 
 	run := &domain.ProvisioningRun{

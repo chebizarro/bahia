@@ -237,7 +237,12 @@ func soulFactoryNIP29Groups(groups []config.NIP29Group) []soulfactory.NIP29Group
 func soulFactoryCommunikeysCommunities(communities []config.CommunikeysCommunity) []soulfactory.CommunikeysCommunity {
 	out := make([]soulfactory.CommunikeysCommunity, 0, len(communities))
 	for _, community := range communities {
-		out = append(out, soulfactory.CommunikeysCommunity{Pubkey: community.Pubkey, Sections: append([]string(nil), community.Sections...)})
+		out = append(out, soulfactory.CommunikeysCommunity{
+			DefinitionAddress: community.DefinitionAddress,
+			ListAuthor:        community.ListAuthor,
+			Purposes:          append([]string(nil), community.Purposes...),
+			Shard:             community.Shard,
+		})
 	}
 	return out
 }

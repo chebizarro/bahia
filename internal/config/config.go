@@ -270,10 +270,23 @@ type NIP29Group struct {
 	ID    string `koanf:"id" yaml:"id"`
 }
 
-// CommunikeysCommunity identifies controller-owned section ACLs assigned to newly provisioned souls.
+// CommunikeysCommunity identifies one exact Communikeys V2 community branch
+// and the section profile lists whose membership grants are assigned to newly
+// provisioned souls. The community is addressed by its definition address, not
+// by a pubkey: the community ID is an opaque identifier that grants no signing
+// meaning, and the profile lists are authored by a delegated real signer.
 type CommunikeysCommunity struct {
-	Pubkey   string   `koanf:"pubkey" yaml:"pubkey"`
-	Sections []string `koanf:"sections" yaml:"sections"`
+	// DefinitionAddress is the exact branch "32222:<owner-pubkey>:<community-id>".
+	DefinitionAddress string `koanf:"definition_address" yaml:"definition_address"`
+	// ListAuthor is the delegated signer that authors the section profile
+	// lists; it must match the configured Signet/controller signing identity.
+	ListAuthor string `koanf:"list_author" yaml:"list_author"`
+	// Purposes are lowercase section-purpose tokens such as "general" or
+	// "room-creator"; they are not display names.
+	Purposes []string `koanf:"purposes" yaml:"purposes"`
+	// Shard selects which shard of each purpose to write: 0/1 is the unsharded
+	// base coordinate, >=2 appends ".<shard>" to the identifier.
+	Shard int `koanf:"shard" yaml:"shard"`
 }
 
 // ConcordCommunity identifies CORD-05 invite material for a fleet community.
@@ -1748,6 +1761,14 @@ func normalizeStringList(values []string) []string {
 // stable lowercase protocol identifiers suitable for Nostr tag values.
 var agentRuntimeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// communikeysHex64Pattern validates canonical lowercase 64-character hex for
+// Communikeys V2 owner pubkeys, opaque community IDs, and list authors.
+var communikeysHex64Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// communikeysPurposeTokenPattern validates Communikeys V2 section-purpose
+// tokens (lowercase letters, digits, and single hyphens).
+var communikeysPurposeTokenPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
 // DefaultAgentRuntimes preserves the historical single-runtime behavior when
 // soul_factory.agent_runtimes is not configured.
 var DefaultAgentRuntimes = []string{"openclaw"}
@@ -2663,34 +2684,58 @@ func (c *Config) validateSoulFactory() error {
 	sf.NIP29Groups = normalizedGroups
 
 	communityIndexes := make(map[string]int, len(sf.CommunikeysCommunities))
-	communitySections := make(map[string]map[string]struct{}, len(sf.CommunikeysCommunities))
+	communityPurposes := make(map[string]map[string]struct{}, len(sf.CommunikeysCommunities))
 	normalizedCommunities := make([]CommunikeysCommunity, 0, len(sf.CommunikeysCommunities))
 	for i, community := range sf.CommunikeysCommunities {
-		pubkeys, err := normalizePubkeyList([]string{community.Pubkey})
-		if err != nil || len(pubkeys) != 1 {
-			if err == nil {
-				err = fmt.Errorf("pubkey is required")
+		address := strings.ToLower(strings.TrimSpace(community.DefinitionAddress))
+		parts := strings.Split(address, ":")
+		if len(parts) != 3 || parts[0] != "32222" ||
+			!communikeysHex64Pattern.MatchString(parts[1]) ||
+			!communikeysHex64Pattern.MatchString(parts[2]) {
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].definition_address must have the form 32222:<owner-pubkey>:<community-id> with 64-hex components", i)
+		}
+		communityID := parts[2]
+		listAuthor := strings.ToLower(strings.TrimSpace(community.ListAuthor))
+		if !communikeysHex64Pattern.MatchString(listAuthor) {
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].list_author must be 64 hex characters", i)
+		}
+		shard := community.Shard
+		if shard == 0 {
+			shard = 1
+		}
+		if shard < 0 {
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].shard must be 0/1 (unsharded) or >= 2", i)
+		}
+		purposes := normalizeStringList(community.Purposes)
+		if len(purposes) == 0 {
+			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].purposes requires at least one section purpose", i)
+		}
+		for _, purpose := range purposes {
+			if !communikeysPurposeTokenPattern.MatchString(purpose) {
+				return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].purposes entry %q must be a lowercase token of letters, digits, and single hyphens", i, purpose)
 			}
-			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].pubkey: %w", i, err)
+			identifier := communityID + "-" + purpose
+			if shard >= 2 {
+				identifier += "." + strconv.Itoa(shard)
+			}
+			if len(identifier) > 200 {
+				return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d] section identifier %q exceeds 200 UTF-8 bytes", i, identifier)
+			}
 		}
-		sections := normalizeStringList(community.Sections)
-		if len(sections) == 0 {
-			return fmt.Errorf("config validation failed: soul_factory.communikeys_communities[%d].sections requires at least one section", i)
-		}
-		pubkey := pubkeys[0]
-		index, exists := communityIndexes[pubkey]
+		key := address + "\x00" + listAuthor + "\x00" + strconv.Itoa(shard)
+		index, exists := communityIndexes[key]
 		if !exists {
 			index = len(normalizedCommunities)
-			communityIndexes[pubkey] = index
-			communitySections[pubkey] = make(map[string]struct{}, len(sections))
-			normalizedCommunities = append(normalizedCommunities, CommunikeysCommunity{Pubkey: pubkey})
+			communityIndexes[key] = index
+			communityPurposes[key] = make(map[string]struct{}, len(purposes))
+			normalizedCommunities = append(normalizedCommunities, CommunikeysCommunity{DefinitionAddress: address, ListAuthor: listAuthor, Shard: shard})
 		}
-		for _, section := range sections {
-			if _, duplicate := communitySections[pubkey][section]; duplicate {
+		for _, purpose := range purposes {
+			if _, duplicate := communityPurposes[key][purpose]; duplicate {
 				continue
 			}
-			communitySections[pubkey][section] = struct{}{}
-			normalizedCommunities[index].Sections = append(normalizedCommunities[index].Sections, section)
+			communityPurposes[key][purpose] = struct{}{}
+			normalizedCommunities[index].Purposes = append(normalizedCommunities[index].Purposes, purpose)
 		}
 	}
 	sf.CommunikeysCommunities = normalizedCommunities
