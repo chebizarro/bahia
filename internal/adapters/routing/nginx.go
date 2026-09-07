@@ -236,43 +236,76 @@ func (b *NginxBackend) Check(ctx context.Context, plan *domain.DesiredPublicRout
 }
 
 func (b *NginxBackend) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	_, err := b.ApplyWithCompensation(ctx, plan)
+	return err
+}
+
+// ApplyWithCompensation converges the internal vhost and returns the inverse of
+// a successful apply.
+//
+// The backend already restores the previous vhost when its own test or reload
+// fails. The returned compensation exposes that same restore for the success
+// path, so an orchestrator can undo a vhost that installed cleanly but whose
+// route later failed a canary gate. Without it, a route could be validated as
+// broken with no way to put the previous, working vhost back.
+func (b *NginxBackend) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (Compensation, error) {
 	b.applyMu.Lock()
 	defer b.applyMu.Unlock()
 	if err := b.Check(ctx, plan); err != nil {
-		return err
+		return nil, err
 	}
 	path, err := b.vhostPath(plan.Hostname)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	previous, err := captureNginxSnapshot(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if plan.InternalHTTPS == nil && !previous.Exists {
-		return nil
+		return noopCompensation, nil
 	}
 	if plan.InternalHTTPS == nil {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove Bahia-owned nginx vhost %q: %w", path, err)
+			return nil, fmt.Errorf("remove Bahia-owned nginx vhost %q: %w", path, err)
 		}
 	} else {
 		data, err := RenderNginxVhost(plan.InternalHTTPS)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := writeNginxAtomic(ctx, path, plan.Hostname, data, 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if err := b.runCommand(ctx, "test", b.cfg.TestCommand); err != nil {
 		cause := fmt.Errorf("validate nginx after converging internal route %q: %w", plan.Hostname, err)
-		return b.restoreAndActivate(path, previous, cause)
+		return nil, b.restoreAndActivate(path, previous, cause)
 	}
 	if err := b.runCommand(ctx, "reload", b.cfg.ReloadCommand); err != nil {
 		cause := fmt.Errorf("reload nginx after converging internal route %q: %w", plan.Hostname, err)
-		return b.restoreAndActivate(path, previous, cause)
+		return nil, b.restoreAndActivate(path, previous, cause)
+	}
+	return func(compensationCtx context.Context) error {
+		b.applyMu.Lock()
+		defer b.applyMu.Unlock()
+		return b.restoreSnapshot(compensationCtx, path, previous)
+	}, nil
+}
+
+// restoreSnapshot puts back a captured vhost and reactivates it. Unlike
+// restoreAndActivate it reports success as a nil error, because it is undoing a
+// successful apply rather than annotating a failure.
+func (b *NginxBackend) restoreSnapshot(ctx context.Context, path string, snapshot atomicfile.Snapshot) error {
+	if err := atomicfile.Restore(path, ".nginx-rollback-*.tmp", snapshot); err != nil {
+		return fmt.Errorf("restore previous nginx vhost: %w", err)
+	}
+	if err := b.runCommand(ctx, "rollback-test", b.cfg.TestCommand); err != nil {
+		return fmt.Errorf("validate nginx after restoring previous vhost: %w", err)
+	}
+	if err := b.runCommand(ctx, "rollback-reload", b.cfg.ReloadCommand); err != nil {
+		return fmt.Errorf("reload nginx after restoring previous vhost: %w", err)
 	}
 	return nil
 }

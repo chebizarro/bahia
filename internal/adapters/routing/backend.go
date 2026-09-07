@@ -17,6 +17,11 @@ type Backend interface {
 // a successful apply.
 type Compensation func(ctx context.Context) error
 
+// noopCompensation is the inverse of an apply that changed nothing. It exists so
+// callers can always invoke a non-nil compensation rather than branching, and so
+// "nothing to undo" is never confused with "no inverse available".
+var noopCompensation Compensation = func(context.Context) error { return nil }
+
 // CompensatingBackend exposes the successful apply's inverse so a composite
 // can roll back an earlier provider when a later provider fails.
 type CompensatingBackend interface {
