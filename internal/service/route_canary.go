@@ -201,6 +201,9 @@ func NewRouteCanarySupervisor(
 	}, nil
 }
 
+// Name identifies the supervisor in background-runner logging and health.
+func (s *RouteCanarySupervisor) Name() string { return "route-canary-supervisor" }
+
 // Run evaluates immediately and then on every tick until the context is done.
 func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
 	s.EvaluateOnce(ctx)

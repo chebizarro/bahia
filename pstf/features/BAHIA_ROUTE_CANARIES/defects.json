@@ -1,0 +1,19 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARIES",
+  "defects": [
+    {
+      "id": "D1",
+      "statement": "NginxBackend restored the previous vhost when its own test or reload failed, but exposed no inverse for a successful apply. A route that installed cleanly yet did not serve traffic could be detected as broken with no way to restore the working vhost.",
+      "status": "fixed",
+      "fix": "NginxBackend and CompositeBackend gained ApplyWithCompensation; PublicRoutePlanner gained ApplyWithCompensation that fails loudly when a backend cannot produce an inverse.",
+      "verification": ["internal/adapters/routing/nginx.go","internal/adapters/routing/composite.go","internal/service/public_route.go"]
+    },
+    {
+      "id": "D2",
+      "statement": "DNS-plus-HTTPS route verification existed only inside CloudflareBackend.verifyHTTPS. Any second verification path would have duplicated the resolver and dial logic, which is the class of divergence that produced this outage.",
+      "status": "fixed",
+      "fix": "Extracted a single shared resolver/dial-override transport builder into internal/httpclient, consumed by the route prober. It is built on hardenTransport so TLS verification cannot be disabled on any probe path.",
+      "verification": ["internal/httpclient/probe_transport.go","internal/adapters/runtime/route_probe.go"]
+    }
+  ]
+}
