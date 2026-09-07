@@ -298,3 +298,14 @@ func (r *PgDNSRecordOverrideRepository) Delete(ctx context.Context, id uuid.UUID
 	}
 	return nil
 }
+
+func (r *PgDNSRecordOverrideRepository) Expire(ctx context.Context, id uuid.UUID, at time.Time) error {
+	cmd, err := r.pool.Exec(ctx, `UPDATE dns_record_overrides SET expires_at = $2 WHERE id = $1`, id, at.UTC())
+	if err != nil {
+		return fmt.Errorf("expiring DNS record override %s: %w", id, err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("expiring DNS record override %s: %w", id, ErrNotFound)
+	}
+	return nil
+}

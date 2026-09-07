@@ -2499,7 +2499,7 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	}
 	if dnsEnabled {
 		capabilities = append(capabilities, "dns_endpoint_catalog")
-		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-override", "dns/drift-remediate", "dns/backend-register")
+		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-override", "dns/drift-remediate", "dns/backend-register", "dns/override-retire")
 	}
 	aiMLMethods := []string{"ml/model-import", "ml/recipe-run", "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"}
 	methods = append(methods, aiMLMethods...)

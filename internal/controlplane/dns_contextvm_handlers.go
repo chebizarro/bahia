@@ -25,6 +25,7 @@ func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator
 	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, h.whenEnabled(h.policyApply))
 	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, h.whenEnabled(h.recordSet))
 	transport.RegisterContextVMHandler(ContextVMMethodDNSDriftRemediate, h.whenEnabled(h.driftRemediate))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSOverrideRetire, h.whenEnabled(h.overrideRetire))
 }
 
 type dnsContextVMHandlers struct {
@@ -139,6 +140,57 @@ func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRe
 		return dnsResult(dnsActionRecordOverride, "error", "reconcile_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
 	}
 	return dnsResult(dnsActionRecordOverride, "success", "completed", "DNS record override persisted; reconcile completed", map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
+}
+
+func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request ContextVMRequest) (any, error) {
+	retirer, _ := h.operator.(DNSOverrideRetirementOperator)
+	if retirer == nil {
+		return dnsResult(dnsActionOverrideRetire, "failed", "unsupported", dnsUnsupportedOverrideRetire, nil), nil
+	}
+	var params struct {
+		OverrideID string `json:"override_id"`
+		Reason     string `json:"reason"`
+	}
+	if err := decodeContextVMParams(request.RPC.Params, &params); err != nil {
+		return dnsResult(dnsActionOverrideRetire, "error", "parse_error", fmt.Sprintf("invalid DNS override retire JSON content: %v", err), nil), nil
+	}
+	params.Reason = strings.TrimSpace(params.Reason)
+	params.OverrideID = strings.TrimSpace(params.OverrideID)
+	if params.OverrideID == "" {
+		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", "override_id is required", nil), nil
+	}
+	if params.Reason == "" {
+		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", "reason is required", nil), nil
+	}
+	overrideID, err := uuid.Parse(params.OverrideID)
+	if err != nil {
+		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", fmt.Sprintf("invalid override_id: %v", err), nil), nil
+	}
+	retirement, err := retireDNSOverride(ctx, retirer, overrideID, time.Now().UTC(), params.Reason)
+	if errors.Is(err, errDNSOverrideNotFound) {
+		return dnsResult(dnsActionOverrideRetire, "error", "not_found", fmt.Sprintf("DNS record override %s not found", params.OverrideID), map[string]any{"override_id": params.OverrideID}), nil
+	}
+	if err != nil {
+		details := map[string]any{"override_id": params.OverrideID}
+		if retirement.Override != nil {
+			details["zone"] = retirement.Override.ZoneName
+		}
+		return dnsResult(dnsActionOverrideRetire, "error", "persist_failed", err.Error(), details), nil
+	}
+	existing := retirement.Override
+	alreadyInactive := retirement.AlreadyInactive
+	now := retirement.RetiredAt
+	operatorPubkey := ""
+	if request.Event != nil {
+		operatorPubkey = request.Event.PubKey.Hex()
+	}
+	if err := h.operator.ReconcileZone(ctx, existing.ZoneName); err != nil {
+		return dnsResult(dnsActionOverrideRetire, "error", "reconcile_failed", err.Error(), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName}), nil
+	}
+	if alreadyInactive {
+		return dnsResult(dnsActionOverrideRetire, "success", "already_inactive", fmt.Sprintf("DNS record override %s was already inactive", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
+	}
+	return dnsResult(dnsActionOverrideRetire, "success", "completed", fmt.Sprintf("DNS record override %s retired; reconcile completed", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
 }
 
 func (h dnsContextVMHandlers) driftRemediate(ctx context.Context, request ContextVMRequest) (any, error) {

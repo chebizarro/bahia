@@ -29,6 +29,7 @@ type cliOperatorClient interface {
 	DNSPolicyApply(context.Context, client.DNSPolicyApplyRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
+	DNSOverrideRetire(context.Context, client.DNSOverrideRetireRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	GetEnvironmentDetailsNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error)
 	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
@@ -197,6 +198,15 @@ func runDNSDriftRemediate(cmd *cobra.Command, req client.DNSDriftRemediateReques
 	}
 	defer op.Close()
 	return op.DNSDriftRemediate(cmd.Context(), req, operatorStatusCallback(cmd, "dns drift-remediate"))
+}
+
+func runDNSOverrideRetire(cmd *cobra.Command, req client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.DNSOverrideRetire(cmd.Context(), req, operatorStatusCallback(cmd, "dns override-retire"))
 }
 
 func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {

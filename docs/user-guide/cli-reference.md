@@ -200,6 +200,14 @@ bahia dns record-set \
   --reason "incident pin" \
   --expires-at 2026-09-04T12:00:00Z
 
+# Retire an existing pin once the projected record is authoritative.
+# Retirement expires the override rather than deleting it, so the row remains
+# as an audit record. It is idempotent: retrying reports the override as
+# already inactive and does not move the recorded retirement time.
+bahia dns override-retire \
+  --override-id 1273e277-dfa7-4459-a452-89598eeca4a2 \
+  --reason "Bahia now projects the zone authoritatively"
+
 # Reconcile one zone or all configured zones
 bahia dns drift-remediate --zone prod.example
 bahia dns drift-remediate

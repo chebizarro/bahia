@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -212,6 +213,8 @@ func (r *RelayFirstPackage) EnsureRepository(ctx context.Context, repo *domain.P
 type relayFirstDNSDelegate interface {
 	CreateZone(ctx context.Context, zone domain.DNSZone) error
 	CreateOverride(ctx context.Context, override domain.DNSRecordOverride) error
+	GetOverride(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error)
+	ExpireOverride(ctx context.Context, id uuid.UUID, at time.Time, reason string) error
 }
 
 // RelayFirstDNS gates durable DNS zone and override mutations before delegating persistence.
@@ -253,4 +256,27 @@ func (r *RelayFirstDNS) CreateOverride(ctx context.Context, override domain.DNSR
 		return err
 	}
 	return r.delegate.CreateOverride(ctx, override)
+}
+
+func (r *RelayFirstDNS) GetOverride(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error) {
+	if r.delegate == nil {
+		return nil, fmt.Errorf("DNS delegate is not configured")
+	}
+	return r.delegate.GetOverride(ctx, id)
+}
+
+func (r *RelayFirstDNS) ExpireOverride(ctx context.Context, id uuid.UUID, at time.Time, reason string) error {
+	if r.delegate == nil {
+		return fmt.Errorf("DNS delegate is not configured")
+	}
+	dTag := "dns-override:" + id.String()
+	retiredAt := at.UTC().Format(time.RFC3339)
+	// The retirement reason is part of the durable audit trail: an operator must
+	// be able to read why a pinned override was withdrawn without DB access.
+	tags := gonostr.Tags{{"override_id", id.String()}, {"retired_at", retiredAt}, {"reason", reason}}
+	payload := map[string]any{"override_id": id.String(), "retired_at": retiredAt, "reason": reason}
+	if err := r.base.publish(ctx, dTag, "dns", "override_retire", tags, payload, "dns override retire state"); err != nil {
+		return err
+	}
+	return r.delegate.ExpireOverride(ctx, id, at, reason)
 }

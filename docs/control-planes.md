@@ -57,7 +57,7 @@ Client mutation publication should use ContextVM JSON-RPC methods rather than Ba
 | `environment` | `create`, `get-details`, `update`, `delete` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update` |
 | `package` | `publish`, `promote`, `yank`, `deprecate`, `drift-detect` |
-| `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
+| `dns` | `zone-create`, `zone-delete`, `record-set`, `override-retire`, `policy-apply`, `drift-remediate` |
 | `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
 | `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-rollback` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
@@ -208,7 +208,7 @@ After receiving this acknowledgment, clients subscribe to `30315` with `#d=<stat
 Human browser operators use the DNS dashboard as a Nostr-native console:
 
 - DNS and FIPS mesh state are read from canonical state/app-data observables (`30900` and `30078`) with semantic `domain`, `schema`, `d`, and resource tags such as `dns-endpoint`, `dns-zone`, `dns-policy`, `worker`, and `fips-mesh`. The dashboard bootstraps historical state through EOSE-aware queries and keeps subscriptions open for realtime EVENT updates. REST read catalogs are not the dashboard substrate.
-- DNS writes are ContextVM methods (`dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/drift-remediate`) rather than Bahia-specific request kinds. The browser records the ContextVM event id, relay OK accepted/rejected outcomes, and canonical observable updates.
+- DNS writes are ContextVM methods (`dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`, `dns/drift-remediate`) rather than Bahia-specific request kinds. The browser records the ContextVM event id, relay OK accepted/rejected outcomes, and canonical observable updates.
 - No REST DNS write endpoints are part of this UX. REST remains a compatibility/query surface for areas that have not moved to Nostr-native flows.
 
 Agent operators use MCP for synchronous discovery and action entry points while following Nostr truth for async state:

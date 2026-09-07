@@ -99,7 +99,7 @@ Methods follow `<domain>/<operation>`:
 | `policy` | `create`, `update`, `delete`, `evaluate` |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
 | `llm` / `ml` | `route-create`, `release-register`, `deploy`, `approve`, `rollback`, `model-import`, `recipe-run`, `inference-deploy` |
-| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate`, `backend-register` |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `override-retire`, `drift-remediate`, `backend-register` |
 | `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
 | `adoption` | `scan`, `import` |
 | `assistant` | `prompt`, `approve`, `cancel` |

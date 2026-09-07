@@ -12,7 +12,7 @@ import (
 
 func dnsCommands() *cobra.Command {
 	cmd := &cobra.Command{Use: "dns", Short: "Manage DNS through the signer-first Nostr control plane"}
-	cmd.AddCommand(dnsZoneCreateCommand(), dnsPolicyApplyCommand(), dnsRecordSetCommand(), dnsDriftRemediateCommand())
+	cmd.AddCommand(dnsZoneCreateCommand(), dnsPolicyApplyCommand(), dnsRecordSetCommand(), dnsDriftRemediateCommand(), dnsOverrideRetireCommand())
 	return cmd
 }
 
@@ -110,6 +110,31 @@ func dnsRecordSetCommand() *cobra.Command {
 	cmd.Flags().String("reason", "", "Operator reason for the override")
 	cmd.Flags().String("expires-at", "", "Optional override expiration timestamp in RFC3339 format")
 	for _, flag := range []string{"zone", "name", "type", "value", "ttl", "reason"} {
+		_ = cmd.MarkFlagRequired(flag)
+	}
+	return cmd
+}
+
+func dnsOverrideRetireCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "override-retire",
+		Short: "Retire a managed DNS record override by setting its expiry",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			overrideID, _ := cmd.Flags().GetString("override-id")
+			reason, _ := cmd.Flags().GetString("reason")
+			result, err := runDNSOverrideRetire(cmd, client.DNSOverrideRetireRequest{
+				OverrideID: overrideID, Reason: reason,
+			})
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
+		},
+	}
+	cmd.Flags().String("override-id", "", "UUID of the DNS record override to retire")
+	cmd.Flags().String("reason", "", "Operator reason for retirement")
+	for _, flag := range []string{"override-id", "reason"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd

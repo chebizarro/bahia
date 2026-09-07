@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -149,7 +150,10 @@ func TestRelayFirstPackageSuccessfulMutationDelegates(t *testing.T) {
 	}
 }
 
-type fakeDNSDelegate struct{ calls int }
+type fakeDNSDelegate struct {
+	calls            int
+	lastRetireReason string
+}
 
 func (d *fakeDNSDelegate) CreateZone(context.Context, domain.DNSZone) error {
 	d.calls++
@@ -157,6 +161,15 @@ func (d *fakeDNSDelegate) CreateZone(context.Context, domain.DNSZone) error {
 }
 func (d *fakeDNSDelegate) CreateOverride(context.Context, domain.DNSRecordOverride) error {
 	d.calls++
+	return nil
+}
+func (d *fakeDNSDelegate) GetOverride(context.Context, uuid.UUID) (*domain.DNSRecordOverride, error) {
+	d.calls++
+	return nil, nil
+}
+func (d *fakeDNSDelegate) ExpireOverride(_ context.Context, _ uuid.UUID, _ time.Time, reason string) error {
+	d.calls++
+	d.lastRetireReason = reason
 	return nil
 }
 

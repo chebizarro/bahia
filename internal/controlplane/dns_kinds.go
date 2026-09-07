@@ -10,6 +10,7 @@ const (
 	KindDNSRecordOverrideRequest  = kinds.DNSRecordOverrideRequest
 	KindDNSDriftRemediateRequest  = kinds.DNSDriftRemediateRequest
 	KindDNSBackendRegisterRequest = kinds.DNSBackendRegisterRequest
+	KindDNSOverrideRetireRequest  = kinds.DNSOverrideRetireRequest
 
 	KindDNSOperationStatus = kinds.DNSOperationStatus
 
@@ -18,4 +19,5 @@ const (
 	KindDNSRecordOverrideResult  = kinds.DNSRecordOverrideResult
 	KindDNSDriftRemediateResult  = kinds.DNSDriftRemediateResult
 	KindDNSBackendRegisterResult = kinds.DNSBackendRegisterResult
+	KindDNSOverrideRetireResult  = kinds.DNSOverrideRetireResult
 )

@@ -2506,9 +2506,33 @@ func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []dom
 	}
 	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet, backends: backendSet}
 	if persistence != nil {
-		return &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence, policies: policies}
+		persistent := &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence, policies: policies}
+		// Advertise override retirement only when the underlying persistence can
+		// actually perform it. Returning a type that always implements the
+		// capability would make the handler's check meaningless and turn an
+		// unsupported backend into a runtime error instead of a clean
+		// "unsupported" result.
+		if retirer, ok := persistence.(controlplane.DNSOverrideRetirementOperator); ok {
+			return &dnsRetiringControlPlaneOperator{dnsPersistentControlPlaneOperator: persistent, retirer: retirer}
+		}
+		return persistent
 	}
 	return operator
+}
+
+// dnsRetiringControlPlaneOperator adds the optional override-retirement
+// capability to a persistent DNS operator whose backend supports it.
+type dnsRetiringControlPlaneOperator struct {
+	*dnsPersistentControlPlaneOperator
+	retirer controlplane.DNSOverrideRetirementOperator
+}
+
+func (o *dnsRetiringControlPlaneOperator) GetOverride(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error) {
+	return o.retirer.GetOverride(ctx, id)
+}
+
+func (o *dnsRetiringControlPlaneOperator) ExpireOverride(ctx context.Context, id uuid.UUID, at time.Time, reason string) error {
+	return o.retirer.ExpireOverride(ctx, id, at, reason)
 }
 
 func (o *dnsControlPlaneOperator) ReconcileAll(ctx context.Context) error {
@@ -2596,6 +2620,20 @@ func (a dnsRepositoryPersistenceAdapter) ListOverridesByZone(ctx context.Context
 		return nil, fmt.Errorf("DNS record override repository is not configured")
 	}
 	return a.overrides.ListByZone(ctx, zoneName)
+}
+
+func (a dnsRepositoryPersistenceAdapter) GetOverride(ctx context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error) {
+	if a.overrides == nil {
+		return nil, fmt.Errorf("DNS record override repository is not configured")
+	}
+	return a.overrides.Get(ctx, id)
+}
+
+func (a dnsRepositoryPersistenceAdapter) ExpireOverride(ctx context.Context, id uuid.UUID, at time.Time, _ string) error {
+	if a.overrides == nil {
+		return fmt.Errorf("DNS record override repository is not configured")
+	}
+	return a.overrides.Expire(ctx, id, at)
 }
 
 func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, internalCfg config.InternalRoutingConfig, secretRepo repository.SecretRepository, encryptor *secretsAdapter.Encryptor, logger *zap.Logger) (*service.PublicRoutePlanner, *routingAdapter.NginxBackend, error) {
