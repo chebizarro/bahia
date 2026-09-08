@@ -238,6 +238,115 @@ func (f buildResultTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Buil
 	return f.build, nil
 }
 
+type buildReadTestLoader struct {
+	build *domain.Build
+	calls int
+}
+
+func (f *buildReadTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
+	f.calls++
+	return f.build, nil
+}
+
+type buildReadTestHistory struct {
+	builds    []domain.Build
+	calls     int
+	serviceID uuid.UUID
+	limit     int
+	offset    int
+}
+
+func (f *buildReadTestHistory) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
+	f.calls++
+	f.serviceID = serviceID
+	f.limit = limit
+	f.offset = offset
+	return f.builds, nil
+}
+
+type buildReadTestMembers struct{ allowedOrgID uuid.UUID }
+
+func (f buildReadTestMembers) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+	if orgID != f.allowedOrgID {
+		return nil, nil
+	}
+	return &domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: domain.RoleViewer}, nil
+}
+
+func (buildReadTestMembers) ListByPubkey(context.Context, string) ([]domain.OrgMember, error) {
+	return nil, nil
+}
+
+func TestBuildReadsUseTenantAuthorizationAndBoundedHistory(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	build := domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusSucceeded}
+	loader := &buildReadTestLoader{build: &build}
+	history := &buildReadTestHistory{builds: []domain.Build{build}}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds: loader, BuildHistory: history,
+		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: orgID}},
+		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: orgID}),
+	})
+
+	getParams, _ := json.Marshal(map[string]any{"build_id": build.ID})
+	result, err := handler.GetBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: getParams},
+	})
+	if err != nil {
+		t.Fatalf("GetBuild() error = %v", err)
+	}
+	if got := result.(map[string]any)["build"].(*domain.Build); got.ID != build.ID {
+		t.Fatalf("GetBuild() build = %#v", got)
+	}
+
+	listParams, _ := json.Marshal(map[string]any{"service_id": serviceID, "limit": 500, "offset": -5})
+	result, err = handler.ListBuilds(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: listParams},
+	})
+	if err != nil {
+		t.Fatalf("ListBuilds() error = %v", err)
+	}
+	response := result.(map[string]any)
+	if history.calls != 1 || history.serviceID != serviceID || history.limit != 200 || history.offset != 0 {
+		t.Fatalf("history call = calls:%d service:%s limit:%d offset:%d", history.calls, history.serviceID, history.limit, history.offset)
+	}
+	if response["count"] != 1 || response["limit"] != 200 || response["offset"] != 0 {
+		t.Fatalf("ListBuilds() response = %#v", response)
+	}
+}
+
+func TestBuildReadsDenyCrossTenantBeforeListingHistory(t *testing.T) {
+	serviceID := uuid.New()
+	build := &domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusQueued}
+	loader := &buildReadTestLoader{build: build}
+	history := &buildReadTestHistory{builds: []domain.Build{*build}}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds: loader, BuildHistory: history,
+		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: uuid.New()}},
+		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: uuid.New()}),
+	})
+
+	getParams, _ := json.Marshal(map[string]any{"build_id": build.ID})
+	if _, err := handler.GetBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: getParams},
+	}); err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("cross-tenant GetBuild() error = %v", err)
+	}
+	listParams, _ := json.Marshal(map[string]any{"service_id": serviceID})
+	if _, err := handler.ListBuilds(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: listParams},
+	}); err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("cross-tenant ListBuilds() error = %v", err)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("GetBuild() loader calls = %d, want 1", loader.calls)
+	}
+	if history.calls != 0 {
+		t.Fatalf("ListBuilds() touched history %d times before authorization", history.calls)
+	}
+}
+
 type buildResultTestRegistrar struct {
 	artifact *domain.Artifact
 	buildID  uuid.UUID
