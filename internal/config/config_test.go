@@ -127,6 +127,74 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
+	validConfig := func() *Config {
+		cfg := Defaults()
+		cfg.HiveCI.Initiator = HiveCIInitiatorConfig{
+			Enabled:        true,
+			GiteaBaseURL:   "https://fleet-gitea.example",
+			GiteaToken:     "fleet-admin-token",
+			MirrorOwner:    "fleet",
+			WorkflowPath:   ".gitea/workflows/release.yml",
+			SourceProvider: "github",
+		}
+		return cfg
+	}
+
+	t.Run("GitHub derives clone URL", func(t *testing.T) {
+		if err := validConfig().Validate(); err != nil {
+			t.Fatalf("valid GitHub initiator config: %v", err)
+		}
+	})
+
+	t.Run("private Gitea requires explicit clone and username", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.HiveCI.Initiator.SourceProvider = " GITEA "
+		cfg.HiveCI.Initiator.SourceCloneURL = "https://git.sharegap.net/fleet/private.git"
+		cfg.HiveCI.Initiator.SourceAuthUsername = "bahia-mirror"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid private Gitea initiator config: %v", err)
+		}
+		if cfg.HiveCI.Initiator.SourceProvider != "gitea" {
+			t.Fatalf("source provider was not normalized: %q", cfg.HiveCI.Initiator.SourceProvider)
+		}
+	})
+
+	for _, tc := range []struct {
+		name        string
+		mutate      func(*Config)
+		wantMessage string
+	}{
+		{name: "missing provider", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceProvider = "" }, wantMessage: "source_provider"},
+		{name: "unsupported provider", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceProvider = "auto" }, wantMessage: "source_provider"},
+		{name: "Gitea clone URL", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceProvider = "gitea" }, wantMessage: "source_clone_url"},
+		{name: "Gitea username", mutate: func(cfg *Config) {
+			cfg.HiveCI.Initiator.SourceProvider = "gitea"
+			cfg.HiveCI.Initiator.SourceCloneURL = "https://git.example/private/repo.git"
+		}, wantMessage: "source_auth_username"},
+		{name: "GitHub username ambiguity", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceAuthUsername = "unused" }, wantMessage: "source_auth_username"},
+		{name: "non-HTTPS clone URL", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceCloneURL = "http://github.example/private/repo.git" }, wantMessage: "absolute https URL"},
+		{name: "credential-bearing clone URL", mutate: func(cfg *Config) {
+			cfg.HiveCI.Initiator.SourceCloneURL = "https://user:secret@git.example/private/repo.git"
+		}, wantMessage: "must not contain credentials"},
+		{name: "fragment-bearing clone URL", mutate: func(cfg *Config) {
+			cfg.HiveCI.Initiator.SourceCloneURL = "https://github.com/private/repo.git#secret"
+		}, wantMessage: "must not contain credentials"},
+		{name: "GitHub foreign host", mutate: func(cfg *Config) {
+			cfg.HiveCI.Initiator.SourceCloneURL = "https://attacker.example/private/repo.git"
+		}, wantMessage: "must use github.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("Validate() error = %v, want %q", err, tc.wantMessage)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInsecureProductionConfig(t *testing.T) {
 	tests := []struct {
 		name    string

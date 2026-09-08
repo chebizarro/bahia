@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -85,9 +86,15 @@ type InitiatorConfig struct {
 	MirrorOwner string
 	// WorkflowPath is the Hive-CI workflow invoked for Arcana builds.
 	WorkflowPath string
-	// SourceCloneURL overrides the upstream clone URL. When empty it is
-	// derived from the request's repository coordinate on github.com.
+	// SourceProvider explicitly selects the upstream provider. Supported values
+	// are "github" and "gitea"; it is never inferred from SourceCloneURL.
+	SourceProvider string
+	// SourceCloneURL identifies the upstream. It is optional for GitHub, where
+	// the request repository coordinate is used, and required for Gitea.
 	SourceCloneURL string
+	// SourceAuthUsername is the non-secret username paired with the resolved
+	// credential for a private Gitea source.
+	SourceAuthUsername string
 	// RepoAnnouncementAddr optionally carries the NIP-34 kind-30617 address
 	// ("30617:<pubkey>:<repo-id>") of the fleet mirror announcement for
 	// canonical run-request correlation.
@@ -97,6 +104,17 @@ type InitiatorConfig struct {
 	// RefResolveAttempts and RefResolveDelay bound the mirror-sync poll loop.
 	RefResolveAttempts int
 	RefResolveDelay    time.Duration
+}
+
+const (
+	SourceProviderGitHub = "github"
+	SourceProviderGitea  = "gitea"
+)
+
+type sourceMirrorConfig struct {
+	cloneURL     string
+	service      string
+	authUsername string
 }
 
 // Initiator implements controlplane.HiveCIBuildStarter against a fleet Gitea
@@ -176,9 +194,14 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return &result, nil
 	}
 
+	source, err := i.sourceMirrorConfig(owner, name)
+	if err != nil {
+		return nil, err
+	}
+
 	// Resolve the opaque credential reference server-side with audit. The
-	// plaintext token stays in memory and is passed only inside the HTTPS
-	// body of the Gitea migrate call.
+	// plaintext credential stays in memory and is passed only inside the HTTPS
+	// body of the Gitea migrate call, in the provider-specific auth field.
 	token, _, err := i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), domain.SecretResolveOptions{
 		Operation: domain.SecretAccessOperationResolve,
 		Actor:     req.RequesterPubkey,
@@ -194,19 +217,21 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return nil, fmt.Errorf("repository credential reference resolved to an empty credential")
 	}
 
-	cloneURL := strings.TrimSpace(i.cfg.SourceCloneURL)
-	if cloneURL == "" {
-		cloneURL = "https://github.com/" + owner + "/" + name + ".git"
-	}
-
 	repoInfo, err := i.client.GetRepo(ctx, i.cfg.MirrorOwner, name)
 	if err != nil {
 		return nil, scrubSecrets(fmt.Errorf("check fleet mirror: %w", err), token)
 	}
 	if repoInfo == nil {
-		if err := i.client.MigrateMirror(ctx, MigrateMirrorRequest{
-			Owner: i.cfg.MirrorOwner, Name: name, CloneAddr: cloneURL, AuthToken: token,
-		}); err != nil {
+		migration := MigrateMirrorRequest{
+			Owner: i.cfg.MirrorOwner, Name: name, CloneAddr: source.cloneURL, Service: source.service,
+		}
+		if source.service == MigrationServiceGit {
+			migration.AuthUsername = source.authUsername
+			migration.AuthPassword = token
+		} else {
+			migration.AuthToken = token
+		}
+		if err := i.client.MigrateMirror(ctx, migration); err != nil {
 			return nil, scrubSecrets(fmt.Errorf("create fleet private mirror: %w", err), token)
 		}
 		// Re-fetch to validate the mirror we (or a concurrent initiation)
@@ -215,13 +240,13 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		if err != nil || repoInfo == nil {
 			return nil, scrubSecrets(fmt.Errorf("fleet private mirror is unavailable after migration"), token)
 		}
-		if err := i.validateMirror(repoInfo, cloneURL); err != nil {
+		if err := i.validateMirror(repoInfo, source.cloneURL); err != nil {
 			return nil, err
 		}
 	} else {
 		// Never trust a pre-existing repository by name alone: it must be a
 		// private mirror of the expected upstream, or we fail closed.
-		if err := i.validateMirror(repoInfo, cloneURL); err != nil {
+		if err := i.validateMirror(repoInfo, source.cloneURL); err != nil {
 			return nil, err
 		}
 		if err := i.client.SyncMirror(ctx, i.cfg.MirrorOwner, name); err != nil {
@@ -269,9 +294,44 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	return &result, nil
 }
 
+func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, error) {
+	provider := strings.ToLower(strings.TrimSpace(i.cfg.SourceProvider))
+	cloneURL := strings.TrimSpace(i.cfg.SourceCloneURL)
+	var source sourceMirrorConfig
+	switch provider {
+	case SourceProviderGitHub:
+		if strings.TrimSpace(i.cfg.SourceAuthUsername) != "" {
+			return sourceMirrorConfig{}, fmt.Errorf("source auth username is not valid for github token authentication")
+		}
+		if cloneURL == "" {
+			cloneURL = "https://github.com/" + owner + "/" + name + ".git"
+		}
+		source = sourceMirrorConfig{cloneURL: cloneURL, service: MigrationServiceGitHub}
+		if err := validateGitHubCloneURL(cloneURL); err != nil {
+			return sourceMirrorConfig{}, err
+		}
+	case SourceProviderGitea:
+		if cloneURL == "" {
+			return sourceMirrorConfig{}, fmt.Errorf("source clone URL is required for gitea provider")
+		}
+		username := strings.TrimSpace(i.cfg.SourceAuthUsername)
+		if username == "" {
+			return sourceMirrorConfig{}, fmt.Errorf("source auth username is required for gitea provider")
+		}
+		source = sourceMirrorConfig{cloneURL: cloneURL, service: MigrationServiceGit, authUsername: username}
+		if err := validateSourceCloneURL(cloneURL); err != nil {
+			return sourceMirrorConfig{}, err
+		}
+	default:
+		return sourceMirrorConfig{}, fmt.Errorf("source provider must be explicitly configured as github or gitea")
+	}
+	return source, nil
+}
+
 // validateMirror fails closed unless the fleet repository is a private mirror
-// of the expected upstream. Gitea strips embedded credentials from
-// original_url, so this comparison never touches secret material.
+// of the expected upstream. Gitea persists the submitted credential-free
+// clone_addr as original_url; auth_username and auth_password are separate
+// migration fields and therefore never affect this comparison.
 func (i *Initiator) validateMirror(info *RepoInfo, expectedCloneURL string) error {
 	if info == nil {
 		return fmt.Errorf("fleet mirror metadata is unavailable")
@@ -279,16 +339,23 @@ func (i *Initiator) validateMirror(info *RepoInfo, expectedCloneURL string) erro
 	if !info.Private || !info.Mirror {
 		return fmt.Errorf("fleet repository exists but is not a private mirror; refusing to build from it")
 	}
-	if got := normalizeCloneURL(info.OriginalURL); got != "" && got != normalizeCloneURL(expectedCloneURL) {
+	if got := normalizeCloneURL(info.OriginalURL); got == "" || got != normalizeCloneURL(expectedCloneURL) {
 		return fmt.Errorf("fleet mirror tracks an unexpected upstream; refusing to build from it")
 	}
 	return nil
 }
 
 func normalizeCloneURL(v string) string {
-	v = strings.ToLower(strings.TrimSpace(v))
-	v = strings.TrimSuffix(v, ".git")
-	return strings.TrimSuffix(v, "/")
+	v = strings.TrimSpace(v)
+	parsed, err := url.Parse(v)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimSuffix(strings.TrimSuffix(v, "/"), ".git")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimSuffix(strings.TrimSuffix(parsed.Path, "/"), ".git")
+	parsed.RawPath = ""
+	return parsed.String()
 }
 
 func (i *Initiator) resolveRefWithRetry(ctx context.Context, name, ref string) (string, error) {

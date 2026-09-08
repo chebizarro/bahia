@@ -1,0 +1,18 @@
+{
+  "feature_id": "BAHIA_GITEA_INITIATOR_SOURCE_PROVIDER_AUTH",
+  "task": "bahia-gitea-initiator-source-provider-auth-20260908",
+  "title": "Explicit source-provider authentication for fleet Gitea mirrors",
+  "intended_behavior": [
+    "The initiator selects GitHub or private Gitea only from authoritative configuration and never guesses from a clone URL.",
+    "GitHub retains token migration while private Gitea uses provider-neutral git migration with configured username and the resolved opaque credential as password.",
+    "Clone URLs remain credential-free HTTPS values and are compared with Gitea original_url before any existing mirror is trusted.",
+    "Gitea API failures include a scrubbed, bounded response excerpt without exposing source or fleet credentials."
+  ],
+  "scope": [
+    "internal/adapters/gitea/client.go",
+    "internal/adapters/gitea/initiator.go",
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "docs/user-guide/features/builds.md"
+  ]
+}

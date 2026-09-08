@@ -1465,7 +1465,9 @@ func New(cfg *config.Config) (*App, error) {
 				giteaAdapter.InitiatorConfig{
 					MirrorOwner:          cfg.HiveCI.Initiator.MirrorOwner,
 					WorkflowPath:         cfg.HiveCI.Initiator.WorkflowPath,
+					SourceProvider:       cfg.HiveCI.Initiator.SourceProvider,
 					SourceCloneURL:       cfg.HiveCI.Initiator.SourceCloneURL,
+					SourceAuthUsername:   cfg.HiveCI.Initiator.SourceAuthUsername,
 					RepoAnnouncementAddr: cfg.HiveCI.Initiator.RepoAnnouncementAddr,
 					RelayHint:            cfg.HiveCI.Initiator.RelayHint,
 				},
@@ -1475,6 +1477,7 @@ func New(cfg *config.Config) (*App, error) {
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
 				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
+				zap.String("source_provider", cfg.HiveCI.Initiator.SourceProvider),
 			)
 		}
 		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{

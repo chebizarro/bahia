@@ -834,10 +834,9 @@ type HiveCIPolicyConfig struct {
 }
 
 // HiveCIInitiatorConfig configures the fleet Gitea private-mirror and
-// Hive-CI build initiation adapter. When Enabled, all fields except
-// RepoAnnouncementAddr and RelayHint are required; the GitHub credential is
-// never configured here — it is resolved per request from an opaque
-// server-side secret reference.
+// Hive-CI build initiation adapter. The source credential is never configured
+// here — it is resolved per request from an opaque server-side secret
+// reference.
 type HiveCIInitiatorConfig struct {
 	Enabled bool `koanf:"enabled"`
 	// GiteaBaseURL is the fleet Gitea API base URL, e.g. https://git.fleet.internal
@@ -848,8 +847,12 @@ type HiveCIInitiatorConfig struct {
 	MirrorOwner string `koanf:"mirror_owner"`
 	// WorkflowPath is the Hive-CI workflow file invoked for builds.
 	WorkflowPath string `koanf:"workflow_path"`
-	// SourceCloneURL optionally overrides the upstream clone URL.
+	// SourceProvider explicitly selects github or gitea; it is never inferred.
+	SourceProvider string `koanf:"source_provider"`
+	// SourceCloneURL optionally overrides GitHub and is required for Gitea.
 	SourceCloneURL string `koanf:"source_clone_url"`
+	// SourceAuthUsername is the non-secret username for Gitea password/token auth.
+	SourceAuthUsername string `koanf:"source_auth_username"`
 	// RepoAnnouncementAddr optionally carries the NIP-34 30617 address of the mirror.
 	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
 	// RelayHint is attached to published run-request/evidence events.
@@ -1434,6 +1437,35 @@ func (c *Config) validate() error {
 		}
 		if strings.TrimSpace(c.HiveCI.Initiator.WorkflowPath) == "" {
 			return fmt.Errorf("config validation failed: hiveci.initiator.workflow_path is required when hiveci.initiator.enabled=true")
+		}
+		provider := strings.ToLower(strings.TrimSpace(c.HiveCI.Initiator.SourceProvider))
+		switch provider {
+		case "github":
+			if strings.TrimSpace(c.HiveCI.Initiator.SourceAuthUsername) != "" {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_auth_username is only valid when source_provider=gitea")
+			}
+		case "gitea":
+			if strings.TrimSpace(c.HiveCI.Initiator.SourceCloneURL) == "" {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_clone_url is required when source_provider=gitea")
+			}
+			if strings.TrimSpace(c.HiveCI.Initiator.SourceAuthUsername) == "" {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_auth_username is required when source_provider=gitea")
+			}
+		default:
+			return fmt.Errorf("config validation failed: hiveci.initiator.source_provider must be explicitly set to github or gitea")
+		}
+		c.HiveCI.Initiator.SourceProvider = provider
+		if cloneURL := strings.TrimSpace(c.HiveCI.Initiator.SourceCloneURL); cloneURL != "" {
+			parsed, err := url.Parse(cloneURL)
+			if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_clone_url must be an absolute https URL")
+			}
+			if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_clone_url must not contain credentials, query parameters, or fragments")
+			}
+			if provider == "github" && (!strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Port() != "") {
+				return fmt.Errorf("config validation failed: hiveci.initiator.source_clone_url must use github.com when source_provider=github")
+			}
 		}
 	}
 	if c.Cashu.Enabled {
