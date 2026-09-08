@@ -46,6 +46,98 @@ func TestCallToolRejectsAuthenticatedCallerOutsideOperatorAllowlist(t *testing.T
 	}
 }
 
+func TestCallToolAllowsAuthorizedPubkey(t *testing.T) {
+	const authorizedPubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
+	server := newTestMCPBuildArtifactServer()
+	server.authorizedPubkeys = []string{authorizedPubkey}
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-authorized",
+		PubKey:  authorizedPubkey,
+		Method:  auth.MethodNIP98,
+	})
+
+	result, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
+		"service_id": uuid.New().String(),
+		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
+		"git_ref":    "main",
+		"ci_run_id":  "ci-run-1",
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("CallTool() result = %#v, want success for authorized pubkey", result)
+	}
+}
+
+func TestCallToolDeniesUnauthorizedPubkey(t *testing.T) {
+	const authorizedPubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
+	const unauthorizedPubkey = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	server := newTestMCPBuildArtifactServer()
+	server.authorizedPubkeys = []string{authorizedPubkey}
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-unauthorized",
+		PubKey:  unauthorizedPubkey,
+		Method:  auth.MethodNIP98,
+	})
+
+	result, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
+		"service_id": uuid.New().String(),
+		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
+		"git_ref":    "main",
+		"ci_run_id":  "ci-run-1",
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, "access denied") {
+		t.Fatalf("CallTool() result = %#v, want access denied", result)
+	}
+}
+
+func TestCallToolEmptyAllowlistDeniesAllExternalCallers(t *testing.T) {
+	const somePubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
+	server := newTestMCPBuildArtifactServer()
+	server.authorizedPubkeys = nil
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-someone",
+		PubKey:  somePubkey,
+		Method:  auth.MethodNIP98,
+	})
+
+	result, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
+		"service_id": uuid.New().String(),
+		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
+		"git_ref":    "main",
+		"ci_run_id":  "ci-run-1",
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, "access denied") {
+		t.Fatalf("CallTool() result = %#v, want access denied (fail-closed)", result)
+	}
+}
+
+func TestCallToolAllowsSystemAdminPrincipal(t *testing.T) {
+	server := newTestMCPBuildArtifactServer()
+	server.authorizedPubkeys = nil
+	ctx := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("admin-test"))
+
+	result, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
+		"service_id": uuid.New().String(),
+		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
+		"git_ref":    "main",
+		"ci_run_id":  "ci-run-1",
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("CallTool() result = %#v, want success for system admin principal", result)
+	}
+}
+
 func TestCallToolRejectsCrossTenantSecretMutation(t *testing.T) {
 	for _, tool := range []string{"bahia_update_secret", "bahia_delete_secret"} {
 		t.Run(tool, func(t *testing.T) {

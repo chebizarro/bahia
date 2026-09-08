@@ -1172,6 +1172,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configureAuthorizationMCPDeps(&mcpDeps, cfg)
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
@@ -3227,6 +3228,13 @@ func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModel
 	if publisher != nil && signer != nil && len(relays) > 0 {
 		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
 	}
+}
+
+func configureAuthorizationMCPDeps(deps *mcp.ServerDeps, cfg *config.Config) {
+	if deps == nil || cfg == nil {
+		return
+	}
+	deps.AuthorizedPubkeys = cfg.Nostr.AuthorizedPubkeys
 }
 
 func appendPackageControlPlaneOptions(opts []controlplane.ReactorOption, packageRegistrySvc *service.PackageRegistryService, packageProjection repository.PackageControlPlaneRepository) []controlplane.ReactorOption {
