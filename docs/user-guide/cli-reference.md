@@ -72,6 +72,8 @@ The current top-level CLI command groups are:
 - `services`
 - `environments`
 - `state`
+- `builds`
+- `artifacts`
 - `dns`
 - `deployments`
 - `adopt`
@@ -83,7 +85,7 @@ The current top-level CLI command groups are:
 - `package`
 - `souls`
 
-Bahia does **not** currently register top-level `llm`, `payments`, `artifacts`, `builds`, or `notifications` CLI commands.
+Bahia does **not** currently register top-level `llm`, `payments`, or `notifications` CLI commands.
 
 ## Commands
 
@@ -131,6 +133,46 @@ bahia environments units update <environment-id> max --file unit.json --default-
 ```
 
 Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI rereads through `environment/get-details` and deliberately remerges at most three signed attempts before surfacing the conflict. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
+
+### Builds
+
+The `builds` group provides the signer-first request → follow → register-artifact path without SQL or ad hoc image injection. The service must have a repository coordinate, matching artifact repository, and an opaque repository-credential secret owned by that service. The server-side fleet mirror initiator must be enabled with `hiveci.initiator.enabled`; otherwise `builds request` returns `Gitea mirror and HiveCI build initiation are not configured`.
+
+```bash
+# Queue the exact Astillero commit through the governed HiveCI path.
+bahia builds request \
+  --service <service-uuid> \
+  --git-ref b13b14fba6e54f008bfa1ba26d716c2ef05c206e \
+  --credential-ref <repository-credential-secret-uuid> \
+  --artifact-repo <registered-service-artifact-repo> \
+  --idempotency-key build:astillero:b13b14f \
+  --result-timeout 120s
+
+# Follow durable build lineage. Production transitions are queued directly to
+# succeeded or failed; Bahia does not currently project an intermediate running state.
+bahia builds list --service <service-uuid>
+bahia builds get --build <build-uuid>
+
+# After the build succeeds, register only its verified HiveCI artifact result.
+bahia builds register-result --build <build-uuid>
+
+# Use the returned artifact ID in the normal reviewed deployment flow.
+bahia deployments preview \
+  --service <service-uuid> \
+  --environment <environment-uuid> \
+  --artifact <artifact-uuid>
+bahia deployments deploy \
+  --service <service-uuid> \
+  --environment <environment-uuid> \
+  --artifact <artifact-uuid> \
+  --expected-desired-state-hash <reviewed-hash>
+```
+
+First-time mirror creation and ref resolution can exceed the default 30-second per-attempt result timeout, so `--result-timeout 120s` is recommended for the first request. Reusing the same `--idempotency-key` replays the first completed ContextVM result from Bahia's durable response store instead of starting another CI run or registering another build. An idempotency key identifies one logical request: do not reuse it with different request fields.
+
+`--build-arg KEY=VALUE` is repeatable and values may contain `=`. Build arguments are public in the signed `ci/workflow-run` request and are accepted only for services with an approved public build-argument allowlist. Astillero does not have that allowlist, so omit `--build-arg` for the workflow above.
+
+`builds register-result` accepts only a successful build. It resolves the immutable artifact from accepted HiveCI evidence and the configured registry; it does not permit an operator-supplied image override. Requesting or registering a build does not deploy it.
 
 ### Deployments
 
