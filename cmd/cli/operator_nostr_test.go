@@ -753,6 +753,10 @@ type fakeCLIOperatorClient struct {
 	policyCreate           func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 	serviceCreate          func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
 	serviceUpdate          func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
+	buildRequest           func(client.BuildRequestNostrRequest) (*client.BuildCommandResult, error)
+	buildGet               func(string) (*client.BuildDetailsResult, error)
+	buildList              func(client.BuildListNostrRequest) (*client.BuildListResult, error)
+	buildRegisterResult    func(string) (*client.ArtifactCommandResult, error)
 	artifactRegister       func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
 	dnsZoneCreate          func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
 	dnsPolicyApply         func(client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error)
@@ -782,6 +786,30 @@ func (f fakeCLIOperatorClient) CreateServiceNostr(_ context.Context, req client.
 func (f fakeCLIOperatorClient) UpdateServiceNostr(_ context.Context, req client.UpdateServiceNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error) {
 	if f.serviceUpdate != nil {
 		return f.serviceUpdate(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) BuildRequestNostr(_ context.Context, req client.BuildRequestNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error) {
+	if f.buildRequest != nil {
+		return f.buildRequest(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) GetBuildNostr(_ context.Context, buildID string, _ func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error) {
+	if f.buildGet != nil {
+		return f.buildGet(buildID)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) ListBuildsNostr(_ context.Context, req client.BuildListNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildListResult, error) {
+	if f.buildList != nil {
+		return f.buildList(req)
+	}
+	return nil, errors.New("not implemented")
+}
+func (f fakeCLIOperatorClient) RegisterBuildResultNostr(_ context.Context, buildID string, _ func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error) {
+	if f.buildRegisterResult != nil {
+		return f.buildRegisterResult(buildID)
 	}
 	return nil, errors.New("not implemented")
 }
