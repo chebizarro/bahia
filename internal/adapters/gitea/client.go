@@ -2,7 +2,7 @@
 // Hive-CI build initiation adapter (controlplane.HiveCIBuildStarter).
 //
 // Security invariants:
-//   - GitHub credentials are resolved server-side from opaque secret
+//   - Source credentials are resolved server-side from opaque secret
 //     references and travel only inside HTTPS request bodies to the fleet
 //     Gitea API. They never enter Nostr events, logs, process argv, or
 //     Docker build args.
@@ -13,8 +13,10 @@ package gitea
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -29,6 +31,13 @@ type APIClient struct {
 	adminToken string
 	httpClient *http.Client
 }
+
+const maxGiteaErrorExcerptRunes = 2048
+
+const (
+	MigrationServiceGit    = "git"
+	MigrationServiceGitHub = "github"
+)
 
 func NewAPIClient(baseURL, adminToken string, httpClient *http.Client) *APIClient {
 	if httpClient == nil {
@@ -69,14 +78,18 @@ func (c *APIClient) validateBaseURL() error {
 }
 
 // MigrateMirrorRequest describes a Gitea repository migration that creates a
-// continuously synced private mirror of an upstream repository. AuthToken is
-// the resolved upstream (GitHub) credential; it is sent only in the HTTPS
-// request body.
+// continuously synced private mirror of an upstream repository. Service and
+// the auth shape are explicit: GitHub uses AuthToken, while provider-neutral
+// Git migration uses AuthUsername and AuthPassword. Secret fields are sent
+// only in the HTTPS request body.
 type MigrateMirrorRequest struct {
-	Owner     string
-	Name      string
-	CloneAddr string
-	AuthToken string
+	Owner        string
+	Name         string
+	CloneAddr    string
+	Service      string
+	AuthUsername string
+	AuthPassword string
+	AuthToken    string
 }
 
 func (c *APIClient) do(ctx context.Context, method, path string, body any, out any, secretsToScrub ...string) (int, error) {
@@ -109,7 +122,12 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return resp.StatusCode, fmt.Errorf("gitea %s %s failed: status %d", method, path, resp.StatusCode)
+		secrets := append([]string{c.adminToken}, secretsToScrub...)
+		excerpt := giteaResponseExcerpt(data, secrets...)
+		if excerpt == "" {
+			return resp.StatusCode, fmt.Errorf("gitea %s %s failed: status %d", method, path, resp.StatusCode)
+		}
+		return resp.StatusCode, fmt.Errorf("gitea %s %s failed: status %d: response %q", method, path, resp.StatusCode, excerpt)
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -143,17 +161,51 @@ func (c *APIClient) GetRepo(ctx context.Context, owner, name string) (*RepoInfo,
 // MigrateMirror creates a private, continuously synced mirror of the upstream
 // repository. The upstream credential travels only in the request body.
 func (c *APIClient) MigrateMirror(ctx context.Context, req MigrateMirrorRequest) error {
+	service := strings.ToLower(strings.TrimSpace(req.Service))
+	req.CloneAddr = strings.TrimSpace(req.CloneAddr)
+	if strings.TrimSpace(req.Owner) == "" || strings.TrimSpace(req.Name) == "" {
+		return fmt.Errorf("gitea mirror migration requires owner and name")
+	}
+	switch service {
+	case MigrationServiceGit:
+		if err := validateSourceCloneURL(req.CloneAddr); err != nil {
+			return err
+		}
+		if strings.TrimSpace(req.AuthUsername) == "" || req.AuthPassword == "" {
+			return fmt.Errorf("git mirror migration requires auth username and password")
+		}
+		if req.AuthToken != "" {
+			return fmt.Errorf("git mirror migration must not include auth token")
+		}
+	case MigrationServiceGitHub:
+		if err := validateGitHubCloneURL(req.CloneAddr); err != nil {
+			return err
+		}
+		if req.AuthToken == "" {
+			return fmt.Errorf("github mirror migration requires auth token")
+		}
+		if req.AuthUsername != "" || req.AuthPassword != "" {
+			return fmt.Errorf("github mirror migration must not include auth username or password")
+		}
+	default:
+		return fmt.Errorf("unsupported gitea mirror migration service %q", service)
+	}
 	body := map[string]any{
 		"clone_addr":      req.CloneAddr,
 		"repo_owner":      req.Owner,
 		"repo_name":       req.Name,
 		"mirror":          true,
 		"private":         true,
-		"service":         "github",
-		"auth_token":      req.AuthToken,
+		"service":         service,
 		"mirror_interval": "10m",
 	}
-	status, err := c.do(ctx, http.MethodPost, "/api/v1/repos/migrate", body, nil, req.AuthToken)
+	if service == MigrationServiceGit {
+		body["auth_username"] = req.AuthUsername
+		body["auth_password"] = req.AuthPassword
+	} else {
+		body["auth_token"] = req.AuthToken
+	}
+	status, err := c.do(ctx, http.MethodPost, "/api/v1/repos/migrate", body, nil, req.AuthPassword, req.AuthToken)
 	if err != nil {
 		// A concurrent initiation may have created the mirror first. The caller
 		// re-validates the existing repository's metadata before trusting it.
@@ -161,6 +213,28 @@ func (c *APIClient) MigrateMirror(ctx context.Context, req MigrateMirrorRequest)
 			return nil
 		}
 		return err
+	}
+	return nil
+}
+
+func validateGitHubCloneURL(raw string) error {
+	if err := validateSourceCloneURL(raw); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(strings.TrimSpace(raw))
+	if !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Port() != "" {
+		return fmt.Errorf("github source clone URL must use github.com")
+	}
+	return nil
+}
+
+func validateSourceCloneURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("source clone URL must be an absolute https URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("source clone URL must not contain credentials, query parameters, or fragments")
 	}
 	return nil
 }
@@ -235,15 +309,46 @@ func scrubSecrets(err error, secrets ...string) error {
 		return nil
 	}
 	msg := err.Error()
-	scrubbed := msg
-	for _, secret := range secrets {
-		if secret == "" {
-			continue
-		}
-		scrubbed = strings.ReplaceAll(scrubbed, secret, "[redacted]")
-	}
+	scrubbed := scrubSecretText(msg, secrets...)
 	if scrubbed == msg {
 		return err
 	}
 	return fmt.Errorf("%s", scrubbed)
+}
+
+func scrubSecretText(value string, secrets ...string) string {
+	scrubbed := value
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		variants := []string{
+			secret,
+			url.QueryEscape(secret),
+			url.PathEscape(secret),
+			html.EscapeString(secret),
+			base64.StdEncoding.EncodeToString([]byte(secret)),
+			base64.RawStdEncoding.EncodeToString([]byte(secret)),
+		}
+		userinfo := url.UserPassword("_", secret).String()
+		variants = append(variants, strings.TrimPrefix(userinfo, "_:"))
+		if encoded, err := json.Marshal(secret); err == nil && len(encoded) >= 2 {
+			variants = append(variants, string(encoded[1:len(encoded)-1]))
+		}
+		for _, variant := range variants {
+			if variant != "" {
+				scrubbed = strings.ReplaceAll(scrubbed, variant, "[redacted]")
+			}
+		}
+	}
+	return scrubbed
+}
+
+func giteaResponseExcerpt(data []byte, secrets ...string) string {
+	excerpt := strings.Join(strings.Fields(scrubSecretText(string(data), secrets...)), " ")
+	runes := []rune(excerpt)
+	if len(runes) > maxGiteaErrorExcerptRunes {
+		excerpt = string(runes[:maxGiteaErrorExcerptRunes]) + "..."
+	}
+	return excerpt
 }
