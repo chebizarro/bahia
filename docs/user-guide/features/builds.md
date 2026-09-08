@@ -5,11 +5,35 @@ The **Builds** page starts and monitors Arcana builds through Bahia's signed Con
 ## Requesting a build
 
 1. Register the Arcana service with repository coordinate `chebizarro/living-library-forge` and its OCI artifact repository.
-2. Store the private GitHub repository credential as a protected service secret.
+2. Store the private source repository credential as a protected service secret.
 3. Open **Delivery → Builds**, select the service and the secret reference, then enter a branch, tag, or full commit.
 4. Optionally set public `VITE_*` compile-time values and request the build.
 
 The browser sends only the opaque secret ID. It never reads the secret value and does not store credentials in localStorage. Bahia accepts only the Arcana Dockerfile's nine documented public Vite arguments; secret-style Docker build arguments are rejected.
+
+## Source provider configuration
+
+The fleet initiator requires an explicit source provider and never infers one from the clone URL. GitHub keeps token-based migration and may derive its clone URL from the request's `owner/name` coordinate:
+
+```yaml
+hiveci:
+  initiator:
+    enabled: true
+    source_provider: github
+```
+
+A private Gitea source requires both its credential-free HTTPS clone URL and a non-secret username. Bahia resolves the protected service credential server-side and supplies it to fleet Gitea as the mirror password; it is not embedded in the URL:
+
+```yaml
+hiveci:
+  initiator:
+    enabled: true
+    source_provider: gitea
+    source_clone_url: https://git.example/organization/repository.git
+    source_auth_username: bahia-mirror
+```
+
+`source_clone_url` must be an absolute HTTPS URL without user information, query parameters, or fragments. A `github` source URL must use `github.com`. Missing or unsupported provider configuration, or missing Gitea clone/username configuration, prevents startup and fails closed.
 
 ## Verified artifact registration
 
@@ -25,4 +49,4 @@ Queued, running, succeeded, and failed states come from signed canonical build p
 
 ## Unavailable fleet boundary
 
-Build initiation requires the fleet Gitea private-mirror and HiveCI runner adapter. If it is not configured, Bahia returns a signed fail-closed error and creates no queued build. Do not work around this by placing GitHub tokens in a ref, build argument, Nostr event, or browser storage.
+Build initiation requires the fleet Gitea private-mirror and HiveCI runner adapter. If it is not configured, Bahia returns a signed fail-closed error and creates no queued build. Do not work around this by placing source credentials in a ref, clone URL, build argument, Nostr event, or browser storage.

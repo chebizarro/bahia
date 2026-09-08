@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	testGitHubToken = "ghp_secret_private_repo_token_1234567890"
-	testCommitSHA   = "0123456789abcdef0123456789abcdef01234567"
+	testRepositoryCredential = "secret_private_repo_credential_1234567890"
+	testCommitSHA            = "0123456789abcdef0123456789abcdef01234567"
 )
 
 type fakeSecretResolver struct {
@@ -60,10 +60,14 @@ func (p *capturingPublisher) Publish(_ context.Context, ev nostr.Event) (int, er
 // chebizarro/living-library-forge. Migration succeeds only when the request
 // presents the correct upstream credential.
 type fakeGitea struct {
-	mu           sync.Mutex
-	mirrored     bool
-	migrateCalls int
-	syncCalls    int
+	mu                 sync.Mutex
+	mirrored           bool
+	migrateCalls       int
+	syncCalls          int
+	sourceCloneURL     string
+	sourceService      string
+	sourceAuthUsername string
+	migrationRequest   map[string]any
 }
 
 func (g *fakeGitea) handler(t *testing.T) http.Handler {
@@ -76,13 +80,29 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]any
 			_ = json.Unmarshal(body, &req)
-			if req["auth_token"] != testGitHubToken {
-				w.WriteHeader(http.StatusUnauthorized)
+			expectedCloneURL := g.sourceCloneURL
+			if expectedCloneURL == "" {
+				expectedCloneURL = "https://github.com/chebizarro/living-library-forge.git"
+			}
+			expectedService := g.sourceService
+			if expectedService == "" {
+				expectedService = MigrationServiceGitHub
+			}
+			authOK := req["auth_token"] == testRepositoryCredential
+			if expectedService == MigrationServiceGit {
+				authOK = req["auth_username"] == g.sourceAuthUsername && req["auth_password"] == testRepositoryCredential
+				_, tokenPresent := req["auth_token"]
+				authOK = authOK && !tokenPresent
+			}
+			if req["clone_addr"] != expectedCloneURL || req["service"] != expectedService || !authOK {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"message":"unsupported source provider or mirror authentication"}`))
 				return
 			}
 			if req["private"] != true || req["mirror"] != true {
 				t.Errorf("migration must create a private mirror, got %v", req)
 			}
+			g.migrationRequest = req
 			g.mirrored = true
 			w.WriteHeader(http.StatusCreated)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/fleet/living-library-forge":
@@ -90,7 +110,13 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			_, _ = w.Write([]byte(`{"name":"living-library-forge","private":true,"mirror":true,"original_url":"https://github.com/chebizarro/living-library-forge.git"}`))
+			originalURL := g.sourceCloneURL
+			if originalURL == "" {
+				originalURL = "https://github.com/chebizarro/living-library-forge.git"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name": "living-library-forge", "private": true, "mirror": true, "original_url": originalURL,
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/fleet/living-library-forge/mirror-sync":
 			g.syncCalls++
 			if !g.mirrored {
@@ -123,7 +149,7 @@ func newTestSigner(t *testing.T) nostr.Signer {
 func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator, *capturingPublisher, *fakeSecretResolver, uuid.UUID, *observer.ObservedLogs) {
 	t.Helper()
 	credentialRef := uuid.New()
-	resolver := &fakeSecretResolver{known: map[string]string{credentialRef.String(): testGitHubToken}}
+	resolver := &fakeSecretResolver{known: map[string]string{credentialRef.String(): testRepositoryCredential}}
 	publisher := &capturingPublisher{}
 	core, logs := observer.New(zap.DebugLevel)
 	initiator := NewInitiator(
@@ -135,6 +161,7 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 		InitiatorConfig{
 			MirrorOwner:        "fleet",
 			WorkflowPath:       ".hive/workflows/arcana-build.yml",
+			SourceProvider:     SourceProviderGitHub,
 			RelayHint:          "wss://relay.fleet.internal",
 			RefResolveAttempts: 2,
 			RefResolveDelay:    1,
@@ -240,13 +267,13 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	// Nostr event or any log entry.
 	for _, ev := range publisher.events {
 		blob, _ := json.Marshal(ev)
-		if strings.Contains(string(blob), testGitHubToken) {
+		if strings.Contains(string(blob), testRepositoryCredential) {
 			t.Fatalf("credential leaked into published Nostr event")
 		}
 	}
 	for _, entry := range logs.All() {
 		line, _ := json.Marshal(entry.ContextMap())
-		if strings.Contains(entry.Message, testGitHubToken) || strings.Contains(string(line), testGitHubToken) {
+		if strings.Contains(entry.Message, testRepositoryCredential) || strings.Contains(string(line), testRepositoryCredential) {
 			t.Fatalf("credential leaked into logs")
 		}
 	}
@@ -302,8 +329,126 @@ func TestConformanceErrorsNeverCarryCredential(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected publish failure")
 	}
-	if strings.Contains(err.Error(), testGitHubToken) {
+	if strings.Contains(err.Error(), testRepositoryCredential) {
 		t.Fatalf("credential leaked into error: %v", err)
+	}
+}
+
+// TestConformancePrivateGiteaMirrorBuildInitiation is the live HTTP 422
+// regression: the fake returns 422 unless Bahia selects provider-neutral git
+// migration and supplies the resolved credential as auth_password alongside
+// the configured username. The stored original_url remains the exact clean
+// clone_addr, so post-create validation still succeeds without a credential.
+func TestConformancePrivateGiteaMirrorBuildInitiation(t *testing.T) {
+	const (
+		cloneURL = "https://git.sharegap.net/chebizar-coinos.io-336e0b4c237a0c000c1e/astillero.git"
+		username = "bahia-mirror"
+	)
+	gitea := &fakeGitea{
+		sourceCloneURL: cloneURL, sourceService: MigrationServiceGit, sourceAuthUsername: username,
+	}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, publisher, _, credentialRef, logs := newConformanceInitiator(t, server)
+	initiator.cfg.SourceProvider = SourceProviderGitea
+	initiator.cfg.SourceCloneURL = cloneURL
+	initiator.cfg.SourceAuthUsername = username
+
+	result, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+	if err != nil {
+		t.Fatalf("StartHiveCIBuild private Gitea 422 regression: %v", err)
+	}
+	if result.GitSHA != testCommitSHA || gitea.migrateCalls != 1 {
+		t.Fatalf("private Gitea initiation result=%+v migrateCalls=%d", result, gitea.migrateCalls)
+	}
+	if got := gitea.migrationRequest["clone_addr"]; got != cloneURL {
+		t.Fatalf("credential-free clone_addr = %q, want %q", got, cloneURL)
+	}
+	for _, ev := range publisher.events {
+		blob, _ := json.Marshal(ev)
+		if strings.Contains(string(blob), testRepositoryCredential) {
+			t.Fatal("private Gitea credential leaked into Nostr event")
+		}
+	}
+	for _, entry := range logs.All() {
+		contextJSON, _ := json.Marshal(entry.ContextMap())
+		if strings.Contains(entry.Message, testRepositoryCredential) || strings.Contains(string(contextJSON), testRepositoryCredential) {
+			t.Fatal("private Gitea credential leaked into logs")
+		}
+	}
+}
+
+func TestConformanceSourceProviderConfigFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		provider    string
+		cloneURL    string
+		username    string
+		wantMessage string
+	}{
+		{name: "missing provider", wantMessage: "source provider"},
+		{name: "unsupported provider", provider: "auto", wantMessage: "source provider"},
+		{name: "Gitea missing clone URL", provider: SourceProviderGitea, username: "mirror-user", wantMessage: "source clone URL"},
+		{name: "Gitea missing username", provider: SourceProviderGitea, cloneURL: "https://git.example/private/repo.git", wantMessage: "source auth username"},
+		{name: "Gitea non-HTTPS clone URL", provider: SourceProviderGitea, cloneURL: "http://git.example/private/repo.git", username: "mirror-user", wantMessage: "absolute https URL"},
+		{name: "GitHub foreign host", provider: SourceProviderGitHub, cloneURL: "https://attacker.example/private/repo.git", wantMessage: "must use github.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gitea := &fakeGitea{}
+			server := httptest.NewServer(gitea.handler(t))
+			defer server.Close()
+			initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
+			initiator.cfg.SourceProvider = tc.provider
+			initiator.cfg.SourceCloneURL = tc.cloneURL
+			initiator.cfg.SourceAuthUsername = tc.username
+
+			_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+			if err == nil || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("expected fail-closed %q error, got %v", tc.wantMessage, err)
+			}
+			if len(resolver.calls) != 0 || gitea.migrateCalls != 0 || len(publisher.events) != 0 {
+				t.Fatalf("invalid provider config caused side effects: resolves=%d migrations=%d events=%d", len(resolver.calls), gitea.migrateCalls, len(publisher.events))
+			}
+		})
+	}
+}
+
+func TestValidateMirrorPreservesSourcePathCase(t *testing.T) {
+	initiator := &Initiator{}
+	err := initiator.validateMirror(&RepoInfo{
+		Private:     true,
+		Mirror:      true,
+		OriginalURL: "https://git.sharegap.net/Fleet/Private.git",
+	}, "https://GIT.SHAREGAP.NET/fleet/Private.git")
+	if err == nil || !strings.Contains(err.Error(), "unexpected upstream") {
+		t.Fatalf("case-sensitive source path mismatch must fail closed, got %v", err)
+	}
+}
+
+func TestConformanceUnexpectedExistingMirrorFailsClosed(t *testing.T) {
+	for _, originalURL := range []string{"", "https://git.sharegap.net/other/repository.git"} {
+		t.Run(originalURL, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/fleet/living-library-forge" {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"private": true, "mirror": true, "original_url": originalURL,
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			initiator, publisher, _, credentialRef, _ := newConformanceInitiator(t, server)
+			_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+			if err == nil || !strings.Contains(err.Error(), "unexpected upstream") {
+				t.Fatalf("expected fail-closed upstream validation error, got %v", err)
+			}
+			if len(publisher.events) != 0 {
+				t.Fatal("mismatched mirror must not publish build events")
+			}
+		})
 	}
 }
 
