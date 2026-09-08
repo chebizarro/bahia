@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 func validArcanaBuildRequest() ArcanaBuildRequest {
@@ -98,10 +100,14 @@ func (buildTestMembers) ListByPubkey(context.Context, string) ([]domain.OrgMembe
 	return nil, nil
 }
 
-type buildTestStarter struct{ request HiveCIBuildStartRequest }
+type buildTestStarter struct {
+	request HiveCIBuildStartRequest
+	calls   int
+}
 
 func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBuildStartRequest) (*HiveCIBuildStartResult, error) {
 	f.request = request
+	f.calls++
 	return &HiveCIBuildStartResult{
 		GitSHA:  "0123456789abcdef0123456789abcdef01234567",
 		GitRef:  "refs/heads/main",
@@ -109,10 +115,14 @@ func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBui
 	}, nil
 }
 
-type buildTestRegistry struct{ build *domain.Build }
+type buildTestRegistry struct {
+	build *domain.Build
+	calls int
+}
 
 func (f *buildTestRegistry) RegisterBuild(_ context.Context, build *domain.Build) error {
 	f.build = build
+	f.calls++
 	return nil
 }
 
@@ -229,6 +239,56 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "approved public build argument allowlist") {
 		t.Fatalf("generic build args error = %v", err)
+	}
+}
+
+func TestBuildRequestTransportReplayInvokesStarterAndRegistryOnce(t *testing.T) {
+	serviceID := uuid.New()
+	credentialID := uuid.New()
+	orgID := uuid.New()
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter: starter, Registry: registry,
+		Services: buildTestServices{service: &domain.Service{
+			ID: serviceID, OrgID: orgID,
+			ArtifactRepo: "harbor.sharegap.net/cascadia/astillero",
+			Repository:   &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID}},
+		RBAC:    auth.NewRBAC(buildTestMembers{}),
+	})
+	params := map[string]any{
+		"service_id": serviceID, "git_ref": "refs/heads/main",
+		"repository_credential_ref": credentialID,
+		"artifact_repo":             "harbor.sharegap.net/cascadia/astillero",
+		"build_args":                map[string]string{},
+		"_meta":                     map[string]any{"progressToken": "build-request-replay"},
+	}
+	requestContent := func(id string) string {
+		content, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0", "id": id, "method": ContextVMMethodBuildRequest, "params": params,
+		})
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+		return string(content)
+	}
+	store := newMemoryContextVMResponseStore()
+	requesterPubkey := testNostrPubKeyFromPrivateKey(t, testRequesterKey).Hex()
+	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(firstTransport)
+	firstTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("first")))
+
+	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(secondTransport)
+	secondTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("replay")))
+
+	if starter.calls != 1 {
+		t.Fatalf("starter calls = %d, want exactly 1", starter.calls)
+	}
+	if registry.calls != 1 {
+		t.Fatalf("registry calls = %d, want exactly 1", registry.calls)
 	}
 }
 
