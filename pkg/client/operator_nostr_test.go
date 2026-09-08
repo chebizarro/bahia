@@ -19,6 +19,170 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+func TestBuildRequestNostrPublishesExpectedContextVMRequest(t *testing.T) {
+	serviceID := uuid.New().String()
+	credentialID := uuid.New().String()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	replyKey := nostr.Generate().Hex()
+	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{
+			"status": "queued", "build_id": uuid.New().String(),
+			"git_sha": "0123456789abcdef0123456789abcdef01234567", "ci_run_id": "run-event-id",
+		})
+		return 1, nil
+	}
+	result, err := client.BuildRequestNostr(context.Background(), BuildRequestNostrRequest{
+		ServiceID: serviceID, GitRef: "b13b14fba6e54f008bfa1ba26d716c2ef05c206e",
+		RepositoryCredentialRef: credentialID,
+		ArtifactRepo:            "harbor.sharegap.net/cascadia/astillero",
+		BuildArgs:               map[string]string{"PUBLIC_FLAG": "value"},
+		IdempotencyKey:          "build:astillero:b13b14f",
+	}, nil)
+	if err != nil {
+		t.Fatalf("BuildRequestNostr() error = %v", err)
+	}
+	if result.Status != "queued" || result.CIRunID != "run-event-id" {
+		t.Fatalf("result = %#v", result)
+	}
+	published := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.Method != controlplane.ContextVMMethodBuildRequest {
+		t.Fatalf("method = %q, want %q", rpc.Method, controlplane.ContextVMMethodBuildRequest)
+	}
+	if rpc.Params["service_id"] != serviceID || rpc.Params["repository_credential_ref"] != credentialID || rpc.Params["artifact_repo"] != "harbor.sharegap.net/cascadia/astillero" {
+		t.Fatalf("params = %#v", rpc.Params)
+	}
+	if _, exists := rpc.Params["idempotency_key"]; exists {
+		t.Fatalf("idempotency_key leaked into business params: %#v", rpc.Params)
+	}
+	meta, _ := rpc.Params["_meta"].(map[string]any)
+	if meta["progressToken"] != "build:astillero:b13b14f" {
+		t.Fatalf("_meta = %#v", meta)
+	}
+	if len(published.Tags) == 0 || len(published.Tags[0]) < 2 || published.Tags[0][0] != "d" || published.Tags[0][1] != "build:astillero:b13b14f" {
+		t.Fatalf("first tag = %#v, want explicit d tag", published.Tags)
+	}
+	assertTagValue(t, published.Tags, "service", serviceID)
+	assertTagValue(t, published.Tags, "git-ref", "b13b14fba6e54f008bfa1ba26d716c2ef05c206e")
+}
+
+func TestBuildRequestNostrRejectsInvalidRequiredFieldsBeforePublish(t *testing.T) {
+	serviceID := uuid.New().String()
+	credentialID := uuid.New().String()
+	base := BuildRequestNostrRequest{
+		ServiceID: serviceID, GitRef: "main", RepositoryCredentialRef: credentialID,
+		ArtifactRepo: "harbor.sharegap.net/cascadia/astillero",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*BuildRequestNostrRequest)
+	}{
+		{"service required", func(req *BuildRequestNostrRequest) { req.ServiceID = "" }},
+		{"service UUID", func(req *BuildRequestNostrRequest) { req.ServiceID = "not-a-uuid" }},
+		{"git ref required", func(req *BuildRequestNostrRequest) { req.GitRef = "" }},
+		{"credential required", func(req *BuildRequestNostrRequest) { req.RepositoryCredentialRef = "" }},
+		{"credential UUID", func(req *BuildRequestNostrRequest) { req.RepositoryCredentialRef = "not-a-uuid" }},
+		{"artifact repo required", func(req *BuildRequestNostrRequest) { req.ArtifactRepo = "" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeOperatorTransport()
+			client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+			req := base
+			test.mutate(&req)
+			_, err := client.BuildRequestNostr(context.Background(), req, nil)
+			var requestErr *ControlPlaneRequestError
+			if !errors.As(err, &requestErr) || requestErr.RequestAccepted {
+				t.Fatalf("error = %T %v, want pre-acceptance validation error", err, err)
+			}
+			if len(transport.published) != 0 {
+				t.Fatalf("published %d events for invalid request", len(transport.published))
+			}
+		})
+	}
+}
+
+func TestBuildReadAndRegistrationMethodsPublishExpectedContextVMRequests(t *testing.T) {
+	serviceID := uuid.New().String()
+	buildID := uuid.New().String()
+	tests := []struct {
+		name   string
+		method string
+		run    func(context.Context, *OperatorControlPlaneClient) error
+		assert func(*testing.T, contextVMRPCRequest, nostr.Event)
+	}{
+		{
+			name: "get", method: controlplane.ContextVMMethodBuildGet,
+			run: func(ctx context.Context, client *OperatorControlPlaneClient) error {
+				_, err := client.GetBuildNostr(ctx, buildID, nil)
+				return err
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest, event nostr.Event) {
+				if rpc.Params["build_id"] != buildID {
+					t.Fatalf("params = %#v", rpc.Params)
+				}
+				assertTagValue(t, event.Tags, "build", buildID)
+			},
+		},
+		{
+			name: "list", method: controlplane.ContextVMMethodBuildList,
+			run: func(ctx context.Context, client *OperatorControlPlaneClient) error {
+				_, err := client.ListBuildsNostr(ctx, BuildListNostrRequest{ServiceID: serviceID, Limit: 20, Offset: 4}, nil)
+				return err
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest, event nostr.Event) {
+				if rpc.Params["service_id"] != serviceID || rpc.Params["limit"] != float64(20) || rpc.Params["offset"] != float64(4) {
+					t.Fatalf("params = %#v", rpc.Params)
+				}
+				assertTagValue(t, event.Tags, "service", serviceID)
+			},
+		},
+		{
+			name: "register result", method: controlplane.ContextVMMethodArtifactRegisterBuildResult,
+			run: func(ctx context.Context, client *OperatorControlPlaneClient) error {
+				_, err := client.RegisterBuildResultNostr(ctx, buildID, nil)
+				return err
+			},
+			assert: func(t *testing.T, rpc contextVMRPCRequest, event nostr.Event) {
+				if rpc.Params["build_id"] != buildID {
+					t.Fatalf("params = %#v", rpc.Params)
+				}
+				assertTagValue(t, event.Tags, "build", buildID)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newFakeOperatorTransport()
+			client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+			replyKey := nostr.Generate().Hex()
+			transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
+				var result any = map[string]any{}
+				switch test.method {
+				case controlplane.ContextVMMethodBuildGet:
+					result = map[string]any{"build": map[string]any{"id": buildID, "service_id": serviceID, "status": "succeeded"}}
+				case controlplane.ContextVMMethodBuildList:
+					result = map[string]any{"builds": []any{}, "count": 0, "limit": 20, "offset": 4}
+				case controlplane.ContextVMMethodArtifactRegisterBuildResult:
+					result = map[string]any{"artifact_id": uuid.New().String(), "build_id": buildID, "service_id": serviceID}
+				}
+				transport.events <- signedContextVMResult(t, replyKey, event, result)
+				return 1, nil
+			}
+			if err := test.run(context.Background(), client); err != nil {
+				t.Fatalf("run error = %v", err)
+			}
+			published := transport.onlyPublished(t)
+			rpc := decodePublishedContextVMRequest(t, published)
+			if rpc.Method != test.method {
+				t.Fatalf("method = %q, want %q", rpc.Method, test.method)
+			}
+			test.assert(t, rpc, published)
+		})
+	}
+}
+
 func TestOperatorDNSRequestConstruction(t *testing.T) {
 	tests := []struct {
 		name   string

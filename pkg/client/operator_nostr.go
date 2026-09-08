@@ -498,6 +498,49 @@ type ServiceCommandResult struct {
 	Message        string          `json:"message,omitempty"`
 }
 
+// BuildRequestNostrRequest is the signer-first build/request payload.
+// IdempotencyKey controls the ContextVM d tag and _meta.progressToken; it is
+// deliberately excluded from the strictly decoded business payload.
+type BuildRequestNostrRequest struct {
+	ServiceID               string            `json:"service_id"`
+	GitRef                  string            `json:"git_ref"`
+	RepositoryCredentialRef string            `json:"repository_credential_ref"`
+	ArtifactRepo            string            `json:"artifact_repo"`
+	BuildArgs               map[string]string `json:"build_args,omitempty"`
+	IdempotencyKey          string            `json:"-"`
+}
+
+// BuildListNostrRequest identifies one service's paginated build history.
+type BuildListNostrRequest struct {
+	ServiceID string `json:"service_id"`
+	Limit     int    `json:"limit"`
+	Offset    int    `json:"offset"`
+}
+
+// BuildCommandResult is the terminal acknowledgment for build/request.
+type BuildCommandResult struct {
+	Status   string `json:"status,omitempty"`
+	BuildID  string `json:"build_id,omitempty"`
+	GitSHA   string `json:"git_sha,omitempty"`
+	GitRef   string `json:"git_ref,omitempty"`
+	CISystem string `json:"ci_system,omitempty"`
+	CIRunID  string `json:"ci_run_id,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// BuildDetailsResult wraps one governed build read.
+type BuildDetailsResult struct {
+	Build *domain.Build `json:"build,omitempty"`
+}
+
+// BuildListResult is one offset-based page of governed build history.
+type BuildListResult struct {
+	Builds []domain.Build `json:"builds"`
+	Count  int            `json:"count"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}
+
 // RegisterArtifactNostrRequest is the signer-first artifact/register payload.
 type RegisterArtifactNostrRequest struct {
 	BuildID           string         `json:"build_id"`
@@ -799,6 +842,121 @@ func (c *OperatorControlPlaneClient) UpdateServiceNostr(ctx context.Context, req
 	}
 	if result.ServiceID == "" {
 		result.ServiceID = req.ID
+	}
+	return &result, nil
+}
+
+// BuildRequestNostr publishes a signer-first build/request mutation and awaits its queued lineage acknowledgment.
+func (c *OperatorControlPlaneClient) BuildRequestNostr(ctx context.Context, req BuildRequestNostrRequest, onStatus func(OperatorStatusEvent)) (*BuildCommandResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.GitRef = strings.TrimSpace(req.GitRef)
+	req.RepositoryCredentialRef = strings.TrimSpace(req.RepositoryCredentialRef)
+	req.ArtifactRepo = strings.TrimSpace(req.ArtifactRepo)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"service_id", req.ServiceID},
+		{"git_ref", req.GitRef},
+		{"repository_credential_ref", req.RepositoryCredentialRef},
+		{"artifact_repo", req.ArtifactRepo},
+	} {
+		if field.value == "" {
+			return nil, &ControlPlaneRequestError{Phase: "validate build request", RequestAccepted: false, Cause: fmt.Errorf("%s is required", field.name)}
+		}
+	}
+	if _, err := uuid.Parse(req.ServiceID); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate build request", RequestAccepted: false, Cause: fmt.Errorf("service_id must be a valid UUID: %w", err)}
+	}
+	if _, err := uuid.Parse(req.RepositoryCredentialRef); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate build request", RequestAccepted: false, Cause: fmt.Errorf("repository_credential_ref must be a valid UUID: %w", err)}
+	}
+	tags := nostr.Tags{{"service", req.ServiceID}, {"git-ref", req.GitRef}}
+	if req.IdempotencyKey != "" {
+		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method: controlplane.ContextVMMethodBuildRequest, Tags: tags, Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result BuildCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode build request result: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "queued"
+	}
+	return &result, nil
+}
+
+// GetBuildNostr reads one tenant-authorized build over ContextVM.
+func (c *OperatorControlPlaneClient) GetBuildNostr(ctx context.Context, buildID string, onStatus func(OperatorStatusEvent)) (*BuildDetailsResult, error) {
+	buildID = strings.TrimSpace(buildID)
+	if _, err := uuid.Parse(buildID); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate build get request", RequestAccepted: false, Cause: fmt.Errorf("build_id must be a valid UUID: %w", err)}
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method: controlplane.ContextVMMethodBuildGet,
+		Tags:   nostr.Tags{{"build", buildID}}, Payload: map[string]string{"build_id": buildID},
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result BuildDetailsResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode build get result: %w", err)
+	}
+	return &result, nil
+}
+
+// ListBuildsNostr reads one tenant-authorized page of build history over ContextVM.
+func (c *OperatorControlPlaneClient) ListBuildsNostr(ctx context.Context, req BuildListNostrRequest, onStatus func(OperatorStatusEvent)) (*BuildListResult, error) {
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	if _, err := uuid.Parse(req.ServiceID); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate build list request", RequestAccepted: false, Cause: fmt.Errorf("service_id must be a valid UUID: %w", err)}
+	}
+	if req.Limit < 0 {
+		return nil, &ControlPlaneRequestError{Phase: "validate build list request", RequestAccepted: false, Cause: fmt.Errorf("limit cannot be negative")}
+	}
+	if req.Offset < 0 {
+		return nil, &ControlPlaneRequestError{Phase: "validate build list request", RequestAccepted: false, Cause: fmt.Errorf("offset cannot be negative")}
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method: controlplane.ContextVMMethodBuildList,
+		Tags:   nostr.Tags{{"service", req.ServiceID}}, Payload: req,
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result BuildListResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode build list result: %w", err)
+	}
+	return &result, nil
+}
+
+// RegisterBuildResultNostr registers the verified artifact produced by a successful build.
+func (c *OperatorControlPlaneClient) RegisterBuildResultNostr(ctx context.Context, buildID string, onStatus func(OperatorStatusEvent)) (*ArtifactCommandResult, error) {
+	buildID = strings.TrimSpace(buildID)
+	if _, err := uuid.Parse(buildID); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate build result registration request", RequestAccepted: false, Cause: fmt.Errorf("build_id must be a valid UUID: %w", err)}
+	}
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method: controlplane.ContextVMMethodArtifactRegisterBuildResult,
+		Tags:   nostr.Tags{{"build", buildID}}, Payload: map[string]string{"build_id": buildID},
+	}, onStatus)
+	if err != nil {
+		return nil, err
+	}
+	var result ArtifactCommandResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, fmt.Errorf("decode build result registration: %w", err)
+	}
+	if result.Status == "" {
+		result.Status = "registered"
 	}
 	return &result, nil
 }
