@@ -17,7 +17,9 @@ The Nostr DM sender is available only when the server has a Nostr private key. I
 
 ## Organization scope and authorization
 
-Encrypted browser channel and log operations belong to an organization. The authenticated caller must be a member of the selected organization; those repository queries are qualified by that organization so another tenant's channel or log is not visible or mutable.
+Encrypted browser channel and log operations belong to an organization. Channel reads require `services:read`, log reads require `logs:read`, and create/update/delete/test require `settings:manage`. ID-based operations resolve the organization from the stored channel and then repeat the read or mutation through an organization-scoped repository method, so a client cannot select another tenant by supplying ownership data.
+
+Channel and recent-log lists include only the union of the requester's organization memberships. An optional `org_id` can narrow channel listing, but only to an organization in that membership set. Creating without `org_id` remains supported for requesters with exactly one membership; requesters with multiple memberships must select one explicitly, and the server verifies both membership and permission before persisting that organization on the channel.
 
 The direct MCP notification handlers do not accept an `org_id` and currently use the server's unqualified notification repository. The standard app also leaves external MCP authorization fail-closed. Do not use these direct tools as a cross-tenant operator surface; prefer the tenant-scoped browser/encrypted operations. See [MCP Tools Reference](../mcp-tools.md#authorization).
 

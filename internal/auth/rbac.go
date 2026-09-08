@@ -172,5 +172,8 @@ func (r *RBAC) CheckPermission(ctx context.Context, p *Principal, orgID uuid.UUI
 
 // GetUserOrgs returns all organizations the user is a member of.
 func (r *RBAC) GetUserOrgs(ctx context.Context, pubkey string) ([]domain.OrgMember, error) {
+	if r == nil || r.members == nil {
+		return nil, fmt.Errorf("authorization not configured: members lookup is unavailable")
+	}
 	return r.members.ListByPubkey(ctx, pubkey)
 }
