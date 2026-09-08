@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
@@ -734,6 +735,138 @@ func TestArtifactsRegisterCommandPublishesSignerFirstContextVMRequest(t *testing
 		captured.ImageDigest != digest ||
 		captured.IdempotencyKey != "artifact:register:astillero" {
 		t.Fatalf("captured artifact register = %#v", captured)
+	}
+}
+
+func TestBuildsRequestCommandPublishesSignerFirstContextVMRequest(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	serviceID := uuid.New().String()
+	credentialID := uuid.New().String()
+	var captured client.BuildRequestNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{buildRequest: func(req client.BuildRequestNostrRequest) (*client.BuildCommandResult, error) {
+			captured = req
+			return &client.BuildCommandResult{Status: "queued", BuildID: uuid.New().String()}, nil
+		}}, nil
+	})
+	defer restoreFactory()
+
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(buildsCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	root.SetArgs([]string{
+		"builds", "request",
+		"--service", serviceID,
+		"--git-ref", "b13b14fba6e54f008bfa1ba26d716c2ef05c206e",
+		"--credential-ref", credentialID,
+		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
+		"--build-arg", "PUBLIC_URL=https://example.test?a=b",
+		"--build-arg", "MODE=release",
+		"--idempotency-key", "build:astillero:b13b14f",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute builds request: %v", err)
+	}
+	if captured.ServiceID != serviceID || captured.GitRef != "b13b14fba6e54f008bfa1ba26d716c2ef05c206e" ||
+		captured.RepositoryCredentialRef != credentialID || captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
+		captured.IdempotencyKey != "build:astillero:b13b14f" || captured.BuildArgs["PUBLIC_URL"] != "https://example.test?a=b" || captured.BuildArgs["MODE"] != "release" {
+		t.Fatalf("captured build request = %#v", captured)
+	}
+}
+
+func TestParseBuildArgsRejectsDuplicateKeys(t *testing.T) {
+	if _, err := parseBuildArgs([]string{"MODE=release", "MODE=debug"}); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate build arg error = %v", err)
+	}
+	parsed, err := parseBuildArgs([]string{"URL=https://example.test?a=b"})
+	if err != nil || parsed["URL"] != "https://example.test?a=b" {
+		t.Fatalf("parse value containing equals = %#v, %v", parsed, err)
+	}
+}
+
+func TestBuildsRequestCommandRejectsMalformedBuildArgBeforeClientConstruction(t *testing.T) {
+	resetOperatorGlobals(t)
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	factoryCalls := 0
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		factoryCalls++
+		return fakeCLIOperatorClient{}, nil
+	})
+	defer restoreFactory()
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(buildsCommands())
+	root.SetArgs([]string{
+		"builds", "request", "--service", uuid.New().String(), "--git-ref", "main",
+		"--credential-ref", uuid.New().String(), "--artifact-repo", "harbor.example/app",
+		"--build-arg", "MALFORMED",
+	})
+	err := root.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "must use KEY=VALUE") {
+		t.Fatalf("malformed build arg error = %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("operator client constructed %d times for malformed input", factoryCalls)
+	}
+}
+
+func TestBuildsReadAndRegisterCommandsUseSignerFirstClient(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	serviceID := uuid.New().String()
+	buildID := uuid.New().String()
+	var gotBuildID, registeredBuildID string
+	var gotList client.BuildListNostrRequest
+	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{
+			buildGet: func(id string) (*client.BuildDetailsResult, error) {
+				gotBuildID = id
+				return &client.BuildDetailsResult{Build: &domain.Build{ID: uuid.MustParse(id), ServiceID: uuid.MustParse(serviceID), Status: domain.BuildStatusQueued}}, nil
+			},
+			buildList: func(req client.BuildListNostrRequest) (*client.BuildListResult, error) {
+				gotList = req
+				return &client.BuildListResult{Builds: []domain.Build{}, Limit: req.Limit, Offset: req.Offset}, nil
+			},
+			buildRegisterResult: func(id string) (*client.ArtifactCommandResult, error) {
+				registeredBuildID = id
+				return &client.ArtifactCommandResult{Status: "registered", BuildID: id}, nil
+			},
+		}, nil
+	})
+	defer restoreFactory()
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(buildsCommands())
+	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
+		t.Fatalf("set relay: %v", err)
+	}
+	for _, args := range [][]string{
+		{"builds", "get", "--build", buildID},
+		{"builds", "list", "--service", serviceID, "--limit", "25", "--offset", "5"},
+		{"builds", "register-result", "--build", buildID},
+	} {
+		root.SetArgs(args)
+		if err := root.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("execute %v: %v", args, err)
+		}
+	}
+	if gotBuildID != buildID || registeredBuildID != buildID {
+		t.Fatalf("get build = %q register build = %q", gotBuildID, registeredBuildID)
+	}
+	if gotList.ServiceID != serviceID || gotList.Limit != 25 || gotList.Offset != 5 {
+		t.Fatalf("list request = %#v", gotList)
+	}
+}
+
+func TestRootCommandRegistersBuildsGroup(t *testing.T) {
+	resetOperatorGlobals(t)
+	root := newRootCommand()
+	cmd, _, err := root.Find([]string{"builds", "request"})
+	if err != nil || cmd == nil || cmd.Name() != "request" {
+		t.Fatalf("find builds request = cmd:%v err:%v", cmd, err)
 	}
 }
 

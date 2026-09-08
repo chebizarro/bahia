@@ -27,25 +27,6 @@ func validArcanaBuildRequest() ArcanaBuildRequest {
 	}
 }
 
-func TestValidateArcanaBuildRequestPublicAllowlist(t *testing.T) {
-	payload := validArcanaBuildRequest()
-	for _, name := range ArcanaPublicBuildArgNames {
-		payload.BuildArgs = map[string]string{name: "public-value"}
-		if name == "VITE_ARCANA_SIGNER_MODE" {
-			payload.BuildArgs[name] = "nip46"
-		}
-		if err := validateArcanaBuildRequest(payload); err != nil {
-			t.Fatalf("%s should be allowed: %v", name, err)
-		}
-	}
-
-	payload.BuildArgs = map[string]string{"GITHUB_TOKEN": "secret"}
-	err := validateArcanaBuildRequest(payload)
-	if err == nil || !strings.Contains(err.Error(), "not an approved public") {
-		t.Fatalf("secret build arg error = %v", err)
-	}
-}
-
 func TestBuildRequestStrictlyRejectsCredentialValues(t *testing.T) {
 	params := json.RawMessage(`{
 		"service_id":"00000000-0000-0000-0000-000000000001",
@@ -222,9 +203,11 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 		ArtifactRepo:            "harbor.sharegap.net/cascadia/astillero",
 		BuildArgs:               map[string]string{"VITE_BLOSSOM_URL": "https://blossom.example"},
 	}
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Starter:  &buildTestStarter{},
-		Registry: &buildTestRegistry{},
+		Starter:  starter,
+		Registry: registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: serviceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
 			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
@@ -239,6 +222,9 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "approved public build argument allowlist") {
 		t.Fatalf("generic build args error = %v", err)
+	}
+	if starter.calls != 0 || registry.calls != 0 {
+		t.Fatalf("rejected build reached starter %d times and registry %d times", starter.calls, registry.calls)
 	}
 }
 

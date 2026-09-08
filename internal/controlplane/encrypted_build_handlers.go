@@ -373,13 +373,6 @@ func validateBuildRequest(payload ArcanaBuildRequest) error {
 	return validateGenericBuildArgs(payload.BuildArgs)
 }
 
-func validateArcanaBuildRequest(payload ArcanaBuildRequest) error {
-	if err := validateBuildRequest(payload); err != nil {
-		return err
-	}
-	return validateServiceBuildArgs(&domain.Service{Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate}}, payload.BuildArgs)
-}
-
 func validateGenericBuildArgs(buildArgs map[string]string) error {
 	if len(buildArgs) > 64 {
 		return fmt.Errorf("build_args contains too many values")
