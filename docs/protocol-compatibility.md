@@ -170,9 +170,11 @@ Bahia's CI/deployment bridge is aligned to the Hive-CI protocol and its Loom exe
 
 | Kind | Name | Direction | Description |
 |------|------|-----------|-------------|
-| `5401` | Workflow Run | Inbound | Trusted CI trigger / workflow-run fact |
+| `5401` | Workflow Run | Inbound/outbound | Trusted CI trigger / workflow-run fact |
 | `5402` | Workflow Result | Inbound | Trusted build outcome fact |
 | `5100` | Loom Job Request | Outbound | Actual compute dispatch for build/deploy work |
+
+Bahia's signed inbound `build/request` is a ContextVM kind-`25910` mutation, but the private-mirror initiator publishes the resulting durable CI-bus event as kind `5401`. The self-dispatched event follows grasp-gitea's empty-content tag vocabulary and its id is returned as `ci_run_id` for 5402 lineage. Bahia's service pubkey remains an operator-managed `trusted_ci_pubkeys` entry; missing self-trust is warned, never auto-added.
 
 
 ---

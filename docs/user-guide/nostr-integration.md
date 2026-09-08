@@ -44,8 +44,17 @@ To add managed HTTPS to an existing deployment, use `service/route-attach` with 
 | **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
 | **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
 | **Collections/relays** | `30002`, `30004` | NIP-51 relay sets, topology, and SBOM availability lists |
+| **Hive-CI interop** | `5401`, `5402` | Durable fleet-local workflow-run and workflow-result events |
 | **SoulFactory interop** | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent lifecycle events accepted by the Bahia sidecar as open interop data |
 | **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` excluding documented SoulFactory interop overlaps | Legacy custom kinds retained only for startup migration, historical conversion tests, and fail-closed fixtures |
+
+### Hive-CI self-dispatch
+
+The signed `build/request` mutation arrives over ContextVM kind `25910`. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another ContextVM message. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
+
+Set `hiveci.initiator.repo_announcement_addr` and include Bahia's service pubkey in `hiveci.trusted_ci_pubkeys`. The latter remains explicit operator trust: Bahia logs `self_issued_run_untrusted` if a self-issued 5401 would be filtered out, but does not auto-trust its key.
+
+Because this interoperable tag-only event has no build-argument field, a private-mirror request with non-empty `build_args` fails before credentials or external side effects. Bahia does not claim unapplied build arguments as provenance.
 
 ### SoulFactory/OpenClaw provisioning
 
@@ -67,7 +76,7 @@ What it converts:
 
 | Legacy input | Canonical output |
 |--------------|------------------|
-| Legacy CRU/request kinds (`5961`-`6006`, `38390`-`38431`, `5102`) excluding SoulFactory interop `5950`, `1950`, `38384` | ContextVM `25910` methods, or NIP-09 `5` where the operation is deletion |
+| Legacy CRU/request kinds (`5961`-`6006`, `38390`-`38431`) excluding SoulFactory interop `5950`, `1950`, `38384` | ContextVM `25910` methods, or NIP-09 `5` where the operation is deletion |
 | Legacy status/progress kinds (`6961`-`6997`) excluding SoulFactory interop `6950` | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | Legacy terminal result kinds (`7961`-`7997`) excluding SoulFactory interop `7950`, `1951`, `38386` | ContextVM responses plus `30900` / `4903` / `30315` observables |
 | Legacy read-model/discovery kinds (`31961`-`32003`, `31974`) | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |

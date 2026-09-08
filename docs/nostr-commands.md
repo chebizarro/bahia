@@ -22,9 +22,12 @@ Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-
 | DM relay lists | `10050` | optional replaceable | NIP-51 DM receive routing only for explicitly configured DM-enabled features and identities |
 | Repository state | `30617`, `30618` | inbound/outbound by repository owner | NIP-34 repository announcements and state; repository relay hints are preferred for repository operations |
 | SoulFactory interop | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | inbound/outbound by operators, SoulFactory controllers, and runtimes | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results |
+| Hive-CI interop | `5401`, `5402` | inbound/outbound by trusted CI issuers and workers | Durable fleet-local workflow-run and workflow-result facts; not ContextVM migration targets |
 | Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
 
 Kind `31953` is state, not a command: trusted operators replace the complete `soulfactory-fleet-config/v1` OpenClaw template, and provisioning reactors consume the latest trusted snapshot. Publishing clients must sign it and require at least one relay `OK accepted`.
+
+For Bahia's private-mirror build path, `build/request` remains an inbound ContextVM method on kind `25910`. Once accepted, the initiator emits the CI-bus workflow run as a tag-only kind `5401` and returns its event id as `ci_run_id`; a 25910 command envelope is ephemeral and must not substitute for this durable event.
 
 ## ContextVM Methods
 
@@ -300,7 +303,7 @@ These families are retained only for migration manifests, historical conversion 
 
 | Legacy range | Historical purpose | Canonical target |
 |--------------|--------------------|------------------|
-| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `5961`-`6006`, `38390`-`38431` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
 | `6961`-`6997` excluding SoulFactory interop `6950` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003` | read models | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |

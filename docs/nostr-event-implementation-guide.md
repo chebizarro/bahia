@@ -21,6 +21,14 @@ First ask whether the semantic is one of these:
 
 If yes, use that mechanism. A new kind requires a written justification that its relay behavior, replaceability, retention, or indexing requirements differ from every existing mechanism.
 
+## Fleet-local Hive-CI exception
+
+Hive-CI kinds `5401` (workflow run) and `5402` (workflow result) are an existing fleet-local protocol, not Bahia legacy kinds and not ContextVM migration targets. A signed inbound `build/request` remains a ContextVM kind-`25910` mutation, but Bahia's resulting CI-bus dispatch is a durable kind `5401`; it must not be published as ephemeral kind `25910`.
+
+Bahia-produced `5401` events use the grasp-gitea-compatible tag-only shape: empty content with `a`, `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`. `a` is the configured NIP-34 repository announcement address. `publisher` is Bahia's actual service signing pubkey; operators must include it in `hiveci.trusted_ci_pubkeys` for Bahia's own subscriber to accept self-dispatch. Bahia warns when that trust is absent and never adds it automatically.
+
+The tag-only protocol has no build-argument field. The initiator fails closed before resolving credentials, mirroring, or publishing when `build_args` is non-empty; it never records requested values as build provenance unless they can reach the builder.
+
 ## SoulFactory fleet configuration exception
 
 Kind `31953` is the parameterized-replaceable SoulFactory interoperability document for fleet-wide OpenClaw configuration. It uses `d=soulfactory-fleet-config/v1`, a matching `schema` tag/content field, and a complete `template` snapshot. This allocation is intentionally adjacent to the staged `31950`–`31952` SoulFactory family: provisioning reactors and external runtimes must query and carry it without treating it as Bahia service-authored canonical state. Only configured `soul_factory.authorized_pubkeys` compete for the current document. A generic NIP-78 object would have different policy classification and would not provide this SoulFactory runtime interoperability boundary.

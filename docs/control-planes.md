@@ -6,6 +6,8 @@ Bahia's supported control-plane contract is now sidecar-first and Nostr-native. 
 2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
 3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
+Fleet-local CI interoperability is a deliberate exception to the generic ContextVM mutation model: an inbound `build/request` is kind `25910`, while the accepted durable CI-bus workflow run/result facts remain Hive-CI kinds `5401`/`5402`. Bahia self-dispatch publishes 5401 with the grasp-gitea tag-only contract and returns that event id as `ci_run_id`; it never uses ephemeral 25910 as the durable CI bus.
+
 Removed legacy surfaces:
 
 - `GET /api/v1/events/stream` dashboard SSE stream

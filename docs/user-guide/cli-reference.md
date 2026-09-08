@@ -172,7 +172,7 @@ bahia deployments deploy \
 
 First-time mirror creation and ref resolution can exceed the default 30-second per-attempt result timeout, so `--result-timeout 120s` is recommended for the first request. Reusing the same `--idempotency-key` replays the first completed ContextVM result from Bahia's durable response store instead of starting another CI run or registering another build. An idempotency key identifies one logical request: do not reuse it with different request fields.
 
-`--build-arg KEY=VALUE` is repeatable and values may contain `=`. Build arguments are public in the signed `ci/workflow-run` request and are accepted only for services with an approved public build-argument allowlist. Astillero does not have that allowlist, so omit `--build-arg` for the workflow above.
+`--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
 
 If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
 
