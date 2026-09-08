@@ -14,8 +14,25 @@ Current automated evidence covers:
 - browser create/update form failure retention
 - browser accessibility-critical headings, labels, and alert regions
 - end-to-end proof that the browser notifications journey publishes only to encrypted relay URLs
+- tenant-RBAC isolation for channel list/get/create/update/delete/test and delivery-log reads
 
 No open product defects or open test defects remain for this slice.
+
+### 2026-09-08 tenant-RBAC hardening (`bahia-kt47q`)
+
+Encrypted notification handlers now derive ID-based ownership from the stored channel, check tenant permission, and repeat the operation through organization-scoped repository methods. List and recent-log reads merge only the requester's organization memberships. `org_id` remains optional: it narrows list results only after membership validation, and create uses it only when verified; a caller with one membership needs no field, while multiple memberships without it fail closed as ambiguous. Reads use `services:read` for channels and `logs:read` for delivery logs; create/update/delete/test use `settings:manage`.
+
+Deterministic Go coverage in `internal/controlplane/notification_encrypted_handlers_test.go` proves foreign-tenant denial, union filtering, optional-org validation, authorized-org persistence, scoped repository use, permission mapping, nil/unconfigured RBAC failure, and rejection of legacy zero-org channels. The load-bearing check was demonstrated by temporarily disabling list scoping, create-org authorization, and stored-channel permission checks: every list/get/create/update/delete/test/logs cross-tenant subtest failed; restoring the implementation made the identical test pass.
+
+A follow-up mutation inserted an early unconditional `return true` in `containsNotificationOrgID`. Dedicated list, single-membership create, and ambiguous-membership create cases all failed because the forged organization reached `CheckPermission` instead of being rejected by the enumerated membership set; all three passed again after restoring the predicate.
+
+Verification:
+
+```text
+GOFLAGS=-buildvcs=false go build ./...  # exit 0
+GOFLAGS=-buildvcs=false go test ./...   # exit 0
+gofmt -l internal cmd                   # 14 pre-existing findings; no changed Go file listed
+```
 
 ## Commands Run
 

@@ -41,6 +41,10 @@ func (r *RBAC) LoadAuthzContext(ctx context.Context, p *Principal, orgID uuid.UU
 		return &AuthzContext{Principal: p, OrgID: orgID}, nil
 	}
 
+	if r.members == nil {
+		return nil, fmt.Errorf("authorization not configured: members lookup is unavailable")
+	}
+
 	member, err := r.members.GetMember(ctx, orgID, p.PubKey)
 	if err != nil {
 		// Not a member - that's okay, member will be nil
@@ -168,5 +172,8 @@ func (r *RBAC) CheckPermission(ctx context.Context, p *Principal, orgID uuid.UUI
 
 // GetUserOrgs returns all organizations the user is a member of.
 func (r *RBAC) GetUserOrgs(ctx context.Context, pubkey string) ([]domain.OrgMember, error) {
+	if r == nil || r.members == nil {
+		return nil, fmt.Errorf("authorization not configured: members lookup is unavailable")
+	}
 	return r.members.ListByPubkey(ctx, pubkey)
 }

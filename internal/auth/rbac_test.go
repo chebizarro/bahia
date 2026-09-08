@@ -10,10 +10,10 @@ import (
 
 // mockMemberLookup is a test mock for OrgMemberLookup.
 type mockMemberLookup struct {
-	member   *domain.OrgMember
-	members  []domain.OrgMember
-	getErr   error
-	listErr  error
+	member  *domain.OrgMember
+	members []domain.OrgMember
+	getErr  error
+	listErr error
 }
 
 func (m *mockMemberLookup) GetMember(ctx context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
@@ -56,10 +56,10 @@ func TestAuthzContext_HasRole(t *testing.T) {
 
 func TestAuthzContext_HasPermission(t *testing.T) {
 	tests := []struct {
-		name   string
-		role   domain.Role
-		perm   domain.Permission
-		want   bool
+		name string
+		role domain.Role
+		perm domain.Permission
+		want bool
 	}{
 		{"viewer read services", domain.RoleViewer, domain.PermReadServices, true},
 		{"viewer write services", domain.RoleViewer, domain.PermWriteServices, false},
@@ -278,5 +278,14 @@ func TestRBAC_GetUserOrgs(t *testing.T) {
 
 	if len(result) != 2 {
 		t.Errorf("GetUserOrgs() returned %d orgs, want 2", len(result))
+	}
+}
+
+func TestRBAC_GetUserOrgsFailsClosedWithoutMembersLookup(t *testing.T) {
+	rbac := NewRBAC(nil)
+
+	_, err := rbac.GetUserOrgs(context.Background(), "abc")
+	if err == nil || err.Error() != "authorization not configured: members lookup is unavailable" {
+		t.Fatalf("GetUserOrgs() error = %v, want fail-closed configuration error", err)
 	}
 }

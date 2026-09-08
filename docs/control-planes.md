@@ -354,13 +354,13 @@ Notification encrypted operations:
 
 | Operation | Payload | Result payload | Notes |
 |-----------|---------|----------------|-------|
-| `notifications.channels.list` | `{}` | `{channels}` | Channel configs are encrypted in transit; webhook `config.secret` is omitted from results. |
-| `notifications.channels.get` | `{id}` | `{channel}` | Returns one sanitized channel or an encrypted terminal error. |
-| `notifications.channels.create` | channel fields | `{channel}` | Webhook secrets are accepted only as encrypted write payloads. |
-| `notifications.channels.update` | `{id, ...fields}` | `{channel}` | Omitted webhook secrets preserve the stored secret; returned channel is sanitized. |
-| `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over encrypted request/result events. |
-| `notifications.channels.test` | `{id}` | `{status,id}` | Dispatches directly to the selected channel and returns terminal success/error. |
-| `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Delivery logs and payloads are returned only in encrypted result content. |
+| `notifications.channels.list` | `{org_id?}` | `{channels}` | Returns the union of channels in the requester's member organizations. Optional `org_id` narrows the result only after membership validation. Webhook `config.secret` is omitted. |
+| `notifications.channels.get` | `{id}` | `{channel}` | Resolves the stored channel's organization and requires `services:read` before an organization-scoped read. |
+| `notifications.channels.create` | channel fields, `org_id?` | `{channel}` | Uses the requester's sole organization when unambiguous. Multiple memberships require an explicit member `org_id`; `settings:manage` is required. |
+| `notifications.channels.update` | `{id, ...fields}` | `{channel}` | Resolves stored ownership and requires `settings:manage`; client-supplied ownership is ignored. Omitted webhook secrets preserve the stored secret. |
+| `notifications.channels.delete` | `{id}` | `{status,id}` | Resolves stored ownership and requires `settings:manage` before an organization-scoped delete. |
+| `notifications.channels.test` | `{id}` | `{status,id}` | Resolves stored ownership and requires `settings:manage` before dispatching through the selected channel. |
+| `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Requires `logs:read`. Channel-specific reads resolve stored ownership; recent logs are merged only from the requester's member organizations. |
 
 Encrypted domain operations:
 
