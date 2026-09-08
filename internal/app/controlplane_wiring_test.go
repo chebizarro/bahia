@@ -240,7 +240,7 @@ func TestConfigureAuthorizationMCPDepsAuthorizesConfiguredPubkeys(t *testing.T) 
 	cfg.Nostr.AuthorizedPubkeys = []string{"default-operator"}
 
 	deps := mcp.ServerDeps{}
-	configureAuthorizationMCPDeps(&deps, cfg)
+	configureAuthorizationMCPDeps(&deps, cfg, nil)
 	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
 
 	unauthorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
@@ -270,4 +270,58 @@ func TestConfigureAuthorizationMCPDepsAuthorizesConfiguredPubkeys(t *testing.T) 
 		require.True(t, result.IsError, "tool handler error expected with nil registry for %s", tool)
 		require.NotContains(t, result.Content[0].Text, "access denied", "authorized caller must not be denied by auth gate for %s", tool)
 	}
+}
+
+func TestConfigureAuthorizationMCPDepsWiresTenantRBACFailClosed(t *testing.T) {
+	const callerPubkey = "default-operator"
+	cfg := config.Defaults()
+	cfg.Nostr.AuthorizedPubkeys = []string{callerPubkey}
+
+	t.Run("member lookup is propagated to the canonical server constructor", func(t *testing.T) {
+		rbac := newTenantRBAC(appWiringMemberLookup{})
+		require.NotNil(t, rbac)
+
+		deps := mcp.ServerDeps{}
+		configureAuthorizationMCPDeps(&deps, cfg, rbac)
+		require.Same(t, rbac, deps.RBAC)
+	})
+
+	t.Run("missing member lookup remains unconfigured and denies", func(t *testing.T) {
+		rbac := newTenantRBAC(nil)
+		require.Nil(t, rbac)
+
+		deps := mcp.ServerDeps{}
+		configureAuthorizationMCPDeps(&deps, cfg, rbac)
+		registryWithoutRepositories := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+		server := mcp.NewServerWithOptions(registryWithoutRepositories, zap.NewNop(), deps)
+		ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+			Subject: "npub-default-operator",
+			PubKey:  callerPubkey,
+			Method:  auth.MethodNIP98,
+		})
+
+		for tool, arguments := range map[string]map[string]interface{}{
+			"bahia_list_builds":         {"service_id": uuid.New().String()},
+			"bahia_get_build":           {"build_id": uuid.New().String()},
+			"bahia_register_build":      {"service_id": uuid.New().String()},
+			"bahia_update_build_status": {"build_id": uuid.New().String(), "status": string(domain.BuildStatusRunning)},
+		} {
+			t.Run(tool, func(t *testing.T) {
+				result, err := server.CallTool(ctx, tool, arguments)
+				require.NoError(t, err)
+				require.True(t, result.IsError)
+				require.Contains(t, result.Content[0].Text, "service authorization is not configured")
+			})
+		}
+	})
+}
+
+type appWiringMemberLookup struct{}
+
+func (appWiringMemberLookup) GetMember(context.Context, uuid.UUID, string) (*domain.OrgMember, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (appWiringMemberLookup) ListByPubkey(context.Context, string) ([]domain.OrgMember, error) {
+	return nil, nil
 }
