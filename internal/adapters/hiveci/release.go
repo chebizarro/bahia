@@ -141,8 +141,8 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	if err := nostradapter.ValidateInboundEvent(run, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: stored 5401 signature boundary: %v", ErrInvalidRelease, err)
 	}
-	if int(run.Kind) != kinds.HiveCIWorkflowRun || run.ID.Hex() != result.Lineage.WorkflowRunEventID {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: lineage event is not the referenced kind 5401", ErrInvalidRelease)
+	if err := validateWorkflowRunReference(run, result.Lineage.WorkflowRunEventID); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
 	}
 	if event.CreatedAt < run.CreatedAt {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: release predates its workflow run", ErrInvalidRelease)
@@ -229,6 +229,13 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		SignedEvent:   string(eventJSON), AcceptedAt: now,
 	}
 	return i.store.CommitAcceptedRelease(ctx, accepted)
+}
+
+func validateWorkflowRunReference(run *nostr.Event, workflowRunEventID string) error {
+	if run == nil || int(run.Kind) != kinds.HiveCIWorkflowRun || run.ID.Hex() != workflowRunEventID {
+		return fmt.Errorf("%w: lineage event is not the referenced kind 5401", ErrInvalidRelease)
+	}
+	return nil
 }
 
 func IsReleaseCandidate(event *nostr.Event) bool {

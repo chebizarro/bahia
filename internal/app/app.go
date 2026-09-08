@@ -1468,6 +1468,7 @@ func New(cfg *config.Config) (*App, error) {
 					WorkflowPath:         cfg.HiveCI.Initiator.WorkflowPath,
 					SourceCloneURL:       cfg.HiveCI.Initiator.SourceCloneURL,
 					RepoAnnouncementAddr: cfg.HiveCI.Initiator.RepoAnnouncementAddr,
+					TrustedCIPubkeys:     cfg.HiveCI.TrustedCIPubkeys,
 					RelayHint:            cfg.HiveCI.Initiator.RelayHint,
 				},
 				logger,

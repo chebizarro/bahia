@@ -835,7 +835,7 @@ type HiveCIPolicyConfig struct {
 
 // HiveCIInitiatorConfig configures the fleet Gitea private-mirror and
 // Hive-CI build initiation adapter. When Enabled, all fields except
-// RepoAnnouncementAddr and RelayHint are required; the GitHub credential is
+// SourceCloneURL and RelayHint are required; the GitHub credential is
 // never configured here — it is resolved per request from an opaque
 // server-side secret reference.
 type HiveCIInitiatorConfig struct {
@@ -850,7 +850,7 @@ type HiveCIInitiatorConfig struct {
 	WorkflowPath string `koanf:"workflow_path"`
 	// SourceCloneURL optionally overrides the upstream clone URL.
 	SourceCloneURL string `koanf:"source_clone_url"`
-	// RepoAnnouncementAddr optionally carries the NIP-34 30617 address of the mirror.
+	// RepoAnnouncementAddr carries the NIP-34 30617 address of the mirror.
 	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
 	// RelayHint is attached to published run-request/evidence events.
 	RelayHint string `koanf:"relay_hint"`
@@ -1435,6 +1435,12 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(c.HiveCI.Initiator.WorkflowPath) == "" {
 			return fmt.Errorf("config validation failed: hiveci.initiator.workflow_path is required when hiveci.initiator.enabled=true")
 		}
+		if strings.TrimSpace(c.HiveCI.Initiator.RepoAnnouncementAddr) == "" {
+			return fmt.Errorf("config validation failed: hiveci.initiator.repo_announcement_addr is required when hiveci.initiator.enabled=true")
+		}
+		if !validNIP34RepositoryAddress(c.HiveCI.Initiator.RepoAnnouncementAddr) {
+			return fmt.Errorf("config validation failed: hiveci.initiator.repo_announcement_addr must be 30617:<64-hex-pubkey>:<repo-id>")
+		}
 	}
 	if c.Cashu.Enabled {
 		return fmt.Errorf("config validation failed: cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
@@ -1505,6 +1511,15 @@ func (c *Config) validate() error {
 	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
 
 	return nil
+}
+
+func validNIP34RepositoryAddress(raw string) bool {
+	parts := strings.SplitN(strings.TrimSpace(raw), ":", 3)
+	if len(parts) != 3 || parts[0] != "30617" || strings.TrimSpace(parts[2]) == "" || strings.ContainsAny(parts[2], "\x00\r\n\t") {
+		return false
+	}
+	pubkey, err := hex.DecodeString(parts[1])
+	return err == nil && len(pubkey) == 32
 }
 
 const bundledOCIServiceAccountHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
