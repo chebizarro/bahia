@@ -14,6 +14,8 @@ import (
 
 const (
 	ContextVMMethodBuildRequest                = "build/request"
+	ContextVMMethodBuildGet                    = "build/get"
+	ContextVMMethodBuildList                   = "build/list"
 	ContextVMMethodArtifactRegisterBuildResult = "artifact/register-build-result"
 
 	ArcanaRepositoryCoordinate = "chebizarro/living-library-forge"
@@ -87,6 +89,7 @@ type HiveCIBuildStarter interface {
 
 type BuildRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
+	ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error)
 }
 
 type BuildResultLoader interface {
@@ -136,6 +139,8 @@ func (h *EncryptedBuildHandlers) Register(transport *EncryptedRequestTransport) 
 		return
 	}
 	transport.RegisterContextVMHandler(ContextVMMethodBuildRequest, h.RequestBuild)
+	transport.RegisterContextVMHandler(ContextVMMethodBuildGet, h.GetBuild)
+	transport.RegisterContextVMHandler(ContextVMMethodBuildList, h.ListBuilds)
 	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegisterBuildResult, h.RegisterBuildResult)
 }
 
@@ -226,6 +231,77 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	}, nil
 }
 
+func (h *EncryptedBuildHandlers) GetBuild(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload struct {
+		BuildID uuid.UUID `json:"build_id"`
+	}
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("decode build/get params: %w", err)
+	}
+	if payload.BuildID == uuid.Nil {
+		return nil, fmt.Errorf("build_id is required")
+	}
+	if h == nil || h.builds == nil || h.services == nil {
+		return nil, fmt.Errorf("build read handling is not configured")
+	}
+	build, err := h.builds.GetByID(ctx, payload.BuildID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch build: %w", err)
+	}
+	if build == nil {
+		return nil, fmt.Errorf("build %s not found", payload.BuildID)
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
+	if _, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermReadServices); err != nil {
+		return nil, err
+	}
+	return map[string]any{"build": build}, nil
+}
+
+func (h *EncryptedBuildHandlers) ListBuilds(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload struct {
+		ServiceID uuid.UUID `json:"service_id"`
+		Limit     int       `json:"limit"`
+		Offset    int       `json:"offset"`
+	}
+	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("decode build/list params: %w", err)
+	}
+	if payload.ServiceID == uuid.Nil {
+		return nil, fmt.Errorf("service_id is required")
+	}
+	if h == nil || h.registry == nil || h.services == nil {
+		return nil, fmt.Errorf("build read handling is not configured")
+	}
+	limit := payload.Limit
+	if limit <= 0 {
+		limit = 20
+	} else if limit > 200 {
+		limit = 200
+	}
+	offset := payload.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
+	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermReadServices); err != nil {
+		return nil, err
+	}
+	builds, err := h.registry.ListBuilds(ctx, payload.ServiceID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list builds: %w", err)
+	}
+	if builds == nil {
+		builds = []domain.Build{}
+	}
+	return map[string]any{
+		"builds": builds,
+		"count":  len(builds),
+		"limit":  limit,
+		"offset": offset,
+	}, nil
+}
+
 func (h *EncryptedBuildHandlers) RegisterBuildResult(ctx context.Context, request ContextVMRequest) (any, error) {
 	var payload struct {
 		BuildID uuid.UUID `json:"build_id"`
@@ -293,13 +369,6 @@ func validateBuildRequest(payload ArcanaBuildRequest) error {
 		return fmt.Errorf("artifact_repo is required")
 	}
 	return validateGenericBuildArgs(payload.BuildArgs)
-}
-
-func validateArcanaBuildRequest(payload ArcanaBuildRequest) error {
-	if err := validateBuildRequest(payload); err != nil {
-		return err
-	}
-	return validateServiceBuildArgs(&domain.Service{Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate}}, payload.BuildArgs)
 }
 
 func validateGenericBuildArgs(buildArgs map[string]string) error {

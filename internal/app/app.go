@@ -230,6 +230,7 @@ func New(cfg *config.Config) (*App, error) {
 	} else {
 		logger.Warn("database unavailable: tier2/tier3 repositories are nil, route gating will return 503 for those tiers")
 	}
+	tenantRBAC := newTenantRBAC(orgMemberRepo)
 
 	// Nostr event audit repository.
 	var nostrEventRepo repository.NostrEventRepository
@@ -1225,6 +1226,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
@@ -1475,7 +1477,6 @@ func New(cfg *config.Config) (*App, error) {
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}
-		tenantRBAC := auth.NewRBAC(orgMemberRepo)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,
 			Orgs:                  orgRepo,
@@ -1648,8 +1649,6 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
-	// Tenant RBAC.
-	rbac := auth.NewRBAC(orgMemberRepo)
 	var nip98Validator *auth.NIP98Validator
 	var nip05Resolver *auth.NIP05Resolver
 	if cfg.Auth.Enabled {
@@ -1702,7 +1701,7 @@ func New(cfg *config.Config) (*App, error) {
 			Orgs:             orgRepo,
 			OrgMembers:       orgMemberRepo,
 			OrgInvites:       orgInviteRepo,
-			RBAC:             rbac,
+			RBAC:             tenantRBAC,
 			MLRegistry:       mlRegistry,
 			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
@@ -3282,6 +3281,26 @@ func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModel
 	if publisher != nil && signer != nil && len(relays) > 0 {
 		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
 	}
+}
+
+// newTenantRBAC leaves tenant authorization unconfigured when no durable
+// membership lookup is available. Consumers must treat a nil RBAC as a denial.
+func newTenantRBAC(members auth.OrgMemberLookup) *auth.RBAC {
+	if members == nil {
+		return nil
+	}
+	return auth.NewRBAC(members)
+}
+
+func configureAuthorizationMCPDeps(deps *mcp.ServerDeps, cfg *config.Config, rbac *auth.RBAC) {
+	if deps == nil {
+		return
+	}
+	deps.RBAC = rbac
+	if cfg == nil {
+		return
+	}
+	deps.AuthorizedPubkeys = cfg.Nostr.AuthorizedPubkeys
 }
 
 func appendPackageControlPlaneOptions(opts []controlplane.ReactorOption, packageRegistrySvc *service.PackageRegistryService, packageProjection repository.PackageControlPlaneRepository) []controlplane.ReactorOption {

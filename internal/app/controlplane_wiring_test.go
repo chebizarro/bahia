@@ -183,3 +183,145 @@ func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T)
 		})
 	}
 }
+
+func TestMCPServerDepsWiresAuthorizedPubkeys(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.AuthorizedPubkeys = []string{"default-operator"}
+
+	deps := mcp.ServerDeps{
+		AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
+	}
+	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+
+	unauthorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-unauthorized",
+		PubKey:  "unauthorized-pubkey",
+		Method:  auth.MethodNIP98,
+	})
+	unauthorizedResult, err := server.CallTool(unauthorizedCtx, "bahia_delete_service", map[string]interface{}{
+		"service_id": uuid.New().String(),
+	})
+	require.NoError(t, err)
+	require.True(t, unauthorizedResult.IsError, "unauthorized caller must be denied")
+	require.Contains(t, unauthorizedResult.Content[0].Text, "access denied")
+
+	authorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-default-operator",
+		PubKey:  "default-operator",
+		Method:  auth.MethodNIP98,
+	})
+	authorizedResult, err := server.CallTool(authorizedCtx, "bahia_delete_service", map[string]interface{}{
+		"service_id": uuid.New().String(),
+	})
+	require.NoError(t, err)
+	require.True(t, authorizedResult.IsError, "tool handler error expected with nil registry")
+	require.NotContains(t, authorizedResult.Content[0].Text, "access denied", "authorized caller must not be denied by auth gate")
+}
+
+func TestMCPServerDepsEmptyAllowlistDeniesExternalCallers(t *testing.T) {
+	deps := mcp.ServerDeps{}
+	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-someone",
+		PubKey:  "some-pubkey",
+		Method:  auth.MethodNIP98,
+	})
+
+	result, err := server.CallTool(ctx, "bahia_delete_service", map[string]interface{}{
+		"service_id": uuid.New().String(),
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "empty allowlist must deny external callers")
+	require.Contains(t, result.Content[0].Text, "access denied")
+}
+
+func TestConfigureAuthorizationMCPDepsAuthorizesConfiguredPubkeys(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.AuthorizedPubkeys = []string{"default-operator"}
+
+	deps := mcp.ServerDeps{}
+	configureAuthorizationMCPDeps(&deps, cfg, nil)
+	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+
+	unauthorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-unauthorized",
+		PubKey:  "unauthorized-pubkey",
+		Method:  auth.MethodNIP98,
+	})
+	for _, tool := range []string{"bahia_delete_service", "bahia_register_build"} {
+		result, err := server.CallTool(unauthorizedCtx, tool, map[string]interface{}{
+			"service_id": uuid.New().String(),
+		})
+		require.NoError(t, err)
+		require.True(t, result.IsError, "unauthorized caller must be denied for %s", tool)
+		require.Contains(t, result.Content[0].Text, "access denied", "unauthorized caller must get access denied for %s", tool)
+	}
+
+	authorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject: "npub-default-operator",
+		PubKey:  "default-operator",
+		Method:  auth.MethodNIP98,
+	})
+	for _, tool := range []string{"bahia_delete_service", "bahia_register_build"} {
+		result, err := server.CallTool(authorizedCtx, tool, map[string]interface{}{
+			"service_id": uuid.New().String(),
+		})
+		require.NoError(t, err)
+		require.True(t, result.IsError, "tool handler error expected with nil registry for %s", tool)
+		require.NotContains(t, result.Content[0].Text, "access denied", "authorized caller must not be denied by auth gate for %s", tool)
+	}
+}
+
+func TestConfigureAuthorizationMCPDepsWiresTenantRBACFailClosed(t *testing.T) {
+	const callerPubkey = "default-operator"
+	cfg := config.Defaults()
+	cfg.Nostr.AuthorizedPubkeys = []string{callerPubkey}
+
+	t.Run("member lookup is propagated to the canonical server constructor", func(t *testing.T) {
+		rbac := newTenantRBAC(appWiringMemberLookup{})
+		require.NotNil(t, rbac)
+
+		deps := mcp.ServerDeps{}
+		configureAuthorizationMCPDeps(&deps, cfg, rbac)
+		require.Same(t, rbac, deps.RBAC)
+	})
+
+	t.Run("missing member lookup remains unconfigured and denies", func(t *testing.T) {
+		rbac := newTenantRBAC(nil)
+		require.Nil(t, rbac)
+
+		deps := mcp.ServerDeps{}
+		configureAuthorizationMCPDeps(&deps, cfg, rbac)
+		registryWithoutRepositories := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+		server := mcp.NewServerWithOptions(registryWithoutRepositories, zap.NewNop(), deps)
+		ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+			Subject: "npub-default-operator",
+			PubKey:  callerPubkey,
+			Method:  auth.MethodNIP98,
+		})
+
+		for tool, arguments := range map[string]map[string]interface{}{
+			"bahia_list_builds":         {"service_id": uuid.New().String()},
+			"bahia_get_build":           {"build_id": uuid.New().String()},
+			"bahia_register_build":      {"service_id": uuid.New().String()},
+			"bahia_update_build_status": {"build_id": uuid.New().String(), "status": string(domain.BuildStatusRunning)},
+		} {
+			t.Run(tool, func(t *testing.T) {
+				result, err := server.CallTool(ctx, tool, arguments)
+				require.NoError(t, err)
+				require.True(t, result.IsError)
+				require.Contains(t, result.Content[0].Text, "service authorization is not configured")
+			})
+		}
+	})
+}
+
+type appWiringMemberLookup struct{}
+
+func (appWiringMemberLookup) GetMember(context.Context, uuid.UUID, string) (*domain.OrgMember, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (appWiringMemberLookup) ListByPubkey(context.Context, string) ([]domain.OrgMember, error) {
+	return nil, nil
+}

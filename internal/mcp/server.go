@@ -1857,7 +1857,7 @@ func (s *Server) authorizeToolCall(ctx context.Context, name string) *ToolResult
 	return nil
 }
 
-func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission) *ToolResult {
+func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission, resource string) *ToolResult {
 	principal := auth.GetPrincipal(ctx)
 	if principal != nil && principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
 		return nil
@@ -1866,15 +1866,23 @@ func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.U
 		return errorResult("authentication required")
 	}
 	if s.registry == nil || s.rbac == nil {
-		return errorResult("secret authorization is not configured")
+		return errorResult(fmt.Sprintf("%s authorization is not configured", resource))
 	}
 
 	svc, err := s.registry.GetService(ctx, serviceID)
 	if err != nil || svc == nil || svc.OrgID == uuid.Nil {
-		return errorResult("secret owner not found")
+		if resource == "secret" {
+			return errorResult("secret owner not found")
+		}
+		return errorResult("service not found")
 	}
 	if err := s.rbac.CheckPermission(ctx, principal, svc.OrgID, permission); err != nil {
-		s.logger.Warn("tenant secret access rejected",
+		message := "tenant service access rejected"
+		if resource == "secret" {
+			message = "tenant secret access rejected"
+		}
+		s.logger.Warn(message,
+			zap.String("resource", resource),
 			zap.String("service_id", serviceID.String()),
 			zap.String("org_id", svc.OrgID.String()),
 			zap.String("subject", principal.Subject),
@@ -1883,6 +1891,32 @@ func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.U
 		return errorResult("access denied")
 	}
 	return nil
+}
+
+func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission) *ToolResult {
+	return s.authorizeServicePermission(ctx, serviceID, permission, "secret")
+}
+
+func (s *Server) authorizeBuildPermission(ctx context.Context, buildID uuid.UUID, permission domain.Permission) (*domain.Build, *ToolResult) {
+	principal := auth.GetPrincipal(ctx)
+	if principal == nil || !principal.IsAuthenticated() {
+		return nil, errorResult("authentication required")
+	}
+	systemAdmin := principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin))
+	if s.registry == nil || (!systemAdmin && s.rbac == nil) {
+		return nil, errorResult("service authorization is not configured")
+	}
+	build, err := s.registry.GetBuild(ctx, buildID)
+	if err != nil {
+		return nil, errorResult(fmt.Sprintf("failed to get build: %v", err))
+	}
+	if build == nil {
+		return nil, errorResult("build not found")
+	}
+	if denied := s.authorizeServicePermission(ctx, build.ServiceID, permission, "service"); denied != nil {
+		return nil, denied
+	}
+	return build, nil
 }
 
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
@@ -3139,6 +3173,9 @@ func (s *Server) handleListBuilds(ctx context.Context, args map[string]interface
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
 	}
+	if denied := s.authorizeServicePermission(ctx, serviceID, domain.PermReadServices, "service"); denied != nil {
+		return denied, nil
+	}
 
 	builds, err := s.registry.ListBuilds(ctx, serviceID, limit, 0)
 	if err != nil {
@@ -3160,12 +3197,9 @@ func (s *Server) handleGetBuild(ctx context.Context, args map[string]interface{}
 		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
 	}
 
-	build, err := s.registry.GetBuild(ctx, buildID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get build: %v", err)), nil
-	}
-	if build == nil {
-		return errorResult("build not found"), nil
+	build, denied := s.authorizeBuildPermission(ctx, buildID, domain.PermReadServices)
+	if denied != nil {
+		return denied, nil
 	}
 
 	result := map[string]interface{}{
@@ -3195,6 +3229,9 @@ func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interf
 	serviceID, err := uuid.Parse(serviceIDStr)
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+	if denied := s.authorizeServicePermission(ctx, serviceID, domain.PermWriteServices, "service"); denied != nil {
+		return denied, nil
 	}
 	if err := domain.ValidateGitSHA(gitSHA); err != nil {
 		return errorResult(err.Error()), nil
@@ -3259,6 +3296,9 @@ func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]in
 	status := domain.BuildStatus(statusStr)
 	if err := domain.ValidateBuildStatus(status); err != nil {
 		return errorResult(err.Error()), nil
+	}
+	if _, denied := s.authorizeBuildPermission(ctx, buildID, domain.PermWriteServices); denied != nil {
+		return denied, nil
 	}
 
 	if err := s.registry.UpdateBuildStatus(ctx, buildID, status); err != nil {

@@ -23,6 +23,10 @@ type cliOperatorClient interface {
 	Close()
 	CreateServiceNostr(context.Context, client.CreateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	UpdateServiceNostr(context.Context, client.UpdateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
+	BuildRequestNostr(context.Context, client.BuildRequestNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error)
+	GetBuildNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error)
+	ListBuildsNostr(context.Context, client.BuildListNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildListResult, error)
+	RegisterBuildResultNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	ImportObservedArtifactNostr(context.Context, client.ImportObservedArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error)
 	DNSZoneCreate(context.Context, client.DNSZoneCreateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
@@ -144,6 +148,42 @@ func runServiceUpdateNostr(cmd *cobra.Command, req client.UpdateServiceNostrRequ
 	}
 	defer op.Close()
 	return op.UpdateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service update"))
+}
+
+func runBuildRequestNostr(cmd *cobra.Command, req client.BuildRequestNostrRequest) (*client.BuildCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.BuildRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds request"))
+}
+
+func runBuildGetNostr(cmd *cobra.Command, buildID string) (*client.BuildDetailsResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.GetBuildNostr(cmd.Context(), buildID, operatorStatusCallback(cmd, "builds get"))
+}
+
+func runBuildListNostr(cmd *cobra.Command, req client.BuildListNostrRequest) (*client.BuildListResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.ListBuildsNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds list"))
+}
+
+func runBuildRegisterResultNostr(cmd *cobra.Command, buildID string) (*client.ArtifactCommandResult, error) {
+	op, err := buildCLIOperatorClient(cmd)
+	if err != nil {
+		return nil, err
+	}
+	defer op.Close()
+	return op.RegisterBuildResultNostr(cmd.Context(), buildID, operatorStatusCallback(cmd, "builds register-result"))
 }
 
 func runArtifactImportObservedNostr(cmd *cobra.Command, req client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error) {

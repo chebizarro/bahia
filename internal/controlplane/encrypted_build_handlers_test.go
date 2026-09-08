@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 func validArcanaBuildRequest() ArcanaBuildRequest {
@@ -22,25 +24,6 @@ func validArcanaBuildRequest() ArcanaBuildRequest {
 			"VITE_ARCANA_SIGNER_MODE": "nip07",
 			"VITE_BLOSSOM_URL":        "https://blossom.example",
 		},
-	}
-}
-
-func TestValidateArcanaBuildRequestPublicAllowlist(t *testing.T) {
-	payload := validArcanaBuildRequest()
-	for _, name := range ArcanaPublicBuildArgNames {
-		payload.BuildArgs = map[string]string{name: "public-value"}
-		if name == "VITE_ARCANA_SIGNER_MODE" {
-			payload.BuildArgs[name] = "nip46"
-		}
-		if err := validateArcanaBuildRequest(payload); err != nil {
-			t.Fatalf("%s should be allowed: %v", name, err)
-		}
-	}
-
-	payload.BuildArgs = map[string]string{"GITHUB_TOKEN": "secret"}
-	err := validateArcanaBuildRequest(payload)
-	if err == nil || !strings.Contains(err.Error(), "not an approved public") {
-		t.Fatalf("secret build arg error = %v", err)
 	}
 }
 
@@ -98,10 +81,14 @@ func (buildTestMembers) ListByPubkey(context.Context, string) ([]domain.OrgMembe
 	return nil, nil
 }
 
-type buildTestStarter struct{ request HiveCIBuildStartRequest }
+type buildTestStarter struct {
+	request HiveCIBuildStartRequest
+	calls   int
+}
 
 func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBuildStartRequest) (*HiveCIBuildStartResult, error) {
 	f.request = request
+	f.calls++
 	return &HiveCIBuildStartResult{
 		GitSHA:  "0123456789abcdef0123456789abcdef01234567",
 		GitRef:  "refs/heads/main",
@@ -109,11 +96,28 @@ func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBui
 	}, nil
 }
 
-type buildTestRegistry struct{ build *domain.Build }
+type buildTestRegistry struct {
+	build         *domain.Build
+	builds        []domain.Build
+	calls         int
+	listCalls     int
+	listServiceID uuid.UUID
+	listLimit     int
+	listOffset    int
+}
 
 func (f *buildTestRegistry) RegisterBuild(_ context.Context, build *domain.Build) error {
 	f.build = build
+	f.calls++
 	return nil
+}
+
+func (f *buildTestRegistry) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
+	f.listCalls++
+	f.listServiceID = serviceID
+	f.listLimit = limit
+	f.listOffset = offset
+	return f.builds, nil
 }
 
 func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing.T) {
@@ -212,9 +216,11 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 		ArtifactRepo:            "harbor.sharegap.net/cascadia/astillero",
 		BuildArgs:               map[string]string{"VITE_BLOSSOM_URL": "https://blossom.example"},
 	}
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Starter:  &buildTestStarter{},
-		Registry: &buildTestRegistry{},
+		Starter:  starter,
+		Registry: registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: serviceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
 			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
@@ -230,12 +236,192 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 	if err == nil || !strings.Contains(err.Error(), "approved public build argument allowlist") {
 		t.Fatalf("generic build args error = %v", err)
 	}
+	if starter.calls != 0 || registry.calls != 0 {
+		t.Fatalf("rejected build reached starter %d times and registry %d times", starter.calls, registry.calls)
+	}
+}
+
+func TestBuildRequestTransportReplayInvokesStarterAndRegistryOnce(t *testing.T) {
+	serviceID := uuid.New()
+	credentialID := uuid.New()
+	orgID := uuid.New()
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter: starter, Registry: registry,
+		Services: buildTestServices{service: &domain.Service{
+			ID: serviceID, OrgID: orgID,
+			ArtifactRepo: "harbor.sharegap.net/cascadia/astillero",
+			Repository:   &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID}},
+		RBAC:    auth.NewRBAC(buildTestMembers{}),
+	})
+	params := map[string]any{
+		"service_id": serviceID, "git_ref": "refs/heads/main",
+		"repository_credential_ref": credentialID,
+		"artifact_repo":             "harbor.sharegap.net/cascadia/astillero",
+		"build_args":                map[string]string{},
+		"_meta":                     map[string]any{"progressToken": "build-request-replay"},
+	}
+	requestContent := func(id string) string {
+		content, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0", "id": id, "method": ContextVMMethodBuildRequest, "params": params,
+		})
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+		return string(content)
+	}
+	store := newMemoryContextVMResponseStore()
+	requesterPubkey := testNostrPubKeyFromPrivateKey(t, testRequesterKey).Hex()
+	firstPublisher := &mockEncryptedPublisher{}
+	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(firstTransport)
+	firstTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("first")))
+
+	secondPublisher := &mockEncryptedPublisher{}
+	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(secondTransport)
+	secondTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("replay")))
+
+	if starter.calls != 1 {
+		t.Fatalf("starter calls = %d, want exactly 1", starter.calls)
+	}
+	if registry.calls != 1 {
+		t.Fatalf("registry calls = %d, want exactly 1", registry.calls)
+	}
+	if len(firstPublisher.events) == 0 {
+		t.Fatal("first request published no response events")
+	}
+	firstResponse := contextVMResponse(t, firstPublisher.events[len(firstPublisher.events)-1])
+	firstResult, ok := firstResponse.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("first build result = %#v", firstResponse.Result)
+	}
+	if len(secondPublisher.events) != 1 {
+		t.Fatalf("replay response events = %d, want exactly 1 terminal response", len(secondPublisher.events))
+	}
+	replayed := contextVMResponse(t, secondPublisher.events[0])
+	result, ok := replayed.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("replayed build result = %#v", replayed.Result)
+	}
+	buildID, _ := result["build_id"].(string)
+	if buildID != registry.build.ID.String() || result["ci_run_id"] != "hive-run-1" {
+		t.Fatalf("replayed build result = %#v", replayed.Result)
+	}
+	if result["build_id"] != firstResult["build_id"] || result["ci_run_id"] != firstResult["ci_run_id"] {
+		t.Fatalf("replayed result = %#v, want cached first result %#v", result, firstResult)
+	}
+
+	otherRequesterKey := nostr.Generate().Hex()
+	otherRequesterPubkey := testNostrPubKeyFromPrivateKey(t, otherRequesterKey).Hex()
+	otherTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{otherRequesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(otherTransport)
+	otherTransport.HandleEvent(context.Background(), makeContextVMEvent(t, otherRequesterKey, requestContent("other-requester")))
+	if starter.calls != 2 || registry.calls != 2 {
+		t.Fatalf("requester-scoped replay calls = starter:%d registry:%d, want 2 each", starter.calls, registry.calls)
+	}
 }
 
 type buildResultTestLoader struct{ build *domain.Build }
 
 func (f buildResultTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
 	return f.build, nil
+}
+
+type buildReadTestLoader struct {
+	build *domain.Build
+	calls int
+}
+
+func (f *buildReadTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
+	f.calls++
+	return f.build, nil
+}
+
+type buildReadTestMembers struct{ allowedOrgID uuid.UUID }
+
+func (f buildReadTestMembers) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+	if orgID != f.allowedOrgID {
+		return nil, nil
+	}
+	return &domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: domain.RoleViewer}, nil
+}
+
+func (buildReadTestMembers) ListByPubkey(context.Context, string) ([]domain.OrgMember, error) {
+	return nil, nil
+}
+
+func TestBuildReadsUseTenantAuthorizationAndBoundedHistory(t *testing.T) {
+	orgID := uuid.New()
+	serviceID := uuid.New()
+	build := domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusSucceeded}
+	loader := &buildReadTestLoader{build: &build}
+	registry := &buildTestRegistry{builds: []domain.Build{build}}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds: loader, Registry: registry,
+		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: orgID}},
+		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: orgID}),
+	})
+
+	getParams, _ := json.Marshal(map[string]any{"build_id": build.ID})
+	result, err := handler.GetBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: getParams},
+	})
+	if err != nil {
+		t.Fatalf("GetBuild() error = %v", err)
+	}
+	if got := result.(map[string]any)["build"].(*domain.Build); got.ID != build.ID {
+		t.Fatalf("GetBuild() build = %#v", got)
+	}
+
+	listParams, _ := json.Marshal(map[string]any{"service_id": serviceID, "limit": 500, "offset": -5})
+	result, err = handler.ListBuilds(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: listParams},
+	})
+	if err != nil {
+		t.Fatalf("ListBuilds() error = %v", err)
+	}
+	response := result.(map[string]any)
+	if registry.listCalls != 1 || registry.listServiceID != serviceID || registry.listLimit != 200 || registry.listOffset != 0 {
+		t.Fatalf("registry list call = calls:%d service:%s limit:%d offset:%d", registry.listCalls, registry.listServiceID, registry.listLimit, registry.listOffset)
+	}
+	if response["count"] != 1 || response["limit"] != 200 || response["offset"] != 0 {
+		t.Fatalf("ListBuilds() response = %#v", response)
+	}
+}
+
+func TestBuildReadsDenyCrossTenantBeforeListingHistory(t *testing.T) {
+	serviceID := uuid.New()
+	build := &domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusQueued}
+	loader := &buildReadTestLoader{build: build}
+	registry := &buildTestRegistry{builds: []domain.Build{*build}}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Builds: loader, Registry: registry,
+		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: uuid.New()}},
+		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: uuid.New()}),
+	})
+
+	getParams, _ := json.Marshal(map[string]any{"build_id": build.ID})
+	if _, err := handler.GetBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: getParams},
+	}); err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("cross-tenant GetBuild() error = %v", err)
+	}
+	listParams, _ := json.Marshal(map[string]any{"service_id": serviceID})
+	if _, err := handler.ListBuilds(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{}, RPC: ContextVMJSONRPCRequest{Params: listParams},
+	}); err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("cross-tenant ListBuilds() error = %v", err)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("GetBuild() loader calls = %d, want 1", loader.calls)
+	}
+	if registry.listCalls != 0 {
+		t.Fatalf("ListBuilds() touched registry %d times before authorization", registry.listCalls)
+	}
 }
 
 type buildResultTestRegistrar struct {

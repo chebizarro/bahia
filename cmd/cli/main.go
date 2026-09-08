@@ -80,6 +80,7 @@ func newRootCommand() *cobra.Command {
 		servicesCommands(),
 		environmentsCommands(),
 		stateCommands(),
+		buildsCommands(),
 		artifactsCommands(),
 		dnsCommands(),
 		deployCommands(),
