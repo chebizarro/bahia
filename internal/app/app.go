@@ -1553,7 +1553,7 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled)
-		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
+		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
 			Config:          cfg,

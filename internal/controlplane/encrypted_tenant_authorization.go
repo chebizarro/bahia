@@ -38,6 +38,20 @@ func (a encryptedTenantAuthorizer) authorizeOrg(ctx context.Context, event *nost
 	return a.rbac.CheckPermission(ctx, requestPrincipal(EncryptedRequest{Event: event}), orgID, permission)
 }
 
+func (a encryptedTenantAuthorizer) requesterOrgMemberships(ctx context.Context, event *nostr.Event) ([]domain.OrgMember, error) {
+	if event == nil {
+		return nil, fmt.Errorf("signed ContextVM request event is required")
+	}
+	if a.rbac == nil {
+		return nil, fmt.Errorf("tenant RBAC is not configured")
+	}
+	memberships, err := a.rbac.GetUserOrgs(ctx, requestPrincipal(EncryptedRequest{Event: event}).PubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch requester organizations: %w", err)
+	}
+	return memberships, nil
+}
+
 func (a encryptedTenantAuthorizer) authorizeService(ctx context.Context, event *nostr.Event, serviceID uuid.UUID, permission domain.Permission) (*domain.Service, error) {
 	if serviceID == uuid.Nil {
 		return nil, fmt.Errorf("service_id is required")

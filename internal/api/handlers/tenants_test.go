@@ -199,6 +199,41 @@ func TestAcceptInviteScopesLookupByOrganization(t *testing.T) {
 	}
 }
 
+func TestTenantHandlerNilRBACFailsClosed(t *testing.T) {
+	pubkey := strings.Repeat("a", 64)
+	orgID := uuid.New()
+
+	// RBAC with nil members — simulates starting without a database.
+	brokenRBAC := auth.NewRBAC(nil)
+
+	h := NewTenantHandler(&testOrgRepo{}, &testMemberRepo{}, &testInviteRepo{}, brokenRBAC, nil, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPut, "/orgs/"+orgID.String(),
+		strings.NewReader(`{"display_name":"Updated"}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", orgID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{
+		Method: auth.MethodNIP98, PubKey: pubkey,
+	}))
+	w := httptest.NewRecorder()
+
+	// This must not panic. Must return a 5xx fail-closed response.
+	h.UpdateOrg(w, req)
+
+	if w.Code < 500 || w.Code >= 600 {
+		t.Fatalf("status = %d, want 5xx fail-closed, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp["error"]; !ok {
+		t.Fatalf("response missing error key: %v", resp)
+	}
+}
+
 var _ repository.OrganizationRepository = (*testOrgRepo)(nil)
 var _ repository.OrgMemberRepository = (*testMemberRepo)(nil)
 var _ repository.OrgInviteRepository = (*testInviteRepo)(nil)
