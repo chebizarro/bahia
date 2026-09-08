@@ -89,14 +89,11 @@ type HiveCIBuildStarter interface {
 
 type BuildRegistry interface {
 	RegisterBuild(context.Context, *domain.Build) error
+	ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error)
 }
 
 type BuildResultLoader interface {
 	GetByID(context.Context, uuid.UUID) (*domain.Build, error)
-}
-
-type BuildHistoryLister interface {
-	ListBuilds(context.Context, uuid.UUID, int, int) ([]domain.Build, error)
 }
 
 type BuildResultArtifactRegistrar interface {
@@ -113,7 +110,6 @@ type EncryptedBuildHandlersConfig struct {
 	Starter           HiveCIBuildStarter
 	Registry          BuildRegistry
 	Builds            BuildResultLoader
-	BuildHistory      BuildHistoryLister
 	ArtifactRegistrar BuildResultArtifactRegistrar
 	Services          encryptedServiceLoader
 	Secrets           BuildCredentialReferenceLoader
@@ -124,7 +120,6 @@ type EncryptedBuildHandlers struct {
 	starter           HiveCIBuildStarter
 	registry          BuildRegistry
 	builds            BuildResultLoader
-	buildHistory      BuildHistoryLister
 	artifactRegistrar BuildResultArtifactRegistrar
 	services          encryptedServiceLoader
 	secrets           BuildCredentialReferenceLoader
@@ -134,7 +129,7 @@ type EncryptedBuildHandlers struct {
 func NewEncryptedBuildHandlers(cfg EncryptedBuildHandlersConfig) *EncryptedBuildHandlers {
 	return &EncryptedBuildHandlers{
 		starter: cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
-		buildHistory: cfg.BuildHistory, artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
+		artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
 		secrets: cfg.Secrets, rbac: cfg.RBAC,
 	}
 }
@@ -275,7 +270,7 @@ func (h *EncryptedBuildHandlers) ListBuilds(ctx context.Context, request Context
 	if payload.ServiceID == uuid.Nil {
 		return nil, fmt.Errorf("service_id is required")
 	}
-	if h == nil || h.buildHistory == nil || h.services == nil {
+	if h == nil || h.registry == nil || h.services == nil {
 		return nil, fmt.Errorf("build read handling is not configured")
 	}
 	limit := payload.Limit
@@ -292,9 +287,12 @@ func (h *EncryptedBuildHandlers) ListBuilds(ctx context.Context, request Context
 	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermReadServices); err != nil {
 		return nil, err
 	}
-	builds, err := h.buildHistory.ListBuilds(ctx, payload.ServiceID, limit, offset)
+	builds, err := h.registry.ListBuilds(ctx, payload.ServiceID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list builds: %w", err)
+	}
+	if builds == nil {
+		builds = []domain.Build{}
 	}
 	return map[string]any{
 		"builds": builds,

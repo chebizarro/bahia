@@ -1482,7 +1482,6 @@ func New(cfg *config.Config) (*App, error) {
 			Starter:           hiveCIBuildStarter,
 			Registry:          registry,
 			Builds:            buildRepo,
-			BuildHistory:      registry,
 			ArtifactRegistrar: buildResultRegistrar,
 			Services:          serviceRepo,
 			Secrets:           secretRepo,

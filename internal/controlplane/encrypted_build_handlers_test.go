@@ -97,14 +97,27 @@ func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBui
 }
 
 type buildTestRegistry struct {
-	build *domain.Build
-	calls int
+	build         *domain.Build
+	builds        []domain.Build
+	calls         int
+	listCalls     int
+	listServiceID uuid.UUID
+	listLimit     int
+	listOffset    int
 }
 
 func (f *buildTestRegistry) RegisterBuild(_ context.Context, build *domain.Build) error {
 	f.build = build
 	f.calls++
 	return nil
+}
+
+func (f *buildTestRegistry) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
+	f.listCalls++
+	f.listServiceID = serviceID
+	f.listLimit = limit
+	f.listOffset = offset
+	return f.builds, nil
 }
 
 func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing.T) {
@@ -262,11 +275,13 @@ func TestBuildRequestTransportReplayInvokesStarterAndRegistryOnce(t *testing.T) 
 	}
 	store := newMemoryContextVMResponseStore()
 	requesterPubkey := testNostrPubKeyFromPrivateKey(t, testRequesterKey).Hex()
-	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	firstPublisher := &mockEncryptedPublisher{}
+	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	handler.Register(firstTransport)
 	firstTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("first")))
 
-	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	secondPublisher := &mockEncryptedPublisher{}
+	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	handler.Register(secondTransport)
 	secondTransport.HandleEvent(context.Background(), makeContextVMEvent(t, testRequesterKey, requestContent("replay")))
 
@@ -275,6 +290,38 @@ func TestBuildRequestTransportReplayInvokesStarterAndRegistryOnce(t *testing.T) 
 	}
 	if registry.calls != 1 {
 		t.Fatalf("registry calls = %d, want exactly 1", registry.calls)
+	}
+	if len(firstPublisher.events) == 0 {
+		t.Fatal("first request published no response events")
+	}
+	firstResponse := contextVMResponse(t, firstPublisher.events[len(firstPublisher.events)-1])
+	firstResult, ok := firstResponse.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("first build result = %#v", firstResponse.Result)
+	}
+	if len(secondPublisher.events) != 1 {
+		t.Fatalf("replay response events = %d, want exactly 1 terminal response", len(secondPublisher.events))
+	}
+	replayed := contextVMResponse(t, secondPublisher.events[0])
+	result, ok := replayed.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("replayed build result = %#v", replayed.Result)
+	}
+	buildID, _ := result["build_id"].(string)
+	if buildID != registry.build.ID.String() || result["ci_run_id"] != "hive-run-1" {
+		t.Fatalf("replayed build result = %#v", replayed.Result)
+	}
+	if result["build_id"] != firstResult["build_id"] || result["ci_run_id"] != firstResult["ci_run_id"] {
+		t.Fatalf("replayed result = %#v, want cached first result %#v", result, firstResult)
+	}
+
+	otherRequesterKey := nostr.Generate().Hex()
+	otherRequesterPubkey := testNostrPubKeyFromPrivateKey(t, otherRequesterKey).Hex()
+	otherTransport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), []string{otherRequesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	handler.Register(otherTransport)
+	otherTransport.HandleEvent(context.Background(), makeContextVMEvent(t, otherRequesterKey, requestContent("other-requester")))
+	if starter.calls != 2 || registry.calls != 2 {
+		t.Fatalf("requester-scoped replay calls = starter:%d registry:%d, want 2 each", starter.calls, registry.calls)
 	}
 }
 
@@ -292,22 +339,6 @@ type buildReadTestLoader struct {
 func (f *buildReadTestLoader) GetByID(context.Context, uuid.UUID) (*domain.Build, error) {
 	f.calls++
 	return f.build, nil
-}
-
-type buildReadTestHistory struct {
-	builds    []domain.Build
-	calls     int
-	serviceID uuid.UUID
-	limit     int
-	offset    int
-}
-
-func (f *buildReadTestHistory) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
-	f.calls++
-	f.serviceID = serviceID
-	f.limit = limit
-	f.offset = offset
-	return f.builds, nil
 }
 
 type buildReadTestMembers struct{ allowedOrgID uuid.UUID }
@@ -328,9 +359,9 @@ func TestBuildReadsUseTenantAuthorizationAndBoundedHistory(t *testing.T) {
 	serviceID := uuid.New()
 	build := domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusSucceeded}
 	loader := &buildReadTestLoader{build: &build}
-	history := &buildReadTestHistory{builds: []domain.Build{build}}
+	registry := &buildTestRegistry{builds: []domain.Build{build}}
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Builds: loader, BuildHistory: history,
+		Builds: loader, Registry: registry,
 		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: orgID}},
 		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: orgID}),
 	})
@@ -354,8 +385,8 @@ func TestBuildReadsUseTenantAuthorizationAndBoundedHistory(t *testing.T) {
 		t.Fatalf("ListBuilds() error = %v", err)
 	}
 	response := result.(map[string]any)
-	if history.calls != 1 || history.serviceID != serviceID || history.limit != 200 || history.offset != 0 {
-		t.Fatalf("history call = calls:%d service:%s limit:%d offset:%d", history.calls, history.serviceID, history.limit, history.offset)
+	if registry.listCalls != 1 || registry.listServiceID != serviceID || registry.listLimit != 200 || registry.listOffset != 0 {
+		t.Fatalf("registry list call = calls:%d service:%s limit:%d offset:%d", registry.listCalls, registry.listServiceID, registry.listLimit, registry.listOffset)
 	}
 	if response["count"] != 1 || response["limit"] != 200 || response["offset"] != 0 {
 		t.Fatalf("ListBuilds() response = %#v", response)
@@ -366,9 +397,9 @@ func TestBuildReadsDenyCrossTenantBeforeListingHistory(t *testing.T) {
 	serviceID := uuid.New()
 	build := &domain.Build{ID: uuid.New(), ServiceID: serviceID, Status: domain.BuildStatusQueued}
 	loader := &buildReadTestLoader{build: build}
-	history := &buildReadTestHistory{builds: []domain.Build{*build}}
+	registry := &buildTestRegistry{builds: []domain.Build{*build}}
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Builds: loader, BuildHistory: history,
+		Builds: loader, Registry: registry,
 		Services: buildTestServices{service: &domain.Service{ID: serviceID, OrgID: uuid.New()}},
 		RBAC:     auth.NewRBAC(buildReadTestMembers{allowedOrgID: uuid.New()}),
 	})
@@ -388,8 +419,8 @@ func TestBuildReadsDenyCrossTenantBeforeListingHistory(t *testing.T) {
 	if loader.calls != 1 {
 		t.Fatalf("GetBuild() loader calls = %d, want 1", loader.calls)
 	}
-	if history.calls != 0 {
-		t.Fatalf("ListBuilds() touched history %d times before authorization", history.calls)
+	if registry.listCalls != 0 {
+		t.Fatalf("ListBuilds() touched registry %d times before authorization", registry.listCalls)
 	}
 }
 

@@ -154,7 +154,9 @@ bahia builds list --service <service-uuid>
 bahia builds get --build <build-uuid>
 
 # After the build succeeds, register only its verified HiveCI artifact result.
-bahia builds register-result --build <build-uuid>
+# Use the succeeded build ID shown by builds list; if CI correlation created a
+# separate terminal row, it can differ from the queued ID returned by request.
+bahia builds register-result --build <succeeded-build-uuid>
 
 # Use the returned artifact ID in the normal reviewed deployment flow.
 bahia deployments preview \
@@ -171,6 +173,8 @@ bahia deployments deploy \
 First-time mirror creation and ref resolution can exceed the default 30-second per-attempt result timeout, so `--result-timeout 120s` is recommended for the first request. Reusing the same `--idempotency-key` replays the first completed ContextVM result from Bahia's durable response store instead of starting another CI run or registering another build. An idempotency key identifies one logical request: do not reuse it with different request fields.
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`. Build arguments are public in the signed `ci/workflow-run` request and are accepted only for services with an approved public build-argument allowlist. Astillero does not have that allowlist, so omit `--build-arg` for the workflow above.
+
+If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
 
 `builds register-result` accepts only a successful build. It resolves the immutable artifact from accepted HiveCI evidence and the configured registry; it does not permit an operator-supplied image override. Requesting or registering a build does not deploy it.
 
