@@ -41,7 +41,12 @@ func (r *RBAC) LoadAuthzContext(ctx context.Context, p *Principal, orgID uuid.UU
 		return &AuthzContext{Principal: p, OrgID: orgID}, nil
 	}
 
-	if r.members == nil {
+	// A nil receiver is reachable: newTenantRBAC returns a nil *RBAC when the
+	// org-member lookup is unavailable (no database). Guard the receiver as
+	// well as the lookup so callers fail closed instead of panicking.
+	// CheckOrgAccess and CheckPermission both delegate here, so this is the
+	// single chokepoint for all three.
+	if r == nil || r.members == nil {
 		return nil, fmt.Errorf("authorization not configured: members lookup is unavailable")
 	}
 
