@@ -54,6 +54,10 @@ The signed `build/request` mutation arrives over ContextVM kind `25910`. After B
 
 Set `hiveci.initiator.repo_announcement_addr` and include Bahia's service pubkey in `hiveci.trusted_ci_pubkeys`. The latter remains explicit operator trust: Bahia logs `self_issued_run_untrusted` if a self-issued 5401 would be filtered out, but does not auto-trust its key.
 
+Once the 5401 is accepted, Bahia submits a kind-5100 Loom job through the same control-plane relay pool and service signer. It is addressed to a configured `trusted_loom_worker_pubkeys` entry whose signed kind-10100 advertisement declares workload `ci/workflow-run` and feature `hive_ci_profile`. The request carries `method=ci/workflow-run`, `e` and `run` equal to `ci_run_id`, plus the mirror clone URL, requested ref, and workflow path. It carries no payment tag: this fleet-internal profile uses the worker's requester-pubkey allowlist because Bahia cannot mint Cashu tokens.
+
+Bahia does not implement the Hive-CI per-run ephemeral publisher-key delivery model. It keeps the 5401 `publisher` equal to the service key and accepts the correlated worker-signed 5402 only when that signer is listed in `hiveci.trusted_loom_worker_pubkeys`. Secrets used by any Loom request are NIP-44 encrypted to the selected worker; they are never projected into plaintext tags or command arguments.
+
 Because this interoperable tag-only event has no build-argument field, a private-mirror request with non-empty `build_args` fails before credentials or external side effects. Bahia does not claim unapplied build arguments as provenance.
 
 ### SoulFactory/OpenClaw provisioning

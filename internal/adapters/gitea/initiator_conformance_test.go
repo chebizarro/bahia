@@ -15,6 +15,7 @@ import (
 	"fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
+	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -45,6 +46,15 @@ type capturingPublisher struct {
 	mu     sync.Mutex
 	events []nostr.Event
 	fail   bool
+}
+
+type capturingLoomSubmitter struct {
+	jobs []loomAdapter.JobRequest
+}
+
+func (s *capturingLoomSubmitter) SubmitJob(_ context.Context, job loomAdapter.JobRequest) (string, error) {
+	s.jobs = append(s.jobs, job)
+	return strings.Repeat("ef", 32), nil
 }
 
 func (p *capturingPublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
@@ -91,7 +101,7 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			_, _ = w.Write([]byte(`{"name":"living-library-forge","private":true,"mirror":true,"original_url":"https://github.com/chebizarro/living-library-forge.git"}`))
+			_, _ = w.Write([]byte(`{"name":"living-library-forge","private":true,"mirror":true,"original_url":"https://github.com/chebizarro/living-library-forge.git","clone_url":"https://git.fleet.internal/fleet/living-library-forge.git"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/fleet/living-library-forge/mirror-sync":
 			g.syncCalls++
 			if !g.mirrored {
@@ -126,6 +136,7 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 	credentialRef := uuid.New()
 	resolver := &fakeSecretResolver{known: map[string]string{credentialRef.String(): testGitHubToken}}
 	publisher := &capturingPublisher{}
+	loomSubmitter := &capturingLoomSubmitter{}
 	core, logs := observer.New(zap.DebugLevel)
 	signer := newTestSigner(t)
 	pubkey, err := signer.GetPublicKey(context.Background())
@@ -139,15 +150,17 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 		signer,
 		NewMemoryInitiationStore(),
 		InitiatorConfig{
-			MirrorOwner:          "fleet",
-			WorkflowPath:         ".hive/workflows/arcana-build.yml",
-			RepoAnnouncementAddr: "30617:" + pubkey.Hex() + ":living-library-forge",
-			TrustedCIPubkeys:     []string{pubkey.Hex()},
-			RelayHint:            "wss://relay.fleet.internal",
-			RefResolveAttempts:   2,
-			RefResolveDelay:      1,
+			MirrorOwner:              "fleet",
+			WorkflowPath:             ".hive/workflows/arcana-build.yml",
+			RepoAnnouncementAddr:     "30617:" + pubkey.Hex() + ":living-library-forge",
+			TrustedCIPubkeys:         []string{pubkey.Hex()},
+			TrustedLoomWorkerPubkeys: []string{strings.Repeat("ab", 32)},
+			RelayHint:                "wss://relay.fleet.internal",
+			RefResolveAttempts:       2,
+			RefResolveDelay:          1,
 		},
 		zap.New(core),
+		WithLoomJobSubmitter(loomSubmitter),
 	)
 	return initiator, publisher, resolver, credentialRef, logs
 }
@@ -270,6 +283,25 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if state["status"] != string(domain.BuildStatusQueued) || state["git_sha"] != testCommitSHA {
 		t.Fatalf("unexpected queued evidence: %v", state)
 	}
+	loomSubmitter := initiator.loom.(*capturingLoomSubmitter)
+	if len(loomSubmitter.jobs) != 1 {
+		t.Fatalf("Loom submissions = %d, want 1", len(loomSubmitter.jobs))
+	}
+	job := loomSubmitter.jobs[0]
+	if job.ReferencedEventID != result.CIRunID || job.Params["run"] != result.CIRunID {
+		t.Fatalf("Loom correlation = e:%q run:%q, want 5401 %q", job.ReferencedEventID, job.Params["run"], result.CIRunID)
+	}
+	if job.Params["method"] != "ci/workflow-run" || job.Params["repo"] != "https://git.fleet.internal/fleet/living-library-forge.git" ||
+		job.Params["ref"] != "main" || job.Params["workflow"] != ".hive/workflows/arcana-build.yml" {
+		t.Fatalf("unexpected Hive-CI Loom params: %#v", job.Params)
+	}
+	if len(job.RequiredWorkloads) != 1 || job.RequiredWorkloads[0] != "ci/workflow-run" ||
+		len(job.RequiredFeatures) != 1 || job.RequiredFeatures[0] != "hive_ci_profile" {
+		t.Fatalf("Hive-CI capability requirements = workloads:%v features:%v", job.RequiredWorkloads, job.RequiredFeatures)
+	}
+	if job.PaymentToken != "" {
+		t.Fatalf("fleet-internal Hive-CI job carried payment token")
+	}
 
 	// Secret hygiene: the credential must never appear in any published
 	// Nostr event or any log entry.
@@ -294,6 +326,9 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	}
 	if *replayed != *result {
 		t.Fatalf("replay must return the original result: %+v vs %+v", replayed, result)
+	}
+	if len(loomSubmitter.jobs) != 1 {
+		t.Fatalf("replay duplicated Loom dispatch, got %d submissions", len(loomSubmitter.jobs))
 	}
 	if gitea.migrateCalls != 1 || gitea.syncCalls != 0 {
 		t.Fatalf("replay must not touch the mirror (migrate=%d sync=%d)", gitea.migrateCalls, gitea.syncCalls)
