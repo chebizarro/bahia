@@ -58,7 +58,7 @@ For the canonical control-plane contract, prefer:
 
 ContextVM kind `25910` is the canonical mutation request/response envelope. Bahia method names use `<domain>/<operation>`; examples include `service/deploy-preview`, `service/deploy`, `service/route-attach`, `service/rollback`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, and `security/scan`. `service/route-attach` reuses deployment intent/run/state observables while executing only the routing and HTTPS verification phase for the current deployed artifact.
 
-Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap.
+Sensitive messages should be wrapped with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`). The verified inner ContextVM event pubkey is the authorization subject after unwrap. When Bahia must re-sign a canonical backup command, it first authorizes that verified subject for the bound tenant and `backups:manage` capability, then includes a service-signed `bahia.backup.delegation.v1` record; Bahia's service key remains the publisher and never replaces requester authority.
 
 The maintenance control leg is not optional encryption: Bahia writes conformant NIP-59 kind `1059` for every `maintenance/*` request, and workers answer conformant NIP-59 when the request arrived that way. Rollout is reader-first: workers temporarily dual-read plaintext, legacy direct encryption, and NIP-59 without downgrading wrapped responses; after all Bahia writers are upgraded, worker `require_nip59` is enabled and the legacy maintenance readers are retired.
 

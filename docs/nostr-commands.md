@@ -46,6 +46,16 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
+Encrypted `backup/*` and `approval/backup-restore-approve` mutations authorize
+the verified inner-event pubkey for the bound tenant's `backups:manage`
+capability before Bahia performs its required canonical service signing. The
+service-signed command contains a `bahia.backup.delegation.v1`
+`request_authority` object and matching `delegation`, `requester`,
+`request_event`, `request_kind`, `tenant`, and `capability` tags. The service
+event pubkey is the delegator/publisher, not the requester. Missing RBAC,
+service-self requests, forged/mismatched authority, unauthorized tenants, and
+ambiguous omitted tenant selection are rejected before command publication.
+
 `environment/get-details` accepts `{"id":"<environment-uuid>"}`, authorizes the signed requester for `environments:read` in the owning organization, and returns the environment (including targeting and `updated_at`) plus its explicit or resolved implicit `deployment_units`.
 
 When `environment/update` includes `deployment_units`, the array is the authoritative complete explicit set and `expected_updated_at` is required. Bahia checks that revision under an environment row lock. A stale request returns JSON-RPC code `-32009` without database or canonical registry mutation; callers reread and deliberately remerge before publishing a newly signed retry.

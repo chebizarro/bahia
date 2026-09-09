@@ -215,7 +215,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		definition.ID = uuid.New()
 	}
 	if definition.CreatedBy == "" {
-		definition.CreatedBy = event.PubKey.Hex()
+		definition.CreatedBy = backupRequestActor(event)
 	}
 	repo, err := r.backupRegistry.GetRepository(ctx, definition.RepositoryID)
 	if err != nil || repo == nil {

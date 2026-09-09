@@ -68,7 +68,7 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 		ID:               uuid.New(),
 		BackupRunID:      backupRunID,
 		RestoreTargetRef: req.RestoreTargetRef,
-		RequestedBy:      event.PubKey.Hex(),
+		RequestedBy:      backupRequestActor(event),
 		RequestEventID:   event.ID.Hex(),
 		RequestKind:      int(event.Kind),
 		RequestDTag:      tagValueNostr(event.Tags, "d"),
@@ -136,7 +136,7 @@ func (r *Reactor) handleBackupRestoreApproval(ctx context.Context, event *nostr.
 		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "validation_error", "restore_id must be a UUID")
 		return
 	}
-	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID.Hex(), event.PubKey.Hex(), req.Message, req.ReasonCode, req.Reason)
+	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID.Hex(), backupRequestActor(event), req.Message, req.ReasonCode, req.Reason)
 	if err != nil {
 		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "restore_approval_error", err.Error())
 		return

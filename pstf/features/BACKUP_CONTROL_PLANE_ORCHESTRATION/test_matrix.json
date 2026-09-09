@@ -221,10 +221,30 @@
         "internal/controlplane/contextvm_handlers_registration_test.go validates every backup ContextVM web method publishes the expected canonical command kind and action tag.",
         "web/tests/unit/public-controlplane.test.js validates web helper method strings for backup repository/policy/recipe/definition mutation and run/verification/restore/retention operations."
       ]
+    },
+    {
+      "id": "T-BACKUP-014",
+      "criteria": [
+        "AC-BACKUP-002",
+        "AC-BACKUP-004",
+        "AC-BACKUP-007",
+        "AC-BACKUP-013",
+        "AC-BACKUP-014"
+      ],
+      "type": "security unit/mutation",
+      "target": "internal/controlplane and internal/domain",
+      "description": "Verify all encrypted backup aliases authorize the verified requester before service re-signing and bind a validated delegation record through downstream attribution.",
+      "status": "passed",
+      "evidence": [
+        "internal/controlplane/backup_contextvm_authority_test.go covers authorized success, unauthorized denial despite the service signer, service-key authority substitution, forged caller fields, cross-tenant denial, missing RBAC, insufficient capability, replay, ambiguous tenant selection, signed audit attribution, private-key non-disclosure, and tampered delegation rejection.",
+        "internal/controlplane/contextvm_handlers_registration_test.go covers requester, tenant, and backups:manage delegation tags on every encrypted backup alias.",
+        "internal/domain/tenant_test.go restricts backups:manage to admin and owner roles.",
+        "Mutation proof temporarily bypassed authorizeDelegation: the service-key substitution regression failed because a downstream backup command was emitted; restoring the guard passed."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 13,
+    "criteria_total": 14,
     "criteria_with_tests": 13,
     "verified_criteria": [
       "AC-BACKUP-001",
@@ -239,7 +259,8 @@
       "AC-BACKUP-010",
       "AC-BACKUP-011",
       "AC-BACKUP-012",
-      "AC-BACKUP-013"
+      "AC-BACKUP-013",
+      "AC-BACKUP-014"
     ],
     "known_gaps": []
   },
@@ -251,6 +272,7 @@
     "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
     "BackupDefinition CRUD is covered at the domain and repository layer; Nostr handlers, MCP, UI, scheduler dispatch, and executor placement are intentionally out of scope for bahia-gbo2.",
     "Operational posture projection is recomputed from durable repository pages on backup run, restore, verification, and retention mutations; it does not poll relays or use timeout-based workflow completion.",
-    "Wave-2 web backup mutations use encrypted ContextVM methods that bridge to the existing 38400-38409 canonical command kinds; UI ACKs are command-submission receipts, not terminal workflow completion."
+    "Wave-2 web backup mutations use encrypted ContextVM methods that bridge to the existing 38400-38409 canonical command kinds; UI ACKs are command-submission receipts, not terminal workflow completion.",
+    "Encrypted backup ContextVM aliases require tenant RBAC backups:manage authorization against the verified inner event before service signing; service-signed commands carry a versioned requester/tenant/capability delegation record that downstream backup state uses for actor attribution."
   ]
 }

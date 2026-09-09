@@ -58,7 +58,7 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 		ID:             uuid.New(),
 		RepositoryID:   repositoryID,
 		PolicyID:       &policyID,
-		RequestedBy:    event.PubKey.Hex(),
+		RequestedBy:    backupRequestActor(event),
 		RequestEventID: event.ID.Hex(),
 		RequestKind:    int(event.Kind),
 		RequestDTag:    tagValueNostr(event.Tags, "d"),
