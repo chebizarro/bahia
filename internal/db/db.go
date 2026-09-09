@@ -11,11 +11,13 @@ import (
 	"go.uber.org/zap"
 )
 
+var parsePoolConfig = pgxpool.ParseConfig
+
 // Connect creates a new PostgreSQL connection pool.
 func Connect(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
+	poolCfg, err := parsePoolConfig(cfg.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("parsing database DSN: %w", err)
+		return nil, fmt.Errorf("parsing database DSN: %w", cfg.RedactError(err))
 	}
 
 	poolCfg.MaxConns = int32(cfg.MaxOpenConns)
@@ -24,7 +26,7 @@ func Connect(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgx
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating connection pool: %w", err)
+		return nil, fmt.Errorf("creating connection pool: %w", cfg.RedactError(err))
 	}
 
 	// Verify connectivity.
@@ -33,7 +35,7 @@ func Connect(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgx
 
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("pinging database: %w", err)
+		return nil, fmt.Errorf("pinging database: %w", cfg.RedactError(err))
 	}
 
 	logger.Info("database connection established",

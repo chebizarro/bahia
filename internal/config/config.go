@@ -109,7 +109,7 @@ type WorkerCleanupConfig struct {
 	Mode             string        `koanf:"mode" yaml:"mode"`
 	Cooldown         time.Duration `koanf:"cooldown" yaml:"cooldown"`
 	TargetFreeGB     int           `koanf:"target_free_gb" yaml:"target_free_gb"`
-	PaymentToken     string        `koanf:"payment_token" yaml:"payment_token"`
+	PaymentToken     string        `koanf:"payment_token" yaml:"payment_token" secret:"true"`
 	RequiredSoftware []string      `koanf:"required_software" yaml:"required_software"`
 }
 
@@ -129,7 +129,7 @@ type EdgeRoutingConfig struct {
 	Provider       string                    `koanf:"provider" yaml:"provider"`
 	BackendRef     string                    `koanf:"backend_ref" yaml:"backend_ref"`
 	APIBaseURL     string                    `koanf:"api_base_url" yaml:"api_base_url"`
-	APITokenRef    string                    `koanf:"api_token_ref" yaml:"api_token_ref"`
+	APITokenRef    string                    `koanf:"api_token_ref" yaml:"api_token_ref" secret:"true"`
 	AccountID      string                    `koanf:"account_id" yaml:"account_id"`
 	TunnelID       string                    `koanf:"tunnel_id" yaml:"tunnel_id"`
 	VerifyTimeout  time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout"`
@@ -161,7 +161,7 @@ type InternalRoutingConfig struct {
 	FilePrefix    string   `koanf:"file_prefix" yaml:"file_prefix"`
 	TestCommand   []string `koanf:"test_command" yaml:"test_command"`
 	ReloadCommand []string `koanf:"reload_command" yaml:"reload_command"`
-	CommandEnv    []string `koanf:"command_env" yaml:"command_env"`
+	CommandEnv    []string `koanf:"command_env" yaml:"command_env" secret:"env_values"`
 	CertFile      string   `koanf:"cert_file" yaml:"cert_file"`
 	KeyFile       string   `koanf:"key_file" yaml:"key_file"`
 	Zones         []string `koanf:"zones" yaml:"zones"`
@@ -195,7 +195,7 @@ type DNSBackendConfig struct {
 	EtcdPrefix                string        `koanf:"etcd_prefix"`
 	EtcdDialTimeout           time.Duration `koanf:"etcd_dial_timeout"`
 	PowerDNSAPIURL            string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
-	PowerDNSAPIKey            string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
+	PowerDNSAPIKey            string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key" secret:"true"`
 	PowerDNSServerID          string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
 	PowerDNSAllowInsecureHTTP bool          `koanf:"powerdns_allow_insecure_http" yaml:"powerdns_allow_insecure_http"`
 	DnsmasqConfigDir          string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
@@ -242,17 +242,17 @@ type SoulFactoryConfig struct {
 	ConcordCommunities              []ConcordCommunity     `koanf:"concord_communities" yaml:"concord_communities"`
 	AuthorizedPubkeys               []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
 	SoulFactoryPubkey               string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
-	SignetBunkerURI                 string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey           string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	SignetBunkerURI                 string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
+	SignetClientSecretKey           string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key" secret:"true"`
 	StartupTimeout                  time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout"`
 	LLMBaseURL                      string                 `koanf:"llm_base_url" yaml:"llm_base_url"`
 	LLMModel                        string                 `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey                       string                 `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMAPIKey                       string                 `koanf:"llm_api_key" yaml:"llm_api_key" secret:"true"`
 	LLMTimeout                      time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout"`
 	WorkspaceGiteaURL               string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
 	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
-	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref"`
-	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref"`
+	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref" secret:"true"`
+	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref" secret:"true"`
 	AgentMemoryTaskIDFile           string                 `koanf:"agent_memory_task_id_file" yaml:"agent_memory_task_id_file"`
 	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
 	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled"`
@@ -306,13 +306,13 @@ type AssistantConfig struct {
 	Enabled    bool   `koanf:"enabled" yaml:"enabled"`
 	LLMBaseURL string `koanf:"llm_base_url" yaml:"llm_base_url"`
 	LLMModel   string `koanf:"llm_model" yaml:"llm_model"`
-	LLMAPIKey  string `koanf:"llm_api_key" yaml:"llm_api_key"`
+	LLMAPIKey  string `koanf:"llm_api_key" yaml:"llm_api_key" secret:"true"`
 	// LLMStreaming controls whether the legacy planner uses streaming chat completions.
 	// When false (the default), the legacy planner uses non-streaming chat completions;
 	// some OpenAI-compatible providers do not emit delta.content for streamed
 	// response_format (json_schema) outputs, so streaming is opt-in per provider.
 	LLMStreaming         bool                       `koanf:"llm_streaming" yaml:"llm_streaming"`
-	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
+	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
 	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
 	Agentic              AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
@@ -350,7 +350,7 @@ type AssistantAgenticConfig struct {
 	ToolMode                   string        `koanf:"tool_mode" yaml:"tool_mode"`
 	BaseURL                    string        `koanf:"base_url" yaml:"base_url"`
 	Model                      string        `koanf:"model" yaml:"model"`
-	APIKey                     string        `koanf:"api_key" yaml:"api_key"`
+	APIKey                     string        `koanf:"api_key" yaml:"api_key" secret:"true"`
 	MaxIterations              int           `koanf:"max_iterations" yaml:"max_iterations"`
 	MaxConsecutiveToolFailures int           `koanf:"max_consecutive_tool_failures" yaml:"max_consecutive_tool_failures"`
 	RequestTimeout             time.Duration `koanf:"request_timeout" yaml:"request_timeout"`
@@ -382,7 +382,7 @@ type AssistantExternalMCPServerConfig struct {
 	URL           string                                 `koanf:"url" yaml:"url"`
 	ToolPrefix    string                                 `koanf:"tool_prefix" yaml:"tool_prefix"`
 	Timeout       time.Duration                          `koanf:"timeout" yaml:"timeout"`
-	AuthHeaders   map[string]string                      `koanf:"auth_headers" yaml:"auth_headers"`
+	AuthHeaders   map[string]string                      `koanf:"auth_headers" yaml:"auth_headers" secret:"true"`
 	DefaultEffect domain.AssistantToolEffect             `koanf:"default_effect" yaml:"default_effect"`
 	DefaultRisk   domain.AssistantToolRisk               `koanf:"default_risk" yaml:"default_risk"`
 	ResourceTypes []string                               `koanf:"resource_types" yaml:"resource_types"`
@@ -423,9 +423,9 @@ type PackageBackendConfig struct {
 	PublicBaseURL      string            `koanf:"public_base_url"`
 	Timeout            time.Duration     `koanf:"timeout"`
 	InsecureSkipVerify bool              `koanf:"insecure_skip_verify"`
-	AuthSecretRef      string            `koanf:"auth_secret_ref"`
-	TLSSecretRef       string            `koanf:"tls_secret_ref"`
-	SecretRefs         map[string]string `koanf:"secret_refs"`
+	AuthSecretRef      string            `koanf:"auth_secret_ref" secret:"true"`
+	TLSSecretRef       string            `koanf:"tls_secret_ref" secret:"true"`
+	SecretRefs         map[string]string `koanf:"secret_refs" secret:"true"`
 }
 
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
@@ -444,7 +444,7 @@ type LLMControlplaneConfig struct {
 type LLMGatewayEndpointConfig struct {
 	Type          string        `koanf:"type"`
 	BaseURL       string        `koanf:"base_url"`
-	AuthToken     string        `koanf:"auth_token"`
+	AuthToken     string        `koanf:"auth_token" secret:"true"`
 	AuthTokenFile string        `koanf:"auth_token_file"`
 	Timeout       time.Duration `koanf:"timeout"`
 }
@@ -452,10 +452,10 @@ type LLMGatewayEndpointConfig struct {
 // RegistryAdapterConfig holds OCI registry adapter settings for multi-registry support.
 // When configured, this supersedes HarborConfig for image verification.
 type RegistryAdapterConfig struct {
-	Type     string `koanf:"type"`     // ghcr, dockerhub, harbor, oci (auto-detected from URL if empty)
-	URL      string `koanf:"url"`      // registry base URL (required for harbor/oci)
-	Username string `koanf:"username"` // credentials (optional for public repos)
-	Password string `koanf:"password"` // password or PAT
+	Type     string `koanf:"type"`                   // ghcr, dockerhub, harbor, oci (auto-detected from URL if empty)
+	URL      string `koanf:"url"`                    // registry base URL (required for harbor/oci)
+	Username string `koanf:"username"`               // credentials (optional for public repos)
+	Password string `koanf:"password" secret:"true"` // password or PAT
 }
 
 // ServerConfig holds HTTP server settings.
@@ -472,7 +472,7 @@ type DBConfig struct {
 	Host            string        `koanf:"host"`
 	Port            int           `koanf:"port"`
 	User            string        `koanf:"user"`
-	Password        string        `koanf:"password"`
+	Password        string        `koanf:"password" secret:"true"`
 	Name            string        `koanf:"name"`
 	SSLMode         string        `koanf:"sslmode"`
 	MaxOpenConns    int           `koanf:"max_open_conns"`
@@ -498,7 +498,7 @@ func (c DBConfig) DSN() string {
 type HarborConfig struct {
 	URL      string `koanf:"url"`
 	Username string `koanf:"username"`
-	Password string `koanf:"password"`
+	Password string `koanf:"password" secret:"true"`
 	Insecure bool   `koanf:"insecure"`
 	Enabled  bool   `koanf:"enabled"`
 }
@@ -514,18 +514,18 @@ type LoomConfig struct {
 // events into canonical CAS 30900 state and 4903 audit events.
 type LoomCanonicalProjectionConfig struct {
 	Enabled               bool          `koanf:"enabled" yaml:"enabled"`
-	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri"`
-	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key"`
+	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
+	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key" secret:"true"`
 	SignetConnectTimeout  time.Duration `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
 	AllowRawKeyDev        bool          `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev"`
-	RawPrivateKey         string        `koanf:"raw_private_key" yaml:"raw_private_key"`
+	RawPrivateKey         string        `koanf:"raw_private_key" yaml:"raw_private_key" secret:"true"`
 }
 
 const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey    string   `koanf:"private_key"`
+	PrivateKey    string   `koanf:"private_key" secret:"true"`
 	Relays        []string `koanf:"relays"`
 	ServiceRelays []string `koanf:"service_relays"`
 	BrowserRelays []string `koanf:"browser_relays"`
@@ -596,7 +596,7 @@ type RelaySidecarConfig struct {
 	MirrorExternal       bool          `koanf:"mirror_external"`
 	EventRetention       time.Duration `koanf:"event_retention"`
 	RequestRetention     time.Duration `koanf:"request_retention"`
-	AuthPrivateKey       string        `koanf:"auth_private_key"`
+	AuthPrivateKey       string        `koanf:"auth_private_key" secret:"true"`
 	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys"`
 	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys"`
 	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path"`
@@ -620,7 +620,7 @@ const (
 // websocket AUTH and ContextVM application/control-plane mutation transport.
 type RelayAdministrationConfig struct {
 	Enabled                    bool                        `koanf:"enabled" yaml:"enabled"`
-	AdministratorPrivateKeyRef string                      `koanf:"administrator_private_key_ref" yaml:"administrator_private_key_ref"`
+	AdministratorPrivateKeyRef string                      `koanf:"administrator_private_key_ref" yaml:"administrator_private_key_ref" secret:"true"`
 	Targets                    []RelayAdministrationTarget `koanf:"targets" yaml:"targets"`
 }
 
@@ -796,7 +796,7 @@ type BlossomConfig struct {
 	Timeout      time.Duration `koanf:"timeout"`
 	MaxRetries   int           `koanf:"max_retries"`
 	RetryDelay   time.Duration `koanf:"retry_delay"`
-	PrivateKey   string        `koanf:"private_key"`
+	PrivateKey   string        `koanf:"private_key" secret:"true"`
 	StorageClass string        `koanf:"storage_class"`
 }
 
@@ -815,7 +815,7 @@ type OCIServerConfig struct {
 // OCIServiceAccountConfig defines a basic-auth service account for OCI token/auth flows.
 type OCIServiceAccountConfig struct {
 	Username     string   `koanf:"username"`
-	PasswordHash string   `koanf:"password_hash"`
+	PasswordHash string   `koanf:"password_hash" secret:"true"`
 	Permissions  []string `koanf:"permissions"`   // pull, push
 	RepoPrefixes []string `koanf:"repo_prefixes"` // e.g. cascadia/
 }
@@ -842,7 +842,7 @@ type HiveCIInitiatorConfig struct {
 	// GiteaBaseURL is the fleet Gitea API base URL, e.g. https://git.fleet.internal
 	GiteaBaseURL string `koanf:"gitea_base_url"`
 	// GiteaToken is the fleet Gitea admin token used for mirror provisioning.
-	GiteaToken string `koanf:"gitea_token"`
+	GiteaToken string `koanf:"gitea_token" secret:"true"`
 	// MirrorOwner is the Gitea org/user that owns private mirrors.
 	MirrorOwner string `koanf:"mirror_owner"`
 	// WorkflowPath is the Hive-CI workflow file invoked for builds.
@@ -889,7 +889,7 @@ type CashuConfig struct {
 type QdrantConfig struct {
 	URL                       string        `koanf:"url"`
 	Timeout                   time.Duration `koanf:"timeout"`
-	APIKey                    string        `koanf:"api_key"`
+	APIKey                    string        `koanf:"api_key" secret:"true"`
 	AuthHeaderName            string        `koanf:"auth_header_name"`
 	AllowUnauthenticatedLocal bool          `koanf:"allow_unauthenticated_local"`
 }
@@ -904,7 +904,7 @@ type TelemetryConfig struct {
 // NotificationsConfig holds notification dispatcher settings.
 type NotificationsConfig struct {
 	Enabled    bool     `koanf:"enabled"`
-	WebhookURL string   `koanf:"webhook_url"`
+	WebhookURL string   `koanf:"webhook_url" secret:"url"`
 	NostrDM    bool     `koanf:"nostr_dm"` // send DMs to subscribed pubkeys
 	Kinds      []string `koanf:"kinds"`    // event kinds to notify on (e.g. "deployment.completed")
 }
