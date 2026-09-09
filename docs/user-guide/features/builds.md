@@ -20,6 +20,8 @@ hiveci:
   initiator:
     enabled: true
     source_provider: github
+    mirror_read_username: bahia-mirror-reader
+    mirror_read_credential_ref: 22222222-2222-4222-8222-222222222222
 ```
 
 A private Gitea source requires both its credential-free HTTPS clone URL and a non-secret username. Bahia resolves the protected service credential server-side and supplies it to fleet Gitea as the mirror password; it is not embedded in the URL:
@@ -31,9 +33,13 @@ hiveci:
     source_provider: gitea
     source_clone_url: https://git.example/organization/repository.git
     source_auth_username: bahia-mirror
+    mirror_read_username: bahia-mirror-reader
+    mirror_read_credential_ref: 22222222-2222-4222-8222-222222222222
 ```
 
-`source_clone_url` must be an absolute HTTPS URL without user information, query parameters, or fragments. A `github` source URL must use `github.com`. Missing or unsupported provider configuration, or missing Gitea clone/username configuration, prevents startup and fails closed.
+`source_clone_url` must be an absolute HTTPS URL without user information, query parameters, or fragments. A `github` source URL must use `github.com`. Missing or unsupported provider configuration, missing Gitea clone/username configuration, or an invalid mirror-read secret reference prevents startup and fails closed.
+
+`mirror_read_credential_ref` must name a protected secret owned by the service being built. Provision a distinct fleet Gitea account/token with read-only access to the private mirror namespace; do not reuse the upstream migration credential or the fleet Gitea admin token. Bahia resolves that secret before publishing and gives Loom exactly `HIVE_CI_GIT_USERNAME` and `HIVE_CI_GIT_PASSWORD`, NIP-44 encrypted to the capability-selected worker. The clone URL remains credential-free, and queued evidence records only the opaque secret UUID.
 
 ## Verified artifact registration
 

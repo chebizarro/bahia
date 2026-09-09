@@ -852,6 +852,10 @@ type HiveCIInitiatorConfig struct {
 	SourceCloneURL string `koanf:"source_clone_url"`
 	// SourceAuthUsername is the non-secret username for Gitea password/token auth.
 	SourceAuthUsername string `koanf:"source_auth_username"`
+	// MirrorReadUsername is a dedicated read-only fleet Gitea clone identity.
+	MirrorReadUsername string `koanf:"mirror_read_username"`
+	// MirrorReadCredentialRef is its opaque service-secret UUID.
+	MirrorReadCredentialRef string `koanf:"mirror_read_credential_ref"`
 	// RepoAnnouncementAddr carries the NIP-34 30617 address of the mirror.
 	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
 	// RelayHint is attached to published run-request/evidence events.
@@ -1466,6 +1470,17 @@ func (c *Config) validate() error {
 				return fmt.Errorf("config validation failed: hiveci.initiator.source_clone_url must use github.com when source_provider=github")
 			}
 		}
+		mirrorReadUsername := strings.TrimSpace(c.HiveCI.Initiator.MirrorReadUsername)
+		if mirrorReadUsername == "" || strings.ContainsAny(mirrorReadUsername, "\x00\r\n") {
+			return fmt.Errorf("config validation failed: hiveci.initiator.mirror_read_username is required and must not contain control characters when hiveci.initiator.enabled=true")
+		}
+		mirrorReadCredentialRef := strings.TrimSpace(c.HiveCI.Initiator.MirrorReadCredentialRef)
+		mirrorReadSecretID, err := uuid.Parse(mirrorReadCredentialRef)
+		if err != nil || mirrorReadSecretID == uuid.Nil {
+			return fmt.Errorf("config validation failed: hiveci.initiator.mirror_read_credential_ref must be a non-zero secret UUID")
+		}
+		c.HiveCI.Initiator.MirrorReadUsername = mirrorReadUsername
+		c.HiveCI.Initiator.MirrorReadCredentialRef = mirrorReadSecretID.String()
 		if strings.TrimSpace(c.HiveCI.Initiator.RepoAnnouncementAddr) == "" {
 			return fmt.Errorf("config validation failed: hiveci.initiator.repo_announcement_addr is required when hiveci.initiator.enabled=true")
 		}

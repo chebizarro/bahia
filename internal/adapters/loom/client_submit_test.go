@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
+	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -275,6 +276,10 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 	pool := &submitRelayPool{}
 	logCore, logs := observer.New(zap.DebugLevel)
 	senderPrivateKey := nostrutil.GeneratePrivateKeyHex()
+	senderPubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(senderPrivateKey)
+	if err != nil {
+		t.Fatalf("derive sender pubkey: %v", err)
+	}
 	uncapablePrivateKey := nostrutil.GeneratePrivateKeyHex()
 	uncapablePubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(uncapablePrivateKey)
 	if err != nil {
@@ -305,10 +310,13 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 		submittedWorkers: make(map[string]string), logger: zap.New(logCore),
 	}
 	runEventID := strings.Repeat("12", 32)
-	plaintext := "private-clone-credential"
+	plaintextSecrets := map[string]string{
+		"HIVE_CI_GIT_USERNAME": "bahia-mirror-reader",
+		"HIVE_CI_GIT_PASSWORD": "private-clone-credential",
+	}
 	_, err = client.SubmitJob(context.Background(), JobRequest{
 		ReferencedEventID:    runEventID,
-		Secrets:              map[string]string{"GIT_CREDENTIAL": plaintext},
+		Secrets:              plaintextSecrets,
 		RequiredSoftware:     []string{"git", "act", "docker"},
 		RequiredWorkloads:    []string{"ci/workflow-run"},
 		RequiredFeatures:     []string{"hive_ci_profile"},
@@ -334,22 +342,48 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 		t.Fatalf("fleet-internal Hive-CI request carried a payment tag: %v", event.Tags)
 	}
 	encoded := event.Content + fmt.Sprint(event.Tags)
-	if strings.Contains(encoded, plaintext) {
-		t.Fatalf("plaintext secret leaked into kind-5100 event")
+	for _, plaintext := range plaintextSecrets {
+		if strings.Contains(encoded, plaintext) {
+			t.Fatalf("plaintext secret leaked into kind-5100 event")
+		}
 	}
 	for _, entry := range logs.All() {
 		fields, _ := json.Marshal(entry.ContextMap())
-		if strings.Contains(entry.Message, plaintext) || strings.Contains(string(fields), plaintext) {
-			t.Fatalf("plaintext secret leaked into Loom logs")
+		for _, plaintext := range plaintextSecrets {
+			if strings.Contains(entry.Message, plaintext) || strings.Contains(string(fields), plaintext) {
+				t.Fatalf("plaintext secret leaked into Loom logs")
+			}
 		}
 	}
-	secretFound := false
+
+	encryptedSecrets := make(map[string]string)
 	for _, tag := range event.Tags {
-		if len(tag) == 3 && tag[0] == "secret" && tag[1] == "GIT_CREDENTIAL" && tag[2] != "" && tag[2] != plaintext {
-			secretFound = true
+		if len(tag) == 3 && tag[0] == "secret" {
+			encryptedSecrets[tag[1]] = tag[2]
 		}
 	}
-	if !secretFound {
-		t.Fatalf("encrypted secret tag missing: %v", event.Tags)
+	if len(encryptedSecrets) != len(plaintextSecrets) {
+		t.Fatalf("encrypted secret tags = %v, want exactly %v", encryptedSecrets, plaintextSecrets)
+	}
+	selectedConversationKey, err := nostrutil.NIP44ConversationKey(senderPubkey, capablePrivateKey)
+	if err != nil {
+		t.Fatalf("selected worker conversation key: %v", err)
+	}
+	wrongConversationKey, err := nostrutil.NIP44ConversationKey(senderPubkey, uncapablePrivateKey)
+	if err != nil {
+		t.Fatalf("wrong worker conversation key: %v", err)
+	}
+	for key, want := range plaintextSecrets {
+		ciphertext := encryptedSecrets[key]
+		if ciphertext == "" || ciphertext == want {
+			t.Fatalf("secret %s was not encrypted", key)
+		}
+		got, err := nip44.Decrypt(ciphertext, selectedConversationKey)
+		if err != nil || got != want {
+			t.Fatalf("selected worker cannot decrypt %s: got=%q err=%v", key, got, err)
+		}
+		if wrong, wrongErr := nip44.Decrypt(ciphertext, wrongConversationKey); wrongErr == nil && wrong == want {
+			t.Fatalf("non-selected worker decrypted %s", key)
+		}
 	}
 }

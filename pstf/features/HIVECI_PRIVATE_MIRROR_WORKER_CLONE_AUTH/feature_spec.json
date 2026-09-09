@@ -1,0 +1,14 @@
+{
+  "feature_id": "HIVECI_PRIVATE_MIRROR_WORKER_CLONE_AUTH",
+  "task": "hiveci-private-mirror-worker-clone-auth-20260909",
+  "intent": "Allow a capability-selected neutral Loom worker to clone the private fleet Gitea mirror without ambient credentials or credential-bearing URLs.",
+  "wire_contract": {
+    "kind": 5100,
+    "secret_keys": ["HIVE_CI_GIT_USERNAME", "HIVE_CI_GIT_PASSWORD"],
+    "encryption": "NIP-44 to the selected worker pubkey",
+    "clone_url": "credential-free HTTPS URL on the configured fleet Gitea origin",
+    "payment_tag": false,
+    "ephemeral_publisher_key": false
+  },
+  "credential_model": "A separately configured, service-scoped, read-only fleet Gitea credential is resolved by opaque UUID and is not reused from upstream mirror provisioning or fleet administration."
+}

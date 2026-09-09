@@ -1,0 +1,30 @@
+{
+  "feature_id": "HIVECI_PRIVATE_MIRROR_WORKER_CLONE_AUTH",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Bahia resolves a non-zero, service-owned mirror-read secret reference before publication and fails closed when configuration, resolution, value, or ownership is invalid.",
+      "verification": ["TestValidateHiveCIInitiatorSourceProvider", "TestConformanceMissingMirrorReadCredentialFailsClosedBeforePublish", "TestConformanceMirrorReadCredentialMustBelongToService"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The Loom kind-5100 request contains exactly HIVE_CI_GIT_USERNAME and HIVE_CI_GIT_PASSWORD as NIP-44 ciphertext decryptable by only the capability-selected trusted worker.",
+      "verification": ["TestConformancePrivateMirrorBuildInitiation", "TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The clone URL contains no credential and is pinned to the configured fleet Gitea origin and selected mirror path; no credential plaintext appears in events, logs, or errors.",
+      "verification": ["TestConformanceUntrustedMirrorCloneURLFailsClosed", "TestConformancePrivateMirrorBuildInitiation", "TestConformanceLoomErrorsNeverCarryMirrorReadCredential", "TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Queued evidence records only the opaque mirror-read credential UUID, while exact request replay does not re-resolve, re-encrypt, or duplicate the Loom dispatch.",
+      "verification": ["TestConformancePrivateMirrorBuildInitiation"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Capability-gated trusted-worker selection, no-payment behavior, service-key kind-5401 publication, and trusted worker-signed kind-5402 semantics remain unchanged.",
+      "verification": ["TestConformancePrivateMirrorBuildInitiation", "TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment", "TestBahiaSelfDispatchRoundTripsThroughSubscriberAndLineageReference"]
+    }
+  ]
+}

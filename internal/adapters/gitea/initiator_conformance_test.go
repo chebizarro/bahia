@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,14 @@ import (
 
 const (
 	testRepositoryCredential = "secret_private_repo_credential_1234567890"
+	testMirrorReadUsername   = "bahia-mirror-reader"
+	testMirrorReadCredential = "secret_fleet_mirror_read_credential_0987654321"
 	testCommitSHA            = "0123456789abcdef0123456789abcdef01234567"
+)
+
+var (
+	testServiceID               = uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	testMirrorReadCredentialRef = uuid.MustParse("22222222-2222-4222-8222-222222222222")
 )
 
 type fakeSecretResolver struct {
@@ -39,7 +47,11 @@ func (f *fakeSecretResolver) ResolveSecretWithAudit(_ context.Context, ref strin
 	if !ok {
 		return "", domain.SecretAccessManifest{}, fmt.Errorf("secret %s not found", ref)
 	}
-	return value, domain.SecretAccessManifest{}, nil
+	id, err := uuid.Parse(ref)
+	if err != nil {
+		return "", domain.SecretAccessManifest{}, fmt.Errorf("invalid secret reference")
+	}
+	return value, domain.SecretAccessManifest{SecretID: id, ServiceID: testServiceID}, nil
 }
 
 type capturingPublisher struct {
@@ -50,10 +62,14 @@ type capturingPublisher struct {
 
 type capturingLoomSubmitter struct {
 	jobs []loomAdapter.JobRequest
+	err  error
 }
 
 func (s *capturingLoomSubmitter) SubmitJob(_ context.Context, job loomAdapter.JobRequest) (string, error) {
 	s.jobs = append(s.jobs, job)
+	if s.err != nil {
+		return "", s.err
+	}
 	return strings.Repeat("ef", 32), nil
 }
 
@@ -78,6 +94,7 @@ type fakeGitea struct {
 	sourceCloneURL     string
 	sourceService      string
 	sourceAuthUsername string
+	mirrorCloneURL     string
 	migrationRequest   map[string]any
 }
 
@@ -125,9 +142,13 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 			if originalURL == "" {
 				originalURL = "https://github.com/chebizarro/living-library-forge.git"
 			}
+			mirrorCloneURL := g.mirrorCloneURL
+			if mirrorCloneURL == "" {
+				mirrorCloneURL = "https://git.fleet.internal/fleet/living-library-forge.git"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"name": "living-library-forge", "private": true, "mirror": true, "original_url": originalURL,
-				"clone_url": "https://git.fleet.internal/fleet/living-library-forge.git",
+				"clone_url": mirrorCloneURL,
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/fleet/living-library-forge/mirror-sync":
 			g.syncCalls++
@@ -161,7 +182,10 @@ func newTestSigner(t *testing.T) nostr.Signer {
 func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator, *capturingPublisher, *fakeSecretResolver, uuid.UUID, *observer.ObservedLogs) {
 	t.Helper()
 	credentialRef := uuid.New()
-	resolver := &fakeSecretResolver{known: map[string]string{credentialRef.String(): testRepositoryCredential}}
+	resolver := &fakeSecretResolver{known: map[string]string{
+		credentialRef.String():               testRepositoryCredential,
+		testMirrorReadCredentialRef.String(): testMirrorReadCredential,
+	}}
 	publisher := &capturingPublisher{}
 	loomSubmitter := &capturingLoomSubmitter{}
 	core, logs := observer.New(zap.DebugLevel)
@@ -177,9 +201,12 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 		signer,
 		NewMemoryInitiationStore(),
 		InitiatorConfig{
+			GiteaBaseURL:             "https://git.fleet.internal",
 			MirrorOwner:              "fleet",
 			WorkflowPath:             ".hive/workflows/arcana-build.yml",
 			SourceProvider:           SourceProviderGitHub,
+			MirrorReadUsername:       testMirrorReadUsername,
+			MirrorReadCredentialRef:  testMirrorReadCredentialRef.String(),
 			RepoAnnouncementAddr:     "30617:" + pubkey.Hex() + ":living-library-forge",
 			TrustedCIPubkeys:         []string{pubkey.Hex()},
 			TrustedLoomWorkerPubkeys: []string{strings.Repeat("ab", 32)},
@@ -196,7 +223,7 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 func arcanaStartRequest(credentialRef uuid.UUID) controlplane.HiveCIBuildStartRequest {
 	return controlplane.HiveCIBuildStartRequest{
 		BuildID:              uuid.New(),
-		ServiceID:            uuid.New(),
+		ServiceID:            testServiceID,
 		RepositoryCoordinate: controlplane.ArcanaRepositoryCoordinate,
 		GitRef:               "main",
 		CredentialRef:        credentialRef,
@@ -311,6 +338,9 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if state["status"] != string(domain.BuildStatusQueued) || state["git_sha"] != testCommitSHA {
 		t.Fatalf("unexpected queued evidence: %v", state)
 	}
+	if state["mirror_read_credential_ref"] != testMirrorReadCredentialRef.String() {
+		t.Fatalf("queued evidence mirror credential ref = %v, want opaque ref %s", state["mirror_read_credential_ref"], testMirrorReadCredentialRef)
+	}
 	loomSubmitter := initiator.loom.(*capturingLoomSubmitter)
 	if len(loomSubmitter.jobs) != 1 {
 		t.Fatalf("Loom submissions = %d, want 1", len(loomSubmitter.jobs))
@@ -322,6 +352,14 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if job.Params["method"] != "ci/workflow-run" || job.Params["repo"] != "https://git.fleet.internal/fleet/living-library-forge.git" ||
 		job.Params["ref"] != "main" || job.Params["workflow"] != ".hive/workflows/arcana-build.yml" {
 		t.Fatalf("unexpected Hive-CI Loom params: %#v", job.Params)
+	}
+	if len(job.Secrets) != 2 || job.Secrets[hiveCIGitUsernameSecretKey] != testMirrorReadUsername ||
+		job.Secrets[hiveCIGitPasswordSecretKey] != testMirrorReadCredential {
+		t.Fatalf("Hive-CI clone secrets = %#v, want exactly username/password contract", job.Secrets)
+	}
+	cloneURL, err := url.Parse(job.Params["repo"])
+	if err != nil || cloneURL.User != nil || strings.Contains(job.Params["repo"], testMirrorReadCredential) || strings.Contains(job.Params["repo"], testMirrorReadUsername) {
+		t.Fatalf("Loom clone URL is not credential-free: %q", job.Params["repo"])
 	}
 	if len(job.RequiredWorkloads) != 1 || job.RequiredWorkloads[0] != "ci/workflow-run" ||
 		len(job.RequiredFeatures) != 1 || job.RequiredFeatures[0] != "hive_ci_profile" {
@@ -335,14 +373,18 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	// Nostr event or any log entry.
 	for _, ev := range publisher.events {
 		blob, _ := json.Marshal(ev)
-		if strings.Contains(string(blob), testRepositoryCredential) {
-			t.Fatalf("credential leaked into published Nostr event")
+		for _, secret := range []string{testRepositoryCredential, testMirrorReadCredential, testMirrorReadUsername} {
+			if strings.Contains(string(blob), secret) {
+				t.Fatalf("credential plaintext leaked into published Nostr event")
+			}
 		}
 	}
 	for _, entry := range logs.All() {
 		line, _ := json.Marshal(entry.ContextMap())
-		if strings.Contains(entry.Message, testRepositoryCredential) || strings.Contains(string(line), testRepositoryCredential) {
-			t.Fatalf("credential leaked into logs")
+		for _, secret := range []string{testRepositoryCredential, testMirrorReadCredential} {
+			if strings.Contains(entry.Message, secret) || strings.Contains(string(line), secret) {
+				t.Fatalf("credential leaked into logs")
+			}
 		}
 	}
 
@@ -363,6 +405,71 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	}
 	if len(publisher.events) != 2 {
 		t.Fatalf("replay must not publish new events, got %d", len(publisher.events))
+	}
+}
+
+func TestConformanceMissingMirrorReadCredentialFailsClosedBeforePublish(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
+	delete(resolver.known, testMirrorReadCredentialRef.String())
+	_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+	if err == nil || !strings.Contains(err.Error(), "mirror-read credential reference") {
+		t.Fatalf("missing mirror-read credential error = %v", err)
+	}
+	if strings.Contains(err.Error(), testMirrorReadCredential) || gitea.migrateCalls != 0 || gitea.syncCalls != 0 || len(publisher.events) != 0 {
+		t.Fatalf("missing mirror-read credential did not fail before side effects: migrate=%d sync=%d events=%d err=%v", gitea.migrateCalls, gitea.syncCalls, len(publisher.events), err)
+	}
+	if got := len(initiator.loom.(*capturingLoomSubmitter).jobs); got != 0 {
+		t.Fatalf("missing mirror-read credential dispatched %d Loom jobs", got)
+	}
+}
+
+func TestConformanceUntrustedMirrorCloneURLFailsClosed(t *testing.T) {
+	for _, cloneURL := range []string{
+		"https://user:password@git.fleet.internal/fleet/living-library-forge.git",
+		"https://attacker.example/fleet/living-library-forge.git",
+		"https://git.fleet.internal/fleet/other.git",
+	} {
+		t.Run(cloneURL, func(t *testing.T) {
+			gitea := &fakeGitea{mirrorCloneURL: cloneURL}
+			server := httptest.NewServer(gitea.handler(t))
+			defer server.Close()
+
+			initiator, publisher, _, credentialRef, _ := newConformanceInitiator(t, server)
+			_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+			if err == nil || (!strings.Contains(err.Error(), "credential-free HTTPS") && !strings.Contains(err.Error(), "trusted Gitea origin") && !strings.Contains(err.Error(), "selected mirror")) {
+				t.Fatalf("untrusted mirror clone URL error = %v", err)
+			}
+			if strings.Contains(err.Error(), "password") {
+				t.Fatalf("credential-bearing mirror URL leaked through error: %v", err)
+			}
+			if got := len(initiator.loom.(*capturingLoomSubmitter).jobs); got != 0 {
+				t.Fatalf("untrusted clone URL dispatched %d Loom jobs", got)
+			}
+			if len(publisher.events) != 1 {
+				t.Fatalf("expected accepted 5401 only and no Loom/evidence publish, got %d events", len(publisher.events))
+			}
+		})
+	}
+}
+
+func TestConformanceMirrorReadCredentialMustBelongToService(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, publisher, _, credentialRef, _ := newConformanceInitiator(t, server)
+	req := arcanaStartRequest(credentialRef)
+	req.ServiceID = uuid.New()
+	_, err := initiator.StartHiveCIBuild(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "must belong to the selected service") {
+		t.Fatalf("cross-service mirror-read credential error = %v", err)
+	}
+	if strings.Contains(err.Error(), testMirrorReadCredential) || gitea.migrateCalls != 0 || len(publisher.events) != 0 {
+		t.Fatalf("cross-service mirror credential escaped fail-closed boundary: events=%d err=%v", len(publisher.events), err)
 	}
 }
 
@@ -444,6 +551,22 @@ func TestConformanceErrorsNeverCarryCredential(t *testing.T) {
 // migration and supplies the resolved credential as auth_password alongside
 // the configured username. The stored original_url remains the exact clean
 // clone_addr, so post-create validation still succeeds without a credential.
+func TestConformanceLoomErrorsNeverCarryMirrorReadCredential(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, _, _, credentialRef, _ := newConformanceInitiator(t, server)
+	initiator.loom.(*capturingLoomSubmitter).err = fmt.Errorf("worker rejected credential %s", testMirrorReadCredential)
+	_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+	if err == nil {
+		t.Fatal("expected Loom submission failure")
+	}
+	if strings.Contains(err.Error(), testMirrorReadCredential) {
+		t.Fatalf("mirror-read credential leaked into error: %v", err)
+	}
+}
+
 func TestConformancePrivateGiteaMirrorBuildInitiation(t *testing.T) {
 	const (
 		cloneURL = "https://git.sharegap.net/chebizar-coinos.io-336e0b4c237a0c000c1e/astillero.git"

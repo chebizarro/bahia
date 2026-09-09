@@ -6,7 +6,7 @@ Bahia's supported control-plane contract is now sidecar-first and Nostr-native. 
 2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
 3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
-Fleet-local CI interoperability is a deliberate exception to the generic ContextVM mutation model: an inbound `build/request` is kind `25910`, while the accepted durable CI-bus workflow run/result facts remain Hive-CI kinds `5401`/`5402`. Bahia self-dispatch publishes 5401 with the grasp-gitea tag-only contract and returns that event id as `ci_run_id`; it then submits a kind-5100 Loom job whose `e` tag references that 5401. The job targets a trusted worker advertising `ci/workflow-run` plus `hive_ci_profile`, carries no payment tag, and does not use ephemeral 25910 as the durable CI bus.
+Fleet-local CI interoperability is a deliberate exception to the generic ContextVM mutation model: an inbound `build/request` is kind `25910`, while the accepted durable CI-bus workflow run/result facts remain Hive-CI kinds `5401`/`5402`. Bahia self-dispatch publishes 5401 with the grasp-gitea tag-only contract and returns that event id as `ci_run_id`; it then submits a kind-5100 Loom job whose `e` tag references that 5401. The job targets a trusted worker advertising `ci/workflow-run` plus `hive_ci_profile`, keeps the mirror URL credential-free, and carries a dedicated read-only mirror username/password only in the existing `secret` tags after NIP-44 encryption to that selected worker. It carries no payment tag and does not use ephemeral 25910 as the durable CI bus.
 
 Removed legacy surfaces:
 

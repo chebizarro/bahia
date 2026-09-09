@@ -1,0 +1,25 @@
+{
+  "feature_id": "HIVECI_PRIVATE_MIRROR_WORKER_CLONE_AUTH",
+  "tests": [
+    {
+      "name": "Bahia initiator clone-auth conformance",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/adapters/gitea -count=1",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"]
+    },
+    {
+      "name": "Selected-worker NIP-44 and wire shape",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/adapters/loom -run TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment -count=1",
+      "criteria": ["AC2", "AC3", "AC5"]
+    },
+    {
+      "name": "Initiator configuration validation",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/config -run TestValidateHiveCIInitiatorSourceProvider -count=1",
+      "criteria": ["AC1"]
+    },
+    {
+      "name": "Repository-wide Go gates",
+      "command": "GOFLAGS=-buildvcs=false go build ./... && GOFLAGS=-buildvcs=false go test ./...",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"]
+    }
+  ]
+}

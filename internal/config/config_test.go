@@ -131,13 +131,15 @@ func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 	validConfig := func() *Config {
 		cfg := Defaults()
 		cfg.HiveCI.Initiator = HiveCIInitiatorConfig{
-			Enabled:              true,
-			GiteaBaseURL:         "https://fleet-gitea.example",
-			GiteaToken:           "fleet-admin-token",
-			MirrorOwner:          "fleet",
-			WorkflowPath:         ".gitea/workflows/release.yml",
-			SourceProvider:       "github",
-			RepoAnnouncementAddr: "30617:" + strings.Repeat("a", 64) + ":repo",
+			Enabled:                 true,
+			GiteaBaseURL:            "https://fleet-gitea.example",
+			GiteaToken:              "fleet-admin-token",
+			MirrorOwner:             "fleet",
+			WorkflowPath:            ".gitea/workflows/release.yml",
+			SourceProvider:          "github",
+			MirrorReadUsername:      "bahia-mirror-reader",
+			MirrorReadCredentialRef: "22222222-2222-4222-8222-222222222222",
+			RepoAnnouncementAddr:    "30617:" + strings.Repeat("a", 64) + ":repo",
 		}
 		return cfg
 	}
@@ -174,6 +176,11 @@ func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 			cfg.HiveCI.Initiator.SourceCloneURL = "https://git.example/private/repo.git"
 		}, wantMessage: "source_auth_username"},
 		{name: "GitHub username ambiguity", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceAuthUsername = "unused" }, wantMessage: "source_auth_username"},
+		{name: "missing mirror-read username", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.MirrorReadUsername = "" }, wantMessage: "mirror_read_username"},
+		{name: "missing mirror-read credential ref", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.MirrorReadCredentialRef = "" }, wantMessage: "mirror_read_credential_ref"},
+		{name: "invalid mirror-read credential ref", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.MirrorReadCredentialRef = "not-a-uuid" }, wantMessage: "mirror_read_credential_ref"},
+		{name: "zero mirror-read credential ref", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.MirrorReadCredentialRef = uuid.Nil.String() }, wantMessage: "mirror_read_credential_ref"},
+		{name: "control character in mirror-read username", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.MirrorReadUsername = "reader\nattacker" }, wantMessage: "mirror_read_username"},
 		{name: "non-HTTPS clone URL", mutate: func(cfg *Config) { cfg.HiveCI.Initiator.SourceCloneURL = "http://github.example/private/repo.git" }, wantMessage: "absolute https URL"},
 		{name: "credential-bearing clone URL", mutate: func(cfg *Config) {
 			cfg.HiveCI.Initiator.SourceCloneURL = "https://user:secret@git.example/private/repo.git"
@@ -199,12 +206,14 @@ func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 func TestHiveCIInitiatorRequiresRepositoryAnnouncementAddress(t *testing.T) {
 	cfg := Defaults()
 	cfg.HiveCI.Initiator = HiveCIInitiatorConfig{
-		Enabled:        true,
-		GiteaBaseURL:   "https://git.fleet.internal",
-		GiteaToken:     "opaque-configured-token",
-		MirrorOwner:    "fleet",
-		WorkflowPath:   ".hive/workflows/build.yml",
-		SourceProvider: "github",
+		Enabled:                 true,
+		GiteaBaseURL:            "https://git.fleet.internal",
+		GiteaToken:              "opaque-configured-token",
+		MirrorOwner:             "fleet",
+		WorkflowPath:            ".hive/workflows/build.yml",
+		SourceProvider:          "github",
+		MirrorReadUsername:      "bahia-mirror-reader",
+		MirrorReadCredentialRef: "22222222-2222-4222-8222-222222222222",
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "hiveci.initiator.repo_announcement_addr") {
 		t.Fatalf("missing repository announcement address error = %v", err)

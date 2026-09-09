@@ -11,6 +11,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	"github.com/google/uuid"
 	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -90,6 +91,9 @@ func (s *MemoryInitiationStore) Put(_ context.Context, record InitiationRecord) 
 
 // InitiatorConfig configures the fleet Gitea mirror / Hive-CI initiator.
 type InitiatorConfig struct {
+	// GiteaBaseURL is the trusted fleet Gitea origin. Mirror clone credentials
+	// may be sent only to this origin.
+	GiteaBaseURL string
 	// MirrorOwner is the fleet Gitea organization or user owning private mirrors.
 	MirrorOwner string
 	// WorkflowPath is the Hive-CI workflow invoked for Arcana builds.
@@ -103,6 +107,14 @@ type InitiatorConfig struct {
 	// SourceAuthUsername is the non-secret username paired with the resolved
 	// credential for a private Gitea source.
 	SourceAuthUsername string
+	// MirrorReadUsername is the non-secret fleet Gitea username used only to
+	// clone the private mirror. Operators must grant this identity read-only
+	// access to the configured mirror namespace.
+	MirrorReadUsername string
+	// MirrorReadCredentialRef is the opaque service-secret UUID containing the
+	// read-only fleet Gitea password/token. It is resolved only when dispatching
+	// to Loom and never placed in a plaintext event tag.
+	MirrorReadCredentialRef string
 	// RepoAnnouncementAddr carries the NIP-34 kind-30617 address
 	// ("30617:<pubkey>:<repo-id>") of the fleet mirror announcement for
 	// canonical run-request correlation.
@@ -125,6 +137,9 @@ type InitiatorConfig struct {
 const (
 	SourceProviderGitHub = "github"
 	SourceProviderGitea  = "gitea"
+
+	hiveCIGitUsernameSecretKey = "HIVE_CI_GIT_USERNAME"
+	hiveCIGitPasswordSecretKey = "HIVE_CI_GIT_PASSWORD"
 )
 
 type sourceMirrorConfig struct {
@@ -234,9 +249,42 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return nil, err
 	}
 
-	// Resolve the opaque credential reference server-side with audit. The
-	// plaintext credential stays in memory and is passed only inside the HTTPS
-	// body of the Gitea migrate call, in the provider-specific auth field.
+	// Resolve the dedicated fleet-mirror read credential before any event is
+	// published. Exact replay returned above never re-resolves or re-encrypts it.
+	// The manifest check preserves the service-scoped secret boundary even
+	// though the opaque reference is supplied by trusted server configuration.
+	mirrorReadUsername := strings.TrimSpace(i.cfg.MirrorReadUsername)
+	mirrorReadCredentialRef := strings.TrimSpace(i.cfg.MirrorReadCredentialRef)
+	mirrorReadPassword := ""
+	if i.loom != nil {
+		if mirrorReadUsername == "" || strings.ContainsAny(mirrorReadUsername, "\x00\r\n") || mirrorReadCredentialRef == "" {
+			return nil, fmt.Errorf("Loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
+		}
+		mirrorReadSecretID, parseErr := uuid.Parse(mirrorReadCredentialRef)
+		if parseErr != nil || mirrorReadSecretID == uuid.Nil {
+			return nil, fmt.Errorf("Loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
+		}
+		var manifest domain.SecretAccessManifest
+		mirrorReadPassword, manifest, err = i.secrets.ResolveSecretWithAudit(ctx, mirrorReadCredentialRef, domain.SecretResolveOptions{
+			Operation: domain.SecretAccessOperationResolve,
+			Actor:     req.RequesterPubkey,
+			Reason:    "fleet gitea private-mirror read for Loom Hive-CI dispatch",
+			RequestID: idempotencyKey,
+		})
+		if err != nil {
+			return nil, scrubSecrets(fmt.Errorf("resolve mirror-read credential reference: %w", err), mirrorReadPassword)
+		}
+		if strings.TrimSpace(mirrorReadPassword) == "" {
+			return nil, fmt.Errorf("mirror-read credential reference resolved to an empty credential")
+		}
+		if manifest.SecretID != mirrorReadSecretID || manifest.ServiceID != req.ServiceID {
+			return nil, scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), mirrorReadPassword)
+		}
+	}
+
+	// Resolve the opaque upstream credential reference server-side with audit.
+	// The plaintext credential stays in memory and is passed only inside the
+	// HTTPS body of the Gitea migrate call, in the provider-specific auth field.
 	token, _, err := i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), domain.SecretResolveOptions{
 		Operation: domain.SecretAccessOperationResolve,
 		Actor:     req.RequesterPubkey,
@@ -246,7 +294,7 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	if err != nil {
 		// The resolver can surface errors after producing a value (e.g. audit
 		// persistence failures); scrub defensively.
-		return nil, scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token)
+		return nil, scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token, mirrorReadPassword)
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("repository credential reference resolved to an empty credential")
@@ -254,7 +302,7 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 
 	repoInfo, err := i.client.GetRepo(ctx, i.cfg.MirrorOwner, name)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("check fleet mirror: %w", err), token)
+		return nil, scrubSecrets(fmt.Errorf("check fleet mirror: %w", err), token, mirrorReadPassword)
 	}
 	if repoInfo == nil {
 		migration := MigrateMirrorRequest{
@@ -267,13 +315,13 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 			migration.AuthToken = token
 		}
 		if err := i.client.MigrateMirror(ctx, migration); err != nil {
-			return nil, scrubSecrets(fmt.Errorf("create fleet private mirror: %w", err), token)
+			return nil, scrubSecrets(fmt.Errorf("create fleet private mirror: %w", err), token, mirrorReadPassword)
 		}
 		// Re-fetch to validate the mirror we (or a concurrent initiation)
 		// created before trusting it.
 		repoInfo, err = i.client.GetRepo(ctx, i.cfg.MirrorOwner, name)
 		if err != nil || repoInfo == nil {
-			return nil, scrubSecrets(fmt.Errorf("fleet private mirror is unavailable after migration"), token)
+			return nil, scrubSecrets(fmt.Errorf("fleet private mirror is unavailable after migration"), token, mirrorReadPassword)
 		}
 		if err := i.validateMirror(repoInfo, source.cloneURL); err != nil {
 			return nil, err
@@ -285,32 +333,32 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 			return nil, err
 		}
 		if err := i.client.SyncMirror(ctx, i.cfg.MirrorOwner, name); err != nil {
-			return nil, scrubSecrets(fmt.Errorf("sync fleet private mirror: %w", err), token)
+			return nil, scrubSecrets(fmt.Errorf("sync fleet private mirror: %w", err), token, mirrorReadPassword)
 		}
 	}
 
 	sha, err := i.resolveRefWithRetry(ctx, name, gitRef)
 	if err != nil {
-		return nil, scrubSecrets(err, token)
+		return nil, scrubSecrets(err, token, mirrorReadPassword)
 	}
 
 	runRequestID, runEventID, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("publish canonical ci/workflow-run request: %w", err), token)
+		return nil, scrubSecrets(fmt.Errorf("publish canonical ci/workflow-run request: %w", err), token, mirrorReadPassword)
 	}
 
 	result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: runEventID}
 	loomJobID := ""
 	if i.loom != nil {
-		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, gitRef, runEventID)
+		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, mirrorReadUsername, mirrorReadPassword)
 		if err != nil {
-			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token)
+			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token, mirrorReadPassword)
 		}
 	}
 
 	evidenceEventID, err := i.publishQueuedEvidence(ctx, req, name, result, runRequestID, loomJobID)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", err), token)
+		return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", err), token, mirrorReadPassword)
 	}
 
 	if err := i.store.Put(ctx, InitiationRecord{
@@ -367,7 +415,7 @@ func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, 
 	return source, nil
 }
 
-func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, ref, runEventID string) (string, error) {
+func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, mirrorReadUsername, mirrorReadPassword string) (string, error) {
 	if len(i.cfg.TrustedLoomWorkerPubkeys) == 0 {
 		return "", fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
 	}
@@ -378,6 +426,9 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 	if repository == "" {
 		return "", fmt.Errorf("fleet mirror clone URL is unavailable")
 	}
+	if err := validateFleetMirrorCloneURL(repository, i.cfg.GiteaBaseURL, i.cfg.MirrorOwner, name); err != nil {
+		return "", err
+	}
 	return i.loom.SubmitJob(ctx, loomAdapter.JobRequest{
 		ID:                   runEventID,
 		ReferencedEventID:    runEventID,
@@ -386,6 +437,10 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 		RequiredWorkloads:    []string{"ci/workflow-run"},
 		RequiredFeatures:     []string{"hive_ci_profile"},
 		AllowedWorkerPubkeys: append([]string(nil), i.cfg.TrustedLoomWorkerPubkeys...),
+		Secrets: map[string]string{
+			hiveCIGitUsernameSecretKey: mirrorReadUsername,
+			hiveCIGitPasswordSecretKey: mirrorReadPassword,
+		},
 		Params: map[string]string{
 			"method":   "ci/workflow-run",
 			"run":      runEventID,
@@ -396,6 +451,25 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 			"event":    "push",
 		},
 	})
+}
+
+func validateFleetMirrorCloneURL(raw, giteaBaseURL, owner, name string) error {
+	if err := validateSourceCloneURL(raw); err != nil {
+		return fmt.Errorf("fleet mirror clone URL must be credential-free HTTPS: %w", err)
+	}
+	cloneURL, _ := url.Parse(strings.TrimSpace(raw))
+	trustedOrigin, err := url.Parse(strings.TrimSpace(giteaBaseURL))
+	if err != nil || trustedOrigin.Scheme != "https" || trustedOrigin.Host == "" || trustedOrigin.User != nil {
+		return fmt.Errorf("trusted fleet Gitea origin is invalid")
+	}
+	if !strings.EqualFold(cloneURL.Scheme, trustedOrigin.Scheme) || !strings.EqualFold(cloneURL.Host, trustedOrigin.Host) {
+		return fmt.Errorf("fleet mirror clone URL does not use the trusted Gitea origin")
+	}
+	expectedPath := "/" + url.PathEscape(strings.TrimSpace(owner)) + "/" + url.PathEscape(strings.TrimSpace(name)) + ".git"
+	if cloneURL.EscapedPath() != expectedPath {
+		return fmt.Errorf("fleet mirror clone URL does not identify the selected mirror")
+	}
+	return nil
 }
 
 // validateMirror fails closed unless the fleet repository is a private mirror
@@ -553,6 +627,9 @@ func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.
 		"loom_job_id":      loomJobID,
 		"artifact_repo":    req.ArtifactRepo,
 		"request_event_id": req.SourceEventID,
+	}
+	if credentialRef := strings.TrimSpace(i.cfg.MirrorReadCredentialRef); credentialRef != "" {
+		statePayload["mirror_read_credential_ref"] = credentialRef
 	}
 	content, err := json.Marshal(statePayload)
 	if err != nil {
