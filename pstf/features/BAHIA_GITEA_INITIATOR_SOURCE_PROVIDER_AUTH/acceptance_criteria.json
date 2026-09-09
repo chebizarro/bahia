@@ -1,0 +1,30 @@
+{
+  "feature_id": "BAHIA_GITEA_INITIATOR_SOURCE_PROVIDER_AUTH",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Private Gitea migration uses service=git plus auth_username/auth_password, keeps clone_addr credential-free, and no longer receives the former provider-mismatch 422.",
+      "verification": ["TestMigrateMirrorPrivateGiteaUsesGitBasicAuth", "TestConformancePrivateGiteaMirrorBuildInitiation"]
+    },
+    {
+      "id": "AC2",
+      "statement": "GitHub migration remains service=github with auth_token and derived github.com clone URL behavior.",
+      "verification": ["TestMigrateMirrorGitHubUsesTokenAuth", "TestConformancePrivateMirrorBuildInitiation"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Missing, unsupported, or incomplete source-provider configuration fails before credential resolution or external side effects.",
+      "verification": ["TestValidateHiveCIInitiatorSourceProvider", "TestConformanceSourceProviderConfigFailsClosed"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Exact replay remains idempotent and an invalid, non-mirror, empty-source, or mismatched-source existing repository fails closed.",
+      "verification": ["TestConformancePrivateMirrorBuildInitiation", "TestConformanceUntrustedExistingRepoFailsClosed", "TestConformanceUnexpectedExistingMirrorFailsClosed"]
+    },
+    {
+      "id": "AC5",
+      "statement": "HTTPS and credential-free clone URL enforcement remains active, and returned errors or logs contain no source or fleet credential.",
+      "verification": ["TestMigrateMirrorRejectsUnsafeCloneURL", "TestMigrateMirror422IncludesScrubbedBoundedResponse", "TestConformanceErrorsNeverCarryCredential", "TestConformancePrivateGiteaMirrorBuildInitiation"]
+    }
+  ]
+}
