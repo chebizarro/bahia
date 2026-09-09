@@ -131,12 +131,13 @@ func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 	validConfig := func() *Config {
 		cfg := Defaults()
 		cfg.HiveCI.Initiator = HiveCIInitiatorConfig{
-			Enabled:        true,
-			GiteaBaseURL:   "https://fleet-gitea.example",
-			GiteaToken:     "fleet-admin-token",
-			MirrorOwner:    "fleet",
-			WorkflowPath:   ".gitea/workflows/release.yml",
-			SourceProvider: "github",
+			Enabled:              true,
+			GiteaBaseURL:         "https://fleet-gitea.example",
+			GiteaToken:           "fleet-admin-token",
+			MirrorOwner:          "fleet",
+			WorkflowPath:         ".gitea/workflows/release.yml",
+			SourceProvider:       "github",
+			RepoAnnouncementAddr: "30617:" + strings.Repeat("a", 64) + ":repo",
 		}
 		return cfg
 	}
@@ -192,6 +193,31 @@ func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want %q", err, tc.wantMessage)
 			}
 		})
+	}
+}
+
+func TestHiveCIInitiatorRequiresRepositoryAnnouncementAddress(t *testing.T) {
+	cfg := Defaults()
+	cfg.HiveCI.Initiator = HiveCIInitiatorConfig{
+		Enabled:        true,
+		GiteaBaseURL:   "https://git.fleet.internal",
+		GiteaToken:     "opaque-configured-token",
+		MirrorOwner:    "fleet",
+		WorkflowPath:   ".hive/workflows/build.yml",
+		SourceProvider: "github",
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "hiveci.initiator.repo_announcement_addr") {
+		t.Fatalf("missing repository announcement address error = %v", err)
+	}
+
+	cfg.HiveCI.Initiator.RepoAnnouncementAddr = "30617:not-a-pubkey:repo"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "30617:<64-hex-pubkey>:<repo-id>") {
+		t.Fatalf("malformed repository announcement address error = %v", err)
+	}
+
+	cfg.HiveCI.Initiator.RepoAnnouncementAddr = "30617:" + strings.Repeat("a", 64) + ":repo"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid Hive-CI initiator config: %v", err)
 	}
 }
 

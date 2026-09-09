@@ -402,8 +402,11 @@ func TestSelectWorker_FailClosedOnCriteria(t *testing.T) {
 	job := JobRequest{
 		RequiredSoftware:     []string{"docker"},
 		RequiredArchitecture: "linux/amd64",
+		RequiredWorkloads:    []string{"ci/workflow-run"},
+		RequiredFeatures:     []string{"hive_ci_profile"},
 		AllowedWorkerPubkeys: []string{"allowed"},
 	}
+	capabilities := domain.WorkerCapabilities{WorkloadKinds: []string{"ci/workflow-run"}, Features: []string{"hive_ci_profile"}}
 	if workerMatchesJob(domain.Worker{PubKey: "other", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 0, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
 		t.Fatal("expected allowlist mismatch to fail closed")
 	}
@@ -416,7 +419,10 @@ func TestSelectWorker_FailClosedOnCriteria(t *testing.T) {
 	if workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 2, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
 		t.Fatal("expected full worker to fail closed")
 	}
-	if !workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 1, SchedulingState: domain.WorkerSchedulingActive}, job, map[string]struct{}{"allowed": {}}) {
+	if workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 1, SchedulingState: domain.WorkerSchedulingActive, Capabilities: domain.WorkerCapabilities{WorkloadKinds: []string{"ci/workflow-run"}}}, job, map[string]struct{}{"allowed": {}}) {
+		t.Fatal("expected missing Hive-CI feature to fail closed")
+	}
+	if !workerMatchesJob(domain.Worker{PubKey: "allowed", Architecture: "linux/amd64", Software: []domain.WorkerSoftware{{Name: "docker"}}, MaxConcurrentJobs: 2, CurrentQueueDepth: 1, SchedulingState: domain.WorkerSchedulingActive, Capabilities: capabilities}, job, map[string]struct{}{"allowed": {}}) {
 		t.Fatal("expected matching worker to be accepted")
 	}
 }

@@ -64,7 +64,8 @@ const (
 // JobRequest represents a deploy job request sent to Loom workers.
 type JobRequest struct {
 	ID                   string            `json:"id"`
-	Type                 string            `json:"type"` // "deploy", "build"
+	ReferencedEventID    string            `json:"referenced_event_id,omitempty"` // originating event referenced by the 5100 e tag
+	Type                 string            `json:"type"`                          // "deploy", "build"
 	Image                string            `json:"image"`
 	Digest               string            `json:"digest"`
 	Environment          string            `json:"environment"`
@@ -79,6 +80,8 @@ type JobRequest struct {
 	Timeout              time.Duration     `json:"timeout,omitempty"`
 	RequiredSoftware     []string          `json:"required_software,omitempty"`
 	RequiredArchitecture string            `json:"required_architecture,omitempty"`
+	RequiredWorkloads    []string          `json:"required_workloads,omitempty"`
+	RequiredFeatures     []string          `json:"required_features,omitempty"`
 	AllowedWorkerPubkeys []string          `json:"allowed_worker_pubkeys,omitempty"`
 }
 
@@ -118,6 +121,7 @@ type Client struct {
 	workerRepo      repository.WorkerRepository
 	privateKey      string
 	clientPubkey    string
+	jobSigner       nostr.Signer
 	canonicalSigner CanonicalSigner
 
 	jobsMu           sync.RWMutex
@@ -168,6 +172,13 @@ type ClientOption func(*Client)
 // WithWorkerRepo enables worker auto-selection from the catalog.
 func WithWorkerRepo(repo repository.WorkerRepository) ClientOption {
 	return func(c *Client) { c.workerRepo = repo }
+}
+
+// WithJobSigner uses the supplied control-plane signer for kind-5100 job
+// requests. The raw private key remains available only for NIP-44 secret
+// encryption and as a compatibility signing fallback.
+func WithJobSigner(signer nostr.Signer) ClientOption {
+	return func(c *Client) { c.jobSigner = signer }
 }
 
 // WithCanonicalSigner injects the signer used for canonical 30900 state and
@@ -247,6 +258,12 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	if c.privateKey == "" {
 		return "", fmt.Errorf("nostr private key not configured")
 	}
+	if job.ReferencedEventID != "" {
+		if _, err := nostr.IDFromHex(strings.TrimSpace(job.ReferencedEventID)); err != nil {
+			return "", fmt.Errorf("invalid referenced event id: %w", err)
+		}
+		job.ReferencedEventID = strings.TrimSpace(job.ReferencedEventID)
+	}
 
 	// Auto-select worker if none specified.
 	workerPubkey := job.WorkerPubkey
@@ -257,6 +274,9 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		}
 		workerPubkey = selected
 		c.logger.Info("auto-selected worker", zap.String("pubkey", workerPubkey))
+	}
+	if workerPubkey == "" && (len(job.RequiredSoftware) > 0 || job.RequiredArchitecture != "" || len(job.RequiredWorkloads) > 0 || len(job.RequiredFeatures) > 0 || len(job.AllowedWorkerPubkeys) > 0) {
+		return "", fmt.Errorf("cannot satisfy worker selection requirements without a worker repository or explicit worker pubkey")
 	}
 
 	if len(job.Secrets) > 0 && workerPubkey == "" {
@@ -276,6 +296,9 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 
 	tags := nostr.Tags{
 		{"cmd", cmd},
+	}
+	if job.ReferencedEventID != "" {
+		tags = append(tags, nostr.Tag{tagJobEvent, job.ReferencedEventID})
 	}
 
 	// Build args: if caller supplied explicit args, use those.
@@ -357,7 +380,11 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		Tags:      tags,
 	}
 
-	if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
+	if c.jobSigner != nil {
+		if err := c.jobSigner.SignEvent(ctx, &ev); err != nil {
+			return "", fmt.Errorf("signing event: %w", err)
+		}
+	} else if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 
@@ -774,7 +801,8 @@ func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey 
 
 // selectWorker picks the best available online worker from the catalog.
 // Selection is fail-closed: a worker must match allowlist, software,
-// architecture, scheduling state, and capacity before it can be chosen.
+// architecture, advertised workloads/features, scheduling state, and capacity
+// before it can be chosen.
 func (c *Client) selectWorker(ctx context.Context, job JobRequest) (string, error) {
 	workers, err := c.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 50)
 	if err != nil {
@@ -796,7 +824,7 @@ func (c *Client) selectWorker(ctx context.Context, job JobRequest) (string, erro
 		}
 		return worker.PubKey, nil
 	}
-	return "", fmt.Errorf("no online Loom worker matches required software/arch/allowlist/capacity")
+	return "", fmt.Errorf("no online Loom worker matches required software/arch/workloads/features/allowlist/capacity")
 }
 
 func workerMatchesJob(worker domain.Worker, job JobRequest, allowed map[string]struct{}) bool {
@@ -823,7 +851,30 @@ func workerMatchesJob(worker domain.Worker, job JobRequest, allowed map[string]s
 			return false
 		}
 	}
+	for _, workload := range job.RequiredWorkloads {
+		if !containsCapability(worker.Capabilities.WorkloadKinds, workload) {
+			return false
+		}
+	}
+	for _, feature := range job.RequiredFeatures {
+		if !containsCapability(worker.Capabilities.Features, feature) {
+			return false
+		}
+	}
 	return true
+}
+
+func containsCapability(values []string, required string) bool {
+	required = strings.ToLower(strings.TrimSpace(required))
+	if required == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == required {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

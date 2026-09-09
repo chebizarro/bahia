@@ -143,6 +143,7 @@ type RepoInfo struct {
 	Private     bool   `json:"private"`
 	Mirror      bool   `json:"mirror"`
 	OriginalURL string `json:"original_url"`
+	CloneURL    string `json:"clone_url"`
 }
 
 // GetRepo returns repository metadata, or (nil, nil) when it does not exist.

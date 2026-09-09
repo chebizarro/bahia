@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
+	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -44,6 +46,15 @@ type capturingPublisher struct {
 	mu     sync.Mutex
 	events []nostr.Event
 	fail   bool
+}
+
+type capturingLoomSubmitter struct {
+	jobs []loomAdapter.JobRequest
+}
+
+func (s *capturingLoomSubmitter) SubmitJob(_ context.Context, job loomAdapter.JobRequest) (string, error) {
+	s.jobs = append(s.jobs, job)
+	return strings.Repeat("ef", 32), nil
 }
 
 func (p *capturingPublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
@@ -116,6 +127,7 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"name": "living-library-forge", "private": true, "mirror": true, "original_url": originalURL,
+				"clone_url": "https://git.fleet.internal/fleet/living-library-forge.git",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/fleet/living-library-forge/mirror-sync":
 			g.syncCalls++
@@ -151,22 +163,32 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 	credentialRef := uuid.New()
 	resolver := &fakeSecretResolver{known: map[string]string{credentialRef.String(): testRepositoryCredential}}
 	publisher := &capturingPublisher{}
+	loomSubmitter := &capturingLoomSubmitter{}
 	core, logs := observer.New(zap.DebugLevel)
+	signer := newTestSigner(t)
+	pubkey, err := signer.GetPublicKey(context.Background())
+	if err != nil {
+		t.Fatalf("get signer pubkey: %v", err)
+	}
 	initiator := NewInitiator(
 		NewAPIClient(server.URL, "gitea-admin-token", server.Client()),
 		resolver,
 		publisher,
-		newTestSigner(t),
+		signer,
 		NewMemoryInitiationStore(),
 		InitiatorConfig{
-			MirrorOwner:        "fleet",
-			WorkflowPath:       ".hive/workflows/arcana-build.yml",
-			SourceProvider:     SourceProviderGitHub,
-			RelayHint:          "wss://relay.fleet.internal",
-			RefResolveAttempts: 2,
-			RefResolveDelay:    1,
+			MirrorOwner:              "fleet",
+			WorkflowPath:             ".hive/workflows/arcana-build.yml",
+			SourceProvider:           SourceProviderGitHub,
+			RepoAnnouncementAddr:     "30617:" + pubkey.Hex() + ":living-library-forge",
+			TrustedCIPubkeys:         []string{pubkey.Hex()},
+			TrustedLoomWorkerPubkeys: []string{strings.Repeat("ab", 32)},
+			RelayHint:                "wss://relay.fleet.internal",
+			RefResolveAttempts:       2,
+			RefResolveDelay:          1,
 		},
 		zap.New(core),
+		WithLoomJobSubmitter(loomSubmitter),
 	)
 	return initiator, publisher, resolver, credentialRef, logs
 }
@@ -179,7 +201,6 @@ func arcanaStartRequest(credentialRef uuid.UUID) controlplane.HiveCIBuildStartRe
 		GitRef:               "main",
 		CredentialRef:        credentialRef,
 		ArtifactRepo:         "registry.fleet.internal/arcana/web",
-		BuildArgs:            map[string]string{"VITE_ARCANA_SIGNER_MODE": "nip07"},
 		RequesterPubkey:      strings.Repeat("ab", 32),
 		SourceEventID:        strings.Repeat("cd", 32),
 	}
@@ -218,7 +239,7 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 		t.Fatalf("expected exactly one private mirror migration, got %d", gitea.migrateCalls)
 	}
 
-	// Evidence: one canonical ci/workflow-run request and one addressed
+	// Evidence: one fleet-local Hive-CI workflow run and one addressed
 	// queued-state projection, both signed and verifiable.
 	if len(publisher.events) != 2 {
 		t.Fatalf("expected 2 published events, got %d", len(publisher.events))
@@ -227,21 +248,49 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if runEvent.ID.Hex() != result.CIRunID {
 		t.Fatalf("run request event ID mismatch")
 	}
+	if int(runEvent.Kind) != 5401 {
+		t.Fatalf("workflow run kind = %d, want wire kind 5401", runEvent.Kind)
+	}
+	if int(runEvent.Kind) != kinds.HiveCIWorkflowRun {
+		t.Fatalf("workflow run kind = %d, want Bahia constant %d", runEvent.Kind, kinds.HiveCIWorkflowRun)
+	}
+	contextVMKind := cascadia.ContextVMMethods["ci/workflow-run"].Kind
+	if contextVMKind != 25910 {
+		t.Fatalf("ci/workflow-run ContextVM binding kind = %d, want 25910", contextVMKind)
+	}
+	if int(runEvent.Kind) == contextVMKind {
+		t.Fatalf("workflow run must not use ephemeral ContextVM kind %d", contextVMKind)
+	}
 	if !runEvent.VerifySignature() || !evidence.VerifySignature() {
 		t.Fatalf("published evidence must be verifiably signed")
 	}
-	var rpc struct {
-		Method string `json:"method"`
-		Params struct {
-			Workflow string `json:"workflow"`
-			Commit   string `json:"commit"`
-		} `json:"params"`
+	if runEvent.Content != "" {
+		t.Fatalf("workflow run must use the grasp-compatible tag-only payload, got %q", runEvent.Content)
 	}
-	if err := json.Unmarshal([]byte(runEvent.Content), &rpc); err != nil {
-		t.Fatalf("run request content: %v", err)
+	tags := make(map[string]string, len(runEvent.Tags))
+	for _, tag := range runEvent.Tags {
+		if len(tag) >= 2 {
+			tags[tag[0]] = tag[1]
+		}
 	}
-	if rpc.Method != "ci/workflow-run" || rpc.Params.Commit != testCommitSHA || rpc.Params.Workflow != ".hive/workflows/arcana-build.yml" {
-		t.Fatalf("unexpected canonical run request: %+v", rpc)
+	pubkey, err := initiator.signer.GetPublicKey(context.Background())
+	if err != nil {
+		t.Fatalf("get initiator pubkey: %v", err)
+	}
+	wantTags := map[string]string{
+		"a":            "30617:" + pubkey.Hex() + ":living-library-forge",
+		"commit":       testCommitSHA,
+		"branch":       "main",
+		"trigger":      "push",
+		"triggered-by": req.RequesterPubkey,
+		"workflow":     ".hive/workflows/arcana-build.yml",
+		"publisher":    pubkey.Hex(),
+		"t":            "hive-ci",
+	}
+	for key, want := range wantTags {
+		if got := tags[key]; got != want {
+			t.Fatalf("workflow run tag %q = %q, want %q", key, got, want)
+		}
 	}
 	if int(evidence.Kind) != kinds.CASControlState {
 		t.Fatalf("evidence must be addressed kind %d, got %d", kinds.CASControlState, evidence.Kind)
@@ -261,6 +310,25 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	}
 	if state["status"] != string(domain.BuildStatusQueued) || state["git_sha"] != testCommitSHA {
 		t.Fatalf("unexpected queued evidence: %v", state)
+	}
+	loomSubmitter := initiator.loom.(*capturingLoomSubmitter)
+	if len(loomSubmitter.jobs) != 1 {
+		t.Fatalf("Loom submissions = %d, want 1", len(loomSubmitter.jobs))
+	}
+	job := loomSubmitter.jobs[0]
+	if job.ReferencedEventID != result.CIRunID || job.Params["run"] != result.CIRunID {
+		t.Fatalf("Loom correlation = e:%q run:%q, want 5401 %q", job.ReferencedEventID, job.Params["run"], result.CIRunID)
+	}
+	if job.Params["method"] != "ci/workflow-run" || job.Params["repo"] != "https://git.fleet.internal/fleet/living-library-forge.git" ||
+		job.Params["ref"] != "main" || job.Params["workflow"] != ".hive/workflows/arcana-build.yml" {
+		t.Fatalf("unexpected Hive-CI Loom params: %#v", job.Params)
+	}
+	if len(job.RequiredWorkloads) != 1 || job.RequiredWorkloads[0] != "ci/workflow-run" ||
+		len(job.RequiredFeatures) != 1 || job.RequiredFeatures[0] != "hive_ci_profile" {
+		t.Fatalf("Hive-CI capability requirements = workloads:%v features:%v", job.RequiredWorkloads, job.RequiredFeatures)
+	}
+	if job.PaymentToken != "" {
+		t.Fatalf("fleet-internal Hive-CI job carried payment token")
 	}
 
 	// Secret hygiene: the credential must never appear in any published
@@ -287,12 +355,49 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if *replayed != *result {
 		t.Fatalf("replay must return the original result: %+v vs %+v", replayed, result)
 	}
+	if len(loomSubmitter.jobs) != 1 {
+		t.Fatalf("replay duplicated Loom dispatch, got %d submissions", len(loomSubmitter.jobs))
+	}
 	if gitea.migrateCalls != 1 || gitea.syncCalls != 0 {
 		t.Fatalf("replay must not touch the mirror (migrate=%d sync=%d)", gitea.migrateCalls, gitea.syncCalls)
 	}
 	if len(publisher.events) != 2 {
 		t.Fatalf("replay must not publish new events, got %d", len(publisher.events))
 	}
+}
+
+func TestSelfDispatchRejectsUnsupportedBuildArgsBeforeSideEffects(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
+	req := arcanaStartRequest(credentialRef)
+	req.BuildArgs = map[string]string{"VITE_ARCANA_SIGNER_MODE": "nip07"}
+	if _, err := initiator.StartHiveCIBuild(context.Background(), req); err == nil || !strings.Contains(err.Error(), "does not support build arguments") {
+		t.Fatalf("unsupported build args error = %v", err)
+	}
+	if len(resolver.calls) != 0 || gitea.migrateCalls != 0 || gitea.syncCalls != 0 || len(publisher.events) != 0 {
+		t.Fatalf("unsupported build args reached side effects: secret=%d migrate=%d sync=%d events=%d", len(resolver.calls), gitea.migrateCalls, gitea.syncCalls, len(publisher.events))
+	}
+}
+
+func TestSelfDispatchWarnsWhenServicePubkeyIsNotTrusted(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+
+	initiator, _, _, credentialRef, logs := newConformanceInitiator(t, server)
+	initiator.cfg.TrustedCIPubkeys = nil
+	if _, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef)); err != nil {
+		t.Fatalf("StartHiveCIBuild: %v", err)
+	}
+	for _, entry := range logs.All() {
+		if entry.ContextMap()["reason"] == "self_issued_run_untrusted" {
+			return
+		}
+	}
+	t.Fatal("missing self_issued_run_untrusted warning")
 }
 
 // TestConformanceUnknownCredentialFailsClosed proves that a bad opaque

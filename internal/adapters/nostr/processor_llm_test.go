@@ -85,6 +85,24 @@ func TestProcessorWorkerAdvertisementParsesLLMRuntimeMetadata(t *testing.T) {
 	}
 }
 
+func TestProcessorWorkerAdvertisementParsesGenericCapabilities(t *testing.T) {
+	repo := &captureWorkerRepo{}
+	processor := NewProcessor(nil, repo, zap.NewNop())
+	ev := &gonostr.Event{
+		PubKey:    processorTestWorkerPubKey(t),
+		Kind:      canonicalKind(kindLoomWorkerAd),
+		CreatedAt: gonostr.Now(),
+		Content:   `{"name":"ci-worker","capabilities":{"workload_kinds":["ci/workflow-run"],"features":["hive_ci_profile"]}}`,
+	}
+	if err := processor.handleWorkerAdvertisement(context.Background(), ev); err != nil {
+		t.Fatalf("handle worker ad: %v", err)
+	}
+	if repo.worker == nil || len(repo.worker.Capabilities.WorkloadKinds) != 1 || repo.worker.Capabilities.WorkloadKinds[0] != "ci/workflow-run" ||
+		len(repo.worker.Capabilities.Features) != 1 || repo.worker.Capabilities.Features[0] != "hive_ci_profile" {
+		t.Fatalf("generic capabilities not parsed: %#v", repo.worker)
+	}
+}
+
 func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishesEvent(t *testing.T) {
 	repo := &captureWorkerRepo{}
 	publisher := &capturePublisher{}

@@ -264,6 +264,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
 		RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
 		MLCapabilities    domain.WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
+		Capabilities      domain.WorkerCapabilities   `json:"capabilities,omitempty"`
 		Telemetry         *domain.WorkerTelemetry     `json:"telemetry,omitempty"`
 	}
 	if ev.Content != "" {
@@ -281,6 +282,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Accelerators:        content.Accelerators,
 		RuntimeTarget:       content.RuntimeTarget,
 		MLCapabilities:      content.MLCapabilities,
+		Capabilities:        content.Capabilities,
 		Telemetry:           content.Telemetry,
 		LastAdvertisementAt: ev.CreatedAt.Time(),
 		Status:              domain.WorkerStatusOnline,

@@ -309,10 +309,12 @@ Bahia still interoperates with external protocols that define their own kinds. T
 | Loom | `5100` | outbound | Compute job request |
 | Loom | `30100` | inbound | Loom job status update |
 | Loom | `5101` | inbound | Loom job result |
-| Hive-CI | `5401` | inbound | Trusted CI workflow run fact |
+| Hive-CI | `5401` | inbound/outbound | Trusted CI workflow run fact; Bahia self-dispatch uses the grasp-compatible tag-only event and returns its id as `ci_run_id` |
 | Hive-CI | `5402` | inbound | Trusted CI workflow result fact |
 
 Where Bahia needs to expose current Loom/Hive-derived truth to browsers or agents, it projects that truth into canonical observables (`30900`, `30315`, `4903`, or `30078`) rather than inventing a Bahia-specific live kind family.
+
+An operator's `build/request` remains a ContextVM kind-`25910` command. It is not the CI bus: the initiator's outbound workflow run is durable kind `5401` with empty content and `a`, `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci` tags. Its event id is both the 5402 lineage key and the `e`/`run` correlation on the targeted kind-5100 Loom job. That job uses `method=ci/workflow-run`, a capable trusted worker, the mirror/ref/workflow parameters, and no payment tag. Operators must explicitly trust the Bahia service pubkey as a CI issuer and the selected Loom worker as a 5402 signer; Bahia does not deliver a per-run ephemeral publisher key.
 
 ## Internal Operational Event Types
 
@@ -355,7 +357,7 @@ This is idempotent and safe to run every startup. If the migration fails because
 
 | Legacy family | Historical purpose | Canonical target |
 |---------------|--------------------|------------------|
-| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `5961`-`6006`, `38390`-`38431` excluding SoulFactory interop `5950`, `1950`, `38384` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
 | `6961`-`6997` excluding SoulFactory interop `6950` | status/progress | `30315`, `4903`, correlated ContextVM responses, or domain observables |
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |

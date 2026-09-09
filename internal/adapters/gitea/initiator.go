@@ -11,6 +11,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -36,6 +37,12 @@ type EventPublisher interface {
 	Publish(ctx context.Context, ev nostr.Event) (int, error)
 }
 
+// LoomJobSubmitter is the existing kind-5100 Loom client surface used after a
+// self-issued workflow run has been accepted by the control-plane relays.
+type LoomJobSubmitter interface {
+	SubmitJob(ctx context.Context, job loomAdapter.JobRequest) (string, error)
+}
+
 // InitiationRecord captures a completed build initiation so that exact
 // request replay (same source event) is idempotent: the recorded result is
 // returned without re-mirroring or re-publishing.
@@ -44,6 +51,7 @@ type InitiationRecord struct {
 	Result          controlplane.HiveCIBuildStartResult
 	RunRequestID    string
 	EvidenceEventID string
+	LoomJobID       string
 	CreatedAt       time.Time
 }
 
@@ -95,10 +103,18 @@ type InitiatorConfig struct {
 	// SourceAuthUsername is the non-secret username paired with the resolved
 	// credential for a private Gitea source.
 	SourceAuthUsername string
-	// RepoAnnouncementAddr optionally carries the NIP-34 kind-30617 address
+	// RepoAnnouncementAddr carries the NIP-34 kind-30617 address
 	// ("30617:<pubkey>:<repo-id>") of the fleet mirror announcement for
 	// canonical run-request correlation.
 	RepoAnnouncementAddr string
+	// TrustedCIPubkeys is the operator-managed allowlist consumed by Bahia's
+	// Hive-CI subscriber. It is inspected only to make untrusted self-dispatch
+	// legible; the initiator never mutates or expands it.
+	TrustedCIPubkeys []string
+	// TrustedLoomWorkerPubkeys is both the dispatch allowlist and the result
+	// signer allowlist. Keeping them identical prevents dispatching work whose
+	// worker-signed 5402 Bahia would reject.
+	TrustedLoomWorkerPubkeys []string
 	// RelayHint is included on published events so consumers can locate them.
 	RelayHint string
 	// RefResolveAttempts and RefResolveDelay bound the mirror-sync poll loop.
@@ -118,7 +134,7 @@ type sourceMirrorConfig struct {
 }
 
 // Initiator implements controlplane.HiveCIBuildStarter against a fleet Gitea
-// private mirror and the canonical ContextVM ci/workflow-run boundary.
+// private mirror and the fleet-local Hive-CI workflow-run boundary.
 type Initiator struct {
 	client    MirrorClient
 	secrets   SecretResolver
@@ -127,11 +143,20 @@ type Initiator struct {
 	store     InitiationStore
 	cfg       InitiatorConfig
 	logger    *zap.Logger
+	loom      LoomJobSubmitter
 	now       func() time.Time
 	mu        sync.Mutex
 }
 
-func NewInitiator(client MirrorClient, secrets SecretResolver, publisher EventPublisher, signer nostr.Signer, store InitiationStore, cfg InitiatorConfig, logger *zap.Logger) *Initiator {
+type InitiatorOption func(*Initiator)
+
+// WithLoomJobSubmitter enables kind-5100 submission after the signed kind-5401
+// publication. Tests and disabled deployments may omit it.
+func WithLoomJobSubmitter(submitter LoomJobSubmitter) InitiatorOption {
+	return func(i *Initiator) { i.loom = submitter }
+}
+
+func NewInitiator(client MirrorClient, secrets SecretResolver, publisher EventPublisher, signer nostr.Signer, store InitiationStore, cfg InitiatorConfig, logger *zap.Logger, opts ...InitiatorOption) *Initiator {
 	if store == nil {
 		store = NewMemoryInitiationStore()
 	}
@@ -144,11 +169,15 @@ func NewInitiator(client MirrorClient, secrets SecretResolver, publisher EventPu
 	if cfg.RefResolveDelay <= 0 {
 		cfg.RefResolveDelay = 3 * time.Second
 	}
-	return &Initiator{
+	initiator := &Initiator{
 		client: client, secrets: secrets, publisher: publisher, signer: signer,
 		store: store, cfg: cfg, logger: logger.Named("gitea-hiveci-initiator"),
 		now: func() time.Time { return time.Now().UTC() },
 	}
+	for _, opt := range opts {
+		opt(initiator)
+	}
+	return initiator
 }
 
 var _ controlplane.HiveCIBuildStarter = (*Initiator)(nil)
@@ -162,8 +191,14 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	if i == nil || i.client == nil || i.secrets == nil || i.publisher == nil || i.signer == nil {
 		return nil, fmt.Errorf("fleet Gitea mirror initiator is not fully configured")
 	}
-	if strings.TrimSpace(i.cfg.MirrorOwner) == "" || strings.TrimSpace(i.cfg.WorkflowPath) == "" {
-		return nil, fmt.Errorf("fleet Gitea mirror initiator requires mirror owner and workflow path")
+	if strings.TrimSpace(i.cfg.MirrorOwner) == "" || strings.TrimSpace(i.cfg.WorkflowPath) == "" || strings.TrimSpace(i.cfg.RepoAnnouncementAddr) == "" {
+		return nil, fmt.Errorf("fleet Gitea mirror initiator requires mirror owner, workflow path, and repository announcement address")
+	}
+	if err := validateRepoAnnouncementAddr(i.cfg.RepoAnnouncementAddr); err != nil {
+		return nil, err
+	}
+	if len(req.BuildArgs) > 0 {
+		return nil, fmt.Errorf("Hive-CI kind-5401 tag-only dispatch does not support build arguments")
 	}
 	owner, name, err := splitRepositoryCoordinate(req.RepositoryCoordinate)
 	if err != nil {
@@ -259,25 +294,28 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return nil, scrubSecrets(err, token)
 	}
 
-	branch := ""
-	if !isFullCommitSHA(gitRef) {
-		branch = gitRef
-	}
-	runRequestID, runEventID, err := i.publishWorkflowRunRequest(ctx, req, name, sha, branch)
+	runRequestID, runEventID, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
 	if err != nil {
 		return nil, scrubSecrets(fmt.Errorf("publish canonical ci/workflow-run request: %w", err), token)
 	}
 
 	result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: runEventID}
+	loomJobID := ""
+	if i.loom != nil {
+		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, gitRef, runEventID)
+		if err != nil {
+			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token)
+		}
+	}
 
-	evidenceEventID, err := i.publishQueuedEvidence(ctx, req, name, result, runRequestID)
+	evidenceEventID, err := i.publishQueuedEvidence(ctx, req, name, result, runRequestID, loomJobID)
 	if err != nil {
 		return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", err), token)
 	}
 
 	if err := i.store.Put(ctx, InitiationRecord{
 		SourceEventID: idempotencyKey, Result: result,
-		RunRequestID: runRequestID, EvidenceEventID: evidenceEventID,
+		RunRequestID: runRequestID, EvidenceEventID: evidenceEventID, LoomJobID: loomJobID,
 		CreatedAt: i.now(),
 	}); err != nil {
 		return nil, fmt.Errorf("record build initiation: %w", err)
@@ -289,6 +327,7 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		zap.String("git_ref", gitRef),
 		zap.String("git_sha", sha),
 		zap.String("ci_run_id", runEventID),
+		zap.String("loom_job_id", loomJobID),
 		zap.String("evidence_event_id", evidenceEventID),
 	)
 	return &result, nil
@@ -326,6 +365,37 @@ func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, 
 		return sourceMirrorConfig{}, fmt.Errorf("source provider must be explicitly configured as github or gitea")
 	}
 	return source, nil
+}
+
+func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, ref, runEventID string) (string, error) {
+	if len(i.cfg.TrustedLoomWorkerPubkeys) == 0 {
+		return "", fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
+	}
+	repository := ""
+	if repoInfo != nil {
+		repository = strings.TrimSpace(repoInfo.CloneURL)
+	}
+	if repository == "" {
+		return "", fmt.Errorf("fleet mirror clone URL is unavailable")
+	}
+	return i.loom.SubmitJob(ctx, loomAdapter.JobRequest{
+		ID:                   runEventID,
+		ReferencedEventID:    runEventID,
+		Type:                 "build",
+		RequiredSoftware:     []string{"git", "act", "docker"},
+		RequiredWorkloads:    []string{"ci/workflow-run"},
+		RequiredFeatures:     []string{"hive_ci_profile"},
+		AllowedWorkerPubkeys: append([]string(nil), i.cfg.TrustedLoomWorkerPubkeys...),
+		Params: map[string]string{
+			"method":   "ci/workflow-run",
+			"run":      runEventID,
+			"repo":     repository,
+			"ref":      ref,
+			"workflow": i.cfg.WorkflowPath,
+			"actor":    req.RequesterPubkey,
+			"event":    "push",
+		},
+	})
 }
 
 // validateMirror fails closed unless the fleet repository is a private mirror
@@ -380,58 +450,51 @@ func (i *Initiator) resolveRefWithRetry(ctx context.Context, name, ref string) (
 	return "", fmt.Errorf("resolve ref %q on fleet mirror: %w", ref, lastErr)
 }
 
-// publishWorkflowRunRequest emits the canonical ContextVM ci/workflow-run
-// request that hands the build to Hive-CI downstream of the fleet mirror.
-// The event carries no credentials; build args are restricted upstream to
-// allowlisted public VITE_* values and travel as public parameters.
+// publishWorkflowRunRequest emits the fleet-local Hive-CI kind-5401 workflow
+// run consumed by Hive-CI and by Bahia's own subscriber. It intentionally uses
+// the tag-only producer contract established by grasp-gitea; the inbound
+// ContextVM build/request command remains the mutation boundary.
 func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name, sha, branch string) (string, string, error) {
-	method, ok := cascadia.ContextVMMethods["ci/workflow-run"]
-	if !ok {
-		return "", "", fmt.Errorf("cascadia binding missing ci/workflow-run")
+	issuer, err := i.signer.GetPublicKey(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve Hive-CI workflow run publisher: %w", err)
+	}
+	issuerHex := issuer.Hex()
+	if issuerHex == strings.Repeat("0", 64) {
+		return "", "", fmt.Errorf("resolve Hive-CI workflow run publisher: signer returned an empty pubkey")
+	}
+	triggeredBy := strings.TrimSpace(req.RequesterPubkey)
+	if triggeredBy == "" {
+		triggeredBy = issuerHex
 	}
 	payload := cascadia.HiveCiWorkflowV1Payload{
 		Workflow:    i.cfg.WorkflowPath,
 		Commit:      sha,
 		Branch:      branch,
-		TriggeredBy: "push",
+		TriggeredBy: triggeredBy,
 	}
 	if err := payload.Validate(); err != nil {
-		return "", "", fmt.Errorf("validate %s payload: %w", method.Schema, err)
+		return "", "", fmt.Errorf("validate Hive-CI workflow run payload: %w", err)
 	}
 	requestID := "bahia:" + req.BuildID.String() + ":" + sha
-	// Params carry the canonical hive.ci.workflow.v1 fields plus the
-	// allowlisted public VITE_* build args (validated upstream; public by
-	// contract, so safe on the wire).
-	params := map[string]any{
-		"workflow": payload.Workflow,
-		"commit":   payload.Commit,
-	}
-	if payload.Branch != "" {
-		params["branch"] = payload.Branch
-	}
-	if payload.TriggeredBy != "" {
-		params["triggered_by"] = payload.TriggeredBy
-	}
-	if len(req.BuildArgs) > 0 {
-		params["build_args"] = req.BuildArgs
-	}
-	rpc := struct {
-		JSONRPC string         `json:"jsonrpc"`
-		ID      string         `json:"id"`
-		Method  string         `json:"method"`
-		Params  map[string]any `json:"params"`
-	}{JSONRPC: "2.0", ID: requestID, Method: method.Name, Params: params}
-	content, err := json.Marshal(rpc)
-	if err != nil {
-		return "", "", fmt.Errorf("marshal %s request: %w", method.Name, err)
+	if !containsPubkey(i.cfg.TrustedCIPubkeys, issuerHex) {
+		i.logger.Warn("self-issued Hive-CI workflow run will be ignored by Bahia's local subscriber",
+			zap.String("reason", "self_issued_run_untrusted"),
+			zap.Int("kind", kinds.HiveCIWorkflowRun),
+			zap.String("service_pubkey", issuerHex),
+		)
 	}
 	tags := nostr.Tags{
+		{"a", strings.TrimSpace(i.cfg.RepoAnnouncementAddr)},
+		{"commit", payload.Commit},
+		{"branch", payload.Branch},
+		{"trigger", "push"},
+		{"triggered-by", payload.TriggeredBy},
+		{"workflow", payload.Workflow},
+		{"publisher", issuerHex},
+		{"t", "hive-ci"},
 		{"repo", i.cfg.MirrorOwner + "/" + name},
-		{"commit", sha},
 		{"build", req.BuildID.String()},
-	}
-	if addr := strings.TrimSpace(i.cfg.RepoAnnouncementAddr); addr != "" {
-		tags = append(tags, nostr.Tag{"a", addr})
 	}
 	if relayHint := strings.TrimSpace(i.cfg.RelayHint); relayHint != "" {
 		tags = append(tags, nostr.Tag{"relay", relayHint})
@@ -440,10 +503,10 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		tags = append(tags, nostr.Tag{"e", sourceEventID})
 	}
 	ev := &nostr.Event{
-		Kind:      nostr.Kind(method.Kind),
+		Kind:      nostr.Kind(kinds.HiveCIWorkflowRun),
 		CreatedAt: nostr.Now(),
 		Tags:      tags,
-		Content:   string(content),
+		Content:   "",
 	}
 	eventID, err := i.signAndPublish(ctx, ev)
 	if err != nil {
@@ -452,10 +515,30 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 	return requestID, eventID, nil
 }
 
+func validateRepoAnnouncementAddr(raw string) error {
+	parts := strings.SplitN(strings.TrimSpace(raw), ":", 3)
+	if len(parts) != 3 || parts[0] != "30617" || strings.TrimSpace(parts[2]) == "" || strings.ContainsAny(parts[2], "\x00\r\n\t") {
+		return fmt.Errorf("repository announcement address must be 30617:<pubkey>:<repo-id>")
+	}
+	if _, err := nostr.PubKeyFromHex(parts[1]); err != nil {
+		return fmt.Errorf("repository announcement address contains an invalid pubkey: %w", err)
+	}
+	return nil
+}
+
+func containsPubkey(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), want) {
+			return true
+		}
+	}
+	return false
+}
+
 // publishQueuedEvidence publishes an addressed (kind 30900, latest-wins per
 // d-tag) build-state projection so queued/running/success/failure evidence is
 // verifiable and replay-safe.
-func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name string, result controlplane.HiveCIBuildStartResult, runRequestID string) (string, error) {
+func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name string, result controlplane.HiveCIBuildStartResult, runRequestID, loomJobID string) (string, error) {
 	statePayload := map[string]any{
 		"schema":           "bahia.hiveci.build-state.v1",
 		"build_id":         req.BuildID.String(),
@@ -467,6 +550,7 @@ func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.
 		"git_sha":          result.GitSHA,
 		"ci_run_id":        result.CIRunID,
 		"ci_run_request":   runRequestID,
+		"loom_job_id":      loomJobID,
 		"artifact_repo":    req.ArtifactRepo,
 		"request_event_id": req.SourceEventID,
 	}

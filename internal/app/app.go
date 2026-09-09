@@ -321,6 +321,10 @@ func New(cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
 	}
+	hiveCIJobClient := loom.NewClient(
+		cfg.Loom, cfg.Nostr.PrivateKey, controlPlanePool, logger,
+		loom.WithWorkerRepo(workerRepo), loom.WithJobSigner(controlPlaneSigner),
+	)
 	var continuityProjectionPublisher service.ContinuityNostrPublishFunc
 	if controlPlanePool != nil && controlPlaneSigner != nil {
 		continuityProjectionPublisher = func(ctx context.Context, kind int, tags nostr.Tags, content string) error {
@@ -1464,15 +1468,18 @@ func New(cfg *config.Config) (*App, error) {
 				controlPlaneSigner,
 				giteaAdapter.NewMemoryInitiationStore(),
 				giteaAdapter.InitiatorConfig{
-					MirrorOwner:          cfg.HiveCI.Initiator.MirrorOwner,
-					WorkflowPath:         cfg.HiveCI.Initiator.WorkflowPath,
-					SourceProvider:       cfg.HiveCI.Initiator.SourceProvider,
-					SourceCloneURL:       cfg.HiveCI.Initiator.SourceCloneURL,
-					SourceAuthUsername:   cfg.HiveCI.Initiator.SourceAuthUsername,
-					RepoAnnouncementAddr: cfg.HiveCI.Initiator.RepoAnnouncementAddr,
-					RelayHint:            cfg.HiveCI.Initiator.RelayHint,
+					MirrorOwner:              cfg.HiveCI.Initiator.MirrorOwner,
+					WorkflowPath:             cfg.HiveCI.Initiator.WorkflowPath,
+					SourceProvider:           cfg.HiveCI.Initiator.SourceProvider,
+					SourceCloneURL:           cfg.HiveCI.Initiator.SourceCloneURL,
+					SourceAuthUsername:       cfg.HiveCI.Initiator.SourceAuthUsername,
+					RepoAnnouncementAddr:     cfg.HiveCI.Initiator.RepoAnnouncementAddr,
+					TrustedCIPubkeys:         cfg.HiveCI.TrustedCIPubkeys,
+					TrustedLoomWorkerPubkeys: cfg.HiveCI.TrustedLoomWorkerPubkeys,
+					RelayHint:                cfg.HiveCI.Initiator.RelayHint,
 				},
 				logger,
+				giteaAdapter.WithLoomJobSubmitter(hiveCIJobClient),
 			)
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
