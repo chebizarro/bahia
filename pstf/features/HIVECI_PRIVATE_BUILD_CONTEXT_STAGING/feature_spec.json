@@ -1,0 +1,13 @@
+{
+  "feature_id": "HIVECI_PRIVATE_BUILD_CONTEXT_STAGING",
+  "task": "hiveci-private-build-context-staging-20260909",
+  "intent": "Let Loom stage only fleet-authorized sibling repositories without exposing the private-mirror credential to repository-controlled workflow code.",
+  "wire_contract": {
+    "kind": 5100,
+    "tag": ["dep", "<name>", "<credential-free-https-clone-url>", "<40-hex-commit-sha>"],
+    "repeatable": true,
+    "revision_source": "fleet Gitea default-branch head resolved at dispatch",
+    "workflow_controlled": false
+  },
+  "authorization_source": "hiveci.policies[].build_dependencies bound to the configured Bahia service"
+}

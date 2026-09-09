@@ -1,0 +1,25 @@
+{
+  "feature_id": "HIVECI_PRIVATE_BUILD_CONTEXT_STAGING",
+  "tests": [
+    {
+      "name": "Fleet Gitea dependency resolution and initiator dispatch",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/adapters/gitea -count=1",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"]
+    },
+    {
+      "name": "Kind-5100 dependency wire validation",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/adapters/loom -count=1",
+      "criteria": ["AC1", "AC3", "AC4"]
+    },
+    {
+      "name": "Fleet policy configuration and external-run dispatch",
+      "command": "GOFLAGS=-buildvcs=false go test ./internal/config ./internal/app ./internal/adapters/hiveci -count=1",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"]
+    },
+    {
+      "name": "Repository-wide Go gates",
+      "command": "GOFLAGS=-buildvcs=false go build ./... && GOFLAGS=-buildvcs=false go test ./...",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"]
+    }
+  ]
+}

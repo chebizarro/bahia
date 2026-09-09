@@ -246,6 +246,7 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 			"payment":  "forged-payment",
 			"p":        strings.Repeat("f", 64),
 			"secret":   "forged-secret",
+			"dep":      "forged-dependency",
 		},
 	})
 	if err != nil {
@@ -265,10 +266,83 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 			t.Fatalf("%s tag = %q, want %q", key, got, want)
 		}
 	}
-	for _, forbidden := range []string{"payment", "p", "secret"} {
+	for _, forbidden := range []string{"payment", "p", "secret", "dep"} {
 		if got := getTagValue(event.Tags, forbidden); got != "" {
 			t.Fatalf("forbidden %s tag projected as %q", forbidden, got)
 		}
+	}
+}
+
+func TestSubmitJob_EmitsSortedImmutableAuthorizedDependencyTags(t *testing.T) {
+	pool := &submitRelayPool{}
+	client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
+	_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{
+		{Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git", CommitSHA: strings.Repeat("b", 40)},
+		{Name: "cascadia-go", CloneURL: "https://git.sharegap.net/cascadia/cascadia-go.git", CommitSHA: strings.Repeat("a", 40)},
+	}})
+	if err != nil {
+		t.Fatalf("SubmitJob() error = %v", err)
+	}
+	var got nostr.Tags
+	for _, tag := range pool.published[0].Tags {
+		if len(tag) > 0 && tag[0] == "dep" {
+			got = append(got, tag)
+		}
+	}
+	want := nostr.Tags{
+		{"dep", "cascadia-go", "https://git.sharegap.net/cascadia/cascadia-go.git", strings.Repeat("a", 40)},
+		{"dep", "drydock", "https://git.sharegap.net/cascadia/drydock.git", strings.Repeat("b", 40)},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("dep tags = %v, want %v", got, want)
+	}
+}
+
+func TestSubmitJob_RejectsFloatingDependencyReferencesBeforePublish(t *testing.T) {
+	for _, ref := range []string{"main", "v1.2.3", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
+		t.Run(ref, func(t *testing.T) {
+			pool := &submitRelayPool{}
+			client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
+			_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{{
+				Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git", CommitSHA: ref,
+			}}})
+			if err == nil || !strings.Contains(err.Error(), "immutable 40-hex") || len(pool.published) != 0 {
+				t.Fatalf("SubmitJob() error=%v publishes=%d, want immutable-ref rejection before publish", err, len(pool.published))
+			}
+		})
+	}
+}
+
+func TestSubmitJob_RejectsCredentialBearingAndNonHTTPSDependencyURLsWithoutLeaks(t *testing.T) {
+	secret := "dependency-password-must-not-leak"
+	urls := []string{
+		"http://git.sharegap.net/cascadia/drydock.git",
+		"ssh://git.sharegap.net/cascadia/drydock.git",
+		"/cascadia/drydock.git",
+		"https://user:" + secret + "@git.sharegap.net/cascadia/drydock.git",
+		"https://git.sharegap.net/cascadia/drydock.git?token=" + secret,
+		"https://git.sharegap.net/cascadia/drydock.git#" + secret,
+	}
+	for index, cloneURL := range urls {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			pool := &submitRelayPool{}
+			core, logs := observer.New(zap.DebugLevel)
+			client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.New(core)}
+			_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{{
+				Name: "drydock", CloneURL: cloneURL, CommitSHA: strings.Repeat("a", 40),
+			}}})
+			if err == nil || !strings.Contains(err.Error(), "credential-free absolute HTTPS") || len(pool.published) != 0 {
+				t.Fatalf("SubmitJob() error=%v publishes=%d, want URL rejection before publish", err, len(pool.published))
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("secret reached error: %q", err)
+			}
+			for _, entry := range logs.All() {
+				if strings.Contains(entry.Message+fmt.Sprint(entry.ContextMap()), secret) {
+					t.Fatal("secret reached log output")
+				}
+			}
+		})
 	}
 }
 

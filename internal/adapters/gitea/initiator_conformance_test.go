@@ -87,15 +87,16 @@ func (p *capturingPublisher) Publish(_ context.Context, ev nostr.Event) (int, er
 // chebizarro/living-library-forge. Migration succeeds only when the request
 // presents the correct upstream credential.
 type fakeGitea struct {
-	mu                 sync.Mutex
-	mirrored           bool
-	migrateCalls       int
-	syncCalls          int
-	sourceCloneURL     string
-	sourceService      string
-	sourceAuthUsername string
-	mirrorCloneURL     string
-	migrationRequest   map[string]any
+	mu                     sync.Mutex
+	mirrored               bool
+	migrateCalls           int
+	syncCalls              int
+	sourceCloneURL         string
+	sourceService          string
+	sourceAuthUsername     string
+	mirrorCloneURL         string
+	migrationRequest       map[string]any
+	dependencyResolveCalls int
 }
 
 func (g *fakeGitea) handler(t *testing.T) http.Handler {
@@ -163,6 +164,14 @@ func (g *fakeGitea) handler(t *testing.T) http.Handler {
 				return
 			}
 			_, _ = w.Write([]byte(`{"commit":{"id":"` + testCommitSHA + `"}}`))
+		case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/repos/cascadia/cascadia-go" || r.URL.Path == "/api/v1/repos/cascadia/drydock"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main", "private": strings.HasSuffix(r.URL.Path, "/drydock")})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/cascadia/cascadia-go/branches/main":
+			g.dependencyResolveCalls++
+			_, _ = w.Write([]byte(`{"commit":{"id":"` + strings.Repeat("a", 40) + `"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/cascadia/drydock/branches/main":
+			g.dependencyResolveCalls++
+			_, _ = w.Write([]byte(`{"commit":{"id":"` + strings.Repeat("b", 40) + `"}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -244,6 +253,13 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	defer server.Close()
 
 	initiator, publisher, _, credentialRef, logs := newConformanceInitiator(t, server)
+	initiator.cfg.BuildDependencyAuthorizations = []BuildDependencyAuthorization{{
+		ServiceID: testServiceID,
+		Dependencies: []BuildDependencySpec{
+			{Name: "cascadia-go", CloneURL: "https://git.fleet.internal/cascadia/cascadia-go.git"},
+			{Name: "drydock", CloneURL: "https://git.fleet.internal/cascadia/drydock.git"},
+		},
+	}}
 	req := arcanaStartRequest(credentialRef)
 
 	result, err := initiator.StartHiveCIBuild(context.Background(), req)
@@ -368,6 +384,10 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if job.PaymentToken != "" {
 		t.Fatalf("fleet-internal Hive-CI job carried payment token")
 	}
+	if len(job.BuildDependencies) != 2 || job.BuildDependencies[0].CommitSHA != strings.Repeat("a", 40) ||
+		job.BuildDependencies[1].CommitSHA != strings.Repeat("b", 40) {
+		t.Fatalf("authorized immutable build dependencies = %#v", job.BuildDependencies)
+	}
 
 	// Secret hygiene: the credential must never appear in any published
 	// Nostr event or any log entry.
@@ -405,6 +425,51 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	}
 	if len(publisher.events) != 2 {
 		t.Fatalf("replay must not publish new events, got %d", len(publisher.events))
+	}
+	if gitea.dependencyResolveCalls != 2 {
+		t.Fatalf("replay re-resolved dependencies: calls=%d, want 2", gitea.dependencyResolveCalls)
+	}
+}
+
+func TestConformanceUnresolvableBuildDependencyFailsBeforeRunOrJobPublish(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+	initiator, publisher, _, credentialRef, _ := newConformanceInitiator(t, server)
+	initiator.cfg.BuildDependencyAuthorizations = []BuildDependencyAuthorization{{
+		ServiceID:    testServiceID,
+		Dependencies: []BuildDependencySpec{{Name: "missing", CloneURL: "https://git.fleet.internal/cascadia/missing.git"}},
+	}}
+	_, err := initiator.StartHiveCIBuild(t.Context(), arcanaStartRequest(credentialRef))
+	if err == nil || !strings.Contains(err.Error(), "pin fleet-authorized build dependencies") {
+		t.Fatalf("StartHiveCIBuild() error = %v", err)
+	}
+	if len(publisher.events) != 0 || len(initiator.loom.(*capturingLoomSubmitter).jobs) != 0 {
+		t.Fatalf("unresolved dependency published events=%d jobs=%d", len(publisher.events), len(initiator.loom.(*capturingLoomSubmitter).jobs))
+	}
+}
+
+func TestConformanceCredentialBearingBuildDependencyFailsWithoutSecretLeak(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+	initiator, publisher, _, credentialRef, logs := newConformanceInitiator(t, server)
+	secret := "dependency-password-must-not-leak"
+	initiator.cfg.BuildDependencyAuthorizations = []BuildDependencyAuthorization{{
+		ServiceID:    testServiceID,
+		Dependencies: []BuildDependencySpec{{Name: "drydock", CloneURL: "https://user:" + secret + "@git.fleet.internal/cascadia/drydock.git"}},
+	}}
+	_, err := initiator.StartHiveCIBuild(t.Context(), arcanaStartRequest(credentialRef))
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("StartHiveCIBuild() error = %v", err)
+	}
+	if len(publisher.events) != 0 || len(initiator.loom.(*capturingLoomSubmitter).jobs) != 0 {
+		t.Fatalf("unsafe dependency published events=%d jobs=%d", len(publisher.events), len(initiator.loom.(*capturingLoomSubmitter).jobs))
+	}
+	for _, entry := range logs.All() {
+		if strings.Contains(entry.Message+fmt.Sprint(entry.ContextMap()), secret) {
+			t.Fatal("dependency credential reached logs")
+		}
 	}
 }
 

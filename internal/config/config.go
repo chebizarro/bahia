@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -824,13 +825,30 @@ type OCIServiceAccountConfig struct {
 // Policies are matched by (repo_coordinate, workflow_path, service_name,
 // environment_name); if a matching row already exists it is left untouched.
 type HiveCIPolicyConfig struct {
-	RepoCoordinate  string         `koanf:"repo_coordinate" yaml:"repo_coordinate"`
-	WorkflowPath    string         `koanf:"workflow_path" yaml:"workflow_path"`
-	BranchPattern   string         `koanf:"branch_pattern" yaml:"branch_pattern"`
-	ServiceName     string         `koanf:"service_name" yaml:"service_name"`
-	EnvironmentName string         `koanf:"environment_name" yaml:"environment_name"`
-	Enabled         *bool          `koanf:"enabled" yaml:"enabled"`
-	Metadata        map[string]any `koanf:"metadata" yaml:"metadata"`
+	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate"`
+	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path"`
+	BranchPattern     string                        `koanf:"branch_pattern" yaml:"branch_pattern"`
+	ServiceName       string                        `koanf:"service_name" yaml:"service_name"`
+	EnvironmentName   string                        `koanf:"environment_name" yaml:"environment_name"`
+	Enabled           *bool                         `koanf:"enabled" yaml:"enabled"`
+	Metadata          map[string]any                `koanf:"metadata" yaml:"metadata"`
+	BuildDependencies []HiveCIBuildDependencyConfig `koanf:"build_dependencies" yaml:"build_dependencies"`
+}
+
+// HiveCIBuildDependencyConfig declares one fleet-authorized build context.
+// The repository's default-branch head is resolved to an immutable commit at
+// dispatch time; repository-controlled workflow input never selects dependencies.
+type HiveCIBuildDependencyConfig struct {
+	Name     string `koanf:"name" yaml:"name"`
+	CloneURL string `koanf:"clone_url" yaml:"clone_url"`
+}
+
+// HiveCIDependencyGiteaConfig configures read-only fleet Gitea access for
+// resolving authorized build dependencies. When omitted, the existing private
+// mirror initiator endpoint is reused.
+type HiveCIDependencyGiteaConfig struct {
+	BaseURL string `koanf:"base_url" yaml:"base_url"`
+	Token   string `koanf:"token" yaml:"token"`
 }
 
 // HiveCIInitiatorConfig configures the fleet Gitea private-mirror and Hive-CI
@@ -874,11 +892,110 @@ type HiveCIConfig struct {
 	// already-running, observation-verified image as governed build/artifact
 	// lineage. It exists so bridging live reality never requires direct
 	// database mutation; CI-attested registration remains the norm.
-	AllowLiveArtifactImport bool                  `koanf:"allow_live_artifact_import"`
-	RetryInterval           time.Duration         `koanf:"retry_interval"`
-	MaxRetries              int                   `koanf:"max_retries"`
-	Policies                []HiveCIPolicyConfig  `koanf:"policies" yaml:"policies"`
-	Initiator               HiveCIInitiatorConfig `koanf:"initiator" yaml:"initiator"`
+	AllowLiveArtifactImport bool                        `koanf:"allow_live_artifact_import"`
+	RetryInterval           time.Duration               `koanf:"retry_interval"`
+	MaxRetries              int                         `koanf:"max_retries"`
+	Policies                []HiveCIPolicyConfig        `koanf:"policies" yaml:"policies"`
+	DependencyGitea         HiveCIDependencyGiteaConfig `koanf:"dependency_gitea" yaml:"dependency_gitea"`
+	Initiator               HiveCIInitiatorConfig       `koanf:"initiator" yaml:"initiator"`
+}
+
+var hiveCIDependencyNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// DependencyGiteaEndpoint returns the dedicated dependency resolver endpoint,
+// falling back to the existing private-mirror endpoint when it is configured.
+func (c HiveCIConfig) DependencyGiteaEndpoint() (string, string) {
+	baseURL := strings.TrimSpace(c.DependencyGitea.BaseURL)
+	token := strings.TrimSpace(c.DependencyGitea.Token)
+	if baseURL != "" || token != "" {
+		return baseURL, token
+	}
+	return strings.TrimSpace(c.Initiator.GiteaBaseURL), strings.TrimSpace(c.Initiator.GiteaToken)
+}
+
+func (c *Config) validateHiveCIBuildDependencies() error {
+	hasDependencies := false
+	for _, policy := range c.HiveCI.Policies {
+		if (policy.Enabled == nil || *policy.Enabled) && len(policy.BuildDependencies) > 0 {
+			hasDependencies = true
+			break
+		}
+	}
+	if !hasDependencies {
+		return nil
+	}
+	baseURL, token := c.HiveCI.DependencyGiteaEndpoint()
+	if baseURL == "" || token == "" {
+		return fmt.Errorf("config validation failed: hiveci dependency Gitea base_url and token are required when build_dependencies are configured")
+	}
+	baseOrigin, err := hiveCIDependencyOrigin(baseURL)
+	if err != nil {
+		return fmt.Errorf("config validation failed: hiveci dependency Gitea base_url must be a credential-free https URL")
+	}
+	seenServices := make(map[string]string)
+	for policyIndex := range c.HiveCI.Policies {
+		policy := &c.HiveCI.Policies[policyIndex]
+		if policy.Enabled != nil && !*policy.Enabled {
+			continue
+		}
+		serviceName := strings.TrimSpace(policy.ServiceName)
+		if serviceName == "" {
+			return fmt.Errorf("config validation failed: hiveci dependency policies require a service_name")
+		}
+		seenNames := make(map[string]struct{}, len(policy.BuildDependencies))
+		canonical := make([]string, 0, len(policy.BuildDependencies))
+		for dependencyIndex := range policy.BuildDependencies {
+			dependency := &policy.BuildDependencies[dependencyIndex]
+			dependency.Name = strings.TrimSpace(dependency.Name)
+			dependency.CloneURL = strings.TrimSpace(dependency.CloneURL)
+			if !hiveCIDependencyNamePattern.MatchString(dependency.Name) {
+				return fmt.Errorf("config validation failed: hiveci policy %d build dependency %d has an invalid name", policyIndex, dependencyIndex)
+			}
+			if _, duplicate := seenNames[dependency.Name]; duplicate {
+				return fmt.Errorf("config validation failed: hiveci policy %d has duplicate build dependency name %q", policyIndex, dependency.Name)
+			}
+			seenNames[dependency.Name] = struct{}{}
+			origin, err := hiveCIDependencyCloneOrigin(dependency.CloneURL)
+			if err != nil || origin != baseOrigin {
+				return fmt.Errorf("config validation failed: hiveci policy %d build dependency %d clone_url must be a credential-free https URL on the configured fleet Gitea origin", policyIndex, dependencyIndex)
+			}
+			canonical = append(canonical, dependency.Name+"\x00"+dependency.CloneURL)
+		}
+		sort.Strings(canonical)
+		signature := strings.Join(canonical, "\x01")
+		if prior, duplicate := seenServices[serviceName]; duplicate && prior != signature {
+			return fmt.Errorf("config validation failed: hiveci policies for one service must authorize the same build dependencies")
+		}
+		seenServices[serviceName] = signature
+	}
+	return nil
+}
+
+func hiveCIDependencyOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid URL")
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("invalid URL")
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
+}
+
+func hiveCIDependencyCloneOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid URL")
+	}
+	if strings.ContainsAny(raw, "\r\n\t ") || strings.Contains(parsed.EscapedPath(), "%") {
+		return "", fmt.Errorf("invalid URL")
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(parsed.Path, "/"), ".git")
+	pathParts := strings.Split(path, "/")
+	if len(pathParts) != 2 || pathParts[0] == "" || pathParts[1] == "" || pathParts[0] == "." || pathParts[0] == ".." || pathParts[1] == "." || pathParts[1] == ".." {
+		return "", fmt.Errorf("invalid URL")
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -1420,6 +1537,11 @@ func (c *Config) validate() error {
 		c.HiveCI.TrustedReleaseAttestors = trustedAttestors
 		if len(c.HiveCI.TrustedCIPubkeys) == 0 {
 			return fmt.Errorf("config validation failed: hiveci.trusted_ci_pubkeys is required when hiveci.enabled=true")
+		}
+	}
+	if c.HiveCI.Enabled || c.HiveCI.Initiator.Enabled {
+		if err := c.validateHiveCIBuildDependencies(); err != nil {
+			return err
 		}
 	}
 	if c.HiveCI.RetryInterval <= 0 {

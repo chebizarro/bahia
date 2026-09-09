@@ -1,0 +1,25 @@
+{
+  "feature_id": "HIVECI_PRIVATE_BUILD_CONTEXT_STAGING",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Bahia resolves the complete fleet-configured service dependency set to immutable lowercase 40-hex commits and emits one exact dep tag per dependency.",
+      "verification": ["TestBuildDependencyResolverPinsAuthorizedDefaultBranchHeads", "TestSubmitJob_EmitsSortedImmutableAuthorizedDependencyTags", "TestConformancePrivateMirrorBuildInitiation"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Any missing or unresolvable dependency prevents workflow-run and Loom job publication without a partial dependency set.",
+      "verification": ["TestBuildDependencyResolverFailsClosedWithoutPartialPins", "TestConformanceUnresolvableBuildDependencyFailsBeforeRunOrJobPublish", "TestHiveCIRunDispatcherResolutionFailurePreventsPublish"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Floating revisions, non-HTTPS URLs, userinfo, query credentials, fragments, foreign Gitea origins, and forged generic dep params are rejected before publication without leaking secrets.",
+      "verification": ["TestSubmitJob_RejectsFloatingDependencyReferencesBeforePublish", "TestSubmitJob_RejectsCredentialBearingAndNonHTTPSDependencyURLsWithoutLeaks", "TestBuildDependencyResolverRejectsUnsafeCloneURLsWithoutEchoingSecrets", "TestHiveCIRunDispatcherDoesNotLogCredentialBearingDependencyURL"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Capability-gated worker selection, encrypted mirror-read credential delivery, no-payment behavior, the kind-5401 contract, and exact replay deduplication remain unchanged.",
+      "verification": ["TestConformancePrivateMirrorBuildInitiation", "TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment", "TestReleaseWorkflowRunReplayDispatchesOnlyOnce"]
+    }
+  ]
+}

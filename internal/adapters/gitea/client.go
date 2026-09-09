@@ -140,10 +140,11 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 // RepoInfo is the subset of fleet Gitea repository metadata needed to decide
 // whether an existing repository is a trustworthy private mirror.
 type RepoInfo struct {
-	Private     bool   `json:"private"`
-	Mirror      bool   `json:"mirror"`
-	OriginalURL string `json:"original_url"`
-	CloneURL    string `json:"clone_url"`
+	Private       bool   `json:"private"`
+	Mirror        bool   `json:"mirror"`
+	OriginalURL   string `json:"original_url"`
+	CloneURL      string `json:"clone_url"`
+	DefaultBranch string `json:"default_branch"`
 }
 
 // GetRepo returns repository metadata, or (nil, nil) when it does not exist.

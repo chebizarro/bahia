@@ -949,37 +949,19 @@ func New(cfg *config.Config) (*App, error) {
 				}
 			})
 		}
-		hiveSub.SetRunConsumer(func(ctx context.Context, run hiveciAdapter.WorkflowRunDispatch) {
-			if !run.Release {
-				return
-			}
-			if strings.TrimSpace(run.Repository) == "" || strings.TrimSpace(run.Ref) == "" {
-				logger.Warn("release workflow run is missing repository/ref; refusing Loom dispatch",
-					zap.String("run_event_id", run.RunEventID))
-				return
-			}
-			jobID, err := loomClient.SubmitJob(ctx, loom.JobRequest{
-				ID:               run.RunEventID,
-				Type:             "build",
-				RequiredSoftware: []string{"git", "act", "docker"},
-				Params: map[string]string{
-					"method":   "ci/workflow-run",
-					"run":      run.RunEventID,
-					"repo":     run.Repository,
-					"ref":      run.Ref,
-					"workflow": run.Workflow,
-					"event":    "push",
-				},
-			})
+		var dependencyPinner hiveCIDependencyPinner
+		if hiveCIHasBuildDependencies(cfg.HiveCI.Policies) {
+			baseURL, token := cfg.HiveCI.DependencyGiteaEndpoint()
+			dependencyResolver, err := giteaAdapter.NewBuildDependencyResolver(
+				giteaAdapter.NewAPIClient(baseURL, token, nil), baseURL,
+			)
 			if err != nil {
-				logger.Error("failed to dispatch release workflow to Loom",
-					zap.String("run_event_id", run.RunEventID), zap.Error(err))
-				return
+				return nil, fmt.Errorf("configure Hive-CI build dependency resolver: %w", err)
 			}
-			logger.Info("release workflow dispatched to Loom",
-				zap.String("run_event_id", run.RunEventID), zap.String("loom_job_id", jobID),
-				zap.String("ref", run.Ref), zap.String("commit", run.CommitSHA))
-		})
+			dependencyPinner = dependencyResolver
+		}
+		runDispatcher := newHiveCIRunDispatcher(cfg.HiveCI.Policies, dependencyPinner, loomClient, logger)
+		hiveSub.SetRunConsumer(runDispatcher.Dispatch)
 		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
 
@@ -1461,6 +1443,10 @@ func New(cfg *config.Config) (*App, error) {
 		// fail-closed error instead of falling back to credential-bearing flows.
 		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
 		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil {
+			dependencyAuthorizations, err := hiveCIBuildDependencyAuthorizations(ctx, cfg.HiveCI.Policies, serviceRepo)
+			if err != nil {
+				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
+			}
 			hiveCIBuildStarter = giteaAdapter.NewInitiator(
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
 				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
@@ -1468,18 +1454,19 @@ func New(cfg *config.Config) (*App, error) {
 				controlPlaneSigner,
 				giteaAdapter.NewMemoryInitiationStore(),
 				giteaAdapter.InitiatorConfig{
-					GiteaBaseURL:             cfg.HiveCI.Initiator.GiteaBaseURL,
-					MirrorOwner:              cfg.HiveCI.Initiator.MirrorOwner,
-					WorkflowPath:             cfg.HiveCI.Initiator.WorkflowPath,
-					SourceProvider:           cfg.HiveCI.Initiator.SourceProvider,
-					SourceCloneURL:           cfg.HiveCI.Initiator.SourceCloneURL,
-					SourceAuthUsername:       cfg.HiveCI.Initiator.SourceAuthUsername,
-					MirrorReadUsername:       cfg.HiveCI.Initiator.MirrorReadUsername,
-					MirrorReadCredentialRef:  cfg.HiveCI.Initiator.MirrorReadCredentialRef,
-					RepoAnnouncementAddr:     cfg.HiveCI.Initiator.RepoAnnouncementAddr,
-					TrustedCIPubkeys:         cfg.HiveCI.TrustedCIPubkeys,
-					TrustedLoomWorkerPubkeys: cfg.HiveCI.TrustedLoomWorkerPubkeys,
-					RelayHint:                cfg.HiveCI.Initiator.RelayHint,
+					GiteaBaseURL:                  cfg.HiveCI.Initiator.GiteaBaseURL,
+					MirrorOwner:                   cfg.HiveCI.Initiator.MirrorOwner,
+					WorkflowPath:                  cfg.HiveCI.Initiator.WorkflowPath,
+					SourceProvider:                cfg.HiveCI.Initiator.SourceProvider,
+					SourceCloneURL:                cfg.HiveCI.Initiator.SourceCloneURL,
+					SourceAuthUsername:            cfg.HiveCI.Initiator.SourceAuthUsername,
+					MirrorReadUsername:            cfg.HiveCI.Initiator.MirrorReadUsername,
+					MirrorReadCredentialRef:       cfg.HiveCI.Initiator.MirrorReadCredentialRef,
+					RepoAnnouncementAddr:          cfg.HiveCI.Initiator.RepoAnnouncementAddr,
+					TrustedCIPubkeys:              cfg.HiveCI.TrustedCIPubkeys,
+					TrustedLoomWorkerPubkeys:      cfg.HiveCI.TrustedLoomWorkerPubkeys,
+					BuildDependencyAuthorizations: dependencyAuthorizations,
+					RelayHint:                     cfg.HiveCI.Initiator.RelayHint,
 				},
 				logger,
 				giteaAdapter.WithLoomJobSubmitter(hiveCIJobClient),

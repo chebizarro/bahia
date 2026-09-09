@@ -248,6 +248,7 @@ func TestReleaseWorkflowRunDispatchPreservesRepositoryAndRef(t *testing.T) {
 	s.handleEvent(context.Background(), run)
 
 	require.Equal(t, nostrutil.EventIDHex(run), dispatched.RunEventID)
+	require.Equal(t, "30617:pk:bahia", dispatched.RepoCoordinate)
 	require.Equal(t, "https://git.example/bahia.git", dispatched.Repository)
 	require.Equal(t, "refs/tags/v0.2.0-rc.1", dispatched.Ref)
 	require.Equal(t, ".github/workflows/release.yml", dispatched.Workflow)

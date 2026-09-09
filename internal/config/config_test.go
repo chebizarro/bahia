@@ -339,6 +339,91 @@ hiveci:
 	}
 }
 
+func TestLoadHiveCIAuthorizedBuildDependencies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`dev_mode: true
+hiveci:
+  enabled: true
+  trusted_ci_pubkeys:
+    - 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+  dependency_gitea:
+    base_url: https://git.sharegap.net
+    token: fleet-read-token
+  policies:
+    - repo_coordinate: 30617:owner:astillero
+      workflow_path: .gitea/workflows/release.yml
+      service_name: astillero
+      environment_name: edge-01-production
+      build_dependencies:
+        - name: cascadia-go
+          clone_url: https://git.sharegap.net/cascadia/cascadia-go.git
+        - name: drydock
+          clone_url: https://git.sharegap.net/cascadia/drydock.git
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.HiveCI.Policies) != 1 || len(cfg.HiveCI.Policies[0].BuildDependencies) != 2 {
+		t.Fatalf("build dependencies = %#v", cfg.HiveCI.Policies)
+	}
+	baseURL, token := cfg.HiveCI.DependencyGiteaEndpoint()
+	if baseURL != "https://git.sharegap.net" || token != "fleet-read-token" {
+		t.Fatalf("dependency Gitea endpoint = (%q, %q)", baseURL, token)
+	}
+}
+
+func TestLoadHiveCIRejectsUnsafeBuildDependencyConfiguration(t *testing.T) {
+	tests := []struct {
+		name     string
+		cloneURL string
+	}{
+		{name: "plain http", cloneURL: "http://git.sharegap.net/cascadia/drydock.git"},
+		{name: "other origin", cloneURL: "https://other.example/cascadia/drydock.git"},
+		{name: "credential", cloneURL: "https://user:secret@git.sharegap.net/cascadia/drydock.git"},
+		{name: "query credential", cloneURL: "https://git.sharegap.net/cascadia/drydock.git?token=secret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.DevMode = true
+			cfg.HiveCI.Enabled = true
+			cfg.HiveCI.TrustedCIPubkeys = []string{"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}
+			cfg.HiveCI.DependencyGitea = HiveCIDependencyGiteaConfig{BaseURL: "https://git.sharegap.net", Token: "fleet-read-token"}
+			cfg.HiveCI.Policies = []HiveCIPolicyConfig{{
+				RepoCoordinate: "30617:owner:astillero", WorkflowPath: ".gitea/workflows/release.yml", ServiceName: "astillero",
+				BuildDependencies: []HiveCIBuildDependencyConfig{{Name: "drydock", CloneURL: test.cloneURL}},
+			}}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "credential-free https URL") || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("Validate() error = %v, want scrubbed dependency URL rejection", err)
+			}
+		})
+	}
+}
+
+func TestHiveCIDependencyGiteaEndpointFallsBackToInitiator(t *testing.T) {
+	cfg := HiveCIConfig{Initiator: HiveCIInitiatorConfig{GiteaBaseURL: " https://git.sharegap.net ", GiteaToken: " token "}}
+	baseURL, token := cfg.DependencyGiteaEndpoint()
+	if baseURL != "https://git.sharegap.net" || token != "token" {
+		t.Fatalf("fallback endpoint = (%q, %q)", baseURL, token)
+	}
+}
+
+func TestHiveCIDependencyGiteaEndpointNeverMixesDedicatedAndInitiatorCredentials(t *testing.T) {
+	cfg := HiveCIConfig{
+		DependencyGitea: HiveCIDependencyGiteaConfig{BaseURL: "https://dependencies.example"},
+		Initiator:       HiveCIInitiatorConfig{GiteaBaseURL: "https://git.sharegap.net", GiteaToken: "initiator-token"},
+	}
+	baseURL, token := cfg.DependencyGiteaEndpoint()
+	if baseURL != "https://dependencies.example" || token != "" {
+		t.Fatalf("dedicated endpoint = (%q, %q), want no initiator credential mixing", baseURL, token)
+	}
+}
+
 func TestLoadLoomCanonicalProjectionConfigFromYAMLAndEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`mode: full

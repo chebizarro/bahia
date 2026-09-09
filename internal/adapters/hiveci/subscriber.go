@@ -31,12 +31,13 @@ const (
 type ResultConsumer func(ctx context.Context, resultEventID string)
 
 type WorkflowRunDispatch struct {
-	RunEventID string
-	Repository string
-	Ref        string
-	Workflow   string
-	CommitSHA  string
-	Release    bool
+	RunEventID     string
+	RepoCoordinate string
+	Repository     string
+	Ref            string
+	Workflow       string
+	CommitSHA      string
+	Release        bool
 }
 
 type RunConsumer func(ctx context.Context, run WorkflowRunDispatch)
@@ -393,12 +394,13 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 	// results for the same run.
 	if existing == nil && s.onRun != nil {
 		s.onRun(ctx, WorkflowRunDispatch{
-			RunEventID: eventID,
-			Repository: optionalTag(ev, "repo"),
-			Ref:        optionalTag(ev, "ref"),
-			Workflow:   workflow,
-			CommitSHA:  commit,
-			Release:    optionalTag(ev, "release") == "true",
+			RunEventID:     eventID,
+			RepoCoordinate: repoCoordinate,
+			Repository:     optionalTag(ev, "repo"),
+			Ref:            optionalTag(ev, "ref"),
+			Workflow:       workflow,
+			CommitSHA:      commit,
+			Release:        optionalTag(ev, "release") == "true",
 		})
 	}
 	s.logger.Info("hiveci workflow run ingested", zap.String("run_event_id", eventID), zap.String("workflow", workflow), zap.String("commit", commit))

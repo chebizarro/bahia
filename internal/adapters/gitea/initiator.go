@@ -127,11 +127,21 @@ type InitiatorConfig struct {
 	// signer allowlist. Keeping them identical prevents dispatching work whose
 	// worker-signed 5402 Bahia would reject.
 	TrustedLoomWorkerPubkeys []string
+	// BuildDependencyAuthorizations are resolved from fleet-owned service
+	// policies at startup. Repository-controlled workflow input cannot alter them.
+	BuildDependencyAuthorizations []BuildDependencyAuthorization
 	// RelayHint is included on published events so consumers can locate them.
 	RelayHint string
 	// RefResolveAttempts and RefResolveDelay bound the mirror-sync poll loop.
 	RefResolveAttempts int
 	RefResolveDelay    time.Duration
+}
+
+// BuildDependencyAuthorization binds one complete dependency set to a Bahia
+// service. An empty set is still an explicit authorization.
+type BuildDependencyAuthorization struct {
+	ServiceID    uuid.UUID
+	Dependencies []BuildDependencySpec
 }
 
 const (
@@ -341,6 +351,10 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	if err != nil {
 		return nil, scrubSecrets(err, token, mirrorReadPassword)
 	}
+	pinnedDependencies, err := i.resolveAuthorizedBuildDependencies(ctx, req.ServiceID)
+	if err != nil {
+		return nil, scrubSecrets(err, token, mirrorReadPassword)
+	}
 
 	runRequestID, runEventID, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
 	if err != nil {
@@ -350,7 +364,7 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: runEventID}
 	loomJobID := ""
 	if i.loom != nil {
-		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, mirrorReadUsername, mirrorReadPassword)
+		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, mirrorReadUsername, mirrorReadPassword, pinnedDependencies)
 		if err != nil {
 			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token, mirrorReadPassword)
 		}
@@ -415,7 +429,7 @@ func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, 
 	return source, nil
 }
 
-func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, mirrorReadUsername, mirrorReadPassword string) (string, error) {
+func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, mirrorReadUsername, mirrorReadPassword string, pinnedDependencies []PinnedBuildDependency) (string, error) {
 	if len(i.cfg.TrustedLoomWorkerPubkeys) == 0 {
 		return "", fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
 	}
@@ -429,6 +443,12 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 	if err := validateFleetMirrorCloneURL(repository, i.cfg.GiteaBaseURL, i.cfg.MirrorOwner, name); err != nil {
 		return "", err
 	}
+	dependencies := make([]loomAdapter.BuildDependency, 0, len(pinnedDependencies))
+	for _, dependency := range pinnedDependencies {
+		dependencies = append(dependencies, loomAdapter.BuildDependency{
+			Name: dependency.Name, CloneURL: dependency.CloneURL, CommitSHA: dependency.CommitSHA,
+		})
+	}
 	return i.loom.SubmitJob(ctx, loomAdapter.JobRequest{
 		ID:                   runEventID,
 		ReferencedEventID:    runEventID,
@@ -437,6 +457,7 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 		RequiredWorkloads:    []string{"ci/workflow-run"},
 		RequiredFeatures:     []string{"hive_ci_profile"},
 		AllowedWorkerPubkeys: append([]string(nil), i.cfg.TrustedLoomWorkerPubkeys...),
+		BuildDependencies:    dependencies,
 		Secrets: map[string]string{
 			hiveCIGitUsernameSecretKey: mirrorReadUsername,
 			hiveCIGitPasswordSecretKey: mirrorReadPassword,
@@ -451,6 +472,35 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 			"event":    "push",
 		},
 	})
+}
+
+func (i *Initiator) resolveAuthorizedBuildDependencies(ctx context.Context, serviceID uuid.UUID) ([]PinnedBuildDependency, error) {
+	if i.loom == nil {
+		return nil, nil
+	}
+	if len(i.cfg.BuildDependencyAuthorizations) == 0 {
+		return nil, nil
+	}
+	for _, authorization := range i.cfg.BuildDependencyAuthorizations {
+		if authorization.ServiceID != serviceID {
+			continue
+		}
+		if len(authorization.Dependencies) == 0 {
+			return nil, nil
+		}
+		resolver, err := NewBuildDependencyResolver(i.client, i.cfg.GiteaBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("configure build dependency resolver: %w", err)
+		}
+		resolveCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		pins, err := resolver.Resolve(resolveCtx, authorization.Dependencies)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("pin fleet-authorized build dependencies: %w", err)
+		}
+		return pins, nil
+	}
+	return nil, fmt.Errorf("selected service has no build dependency authorization")
 }
 
 func validateFleetMirrorCloneURL(raw, giteaBaseURL, owner, name string) error {

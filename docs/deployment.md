@@ -447,6 +447,12 @@ hiveci:
   trusted_loom_worker_pubkeys:
     - <loom-worker-pubkey>
 
+  # Read-only fleet Gitea access for pinning authorized build dependencies.
+  # If omitted, Bahia reuses hiveci.initiator.gitea_base_url/gitea_token.
+  dependency_gitea:
+    base_url: https://git.example
+    token: <fleet-gitea-read-token>
+
   # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results.
   # Omit this block unless the second release-provenance event and Bahia OCI
   # evidence service are both deployed.
@@ -472,6 +478,28 @@ hiveci:
   retry_interval: 30s
   max_retries: 10
 ```
+
+Services that need named build contexts declare the complete authorized set on
+their `hiveci.policies` entry:
+
+```yaml
+hiveci:
+  policies:
+    - repo_coordinate: "30617:<owner-pubkey>:astillero"
+      workflow_path: ".gitea/workflows/release.yml"
+      service_name: astillero
+      environment_name: edge-01-production
+      build_dependencies:
+        - name: cascadia-go
+          clone_url: https://git.example/cascadia/cascadia-go.git
+        - name: drydock
+          clone_url: https://git.example/cascadia/drydock.git
+```
+
+The dependency list is fleet configuration, not workflow input. At dispatch,
+Bahia resolves each repository's default-branch head to a full commit SHA and
+places only the credential-free URL and immutable SHA in the kind-5100 `dep`
+tag. Resolution or validation failure prevents job publication.
 
 ### Promoting a registered release
 

@@ -301,6 +301,11 @@ hiveci:
     - "<grasp-gitea-5401-signer-hex>"
   trusted_loom_worker_pubkeys:
     - "<loom-worker-5402-signer-hex>"
+  dependency_gitea:
+    # Use a read-only API token. These credentials resolve refs in Bahia only;
+    # they are never placed in the signed job or given to workflow code.
+    base_url: "https://git.sharegap.net"
+    token: "<fleet-gitea-read-token>"
   policies:
     # Map the RELEASE workflow, not ci.yml. grasp-gitea publishes one 5401 per
     # discovered workflow file, but only .gitea/workflows/release.yml builds and
@@ -312,6 +317,13 @@ hiveci:
       branch_pattern: "main"
       service_name: astillero
       environment_name: edge-01-production
+      # This fleet-owned service policy is the complete dependency allowlist.
+      # The Astillero repository and its workflow cannot add or redirect one.
+      build_dependencies:
+        - name: cascadia-go
+          clone_url: "https://git.sharegap.net/cascadia/cascadia-go.git"
+        - name: drydock
+          clone_url: "https://git.sharegap.net/cascadia/drydock.git"
 
 harbor:
   enabled: true
@@ -332,6 +344,16 @@ it builds and pushes the immutable image (supplying the `cascadia-go` and
 manifest digest, and prints exactly one `BAHIA_ARTIFACT` line for Loom to copy
 into the signed 5402. Astillero's older `ci.yml` only builds and tests, so it
 produces no artifact identity and should not be mapped by a pipeline policy.
+
+Before publishing each kind-5100 job, Bahia resolves every configured dependency's
+current default-branch head through the fleet Gitea API and emits one repeatable
+`["dep", "<name>", "<credential-free-https-url>", "<40-hex-sha>"]` tag.
+The signed job therefore records immutable provenance without requiring an
+operator config edit whenever a dependency advances. Any missing repository,
+unresolvable head, non-HTTPS or credential-bearing URL, or non-immutable result
+fails closed before the Loom job is published. Static branch/tag values are not
+accepted on the wire. A replay of the same 5401 remains covered by the persisted
+run-event guard and does not resolve or dispatch again.
 
 Registration is not promotion. A registered artifact is digest-pinned and
 inert until a separately authorized Bahia deployment promotes it.
