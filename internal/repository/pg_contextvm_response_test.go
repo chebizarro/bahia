@@ -18,23 +18,24 @@ func TestPgContextVMResponseStorePutGetAndDelete(t *testing.T) {
 	store := newPgContextVMResponseStoreWithDB(mock)
 	createdAt := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	record := ContextVMResponseRecord{
-		RequesterPubkey: "requester",
-		Method:          "service/deploy",
-		ProgressToken:   "deploy-1",
-		Response:        []byte(`{"jsonrpc":"2.0","id":1,"result":{"accepted":true}}`),
-		CreatedAt:       createdAt,
+		RequesterPubkey:    "requester",
+		Method:             "service/deploy",
+		ProgressToken:      "deploy-1",
+		RequestFingerprint: "fingerprint",
+		Response:           []byte(`{"jsonrpc":"2.0","id":1,"result":{"accepted":true}}`),
+		CreatedAt:          createdAt,
 	}
 
 	mock.ExpectExec("INSERT INTO contextvm_responses").
-		WithArgs(record.RequesterPubkey, record.Method, record.ProgressToken, record.Response, createdAt).
+		WithArgs(record.RequesterPubkey, record.Method, record.ProgressToken, record.RequestFingerprint, record.Response, createdAt).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 	require.NoError(t, store.Put(ctx, record))
 
 	createdAfter := createdAt.Add(-time.Hour)
 	mock.ExpectQuery("FROM contextvm_responses").
 		WithArgs(record.RequesterPubkey, record.Method, record.ProgressToken, createdAfter).
-		WillReturnRows(pgxmock.NewRows([]string{"requester_pubkey", "method", "progress_token", "response", "created_at"}).
-			AddRow(record.RequesterPubkey, record.Method, record.ProgressToken, record.Response, createdAt))
+		WillReturnRows(pgxmock.NewRows([]string{"requester_pubkey", "method", "progress_token", "request_fingerprint", "response", "created_at"}).
+			AddRow(record.RequesterPubkey, record.Method, record.ProgressToken, record.RequestFingerprint, record.Response, createdAt))
 	got, err := store.Get(ctx, record.RequesterPubkey, record.Method, record.ProgressToken, createdAfter)
 	require.NoError(t, err)
 	require.Equal(t, &record, got)
@@ -55,10 +56,32 @@ func TestPgContextVMResponseStoreGetMissing(t *testing.T) {
 	createdAfter := time.Now().UTC().Add(-24 * time.Hour)
 	mock.ExpectQuery("FROM contextvm_responses").
 		WithArgs("requester", "service/deploy", "missing", createdAfter).
-		WillReturnRows(pgxmock.NewRows([]string{"requester_pubkey", "method", "progress_token", "response", "created_at"}))
+		WillReturnRows(pgxmock.NewRows([]string{"requester_pubkey", "method", "progress_token", "request_fingerprint", "response", "created_at"}))
 
 	got, err := store.Get(context.Background(), "requester", "service/deploy", "missing", createdAfter)
 	require.NoError(t, err)
 	require.Nil(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgContextVMResponseStorePutRejectsFingerprintConflict(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	store := newPgContextVMResponseStoreWithDB(mock)
+	record := ContextVMResponseRecord{
+		RequesterPubkey:    "requester",
+		Method:             "service/deploy",
+		ProgressToken:      "deploy-1",
+		RequestFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Response:           []byte(`{"jsonrpc":"2.0","id":1,"result":true}`),
+		CreatedAt:          time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
+	}
+	mock.ExpectExec("INSERT INTO contextvm_responses").
+		WithArgs(record.RequesterPubkey, record.Method, record.ProgressToken, record.RequestFingerprint, record.Response, record.CreatedAt).
+		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
+
+	err = store.Put(context.Background(), record)
+	require.ErrorIs(t, err, ErrContextVMResponseFingerprintConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
