@@ -10,19 +10,19 @@ import (
 // entrypoints. The handlers publish canonical worker command events and return
 // an immediate receipt; durable state and terminal outcomes are emitted by the
 // worker control-plane handlers as worker status/result/state observables.
-func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport) {
+func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate *FleetOperatorGate) {
 	if transport == nil || transport.responder == nil {
 		return
 	}
 	h := workerContextVMHandlers{publisher: NewWorkerCommandPublisher(transport.responder.publisher, transport.responder.signer)}
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerCleanup, h.cleanup)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, h.cordon)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerUncordon, h.uncordon)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerDrain, h.drain)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerUndrain, h.undrain)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceEnter, h.maintenanceEnter)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceExit, h.maintenanceExit)
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerLabelsUpdate, h.labelsUpdate)
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerCleanup, gate.wrap(h.cleanup))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, gate.wrap(h.cordon))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerUncordon, gate.wrap(h.uncordon))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerDrain, gate.wrap(h.drain))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerUndrain, gate.wrap(h.undrain))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceEnter, gate.wrap(h.maintenanceEnter))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceExit, gate.wrap(h.maintenanceExit))
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerLabelsUpdate, gate.wrap(h.labelsUpdate))
 }
 
 type workerContextVMHandlers struct {

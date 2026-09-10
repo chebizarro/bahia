@@ -41,27 +41,29 @@ type RelayAdminCaller interface {
 }
 
 type RelaySettingsHandlerConfig struct {
-	Config          *config.Config
-	AdminClient     RelayAdminCaller
-	ProjectionStore repository.RelayPolicyProjectionRepository
-	ServicePubkey   string
-	Logger          *zap.Logger
-	Now             func() time.Time
-	FreshnessWindow time.Duration
-	ConfigFabric    *service.ConfigFabricService
+	Config            *config.Config
+	AdminClient       RelayAdminCaller
+	ProjectionStore   repository.RelayPolicyProjectionRepository
+	ServicePubkey     string
+	Logger            *zap.Logger
+	Now               func() time.Time
+	FreshnessWindow   time.Duration
+	ConfigFabric      *service.ConfigFabricService
+	FleetOperatorGate *FleetOperatorGate
 }
 
 type RelaySettingsHandlers struct {
-	cfg             *config.Config
-	admin           RelayAdminCaller
-	projectionStore repository.RelayPolicyProjectionRepository
-	servicePubkey   string
-	publisher       NostrEventPublisher
-	signer          canonicalnostr.Signer
-	logger          *zap.Logger
-	now             func() time.Time
-	freshnessWindow time.Duration
-	configFabric    *service.ConfigFabricService
+	cfg               *config.Config
+	admin             RelayAdminCaller
+	projectionStore   repository.RelayPolicyProjectionRepository
+	servicePubkey     string
+	publisher         NostrEventPublisher
+	signer            canonicalnostr.Signer
+	logger            *zap.Logger
+	now               func() time.Time
+	freshnessWindow   time.Duration
+	configFabric      *service.ConfigFabricService
+	fleetOperatorGate *FleetOperatorGate
 }
 
 // RelayPolicyState is the canonical signed policy payload. It is not the
@@ -167,14 +169,15 @@ func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHand
 		freshnessWindow = defaultRelayPolicyProjectionFreshness
 	}
 	return &RelaySettingsHandlers{
-		cfg:             cfg.Config,
-		admin:           cfg.AdminClient,
-		projectionStore: cfg.ProjectionStore,
-		servicePubkey:   strings.ToLower(strings.TrimSpace(cfg.ServicePubkey)),
-		logger:          logger.Named("relay-settings-contextvm"),
-		now:             now,
-		freshnessWindow: freshnessWindow,
-		configFabric:    cfg.ConfigFabric,
+		cfg:               cfg.Config,
+		admin:             cfg.AdminClient,
+		projectionStore:   cfg.ProjectionStore,
+		servicePubkey:     strings.ToLower(strings.TrimSpace(cfg.ServicePubkey)),
+		logger:            logger.Named("relay-settings-contextvm"),
+		now:               now,
+		freshnessWindow:   freshnessWindow,
+		configFabric:      cfg.ConfigFabric,
+		fleetOperatorGate: cfg.FleetOperatorGate,
 	}
 }
 
@@ -192,11 +195,11 @@ func (h *RelaySettingsHandlers) Register(transport *EncryptedRequestTransport) {
 		h.signer = transport.responder.signer
 	}
 	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyGet, h.GetPolicy)
-	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyApply, h.ApplyPolicy)
-	transport.RegisterContextVMHandler(ContextVMMethodRelayAdminCall, h.CallRelayAdmin)
-	transport.RegisterContextVMHandler(ContextVMMethodConfigReconcile, h.ConfigReconcile)
+	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyApply, h.fleetOperatorGate.wrap(h.ApplyPolicy))
+	transport.RegisterContextVMHandler(ContextVMMethodRelayAdminCall, h.fleetOperatorGate.wrap(h.CallRelayAdmin))
+	transport.RegisterContextVMHandler(ContextVMMethodConfigReconcile, h.fleetOperatorGate.wrap(h.ConfigReconcile))
 	transport.RegisterContextVMHandler(ContextVMMethodConfigStatus, h.ConfigStatus)
-	transport.RegisterContextVMHandler(ContextVMMethodConfigReload, h.ConfigReload)
+	transport.RegisterContextVMHandler(ContextVMMethodConfigReload, h.fleetOperatorGate.wrap(h.ConfigReload))
 }
 
 func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
