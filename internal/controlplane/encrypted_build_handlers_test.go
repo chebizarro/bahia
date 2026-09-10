@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,7 @@ func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBui
 type buildTestRegistry struct {
 	build         *domain.Build
 	builds        []domain.Build
+	registerErr   error
 	calls         int
 	listCalls     int
 	listServiceID uuid.UUID
@@ -109,7 +111,14 @@ type buildTestRegistry struct {
 func (f *buildTestRegistry) RegisterBuild(_ context.Context, build *domain.Build) error {
 	f.build = build
 	f.calls++
-	return nil
+	return f.registerErr
+}
+
+func (f *buildTestRegistry) GetByID(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	if f.build == nil || f.build.ID != id {
+		return nil, nil
+	}
+	return f.build, nil
 }
 
 func (f *buildTestRegistry) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
@@ -129,6 +138,7 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
 		Starter:  starter,
 		Registry: registry,
+		Builds:   registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: payload.ServiceID, OrgID: orgID, ArtifactRepo: payload.ArtifactRepo,
 			Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate},
@@ -141,7 +151,7 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 		t.Fatal(err)
 	}
 	_, err = handler.RequestBuild(context.Background(), ContextVMRequest{
-		Event: &nostr.Event{},
+		Event: &nostr.Event{ID: nostr.ID{1}},
 		RPC:   ContextVMJSONRPCRequest{Params: params},
 	})
 	if err != nil {
@@ -164,6 +174,71 @@ func TestBuildRequestPersistsOnlySafeMetadataAfterInitiatorAcceptance(t *testing
 	}
 }
 
+func TestBuildRequestRecoversCanonicalRowAfterDuplicateInsertRace(t *testing.T) {
+	payload := validArcanaBuildRequest()
+	registry := &buildTestRegistry{registerErr: errors.New("duplicate key value violates unique constraint")}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter:  &buildTestStarter{},
+		Registry: registry,
+		Builds:   registry,
+		Services: buildTestServices{service: &domain.Service{
+			ID: payload.ServiceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
+			Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{
+			ID: payload.RepositoryCredentialRef, ServiceID: payload.ServiceID,
+		}},
+		RBAC: auth.NewRBAC(buildTestMembers{}),
+	})
+	params, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := handler.RequestBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{ID: nostr.ID{1}},
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err != nil {
+		t.Fatalf("RequestBuild() duplicate insert recovery error = %v", err)
+	}
+	if registry.calls != 1 || registry.build == nil || result.(map[string]any)["build_id"] != registry.build.ID {
+		t.Fatalf("duplicate insert recovery result=%#v registry=%#v", result, registry)
+	}
+}
+
+func TestBuildRequestRejectsZeroSourceEventIDBeforeStarting(t *testing.T) {
+	payload := validArcanaBuildRequest()
+	starter := &buildTestStarter{}
+	registry := &buildTestRegistry{}
+	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
+		Starter:  starter,
+		Registry: registry,
+		Builds:   registry,
+		Services: buildTestServices{service: &domain.Service{
+			ID: payload.ServiceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
+			Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate},
+		}},
+		Secrets: buildTestCredentials{secret: &domain.ServiceSecret{
+			ID: payload.RepositoryCredentialRef, ServiceID: payload.ServiceID,
+		}},
+		RBAC: auth.NewRBAC(buildTestMembers{}),
+	})
+	params, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = handler.RequestBuild(context.Background(), ContextVMRequest{
+		Event: &nostr.Event{},
+		RPC:   ContextVMJSONRPCRequest{Params: params},
+	})
+	if err == nil || !strings.Contains(err.Error(), "signed source event ID") {
+		t.Fatalf("zero source event ID error = %v", err)
+	}
+	if starter.calls != 0 || registry.calls != 0 {
+		t.Fatalf("zero source event reached starter=%d registry=%d", starter.calls, registry.calls)
+	}
+}
+
 func TestBuildRequestUsesRegisteredServiceRepositoryCoordinate(t *testing.T) {
 	serviceID := uuid.New()
 	credentialID := uuid.New()
@@ -180,6 +255,7 @@ func TestBuildRequestUsesRegisteredServiceRepositoryCoordinate(t *testing.T) {
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
 		Starter:  starter,
 		Registry: registry,
+		Builds:   registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: serviceID, OrgID: orgID, ArtifactRepo: payload.ArtifactRepo,
 			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
@@ -192,7 +268,7 @@ func TestBuildRequestUsesRegisteredServiceRepositoryCoordinate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = handler.RequestBuild(context.Background(), ContextVMRequest{
-		Event: &nostr.Event{},
+		Event: &nostr.Event{ID: nostr.ID{1}},
 		RPC:   ContextVMJSONRPCRequest{Params: params},
 	})
 	if err != nil {
@@ -221,6 +297,7 @@ func TestBuildRequestRejectsBuildArgsForGenericServiceWithoutAllowlist(t *testin
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
 		Starter:  starter,
 		Registry: registry,
+		Builds:   registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: serviceID, OrgID: uuid.New(), ArtifactRepo: payload.ArtifactRepo,
 			Repository: &domain.RepositoryRef{RepoCoordinate: "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero"},
@@ -248,7 +325,7 @@ func TestBuildRequestTransportReplayInvokesStarterAndRegistryOnce(t *testing.T) 
 	starter := &buildTestStarter{}
 	registry := &buildTestRegistry{}
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Starter: starter, Registry: registry,
+		Starter: starter, Registry: registry, Builds: registry,
 		Services: buildTestServices{service: &domain.Service{
 			ID: serviceID, OrgID: orgID,
 			ArtifactRepo: "harbor.sharegap.net/cascadia/astillero",

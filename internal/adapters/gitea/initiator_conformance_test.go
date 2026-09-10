@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
-	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -26,6 +25,9 @@ import (
 const (
 	testRepositoryCredential = "secret_private_repo_credential_1234567890"
 	testCommitSHA            = "0123456789abcdef0123456789abcdef01234567"
+	// Pin the historical wire value: the Cascadia registry entry is deprecated
+	// and may be removed, but this guard must continue rejecting regressions.
+	historicalContextVMWorkflowRunKind = 25910
 )
 
 type fakeSecretResolver struct {
@@ -248,18 +250,14 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 	if runEvent.ID.Hex() != result.CIRunID {
 		t.Fatalf("run request event ID mismatch")
 	}
+	if int(runEvent.Kind) == historicalContextVMWorkflowRunKind {
+		t.Fatalf("workflow run must not use historical ContextVM kind %d", historicalContextVMWorkflowRunKind)
+	}
 	if int(runEvent.Kind) != 5401 {
 		t.Fatalf("workflow run kind = %d, want wire kind 5401", runEvent.Kind)
 	}
 	if int(runEvent.Kind) != kinds.HiveCIWorkflowRun {
 		t.Fatalf("workflow run kind = %d, want Bahia constant %d", runEvent.Kind, kinds.HiveCIWorkflowRun)
-	}
-	contextVMKind := cascadia.ContextVMMethods["ci/workflow-run"].Kind
-	if contextVMKind != 25910 {
-		t.Fatalf("ci/workflow-run ContextVM binding kind = %d, want 25910", contextVMKind)
-	}
-	if int(runEvent.Kind) == contextVMKind {
-		t.Fatalf("workflow run must not use ephemeral ContextVM kind %d", contextVMKind)
 	}
 	if !runEvent.VerifySignature() || !evidence.VerifySignature() {
 		t.Fatalf("published evidence must be verifiably signed")
