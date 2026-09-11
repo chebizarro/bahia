@@ -108,3 +108,80 @@ func TestNostrFleetHealthEmptyTimestampsRenderAsZero(t *testing.T) {
 		t.Fatalf("zero timestamp did not render as zero:\n%s", recorder.Body.String())
 	}
 }
+
+// Route outages are a distinct fleet-health domain: one entity per managed-route
+// coordinate, counted by the Prometheus gauge separately from the runtime
+// container behind the route.
+func TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain(t *testing.T) {
+	provider := Setup(Config{}, zap.NewNop())
+	now := time.Unix(300, 0).UTC()
+	provider.now = func() time.Time { return now }
+	observe := func(kind int, createdAt int64, tags gonostr.Tags) {
+		t.Helper()
+		provider.ObserveNostrEvent(context.Background(), &gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: gonostr.Timestamp(createdAt), Tags: tags})
+	}
+	broken := "route:svc:env:none:git.example.test"
+	// Status and state observables for one route share a coordinate, so they are
+	// one entity rather than two.
+	observe(kinds.NIP38Status, 100, gonostr.Tags{{"d", broken}, {"domain", "route"}, {"status", "unhealthy"}})
+	observe(kinds.CASControlState, 100, gonostr.Tags{{"d", broken}, {"domain", "route"}, {"status", "unhealthy"}})
+	observe(kinds.NIP38Status, 100, gonostr.Tags{{"d", "route:svc:env:none:expiring.example.test"}, {"domain", "route"}, {"status", "degraded"}})
+	observe(kinds.CASControlState, 100, gonostr.Tags{{"d", "route:svc:env:none:ok.example.test"}, {"domain", "route"}, {"status", "healthy"}})
+	// The container behind the broken route is healthy; it stays in its own domain.
+	observe(kinds.NIP38Status, 100, gonostr.Tags{{"d", "runtime:instance:svc"}, {"domain", "runtime"}, {"status", "healthy"}})
+	// A route audit fact is lineage, not an additional route.
+	observe(kinds.CASAudit, 100, gonostr.Tags{{"domain", "route"}, {"type", "route.canary_outage_opened"}, {"state", broken}, {"status", "unhealthy"}})
+
+	snapshot := provider.nostrFleetHealth.snapshot(now)
+	for key, want := range map[string]int{
+		"route:unhealthy": 1, "route:degraded": 1, "route:healthy": 1, "route:unknown": 0,
+		"runtime:healthy": 1, "control_plane:unhealthy": 0, "control_plane:unknown": 0,
+	} {
+		if got := snapshot.Entities[key]; got != want {
+			t.Fatalf("entities[%q] = %d, want %d (all: %#v)", key, got, want, snapshot.Entities)
+		}
+	}
+	if snapshot.ProjectionErrors != 0 {
+		t.Fatalf("route audit lineage counted as projection error: %d", snapshot.ProjectionErrors)
+	}
+
+	recorder := httptest.NewRecorder()
+	provider.MetricsHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := recorder.Body.String()
+	for _, want := range []string{
+		`bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 1`,
+		`bahia_fleet_health_nostr_entities{domain="route",status="degraded"} 1`,
+		`bahia_fleet_health_nostr_entities{domain="route",status="healthy"} 1`,
+		`bahia_fleet_health_nostr_entities{domain="route",status="unknown"} 0`,
+		`bahia_fleet_health_nostr_entities{domain="runtime",status="healthy"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in metrics:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "git.example.test") {
+		t.Fatalf("route coordinate leaked into metric labels:\n%s", body)
+	}
+
+	// Recovery replaces the route's state; it does not add a second entity.
+	observe(kinds.NIP38Status, 200, gonostr.Tags{{"d", broken}, {"domain", "route"}, {"status", "healthy"}})
+	snapshot = provider.nostrFleetHealth.snapshot(now)
+	if snapshot.Entities["route:unhealthy"] != 0 || snapshot.Entities["route:healthy"] != 2 {
+		t.Fatalf("recovered route not reflected: %#v", snapshot.Entities)
+	}
+}
+
+func TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate(t *testing.T) {
+	projector := newNostrFleetHealthProjector(func() time.Time { return time.Unix(300, 0).UTC() })
+	projector.observeEvent(context.Background(), &gonostr.Event{
+		Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: 100,
+		Tags: gonostr.Tags{{"domain", "route"}, {"status", "unhealthy"}},
+	})
+	snapshot := projector.snapshot(time.Unix(300, 0).UTC())
+	if snapshot.Entities["route:unhealthy"] != 0 {
+		t.Fatalf("unattributable route observable counted as a route: %#v", snapshot.Entities)
+	}
+	if snapshot.ProjectionErrors != 1 {
+		t.Fatalf("projection errors = %d, want 1", snapshot.ProjectionErrors)
+	}
+}

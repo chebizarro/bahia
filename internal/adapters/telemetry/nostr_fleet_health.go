@@ -13,6 +13,33 @@ import (
 
 const maxFleetHealthEventEntities = 4000
 
+// fleetDomainRoute is the bounded fleet-health domain for managed-route canary
+// observables. It matches the CAS `domain` tag Bahia's route canary projector
+// publishes, so route outages count separately from the runtime containers
+// behind them.
+const fleetDomainRoute = "route"
+
+// nostrFleetHealthDomains is the single bounded vocabulary for the `domain`
+// label of bahia_fleet_health_nostr_entities. Classification and metric
+// rendering both read it, so a domain can never be classified without also
+// being exported.
+var nostrFleetHealthDomains = []string{"agent", "worker", "service", "deployment", "runtime", fleetDomainRoute, "relay", "control_plane"}
+
+// fleetHealthClass says how a canonical observable contributes to the snapshot.
+type fleetHealthClass int
+
+const (
+	// fleetHealthInvalid observables cannot be attributed and count as
+	// projection errors.
+	fleetHealthInvalid fleetHealthClass = iota
+	// fleetHealthEntity observables define or update one subject entity.
+	fleetHealthEntity
+	// fleetHealthLineage observables are immutable history about an entity that
+	// is already represented by its current-state observables; they neither
+	// create nor overwrite an entity.
+	fleetHealthLineage
+)
+
 var observableFleetHealthKinds = map[int]struct{}{
 	kinds.NIP38Status: {}, kinds.AssistantTranscript: {},
 	kinds.SoulFactoryRuntimeCapability: {}, kinds.CASControlState: {}, kinds.CASAudit: {},
@@ -61,10 +88,13 @@ func (p *nostrFleetHealthProjector) observeEvent(_ context.Context, ev *gonostr.
 	if _, ok := observableFleetHealthKinds[kind]; !ok {
 		return
 	}
-	domain, status, key, ok := classifyFleetHealthEvent(ev)
+	domain, status, key, class := classifyFleetHealthEvent(ev)
+	if class == fleetHealthLineage {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !ok {
+	if class != fleetHealthEntity {
 		p.projectionErrors++
 		return
 	}
@@ -129,7 +159,7 @@ func (p *nostrFleetHealthProjector) snapshot(now time.Time) NostrFleetHealthSnap
 	return out
 }
 
-func classifyFleetHealthEvent(ev *gonostr.Event) (domain, status, key string, ok bool) {
+func classifyFleetHealthEvent(ev *gonostr.Event) (domain, status, key string, class fleetHealthClass) {
 	kind := int(ev.Kind)
 	domain = boundedFleetDomain(tagValue(ev, "domain"), kind)
 	status = boundedFleetStatus(tagValue(ev, "status"))
@@ -147,14 +177,28 @@ func classifyFleetHealthEvent(ev *gonostr.Event) (domain, status, key string, ok
 		}
 	}
 	coordinate := tagValue(ev, "d")
+	if domain == fleetDomainRoute {
+		// Route entities are addressable: exactly one per managed-route
+		// coordinate, carried by the replaceable status and state observables. A
+		// route audit fact records a transition rather than current route state,
+		// and a route observable without a coordinate cannot be attributed to any
+		// route, so neither may fall back to a signer-wide entity that would
+		// inflate the route count.
+		if kind == kinds.CASAudit {
+			return domain, status, "", fleetHealthLineage
+		}
+		if coordinate == "" {
+			return "", "", "", fleetHealthInvalid
+		}
+	}
 	if coordinate == "" {
 		coordinate = ev.PubKey.Hex()
 	}
 	if coordinate == "" {
-		return "", "", "", false
+		return "", "", "", fleetHealthInvalid
 	}
 	key = domain + ":" + ev.PubKey.Hex() + ":" + coordinate
-	return domain, status, key, true
+	return domain, status, key, fleetHealthEntity
 }
 
 func tagValue(ev *gonostr.Event, name string) string {
@@ -167,9 +211,11 @@ func tagValue(ev *gonostr.Event, name string) string {
 }
 
 func boundedFleetDomain(value string, kind int) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "agent", "worker", "service", "deployment", "runtime", "relay", "control_plane":
-		return strings.ToLower(strings.TrimSpace(value))
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, known := range nostrFleetHealthDomains {
+		if normalized == known {
+			return known
+		}
 	}
 	switch kind {
 	case kinds.AssistantTranscript, kinds.SoulFactoryRuntimeCapability:
