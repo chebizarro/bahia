@@ -2,8 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"fiatjaf.com/nostr"
@@ -67,7 +69,7 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		ID:                 uuid.New(),
 		RecipeID:           recipe.ID,
 		RepositoryID:       recipe.RepositoryID,
-		RequestedBy:        event.PubKey.Hex(),
+		RequestedBy:        backupRequestActor(event),
 		RequestEventID:     event.ID.Hex(),
 		RequestKind:        int(event.Kind),
 		RequestDTag:        tagValueNostr(event.Tags, "d"),
@@ -131,11 +133,128 @@ func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nost
 		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable backup command events")
 		return false
 	}
+	authority, delegated, err := backupRequestAuthorityFromEvent(event)
+	if err != nil {
+		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
+		return false
+	}
+	if delegated {
+		if r.signer == nil {
+			_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer is not configured")
+			return false
+		}
+		issuer, err := r.signer.GetPublicKey(ctx)
+		if err != nil || normalizeEncryptedPubkey(issuer.Hex()) != authority.ServicePubkey {
+			_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer does not match the configured service signer")
+			return false
+		}
+	}
 	if r.backupRegistry == nil {
 		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
 		return false
 	}
 	return true
+}
+
+func backupRequestAuthorityFromEvent(event *nostr.Event) (backupDelegationRecord, bool, error) {
+	if event == nil {
+		return backupDelegationRecord{}, false, fmt.Errorf("backup command event is required")
+	}
+	servicePubkey := normalizeEncryptedPubkey(event.PubKey.Hex())
+	version, err := singleBackupDelegationTag(event.Tags, "delegation", false)
+	if err != nil {
+		return backupDelegationRecord{}, true, err
+	}
+	if version == "" {
+		return backupDelegationRecord{
+			RequesterPubkey:  servicePubkey,
+			RequestEventID:   event.ID.Hex(),
+			RequestEventKind: int(event.Kind),
+			ServicePubkey:    servicePubkey,
+		}, false, nil
+	}
+	if version != backupDelegationVersion {
+		return backupDelegationRecord{}, true, fmt.Errorf("unsupported backup delegation version")
+	}
+	var content struct {
+		RequestAuthority *backupDelegationRecord `json:"request_authority"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		return backupDelegationRecord{}, true, fmt.Errorf("decode backup delegation record: %w", err)
+	}
+	if content.RequestAuthority == nil {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation record is required")
+	}
+	record := *content.RequestAuthority
+	if record.Version != backupDelegationVersion || record.Version != version {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation version mismatch")
+	}
+	if !validBackupHexIdentity(record.RequesterPubkey) || !validBackupHexIdentity(record.ServicePubkey) || !validBackupHexIdentity(record.RequestEventID) {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation identities must be 32-byte lowercase hex values")
+	}
+	if record.ServicePubkey != servicePubkey {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation service identity does not match event signer")
+	}
+	if record.RequesterPubkey == record.ServicePubkey {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation requester must differ from service signer")
+	}
+	if record.RequestEventKind != int(KindContextVMMessage) {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation request kind is invalid")
+	}
+	if _, err := uuid.Parse(record.TenantID); err != nil {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation tenant is invalid")
+	}
+	if record.Capability != string(domain.PermManageBackups) {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation capability is invalid")
+	}
+	requesterTag, requesterErr := singleBackupDelegationTag(event.Tags, "requester", true)
+	requestEventTag, requestEventErr := singleBackupDelegationTag(event.Tags, "request_event", true)
+	requestKindTag, requestKindErr := singleBackupDelegationTag(event.Tags, "request_kind", true)
+	tenantTag, tenantErr := singleBackupDelegationTag(event.Tags, "tenant", true)
+	capabilityTag, capabilityErr := singleBackupDelegationTag(event.Tags, "capability", true)
+	if requesterErr != nil || requestEventErr != nil || requestKindErr != nil || tenantErr != nil || capabilityErr != nil {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation requires one value for every authority tag")
+	}
+	requestKind, err := strconv.Atoi(requestKindTag)
+	if err != nil || requestKind != record.RequestEventKind ||
+		requesterTag != record.RequesterPubkey ||
+		requestEventTag != record.RequestEventID ||
+		tenantTag != record.TenantID ||
+		capabilityTag != record.Capability {
+		return backupDelegationRecord{}, true, fmt.Errorf("backup delegation tags do not match signed record")
+	}
+	return record, true, nil
+}
+
+func singleBackupDelegationTag(tags nostr.Tags, key string, required bool) (string, error) {
+	value := ""
+	count := 0
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			count++
+			value = strings.TrimSpace(tag[1])
+		}
+	}
+	if count > 1 || (count == 1 && value == "") || (required && count != 1) {
+		return "", fmt.Errorf("backup delegation tag %s must occur exactly once", key)
+	}
+	return value, nil
+}
+
+func validBackupHexIdentity(value string) bool {
+	if value != strings.ToLower(value) || len(value) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 32
+}
+
+func backupRequestActor(event *nostr.Event) string {
+	record, _, err := backupRequestAuthorityFromEvent(event)
+	if err != nil {
+		return ""
+	}
+	return record.RequesterPubkey
 }
 
 func parseBackupRunRequest(event *nostr.Event) (*backupRunRequest, error) {
@@ -203,7 +322,19 @@ func backupNostrMetadata(event *nostr.Event, requestMetadata map[string]any, ext
 		}
 	}
 	metadata["nostr_event_id"] = event.ID.Hex()
-	metadata["nostr_request_pubkey"] = event.PubKey.Hex()
+	authority, delegated, err := backupRequestAuthorityFromEvent(event)
+	if err == nil {
+		metadata["nostr_request_pubkey"] = authority.RequesterPubkey
+		metadata["nostr_delegated"] = delegated
+		if delegated {
+			metadata["nostr_request_event_id"] = authority.RequestEventID
+			metadata["nostr_request_event_kind"] = authority.RequestEventKind
+			metadata["nostr_service_pubkey"] = authority.ServicePubkey
+			metadata["nostr_delegation_version"] = authority.Version
+			metadata["nostr_tenant_id"] = authority.TenantID
+			metadata["nostr_capability"] = authority.Capability
+		}
+	}
 	metadata["nostr_request_kind"] = int(event.Kind)
 	metadata["nostr_d_tag"] = tagValueNostr(event.Tags, "d")
 	for _, key := range []string{"recipe", "recipe_id", "repository", "repository_id", "policy", "policy_id", "target", "backend", "site", "environment", "worker", "verification"} {

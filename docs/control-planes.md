@@ -238,6 +238,16 @@ DNS state uses the same canonical observable stream rather than a custom Bahia r
 
 AI/ML and backup operators use ContextVM mutation methods (`ml/model-import`, `ml/recipe-run`, `ml/inference-deploy`, `backup/run`, `backup/restore`, `backup/verify`, and related methods) over kind `25910`, wrapped with `1059`/`21059` when encrypted transport is available. Long-running operations publish canonical observables instead of Bahia-specific command/result/read-model ranges:
 
+Encrypted backup aliases authorize the verified inner-event pubkey against the
+bound tenant for `backups:manage` before Bahia performs its required service
+re-sign. The resulting command includes a `bahia.backup.delegation.v1` content
+record and matching `delegation`, `requester`, `request_event`, `request_kind`,
+`tenant`, and `capability` tags. The command author is the Bahia service
+(publisher/delegator); the delegation requester is the tenant-authorized actor.
+Incomplete, mismatched, cross-tenant, ambiguous, or service-self delegation is
+rejected. These public audit fields contain identities and authorization
+context only, never private keys, tokens, or credentials.
+
 - `30900` for desired/observed state projections.
 - `4903` for immutable audit facts and provenance breadcrumbs.
 - `30315` for operational status and progress; continuity heartbeat observations are NIP-38 statuses with `#domain=continuity` and heartbeat schema/d/worker tags, not a dedicated `30350` kind.

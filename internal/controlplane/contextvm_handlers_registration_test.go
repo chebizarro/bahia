@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -68,6 +69,7 @@ func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 }
 
 func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
+	tenantID := uuid.New()
 	tests := []struct {
 		method string
 		action string
@@ -87,9 +89,10 @@ func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.method, func(t *testing.T) {
+			tc.params["tenant_id"] = tenantID.String()
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-			RegisterBackupAliasContextVMHandlers(transport)
+			RegisterBackupAliasContextVMHandlers(transport, encryptedAdminRBAC(t, tenantID))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
 			if len(publisher.events) != 3 {
@@ -101,6 +104,11 @@ func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
 			}
 			if tagValueNostr(commandEvent.Tags, "command") != tc.action {
 				t.Fatalf("command tag = %q, want %q", tagValueNostr(commandEvent.Tags, "command"), tc.action)
+			}
+			if tagValueNostr(commandEvent.Tags, "requester") != testNostrPubKeyHexFromPrivateKey(t, testRequesterKey) ||
+				tagValueNostr(commandEvent.Tags, "tenant") != tenantID.String() ||
+				tagValueNostr(commandEvent.Tags, "capability") != "backups:manage" {
+				t.Fatalf("command delegation tags = %v", commandEvent.Tags)
 			}
 			payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
 			if payload["status"] != "submitted" || payload["action"] != tc.action || payload["request_event_id"] == "" {

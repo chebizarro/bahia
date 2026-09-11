@@ -97,6 +97,14 @@ Examples:
 | Read authorized environment details | `environment/get-details` |
 | Read Security findings or schedules | `security/findings-list`, `security/schedules-list` |
 
+Encrypted backup mutations check the verified inner-event pubkey for the
+selected tenant's `backups:manage` capability before Bahia re-signs a canonical
+backup command. That service-signed event carries a
+`bahia.backup.delegation.v1` authority record and matching requester, original
+request, tenant, and capability tags. Never infer requester authority from the
+Bahia service event pubkey; service-self, incomplete, mismatched, unauthorized,
+and ambiguous delegations fail closed.
+
 `environment/get-details` accepts `id`, requires `environments:read` for the signed requester in the owning organization, and returns the environment plus its explicit or resolved implicit deployment units in the signed ContextVM result.
 
 For `environment/update`, a supplied `deployment_units` array is authoritative and requires `expected_updated_at` from the latest read. The service checks it while holding the environment row lock; a stale write fails with JSON-RPC code `-32009` and does not mutate the database or canonical registry projection. Only retry after a fresh signed read, deliberate remerge, and new signature.

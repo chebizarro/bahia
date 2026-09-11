@@ -107,6 +107,14 @@ Methods follow `<domain>/<operation>`:
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
+For encrypted backup mutations, the verified inner `25910` pubkey is the
+authorization subject. Bahia checks `backups:manage` in the selected tenant
+before re-signing the canonical command and binds a
+`bahia.backup.delegation.v1` record in `request_authority` plus matching
+`delegation`, `requester`, `request_event`, `request_kind`, `tenant`, and
+`capability` tags. The canonical event pubkey remains the Bahia service
+publisher; it is not accepted as a replacement requester identity.
+
 `environment/get-details` uses params `{"id":"<environment-uuid>"}`. After verifying the signer and `environments:read` authorization in the owning organization, Bahia returns the environment (including targeting and `updated_at`) plus its explicit or resolved implicit `deployment_units` in the signed ContextVM result.
 
 Complete-set `environment/update` intent includes `deployment_units` plus required `expected_updated_at` from the latest environment read. Bahia checks the revision under the environment row lock and returns JSON-RPC code `-32009` on conflict before any database or canonical registry mutation; clients must reread, deliberately remerge, and sign a fresh retry.

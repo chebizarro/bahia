@@ -103,6 +103,7 @@ const (
 	PermWriteSecrets       Permission = "secrets:write"
 	PermWritePolicies      Permission = "policies:write"
 	PermWriteLLMRoutes     Permission = "llm_routes:write"
+	PermManageBackups      Permission = "backups:manage"
 	PermApproveDeployments Permission = "deployments:approve"
 
 	// Admin permissions
@@ -141,6 +142,7 @@ var RolePermissions = map[Role][]Permission{
 		PermWriteSecrets,
 		PermWritePolicies,
 		PermWriteLLMRoutes,
+		PermManageBackups,
 		PermApproveDeployments,
 	},
 	RoleOwner: {
@@ -156,6 +158,7 @@ var RolePermissions = map[Role][]Permission{
 		PermWriteSecrets,
 		PermWritePolicies,
 		PermWriteLLMRoutes,
+		PermManageBackups,
 		PermApproveDeployments,
 		PermManageMembers,
 		PermManageSettings,

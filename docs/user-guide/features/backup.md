@@ -75,6 +75,27 @@ Operational controls are available on list and detail pages:
 - **Probe repository** publishes `backup/repository-probe`.
 - **Approve/Reject restore** publishes `approval/backup-restore-approve`.
 
+### Request authority
+
+Encrypted backup mutations require the verified ContextVM requester to hold the
+`backups:manage` tenant permission (admin or owner). Bahia still signs the
+canonical downstream command, but its service key is only the delegating signer;
+it is never substituted for the requester.
+
+Each service-signed backup command binds a versioned delegation record containing
+the verified requester pubkey, original ContextVM event ID and kind, tenant ID,
+checked capability, and Bahia service pubkey. The same fields are copied into
+backup provenance metadata so operators can distinguish the requesting actor
+from the publishing service. Private keys, tokens, and credentials are not part
+of the delegation record.
+
+Callers that belong to one tenant granting `backups:manage` may omit
+`tenant_id`. Multi-tenant callers must provide `tenant_id` (or the `org_id`
+compatibility alias); Bahia rejects an omitted or unauthorized tenant rather
+than choosing authority ambiguously. A ContextVM request authored by Bahia's
+own service key is also rejected so service signing power cannot stand in for
+requester authorization.
+
 ### CLI and MCP
 
 The current CLI does not register a `bahia backup` group. Use the web UI or signer-first backup operations. In an embedding that explicitly configures external MCP authorization, use `apply_backup_definition` / `bahia_apply_backup_definition`; its schema requires the definition name plus repository, policy, and recipe identities.

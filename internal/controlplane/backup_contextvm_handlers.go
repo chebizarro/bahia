@@ -9,6 +9,8 @@ import (
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 const (
@@ -33,16 +35,23 @@ const (
 	backupDefaultRetention          = "backup-retention"
 	backupDefaultRestoreApproval    = "backup-restore-approval"
 	backupDefaultRepositoryProbe    = "backup-repository-probe"
+
+	backupDelegationVersion = "bahia.backup.delegation.v1"
 )
 
 // RegisterBackupAliasContextVMHandlers registers encrypted ContextVM method
 // aliases used by the web UI while preserving the canonical backup action
 // strings consumed by the backup control-plane handlers.
-func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport) {
+func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, rbac *auth.RBAC) {
 	if transport == nil || transport.responder == nil {
 		return
 	}
-	h := backupContextVMHandlers{publisher: transport.responder.publisher, signer: transport.responder.signer}
+	h := backupContextVMHandlers{
+		publisher:     transport.responder.publisher,
+		signer:        transport.responder.signer,
+		servicePubkey: normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
+		authorizer:    encryptedTenantAuthorizer{rbac: rbac},
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodBackupRepositoryRegister, h.repositoryRegister)
 	transport.RegisterContextVMHandler(ContextVMMethodBackupPolicyApply, h.policyApply)
 	transport.RegisterContextVMHandler(ContextVMMethodBackupRecipeApply, h.recipeApply)
@@ -56,8 +65,20 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport) 
 }
 
 type backupContextVMHandlers struct {
-	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	publisher     NostrEventPublisher
+	signer        canonicalnostr.Signer
+	servicePubkey string
+	authorizer    encryptedTenantAuthorizer
+}
+
+type backupDelegationRecord struct {
+	Version          string `json:"version"`
+	RequesterPubkey  string `json:"requester_pubkey"`
+	RequestEventID   string `json:"request_event_id"`
+	RequestEventKind int    `json:"request_event_kind"`
+	TenantID         string `json:"tenant_id"`
+	Capability       string `json:"capability"`
+	ServicePubkey    string `json:"service_pubkey"`
 }
 
 type backupContextVMReceipt struct {
@@ -91,6 +112,8 @@ type backupRestoreApprovalContextVMPayload struct {
 	Reason         any            `json:"reason,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
 	AgentID        string         `json:"agent_id,omitempty"`
+	TenantID       string         `json:"tenant_id,omitempty"`
+	OrgID          string         `json:"org_id,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
@@ -99,6 +122,8 @@ type backupRepositoryProbeContextVMPayload struct {
 	Repository     string         `json:"repository,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
 	AgentID        string         `json:"agent_id,omitempty"`
+	TenantID       string         `json:"tenant_id,omitempty"`
+	OrgID          string         `json:"org_id,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
@@ -107,7 +132,7 @@ func (h backupContextVMHandlers) repositoryRegister(ctx context.Context, request
 	if err != nil {
 		return nil, err
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRepositoryRegister,
 		statusKind: KindBackupRunStatus,
 		resultKind: KindBackupRepositoryRegisterResult,
@@ -136,7 +161,7 @@ func (h backupContextVMHandlers) policyApply(ctx context.Context, request Contex
 	if err != nil {
 		return nil, err
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupPolicyApply,
 		statusKind: KindBackupRunStatus,
 		resultKind: KindBackupPolicyApplyResult,
@@ -168,7 +193,7 @@ func (h backupContextVMHandlers) recipeApply(ctx context.Context, request Contex
 	if recipe == "" {
 		recipe = backupRecipeCoordLocal(backupStringParam(params, "name", "recipe_name"), backupStringParam(params, "version", "recipe_version"))
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRecipeApply,
 		statusKind: KindBackupRunStatus,
 		resultKind: KindBackupRecipeApplyResult,
@@ -202,7 +227,7 @@ func (h backupContextVMHandlers) definitionApply(ctx context.Context, request Co
 	if err != nil {
 		return nil, err
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupDefinitionApply,
 		statusKind: KindBackupRunStatus,
 		resultKind: KindBackupDefinitionApplyResult,
@@ -235,7 +260,7 @@ func (h backupContextVMHandlers) run(ctx context.Context, request ContextVMReque
 	if err != nil {
 		return nil, err
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRunRequest,
 		statusKind: KindBackupRunStatus,
 		resultKind: KindBackupRunResult,
@@ -266,7 +291,7 @@ func (h backupContextVMHandlers) verification(ctx context.Context, request Conte
 		return nil, fmt.Errorf("backup_run_id must be a UUID")
 	}
 	params["backup_run_id"] = runID
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupVerificationRequest,
 		statusKind: KindBackupVerificationStatus,
 		resultKind: KindBackupVerificationResult,
@@ -297,7 +322,7 @@ func (h backupContextVMHandlers) restore(ctx context.Context, request ContextVMR
 		return nil, fmt.Errorf("backup_run_id must be a UUID")
 	}
 	params["backup_run_id"] = runID
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRestoreRequest,
 		statusKind: KindBackupRestoreStatus,
 		resultKind: KindBackupRestoreResult,
@@ -331,7 +356,7 @@ func (h backupContextVMHandlers) retention(ctx context.Context, request ContextV
 	if _, err := uuid.Parse(policyID); err != nil {
 		return nil, fmt.Errorf("policy_id must be a UUID")
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRetentionEnforce,
 		statusKind: KindBackupObservation,
 		resultKind: KindBackupRetentionResult,
@@ -373,9 +398,10 @@ func (h backupContextVMHandlers) restoreApproval(ctx context.Context, request Co
 		"message":     payload.Message,
 		"reason_code": payload.ReasonCode,
 		"reason":      payload.Reason,
+		"tenant_id":   firstNonEmpty(payload.TenantID, payload.OrgID),
 		"metadata":    payload.Metadata,
 	}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRestoreApproval,
 		statusKind: KindBackupRestoreStatus,
 		resultKind: KindBackupRestoreApprovalResult,
@@ -412,8 +438,8 @@ func (h backupContextVMHandlers) repositoryProbe(ctx context.Context, request Co
 			return nil, fmt.Errorf("repository_id must be a UUID")
 		}
 	}
-	content := map[string]any{"repository_id": repositoryID, "repository": repository, "metadata": payload.Metadata}
-	receipt, err := h.publish(ctx, backupPublishSpecLocal{
+	content := map[string]any{"repository_id": repositoryID, "repository": repository, "tenant_id": firstNonEmpty(payload.TenantID, payload.OrgID), "metadata": payload.Metadata}
+	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRepositoryProbe,
 		statusKind: KindBackupObservation,
 		resultKind: KindBackupRepositoryProbeResult,
@@ -446,15 +472,28 @@ type backupPublishSpecLocal struct {
 	tags       nostr.Tags
 }
 
-func (h backupContextVMHandlers) publish(ctx context.Context, spec backupPublishSpecLocal) (*backupContextVMReceipt, error) {
+func (h backupContextVMHandlers) publish(ctx context.Context, request ContextVMRequest, spec backupPublishSpecLocal) (*backupContextVMReceipt, error) {
 	if h.publisher == nil {
 		return nil, fmt.Errorf("backup command publisher is not configured")
+	}
+	delegation, err := h.authorizeDelegation(ctx, request, spec.content)
+	if err != nil {
+		return nil, err
 	}
 	dTag := strings.TrimSpace(spec.dTag)
 	if dTag == "" {
 		dTag = spec.defaultD + ":" + uuid.NewString()
 	}
 	content := cloneBackupContextVMContent(spec.content)
+	delete(content, "org_id")
+	delete(content, "requester_pubkey")
+	delete(content, "request_event_id")
+	delete(content, "request_event_kind")
+	delete(content, "service_pubkey")
+	delete(content, "capability")
+	delete(content, "delegation")
+	content["tenant_id"] = delegation.TenantID
+	content["request_authority"] = delegation
 	content["idempotency_key"] = dTag
 	content["action"] = spec.action
 	if agentID := strings.TrimSpace(spec.agentID); agentID != "" {
@@ -464,7 +503,16 @@ func (h backupContextVMHandlers) publish(ctx context.Context, spec backupPublish
 	if err != nil {
 		return nil, fmt.Errorf("marshal backup command content: %w", err)
 	}
-	tags := nostr.Tags{{"d", dTag}, {"command", spec.action}}
+	tags := nostr.Tags{
+		{"d", dTag},
+		{"command", spec.action},
+		{"delegation", delegation.Version},
+		{"requester", delegation.RequesterPubkey},
+		{"request_event", delegation.RequestEventID},
+		{"request_kind", fmt.Sprint(delegation.RequestEventKind)},
+		{"tenant", delegation.TenantID},
+		{"capability", delegation.Capability},
+	}
 	if agentID := strings.TrimSpace(spec.agentID); agentID != "" {
 		tags = append(tags, nostr.Tag{"agent", agentID})
 	}
@@ -481,6 +529,79 @@ func (h backupContextVMHandlers) publish(ctx context.Context, spec backupPublish
 		return nil, fmt.Errorf("publish backup command event: no relay accepted the request")
 	}
 	return &backupContextVMReceipt{RequestEventID: event.ID.Hex(), RequestPubkey: event.PubKey.Hex(), RequestKind: spec.kind, StatusKind: spec.statusKind, ResultKind: spec.resultKind, DTag: dTag, PublishedRelays: published, Action: spec.action}, nil
+}
+
+func (h backupContextVMHandlers) authorizeDelegation(ctx context.Context, request ContextVMRequest, params map[string]any) (*backupDelegationRecord, error) {
+	if request.Event == nil {
+		return nil, fmt.Errorf("signed ContextVM request event is required")
+	}
+	if request.Event.PubKey == (nostr.PubKey{}) {
+		return nil, fmt.Errorf("signed ContextVM request pubkey is required")
+	}
+	requesterPubkey := normalizeEncryptedPubkey(request.Event.PubKey.Hex())
+	servicePubkey := normalizeEncryptedPubkey(h.servicePubkey)
+	if servicePubkey == "" {
+		return nil, fmt.Errorf("backup delegation service identity is not configured")
+	}
+	if requesterPubkey == servicePubkey {
+		return nil, fmt.Errorf("Bahia service signer cannot supply backup requester authority")
+	}
+	tenantID, err := h.resolveDelegationTenant(ctx, request.Event, params, domain.PermManageBackups)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.authorizer.authorizeOrg(ctx, request.Event, tenantID, domain.PermManageBackups); err != nil {
+		return nil, err
+	}
+	return &backupDelegationRecord{
+		Version:          backupDelegationVersion,
+		RequesterPubkey:  requesterPubkey,
+		RequestEventID:   request.Event.ID.Hex(),
+		RequestEventKind: int(request.Event.Kind),
+		TenantID:         tenantID.String(),
+		Capability:       string(domain.PermManageBackups),
+		ServicePubkey:    servicePubkey,
+	}, nil
+}
+
+func (h backupContextVMHandlers) resolveDelegationTenant(ctx context.Context, event *nostr.Event, params map[string]any, permission domain.Permission) (uuid.UUID, error) {
+	rawTenantID := backupStringParam(params, "tenant_id")
+	rawOrgID := backupStringParam(params, "org_id")
+	if rawTenantID != "" && rawOrgID != "" {
+		tenantID, tenantErr := uuid.Parse(rawTenantID)
+		orgID, orgErr := uuid.Parse(rawOrgID)
+		if tenantErr != nil || orgErr != nil || tenantID != orgID {
+			return uuid.Nil, fmt.Errorf("tenant_id and org_id must identify the same tenant")
+		}
+	}
+	if rawTenantID = firstNonEmpty(rawTenantID, rawOrgID); rawTenantID != "" {
+		tenantID, err := uuid.Parse(rawTenantID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("tenant_id must be a UUID")
+		}
+		return tenantID, nil
+	}
+	memberships, err := h.authorizer.requesterOrgMemberships(ctx, event)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	eligible := make([]uuid.UUID, 0, len(memberships))
+	seen := make(map[uuid.UUID]struct{}, len(memberships))
+	for _, membership := range memberships {
+		_, duplicate := seen[membership.OrgID]
+		if membership.OrgID != uuid.Nil && !duplicate && domain.RoleHasPermission(membership.Role, permission) {
+			eligible = append(eligible, membership.OrgID)
+			seen[membership.OrgID] = struct{}{}
+		}
+	}
+	switch len(eligible) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("requester has no tenant granting %s", permission)
+	case 1:
+		return eligible[0], nil
+	default:
+		return uuid.Nil, fmt.Errorf("tenant_id is required when requester has %d tenants granting %s", len(eligible), permission)
+	}
 }
 
 func backupContextVMParams(request ContextVMRequest) (map[string]any, error) {

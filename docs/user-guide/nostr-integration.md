@@ -360,6 +360,16 @@ ContextVM commands use JSON-RPC request/response for private intent acknowledgme
 5. Treat JSON-RPC response status as command acknowledgment only; long-running truth is the canonical observable event stream.
 6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.
 
+For encrypted backup methods, the verified inner `25910` author is checked
+against tenant RBAC for `backups:manage` before Bahia signs the canonical backup
+command. The service-signed command carries `delegation`, `requester`,
+`request_event`, `request_kind`, `tenant`, and `capability` tags plus an
+equivalent `request_authority` content object. Consumers treat the command
+event pubkey as the publishing/delegating service and the signed delegation as
+the original requester audit identity; a service-key requester, incomplete or
+mismatched delegation, unauthorized tenant, or ambiguous omitted tenant fails
+closed.
+
 ### Assistant documentation context
 
 The floating assistant keeps the same encrypted ContextVM operation for prompts: `assistant/prompt` carried as kind `25910` and normally wrapped with CEP-4/NIP-59 where supported. Documentation context does not introduce a relay polling loop, synthetic request/response route, or new Nostr completion signal.

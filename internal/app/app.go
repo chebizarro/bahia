@@ -1494,7 +1494,7 @@ func New(cfg *config.Config) (*App, error) {
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
