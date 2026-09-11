@@ -9,7 +9,7 @@
     instanceStatusLabel,
     instanceStatusClass,
     isNotFoundError
-  } from './page-model.js';
+  } from '$lib/route-canaries.js';
 
   let rows = $state([]);
   let loading = $state(true);
@@ -129,7 +129,7 @@
     <section class="route-grid" aria-label="Route canary states">
       {#each filteredRows as row (routeCanaryKey(row))}
         <button class:selected={selected && routeCanaryKey(selected) === routeCanaryKey(row)} class="route-card" type="button" onclick={() => selectRoute(row)}>
-          <header><strong>{row.hostname}</strong><span class={`badge ${classificationClass(row.classification)}`}>{classificationLabel(row.classification)}</span></header>
+          <header><strong>{row.hostname}</strong><span class={`badge ${classificationClass(row.classification, row.open)}`}>{classificationLabel(row.classification)}</span></header>
           <p>{row.perspective || 'unknown'} · {row.open ? 'Open' : 'Closed'}</p>
           {#if row.open && row.service_healthy_route_broken}
             <p class="contradiction">⚠ Container healthy, route broken</p>
@@ -153,7 +153,7 @@
       {:else if detailError}<p class="error">{detailError}</p>
       {:else if detail}
         <dl class="detail-grid">
-          <div><dt>Classification</dt><dd><span class={`badge ${classificationClass(detail.classification)}`}>{classificationLabel(detail.classification)}</span></dd></div>
+          <div><dt>Classification</dt><dd><span class={`badge ${classificationClass(detail.classification, detail.open)}`}>{classificationLabel(detail.classification)}</span></dd></div>
           <div><dt>Open</dt><dd>{detail.open ? 'Yes' : 'No'}</dd></div>
           <div><dt>Perspective</dt><dd>{detail.perspective || 'unknown'}</dd></div>
           <div><dt>Consecutive failures</dt><dd>{detail.consecutive_failures}</dd></div>

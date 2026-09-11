@@ -1,3 +1,9 @@
+// Shared route canary domain helpers: classification/warning mapping,
+// presentation rules, and formatting. Lives in $lib (rather than colocated
+// with a single route) because it backs three surfaces: the standalone
+// /route-canaries page and the RouteCanaryOutages component embedded in the
+// service and environment detail pages.
+
 const OUTAGE_CLASSIFICATIONS = new Set([
   'dns_unresolved',
   'connect_failed',
@@ -16,12 +22,34 @@ export function routeCanaryKey(row) {
   return [row?.service_id, row?.environment_id, row?.hostname, row?.perspective].join(':');
 }
 
+// isOutage/isWarning classify a classification value in isolation. They do
+// not know about `open`, so callers that need presentation (badge color,
+// summary tallies) should use isRenderedOutage/isRenderedWarning instead,
+// which key off `open` first — see below for why that distinction matters.
 export function isOutage(classification) {
   return OUTAGE_CLASSIFICATIONS.has(classification);
 }
 
 export function isWarning(classification) {
   return WARNING_CLASSIFICATIONS.has(classification);
+}
+
+// isRenderedOutage reports whether a route row should be *presented* as an
+// outage. An open route always renders as an outage regardless of its latest
+// classification: `health_path_not_discriminating` is a warning classification
+// by default, but a target configured with require_discriminating_health_path
+// promotes it to failing, which can open the route. When that happens the row
+// is genuinely down and must not render with warning styling just because its
+// classification is nominally in the warning set.
+export function isRenderedOutage(row = {}) {
+  return Boolean(row.open) || isOutage(row.classification);
+}
+
+// isRenderedWarning mirrors isRenderedOutage: a row only renders as a warning
+// when it is not an open outage, so a promoted/open warning classification is
+// never double-counted as both an outage and a warning.
+export function isRenderedWarning(row = {}) {
+  return !row.open && isWarning(row.classification);
 }
 
 export function classificationLabel(classification) {
@@ -39,8 +67,10 @@ export function classificationLabel(classification) {
   return labels[classification] || classification;
 }
 
-export function classificationClass(classification) {
-  if (isOutage(classification)) return 'critical';
+// classificationClass drives the classification badge color. `open` takes
+// precedence over the classification itself — see isRenderedOutage.
+export function classificationClass(classification, open = false) {
+  if (isRenderedOutage({ classification, open })) return 'critical';
   if (isWarning(classification)) return 'warning';
   return 'healthy';
 }
@@ -52,7 +82,7 @@ export function buildRouteCanarySummary(rows = []) {
       summary.open += 1;
       if (row.service_healthy_route_broken) summary.healthyContainerBrokenRoute += 1;
     }
-    if (isWarning(row.classification)) {
+    if (isRenderedWarning(row)) {
       summary.warnings += 1;
     }
     return summary;

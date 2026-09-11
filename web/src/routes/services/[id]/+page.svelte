@@ -48,15 +48,7 @@
     loadRepositories
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
-  import {
-    classificationLabel,
-    classificationClass,
-    formatRouteTimestamp,
-    instanceStatusLabel,
-    instanceStatusClass,
-    isNotFoundError
-  } from '../../route-canaries/page-model.js';
-  import api from '$lib/api/client.js';
+  import RouteCanaryOutages from '$lib/components/RouteCanaryOutages.svelte';
   import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
   import {
     buildManagedRuntimeConfig,
@@ -197,11 +189,10 @@
     mode: 'previous',
     artifact_id: ''
   });
-  // Route canary state for this service
-  let routeCanaries = $state([]);
-  let routeCanariesLoading = $state(false);
-  let routeCanariesError = $state('');
-  let routeCanariesUnavailable = $state(false);
+  // Route canary count for the section heading; RouteCanaryOutages owns the
+  // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
+  // page stays nostr_native and never imports $lib/api/client.js.
+  let routeCanaryCount = $state(0);
   // Secret create modal state
   let secretCreateOpen = $state(false);
   let secretCreating = $state(false);
@@ -306,7 +297,6 @@
       hydratedRelatedForServiceId = id;
       void hydrateServiceSecrets(id, sequence);
       void hydrateRepositories(sequence);
-      void loadRouteCanaries();
     }
   }
 
@@ -324,10 +314,7 @@
     secretsLoading = false;
     secretsError = null;
     hydratedRelatedForServiceId = null;
-    routeCanaries = [];
-    routeCanariesLoading = false;
-    routeCanariesError = '';
-    routeCanariesUnavailable = false;
+    routeCanaryCount = 0;
 
     try {
       await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
@@ -878,27 +865,6 @@
     }
   }
 
-  async function loadRouteCanaries() {
-    if (!serviceId) return;
-    routeCanariesLoading = true;
-    routeCanariesError = '';
-    routeCanariesUnavailable = false;
-    try {
-      routeCanaries = await api.listRouteCanaries({ service_id: serviceId });
-    } catch (err) {
-      routeCanaries = [];
-      if (isNotFoundError(err)) {
-        // Route canaries are tier-2 gated and are not registered at all when the
-        // feature is disabled. Treat that as "nothing to show" rather than an error.
-        routeCanariesUnavailable = true;
-      } else {
-        routeCanariesError = err?.message || 'Route canary state unavailable';
-      }
-    } finally {
-      routeCanariesLoading = false;
-    }
-  }
-
   async function handleSecretCreate() {
     const validationResult = validateForm(secretFormSchema, secretForm);
     if (!validationResult.success) {
@@ -1231,52 +1197,15 @@
 
     <section>
       <div class="section-header">
-        <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Canaries ({routeCanaries.length})</span></h2>
+        <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Canaries ({routeCanaryCount})</span></h2>
         <a class="button-link" href="/route-canaries">View all</a>
       </div>
-      {#if routeCanariesLoading}
-        <p class="muted">Loading route canary state…</p>
-      {:else if routeCanariesUnavailable}
-        <div class="empty-state">
-          <WarningIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
-          <p class="empty">Route canary monitoring is not enabled</p>
-          <p class="empty-detail">Enable the route_canaries feature to surface managed-route outage detection here.</p>
-        </div>
-      {:else if routeCanariesError}
-        <div class="empty-state">
-          <WarningIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
-          <p class="empty">Route canary state unavailable</p>
-          <p class="empty-detail">{routeCanariesError}</p>
-        </div>
-      {:else if routeCanaries.length > 0}
-        <div class="route-canary-list">
-          {#each routeCanaries as canary}
-            <a href="/route-canaries" class="route-canary-row">
-              <div class="route-canary-info">
-                <WarningIcon size={16} strokeWidth={1.75} ariaHidden="true" className="inline-entity-icon" />
-                <strong>{canary.hostname}</strong>
-                <span class="badge-sm {classificationClass(canary.classification)}">{classificationLabel(canary.classification)}</span>
-                {#if canary.observed_instance_status}
-                  <span class="badge-sm {instanceStatusClass(canary.observed_instance_status)}">Instance: {instanceStatusLabel(canary.observed_instance_status)}</span>
-                {/if}
-                {#if canary.open && canary.service_healthy_route_broken}
-                  <span class="contradiction-badge">⚠ Container healthy, route broken</span>
-                {/if}
-              </div>
-              <div class="route-canary-meta">
-                <span>{canary.perspective || 'unknown'}</span>
-                <span>{canary.open ? 'Open' : 'Closed'}</span>
-                <span>{formatRouteTimestamp(canary.last_observed_at)}</span>
-              </div>
-            </a>
-          {/each}
-        </div>
-      {:else}
-        <div class="empty-state">
-          <WarningIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
-          <p class="empty">No route canaries configured for this service</p>
-        </div>
-      {/if}
+      <RouteCanaryOutages
+        serviceId={serviceId}
+        emptyTitle="No route canaries configured"
+        emptyMessage="No route canaries configured for this service"
+        onCount={(count) => (routeCanaryCount = count)}
+      />
     </section>
   {/if}
 </div>
@@ -2600,64 +2529,5 @@
     font-size: 0.75rem;
     color: var(--error);
     margin-top: 0.25rem;
-  }
-
-  .route-canary-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .route-canary-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem;
-    background: var(--hover-bg);
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-    text-decoration: none;
-    color: inherit;
-    transition: background 0.2s;
-    gap: 1rem;
-  }
-  .route-canary-row:hover {
-    background: var(--bg);
-    border-color: var(--primary);
-  }
-  .route-canary-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-  }
-  .route-canary-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-  .badge-sm {
-    display: inline-flex;
-    align-items: center;
-    font-size: 0.65rem;
-    font-weight: 600;
-    padding: 0.15rem 0.45rem;
-    border-radius: 999px;
-    text-transform: uppercase;
-  }
-  .badge-sm.healthy { background: rgba(34,197,94,.15); color: #4ade80; }
-  .badge-sm.warning { background: rgba(245,158,11,.15); color: #fbbf24; }
-  .badge-sm.critical { background: rgba(239,68,68,.15); color: #f87171; }
-  .badge-sm.unknown { background: rgba(148,163,184,.15); color: #94a3b8; }
-  .contradiction-badge {
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #f97316;
-  }
-  .inline-entity-icon {
-    flex-shrink: 0;
-    color: var(--text-muted);
   }
 </style>

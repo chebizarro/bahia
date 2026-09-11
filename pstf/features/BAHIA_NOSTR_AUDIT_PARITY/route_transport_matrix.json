@@ -35,19 +35,7 @@
       "file": "web/src/routes/route-canaries/+page.svelte",
       "permitted_transport_classes": ["rest_compatibility"],
       "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Route canary outage state, detail, and lineage are a server-owned live supervision projection with no signed Nostr event representation, the same category as managed instance health; the page reads it directly over the bounded Tier 2 REST surface rather than claiming browser-signed Nostr command ingress."
-    },
-    {
-      "file": "web/src/routes/services/[id]/+page.svelte",
-      "permitted_transport_classes": ["rest_compatibility"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "The service detail page's route canary section reads the same server-owned route canary/instance-health pairing shown on /route-canaries, scoped by service_id, so operators see open route outages without leaving the service view. No command ingress; read-only."
-    },
-    {
-      "file": "web/src/routes/environments/[id]/+page.svelte",
-      "permitted_transport_classes": ["rest_compatibility"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "The environment detail page's Route Outages section reads the same server-owned route canary/instance-health pairing shown on /route-canaries, scoped by environment_id, across every service deployed to the environment. No command ingress; read-only."
+      "allowed_usage": "Route canary state is also projected to signed Nostr observables (NIP-38 status, 30900 state, 4903 audit; see bahia-dblkq), so this is not a REST-only signal, the same as managed instance health. The REST surface remains the server-owned, richer read model with probe lineage and the observed_instance_status/service_healthy_route_broken container-health pairing that the Nostr projection does not carry. The page reads it directly over the bounded Tier 2 REST surface rather than claiming browser-signed Nostr command ingress; it is read-only."
     }
   ],
   "entries": [
@@ -376,22 +364,11 @@
     },
     {
       "id": "route-canaries-rest-compatibility",
-      "surface": "`/route-canaries` managed-route outage state, detail, and event lineage",
+      "surface": "`/route-canaries` managed-route outage state, detail, and event lineage, plus the RouteCanaryOutages component embedded in the service and environment detail pages",
       "transport_class": "rest_compatibility",
       "route_files": ["web/src/routes/route-canaries/+page.svelte"],
-      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/route_canary.go"],
-      "evidence": ["The Route Canaries page imports $lib/api/client.js for bounded Tier 2 route canary list, detail, and event-lineage API calls.", "Route canary state is a live derived read model (probe classification paired with observed_instance_status) with no signed Nostr event representation, the same category as managed instance health.", "This is intentionally classified as REST compatibility rather than signer-first Nostr command ingress; the page is read-only and does not publish browser-signed Nostr commands."],
-      "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface",
-      "pstf_status": "current_audit_evidence",
-      "resolved_by_beads": ["bahia-94n8f"]
-    },
-    {
-      "id": "route-canaries-detail-inline-rest-compatibility",
-      "surface": "`/services/{id}` and `/environments/{id}` inline route canary outage summaries",
-      "transport_class": "rest_compatibility",
-      "route_files": ["web/src/routes/services/[id]/+page.svelte", "web/src/routes/environments/[id]/+page.svelte"],
-      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/route_canary.go"],
-      "evidence": ["Both detail pages remain nostr_native for read models and public commands (see services-public-controlplane and environments-public-controlplane); the route canary section is a narrow, read-only, additive REST compatibility surface layered on top, mirroring the /route-canaries page and the instance-health precedent.", "The service view filters by service_id; the environment view filters by environment_id and lists outages across every service deployed to that environment.", "No command ingress: the section never publishes Nostr events or REST mutations, it only reads route_canaries.List filtered by service_id/environment_id."],
+      "control_files": ["web/src/lib/api/client.js", "web/src/lib/route-canaries.js", "web/src/lib/components/RouteCanaryOutages.svelte", "internal/api/handlers/route_canary.go"],
+      "evidence": ["The Route Canaries page imports $lib/api/client.js for bounded Tier 2 route canary list, detail, and event-lineage API calls.", "Route canary state is also projected to signed Nostr observables in a sibling branch (NIP-38 status, 30900 state, 4903 audit; bahia-dblkq), so the existence of a Nostr representation is not why this stays REST compatibility. It stays REST compatibility because it is the server-owned, richer read model (probe lineage plus the observed_instance_status/service_healthy_route_broken container-health pairing that the Nostr projection does not carry) and it is read-only - the same rationale that keeps managed instance health (itself also Nostr-projected) classified as REST compatibility rather than signer-first command ingress.", "web/src/lib/components/RouteCanaryOutages.svelte is the only place services/[id] and environments/[id] read this surface: it owns the REST call so those two nostr_native, REST-import-forbidden pages never import $lib/api/client.js themselves (see services-public-controlplane and environments-public-controlplane). The component lives under web/src/lib, outside web/src/routes, so the route-transport-matrix tests cannot see its import directly; it is registered here as control_files for audit traceability. It is read-only - it never publishes a Nostr event or a REST mutation, it only calls route_canaries.List filtered by service_id or environment_id."],
       "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface",
       "pstf_status": "current_audit_evidence",
       "resolved_by_beads": ["bahia-94n8f"]
