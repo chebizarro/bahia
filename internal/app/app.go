@@ -1780,7 +1780,7 @@ func configuredMode(mode string) Mode {
 func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger, policy *ModePolicy) (*pgxpool.Pool, bool) {
 	pool, err := dbConnect(ctx, cfg.DB, logger)
 	if err != nil {
-		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(err))
+		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
 		if policy != nil && policy.ActiveTier > Tier1 {
 			policy.SetActiveTier(Tier1)
 		}
@@ -2721,8 +2721,12 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 }
 
 func internalRoutingConfigHash(cfg config.InternalRoutingConfig) string {
-	sanitized, _ := json.Marshal(cfg)
-	return domain.PublicRouteProviderConfigHash(string(sanitized))
+	// The hash must cover command environment values without exposing the
+	// serialized bytes. Use a local alias to bypass the diagnostic redaction
+	// boundary only for this immediate one-way hash input.
+	type internalRoutingHashInput config.InternalRoutingConfig
+	encoded, _ := json.Marshal(internalRoutingHashInput(cfg))
+	return domain.PublicRouteProviderConfigHash(string(encoded))
 }
 
 // buildDNSRuntime returns the configured zones and backend resolver plus the
