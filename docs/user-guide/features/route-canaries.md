@@ -72,9 +72,9 @@ promoting it to an outage would page operators about working routes and roll
 back healthy deployments. Two ways to make the check meaningful:
 
 - point the route at a real health endpoint, or
-- set `expected_body_contains` to something only the intended application
-  returns — an explicit body assertion is real evidence and suppresses the
-  warning.
+- set `expected_body_contains` or `expected_body_regex` to something only the
+  intended application returns — an explicit body assertion is real evidence
+  and suppresses the warning.
 
 Set `require_discriminating_health_path: true` to promote it to a failure, which
 also makes it **block deployments**. Note this will block a route whose health
@@ -108,7 +108,8 @@ It does not, by default, catch a route that serves the *wrong thing* with a 200.
 Against a catch-all application a wrong health path still returns 200, so the
 gate will correctly allow it. If you need a misconfigured health path to be
 caught, enable `detect_catch_all` together with
-`require_discriminating_health_path`, or set `expected_body_contains`.
+`require_discriminating_health_path`, or set `expected_body_contains` or
+`expected_body_regex`.
 
 If the policy derives no targets for a route, the gate has verified nothing. It
 allows the deployment but logs a warning at `route-canary-gate`, so
@@ -253,7 +254,7 @@ All endpoints are tier-2 gated.
 | `GET` | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary` | State for one route. |
 | `GET` | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary/events` | Append-only failure lineage, newest first. `limit` up to 500. |
 
-Add `?deployment_unit_id=<uuid>` when a service has more than one managed route per environment.
+`deployment_unit_id` is optional. When it is omitted, the server resolves the single route for that service/environment/hostname; if more than one deployment unit has a route at that hostname, it responds with a conflict listing the ambiguous units instead of guessing. Pass `?deployment_unit_id=<uuid>` to disambiguate in that case.
 
 Example:
 
@@ -297,14 +298,13 @@ Each of these transitions is also projected to Nostr under `domain=route`, so No
 - `30315` status and `30900` state, addressed by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. Both carry `status` (`unhealthy` while an outage is open, `degraded` for a warning or a failure below the outage threshold, `healthy` for `route_ok`), `outage=open|closed`, `classification`, `hostname`, the observed `instance_status`, and `service_healthy_route_broken`.
 - `4903` audit facts recording the transition, with sanitized probe evidence.
 
-Fleet Health counts these under the `route` domain of `bahia_fleet_health_nostr_entities`. A gate-declared outage is projected when the periodic supervisor next reports a transition for that route, because the post-deploy gate records its outcome without publishing an event. See the [Nostr event implementation guide](../../nostr-event-implementation-guide.md#route-canary-observables) for the full event shape.
+Fleet Health counts these under the `route` domain of `bahia_fleet_health_nostr_entities`. The post-deploy gate publishes the same transition events as the periodic supervisor, so a gate-declared outage or a gate-recovered route reaches Nostr immediately rather than waiting for the next periodic supervisor transition for that route. See the [Nostr event implementation guide](../../nostr-event-implementation-guide.md#route-canary-observables) for the full event shape.
 
 ## Evidence and secrets
 
 Response bodies are bounded and passed through evidence sanitization before being stored or published, so credentials echoed by a broken upstream never reach durable state.
 
 Body assertions are matched against the raw bounded body rather than the sanitized one, so redaction can never silently change whether an assertion passes.
-
 
 ## Web UI
 
@@ -315,10 +315,17 @@ incident.
 
 - The Route Canaries page lists every monitored route with its classification,
   open/closed state, and the paired container-level `observed_instance_status`.
-  Outage classifications (`dns_unresolved`, `connect_failed`, `tls_invalid`,
-  `upstream_error`, `status_mismatch`, `body_mismatch`) render as a critical
-  badge; the two classifications that still serve traffic (`tls_expiring`,
-  `health_path_not_discriminating`) render as a distinct warning badge instead.
+  An open route always renders as a critical badge, regardless of its latest
+  classification. A closed route with a nonzero consecutive-failure streak
+  (failing, but below the outage threshold) renders as a distinct degraded
+  badge instead - this covers both an outage classification that has not yet
+  opened the route and a warning classification promoted by
+  `require_discriminating_health_path`. Any other closed route renders by its
+  classification: the two classifications that still serve traffic
+  (`tls_expiring`, `health_path_not_discriminating`) render as a warning
+  badge, and `route_ok` renders as healthy. The event lineage list colors each
+  event by its transition (opened, recovered, classification changed) rather
+  than by the classification recorded at that instant.
 - When a route is open and `service_healthy_route_broken` is true, the UI
   calls out the contradiction explicitly ("Container healthy, route broken")
   next to a colored instance-status badge, so the routing-layer-only failure
