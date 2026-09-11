@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -1201,13 +1202,29 @@ func secretsCommands() *cobra.Command {
 		},
 	}
 
+	var valueFile string
 	setCmd := &cobra.Command{
 		Use:   "set [service-id] [name] [value]",
 		Short: "Set a secret",
-		Args:  cobra.ExactArgs(3),
+		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if valueFile != "" && len(args) == 3 {
+				return fmt.Errorf("provide either [value] or --value-file, not both")
+			}
+			var value string
+			if valueFile != "" {
+				var err error
+				value, err = readSecretValueFile(valueFile)
+				if err != nil {
+					return err
+				}
+			} else if len(args) == 3 {
+				value = args[2]
+			} else {
+				return fmt.Errorf("secret value or --value-file is required")
+			}
 			envID, _ := cmd.Flags().GetString("environment")
-			secret, err := apiClient.SetSecret(cmd.Context(), args[0], args[1], args[2], envID)
+			secret, err := apiClient.SetSecret(cmd.Context(), args[0], args[1], value, envID)
 			if err != nil {
 				return err
 			}
@@ -1216,6 +1233,7 @@ func secretsCommands() *cobra.Command {
 		},
 	}
 	setCmd.Flags().String("environment", "", "Environment ID (optional, for env-specific secret)")
+	setCmd.Flags().StringVar(&valueFile, "value-file", "", "Read the secret value from an owner-only absolute file")
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete [service-id] [secret-id]",
@@ -1232,6 +1250,35 @@ func secretsCommands() *cobra.Command {
 
 	cmd.AddCommand(listCmd, setCmd, deleteCmd)
 	return cmd
+}
+
+func readSecretValueFile(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("--value-file must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect --value-file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("--value-file must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("--value-file must not be accessible by group or others")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read --value-file: %w", err)
+	}
+	value := strings.TrimSuffix(string(data), "\n")
+	value = strings.TrimSuffix(value, "\r")
+	if value == "" {
+		return "", fmt.Errorf("--value-file is empty")
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return "", fmt.Errorf("--value-file contains a NUL byte")
+	}
+	return value, nil
 }
 
 // --- Orgs Commands ---
