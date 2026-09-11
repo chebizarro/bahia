@@ -125,6 +125,55 @@ func TestLLMCommandPublisherPublishesCanonicalReleaseRegisterRequest(t *testing.
 	}
 }
 
+func TestLLMCommandPublisherPublishesCanonicalApprovalMethods(t *testing.T) {
+	for _, tc := range []struct {
+		decision, wantDecision, wantMethod string
+	}{
+		{"approve", "approve", "approval/llm-approve"},
+		{" Reject ", "reject", "approval/llm-reject"},
+	} {
+		t.Run(tc.wantDecision, func(t *testing.T) {
+			capture := &captureNostrPublisher{published: 1}
+			signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+			if err != nil {
+				t.Fatalf("create signer: %v", err)
+			}
+			intentID := uuid.New()
+			receipt, err := NewLLMCommandPublisher(capture, signer).PublishLLMApprovalRequest(context.Background(), LLMApprovalCommand{IntentID: intentID, Decision: tc.decision})
+			if err != nil {
+				t.Fatalf("publish approval: %v", err)
+			}
+			if receipt.Decision != tc.wantDecision || receipt.IntentID != intentID.String() {
+				t.Fatalf("unexpected approval receipt: %#v", receipt)
+			}
+			if len(capture.events) != 1 {
+				t.Fatalf("expected one event, got %d", len(capture.events))
+			}
+			ev := capture.events[0]
+			content := assertContextVMCommand(t, ev, tc.wantMethod)
+			assertReactorTag(t, ev.Tags, "intent", intentID.String())
+			assertReactorTag(t, ev.Tags, "decision", tc.wantDecision)
+			if content["intent_id"] != intentID.String() || content["decision"] != tc.wantDecision {
+				t.Fatalf("unexpected approval content: %#v", content)
+			}
+		})
+	}
+}
+
+func TestLLMCommandPublisherRejectsUnknownApprovalDecision(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	if _, err := NewLLMCommandPublisher(capture, signer).PublishLLMApprovalRequest(context.Background(), LLMApprovalCommand{IntentID: uuid.New(), Decision: "maybe"}); err == nil {
+		t.Fatal("expected unknown decision to be rejected")
+	}
+	if len(capture.events) != 0 {
+		t.Fatalf("unknown decision must not publish, got %d events", len(capture.events))
+	}
+}
+
 func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}

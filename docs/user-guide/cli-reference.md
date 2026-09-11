@@ -80,12 +80,13 @@ The current top-level CLI command groups are:
 - `workers`
 - `logs`
 - `policies`
+- `config`
 - `secrets`
 - `orgs`
 - `package`
 - `souls`
 
-Bahia does **not** currently register top-level `llm`, `ml`, `payments`, `builds`, `notifications`, `backup`, or `config` CLI commands. Aliases: `env` for `environments`, `svc` for `services`, and `soul`/`sf` for `souls`.
+Bahia does **not** currently register top-level `llm`, `ml`, `payments`, `builds`, `notifications`, or `backup` CLI commands. Aliases: `env` for `environments`, `svc` for `services`, and `soul`/`sf` for `souls`.
 
 ## Commands
 
@@ -261,7 +262,19 @@ bahia policies create \
 
 ### Config fabric
 
-> **NOTE (2026-09-11):** `cmd/cli/config_fabric.go` defines `config publish`, `config drift`, and `config rollback`, but the `config` group is not registered on the root command, so `bahia config …` is not available in current builds. Use the **Config Fabric** web page (`/config-fabric`) or the `/api/v1/config-fabric/*` endpoints instead.
+Publish and inspect fleet config desired state. These commands call the `/api/v1/config-fabric/*` endpoints, so they need an authenticated operator key (see [Authentication](#authentication) flags above); the **Config Fabric** web page (`/config-fabric`) exposes the same data.
+
+```bash
+# Publish a config-fabric desired-state event from a JSON publish request
+bahia config publish --file config-request.json
+
+# List desired-versus-applied drift per service/policy/scope
+bahia config drift
+bahia config drift -o json
+
+# Republish a prior desired event at the next version
+bahia config rollback <event-id>
+```
 
 ### Secrets
 

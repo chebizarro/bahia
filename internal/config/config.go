@@ -312,6 +312,9 @@ type SoulFactoryConfig struct {
 	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path"`
 	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file"`
 	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey"`
+	OpenClawSagaStoreDir           string                 `koanf:"openclaw_saga_store_dir" yaml:"openclaw_saga_store_dir"`
+	OpenClawSagaInstance           string                 `koanf:"openclaw_saga_instance" yaml:"openclaw_saga_instance"`
+	OpenClawSagaBuildID            string                 `koanf:"openclaw_saga_build_id" yaml:"openclaw_saga_build_id"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
@@ -801,6 +804,29 @@ type OperatorAccessConfig struct {
 // Empty reports whether no operator identities are configured.
 func (c OperatorAccessConfig) Empty() bool {
 	return len(c.AllowedSubjects) == 0 && len(c.AllowedPubkeys) == 0 && len(c.AllowedEmails) == 0
+}
+
+// validateSignerFirstOperatorAllowlist enforces the pubkey allowlist for a
+// privileged surface that is reachable over signer-first transports (ContextVM
+// and control-plane events). Those paths authorize only the verified signer
+// pubkey: allowed_subjects and allowed_emails are HTTP/NIP-98 compatibility
+// settings and can never authorize a signed Nostr request. A subject- or
+// email-only allowlist therefore does not configure signer-first access and is
+// rejected rather than silently accepted. Pubkeys are normalized to lowercase
+// 64-character hex so they match verified event pubkeys exactly.
+func validateSignerFirstOperatorAllowlist(surface string, access *OperatorAccessConfig) error {
+	pubkeys, err := normalizePubkeyList(access.AllowedPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: %s.allowed_pubkeys: %w", surface, err)
+	}
+	if len(pubkeys) == 0 {
+		if len(access.AllowedSubjects) > 0 || len(access.AllowedEmails) > 0 {
+			return fmt.Errorf("config validation failed: %s operator allowlist must include allowed_pubkeys when %s.enabled=true; allowed_subjects and allowed_emails do not authorize signer-first requests", surface, surface)
+		}
+		return fmt.Errorf("config validation failed: %s operator allowlist is required when %s.enabled=true (set %s.allowed_pubkeys)", surface, surface, surface)
+	}
+	access.AllowedPubkeys = pubkeys
+	return nil
 }
 
 // AdoptionConfig holds privileged adoption route settings.
@@ -1390,8 +1416,8 @@ func (c *Config) validate() error {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when adoption.enabled=true")
 		}
-		if c.Adoption.OperatorAccessConfig.Empty() {
-			return fmt.Errorf("config validation failed: adoption operator allowlist is required when adoption.enabled=true")
+		if err := validateSignerFirstOperatorAllowlist("adoption", &c.Adoption.OperatorAccessConfig); err != nil {
+			return err
 		}
 		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
 			return fmt.Errorf("config validation failed: nostr.private_key is required when adoption.enabled=true because adopted workload secret import requires encryption")
@@ -1415,8 +1441,8 @@ func (c *Config) validate() error {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when direct_runtime_actions.enabled=true")
 		}
-		if c.DirectRuntime.OperatorAccessConfig.Empty() {
-			return fmt.Errorf("config validation failed: direct_runtime_actions operator allowlist is required when direct_runtime_actions.enabled=true")
+		if err := validateSignerFirstOperatorAllowlist("direct_runtime_actions", &c.DirectRuntime.OperatorAccessConfig); err != nil {
+			return err
 		}
 		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
 			return fmt.Errorf("config validation failed: nostr.private_key is required when direct_runtime_actions.enabled=true because runtime secret handling requires encryption")
@@ -2802,6 +2828,9 @@ func (c *Config) validateSoulFactory() error {
 	sf.OpenClawSignetConfigPath = strings.TrimSpace(sf.OpenClawSignetConfigPath)
 	sf.OpenClawSignetProvisionerFile = strings.TrimSpace(sf.OpenClawSignetProvisionerFile)
 	sf.OpenClawSignetProvisionerPubkey = strings.ToLower(strings.TrimSpace(sf.OpenClawSignetProvisionerPubkey))
+	sf.OpenClawSagaStoreDir = strings.TrimSpace(sf.OpenClawSagaStoreDir)
+	sf.OpenClawSagaInstance = strings.TrimSpace(sf.OpenClawSagaInstance)
+	sf.OpenClawSagaBuildID = strings.TrimSpace(sf.OpenClawSagaBuildID)
 	if sf.StartupTimeout == 0 {
 		sf.StartupTimeout = 15 * time.Second
 	}

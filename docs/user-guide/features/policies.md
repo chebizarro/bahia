@@ -41,9 +41,7 @@ A policy has no separate "type"; each rule carries its own `type` and optional `
 | `block_package` | Block a package (`params.package`) |
 | `sbom_subject_digest_match`, `sbom_parseability`, `sbom_ntia_min_fields`, `sbom_trusted_generator`, `sbom_format` | SBOM quality gates |
 | `package_min_age`, `package_min_downloads`, `typosquat_check` | Package supply-chain gates (tool provisioning) |
-| `require_approval` | Offered in the UI rule builder; see the note below |
-
-> **NOTE (2026-09-11):** deployment approval is currently driven by the environment's `protected` flag. The `require_approval` rule type is defined and offered in the web rule builder, but the deployment policy evaluator (`internal/service/policy.go`) does not act on it.
+| `require_approval` | Approval gate: matching deployment intents wait for manual approval (see [Approval](#approval)) |
 
 ### Evaluation Result
 
@@ -53,7 +51,10 @@ policy_name: "require-sbom"
 passed: true
 enforcement: "block"
 violations: []
+requires_approval: false   # true when the policy contains a require_approval rule
 ```
+
+The aggregate evaluation also carries `requires_approval: true` when any applicable policy contains a `require_approval` rule, so deploy previews show that the intent will wait for approval.
 
 ## Config Fabric operator console
 
@@ -203,7 +204,21 @@ Scheduled rescans are repository-backed due records derived from enabled policy-
 
 ### Approval
 
-Mark the environment `protected` to require approval for every deployment intent. Multi-approver counts, approver allowlists, and auto-approval conditions are not policy parameters.
+A deployment intent requires manual approval when **either** of these is true:
+
+- the target environment is marked `protected`; or
+- any enabled policy that applies to the deployment (a global policy, or one scoped to the target environment) contains a `require_approval` rule.
+
+```json
+{
+  "name": "prod-approval",
+  "environment_id": "<env-uuid>",
+  "rules": [{ "type": "require_approval" }],
+  "enforcement": "block"
+}
+```
+
+`require_approval` is a gate, not a check: it never produces a violation or blocker, and it applies regardless of the policy's `enforcement` mode. Gated intents are created as `pending`, do not advance desired state, and proceed only after an explicit approve decision on the deployment intent (the same flow used for protected environments). Caller-supplied approval on creation is ignored. If Bahia cannot read the policy set when the intent is created, creation fails rather than skipping approval. Multi-approver counts, approver allowlists, and auto-approval conditions are not policy parameters.
 
 ### Signature Rules
 

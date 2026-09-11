@@ -30,10 +30,11 @@ Exit only with sanitized evidence and zero critical alerts.
 
 Enable one disposable production canary while incumbents remain unchanged.
 
-> **NOTE (2026-09-11):** The `bahia_openclaw_provisioning_*` metrics and the
-> `BahiaOpenClaw*` alerts are defined in source (`internal/soulfactory/saga`,
-> `deploy/observability/bahia-alerts.yml`) but are not exposed by Bahia's
-> `/metrics` in this checkout. "Zero critical alerts" is only meaningful after
+> **NOTE (2026-09-11, updated):** The `bahia_openclaw_provisioning_*` metrics
+> are appended to Bahia's `/metrics` when
+> `soul_factory.openclaw_saga_store_dir` is configured. However, no binary
+> drives the saga engine yet (bahia-lf0s4), so the series stays empty until a
+> provisioning run is recorded. "Zero critical alerts" is only meaningful after
 > those series are confirmed present in Prometheus; see
 > `docs/runbooks/openclaw-provisioning-operations.md`.
 

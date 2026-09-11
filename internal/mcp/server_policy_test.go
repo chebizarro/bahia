@@ -140,19 +140,19 @@ type capturePolicyCommandPublisher struct {
 
 func (p *capturePolicyCommandPublisher) PublishPolicyCreateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
 	p.create = &cmd
-	return testPolicyReceipt(controlplane.KindPolicyCreate, cmd.IdempotencyKey), nil
+	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
 }
 func (p *capturePolicyCommandPublisher) PublishPolicyUpdateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
 	p.update = &cmd
-	return testPolicyReceipt(controlplane.KindPolicyUpdate, cmd.IdempotencyKey), nil
+	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
 }
 func (p *capturePolicyCommandPublisher) PublishPolicyDeleteRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
 	p.delete = &cmd
-	return testPolicyReceipt(controlplane.KindPolicyDelete, cmd.IdempotencyKey), nil
+	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
 }
 func (p *capturePolicyCommandPublisher) PublishPolicyEvaluateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
 	p.evaluate = &cmd
-	return testPolicyReceipt(controlplane.KindPolicyEvaluate, cmd.IdempotencyKey), nil
+	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
 }
 
 func testPolicyReceipt(kind int, key string) *controlplane.PolicyCommandReceipt {
@@ -168,7 +168,7 @@ type captureToolApprovalCommandPublisher struct {
 
 func (p *captureToolApprovalCommandPublisher) PublishToolApprovalResponse(_ context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error) {
 	p.cmd = &cmd
-	return &controlplane.ToolApprovalCommandReceipt{RequestEventID: "tool-approval-event", RequestPubkey: "operator-pubkey", RequestKind: controlplane.KindToolApprovalResponse, ResultKind: controlplane.KindContextVMMessage, ReadModelKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Action: cmd.Action}, nil
+	return &controlplane.ToolApprovalCommandReceipt{RequestEventID: "tool-approval-event", RequestPubkey: "operator-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindContextVMMessage, ReadModelKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Action: cmd.Action}, nil
 }
 
 func decodeResultMap(t *testing.T, result *ToolResult) map[string]interface{} {
@@ -257,7 +257,7 @@ func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
 		t.Fatalf("create result=%#v err=%v", createRes, err)
 	}
 	createPayload := decodeResultMap(t, createRes)
-	if int(createPayload["request_kind"].(float64)) != controlplane.KindPolicyCreate {
+	if int(createPayload["request_kind"].(float64)) != controlplane.KindContextVMMessage {
 		t.Fatalf("create request_kind = %v", createPayload["request_kind"])
 	}
 	if publisher.create == nil || publisher.create.Name != "require-signature" || publisher.create.EnvironmentID == nil || *publisher.create.EnvironmentID != envID || publisher.create.IdempotencyKey != "policy:create:test" {
@@ -300,7 +300,7 @@ func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T)
 		t.Fatalf("approve result=%#v err=%v", res, err)
 	}
 	payload := decodeResultMap(t, res)
-	if int(payload["request_kind"].(float64)) != controlplane.KindToolApprovalResponse {
+	if int(payload["request_kind"].(float64)) != controlplane.KindContextVMMessage {
 		t.Fatalf("approve request_kind = %v", payload["request_kind"])
 	}
 	if publisher.cmd == nil || publisher.cmd.IntentID != intentID || publisher.cmd.Action != "approve" || publisher.cmd.Reason != "reviewed" || publisher.cmd.IdempotencyKey != "tool:approve:test" {

@@ -165,13 +165,16 @@ func parseDirectRuntimeActionPayload(raw directRuntimeActionEventRequest) (parse
 	return parsedDirectRuntimeActionRequest{Action: action, ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID}, nil
 }
 
+// authorizedContextVMPubkey reports whether the verified inner-event signer is
+// on a privileged operator surface allowlist. It fails closed: an empty
+// allowlist authorizes nobody. Config validation requires a non-empty
+// allowed_pubkeys list whenever the adoption or direct-runtime surface is
+// enabled, so an empty list here means the surface is not configured for
+// signer-first access.
 func authorizedContextVMPubkey(pubkey string, authorized []string) bool {
-	pubkey = strings.TrimSpace(pubkey)
-	if pubkey == "" {
+	pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+	if pubkey == "" || len(authorized) == 0 {
 		return false
-	}
-	if len(authorized) == 0 {
-		return true
 	}
 	return slices.Contains(authorized, pubkey)
 }

@@ -2459,8 +2459,15 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 	return registries
 }
 
-func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
-	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models", "encrypted_controlplane.progress_ack"}
+// DiscoveryContextVMMethods returns the ContextVM JSON-RPC methods advertised in
+// discovery control_plane.methods. Every entry must have a server-side
+// RegisterContextVMHandler registration on bahia-server's encrypted transport;
+// internal/controlplane tests enforce this. Methods that Bahia's REST/MCP
+// command publishers emit without a server-side consumer (llm/*, ml/*,
+// package/*, worker/policy-apply, worker/workload-pin) are intentionally not
+// advertised. DNS methods are always registered but only advertised when a DNS
+// source is configured.
+func DiscoveryContextVMMethods(dnsEnabled bool) []string {
 	methods := []string{
 		"service/deploy-preview",
 		"service/deploy",
@@ -2472,25 +2479,24 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 		"worker/maintenance-enter",
 		"worker/maintenance-exit",
 		"worker/labels-update",
-		"worker/policy-apply",
-		"workload/pin",
 		"worker/cleanup",
-		"package/repository-apply",
-		"package/repository-delete",
-		"package/publish",
-		"package/promote",
-		"package/yank",
-		"package/drift-detect",
 		"approval/approve",
-		"tools/call",
 		"sbom/generate",
 		"sbom/import",
 	}
+	if dnsEnabled {
+		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-set", "dns/drift-remediate")
+	}
+	return methods
+}
+
+func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
+	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models", "encrypted_controlplane.progress_ack"}
+	methods := DiscoveryContextVMMethods(dnsEnabled)
 	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step", "subject", "subject_type"}
 	mcpFields := []string{"request_event_id", "request_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "observable_kinds"}
 	if llmEnabled {
 		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
-		methods = append(methods, "llm/route-create", "llm/release-register", "llm/deploy", "llm/deployment-approval", "llm/rollback")
 		correlationTags = append(correlationTags, "route", "release")
 		mcpFields = append(mcpFields, "route_id", "release_id")
 	}
@@ -2499,10 +2505,10 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	}
 	if dnsEnabled {
 		capabilities = append(capabilities, "dns_endpoint_catalog")
-		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-override", "dns/drift-remediate", "dns/backend-register")
 	}
-	aiMLMethods := []string{"ml/model-import", "ml/recipe-run", "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"}
-	methods = append(methods, aiMLMethods...)
+	// No ml/* ContextVM method has a bahia-server handler; AI/ML discovery
+	// advertises read models only until a consumer exists.
+	aiMLMethods := []string{}
 	transportKinds := map[string]int{
 		"contextvm_message":        kinds.ContextVMMessage,
 		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
@@ -2529,9 +2535,9 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 		"transport_kinds":       transportKinds,
 		"methods":               aiMLMethods,
 		"observable_kinds":      observableKinds,
-		"capabilities":          []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models", "ml_inference_deploy_requests", "ml_inference_approval_requests", "ml_inference_rollback_requests"},
+		"capabilities":          []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models"},
 		"correlation_tags":      []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
-		"contextvm_commands":    true,
+		"contextvm_commands":    len(aiMLMethods) > 0,
 		"canonical_observables": true,
 		"unsupported_in_d1":     []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
 	}

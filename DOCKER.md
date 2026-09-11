@@ -34,8 +34,12 @@ The `docker-compose.yml` file defines four services. Compose interpolation requi
 - **Dependencies**: Bahia API and relay sidecar (waits for healthy status)
 - **Proxy**: `/api` requests are proxied to `bahia:8080`; `/relay` WebSocket traffic is proxied to `relay:3334`
 - **Build args**: `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` (default `ws://localhost:3334/relay`) and `PUBLIC_BAHIA_SERVICE_PUBKEYS` (default empty), plus version metadata
+- **Runtime bootstrap env**: `web/docker-entrypoint.d/40-bahia-bootstrap-env.sh` substitutes the discovery seed into `index.html` at container start, so compose also passes it as runtime `environment`:
+  - `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` (default `ws://localhost:3334/relay`)
+  - `PUBLIC_BAHIA_SERVICE_PUBKEYS` (default empty)
+  - `BAHIA_WEB_SERVICE_PUBKEY_NIP11_URL` (default `http://relay:3334/relay`). When `PUBLIC_BAHIA_SERVICE_PUBKEYS` is empty, the entrypoint reads the `pubkey` field of the relay sidecar's NIP-11 document. The sidecar derives that value from `BAHIA_NOSTR_PRIVATE_KEY`, so the stock stack boots with only that one variable set.
 
-> **NOTE (2026-09-11):** `web/docker-entrypoint.d/40-bahia-bootstrap-env.sh` exits non-zero at container start unless `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` are set as **runtime** environment variables. `docker-compose.yml` passes them only as build args, and the service pubkey defaults to empty. If the `web` container exits on startup, add both values under `web.environment` in a local override. `PUBLIC_BAHIA_SERVICE_PUBKEYS` should be the hex pubkey that matches `BAHIA_NOSTR_PRIVATE_KEY`. Tracked as `bahia-zdbam`; verify against the current compose file before relying on this note.
+  The entrypoint still fails closed (the `web` container exits) if it cannot resolve a relay or a pubkey. After the first substitution, restarts skip the step. For any non-local deployment, set `PUBLIC_BAHIA_SERVICE_PUBKEYS` explicitly to the hex pubkey that matches `BAHIA_NOSTR_PRIVATE_KEY`, and leave `BAHIA_WEB_SERVICE_PUBKEY_NIP11_URL` unset so the browser trust anchor is always pinned rather than discovered (fixed in `bahia-zdbam`, 2026-09-11).
 
 ## Usage
 

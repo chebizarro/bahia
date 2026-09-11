@@ -137,7 +137,7 @@ func (p *captureArtifactCommandPublisher) PublishArtifactRegisterRequest(_ conte
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &controlplane.ArtifactCommandReceipt{RequestEventID: "artifact-event", RequestPubkey: "operator", RequestKind: controlplane.KindArtifactRegister, ResultKind: controlplane.KindActionResult, RegistryKind: controlplane.KindArtifactRegistry, Status: "submitted", PublishedRelays: 1, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}, nil
+	return &controlplane.ArtifactCommandReceipt{RequestEventID: "artifact-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindCASControlState, Status: "submitted", PublishedRelays: 1, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}, nil
 }
 
 func newTestMCPBuildArtifactServer() *Server {
@@ -226,7 +226,7 @@ func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
 		t.Fatalf("register artifact returned error: %s", artifactRes.Content[0].Text)
 	}
 	artifactPayload := decodeResultMap(t, artifactRes)
-	if artifactPayload["request_event_id"] != "artifact-event" || artifactPayload["request_kind"].(float64) != float64(controlplane.KindArtifactRegister) {
+	if artifactPayload["request_event_id"] != "artifact-event" || artifactPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) {
 		t.Fatalf("unexpected artifact register receipt: %#v", artifactPayload)
 	}
 	if artifactPayload["build_id"] != buildID || artifactPayload["service_id"] != serviceID || artifactPayload["image_digest"] != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {

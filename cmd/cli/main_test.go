@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +54,11 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 			cmd:  authCommands(),
 			want: []string{"inspect"},
 		},
+		{
+			name: "config",
+			cmd:  configCommands(),
+			want: []string{"publish", "drift", "rollback"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -62,6 +69,51 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRootCommandRegistersConfigGroup(t *testing.T) {
+	root := newRootCommand()
+	configCmd := findDirectChild(root, "config")
+	if configCmd == nil {
+		t.Fatal("root command missing config command group")
+	}
+	for _, name := range []string{"publish", "drift", "rollback"} {
+		if findDirectChild(configCmd, name) == nil {
+			t.Fatalf("bahia config missing child %q", name)
+		}
+	}
+
+	found, _, err := root.Find([]string{"config", "drift"})
+	if err != nil {
+		t.Fatalf("resolve `bahia config drift`: %v", err)
+	}
+	if found.Name() != "drift" || found.Parent() != configCmd {
+		t.Fatalf("`bahia config drift` resolved to %q", found.CommandPath())
+	}
+}
+
+func TestConfigDriftCommandCallsConfigFabricEndpoint(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
+	t.Setenv("BAHIA_NOSTR_NSEC", "")
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
+
+	var gotMethod, gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	root := newRootCommand()
+	root.SetArgs([]string{"--server", server.URL, "--output", "json", "config", "drift"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("bahia config drift: %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/v1/config-fabric/drift" {
+		t.Fatalf("bahia config drift called %s %s, want GET /api/v1/config-fabric/drift", gotMethod, gotPath)
 	}
 }
 

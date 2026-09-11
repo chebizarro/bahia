@@ -22,7 +22,7 @@ curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```
 
-The stack runs PostgreSQL, `bahia-server`, the `bahia-relay` sidecar, and the web UI. See [`DOCKER.md`](../DOCKER.md) for service details and known caveats.
+The stack runs PostgreSQL, `bahia-server`, the `bahia-relay` sidecar, and the web UI (http://localhost:3000). `BAHIA_NOSTR_PRIVATE_KEY` is the only variable you must set. Locally, the web container reads the trusted service pubkey from the relay sidecar's NIP-11 document at startup. Outside local development, set `PUBLIC_BAHIA_SERVICE_PUBKEYS` explicitly instead. See [`DOCKER.md`](../DOCKER.md) for service details and known caveats.
 
 ## Manual Setup
 

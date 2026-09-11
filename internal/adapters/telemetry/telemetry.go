@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -44,7 +45,9 @@ type Provider struct {
 	fleetHealthStates  fleetHealthStateSource
 	now                func() time.Time
 	nostrFleetHealth   *nostrFleetHealthProjector
-	tracerProvider     *sdktrace.TracerProvider
+	openClawSagaMu    sync.RWMutex
+	openClawSaga      func(context.Context, io.Writer) error
+	tracerProvider    *sdktrace.TracerProvider
 	meterProvider      *sdkmetric.MeterProvider
 	setupErr           error
 	shutdownOnce       sync.Once
@@ -1032,7 +1035,28 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		for mint, balance := range m.CashuWalletBalance {
 			fmt.Fprintf(w, "bahia_cashu_wallet_balance_sats{mint=%q} %d\n", mint, balance)
 		}
+
+		p.openClawSagaMu.RLock()
+		openClawSaga := p.openClawSaga
+		p.openClawSagaMu.RUnlock()
+		if openClawSaga != nil {
+			if err := openClawSaga(r.Context(), w); err != nil {
+				fmt.Fprintf(w, "# bahia_openclaw_provisioning export unavailable: %v\n", err)
+			}
+		}
 	}
+}
+
+// SetOpenClawSagaExporter registers an optional exporter whose Prometheus text
+// output is appended to the /metrics response. It exists so the OpenClaw
+// provisioning saga monitor (internal/soulfactory/saga) can surface
+// bahia_openclaw_provisioning_* gauges on the same scrape the
+// BahiaOpenClaw* alert rules target, without the telemetry package depending
+// on the saga package. The exporter must be safe for concurrent use.
+func (p *Provider) SetOpenClawSagaExporter(export func(context.Context, io.Writer) error) {
+	p.openClawSagaMu.Lock()
+	defer p.openClawSagaMu.Unlock()
+	p.openClawSaga = export
 }
 
 func renderNostrFleetHealthMetrics(w http.ResponseWriter, snapshot NostrFleetHealthSnapshot) {

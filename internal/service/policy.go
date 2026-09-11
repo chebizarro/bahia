@@ -101,6 +101,9 @@ func (s *PolicyService) Evaluate(ctx context.Context, artifactID, environmentID 
 	for _, policy := range allPolicies {
 		result := s.evaluatePolicy(ctx, policy, artifactID)
 		eval.Results = append(eval.Results, result)
+		if result.RequiresApproval {
+			eval.RequiresApproval = true
+		}
 
 		if !result.Passed {
 			blockers, warnings := policyResultViolationCounts(result)
@@ -115,6 +118,35 @@ func (s *PolicyService) Evaluate(ctx context.Context, artifactID, environmentID 
 	return eval, nil
 }
 
+// DeploymentApprovalRequired reports whether any enabled global or
+// environment-scoped policy contains a require_approval rule. It inspects only
+// policy rules (no artifact lookups) so the registry can cheaply gate intent
+// creation on it. artifactID is accepted for interface symmetry with Evaluate.
+func (s *PolicyService) DeploymentApprovalRequired(ctx context.Context, _ uuid.UUID, environmentID uuid.UUID) (bool, error) {
+	if s == nil || s.policies == nil {
+		return false, nil
+	}
+	globalPolicies, err := s.policies.ListGlobal(ctx)
+	if err != nil {
+		return false, fmt.Errorf("listing global policies: %w", err)
+	}
+	for _, policy := range globalPolicies {
+		if domain.PolicyRequiresApproval(policy) {
+			return true, nil
+		}
+	}
+	envPolicies, err := s.policies.ListByEnvironment(ctx, environmentID)
+	if err != nil {
+		return false, fmt.Errorf("listing env policies: %w", err)
+	}
+	for _, policy := range envPolicies {
+		if domain.PolicyRequiresApproval(policy) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // evaluatePolicy checks all rules in a single policy against an artifact.
 func (s *PolicyService) evaluatePolicy(ctx context.Context, policy domain.DeploymentPolicy, artifactID uuid.UUID) domain.PolicyResult {
 	result := domain.PolicyResult{
@@ -125,6 +157,12 @@ func (s *PolicyService) evaluatePolicy(ctx context.Context, policy domain.Deploy
 	}
 
 	for _, rule := range policy.Rules {
+		if rule.Type == domain.RuleRequireApproval {
+			// Approval gate, not an artifact check: recorded on the result and
+			// enforced when the deployment intent is created.
+			result.RequiresApproval = true
+			continue
+		}
 		violation := s.evaluateRule(ctx, rule, artifactID)
 		if violation != nil {
 			result.Passed = false

@@ -431,6 +431,9 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 			opt(transport)
 		}
 	}
+	if len(transport.authorizedPubkeys) == 0 {
+		transport.logger.Warn("ContextVM requester pre-filter disabled: nostr.authorized_pubkeys is empty, so any verified signer reaches method handlers; only handlers with their own authorization (tenant RBAC, adoption/direct-runtime allowlists) are protected")
+	}
 	return transport
 }
 
@@ -1152,6 +1155,11 @@ func contextVMResponseID(id json.RawMessage) json.RawMessage {
 	return cascontextvm.NewResponse(id, nil).ID
 }
 
+// authorized applies the optional transport-wide requester pre-filter
+// (nostr.authorized_pubkeys). An empty list disables the pre-filter so that
+// tenant-scoped browser signers can reach RBAC-checked handlers; it is NOT an
+// operator authorization decision. Privileged operator methods must enforce
+// their own allowlist (see authorizedContextVMPubkey), which fails closed.
 func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
 	return len(t.authorizedPubkeys) == 0 || slices.Contains(t.authorizedPubkeys, pubkey)
 }

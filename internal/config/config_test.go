@@ -2112,8 +2112,9 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.Adoption.AllowedPubkeys = []string{testOperatorPubkey}
 		cfg.DirectRuntime.Enabled = true
-		cfg.DirectRuntime.AllowedPubkeys = []string{"abcdef"}
+		cfg.DirectRuntime.AllowedPubkeys = []string{testOperatorPubkey}
 		cfg.LLM.Enabled = true
 		cfg.LLM.AllowOperationalREST = true
 		cfg.LLM.AllowedSubjects = []string{"llm-ops"}
@@ -2154,7 +2155,7 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedPubkeys = []string{"abcdef"}
+		cfg.Adoption.AllowedPubkeys = []string{testOperatorPubkey}
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
 		}
@@ -2228,7 +2229,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.Adoption.AllowedPubkeys = []string{testOperatorPubkey}
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when adoption.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
@@ -2238,7 +2239,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
 		cfg.DirectRuntime.Enabled = true
-		cfg.DirectRuntime.AllowedSubjects = []string{"ops"}
+		cfg.DirectRuntime.AllowedPubkeys = []string{testOperatorPubkey}
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when direct_runtime_actions.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
@@ -2257,13 +2258,15 @@ adoption:
   allowed_subjects:
     - ops-user
   allowed_pubkeys:
-    - abc123
+    - ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB
   allowed_emails:
     - ops@example.com
 direct_runtime_actions:
   enabled: true
   allowed_subjects:
     - runtime-user
+  allowed_pubkeys:
+    - abababababababababababababababababababababababababababababababab
 llm:
   enabled: true
   allow_operational_rest: true
@@ -2283,6 +2286,9 @@ llm:
 	}
 	if !cfg.DirectRuntime.Enabled || len(cfg.DirectRuntime.AllowedSubjects) != 1 || cfg.DirectRuntime.AllowedSubjects[0] != "runtime-user" {
 		t.Fatalf("direct runtime config not loaded: %+v", cfg.DirectRuntime)
+	}
+	if len(cfg.Adoption.AllowedPubkeys) != 1 || cfg.Adoption.AllowedPubkeys[0] != testOperatorPubkey {
+		t.Fatalf("adoption allowed_pubkeys not normalized: %+v", cfg.Adoption.AllowedPubkeys)
 	}
 	if !cfg.LLM.AllowOperationalREST || len(cfg.LLM.AllowedSubjects) != 1 || cfg.LLM.AllowedSubjects[0] != "llm-ops" {
 		t.Fatalf("llm operational REST config not loaded: %+v", cfg.LLM)
@@ -2425,7 +2431,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	adoptionAllowed.Nostr.PrivateKey = "test-secret-key"
 	adoptionAllowed.Auth.Enabled = true
 	adoptionAllowed.Adoption.Enabled = true
-	adoptionAllowed.Adoption.AllowedSubjects = []string{"ops"}
+	adoptionAllowed.Adoption.AllowedPubkeys = []string{testOperatorPubkey}
 	if err := adoptionAllowed.validate(); err != nil {
 		t.Fatalf("adoption with auth and allowlist should validate: %v", err)
 	}
@@ -2447,7 +2453,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	directAllowed.Nostr.PrivateKey = "test-secret-key"
 	directAllowed.Auth.Enabled = true
 	directAllowed.DirectRuntime.Enabled = true
-	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}
+	directAllowed.DirectRuntime.AllowedPubkeys = []string{testOperatorPubkey}
 	if err := directAllowed.validate(); err != nil {
 		t.Fatalf("direct runtime with auth and allowlist should validate: %v", err)
 	}
@@ -2740,4 +2746,77 @@ func TestDNSValidationEnabled(t *testing.T) {
 			t.Fatalf("expected worker_zone error, got %v", err)
 		}
 	})
+}
+
+const testOperatorPubkey = "abababababababababababababababababababababababababababababababab"
+
+// TestSignerFirstOperatorAllowlistsFailClosed is the config-load regression for
+// bahia-9sav5: signer-first surfaces authorize only verified pubkeys, so a
+// subject/email-only allowlist must not validate.
+func TestSignerFirstOperatorAllowlistsFailClosed(t *testing.T) {
+	base := func() *Config {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Nostr.PrivateKey = "test-secret-key"
+		return cfg
+	}
+	surfaces := []struct {
+		name   string
+		enable func(*Config) *OperatorAccessConfig
+	}{
+		{"adoption", func(c *Config) *OperatorAccessConfig {
+			c.Adoption.Enabled = true
+			return &c.Adoption.OperatorAccessConfig
+		}},
+		{"direct_runtime_actions", func(c *Config) *OperatorAccessConfig {
+			c.DirectRuntime.Enabled = true
+			return &c.DirectRuntime.OperatorAccessConfig
+		}},
+	}
+	for _, surface := range surfaces {
+		t.Run(surface.name+" rejects subject-only allowlist", func(t *testing.T) {
+			cfg := base()
+			surface.enable(cfg).AllowedSubjects = []string{"ops"}
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), surface.name+" operator allowlist must include allowed_pubkeys") {
+				t.Fatalf("validate error = %v, want subject-only rejection", err)
+			}
+		})
+		t.Run(surface.name+" rejects email-only allowlist", func(t *testing.T) {
+			cfg := base()
+			surface.enable(cfg).AllowedEmails = []string{"ops@example.com"}
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), surface.name+" operator allowlist must include allowed_pubkeys") {
+				t.Fatalf("validate error = %v, want email-only rejection", err)
+			}
+		})
+		t.Run(surface.name+" rejects blank-only pubkeys", func(t *testing.T) {
+			cfg := base()
+			surface.enable(cfg).AllowedPubkeys = []string{"  "}
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), surface.name+" operator allowlist is required") {
+				t.Fatalf("validate error = %v, want empty allowlist rejection", err)
+			}
+		})
+		t.Run(surface.name+" rejects non-hex pubkeys", func(t *testing.T) {
+			cfg := base()
+			surface.enable(cfg).AllowedPubkeys = []string{"npub1operator"}
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), surface.name+".allowed_pubkeys") {
+				t.Fatalf("validate error = %v, want invalid pubkey rejection", err)
+			}
+		})
+		t.Run(surface.name+" normalizes pubkeys", func(t *testing.T) {
+			cfg := base()
+			access := surface.enable(cfg)
+			access.AllowedSubjects = []string{"ops"}
+			access.AllowedPubkeys = []string{" " + strings.ToUpper(testOperatorPubkey) + " ", testOperatorPubkey}
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("validate error = %v", err)
+			}
+			if len(access.AllowedPubkeys) != 1 || access.AllowedPubkeys[0] != testOperatorPubkey {
+				t.Fatalf("allowed_pubkeys = %v, want [%s]", access.AllowedPubkeys, testOperatorPubkey)
+			}
+		})
+	}
 }

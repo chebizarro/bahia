@@ -63,6 +63,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
+	"github.com/openagentsinc/bahia/internal/soulfactory/saga"
 	"github.com/openagentsinc/bahia/internal/workflow"
 	"go.uber.org/zap"
 )
@@ -288,10 +289,15 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("image verification disabled, artifacts will not be verified against registry")
 	}
 
+	// Policy service. Built before the registry so require_approval policy
+	// rules gate deployment intent creation.
+	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
+
 	// Registry service.
 	registryOptions := []service.RegistryOption{
 		service.WithManualArtifactRegistration(cfg.HiveCI.AllowManualArtifactRegistration),
 		service.WithLiveArtifactImport(cfg.HiveCI.AllowLiveArtifactImport),
+		service.WithDeploymentApprovalPolicy(policySvc),
 	}
 	if dbAvailable && pool != nil {
 		registryOptions = append(registryOptions, service.WithRegistryTxExecutor(repository.NewPgTxExecutor(pool)))
@@ -513,6 +519,37 @@ func New(cfg *config.Config) (*App, error) {
 	}, logger)
 	if dbAvailable {
 		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
+	}
+
+	// OpenClaw provisioning saga observability: when a saga store directory is
+	// configured, append bahia_openclaw_provisioning_* gauges to /metrics so
+	// the BahiaOpenClaw* alert rules can fire from this scrape.
+	if cfg.SoulFactory.OpenClawSagaStoreDir != "" {
+		sagaStore, sagaErr := saga.NewFileStore(cfg.SoulFactory.OpenClawSagaStoreDir)
+		if sagaErr != nil {
+			return nil, fmt.Errorf("configuring OpenClaw saga store: %w", sagaErr)
+		}
+		sagaInstance := cfg.SoulFactory.OpenClawSagaInstance
+		if sagaInstance == "" {
+			sagaInstance = cfg.Telemetry.ServiceName
+		}
+		if sagaInstance == "" {
+			sagaInstance = "bahia"
+		}
+		sagaBuild := cfg.SoulFactory.OpenClawSagaBuildID
+		if sagaBuild == "" {
+			sagaBuild = "dev"
+		}
+		sagaMonitor, sagaErr := saga.NewMonitor(saga.MonitorConfig{
+			Store: sagaStore, Instance: sagaInstance, Build: sagaBuild,
+		})
+		if sagaErr != nil {
+			return nil, fmt.Errorf("configuring OpenClaw saga monitor: %w", sagaErr)
+		}
+		telemetryProvider.SetOpenClawSagaExporter(sagaMonitor.WritePrometheus)
+		logger.Info("openclaw saga metrics exporter enabled",
+			zap.String("store_dir", cfg.SoulFactory.OpenClawSagaStoreDir),
+			zap.String("instance", sagaInstance), zap.String("build", sagaBuild))
 	}
 
 	// Background runner manager and startup health provider.
@@ -768,9 +805,6 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
-
-	// Policy service.
-	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
 
 	var dnsProjector *reconcile.DNSProjector
 	var dnsZones []domain.DNSZone

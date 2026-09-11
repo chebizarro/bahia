@@ -52,6 +52,7 @@ type RegistryService struct {
 	state                           repository.EnvironmentServiceStateRepository
 	txExecutor                      repository.TxExecutor
 	verifier                        ImageVerifier
+	approvalPolicy                  DeploymentApprovalPolicy
 	allowManualArtifactRegistration bool
 	allowLiveArtifactImport         bool
 	publisher                       events.Publisher
@@ -65,6 +66,21 @@ type RegistryOption func(*RegistryService)
 func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
 	return func(s *RegistryService) {
 		s.txExecutor = executor
+	}
+}
+
+// DeploymentApprovalPolicy decides whether deployment policies (the
+// require_approval rule) demand manual approval for an artifact deployment
+// into an environment, independently of environment.protected.
+type DeploymentApprovalPolicy interface {
+	DeploymentApprovalRequired(ctx context.Context, artifactID, environmentID uuid.UUID) (bool, error)
+}
+
+// WithDeploymentApprovalPolicy enables policy-driven approval gating on
+// deployment intent creation. Without it, only environment.protected gates.
+func WithDeploymentApprovalPolicy(policy DeploymentApprovalPolicy) RegistryOption {
+	return func(s *RegistryService) {
+		s.approvalPolicy = policy
 	}
 }
 
@@ -1340,9 +1356,19 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return fmt.Errorf("artifact %s does not belong to service %s", di.ArtifactID, di.ServiceID)
 	}
 
-	// Creation never accepts caller-supplied approval for protected environments;
-	// approval must be recorded through ApproveDeploymentIntent after the intent exists.
-	if env.Protected {
+	// Creation never accepts caller-supplied approval for protected environments
+	// or for deployments gated by a require_approval policy; approval must be
+	// recorded through ApproveDeploymentIntent after the intent exists.
+	approvalRequired := env.Protected
+	if !approvalRequired && s.approvalPolicy != nil {
+		required, err := s.approvalPolicy.DeploymentApprovalRequired(ctx, di.ArtifactID, di.EnvironmentID)
+		if err != nil {
+			// Fail closed: an unreadable policy set must not skip approval.
+			return fmt.Errorf("evaluating deployment approval policy: %w", err)
+		}
+		approvalRequired = required
+	}
+	if approvalRequired {
 		di.ApprovalStatus = domain.ApprovalStatusPending
 		di.Status = domain.IntentStatusPending
 	} else {

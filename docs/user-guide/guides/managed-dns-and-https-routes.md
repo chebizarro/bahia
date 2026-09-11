@@ -18,6 +18,7 @@ Bahia's internal service projection requires a writable DNS backend. This exampl
 ```yaml
 direct_runtime_actions:
   enabled: true
+  allowed_pubkeys: ["<operator-hex-pubkey>"] # required; empty or subject/email-only lists fail config load
 
 dns:
   enabled: true

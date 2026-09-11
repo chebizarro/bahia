@@ -1,0 +1,129 @@
+name: Release (Hive CI)
+
+# Cascadia release spine for the Bahia control plane. grasp-gitea discovers this
+# file at the pushed commit and publishes a signed kind 5401; Bahia authorizes it
+# and dispatches a kind 5100 Loom job; the Loom worker clones this repository at
+# the exact commit and runs `act <trigger> -W .gitea/workflows/release.yml`. This
+# job builds and pushes the immutable backend control-plane image, resolves its
+# manifest digest, and prints exactly one BAHIA_ARTIFACT=<json> line. Loom copies
+# those values into the signed kind 5402 so Bahia registers a digest-pinned
+# artifact automatically.
+#
+# This is the workflow_path mapped by hiveci pipeline policies for
+# chebizarro/bahia (docs/push-to-deploy-and-hiveci-runbook.md §Seeding and
+# scripts/seed_hiveci_pipeline_policy.sql). .github/workflows/hive-ci-build.yml
+# remains for the legacy hive-ci-runner .hiveci-result.json contract.
+#
+# Registering an artifact does NOT deploy or promote it: production promotion
+# remains a separately authorized Bahia operation.
+#
+# Registry credentials are deliberately absent. The Loom CI profile mounts the
+# worker's docker config into the build container, matching the fleet precedent
+# in .github/workflows/loom-release.yml. Runners without a container runtime (for
+# example ordinary Gitea/GitHub-hosted runners, which also lack Harbor
+# credentials) cannot satisfy this contract and skip cleanly instead of failing
+# red — see the preflight step.
+#
+# IMAGE_REPO must exactly equal the artifact_repo of the Bahia service in Bahia
+# (and the policy's release_image_repository metadata). The pipeline bridge
+# rejects a 5402 whose image_repo does not match the mapped service, and the
+# rejection is logged at WARN with the reason.
+#
+# Only the backend image is released here: one 5402 carries one artifact. The
+# web image keeps shipping through .github/workflows/loom-release.yml (tags) and
+# hive-ci-build.yml until a multi-artifact result extension exists.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, push, and publish artifact identity
+    runs-on: ubuntu-latest
+
+    env:
+      IMAGE_REPO: harbor.sharegap.net/cascadia/bahia
+
+    steps:
+      - name: Preflight
+        id: preflight
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "ERROR: could not resolve a full commit SHA from the checkout" >&2
+            exit 1
+          fi
+          short="${sha:0:7}"
+
+          echo "sha=$sha"          >> "$GITHUB_OUTPUT"
+          echo "short=$short"      >> "$GITHUB_OUTPUT"
+          echo "tag=master-$short" >> "$GITHUB_OUTPUT"
+
+          capable=true
+          if ! command -v docker >/dev/null 2>&1 || ! docker version >/dev/null 2>&1; then
+            capable=false
+            reason="no usable container runtime"
+          fi
+
+          echo "capable=$capable" >> "$GITHUB_OUTPUT"
+          if [ "$capable" != "true" ]; then
+            echo "[hive-ci] SKIPPING Bahia release build: ${reason}."
+            echo "[hive-ci] This workflow is executed by the Hive CI/Loom worker, which"
+            echo "[hive-ci] provides the container runtime and registry credentials."
+            echo "[hive-ci] No artifact marker will be emitted for commit ${sha}."
+          else
+            echo "[hive-ci] Releasing commit ${sha} as ${IMAGE_REPO}:master-${short}"
+          fi
+
+      - name: Build, push, and emit artifact identity
+        if: steps.preflight.outputs.capable == 'true'
+        run: |
+          set -euo pipefail
+
+          # Loom destroys clone credentials before repository-controlled code
+          # runs; refuse to continue if they leaked into the workflow env.
+          if [ "${HIVE_CI_GIT_USERNAME+x}" = x ] || [ "${HIVE_CI_GIT_PASSWORD+x}" = x ]; then
+            echo "ERROR: HiveCI clone credentials reached workflow-visible environment" >&2
+            exit 1
+          fi
+
+          sha='${{ steps.preflight.outputs.sha }}'
+          tag='${{ steps.preflight.outputs.tag }}'
+          image="${IMAGE_REPO}:${tag}"
+
+          docker build \
+            --build-arg VERSION_BASE=0.1.0 \
+            --build-arg GIT_COMMIT="${sha}" \
+            --build-arg VERSION="0.1.0-${sha}" \
+            --tag "${image}" \
+            .
+
+          docker push "${image}"
+
+          # RepoDigests is populated by the push above. Fall back to querying the
+          # registry so a missing local digest cannot silently yield an unpinned
+          # artifact.
+          repo_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${image}" 2>/dev/null || true)"
+          digest="${repo_digest##*@}"
+          if [ "$digest" = "$repo_digest" ]; then
+            digest=""
+          fi
+          if [ -z "$digest" ] && docker buildx version >/dev/null 2>&1; then
+            digest="$(docker buildx imagetools inspect "${image}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          fi
+          if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "ERROR: could not resolve an immutable sha256 manifest digest for ${image}" >&2
+            exit 1
+          fi
+
+          # Exactly one marker line. Loom parses this from stdout and copies the
+          # three values into the signed kind 5402 that Bahia registers.
+          printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
+            "${IMAGE_REPO}" "${tag}" "${digest}"

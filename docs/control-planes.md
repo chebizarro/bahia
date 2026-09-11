@@ -320,10 +320,9 @@ CLI behavior:
 
 Authorization uses the verified inner ContextVM event pubkey after unwrap:
 
-- `nostr.authorized_pubkeys` is the global fallback for public operator request authorization.
-- `adoption.allowed_pubkeys` additionally authorizes adoption ContextVM methods.
-- `direct_runtime_actions.allowed_pubkeys` additionally authorizes direct-runtime ContextVM service action methods.
-- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by ContextVM event authorization.
+- `nostr.authorized_pubkeys` is the global fallback for control-plane operator request events, and an optional ContextVM transport pre-filter. When it is empty, the ContextVM pre-filter is disabled and per-method authorization applies.
+- `adoption.allowed_pubkeys` is the ContextVM allowlist for `adoption/scan` and `adoption/import`. `direct_runtime_actions.allowed_pubkeys` is the ContextVM allowlist for `service/action`. Both fail closed: an empty list authorizes no signer. Config load requires a non-empty hex list whenever the surface is enabled.
+- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by ContextVM event authorization. An enabled adoption or direct-runtime surface with only subject/email entries fails config validation.
 
 #### Adoption scan/import
 

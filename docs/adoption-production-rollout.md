@@ -40,10 +40,12 @@ The legacy privileged REST adoption/import and direct-runtime mutation routes ar
    ```
 
    Notes:
-   - `nostr.authorized_pubkeys` is the outer gate: the ContextVM transport rejects any requester not in it before dispatch.
-   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` are then checked per method (`adoption/*` and `service/action` respectively).
-   - **Both checks treat an empty list as "allow any signer".** Config validation only requires *some* operator allowlist (subjects, pubkeys, or emails) when a surface is enabled, so a subject- or email-only allowlist passes validation while leaving signer-first execution open. Always set non-empty `allowed_pubkeys` for each enabled surface and a non-empty `nostr.authorized_pubkeys`.
-   - Subject/email operator allowlists are compatibility-only and do not authorize signer-first public events.
+   - `nostr.authorized_pubkeys` is an optional outer pre-filter: when non-empty, the ContextVM transport rejects any requester not in it before dispatch. When empty, the pre-filter is disabled (so tenant-scoped browser signers can reach RBAC-checked methods) and the server logs a startup warning.
+   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` are then checked per method (`adoption/*` and `service/action` respectively). These checks **fail closed**: an empty list authorizes no signer.
+   - Config load rejects `adoption.enabled=true` or `direct_runtime_actions.enabled=true` unless that surface has a non-empty `allowed_pubkeys` list of 64-character hex pubkeys. Entries are lowercased and deduplicated. A subject- or email-only allowlist is rejected with an error, because those entries cannot authorize signer-first requests.
+   - Subject/email operator allowlists are compatibility-only. They still apply to HTTP/NIP-98 routes, but they never authorize signer-first public events.
+
+   > **NOTE (2026-09-11, updated):** Earlier builds treated an empty `adoption.allowed_pubkeys` / `direct_runtime_actions.allowed_pubkeys` as "allow any signer" and accepted subject/email-only allowlists at load. Fixed under `bahia-9sav5`. Existing configs that relied on subject/email-only allowlists for these surfaces now fail to load until `allowed_pubkeys` is set. Other operator-only ContextVM methods (worker, backup, relay settings, DNS, and similar) still rely on the `nostr.authorized_pubkeys` pre-filter alone; see `bahia-4yhej`. Set a non-empty `nostr.authorized_pubkeys` for operator-only deployments.
    - `direct_runtime_actions.enabled=true` also requires `auth.enabled=true` and `nostr.private_key`.
 
 2. Configure endpoint aliases; do not expose Docker credentials to clients:

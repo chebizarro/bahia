@@ -3,8 +3,15 @@ name: Hive CI Build
 # This workflow is the Hive CI durable path counterpart to deploy-edge.yml.
 # It is executed by hive-ci-runner via nektos/act when grasp-gitea publishes
 # a kind 5401 event for pushes to master.  It builds images, pushes them to
-# Harbor, resolves the pushed manifest digest, and writes .hiveci-result.json
-# so hive-ci-runner can include image metadata in the kind 5402 result event.
+# Harbor, resolves the pushed manifest digest, writes .hiveci-result.json so
+# hive-ci-runner can include image metadata in the kind 5402 result event, and
+# prints exactly one BAHIA_ARTIFACT=<json> stdout line (image_repo, image_tag,
+# image_digest) for the Loom ci/workflow-run profile, which ignores the result
+# file and parses only that marker (loom-worker src/ci/artifact-marker.ts).
+#
+# The canonical Bahia release workflow mapped by hiveci pipeline policies is
+# .gitea/workflows/release.yml (see scripts/seed_hiveci_pipeline_policy.sql);
+# this file remains for the legacy hive-ci-runner result-file contract.
 #
 # Bahia's pipeline bridge (internal/pipeline/bridge.go) reads image_repo,
 # image_tag, and image_digest from the 5402 event (tags or JSON body) and
@@ -14,7 +21,8 @@ name: Hive CI Build
 # The .hiveci-result.json schema uses camelCase to match the runner contract;
 # the subscriber also accepts snake_case Nostr tags as a fallback.
 #
-# Only the backend control-plane image is included in .hiveci-result.json.
+# Only the backend control-plane image is included in .hiveci-result.json and
+# the BAHIA_ARTIFACT marker.
 # The web image is also built and pushed so it is available in Harbor, but
 # multi-artifact Hive CI results are not yet defined.  See runbook §"Durable
 # Path" for the retirement conditions that let this replace deploy-edge.yml.
@@ -143,7 +151,7 @@ jobs:
 
           docker push "${WEB_IMAGE_REPO}:${tag}"
 
-      - name: Write .hiveci-result.json
+      - name: Write .hiveci-result.json and emit artifact marker
         run: |
           set -euo pipefail
           tag="${{ steps.meta.outputs.tag }}"
@@ -182,3 +190,13 @@ jobs:
               sys.exit(1)
           print("Validation passed:", {k: r[k] for k in required})
           PY
+
+          # Loom's ci/workflow-run profile parses the first stdout line carrying
+          # the marker and copies the three values into the signed 5402. Emit it
+          # exactly once, only after the digest is validated as immutable.
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "ERROR: refusing to emit artifact marker for non-immutable digest '${digest}'" >&2
+            exit 1
+          }
+          printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
+            "${IMAGE_REPO}" "${tag}" "${digest}"

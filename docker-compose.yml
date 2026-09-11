@@ -97,6 +97,17 @@ services:
         PUBLIC_BAHIA_WEB_BASE_VERSION: ${VERSION_BASE:-0.1.0}
         PUBLIC_BAHIA_GIT_COMMIT: ${GIT_COMMIT:-dev}
         PUBLIC_BAHIA_WEB_VERSION: ${WEB_VERSION:-}
+    # The bootstrap seed is substituted into index.html at container start by
+    # web/docker-entrypoint.d/40-bahia-bootstrap-env.sh, so it must be runtime
+    # env (the build args above only feed the Vite build). When
+    # PUBLIC_BAHIA_SERVICE_PUBKEYS is unset, the entrypoint reads the service
+    # pubkey from the relay sidecar's NIP-11 document; the sidecar derives it
+    # from BAHIA_NOSTR_PRIVATE_KEY. Pin PUBLIC_BAHIA_SERVICE_PUBKEYS explicitly
+    # for any non-local deployment.
+    environment:
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-ws://localhost:3334/relay}
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:-}
+      BAHIA_WEB_SERVICE_PUBKEY_NIP11_URL: ${BAHIA_WEB_SERVICE_PUBKEY_NIP11_URL:-http://relay:3334/relay}
     ports:
       - "3000:80"
     depends_on:

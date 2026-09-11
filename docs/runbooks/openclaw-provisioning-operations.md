@@ -4,12 +4,14 @@ Task: **bahia-openclaw-rollout-conformance-20260819**
 
 This runbook operates the durable saga and dedicated runtime contract. Supply values through protected environment or files; never put bunker URIs, NIP-46 keys, tokens, private keys, or DM plaintext on a command line, in logs, or in evidence.
 
-> **NOTE (2026-09-11):** `internal/soulfactory/saga.Operator` defines
-> `inspect`, `retry`, `reconcile`, and `safe-abort`, but this checkout does not
-> expose that operator through a binary under `cmd/`, the REST router, or the
-> public ContextVM handlers. The steps below describe the contract for a
-> deployment-supplied authenticated adapter; do not invent a CLI command or
-> operate the saga database directly.
+> **NOTE (2026-09-11, updated):** `internal/soulfactory/saga.Operator` defines
+> `inspect`, `retry`, `reconcile`, and `safe-abort`, but no binary in this
+> checkout drives the saga engine, so the operator has nothing to act on and
+> remains unexposed (see bahia-lf0s4). The monitor half is wired: configuring
+> `soul_factory.openclaw_saga_store_dir` appends
+> `bahia_openclaw_provisioning_*` gauges to Bahia's `/metrics`. The steps below
+> describe the contract for a deployment-supplied authenticated adapter; do not
+> invent a CLI command or operate the saga database directly.
 
 ## Deploy
 

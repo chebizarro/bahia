@@ -2,8 +2,8 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 
 	"fiatjaf.com/nostr"
 	canonicalnostr "fiatjaf.com/nostr"
@@ -24,6 +24,8 @@ type ArtifactRegisterCommand struct {
 	SignatureRef      string
 	ScanStatus        domain.ScanStatus
 	Metadata          map[string]any
+	IdempotencyKey    string
+	AgentID           string
 }
 
 // ArtifactCommandReceipt is the correlation handle for artifact registration events.
@@ -33,6 +35,7 @@ type ArtifactCommandReceipt struct {
 	RequestKind     int            `json:"request_kind"`
 	ResultKind      int            `json:"result_kind"`
 	RegistryKind    int            `json:"registry_kind"`
+	DTag            string         `json:"d_tag,omitempty"`
 	IdempotencyKey  string         `json:"idempotency_key,omitempty"`
 	Status          string         `json:"status"`
 	Error           string         `json:"error,omitempty"`
@@ -51,7 +54,9 @@ type RelayOutcome struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// ArtifactCommandPublisher emits signed artifact registration events.
+// ArtifactCommandPublisher emits signed ContextVM kind 25910 artifact/register
+// requests. Legacy request kind 5985 is a migration input only and is never
+// published.
 type ArtifactCommandPublisher struct {
 	publisher NostrEventPublisher
 	signer    canonicalnostr.Signer
@@ -109,26 +114,23 @@ func (p *ArtifactCommandPublisher) PublishArtifactRegisterRequest(ctx context.Co
 	if len(cmd.Metadata) > 0 {
 		content["metadata"] = cmd.Metadata
 	}
-	body, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("marshal artifact register request: %w", err)
+	dTag := strings.TrimSpace(cmd.IdempotencyKey)
+	if dTag == "" {
+		dTag = "artifact-register:" + uuid.NewString()
 	}
-	ev := &nostr.Event{Kind: KindArtifactRegister, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"service", cmd.ServiceID.String()}, {"build", cmd.BuildID.String()}, {"digest", cmd.ImageDigest}}, Content: string(body)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign artifact register request: %w", err)
+	tags := nostr.Tags{{"service", cmd.ServiceID.String()}, {"build", cmd.BuildID.String()}, {"digest", cmd.ImageDigest}}
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, ContextVMMethodArtifactRegister, dTag, cmd.AgentID, tags, content, "artifact register")
+	if ev == nil {
+		return nil, err
 	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	receipt := &ArtifactCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: KindArtifactRegister, ResultKind: KindActionResult, RegistryKind: KindArtifactRegistry, Status: "submitted", PublishedRelays: published, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}
+	receipt := &ArtifactCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: int(ev.Kind), ResultKind: KindContextVMMessage, RegistryKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published, BuildID: cmd.BuildID.String(), ServiceID: cmd.ServiceID.String(), ImageDigest: cmd.ImageDigest}
 	if err != nil {
-		receipt.Status = "error"
-		receipt.Error = err.Error()
 		if published > 0 {
+			receipt.Status = "error"
+			receipt.Error = err.Error()
 			return receipt, nil
 		}
 		return nil, err
-	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish artifact register request: no relay accepted the request")
 	}
 	return receipt, nil
 }

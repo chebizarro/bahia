@@ -43,12 +43,14 @@ The `BahiaOpenClaw*` rules link to
 [`openclaw-provisioning-operations.md#incident-and-alert-response`](openclaw-provisioning-operations.md#incident-and-alert-response)
 as their `runbook_url`; the sections below are a summary.
 
-> **NOTE (2026-09-11):** The `bahia_openclaw_provisioning_*` series consumed by
-> the `BahiaOpenClaw*` rules are produced by `internal/soulfactory/saga`, which
-> no binary under `cmd/` currently links. They are absent from Bahia's
-> `/metrics`, so these six alerts are covered by rule unit tests only and cannot
-> fire in production until an exporter for the saga monitor is deployed and
-> scraped.
+> **NOTE (2026-09-11, updated):** The `bahia_openclaw_provisioning_*`
+> series consumed by the `BahiaOpenClaw*` rules is appended to Bahia's
+> `/metrics` when `soul_factory.openclaw_saga_store_dir` is configured
+> (`internal/soulfactory/saga.Monitor` via the telemetry provider). When the
+> key is unset the series is absent, so these six alerts are covered by rule
+> unit tests only. Additionally, no binary currently drives the saga engine, so
+> a configured store stays empty until bahia-lf0s4 is resolved; treat alert
+> silence as unverified until a provisioning run has been observed.
 
 ## Non-mutating detection simulations
 

@@ -190,7 +190,10 @@ RELEASE registration.
 
 ### Hive Workflow Contract
 
-The Loom `ci/workflow-run` profile does not read `.hiveci-result.json`. The
+The Loom `ci/workflow-run` profile does not read `.hiveci-result.json`. In this
+repository, `.gitea/workflows/release.yml` implements the contract below, and
+`.github/workflows/hive-ci-build.yml` also emits the marker.
+`internal/pipeline/release_workflow_contract_test.go` guards both. The
 Hive-executed workflow must:
 
 1. Build backend and web images.
@@ -396,12 +399,15 @@ hiveci:
         readiness_contract: {type: http, path: /ready, timeout_seconds: 15}
 ```
 
-> **NOTE (2026-09-11):** This repository has no `.gitea/workflows/release.yml`.
-> Bahia's own Hive workflow is `.github/workflows/hive-ci-build.yml`, and it
-> writes `.hiveci-result.json` without printing a `BAHIA_ARTIFACT` line. Before
-> seeding a Bahia policy, confirm which workflow path grasp-gitea actually
-> publishes in the signed 5401 (discovery query below) and that the workflow
-> emits the artifact contract the consuming worker reads.
+> **NOTE (2026-09-11, resolved in `bahia-viscy`):** `.gitea/workflows/release.yml`
+> now exists in this repository. It is Bahia's canonical release workflow:
+> it builds and pushes `harbor.sharegap.net/cascadia/bahia:master-<short-sha>`,
+> resolves the manifest digest, and prints exactly one `BAHIA_ARTIFACT=<json>`
+> line for Loom. `.github/workflows/hive-ci-build.yml` also prints the marker
+> now, alongside the legacy `.hiveci-result.json`, but policies should map the
+> `.gitea` path, matching `scripts/seed_hiveci_pipeline_policy.sql`. Before
+> seeding, still confirm with the discovery query below that grasp-gitea
+> publishes a signed 5401 for that path.
 
 The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
 kind-5401 events.  Use the discovery query below to find it once 5401 events
@@ -474,7 +480,7 @@ until an authorized intent is accepted, no environment desired state changes.
 
 1. ✅ Land the immediate self-hosted deploy workflow.
 2. Confirm pushes to `master` rebuild and roll the live edge stack.
-3. Partially done: `.github/workflows/hive-ci-build.yml` builds and pushes images and writes `.hiveci-result.json` (the hive-ci-runner contract). It does not yet print the `BAHIA_ARTIFACT=<json>` line that the Loom `ci/workflow-run` profile requires (see §Hive Workflow Contract).
+3. ✅ `.gitea/workflows/release.yml` (the canonical, policy-mapped path) builds and pushes the backend image and prints the `BAHIA_ARTIFACT=<json>` line required by the Loom `ci/workflow-run` profile (see §Hive Workflow Contract). `.github/workflows/hive-ci-build.yml` also prints the marker and still writes `.hiveci-result.json` for the legacy hive-ci-runner contract.
 4. Confirm `grasp-gitea` publishes `5401` for that workflow path.
 5. Confirm the executing worker (loom-worker, or hive-ci-runner for the legacy result-file contract) publishes a `5402` carrying `image_repo`, `image_tag`, and `image_digest`.
 6. ✅ Script for `hiveci_pipeline_policies` row available; run seeder once

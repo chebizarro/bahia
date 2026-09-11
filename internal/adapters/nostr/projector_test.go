@@ -1403,8 +1403,17 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if !ok {
 		t.Fatalf("control_plane.methods missing: %#v", controlPlane["methods"])
 	}
-	for _, method := range []string{"service/deploy-preview", "service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "ml/recipe-run", "ml/inference-deploy", "sbom/generate", "sbom/import"} {
+	for _, method := range []string{"service/deploy-preview", "service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "dns/record-set", "sbom/generate", "sbom/import"} {
 		assertDiscoveryStringContains(t, methods, method)
+	}
+	// Methods without a bahia-server ContextVM handler must not be advertised
+	// (bahia-ubg10, bahia-vfw9c, bahia-tgjvj).
+	for _, method := range []string{"dns/record-override", "dns/backend-register", "ml/recipe-run", "ml/inference-deploy", "llm/deployment-approval", "llm/deploy", "package/promote", "workload/pin", "worker/policy-apply", "tools/call"} {
+		for _, value := range methods {
+			if value == method {
+				t.Fatalf("discovery advertises unhandled method %q: %#v", method, methods)
+			}
+		}
 	}
 	assertDiscoveryContainsNoLegacyKinds(t, payload)
 }
