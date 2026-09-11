@@ -29,6 +29,15 @@
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
+  import api from '$lib/api/client.js';
+  import {
+    classificationLabel,
+    classificationClass,
+    formatRouteTimestamp,
+    instanceStatusLabel,
+    instanceStatusClass,
+    isNotFoundError
+  } from '../../route-canaries/page-model.js';
   import {
     ArtifactIcon,
     DeploymentIcon,
@@ -45,6 +54,12 @@
   let deploymentHistory = $state([]);
   let loading = $state(true);
   let error = $state(null);
+
+  // Route canary state for this environment
+  let routeCanaries = $state([]);
+  let routeCanariesLoading = $state(false);
+  let routeCanariesError = $state('');
+  let routeCanariesUnavailable = $state(false);
 
   // Service detail dialog
   let selectedService = $state(null);
@@ -147,10 +162,33 @@
           const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
           return dateB - dateA;
         });
+
+      void loadRouteCanaries(id);
     } catch (err) {
       error = err.message;
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadRouteCanaries(environmentId) {
+    routeCanariesLoading = true;
+    routeCanariesError = '';
+    routeCanariesUnavailable = false;
+    try {
+      routeCanaries = await api.listRouteCanaries({ environment_id: environmentId });
+    } catch (err) {
+      routeCanaries = [];
+      if (isNotFoundError(err)) {
+        // Route canaries are tier-2 gated and are not registered at all when
+        // the feature is disabled, so treat that as "nothing to show" rather
+        // than an error wall.
+        routeCanariesUnavailable = true;
+      } else {
+        routeCanariesError = err?.message || 'Route canary state unavailable';
+      }
+    } finally {
+      routeCanariesLoading = false;
     }
   }
 
@@ -504,6 +542,54 @@
     </section>
 
     <section>
+      <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Outages ({routeCanaries.length})</span></h2>
+      {#if routeCanariesLoading}
+        <p class="loading">Loading route canary state…</p>
+      {:else if routeCanariesUnavailable}
+        <EmptyState
+          iconComponent={WarningIcon}
+          title="Route canary monitoring is not enabled"
+          message="Enable the route_canaries feature to surface managed-route outage detection here."
+        />
+      {:else if routeCanariesError}
+        <EmptyState
+          iconComponent={WarningIcon}
+          title="Route canary state unavailable"
+          message={routeCanariesError}
+        />
+      {:else if routeCanaries.length > 0}
+        <div class="route-canary-list">
+          {#each routeCanaries as canary (`${canary.service_id}:${canary.hostname}:${canary.perspective}`)}
+            <a href="/route-canaries" class="route-canary-row">
+              <div class="route-canary-info">
+                <strong>{serviceDisplayName(canary.service_id)}</strong>
+                <code class="route-canary-hostname">{canary.hostname}</code>
+                <span class="badge-sm {classificationClass(canary.classification)}">{classificationLabel(canary.classification)}</span>
+                {#if canary.observed_instance_status}
+                  <span class="badge-sm {instanceStatusClass(canary.observed_instance_status)}">Instance: {instanceStatusLabel(canary.observed_instance_status)}</span>
+                {/if}
+                {#if canary.open && canary.service_healthy_route_broken}
+                  <span class="contradiction-badge">⚠ Container healthy, route broken</span>
+                {/if}
+              </div>
+              <div class="route-canary-meta">
+                <span>{canary.perspective || 'unknown'}</span>
+                <span>{canary.open ? 'Open' : 'Closed'}</span>
+                <span>{formatRouteTimestamp(canary.last_observed_at)}</span>
+              </div>
+            </a>
+          {/each}
+        </div>
+      {:else}
+        <EmptyState
+          iconComponent={WarningIcon}
+          title="No route canaries configured"
+          message="No managed routes are currently being probed for this environment"
+        />
+      {/if}
+    </section>
+
+    <section>
       <h2 class="section-title"><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Deployment History ({deploymentHistory.length})</span></h2>
       {#if deploymentHistory.length > 0}
         <Table columns={historyColumns} data={deploymentHistory} />
@@ -807,6 +893,66 @@
     text-align: center;
   }
   .error { color: var(--error); }
+
+  .route-canary-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .route-canary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: var(--hover-bg);
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.2s;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .route-canary-row:hover {
+    background: var(--bg);
+    border-color: var(--primary);
+  }
+  .route-canary-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .route-canary-hostname {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+  .route-canary-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .badge-sm {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+  }
+  .badge-sm.healthy { background: rgba(34,197,94,.15); color: #4ade80; }
+  .badge-sm.warning { background: rgba(245,158,11,.15); color: #fbbf24; }
+  .badge-sm.critical { background: rgba(239,68,68,.15); color: #f87171; }
+  .badge-sm.unknown { background: rgba(148,163,184,.15); color: #94a3b8; }
+  .contradiction-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #f97316;
+  }
 
   :global(.svc-name-link) {
     color: var(--primary);

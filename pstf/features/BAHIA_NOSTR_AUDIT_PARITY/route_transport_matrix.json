@@ -30,6 +30,24 @@
       "permitted_transport_classes": ["rest_compatibility"],
       "allowed_imports": ["$lib/api/client.js"],
       "allowed_usage": "Managed-instance supervision is an explicitly non-signer-first REST compatibility surface: the browser reads the server-owned watchdog projection and authenticated maintenance controls invoke the local supervisor rather than claiming browser-signed Nostr command ingress."
+    },
+    {
+      "file": "web/src/routes/route-canaries/+page.svelte",
+      "permitted_transport_classes": ["rest_compatibility"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Route canary outage state, detail, and lineage are a server-owned live supervision projection with no signed Nostr event representation, the same category as managed instance health; the page reads it directly over the bounded Tier 2 REST surface rather than claiming browser-signed Nostr command ingress."
+    },
+    {
+      "file": "web/src/routes/services/[id]/+page.svelte",
+      "permitted_transport_classes": ["rest_compatibility"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "The service detail page's route canary section reads the same server-owned route canary/instance-health pairing shown on /route-canaries, scoped by service_id, so operators see open route outages without leaving the service view. No command ingress; read-only."
+    },
+    {
+      "file": "web/src/routes/environments/[id]/+page.svelte",
+      "permitted_transport_classes": ["rest_compatibility"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "The environment detail page's Route Outages section reads the same server-owned route canary/instance-health pairing shown on /route-canaries, scoped by environment_id, across every service deployed to the environment. No command ingress; read-only."
     }
   ],
   "entries": [
@@ -355,6 +373,28 @@
       "evidence": ["Router still mounts REST compatibility routes for legacy clients and domain reads/writes outside current browser command ingress.", "web/src/lib/api/client.js intentionally omits redundant compatibility groups and keeps only HTTP-native Blossom/SBOM interop helpers used by web routes."],
       "rest_import_policy": "allowed_only_when_matrix_classifies_surface_as_rest_compatibility_or_http_native",
       "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "route-canaries-rest-compatibility",
+      "surface": "`/route-canaries` managed-route outage state, detail, and event lineage",
+      "transport_class": "rest_compatibility",
+      "route_files": ["web/src/routes/route-canaries/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/route_canary.go"],
+      "evidence": ["The Route Canaries page imports $lib/api/client.js for bounded Tier 2 route canary list, detail, and event-lineage API calls.", "Route canary state is a live derived read model (probe classification paired with observed_instance_status) with no signed Nostr event representation, the same category as managed instance health.", "This is intentionally classified as REST compatibility rather than signer-first Nostr command ingress; the page is read-only and does not publish browser-signed Nostr commands."],
+      "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface",
+      "pstf_status": "current_audit_evidence",
+      "resolved_by_beads": ["bahia-94n8f"]
+    },
+    {
+      "id": "route-canaries-detail-inline-rest-compatibility",
+      "surface": "`/services/{id}` and `/environments/{id}` inline route canary outage summaries",
+      "transport_class": "rest_compatibility",
+      "route_files": ["web/src/routes/services/[id]/+page.svelte", "web/src/routes/environments/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/route_canary.go"],
+      "evidence": ["Both detail pages remain nostr_native for read models and public commands (see services-public-controlplane and environments-public-controlplane); the route canary section is a narrow, read-only, additive REST compatibility surface layered on top, mirroring the /route-canaries page and the instance-health precedent.", "The service view filters by service_id; the environment view filters by environment_id and lists outages across every service deployed to that environment.", "No command ingress: the section never publishes Nostr events or REST mutations, it only reads route_canaries.List filtered by service_id/environment_id."],
+      "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface",
+      "pstf_status": "current_audit_evidence",
+      "resolved_by_beads": ["bahia-94n8f"]
     }
   ]
 }
