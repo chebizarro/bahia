@@ -1,0 +1,22 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_NOSTR_PROJECTION",
+  "tests": [
+    {"ac":"AC1","test":"TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"unit"},
+    {"ac":"AC1","test":"TestRouteCanaryOutageIsCountedByFleetHealthGauge","file":"internal/service/route_canary_projector_test.go","kind":"integration"},
+    {"ac":"AC2","test":"TestRouteCanaryProjectorPublishesOutageAsRouteDomainObservables","file":"internal/service/route_canary_projector_test.go","kind":"event-shape"},
+    {"ac":"AC3","test":"TestRouteCanaryFleetStatusIsTruthful","file":"internal/service/route_canary_projector_test.go","kind":"unit"},
+    {"ac":"AC3","test":"TestRouteCanaryProjectorRecoveryClearsContrast","file":"internal/service/route_canary_projector_test.go","kind":"behavioral"},
+    {"ac":"AC4","test":"TestRouteCanaryServiceHealthyRouteBrokenMatchesAPI","file":"internal/service/route_canary_projector_test.go","kind":"unit"},
+    {"ac":"AC5","test":"TestRouteCanaryProjectorRetriesOnlyRejectedPublishes","file":"internal/service/route_canary_projector_test.go","kind":"behavioral"},
+    {"ac":"AC5","test":"TestRouteCanaryProjectorNeverRegressesReplaceableStateButKeepsAuditHistory","file":"internal/service/route_canary_projector_test.go","kind":"behavioral"},
+    {"ac":"AC6","test":"TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"unit"},
+    {"ac":"AC7","test":"TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated","file":"internal/adapters/nostr/subscriber_test.go","kind":"behavioral"},
+    {"ac":"AC7","test":"TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents","file":"internal/adapters/nostr/subscriber_test.go","kind":"regression"},
+    {"ac":"AC8","test":"TestRouteCanaryProjectorRejectsUnattributablePayloads","file":"internal/service/route_canary_projector_test.go","kind":"unit"},
+    {"ac":"AC8","test":"TestNewRouteCanaryProjectorRequiresBusAndPublisher","file":"internal/service/route_canary_projector_test.go","kind":"unit"},
+    {"ac":"AC9","test":"TestNostrFleetHealthRedeliveryDoesNotMoveCounters","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"behavioral"},
+    {"ac":"AC9","test":"TestNostrFleetHealthOverLimitRejectionIsCountedOncePerEvent","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"behavioral"},
+    {"ac":"AC9","test":"TestBoundedEventIDSetEvictsOldestAndStaysBounded","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"unit"}
+  ],
+  "determinism": "No test sleeps or waits on goroutines: the projector is driven through a synchronous in-test bus, relay acceptance and rejection are injected through the publisher, and fleet-health ingestion is driven by direct observation of signed events."
+}

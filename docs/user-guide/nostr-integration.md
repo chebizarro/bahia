@@ -135,6 +135,37 @@ Worker resource-pressure and cleanup projections use the same canonical state la
 
 A cleanup execution projection is kind `30900` with tags such as `schema=bahia.state.worker-cleanup.v1`, `worker=<worker_pubkey>`, `status=<requested|dispatched|running|completed|failed>`, and `cleanup_mode=<reclaimable_only|aggressive>`. Cleanup mutation intent remains encrypted ContextVM `worker/cleanup`; public cleanup progress is represented by this state projection.
 
+Managed-route canary outages are projected with `domain=route`. Each route transition publishes a `30315` status and a `30900` state addressed by the route coordinate, plus an immutable `4903` audit fact:
+
+| Schema | Kind | Purpose |
+|--------|------|---------|
+| `bahia.status.route-canary.v1` | `30315` | Current bounded route health (`healthy`, `degraded`, `unhealthy`, `unknown`). |
+| `bahia.state.route-canary.v1` | `30900` | Current route canary state, including the container status observed at the same instant. |
+| `bahia.audit.route-canary.v1` | `4903` | Outage opened, recovered, or classification changed, with sanitized probe evidence. |
+
+```json
+{
+  "kind": 30900,
+  "tags": [
+    ["d", "route:<service_id>:<environment_id>:<deployment_unit_id|none>:git.example.com"],
+    ["domain", "route"],
+    ["schema", "bahia.state.route-canary.v1"],
+    ["entity", "route-canary"],
+    ["service", "<service_id>"],
+    ["environment", "<environment_id>"],
+    ["hostname", "git.example.com"],
+    ["status", "unhealthy"],
+    ["outage", "open"],
+    ["classification", "upstream_error"],
+    ["perspective", "public_edge"],
+    ["instance_status", "healthy"],
+    ["service_healthy_route_broken", "true"]
+  ]
+}
+```
+
+An open outage is `unhealthy`. A route failing below the open threshold, or reporting a warning such as `tls_expiring` or `health_path_not_discriminating`, is `degraded`. `service_healthy_route_broken=true` means the route is down while the containers behind it are healthy or running: the fault is in the routing layer. To follow route outages, subscribe to the service author with `{"kinds": [30315, 30900, 4903], "#domain": ["route"]}`, process history until `EOSE`, and keep the latest `30900` per `d`.
+
 ## Relay Topology
 
 ### Sidecar

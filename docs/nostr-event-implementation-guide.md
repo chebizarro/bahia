@@ -494,3 +494,49 @@ If the implementation wants a new event kind, stop and write the kind-allocation
 ### Managed-instance supervisor observables
 
 The managed-instance health projector subscribes to internal runtime health, recovery, and maintenance events. It publishes NIP-38 kind `30315` status with schema `bahia.status.managed-instance-health.v1` and stable `d=runtime:instance:<service>:<environment>:<deployment-unit>:<sha256(runtime-target)>`, kind `30900` current state with schema `bahia.state.managed-instance-health.v1`, and immutable kind `4903` audit facts with schema `bahia.audit.managed-instance-health.v1`. Evidence is sanitized before projection and publication uses the signed durable outbox/relay-OK path. No polling or new event kind is introduced.
+
+### Route canary observables
+
+The route canary projector subscribes to the in-process route canary transitions the route canary supervisor publishes (`route.canary_outage_opened`, `route.canary_recovered`, `route.canary_classification_changed`) and projects each one to existing canonical kinds. No new event kind is introduced.
+
+| Kind | Schema | Addressing | Purpose |
+|------|--------|------------|---------|
+| `30315` | `bahia.status.route-canary.v1` | `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>` | Current bounded route health |
+| `30900` | `bahia.state.route-canary.v1` | same `d` | Current durable route canary state; content carries the full `route_canary` state |
+| `4903` | `bahia.audit.route-canary.v1` | no `d`; `state=<route coordinate>` | Immutable transition fact with sanitized per-perspective probe evidence |
+
+The `d` coordinate is the same route coordinate the REST API, route lineage and in-process events use. All three events carry `domain=route`, `service`, `environment`, `deployment_unit` (when the route is bound to a deployment unit), `hostname`, `status`, `outage=open|closed`, `classification`, `perspective` (when known), `instance_status` (when a container status was observed), and `service_healthy_route_broken=true|false`. Status and state also carry `entity=route-canary`; audits carry `type=<in-process event type>` and `transition=opened|recovered|classification_changed`.
+
+Vocabulary decisions:
+
+- `domain=route` is a Bahia operational domain added under NIP-CAS-0002, which allows new `domain` values by convention. It does not collide with `domain=llm`, which Bahia uses for LLM routes.
+- The managed hostname is carried in a `hostname` tag, not a `route` tag. The Cascadia `route` tag is registered for LLM/API route identifiers.
+
+The bounded `status` tag is the fleet-health status of the route:
+
+| Route state | `status` |
+|-------------|----------|
+| Outage open, whatever the latest classification (including while recovery streaks accumulate) | `unhealthy` |
+| Failing below the open threshold (including a warning an operator promoted to a failure) | `degraded` |
+| Warning classification: `tls_expiring`, `health_path_not_discriminating` (the route still serves) | `degraded` |
+| `route_ok` | `healthy` |
+| Unrecognized classification | `unknown` |
+
+`service_healthy_route_broken` is true exactly when an outage is open and the observed container status is `healthy` or `running`, matching the REST API field of the same name. An unknown container status is not evidence that the service is up, so it never sets the flag.
+
+Publication rules:
+
+- `created_at` is the transition time. Replaceable status/state for a route are never overwritten by an older transition that is handled late; audit facts are immutable history and are always published.
+- Each event is recorded as published only after the signed outbox/relay path returns relay `OK accepted=true`. A rejected publish does not stop the rest of the transition's events. All failures are returned together so the in-process bus retries the transition, and events already accepted are skipped on the retry.
+- Dedupe state is bounded: the last accepted event per `(kind, route coordinate)`.
+- The projector is wired only when Nostr publishing is enabled with a service private key.
+
+Fleet-health telemetry counts `domain=route` as its own bounded domain. Route status/state define one entity per route coordinate. Route `4903` audit facts are lineage and never define or overwrite a route entity. A route status/state without a `d` coordinate cannot be attributed to a route and is counted as a projection error.
+
+The inbound subscriber delivers every validated, persisted event to fleet-health telemetry as an idempotent observer, including relay echoes of Bahia's own publications. The publisher persists each signed event before its first relay attempt, so those echoes always arrive as already-persisted duplicates, and side-effect handlers remain gated on first insert.
+
+Known limits:
+
+- The post-deploy route gate records its outcome durably but does not publish in-process transitions, so a gate-declared outage reaches Nostr when the supervisor next reports a transition for that route.
+- Route state is projected on transition. A route whose state predates the projector is projected on its next transition.
+- Fleet-health telemetry keeps its projection in memory and does not replay relay history on restart. Replaceable route state remains queryable on relays.

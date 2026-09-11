@@ -467,6 +467,13 @@ func New(cfg *config.Config) (*App, error) {
 			if err != nil {
 				return nil, fmt.Errorf("configuring route canary supervisor: %w", err)
 			}
+			// Project supervisor transitions to canonical Nostr observables so a
+			// route outage is visible to Nostr consumers and fleet-health telemetry.
+			if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+				if _, projErr := service.NewRouteCanaryProjector(publisher, nostrPub, logger); projErr != nil {
+					return nil, fmt.Errorf("configuring route canary projector: %w", projErr)
+				}
+			}
 		}
 	} else if publicRoutePlanner != nil {
 		coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
@@ -1367,7 +1374,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
-		nostrAdapter.WithHandler(telemetryProvider.ObserveNostrEvent),
+		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
 	)

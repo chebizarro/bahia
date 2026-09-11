@@ -391,6 +391,55 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
+// A self-published observable is persisted by the publisher before its relay
+// attempt, so its relay echo is always an already-persisted duplicate. Side-effect
+// handlers must stay gated, but idempotent projections still have to see it or
+// Bahia's own fleet-health observables are invisible to its own telemetry.
+func TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	now := time.Unix(200, 0).UTC()
+	echo := signedTestEvent(t, KindCASControlState, time.Unix(100, 0).UTC())
+	inserted, err := repo.Record(ctx, &repository.NostrEventRecord{
+		ID:           eventIDHex(echo),
+		Kind:         eventKindInt(echo),
+		PubKey:       eventPubKeyHex(echo),
+		Content:      echo.Content,
+		Tags:         json.RawMessage("[]"),
+		Sig:          eventSignatureHex(echo),
+		CreatedAt:    echo.CreatedAt.Time(),
+		PublishState: repository.NostrPublishStatePending,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	var handled, observed []string
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) { handled = append(handled, eventIDHex(ev)) }),
+		WithObserver(func(_ context.Context, ev *gonostr.Event) { observed = append(observed, eventIDHex(ev)) }),
+		withClock(func() time.Time { return now }),
+	)
+
+	sub.handleEvent(ctx, echo)
+	require.Empty(t, handled, "a persisted echo must not re-run side-effect handlers")
+	require.Equal(t, []string{eventIDHex(echo)}, observed, "a persisted echo must reach idempotent observers")
+
+	fresh := signedTestEvent(t, KindCASControlState, time.Unix(105, 0).UTC())
+	sub.handleEvent(ctx, fresh)
+	require.Equal(t, []string{eventIDHex(fresh)}, handled)
+	require.Equal(t, []string{eventIDHex(echo), eventIDHex(fresh)}, observed)
+
+	invalid := *signedTestEvent(t, KindCASControlState, time.Unix(106, 0).UTC())
+	invalid.ID = gonostr.ID{}
+	sub.handleEvent(ctx, &invalid)
+
+	unpersisted := signedTestEvent(t, KindCASControlState, time.Unix(107, 0).UTC())
+	repo.failRecordID = eventIDHex(unpersisted)
+	sub.handleEvent(ctx, unpersisted)
+	require.Equal(t, []string{eventIDHex(echo), eventIDHex(fresh)}, observed,
+		"observers only see events that validated and are durably persisted")
+}
+
 func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()

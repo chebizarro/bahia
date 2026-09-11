@@ -292,6 +292,13 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Payloads carry the container-level status observed at the same moment, so a notification about a broken route also tells you whether the service behind it was fine.
 
+Each of these transitions is also projected to Nostr under `domain=route`, so Nostr-native consumers and dashboards see route outages without the REST API:
+
+- `30315` status and `30900` state, addressed by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. Both carry `status` (`unhealthy` while an outage is open, `degraded` for a warning or a failure below the outage threshold, `healthy` for `route_ok`), `outage=open|closed`, `classification`, `hostname`, the observed `instance_status`, and `service_healthy_route_broken`.
+- `4903` audit facts recording the transition, with sanitized probe evidence.
+
+Fleet Health counts these under the `route` domain of `bahia_fleet_health_nostr_entities`. A gate-declared outage is projected when the periodic supervisor next reports a transition for that route, because the post-deploy gate records its outcome without publishing an event. See the [Nostr event implementation guide](../../nostr-event-implementation-guide.md#route-canary-observables) for the full event shape.
+
 ## Evidence and secrets
 
 Response bodies are bounded and passed through evidence sanitization before being stored or published, so credentials echoed by a broken upstream never reach durable state.

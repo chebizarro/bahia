@@ -1,0 +1,79 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_NOSTR_PROJECTION",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A route outage appears in the fleet-health snapshot under a distinct route domain, and bahia_fleet_health_nostr_entities counts it (domain=\"route\",status=\"unhealthy\") separately from the runtime container behind it.",
+      "verification": [
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain",
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryOutageIsCountedByFleetHealthGauge"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "Each route canary transition publishes 30315 status and 30900 state addressed by the route coordinate plus an immutable 4903 audit fact, using kinds from internal/kinds, domain=route, versioned schemas, and a hostname tag rather than the Cascadia route tag.",
+      "verification": [
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorPublishesOutageAsRouteDomainObservables"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "The projected status is truthful: an open outage is unhealthy (including while recovery accumulates), pre-threshold failures and warnings (tls_expiring, health_path_not_discriminating) are degraded, route_ok is healthy, unknown classifications are unknown.",
+      "verification": [
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryFleetStatusIsTruthful",
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorRecoveryClearsContrast"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "The observed container status and the service_healthy_route_broken contrast travel in both tags and content, and agree with the REST API definition.",
+      "verification": [
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorPublishesOutageAsRouteDomainObservables",
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryServiceHealthyRouteBrokenMatchesAPI"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Publication is verified and idempotent: only relay-accepted events are recorded, a rejected publish surfaces for bus retry without blocking the transition's other events, redelivery republishes nothing, and an older transition never overwrites newer replaceable state while its audit fact is still published.",
+      "verification": [
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorRetriesOnlyRejectedPublishes",
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorPublishesOutageAsRouteDomainObservables",
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorNeverRegressesReplaceableStateButKeepsAuditHistory"
+      ]
+    },
+    {
+      "id": "AC6",
+      "statement": "Fleet-health route counts are exact: route audit facts neither create nor overwrite route entities, and a route observable without a d coordinate is a projection error rather than a signer-wide route entity.",
+      "verification": [
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate"
+      ]
+    },
+    {
+      "id": "AC7",
+      "statement": "Fleet-health telemetry observes relay echoes of Bahia's own publications while side-effect handlers stay gated on first insert, and observers never see invalid or unpersisted events.",
+      "verification": [
+        "internal/adapters/nostr/subscriber_test.go:TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated",
+        "internal/adapters/nostr/subscriber_test.go:TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents"
+      ]
+    },
+    {
+      "id": "AC8",
+      "statement": "Unattributable or malformed payloads are rejected rather than projected, and the projector requires a bus and a publisher and subscribes to all three route canary transitions.",
+      "verification": [
+        "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorRejectsUnattributablePayloads",
+        "internal/service/route_canary_projector_test.go:TestNewRouteCanaryProjectorRequiresBusAndPublisher"
+      ]
+    },
+    {
+      "id": "AC9",
+      "statement": "Fleet-health observation is idempotent under redelivery: observing the same event ID repeatedly moves no entity count, projection error counter, heartbeat lag, or event/ingestion timestamp after the first observation, while distinct rejected events are still each counted.",
+      "verification": [
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRedeliveryDoesNotMoveCounters",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthOverLimitRejectionIsCountedOncePerEvent",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestBoundedEventIDSetEvictsOldestAndStaysBounded",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate"
+      ]
+    }
+  ]
+}

@@ -1051,11 +1051,11 @@ func renderNostrFleetHealthMetrics(w http.ResponseWriter, snapshot NostrFleetHea
 	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_relay_closed_total Relay CLOSED frames observed by the projector subscription")
 	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_relay_closed_total counter")
 	fmt.Fprintf(w, "bahia_fleet_health_projector_relay_closed_total %d\n", snapshot.RelayClosedTotal)
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_errors_total Rejected or over-limit observable projections")
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_errors_total Distinct rejected or over-limit observable events; redeliveries of the same event are counted once")
 	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_errors_total counter")
 	fmt.Fprintf(w, "bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
-	for _, domain := range []string{"agent", "worker", "service", "deployment", "runtime", "relay", "control_plane"} {
-		for _, status := range []string{"healthy", "degraded", "unhealthy", "unknown"} {
+	for _, domain := range nostrFleetHealthDomains {
+		for _, status := range fleetHealthStatuses {
 			fmt.Fprintf(w, "bahia_fleet_health_nostr_entities{domain=%q,status=%q} %d\n", domain, status, snapshot.Entities[domain+":"+status])
 		}
 	}
