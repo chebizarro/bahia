@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -375,6 +377,23 @@ func TestNIP98SignerAuthorizationHeader(t *testing.T) {
 	}
 	event := decodeNIP98Header(t, header)
 	assertNIP98Event(t, event, http.MethodPost, "https://bahia.example/api/v1/secrets")
+}
+
+func TestNIP98SignerAuthorizationHeaderIncludesPayloadHash(t *testing.T) {
+	provider, err := NewNIP98SignerProvider(nip98TestSigner{secret: nostr.Generate()})
+	if err != nil {
+		t.Fatalf("NewNIP98SignerProvider() error = %v", err)
+	}
+	payload := []byte(`{"name":"TOKEN","value":"secret"}`)
+	header, err := provider.AuthorizationHeaderWithPayload(context.Background(), http.MethodPost, "https://bahia.example/api/v1/secrets", payload)
+	if err != nil {
+		t.Fatalf("AuthorizationHeaderWithPayload() error = %v", err)
+	}
+	event := decodeNIP98Header(t, header)
+	digest := sha256.Sum256(payload)
+	if got := event.Tags.Find("payload"); len(got) < 2 || got[1] != hex.EncodeToString(digest[:]) {
+		t.Fatalf("payload tag = %v", got)
+	}
 }
 
 func TestListWorkers(t *testing.T) {

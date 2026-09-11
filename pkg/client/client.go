@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,10 @@ type Client struct {
 // replayed event IDs.
 type AuthorizationProvider interface {
 	AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error)
+}
+
+type payloadAuthorizationProvider interface {
+	AuthorizationHeaderWithPayload(ctx context.Context, method, absoluteURL string, payload []byte) (string, error)
 }
 
 // New creates a new Bahia API client.
@@ -74,6 +79,12 @@ func NewNIP98SignerProvider(signer nostr.Signer) (*NIP98SignerProvider, error) {
 // AuthorizationHeader returns a fresh NIP-98 Authorization header signed by
 // the configured canonical signer.
 func (p *NIP98SignerProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	return p.AuthorizationHeaderWithPayload(ctx, method, absoluteURL, nil)
+}
+
+// AuthorizationHeaderWithPayload includes the mandatory NIP-98 payload hash
+// when the HTTP request has a body.
+func (p *NIP98SignerProvider) AuthorizationHeaderWithPayload(ctx context.Context, method, absoluteURL string, payload []byte) (string, error) {
 	if p == nil || p.Signer == nil {
 		return "", fmt.Errorf("NIP-98 signer is required")
 	}
@@ -94,6 +105,10 @@ func (p *NIP98SignerProvider) AuthorizationHeader(ctx context.Context, method, a
 			{"nonce", nonce},
 		},
 		Content: "",
+	}
+	if len(payload) > 0 {
+		digest := sha256.Sum256(payload)
+		event.Tags = append(event.Tags, nostr.Tag{"payload", hex.EncodeToString(digest[:])})
 	}
 	if err := p.Signer.SignEvent(ctx, &event); err != nil {
 		return "", fmt.Errorf("sign NIP-98 event: %w", err)
@@ -116,6 +131,12 @@ func NewNIP98PrivateKeyProvider(privateKey string) (*NIP98PrivateKeyProvider, er
 
 // AuthorizationHeader returns a fresh NIP-98 Authorization header for method and absoluteURL.
 func (p *NIP98PrivateKeyProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	return p.AuthorizationHeaderWithPayload(ctx, method, absoluteURL, nil)
+}
+
+// AuthorizationHeaderWithPayload includes the mandatory NIP-98 payload hash
+// when the HTTP request has a body.
+func (p *NIP98PrivateKeyProvider) AuthorizationHeaderWithPayload(ctx context.Context, method, absoluteURL string, payload []byte) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -144,6 +165,10 @@ func (p *NIP98PrivateKeyProvider) AuthorizationHeader(ctx context.Context, metho
 			{"nonce", nonce},
 		},
 		Content: "",
+	}
+	if len(payload) > 0 {
+		digest := sha256.Sum256(payload)
+		event.Tags = append(event.Tags, nostr.Tag{"payload", hex.EncodeToString(digest[:])})
 	}
 	secret, err := nostr.SecretKeyFromHex(privateKey)
 	if err != nil {
@@ -357,12 +382,14 @@ type apiResponse struct {
 
 func (c *Client) do(ctx context.Context, method, path string, body any, result any) error {
 	var reqBody io.Reader
+	var requestBody []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("marshaling request: %w", err)
 		}
-		reqBody = bytes.NewReader(b)
+		requestBody = b
+		reqBody = bytes.NewReader(requestBody)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
@@ -370,7 +397,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 		return fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if err := c.applyAuthorization(ctx, req); err != nil {
+	if err := c.applyAuthorization(ctx, req, requestBody); err != nil {
 		return err
 	}
 
@@ -403,11 +430,17 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 	return nil
 }
 
-func (c *Client) applyAuthorization(ctx context.Context, req *http.Request) error {
+func (c *Client) applyAuthorization(ctx context.Context, req *http.Request, payload []byte) error {
 	if c.authorizationProvider == nil {
 		return nil
 	}
-	header, err := c.authorizationProvider.AuthorizationHeader(ctx, req.Method, req.URL.String())
+	var header string
+	var err error
+	if provider, ok := c.authorizationProvider.(payloadAuthorizationProvider); ok {
+		header, err = provider.AuthorizationHeaderWithPayload(ctx, req.Method, req.URL.String(), payload)
+	} else {
+		header, err = c.authorizationProvider.AuthorizationHeader(ctx, req.Method, req.URL.String())
+	}
 	if err != nil {
 		return fmt.Errorf("creating authorization header: %w", err)
 	}
@@ -631,7 +664,7 @@ func (c *Client) StreamLiveLogs(ctx context.Context, serviceID, envID string, ta
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if err := c.applyAuthorization(ctx, req); err != nil {
+	if err := c.applyAuthorization(ctx, req, nil); err != nil {
 		return err
 	}
 
