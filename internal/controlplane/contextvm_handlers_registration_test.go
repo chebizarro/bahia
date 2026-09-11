@@ -46,7 +46,7 @@ func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 		t.Run(tc.method, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-			RegisterWorkerContextVMHandlers(transport)
+			RegisterWorkerContextVMHandlers(transport, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
 			if len(publisher.events) != 3 {
@@ -134,7 +134,7 @@ func TestDNSContextVMHandlersDispatchWebMethods(t *testing.T) {
 			operator := &fakeDNSContextVMOperator{zones: map[string]bool{"prod.example": true}}
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-			RegisterDNSContextVMHandlers(transport, operator, true)
+			RegisterDNSContextVMHandlers(transport, operator, true, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
 			if len(publisher.events) != 2 {
@@ -164,7 +164,7 @@ func TestDNSContextVMHandlersReturnConfigurationErrorWhenDisabled(t *testing.T) 
 		t.Run(method, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-			RegisterDNSContextVMHandlers(transport, nil, false)
+			RegisterDNSContextVMHandlers(transport, nil, false, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, method, map[string]any{"unexpected": true}))
 			if len(publisher.events) != 2 {

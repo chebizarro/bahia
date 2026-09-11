@@ -25,13 +25,13 @@ type sbomContextVMHandler struct {
 	runner sbomRequestRunner
 }
 
-func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, runner sbomRequestRunner) {
+func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, runner sbomRequestRunner, gate *FleetOperatorGate) {
 	if transport == nil || runner == nil {
 		return
 	}
 	h := sbomContextVMHandler{runner: runner}
-	transport.RegisterContextVMHandler(ContextVMMethodSBOMGenerate, h.generate)
-	transport.RegisterContextVMHandler(ContextVMMethodSBOMImport, h.importSBOM)
+	transport.RegisterContextVMHandler(ContextVMMethodSBOMGenerate, gate.wrap(h.generate))
+	transport.RegisterContextVMHandler(ContextVMMethodSBOMImport, gate.wrap(h.importSBOM))
 }
 
 func (h sbomContextVMHandler) generate(ctx context.Context, req ContextVMRequest) (any, error) {

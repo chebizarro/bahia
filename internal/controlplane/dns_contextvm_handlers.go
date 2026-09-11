@@ -16,16 +16,16 @@ const dnsOrchestrationDisabledMessage = "DNS orchestration is not enabled; set d
 
 // RegisterDNSContextVMHandlers bridges encrypted ContextVM DNS methods from the
 // browser to the app-owned DNS reconciliation and persistence boundary.
-func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator, enabled bool) {
+func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator, enabled bool, gate *FleetOperatorGate) {
 	if transport == nil {
 		return
 	}
 	h := dnsContextVMHandlers{operator: operator, enabled: enabled}
-	transport.RegisterContextVMHandler(ContextVMMethodDNSZoneCreate, h.whenEnabled(h.zoneCreate))
-	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, h.whenEnabled(h.policyApply))
-	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, h.whenEnabled(h.recordSet))
-	transport.RegisterContextVMHandler(ContextVMMethodDNSDriftRemediate, h.whenEnabled(h.driftRemediate))
-	transport.RegisterContextVMHandler(ContextVMMethodDNSOverrideRetire, h.whenEnabled(h.overrideRetire))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSZoneCreate, gate.wrap(h.whenEnabled(h.zoneCreate)))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, gate.wrap(h.whenEnabled(h.policyApply)))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, gate.wrap(h.whenEnabled(h.recordSet)))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSDriftRemediate, gate.wrap(h.whenEnabled(h.driftRemediate)))
+	transport.RegisterContextVMHandler(ContextVMMethodDNSOverrideRetire, gate.wrap(h.whenEnabled(h.overrideRetire)))
 }
 
 type dnsContextVMHandlers struct {

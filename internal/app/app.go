@@ -1407,6 +1407,7 @@ func New(cfg *config.Config) (*App, error) {
 			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
 		}
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(contextVMRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
+		fleetOperatorGate := controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys)
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}
@@ -1493,19 +1494,20 @@ func New(cfg *config.Config) (*App, error) {
 			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}).Register(encryptedRequestTransport)
-		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport)
+		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys)
-		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled)
+		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
-			Config:          cfg,
-			AdminClient:     relayAdminClient,
-			ProjectionStore: relayPolicyProjectionRepo,
-			ServicePubkey:   servicePubkey,
-			Logger:          logger,
-			ConfigFabric:    configFabricSvc,
+			Config:            cfg,
+			AdminClient:       relayAdminClient,
+			ProjectionStore:   relayPolicyProjectionRepo,
+			ServicePubkey:     servicePubkey,
+			Logger:            logger,
+			ConfigFabric:      configFabricSvc,
+			FleetOperatorGate: fleetOperatorGate,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
 		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, nostrEventRepo)
@@ -1523,10 +1525,10 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
-			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner)
+			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate)
 			bgManager.RegisterWithOptions(sbomAsyncRunner, RunnerTier(Tier2))
 		}
-		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner)
+		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate)
 		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
 		// ContextVM carries the canonical mutation plane, so it must remain
 		// available in the minimum production control-plane tier.

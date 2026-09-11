@@ -30,15 +30,15 @@ type securityContextVMHandler struct {
 	scanner SecurityScannerControlPlane
 }
 
-func RegisterSecurityContextVMHandlers(transport *EncryptedRequestTransport, scanner SecurityScannerControlPlane) {
+func RegisterSecurityContextVMHandlers(transport *EncryptedRequestTransport, scanner SecurityScannerControlPlane, gate *FleetOperatorGate) {
 	if transport == nil || scanner == nil {
 		return
 	}
 	h := securityContextVMHandler{scanner: scanner}
-	transport.RegisterContextVMHandler(ContextVMMethodSecurityScan, h.scan)
-	transport.RegisterContextVMHandler(ContextVMMethodSecurityRescan, h.rescan)
-	transport.RegisterContextVMHandler(ContextVMMethodSecurityFindingsList, h.findingsList)
-	transport.RegisterContextVMHandler(ContextVMMethodSecuritySchedulesList, h.schedulesList)
+	transport.RegisterContextVMHandler(ContextVMMethodSecurityScan, gate.wrap(h.scan))
+	transport.RegisterContextVMHandler(ContextVMMethodSecurityRescan, gate.wrap(h.rescan))
+	transport.RegisterContextVMHandler(ContextVMMethodSecurityFindingsList, gate.wrap(h.findingsList))
+	transport.RegisterContextVMHandler(ContextVMMethodSecuritySchedulesList, gate.wrap(h.schedulesList))
 }
 
 type securityScanParams struct {
