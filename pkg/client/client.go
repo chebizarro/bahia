@@ -56,6 +56,55 @@ type NIP98PrivateKeyProvider struct {
 	Clock      func() time.Time
 }
 
+// NIP98SignerProvider signs Bahia HTTP requests through a remote or local
+// canonical Nostr signer without requiring private key material in-process.
+type NIP98SignerProvider struct {
+	Signer nostr.Signer
+	Clock  func() time.Time
+}
+
+// NewNIP98SignerProvider returns a NIP-98 provider backed by signer.
+func NewNIP98SignerProvider(signer nostr.Signer) (*NIP98SignerProvider, error) {
+	if signer == nil {
+		return nil, fmt.Errorf("NIP-98 signer is required")
+	}
+	return &NIP98SignerProvider{Signer: signer}, nil
+}
+
+// AuthorizationHeader returns a fresh NIP-98 Authorization header signed by
+// the configured canonical signer.
+func (p *NIP98SignerProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	if p == nil || p.Signer == nil {
+		return "", fmt.Errorf("NIP-98 signer is required")
+	}
+	createdAt := nostr.Now()
+	if p.Clock != nil {
+		createdAt = nostr.Timestamp(p.Clock().Unix())
+	}
+	nonce, err := randomNonce()
+	if err != nil {
+		return "", fmt.Errorf("generate NIP-98 nonce: %w", err)
+	}
+	event := nostr.Event{
+		Kind:      27235,
+		CreatedAt: createdAt,
+		Tags: nostr.Tags{
+			{"u", absoluteURL},
+			{"method", strings.ToUpper(method)},
+			{"nonce", nonce},
+		},
+		Content: "",
+	}
+	if err := p.Signer.SignEvent(ctx, &event); err != nil {
+		return "", fmt.Errorf("sign NIP-98 event: %w", err)
+	}
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return "", fmt.Errorf("encode NIP-98 event: %w", err)
+	}
+	return "Nostr " + base64.StdEncoding.EncodeToString(eventJSON), nil
+}
+
 // NewNIP98PrivateKeyProvider validates key material and returns a NIP-98 signer.
 func NewNIP98PrivateKeyProvider(privateKey string) (*NIP98PrivateKeyProvider, error) {
 	provider := &NIP98PrivateKeyProvider{PrivateKey: privateKey}

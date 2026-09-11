@@ -354,6 +354,29 @@ func TestNIP98AuthorizationHeader(t *testing.T) {
 	assertNIP98Event(t, event, http.MethodGet, server.URL+"/api/v1/services")
 }
 
+type nip98TestSigner struct{ secret nostr.SecretKey }
+
+func (s nip98TestSigner) GetPublicKey(context.Context) (nostr.PubKey, error) {
+	return s.secret.Public(), nil
+}
+
+func (s nip98TestSigner) SignEvent(_ context.Context, event *nostr.Event) error {
+	return event.Sign(s.secret)
+}
+
+func TestNIP98SignerAuthorizationHeader(t *testing.T) {
+	provider, err := NewNIP98SignerProvider(nip98TestSigner{secret: nostr.Generate()})
+	if err != nil {
+		t.Fatalf("NewNIP98SignerProvider() error = %v", err)
+	}
+	header, err := provider.AuthorizationHeader(context.Background(), http.MethodPost, "https://bahia.example/api/v1/secrets")
+	if err != nil {
+		t.Fatalf("AuthorizationHeader() error = %v", err)
+	}
+	event := decodeNIP98Header(t, header)
+	assertNIP98Event(t, event, http.MethodPost, "https://bahia.example/api/v1/secrets")
+}
+
 func TestListWorkers(t *testing.T) {
 	workers := []Worker{
 		{Pubkey: "abc123", Name: "worker1", PricePerSec: 10},

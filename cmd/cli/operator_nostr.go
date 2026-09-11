@@ -448,6 +448,34 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	return op, nil
 }
 
+func configureNIP46HTTPClientAuth(cmd *cobra.Command, c *client.Client) (func() error, error) {
+	key, err := resolveNostrPrivateKeyInput(cmd)
+	if err != nil {
+		return nil, err
+	}
+	bunkerURI, clientKey, err := resolveNIP46OperatorInput(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(key) != "" && bunkerURI != "" {
+		return nil, fmt.Errorf("configure either a NIP-46 bunker signer or a local private key, not both")
+	}
+	if bunkerURI == "" {
+		return nil, nil
+	}
+	signer, _, closeSigner, err := newCLINIP46Signer(cmd.Context(), bunkerURI, clientKey)
+	if err != nil {
+		return nil, fmt.Errorf("connect NIP-46 HTTP signer: %w", err)
+	}
+	provider, err := client.NewNIP98SignerProvider(signer)
+	if err != nil {
+		_ = closeSigner()
+		return nil, err
+	}
+	c.SetAuthorizationProvider(provider)
+	return closeSigner, nil
+}
+
 func newCLIOperatorLogger(stderr io.Writer) *zap.Logger {
 	if stderr == nil {
 		return zap.NewNop()

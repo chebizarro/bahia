@@ -1208,6 +1208,13 @@ func secretsCommands() *cobra.Command {
 		Short: "Set a secret",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
+			if err != nil {
+				return err
+			}
+			if closeSigner != nil {
+				defer closeSigner()
+			}
 			if valueFile != "" && len(args) == 3 {
 				return fmt.Errorf("provide either [value] or --value-file, not both")
 			}
