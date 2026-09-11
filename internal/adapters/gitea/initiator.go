@@ -173,6 +173,22 @@ type Initiator struct {
 	mu        sync.Mutex
 }
 
+// ReloadMirrorReadCredentialRef atomically replaces the opaque secret reference
+// used for private sibling repository staging. Initiate serializes on the same
+// mutex, so a running build observes either the complete old value or the
+// complete new value.
+func (i *Initiator) ReloadMirrorReadCredentialRef(ref string) error {
+	ref = strings.TrimSpace(ref)
+	parsed, err := uuid.Parse(ref)
+	if err != nil || parsed == uuid.Nil {
+		return fmt.Errorf("mirror-read credential reference must be a non-zero UUID")
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.cfg.MirrorReadCredentialRef = parsed.String()
+	return nil
+}
+
 type InitiatorOption func(*Initiator)
 
 // WithLoomJobSubmitter enables kind-5100 submission after the signed kind-5401

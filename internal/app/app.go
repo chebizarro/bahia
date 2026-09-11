@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -91,6 +92,8 @@ type App struct {
 	RelayFirstRegistry        *service.RelayFirstRegistry
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
+	hiveCIInitiator           *giteaAdapter.Initiator
+	reloadMu                  sync.Mutex
 }
 
 var (
@@ -185,6 +188,7 @@ func New(cfg *config.Config) (*App, error) {
 	var sigRepo repository.ArtifactSignatureRepository
 	var policyRepo repository.DeploymentPolicyRepository
 	var secretRepo repository.SecretRepository
+	var hiveCIInitiator *giteaAdapter.Initiator
 	var deploymentUnitRepo repository.DeploymentUnitRepository
 	var orgRepo repository.OrganizationRepository
 	var orgMemberRepo repository.OrgMemberRepository
@@ -1511,7 +1515,7 @@ func New(cfg *config.Config) (*App, error) {
 			if err != nil {
 				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
 			}
-			hiveCIBuildStarter = giteaAdapter.NewInitiator(
+			hiveCIInitiator = giteaAdapter.NewInitiator(
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
 				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
 				controlPlanePool,
@@ -1535,6 +1539,7 @@ func New(cfg *config.Config) (*App, error) {
 				logger,
 				giteaAdapter.WithLoomJobSubmitter(hiveCIJobClient),
 			)
+			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
@@ -1759,9 +1764,42 @@ func New(cfg *config.Config) (*App, error) {
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
+		hiveCIInitiator:           hiveCIInitiator,
 	}
 	soulFactoryRuntimeReleased = true
 	return application, nil
+}
+
+// ReloadConfig applies the one security-sensitive scalar that can be safely
+// swapped in place. Any other delta is deliberately left to the full
+// candidate-application replacement path in cmd/server.
+func (a *App) ReloadConfig(candidate *config.Config) (bool, error) {
+	if a == nil || candidate == nil || a.Config == nil {
+		return false, fmt.Errorf("application and candidate config are required")
+	}
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+
+	currentComparable := *a.Config
+	candidateComparable := *candidate
+	currentRef := currentComparable.HiveCI.Initiator.MirrorReadCredentialRef
+	candidateRef := candidateComparable.HiveCI.Initiator.MirrorReadCredentialRef
+	candidateComparable.HiveCI.Initiator.MirrorReadCredentialRef = currentRef
+	if !reflect.DeepEqual(currentComparable, candidateComparable) {
+		return false, nil
+	}
+	if strings.TrimSpace(currentRef) == strings.TrimSpace(candidateRef) {
+		return true, nil
+	}
+	if a.hiveCIInitiator == nil {
+		return false, fmt.Errorf("HiveCI mirror credential cannot be reloaded while the initiator is disabled")
+	}
+	if err := a.hiveCIInitiator.ReloadMirrorReadCredentialRef(candidateRef); err != nil {
+		return false, err
+	}
+	a.Config = candidate
+	a.Logger.Info("HiveCI mirror-read credential reference reloaded")
+	return true, nil
 }
 
 func soulFactoryReactorFromRuntime(runtime *soulFactoryRuntime) *soulfactory.Reactor {

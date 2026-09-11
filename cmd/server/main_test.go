@@ -18,6 +18,18 @@ type gatedServerApplication struct {
 	result         error
 }
 
+type inPlaceReloadApplication struct {
+	*gatedServerApplication
+	handled bool
+	err     error
+	called  chan *config.Config
+}
+
+func (a *inPlaceReloadApplication) ReloadConfig(candidate *config.Config) (bool, error) {
+	a.called <- candidate
+	return a.handled, a.err
+}
+
 func newGatedServerApplication() *gatedServerApplication {
 	return &gatedServerApplication{
 		started:        make(chan struct{}),
@@ -111,6 +123,54 @@ func TestRunWithDependenciesRetainsRunningApplicationWhenReloadInitializationFai
 	select {
 	case <-application.cancelObserved:
 		t.Fatal("failed candidate initialization canceled the running application")
+	default:
+	}
+
+	cancelRoot()
+	<-application.cancelObserved
+	require.NoError(t, <-done)
+}
+
+func TestRunWithDependenciesAppliesSupportedReloadWithoutConstructingReplacement(t *testing.T) {
+	root, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+	reload := make(chan os.Signal, 1)
+	application := &inPlaceReloadApplication{
+		gatedServerApplication: newGatedServerApplication(),
+		handled:                true,
+		called:                 make(chan *config.Config, 1),
+	}
+	factoryCalls := 0
+	loadCalls := 0
+	logs := make(chan string, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runWithDependencies("config.yaml", serverDependencies{
+			loadConfig: func(string) (*config.Config, error) {
+				loadCalls++
+				return &config.Config{Mode: "full"}, nil
+			},
+			newApplication: func(*config.Config) (serverApplication, error) {
+				factoryCalls++
+				return application, nil
+			},
+			newSignals: func() serverSignalSource {
+				return serverSignalSource{root: root, reload: reload}
+			},
+			logf: func(format string, _ ...any) { logs <- format },
+		})
+	}()
+
+	<-application.started
+	reload <- os.Interrupt
+	require.NotNil(t, <-application.called)
+	require.Contains(t, <-logs, "applied in place")
+	require.Equal(t, 1, factoryCalls)
+	require.Equal(t, 2, loadCalls)
+	select {
+	case <-application.cancelObserved:
+		t.Fatal("in-place reload canceled the running application")
 	default:
 	}
 

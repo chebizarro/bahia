@@ -27,6 +27,10 @@ type serverApplication interface {
 	RunContext(context.Context) error
 }
 
+type inPlaceConfigReloader interface {
+	ReloadConfig(*config.Config) (bool, error)
+}
+
 type serverSignalSource struct {
 	root   context.Context
 	reload <-chan os.Signal
@@ -103,6 +107,17 @@ func runWithDependencies(configPath string, deps serverDependencies) error {
 				if loadErr != nil {
 					logf("config reload rejected; keeping current application: %v", loadErr)
 					continue
+				}
+				if reloader, ok := application.(inPlaceConfigReloader); ok {
+					handled, reloadErr := reloader.ReloadConfig(candidateConfig)
+					if reloadErr != nil {
+						logf("config reload rejected; keeping current application: %v", reloadErr)
+						continue
+					}
+					if handled {
+						logf("config reload applied in place from %s", configPath)
+						continue
+					}
 				}
 				candidate, initErr := deps.newApplication(candidateConfig)
 				if initErr != nil {
