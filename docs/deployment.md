@@ -4,20 +4,25 @@ This guide covers how to run Bahia in different environments.
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.26.3+ (see `go.mod`)
 - PostgreSQL 16+
-- Docker, Podman, or Kubernetes (for runtime observation)
+- A runtime target for observation/execution: Docker, Compose, Podman, Kubernetes, QEMU/KVM, or Firecracker (see `docs/vm-runtimes.md` for VM targets)
+- A Nostr service key (`nostr.private_key` / `BAHIA_NOSTR_PRIVATE_KEY`, 64-character hex) for signed publication and ContextVM
 
 ## Quick Start with Docker Compose
 
 ```bash
 # Clone and start
 cd bahia
+export BAHIA_NOSTR_PRIVATE_KEY=<64-hex-secret-key>   # required by docker-compose.yml
 docker compose up --build
 
 # The API is available at http://localhost:8080
 curl http://localhost:8080/health
+curl http://localhost:8080/ready
 ```
+
+The stack runs PostgreSQL, `bahia-server`, the `bahia-relay` sidecar, and the web UI. See [`DOCKER.md`](../DOCKER.md) for service details and known caveats.
 
 ## Manual Setup
 
@@ -27,7 +32,7 @@ curl http://localhost:8080/health
 # Create the database
 createdb bahia
 
-# Migrations run automatically on server start
+# Schema migrations run automatically on server start (`make migrate` just starts the server with config.yaml)
 ```
 
 ### 2. Configuration
@@ -39,7 +44,7 @@ cp config.yaml config.local.yaml
 # Edit config.local.yaml with your settings
 ```
 
-Or use environment variables:
+Or use environment variables. They override the YAML file and follow `BAHIA_<SECTION>_<FIELD>`. The first underscore separates section from field, so `BAHIA_DB_MAX_OPEN_CONNS` becomes `db.max_open_conns`. Use `__` for deeper nesting or for sections whose names contain underscores, for example `BAHIA_NOSTR__SIDECAR__ENABLED=true` or `BAHIA_ROUTE_CANARIES__ENABLED=true`. `BAHIA_MODE` selects `full`, `degraded`, or `emergency` operating mode (see `docs/api.md`).
 
 ```bash
 export BAHIA_DB_HOST=localhost
@@ -71,31 +76,39 @@ make build-cli
 # List services
 ./bin/bahia services list
 
-# Deployments are signer-first Nostr operations.
-# Publish a ContextVM service/deploy request (kind 25910, wrapped with 1059/21059 when encrypted) and subscribe for canonical observables.
-# Legacy REST-backed deploy CLI paths are deprecated until they publish signed events directly.
+# Deployments are signer-first Nostr operations. The CLI signs ContextVM
+# service/deploy requests (kind 25910) with a NIP-46 bunker and publishes them
+# to the configured relays; add --encrypted (with --service-pubkey) to wrap them in 1059/21059.
+./bin/bahia --nostr-bunker-file ~/.config/bahia/bunker --relay wss://relay.example \
+  deployments deploy --service <id> --environment <id> --artifact <id>
 ```
+
+Operator signing and relay settings can also come from `BAHIA_NOSTR_BUNKER_FILE`/`BAHIA_NOSTR_BUNKER_URI`, `BAHIA_NOSTR_RELAYS`, `BAHIA_NOSTR_BOOTSTRAP_RELAYS`, and `BAHIA_NOSTR_SERVICE_PUBKEY`. The REST server URL comes from `--server`/`BAHIA_SERVER` (default `http://localhost:8080`). See `docs/user-guide/cli-reference.md`.
 
 ## Production Deployment
 
 ### Docker
 
 ```bash
-# Build image
+# Build image (tagged bahia:<VERSION>, e.g. bahia:0.1.0-<git-sha>)
 make docker
 
 # Run
 docker run -p 8080:8080 \
+  -v /etc/bahia/config.yaml:/etc/bahia/config.yaml:ro \
   -e BAHIA_DB_HOST=db.example.com \
   -e BAHIA_DB_PASSWORD=secret \
-  bahia:latest
+  -e BAHIA_NOSTR_PRIVATE_KEY=<64-hex-secret-key> \
+  bahia:<VERSION> --config /etc/bahia/config.yaml
 ```
+
+The image entrypoint is `bahia-server`. It also contains `bahia`, `bahia-relay`, `fips-bahia-bridge`, `openclaw-soulfactory-sidecar`, and `openclaw-soulfactory-control`, so run the relay sidecar from the same image with `--entrypoint bahia-relay`. `bahia-dns-agent` is not in the image; build it with `make build-bahia-dns-agent` or `make dist-bahia-dns-agent`. The image exposes ports `8080` (API) and `3334` (relay sidecar).
 
 Backend, relay, CLI, bridge, sidecar, and web artifacts are stamped with SemVer component versions. The backend Dockerfile accepts `VERSION_BASE` (default `0.1.0`), `GIT_COMMIT` (default `dev`), and optional full `VERSION` build args; Compose passes the same defaults to the backend and relay images. The web Dockerfile accepts `PUBLIC_BAHIA_WEB_BASE_VERSION`, `PUBLIC_BAHIA_GIT_COMMIT`, and optional `PUBLIC_BAHIA_WEB_VERSION`. Release automation should pass the same commit hash to both backend and web builds so Settings displays matching `0.1.0-<commit-hash>` provenance.
 
 ### Environment Variables
 
-See `.env.example` for all available configuration options.
+`.env.example` lists commonly used variables (database, server, logging, Harbor, Loom, Nostr relays, reconcile, runtime). It is not exhaustive: every key in `internal/config/config.go` can be set via the `BAHIA_` convention described above.
 
 Nested runtime target settings use double underscores in environment variables:
 
@@ -153,7 +166,7 @@ runtime:
       bahia_owned: false
 ```
 
-Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `bahia_owned`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `compose_dir`, `bahia_owned`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
 
 Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
 
@@ -223,7 +236,7 @@ Soul Factory does not consume provisioning requests until its signer is connecte
 
 Environment targeting is typed and additive. Each environment owns a `targeting` object with `default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, and `default_reconcile_mode`. `default_reconcile_mode` accepts `observe_only`, `auto_apply`, `approval_required`, or `disabled`; `secret_scope_mode` accepts `service`, `environment`, or `unit`.
 
-A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, or `podman`), endpoint reference, Compose directory, namespace, network profile, reconcile mode override, ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
+A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, `podman`, `vm-qemu`, or `vm-firecracker`), endpoint reference, Compose directory, namespace, network profile, reconcile mode override, ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
 
 Reconcile policy is persisted on `environments.targeting.default_reconcile_mode` and, for explicit units, `deployment_units.reconcile_mode`. Explicit unit policy overrides the environment default; implicit default-unit rows use the environment default.
 
@@ -344,12 +357,9 @@ Bahia supports Podman as an alternative to Docker. Since Podman emulates Docker'
 ```yaml
 runtime:
   type: podman
-  # Rootless Podman (default if omitted):
-  podman_host: unix:///run/user/1000/podman/podman.sock
-
-  # Or for rootful Podman:
-  # podman_host: unix:///run/podman/podman.sock
 ```
+
+> **NOTE (2026-09-11):** Earlier versions of this guide documented a `podman_host` key. No `podman_host` key exists in `internal/config` or in persisted runtime-config resolution, and the runtime factory's `PodmanHost` field is never populated. In practice Podman targets always connect to the rootless socket of the user running Bahia (`unix:///run/user/<UID>/podman/podman.sock`). Custom or rootful socket selection is not supported until the wiring gap tracked as `bahia-93dtn` is resolved.
 
 ### Socket Paths
 
@@ -374,7 +384,6 @@ sudo systemctl enable --now podman.socket
 
 ```bash
 export BAHIA_RUNTIME__DEFAULT__TYPE=podman
-export BAHIA_RUNTIME__DEFAULT__PODMAN_HOST=unix:///run/user/1000/podman/podman.sock
 ```
 
 For Compose desired-state deploys, Bahia intentionally owns the generated Compose project for the environment or deployment unit. Multiple environments can point to different `compose_dir` values, and services in the same Compose-owned unit share that generated project. Bahia writes the service image directly into the rendered model from the desired-state snapshot; operators should not rely on the old service-name-derived `<SERVICE>_IMAGE` override pattern for desired-state-managed deploys.
@@ -412,12 +421,17 @@ oci:
 
 ### Blossom Backend
 
-The registry uses Blossom for blob storage. Ensure Blossom is configured:
+The registry uses Blossom for blob storage. Ensure Blossom is configured (keys from `BlossomConfig` in `internal/config/config.go`):
 
 ```yaml
 blossom:
-  base_url: https://blossom.sharegap.net
-  auth_pubkey: <your-blossom-auth-pubkey>
+  enabled: true
+  url: https://blossom.sharegap.net
+  # Optional additional servers
+  servers: []
+  # Nostr key used to sign Blossom auth events
+  private_key: <hex-private-key>
+  timeout: 30s
 ```
 
 ### Spool Directory
@@ -524,5 +538,10 @@ audit evidence through the durable Nostr outbox.
 
 - Liveness/health snapshot: `GET /health`
 - Active-tier readiness: `GET /ready` (`503` when required checks fail)
+- Prometheus metrics: `GET /metrics` (requires NIP-98 auth when `auth.enabled`; scrape config and alert rules in `deploy/observability/`)
 - Drift detection: `GET /api/v1/state/drifted`
+- Managed instance health: `GET /api/v1/instance-health`
+- Route canaries: `GET /api/v1/route-canaries`
 - Registry API: `GET /v2/`
+
+Observability deployment assets (dashboards/alerts) live under `deploy/observability/`.

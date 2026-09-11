@@ -19,7 +19,7 @@ nostr:
     enabled: true
     listen_addr: "0.0.0.0:3334"
     public_url: "ws://localhost:3000/relay"
-    backend_url: "ws://relay:3334"
+    backend_url: "ws://relay:3334/relay"
     data_dir: "./data/relay-sidecar"
     mirror_external: false
     event_retention: 168h
@@ -40,7 +40,7 @@ nostr:
 - `relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation and the operation fails if remaining relays cannot satisfy the success rule.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
 - `request_retention` applies to stored ContextVM request/response transport kind `1059`; `event_retention` applies to every other stored kind. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. The sidecar sweeps expired events by their Nostr `created_at` timestamp at startup and every 15 minutes while running.
-- `max_query_limit` caps events yielded by one replay query after honoring a lower client `limit`. The default/current checked-in value is `2000`. `EOSE` completes only that bounded query; clients that may reach the cap must narrow resource tags and `since`/`until` windows, overlap windows, and deduplicate by event id.
+- `max_query_limit` caps events yielded by one replay query after honoring a lower client `limit`. The runtime default (when unset or `<= 0`) and the checked-in `config.compose.yaml` value are both `2000`. `EOSE` completes only that bounded query; clients that may reach the cap must narrow resource tags and `since`/`until` windows, overlap windows, and deduplicate by event id.
 - `administrator_pubkeys` seeds the durable NIP-86 administrator allowlist only when `admin_policy_path` is absent. The policy file then owns the allowlist, allowed/banned pubkey sets, relay metadata, and used NIP-98 authorization IDs. `config_trusted_pubkeys` authorizes signed NIP-51/NIP-78 desired state; it defaults to the administrator seed when omitted.
 - The mounted YAML file is authoritative for `sidecar.enabled`, `public_url`, `backend_url`, `max_query_limit`, `nostr.contextvm_relays`, and `reconcile.enabled`. Their legacy environment variables seed missing YAML keys once through an atomic write and never override keys already present. Send `SIGHUP` to `bahia-server` or `bahia-relay` to validate the mounted file and rebuild the affected in-process runtime without recreating the container.
 - When sidecar mode is enabled, canonical observable projectors remain sidecar-only. ContextVM request subscriptions and response publication instead use the enabled sidecar URL plus `contextvm_relays` (or the `browser_relays` fallback), ensuring progress and terminal results reach direct operator relay subscriptions.
@@ -50,9 +50,10 @@ nostr:
 
 `docker-compose.yml` starts:
 
-- `relay`: the Khatru sidecar (`cmd/relay`) on `:3334` (serves both `/` and `/relay` for backward compatibility)
-- `bahia`: backend publishing/subscribing to `nostr.sidecar.backend_url`
-- `web`: nginx proxy exposing `/relay` to the browser
+- `postgres`: the Bahia database
+- `relay`: the Khatru sidecar (`bahia-relay`, built from `cmd/relay`) on `:3334` (serves both `/` and `/relay` for backward compatibility), with durable state in the `relaydata` volume
+- `bahia`: the backend (`bahia-server`, built from `cmd/server`) on `:8080`, publishing/subscribing to `nostr.sidecar.backend_url`
+- `web`: nginx (`web/nginx.conf`) on host port `3000`, serving the dashboard and proxying `/relay` and `/api/` to the browser
 
 Both Go services mount `config.compose.yaml` at `/etc/bahia/config.yaml`; mutable sidecar routing and query policy is intentionally absent from their environment blocks.
 

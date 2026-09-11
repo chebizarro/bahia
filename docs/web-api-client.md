@@ -55,7 +55,30 @@ api.query({ status: 'running', tags: ['gpu', 'us-west'], empty: '' });
 
 ## Implemented domain methods
 
-The current client exposes only SBOM and Blossom compatibility methods.
+The current client exposes managed-instance health, config-fabric, SBOM, and Blossom compatibility methods.
+
+### Managed-instance health
+
+```javascript
+await api.listInstanceHealth({ service_id, environment_id });
+await api.getInstanceHealth(key);
+await api.listInstanceHealthEvents(key, 50);
+await api.listInstanceRecoveryAttempts(key, 50);
+await api.setInstanceMaintenance(key, payload);
+await api.clearInstanceMaintenance(key);
+```
+
+`key` contains `service_id`, `environment_id`, `deployment_unit_id`, and optional `runtime_target_name`. List reads use `GET /api/v1/instance-health`; detail/event/recovery reads and `POST`/`DELETE` maintenance use `/api/v1/services/{serviceId}/environments/{environmentId}/managed-instances/{deploymentUnitId}/...`.
+
+### Config fabric
+
+```javascript
+await api.listConfigFabricDrift();
+await api.publishConfigFabricEvent(payload);
+await api.rollbackConfigFabricEvent(eventId);
+```
+
+These call `GET /api/v1/config-fabric/drift`, `POST /api/v1/config-fabric/events`, and `POST /api/v1/config-fabric/rollback`.
 
 ### SBOM
 
@@ -96,11 +119,11 @@ const blob = await response.blob();
 
 ## What is not on this client
 
-There are no `listServices`, `createService`, `listEnvironments`, deployment, policy, secret, worker, state, payment, notification, LLM, or SoulFactory methods on `BahiaClient`.
+There are no general service, environment, deployment, policy, secret, worker, payment, notification, LLM, or SoulFactory methods on `BahiaClient`; managed-instance health/maintenance and config-fabric are the narrowly implemented exceptions.
 
 Current browser paths use:
 
-- `web/src/lib/stores/collections/**` for relay-projected shared read models;
+- `web/src/lib/stores/collections/**` (services, environments, deployments, workers, SBOM, backup, ML, activity, operations; IndexedDB cache in `indexeddb-cache.js`) and domain stores under `web/src/lib/stores/` for relay-projected shared read models;
 - `web/src/lib/stores/public-controlplane.svelte.js` and domain helpers for public signed mutations;
 - `web/src/lib/nostr/encrypted-controlplane.js` plus sensitive-domain stores for encrypted ContextVM flows;
 - `web/src/lib/stores/souls.svelte.js` for SoulFactory;

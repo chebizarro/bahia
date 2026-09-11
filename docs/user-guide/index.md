@@ -48,11 +48,12 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Services](features/services.md) | Create and manage deployable applications |
 | [Environments](features/environments.md) | Configure deployment targets (staging, production) |
 | [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
+| [Builds](features/builds.md) | Request private-repository builds and register verified artifacts |
 | [Artifacts](features/artifacts.md) | Container images and build outputs |
 | [Notifications](features/notifications.md) | Organization-scoped webhook and Nostr DM delivery |
 | [Organizations](features/organizations.md) | Team management and access control |
 | [LLM Routes](features/llm-routes.md) | Manage and deploy LLM inference endpoints (feature-gated; disabled by default) |
-| [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference |
+| [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference (sidebar: **Inference**) |
 | [Souls](features/souls.md) | AI agent provisioning with Soul Factory (feature-gated; disabled by default) |
 | [Workers](features/workers.md) | Loom workers for deployment execution |
 | [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
@@ -64,7 +65,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Backup](features/backup.md) | Backup definitions, policies, and recovery |
 | [DNS](features/dns.md) | DNS zone and endpoint management (feature-gated; disabled by default) |
 | [Packages](features/packages.md) | Package repository management |
-| [Policies](features/policies.md) | Deployment approval and SBOM policies |
+| [Policies](features/policies.md) | Deployment and SBOM policies, plus the Config Fabric console |
 | [Security](features/security.md) | OSV vulnerability scanning dashboard |
 | [Payments](features/payments.md) | Cost estimation and payment history |
 
@@ -115,7 +116,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 - **Web UI**: Access the dashboard at `http://localhost:3000`
 - **Docs UI**: Browse documentation at `http://localhost:3000/docs`; internal documentation links stay inside `/docs/<topic>`.
 - **Assistant**: Open the floating assistant on a mapped product route to include a visible, dismissible route docs reference in `selected_refs`.
-- **MCP**: Connect to `/mcp` or `/api/v1/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
+- **MCP**: Connect to `/mcp` or `/api/v1/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`. External `tools/call` requests fail closed unless the embedding explicitly authorizes caller pubkeys (see [MCP Tools](mcp-tools.md#authorization)).
 - **Nostr**: Subscribe to read models and status events
 - **API Docs**: See [api.md](../api.md) for HTTP reference
 

@@ -36,7 +36,7 @@ For the canonical control-plane contract, prefer:
 | NIP-05 | Identity enrichment / verification | ✅ implemented |
 | NIP-46 | Signer / bunker support | ✅ implemented in Signet, browser signer flows, and signer-first operator CLI (including relay-pool and NIP-42 AUTH signing) |
 | NIP-51 / NIP-65 | Relay sets, SBOM availability lists, and relay list metadata | ✅ canonical bootstrap/routing and curated SBOM availability inputs |
-| Security OSV/SBOM | ContextVM scan intent plus canonical status, state, finding, and audit observables | 🟡 contract defined; implementation tracked under `bahia-65q8` |
+| Security OSV/SBOM | ContextVM scan intent plus canonical status, state, finding, and audit observables | ✅ implemented (`security/scan`, `security/rescan`, `security/findings-list`, `security/schedules-list`; epic `bahia-65q8` closed) |
 | NIP-51 `10050` | DM relay lists | ✅ explicit opt-in for notification DM service identity; not published by default |
 | NIP-34 + NIP-22 comments | Repository announcements, repository relay hints, repository state, patches, PRs, issues, status, and replies | ✅ repository/ngit-specific routing input and sidecar open interop surface |
 | SoulFactory | Agent templates, drafts, provisioning/lifecycle requests, runtime capabilities, and correlated results | ✅ Nostr-native agent lifecycle interop and sidecar open interop surface |
@@ -47,7 +47,7 @@ For the canonical control-plane contract, prefer:
 | OCI Distribution API | Registry push/pull | ✅ implemented |
 | Blossom | Blob/log storage backend | ✅ implemented |
 | Cashu | Worker payment surface | ⛔ unsupported; `cashu.enabled=true` fails configuration validation rather than simulating mint-backed flows |
-| REST API | Narrowed CRUD/query/log compatibility surface | ✅ implemented |
+| REST API | Narrowed query/log surface plus a small set of compatibility writes (see `docs/api.md`) | ✅ implemented |
 | HTTP MCP | Tooling surface with async Nostr correlation metadata | ✅ implemented |
 
 ---
@@ -93,7 +93,7 @@ NIP-34 repository announcement discovery uses `nostr.nip34_relays` when configur
 
 SoulFactory uses Nostr rather than REST lifecycle endpoints. Trusted operators publish parameterized-replaceable kind `31953` (`d=soulfactory-fleet-config/v1`) for the fleet-wide OpenClaw template used by later provisions. New mutation clients use ContextVM `soul-factory/provision` and `soul-factory/action`; Bahia preserves the original `25910` event id while adapting accepted requests into the existing event-driven reactor. SoulFactory kinds `31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` pass through the unrestricted sidecar like every other valid event kind. The ContextVM response is not completion. ContextVM provisioning now projects correlated `30900` state and `4903` audit truth; lifecycle action projection remains staged.
 
-NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured, and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
+NIP-11 metadata and optional NIP-66 monitor events are advisory health/capability inputs only; they cannot establish service trust, override trusted service pubkeys, or remove all configured relays. NIP-66 monitor ingestion is disabled unless trusted monitor pubkeys are configured (`nostr.trusted_relay_monitor_pubkeys`), and accepted `10166`/`30166` monitor events annotate only configured relay health. NIP-51 `10050` DM relay lists are not published by default; Bahia publishes one only when `notifications.enabled=true`, `notifications.nostr_dm=true`, and `nostr.dm_relay_lists` explicitly enables `feature: notifications` for `identity: service`. Browser, ContextVM, and service relay sets are never copied into 10050.
 
 ### 4. Delivery durability and replay
 
@@ -104,7 +104,7 @@ The relay sidecar persists accepted history in SQLite across restarts. Replay qu
 ### 5. REST and HTTP MCP
 
 - HTTP MCP (`/mcp`, `/api/v1/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
-- REST remains for narrowed CRUD/query/log/registry compatibility.
+- REST remains for narrowed query/log/registry access plus the compatibility writes listed in `docs/api.md`; core registry and deployment mutations are ContextVM-only.
 - HTTP responses must not claim long-running completion when the durable truth is relay-delivered canonical observables.
 - Fallback to REST after a signed ContextVM event has been accepted by any relay is unsafe and must be avoided.
 

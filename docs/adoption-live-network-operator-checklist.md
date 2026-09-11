@@ -1,10 +1,16 @@
 # Adoption / Import Live-Network Operator Checklist and Evidence Template
 
-> **Deprecated legacy checklist**
+> **Retired legacy checklist — do not execute**
 >
-> This document validates the legacy privileged HTTP/NIP-98 operator surface.
-> It is retained for historical/reference purposes only and is no longer the primary rollout gate for Bahia's signer-first direction.
-> Use `docs/adoption-signer-first-operator-checklist.md` for the primary signer-first execution checklist. This legacy checklist remains compatibility-only reference material.
+> This document validated the legacy privileged HTTP/NIP-98 operator surface.
+> That surface has been removed. The adoption/import and direct-runtime REST mutation
+> routes are not mounted (`internal/api/router/router.go`), and the CLI's
+> `--http-fallback` for `adopt` / `services actions` now fails client-side with
+> `REST ... is removed`. The `401`/`403` expectations, raw-target flows, and
+> HTTP-path evidence below can no longer be reproduced.
+>
+> Use [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md)
+> for every rollout. This file is kept for historical reference only.
 
 Issue lineage: superseded by `bahia-sqfx.5`
 Purpose: compatibility-only reference checklist for the deprecated HTTP/NIP-98 operator surface.

@@ -6,7 +6,7 @@ Scope: staged/live rollout readiness for signer-first adoption/import and direct
 This matrix is the normative production gate.
 For execution, use [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md). That document is the operator run sheet and evidence template.
 
-Legacy privileged HTTP/NIP-98 verification is compatibility-only and secondary. It is not the primary production gate.
+Legacy privileged HTTP/NIP-98 adoption and direct-runtime mutation routes are no longer mounted, and the CLI's `--http-fallback` for these commands returns a `REST ... is removed` error instead of calling the server. They are not a production gate.
 
 ## Gate policy
 
@@ -56,7 +56,7 @@ These checks intentionally require real staging infrastructure and cannot be saf
 | SF-01 | Signer/operator authorization | Publish malformed, unauthorized, and authorized signer-first requests for scan/import/restart through the staging relay path. | Malformed/unsigned requests are rejected; signed non-operator requests are rejected; signed operator requests are accepted; replies correlate by request event id and requester pubkey. | Any unauthorized request succeeds or correlation cannot be verified. |
 | SF-02 | Relay routing and response/progress correlation | Run a signer-first operator request and capture the request plus progress and terminal ContextVM `25910` responses. | Request reaches the intended relay path; response events correlate by `#e` and `#p`; duplicate or unrelated events are ignored safely; terminal JSON-RPC success/error is visible without HTTP polling. | Relay path mismatch, bad correlation, or timeout/polling assumptions required for completion. |
 | SF-03 | Multi-host managed endpoint scan | Run `bahia adopt scan --target host-a --target host-b`. | Both hosts scan successfully; requests/responses use endpoint refs only; no raw Docker host or cert material appears in request/response/log/metric surfaces. | Raw endpoint/credential leakage or incorrect host attribution. |
-| SF-04 | Raw-host rejection / compatibility boundary | Run `bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375` with and without explicit relay configuration approval. | Signer-first path rejects raw-host usage; compatibility mode requires explicit fallback; no unmanaged runtime call occurs when disabled. | Raw host is accepted on signer-first path or fallback occurs silently. |
+| SF-04 | Raw-host rejection / compatibility boundary | Run `bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375` with and without explicit HTTP fallback approval. | Without fallback the CLI rejects `--raw-target`; with `--http-fallback` it fails client-side with `REST adoption scan is removed`; no Docker call reaches the raw host. | Raw host is scanned by any path, or fallback occurs silently. |
 | SF-05 | Redaction/secret and org/unit import | Scan/import a workload with known sensitive env and labels, passing `--org <uuid>` when inference is ambiguous. | Results show only safe values plus redacted key names; sensitive env appears only in Bahia secrets; service/environment use the selected org; state and initial observation share the imported deployment unit. | Sensitive values leak, org resolution crosses tenants, or unit binding is absent/inconsistent. |
 | SF-06 | Transaction rollback | Induce a controlled persistence failure during import. | Import returns a correlated terminal ContextVM error response and leaves no partial service/environment/build/artifact/state/observation rows for that candidate. | Partial rows remain after failure. |
 | SF-07 | Concurrent duplicate import | Start two signer-first imports of the same selected container at the same time. | Exactly one canonical service/build/artifact/deployment-unit identity remains; no duplicates or inconsistent state. | Duplicate identities or inconsistent state. |
@@ -69,8 +69,8 @@ These checks intentionally require real staging infrastructure and cannot be saf
 
 Run these only if the release owner explicitly requires legacy HTTP compatibility evidence:
 
-- HTTP privileged endpoints still reject `Authorization: Bearer ...` with `401` when auth is enabled.
-- Any legacy NIP-98 operator flow under test is documented as compatibility-only.
+- The legacy privileged adoption/direct-runtime REST mutation routes are absent: requests get an unmounted-route response, not a `401`, because the routes are no longer registered (`internal/api/router/router.go`).
+- `bahia --http-fallback adopt scan ...` and `services actions ...` fail client-side with `REST ... is removed` and make no HTTP call.
 - Compatibility results do not override signer-first production signoff unless a release requirement explicitly depends on them.
 
 ## Signoff record
@@ -91,4 +91,4 @@ Before production enablement, record:
 ## Production readiness statement
 
 Until all automated and manual signer-first rows pass, adoption/import/direct-runtime is **not ready for production enablement**.
-Legacy HTTP/NIP-98 checks may still be captured as compatibility evidence, but they are not the primary rollout gate.
+Legacy HTTP/NIP-98 checks can only show that the removed routes are absent; they are not a rollout gate.

@@ -2,19 +2,11 @@
 
 Task: **bahia-openclaw-rollout-conformance-20260819**
 
-## Source pins
+## Source and release pins
 
-| Component | Commit |
-| --- | --- |
-| Integrated Bahia baseline | f88ec8fa418485670803c3ee72e2dd10d7de601e |
-| Dedicated runtime orchestration | 490835adaecca1f1871d30f34082d7ff85566f21 |
-| Signet/NIP-46 enrollment | a2058571bdbf2aca61f28a64078209e1f58651a1 |
-| Durable saga hardening | f8c6b36b42db68bc4213850543088fa464edd99f |
-| Runtime integration merge | 05f1c085ca67dcde938ae26488fab59e2da8da22 |
-| Signet integration merge | f7638149fc0ef226262da9ac29333dad9670d2a9 |
-| Saga integration merge | c781b0883f38faa981a111f4abdbb4cc18a99d70 |
-
-The final task commit supersedes the baseline pin after merge.
+> **NOTE (2026-09-11):** Historical implementation commits are not promotion
+> pins. Record the exact reviewed release commit and immutable deployed image
+> digests in the release record before starting this procedure.
 
 ## Image and configuration pin gate
 
@@ -36,7 +28,16 @@ Exit only with sanitized evidence and zero critical alerts.
 
 ## Phase 1: first canary
 
-Enable one disposable production canary while incumbents remain unchanged. Gate:
+Enable one disposable production canary while incumbents remain unchanged.
+
+> **NOTE (2026-09-11):** The `bahia_openclaw_provisioning_*` metrics and the
+> `BahiaOpenClaw*` alerts are defined in source (`internal/soulfactory/saga`,
+> `deploy/observability/bahia-alerts.yml`) but are not exposed by Bahia's
+> `/metrics` in this checkout. "Zero critical alerts" is only meaningful after
+> those series are confirmed present in Prometheus; see
+> `docs/runbooks/openclaw-provisioning-operations.md`.
+
+Gate:
 
 - pinned build/instance visible in metrics/logs
 - exact-client Signet policy and durable reconnect

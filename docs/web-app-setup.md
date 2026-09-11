@@ -4,8 +4,10 @@ This guide covers setting up and running the Bahia SvelteKit web application.
 
 ## Prerequisites
 
-- **Node.js**: `^20.19.0`, `^22.12.0`, or `>=24.0.0` (required by the current Vite dependency)
-- **pnpm**: use a version compatible with `web/pnpm-lock.yaml`
+- **Node.js**: `^20.19.0` or `>=22.12.0` (the engine range of the current Vite 7 dependency; the web Docker image builds on `node:20-alpine`)
+- **pnpm**: use a version compatible with `web/pnpm-lock.yaml` (CI uses `pnpm install --frozen-lockfile`)
+
+> **Two lockfiles:** `web/pnpm-lock.yaml` drives local development and the `web-vitest-unit`/`web-playwright-e2e` CI workflows. `web/Dockerfile` still runs `npm install` against `web/package-lock.json`. When you change dependencies, update both lockfiles.
 - **Bahia Backend**: Running locally or remotely (default: `http://localhost:8080`)
 - **NIP-07 Browser Extension** (optional): For direct browser signing (NIP-07)
 - **NIP-46 Signer/Bunker** (optional): For remote signing via Nostr Connect
@@ -35,6 +37,8 @@ pnpm preview
 ```
 
 Preview server runs at **http://localhost:4173**.
+
+The container build (`web/Dockerfile`) runs `npm run build` and copies `web/build/` into an `nginx:alpine` image. `web/nginx.conf` serves the SPA and proxies `/api/` to `bahia:8080` and `/relay` to `relay:3334`. In `docker-compose.yml` the `web` service listens on host port `3000`.
 
 ## Configuration
 
@@ -121,7 +125,7 @@ Important signer constraints:
 **Problem**: `fetch failed` or CORS errors
 
 **Solutions**:
-- Verify the backend is running: `curl http://localhost:8080/api/v1/services`
+- Verify the backend is running: `curl http://localhost:8080/health` (or `/ready` for dependency checks)
 - Check SvelteKit dev server proxy configuration
 - For production, verify reverse proxy routes `/api/v1/*` to backend
 
@@ -137,7 +141,7 @@ Important signer constraints:
 
 ### NIP-07 Extension Not Detected
 
-**Problem**: "No Nostr extension found" message on Soul Factory pages
+**Problem**: "No Nostr signer detected" at sign-in, or "Browser signer not detected" in the user menu
 
 **Solutions**:
 - Install a NIP-07 browser extension (nos2x, Alby, Nostore)
@@ -167,7 +171,7 @@ Compatibility notes for renamed keys:
 **Solutions**:
 - Clear `.svelte-kit/` build cache: `rm -rf .svelte-kit`
 - Delete `node_modules` and reinstall: `rm -rf node_modules && pnpm install`
-- Check Node.js version: `node -v` (must satisfy the current Vite engine: `^20.19.0`, `^22.12.0`, or `>=24`)
+- Check Node.js version: `node -v` (must satisfy the current Vite engine: `^20.19.0` or `>=22.12.0`)
 - Check for port conflicts on 5173
 
 ### Test Failures
@@ -177,7 +181,7 @@ Compatibility notes for renamed keys:
 **Solutions**:
 - Run tests in isolation: `pnpm exec vitest run tests/unit/specific.test.js`
 - Check test setup files: `tests/setup/vitest.setup.js`
-- For E2E failures, verify the preview server is accessible at `http://127.0.0.1:4173`
+- For E2E failures, verify the server Playwright launches is reachable: `playwright.config.js` starts `pnpm dev --host 127.0.0.1 --port 4173`, while `playwright.prod.config.js` (`pnpm test:e2e:prod`) builds and runs `vite preview` on `http://127.0.0.1:4174`
 - Review Playwright HTML report: `pnpm exec playwright show-report`
 
 ## Browser Compatibility

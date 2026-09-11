@@ -8,12 +8,13 @@ Scope: operator-gated proof for btc-01 over canonical ContextVM kind `25910`. Th
 
 ## Preconditions
 
-- Bahia is deployed with locked-down defaults explicitly enabled for the proof:
+- Bahia is deployed with its locked-down mutation surfaces explicitly enabled for the proof:
   - `nostr.private_key` supplied by deployment secret or environment, not committed config.
-  - `nostr.publish_enabled=true`.
+  - `nostr.publish_enabled=true` (the default; confirm it has not been disabled).
   - at least one `nostr.contextvm_relays` control-plane relay reachable by Bahia and the operator client.
-  - `auth.enabled=true` with operator/agent allowlists for Biz, Stew, and the Bahia signer as applicable.
-  - `adoption.enabled=true` and `direct_runtime_actions.enabled=true`.
+  - `auth.enabled=true`.
+  - `adoption.enabled=true` and `direct_runtime_actions.enabled=true`, each with `allowed_pubkeys` listing the operator pubkeys (Biz, Stew, as applicable). Signer-first ContextVM handlers authorize `adoption/*` against `adoption.allowed_pubkeys` and `service/action` against `direct_runtime_actions.allowed_pubkeys`.
+  - `adoption.allow_compose_takeover=true` only if the selected workload is compose-origin and operators accept that Bahia, not Compose, will drive its lifecycle.
 - btc-01 Docker access is registered as a server-managed runtime endpoint alias, for example `runtime.endpoints.btc-01-docker`.
 - Adoption requests use `endpoint_ref: "btc-01-docker"`; raw `docker_host` in Nostr payloads is forbidden for this proof.
 - Operator signer can publish signed ContextVM `25910` requests and subscribe to correlated `30315`, `30900`, and `4903` observables.
@@ -35,7 +36,7 @@ Excluded from this proof:
 
 1. **Discover ContextVM surface**
    - Confirm Bahia publishes ContextVM discovery (`11316`-`11320`) on the configured relay set.
-   - Confirm required methods are present: `adoption/scan`, `adoption/import`, `service/deploy`, and direct runtime restart/action support.
+   - Confirm required methods are present: `adoption/scan`, `adoption/import`, `service/deploy`, and `service/action` (direct runtime restart).
 
 2. **Scan btc-01**
    - Publish a signed ContextVM `25910` request for `adoption/scan` with a target that references `endpoint_ref: "btc-01-docker"`.
@@ -52,7 +53,7 @@ Excluded from this proof:
    - Confirm audit (`4903`) and status (`30315`) events correlate to the request event ID.
 
 5. **Restart through Bahia**
-   - Publish the Bahia direct-runtime restart action for the imported service/environment.
+   - Publish a signed ContextVM `25910` `service/action` request with action `restart` for the imported service/environment.
    - Confirm the restart completes through the registered endpoint alias and does not require raw `docker_host` in the request.
    - Confirm observed state returns to healthy or starting during grace, then healthy.
 

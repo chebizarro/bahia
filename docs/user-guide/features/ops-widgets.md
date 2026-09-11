@@ -4,12 +4,9 @@ The **Operations → Ops Widgets** view displays live dashboard snapshots publis
 
 ## Trust and relay policy
 
-Bahia subscribes only to the fleet relays exported by Wheelhouse:
+Bahia subscribes only to the fleet relays exported by Wheelhouse (`FLEET_RELAY_URLS`, consumed by `web/src/lib/widgets/ops-widget-wall.js`).
 
-- `wss://relay.sharegap.net`
-- `wss://nos.lol`
-
-Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` to a comma-separated list of trusted 64-character hexadecimal publisher pubkeys. The view fails closed and renders no events when the allowlist is empty. Invalid Nostr signatures are rejected by Bahia's relay client before events reach Wheelhouse.
+Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` (or the fallback `VITE_WHEELHOUSE_ALLOWED_PUBKEYS`) to a comma-separated list of trusted 64-character hexadecimal publisher pubkeys. The view fails closed and renders no events when the allowlist is empty. Invalid Nostr signatures are rejected by Bahia's relay client before events reach Wheelhouse.
 
 ## Display behavior
 
@@ -25,4 +22,4 @@ External `data_ref` payloads remain represented by Wheelhouse's verified-sidecar
 
 ## Local package dependency
 
-Wheelhouse is not published yet. The web package consumes it from `file:../../wheelhouse`, so the sibling Wheelhouse checkout must exist and its library artifact must be built before installing or building Bahia web.
+Wheelhouse is not published to a registry. The web package vendors it as `"wheelhouse": "file:./vendor/wheelhouse"` in `web/package.json`, so no sibling checkout is required to install or build Bahia web.

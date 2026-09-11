@@ -137,7 +137,7 @@ nostr:
     backend_url: "ws://relay:3334/relay"
 ```
 
-Browser and API Nostr relay traffic can go through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. It stores and broadcasts locally but does not forward accepted events to external relays. The advertised `nostr.browser_relays` / `nostr.sidecar_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
+Browser and API Nostr relay traffic can go through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. It stores and broadcasts locally but does not forward accepted events to external relays. The advertised `nostr.browser_relays` / `nostr.sidecar.public_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
 
 ### Relay Policy Sources
 
@@ -196,7 +196,7 @@ When enabled, Bahia support code may call only NIP-86 relay-owner methods such a
 
 The Settings page separates persistent operator relay policy from local browser-session relay overrides.
 
-Use **Settings → Operator Relay Policy** to add or remove:
+Open **Settings → Relays** (`/settings/relays`) and use the **Operator Relay Policy** section to add or remove:
 
 - browser/bootstrap relays published as Bahia relay topology,
 - ContextVM request/reply relays,
@@ -282,23 +282,13 @@ nostr:
 
 ## Discovery
 
-### Well-Known Endpoint
-
-Bahia publishes discovery metadata:
-
-```bash
-curl https://bahia.example.com/.well-known/nostr.json
-```
-
-Returns:
-- Service pubkey
-- Relay URLs
-- Feature flags
-- Control plane kind maps
+Bahia does not serve an HTTP discovery document (there is no `/.well-known/nostr.json` route). Discovery is Nostr-native: the browser subscribes to the service's kind `11316` announcement (schema `bahia.system-discovery.v1`) plus NIP-51 `30002` relay sets, starting from bootstrap relays and trusted service pubkeys.
 
 ### Discovery Event
 
 ContextVM kind `11316` is the canonical capability bootstrap. New clients use `11316` plus ContextVM capability announcements (`11317`-`11320`) and NIP-51 relay sets (`30002`). Legacy kind `31974` discovery may appear only as startup migration input or a compatibility fixture.
+
+Illustrative shape (field names abbreviated; see `internal/adapters/nostr/discovery_protocol.go` for the authoritative payload):
 
 ```json
 {

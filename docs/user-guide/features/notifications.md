@@ -27,7 +27,7 @@ The direct MCP notification handlers do not accept an `org_id` and currently use
 
 1. Open **Notifications**.
 2. Select the current organization.
-3. Choose **New Channel**.
+3. Choose **Create channel** (`/notifications/new`).
 4. Select **Webhook** or **Nostr DM**, enter its configuration and event filter, and save.
 5. Use **Test** before relying on the channel.
 
@@ -91,7 +91,7 @@ The dispatcher creates an organization-scoped log record for each attempted noti
 
 For Nostr DMs, zero relay acceptances count as a delivery failure. For webhooks, connection, TLS, authentication, and non-success response failures remain visible in the log's status and error fields.
 
-Use the Notifications log view or these MCP tools:
+Use the Notifications log view (**View log**, `/notifications/log`) or these MCP tools:
 
 | Tool | Purpose |
 |---|---|

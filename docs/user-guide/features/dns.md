@@ -2,13 +2,15 @@
 
 **DNS** in Bahia provides service discovery through DNS zone and endpoint management.
 
+> DNS orchestration is feature-gated and disabled by default. Set `dns.enabled: true` and configure a backend.
+
 ## Overview
 
 DNS features include:
 - **Zone management** — Define DNS zones
 - **Endpoint projection** — Auto-discover service endpoints
-- **Policy routing** — Split-horizon, weighted routing
-- **FIPS mesh integration** — Federated identity endpoints
+- **Policy routing** — Match/action rules that set visibility and TTL overrides
+- **FIPS mesh integration** — Mesh node endpoints
 
 ## Key Concepts
 
@@ -18,8 +20,8 @@ A **Zone** defines a DNS namespace:
 
 ```yaml
 name: "services.example.com"
-visibility: "internal"
-backend: "dnsmasq-main"
+visibility: "internal"     # internal, external, edge, or mesh
+backend_ref: "dnsmasq-main"
 ttl: 3600
 authoritative: true
 allow_empty_authoritative: false
@@ -33,40 +35,51 @@ An **Endpoint** is a discoverable service address:
 family: "service"
 name: "payment-api"
 environment: "prod"
+zone: "services.example.com"
 fqdn: "payment-api.prod.services.example.com"
 address: "10.0.1.100"
 port: 8080
 protocol: "https"
 health: "healthy"
+drift_status: "in_sync"
 ```
 
 ### DNS Policy
 
-A **Policy** controls routing behavior:
+A **Policy** is a named set of match/action rules, optionally scoped to a zone or environment:
 
-```yaml
-name: "geo-routing"
-type: "weighted"
-rules:
-  - weight: 80
-    endpoint: "payment-api-us"
-  - weight: 20
-    endpoint: "payment-api-eu"
+```json
+{
+  "name": "edge-routing",
+  "rules": [
+    {
+      "match": {"environment": "prod"},
+      "action": {"visibility": "edge", "ttl_override": 60}
+    }
+  ],
+  "enabled": true
+}
 ```
+
+Weighted or geo routing is not part of the DNS policy model.
 
 ## Viewing DNS State
 
 ### Web UI
 
 Navigate to **DNS** in the sidebar:
+- **Signed DNS control-plane commands**: zone, policy, record, and remediation forms
 - **Zones**: DNS zone definitions
 - **Endpoints**: Service endpoint catalog
+- **Drift history**: Recent drift events
 - **Policies**: Routing policies
-- **FIPS Mesh**: Federated identity endpoints
+- **FIPS/Mesh** tab: Mesh node status
 
 ### CLI and MCP
 
-The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments. The corresponding `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are always registered. When DNS orchestration is disabled or has no configured runtime, they return JSON-RPC `-32000` with the exact message `DNS orchestration is not enabled; set dns.enabled and configure a backend` instead of method-not-found.
+The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments. The corresponding `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are always registered.
+
+> **NOTE (2026-09-11):** the relay projector's capability announcement lists `dns/record-override`, but the registered handler method is `dns/record-set` (`internal/controlplane/encrypted_transport.go`). Use `dns/record-set`. When DNS orchestration is disabled or has no configured runtime, they return JSON-RPC `-32000` with the exact message `DNS orchestration is not enabled; set dns.enabled and configure a backend` instead of method-not-found.
 
 ```bash
 bahia dns zone-create --name prod.example --visibility internal --backend-ref dnsmasq-main --ttl 300 --authoritative
@@ -124,7 +137,7 @@ Bahia automatically projects endpoints from:
 - **LLM routes** — Active LLM endpoints
 - **ML endpoints** — Inference endpoints
 - **Workers** — Available workers
-- **FIPS mesh** — Federated identity nodes
+- **FIPS mesh** — Mesh nodes
 
 For service observations, `dns.projection.host_overrides` translates a runtime-observed host or deployment-unit endpoint alias into a concrete IP address or fully qualified hostname before Bahia selects the DNS record type. IP overrides produce `A` or `AAAA` records; fully qualified hostname overrides produce `CNAME` records. Configure an override for every Bahia-managed endpoint alias that is not itself resolvable:
 
@@ -145,7 +158,7 @@ Bahia never emits a `CNAME` to a bare single-label target such as `edge-01-docke
 | `llm` | LLM route endpoints |
 | `ml` | ML inference endpoints |
 | `worker` | Loom workers |
-| `fips` | FIPS mesh nodes |
+| `mesh` | FIPS mesh nodes |
 
 ### Health Status
 
@@ -157,7 +170,7 @@ Bahia never emits a `CNAME` to a bare single-label target such as `edge-01-docke
 
 ## FIPS Mesh
 
-The FIPS mesh provides federated identity endpoints:
+The FIPS mesh exposes mesh-node endpoints:
 
 ### Viewing FIPS mesh
 
@@ -165,7 +178,7 @@ Use the web panel or `bahia_fips_mesh_status` and `bahia_fips_list_mesh_nodes` t
 
 ### Web UI
 
-The DNS page includes a **FIPS Mesh Panel** showing:
+The DNS page includes a **FIPS/Mesh** tab showing:
 - Mesh topology
 - Node status
 - Connection health
@@ -176,7 +189,7 @@ FIPS nodes are exposed as MCP resources:
 
 ```json
 {
-  "uri": "bahia://fips/node/node-123",
+  "uri": "bahia://fips/mesh/node/node-a.mesh.example",
   "name": "fips-node-123",
   "metadata": {
     "status": "online",
@@ -185,32 +198,20 @@ FIPS nodes are exposed as MCP resources:
 }
 ```
 
-## Nostr Event Kinds
+## Nostr Methods and Kinds
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 5941 | DNSZoneCreate | Create/reconcile zone |
-| 5942 | DNSPolicyApply | Apply policy |
-| 5943 | DNSRecordOverride | Override record |
-| 5944 | DNSDriftRemediate | Fix drift |
-| 5945 | DNSBackendRegister | Register backend |
-| 6941 | DNSStatus | Progress updates |
-| 7941-7945 | DNS Results | Terminal results |
+DNS mutations use ContextVM kind `25910` methods (`dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/drift-remediate`, `dns/backend-register`). The dedicated DNS request/status/result kinds (`5941`-`5945`, `6941`, `7941`-`7945`) remain defined in `internal/kinds`.
 
 ## Read Models
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31975 | `zone:<name>` | Zone state |
-| 31976 | `endpoint:<family>:<name>:<env>` | Endpoint state |
-| 31977 | `dnspolicy:<id>` | Policy state |
-| 31978 | `dnsbackend:<id>` | Backend state |
+DNS state is published as canonical kind `30900` with `domain=dns` (entities `zone`, `endpoint`, `policy`, `backend`) and a `legacy_kind` tag. The historical `31975`-`31978` read-model kinds are migration inventory only.
 
 Subscribe for updates:
 ```json
 {
-  "kinds": [31976],
-  "#t": ["dns-endpoint"]
+  "kinds": [30900],
+  "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["dns"]
 }
 ```
 
@@ -227,11 +228,10 @@ Use `bahia dns drift-remediate [--zone <zone>]` for the CLI path. MCP clients ca
 
 ## Best Practices
 
-1. **Use policies** — Consistent routing behavior
+1. **Use policies** — Consistent visibility and TTL behavior
 2. **Monitor health** — Alert on unhealthy endpoints
-3. **Document zones** — Clear naming conventions
-4. **Test failover** — Verify routing under failure
-5. **Secure backends** — Limit backend access
+3. **Configure host overrides** — Map every non-resolvable endpoint alias
+4. **Secure backends** — Limit backend access
 
 ## Troubleshooting
 

@@ -5,14 +5,15 @@ The `bahia` CLI provides command-line access to Bahia’s current HTTP-compatibl
 ## Installation
 
 ```bash
-# From source
-go install github.com/openagentsinc/bahia/cmd/cli@latest
-
-# Or build locally
+# Build locally (produces bin/bahia)
 cd bahia
-make build
+make build-cli
 ./bin/bahia --help
+
+# `make build` builds the CLI plus the server, relay, and helper binaries.
 ```
+
+`go install github.com/openagentsinc/bahia/cmd/cli@latest` also works, but Go names the installed binary `cli` after the package directory; rename it to `bahia` or prefer `make build-cli`.
 
 ## Configuration
 
@@ -72,6 +73,7 @@ The current top-level CLI command groups are:
 - `services`
 - `environments`
 - `state`
+- `artifacts`
 - `dns`
 - `deployments`
 - `adopt`
@@ -83,7 +85,7 @@ The current top-level CLI command groups are:
 - `package`
 - `souls`
 
-Bahia does **not** currently register top-level `llm`, `payments`, `artifacts`, `builds`, or `notifications` CLI commands.
+Bahia does **not** currently register top-level `llm`, `ml`, `payments`, `builds`, `notifications`, `backup`, or `config` CLI commands. Aliases: `env` for `environments`, `svc` for `services`, and `soul`/`sf` for `souls`.
 
 ## Commands
 
@@ -98,10 +100,14 @@ bahia services list -o json
 bahia services get svc-123
 bahia services get svc-123 -o yaml
 
-# Transitional create command (deprecated; signer-first mutations are the canonical path)
+# Create through the signer-first ContextVM control plane
+# (--name and --artifact-repo are required; --runtime-type defaults to compose)
 bahia services create \
   --name "payment-api" \
   --artifact-repo "ghcr.io/company/payment-api"
+
+# Update through the signer-first control plane (--service is required)
+bahia services update --service svc-123 --default-branch main
 
 # Direct runtime lifecycle actions
 bahia services actions deploy --service svc-123 --environment env-456 --artifact art-789
@@ -135,8 +141,17 @@ Omitting `--units-file` leaves the unit set unchanged on update. Supplying a fil
 ### Deployments
 
 ```bash
-# Submit signer-first deployment intent
-bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
+# Preview the managed desired state (all four flags are required)
+bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
+  --managed-runtime-config-file runtime.json
+
+# Submit signer-first deployment intent, optionally pinned to the reviewed preview
+bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789 \
+  --expected-desired-state-hash <hash-from-preview>
+
+# Approve or reject a pending intent
+bahia deployments approve --intent intent-123
+bahia deployments reject --intent intent-123
 
 # Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
 bahia deployments route-attach --service svc-123 --environment env-456 \
@@ -154,15 +169,14 @@ bahia deployments rollback --service svc-123 --environment env-456 --deployment-
 ### State
 
 ```bash
-# List desired/observed state
+# List desired/observed state for all environment/service pairs
 bahia state list
-bahia state list --environment production
-bahia state list --service payment-api
 
 # Show drifted services
 bahia state drifted
-bahia state drifted --environment production
 ```
+
+The `state` commands take no filter flags; use `-o json` and filter client-side.
 
 ### DNS
 
@@ -222,10 +236,11 @@ bahia workers show npub1worker...
 ### Logs
 
 ```bash
-# Fetch run logs
+# Fetch run logs (--stream accepts stdout, stderr, or merged)
 bahia logs run run-456 --tail 100
+bahia logs run run-456 --stream stderr
 
-# Stream live logs for a service/environment
+# Stream live logs for a service/environment (--tail defaults to 100)
 bahia logs live svc-123 env-456
 ```
 
@@ -246,16 +261,7 @@ bahia policies create \
 
 ### Config fabric
 
-```bash
-# Publish a validated desired-state request; Bahia signs through operator Signet
-bahia config publish --file config-request.json
-
-# Compare desired events with applied/rejected status
-bahia config drift
-
-# Republish a prior desired event at the next version
-bahia config rollback <desired-event-id>
-```
+> **NOTE (2026-09-11):** `cmd/cli/config_fabric.go` defines `config publish`, `config drift`, and `config rollback`, but the `config` group is not registered on the root command, so `bahia config …` is not available in current builds. Use the **Config Fabric** web page (`/config-fabric`) or the `/api/v1/config-fabric/*` endpoints instead.
 
 ### Secrets
 
@@ -292,7 +298,20 @@ bahia orgs members add org-123 npub1member... --role deployer
 bahia orgs members remove org-123 npub1member...
 ```
 
-### Importing an already-running image
+### Artifact registration and importing an already-running image
+
+The normal artifact path is automatic registration from trusted signed HiveCI results. When `hiveci.allow_manual_artifact_registration` is explicitly enabled, an authorized operator can submit a verified manual registration:
+
+```bash
+bahia artifacts register \
+  --build <build-id> \
+  --service <service-id> \
+  --image-repo ghcr.io/org/service \
+  --image-tag <tag> \
+  --image-digest sha256:<manifest-digest>
+```
+
+The server verifies the build/service binding, exact repository, tag, immutable digest, and registry resolution; this command is not a verification bypass.
 
 Bahia governs images that CI attested. When an image is already running but has
 no Bahia artifact — for example a locally built image deployed before its
@@ -320,7 +339,8 @@ Importing provenance never deploys or promotes it. Desired state is unchanged;
 align it afterwards with a reviewed deployment:
 
 ```bash
-bahia deployments preview --service <service-id> --environment <environment-id> --artifact <artifact-id>
+bahia deployments preview --service <service-id> --environment <environment-id> --artifact <artifact-id> \
+  --managed-runtime-config-file runtime.json
 bahia deployments deploy  --service <service-id> --environment <environment-id> --artifact <artifact-id> \
   --expected-desired-state-hash <hash-from-preview>
 ```

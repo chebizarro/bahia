@@ -75,7 +75,14 @@ runtime:
 ```
 
 `state_dir` and `image_root` are required; `vcpus`/`memory_mb` default to
-2/2048. Instances are named `bahia-<envID-short>-<serviceName>` (this is the
+2/2048. `vm.network_profile` is accepted and folded into the instance spec
+hash, but v1 attaches no network interfaces, so it has no runtime effect yet.
+
+VM runtimes can also be the process default (`runtime.default.type: vm-qemu`)
+or a deployment unit's `runtime_type`. Unlike Docker/Compose/Podman targets,
+VM targets do not need an `endpoint_ref`. The equivalent environment-variable
+form uses `__` separators, for example
+`BAHIA_RUNTIME__ENVIRONMENTS__microvms__VM__STATE_DIR=/var/lib/bahia/vm/firecracker`. Instances are named `bahia-<envID-short>-<serviceName>` (this is the
 libvirt domain name / firecracker instance directory name).
 
 After a bahia restart, the firecracker runtime reconciles its on-disk
@@ -238,7 +245,7 @@ to read time). Follow mode survives console log rotation/truncation. Live
 logs are served over the same SSE endpoint as containers:
 
 ```
-GET /services/{id}/environments/{envId}/logs?tail=200&follow=true
+GET /api/v1/services/{id}/environments/{envId}/logs?tail=200&follow=true
 ```
 
 Guest-agent-based structured log streaming is out of scope for v1.

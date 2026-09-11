@@ -38,17 +38,14 @@ Common issues and solutions when using Bahia.
 - Subscriptions timing out
 
 **Solutions:**
-1. Verify relay URLs in configuration:
-   ```bash
-   curl http://localhost:8080/.well-known/nostr.json
-   ```
+1. Verify relay URLs in configuration (`nostr.service_relays`, `nostr.browser_relays`, `nostr.contextvm_relays`, and `nostr.sidecar.public_url`). Bahia has no HTTP discovery document; discovery is Nostr-native (kind `11316` plus NIP-51 `30002`).
 
 2. Test relay connectivity directly:
    ```bash
    websocat wss://relay.example.com
    ```
 
-3. Check relay health in the discovery endpoint.
+3. In the web UI, open **Settings → Relays** (`/settings/relays`) to inspect relay policy and reconnect the browser session.
 
 4. Ensure TLS certificates are valid for wss:// URLs.
 
@@ -113,9 +110,9 @@ Common issues and solutions when using Bahia.
 
 2. Verify policies by publishing a signed `PolicyEvaluate` event for the artifact and environment, or use a UI flow backed by the Nostr control plane.
 
-3. Check authorized approvers are available.
+3. If the environment is `protected`, every intent waits for approval: approve it from **Pending Approvals** or with `bahia deployments approve --intent <id>`.
 
-4. Review environment settings for approval requirements.
+4. Check that an authorized approver is available.
 
 ### Deployment Failed
 
@@ -145,16 +142,17 @@ Common issues and solutions when using Bahia.
 - Observed artifact differs from desired
 
 **Solutions:**
-1. Check what's actually running:
+1. Check what's actually running (the command has no filter flags):
    ```bash
-   bahia state list --service svc-123
+   bahia state drifted
+   bahia state list -o json
    ```
 
 2. Deploy to correct the drift by publishing a ContextVM `service/deploy` intent or using a UI flow backed by the Nostr control plane. Legacy `DeployRequest` custom kinds are startup migration inputs only.
 
 3. Investigate why drift occurred (manual changes, crashes, etc.)
 
-4. Consider enabling auto-remediation.
+4. Consider setting the environment or unit reconcile mode to `auto_apply` for automatic remediation.
 
 ## Worker Issues
 
@@ -195,19 +193,16 @@ Common issues and solutions when using Bahia.
 - "Migration error" in logs
 
 **Solutions:**
-1. Check database connectivity:
+1. Check database connectivity with the same settings Bahia uses (`BAHIA_DB_HOST`, `BAHIA_DB_PORT`, `BAHIA_DB_USER`, `BAHIA_DB_NAME`, `BAHIA_DB_SSLMODE`):
    ```bash
-   psql $DATABASE_URL -c "SELECT 1"
+   psql "host=$BAHIA_DB_HOST port=$BAHIA_DB_PORT user=$BAHIA_DB_USER dbname=$BAHIA_DB_NAME sslmode=$BAHIA_DB_SSLMODE" -c "SELECT 1"
    ```
 
 2. Review migration logs for specific errors.
 
 3. Ensure database user has necessary permissions.
 
-4. Try running migrations manually:
-   ```bash
-   make migrate
-   ```
+4. Migrations run automatically at server startup; restart the server (`make migrate` simply runs the server with `config.yaml`).
 
 ### Data Not Persisting
 
@@ -216,11 +211,11 @@ Common issues and solutions when using Bahia.
 - Events not found
 
 **Solutions:**
-1. Verify DATABASE_URL is set correctly.
+1. Verify the `BAHIA_DB_*` settings (or `db:` config block) point at the intended database.
 
 2. Check PostgreSQL is persisting data:
    ```bash
-   docker compose exec postgres psql -U postgres -c "SELECT count(*) FROM services"
+   docker compose exec postgres psql -U bahia -d bahia -c "SELECT count(*) FROM services"
    ```
 
 3. Ensure volume mounts are correct in Docker Compose.
@@ -289,7 +284,7 @@ Common issues and solutions when using Bahia.
 1. Verify the Bahia service private key and Nostr publisher are configured for non-dry-run migration.
 2. Check relay connectivity and require `EOSE` for legacy backfill before treating migration as complete.
 3. Rerun startup after fixing configuration. The migration app is idempotent: it skips canonical outputs already tagged with `migrated-from=<legacy_event_id>` and preserves `legacy-kind` metadata.
-4. Keep relay sidecar allowlists in place. The sidecar should route canonical outputs and migration publishes to configured allowlisted relays; do not re-enable legacy live subscribers as a workaround.
+4. Migration publishes canonical outputs to the configured relays. Do not re-enable legacy live subscribers as a workaround.
 
 ## Web UI Issues
 
@@ -447,13 +442,13 @@ journalctl -u bahia > bahia.log
 Enable verbose logging:
 
 ```yaml
-logging:
+log:
   level: debug
 ```
 
 Or:
 ```bash
-BAHIA_LOG_LEVEL=debug bahia-server
+BAHIA_LOG_LEVEL=debug ./bin/bahia-server -config config.yaml
 ```
 
 ### Health Checks
@@ -462,11 +457,8 @@ BAHIA_LOG_LEVEL=debug bahia-server
 # API health
 curl http://localhost:8080/health
 
-# Readiness
+# Readiness (component states such as signet-soulfactory)
 curl http://localhost:8080/ready
-
-# Discovery
-curl http://localhost:8080/.well-known/nostr.json
 ```
 
 ### Community

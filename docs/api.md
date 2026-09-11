@@ -2,7 +2,9 @@
 
 Base URL: `http://localhost:8080`
 
-Most API endpoints are mounted under `/api/v1`. Root-level exceptions include `/health`, `/ready`, `/mcp`, and `/v2/*`.
+Most API endpoints are mounted under `/api/v1`. Root-level exceptions include `/health`, `/ready`, `/metrics`, `/mcp`, and `/v2/*`.
+
+Route tables in this document reflect `internal/api/router/router.go`. Many route groups are only mounted when their backing dependency is configured (for example ML, LLM, payments, SBOM, signatures, secrets, notifications, tool provisioning, Blossom, OCI, and SoulFactory).
 
 ## Important scope note
 
@@ -31,12 +33,25 @@ When Bahia HTTP auth is enabled:
 - `Authorization: Bearer ...` is unsupported and should be rejected with `401`
 - signer-first adoption/import and direct runtime action events are privileged operator flows gated by their feature flags and allowlists
 
+## Operating mode tiers and rate limits
+
+The server runs in one of three modes, set by `mode` in the config file or `BAHIA_MODE`: `full` (tier 3, the default), `degraded` (tier 2), or `emergency` (tier 1). Bootstrap dependency checks can lower the active tier below the requested one. Routes above the active tier return `503` with `{"error":"route unavailable in current mode", "mode", "active_tier", "required_tier"}`.
+
+- Tier 1: worker reads
+- Tier 2: core registry/deployment/state reads, orgs, policies, payments, signatures, secrets reads, notifications, instance health, route canaries
+- Tier 3: OCI `/v2`, MCP, ML, LLM, SBOM, config fabric, tool provisioning, Blossom, SoulFactory, repository CI lookup
+
+`/api/v1` requests are rate-limited per client IP: 100 requests/minute for the read group and 30 requests/minute for the write group.
+
 ## Health
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Liveness/health snapshot |
+| GET | `/health` | Liveness snapshot (always `200` when the process is serving) |
 | GET | `/ready` | Readiness snapshot; returns `503` when active-tier required checks fail |
+| GET | `/metrics` | Prometheus text metrics (always mounted by the server; `telemetry.enabled` only controls OTLP export). Requires NIP-98 auth when HTTP auth is enabled |
+
+Container health checks should use `/health`; traffic gates and operators should use `/ready`.
 
 ## Discovery and tooling bootstrap
 
@@ -90,7 +105,7 @@ Idempotency keys are represented as the Nostr `d` tag. Clients may provide `idem
 
 For canonical ContextVM-backed writes, `request_kind` is `25910`, `status_kind` is normally `30315`, and `result_kind` is the correlated ContextVM response kind `25910`; state/audit convergence uses `30900` and `4903` (plus domain-specific standard NIPs). Some receipt fields remain for compatibility, but clients must not substitute historical `69xx`/`79xx` kinds.
 
-Compatibility note: representative transitional REST mutation routes for services, deployment intents, LLM route creation, policy writes, and ML writes are Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's canonical response/status/state/audit coordinates. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
+Compatibility note: the server no longer mounts REST mutations for services, environments, artifacts, deployment intents/approvals/rollback, policy writes/evaluation, or LLM route creation. Use ContextVM, the signer-first CLI, or MCP for those operations. A smaller set of compatibility writes remains mounted for deployment-run bookkeeping, ML commands, organizations, payments, SBOM ingestion, signature verification, secrets, notifications, tool denylisting, and config-fabric operations. Route availability can also depend on configured dependencies and the active mode tier.
 
 ## Core registry routes
 
@@ -98,21 +113,19 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/services` | Publish `service/create` ContextVM command and return `202` command receipt |
 | GET | `/api/v1/services` | List services |
 | GET | `/api/v1/services/{id}` | Get a service |
-| PUT | `/api/v1/services/{id}` | Update a service |
-| DELETE | `/api/v1/services/{id}` | Delete a service |
+
+Service creation, update, and deletion use signer-first ContextVM methods; no service REST mutation routes are mounted.
 
 ### Environments
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/environments` | Create an environment |
 | GET | `/api/v1/environments` | List environments |
 | GET | `/api/v1/environments/{id}` | Get an environment |
-| PUT | `/api/v1/environments/{id}` | Update an environment |
-| DELETE | `/api/v1/environments/{id}` | Delete an environment |
+
+Environment creation, detail reads for unit management, update, and deletion are available through signer-first ContextVM methods. The REST surface only mounts the two reads above.
 
 ### Builds
 
@@ -127,9 +140,10 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/artifacts` | Register an artifact |
 | GET | `/api/v1/artifacts/{id}` | Get an artifact |
 | GET | `/api/v1/services/{serviceId}/artifacts` | List artifacts by service |
+
+Artifact registration and observed-artifact import use signer-first ContextVM methods; `POST /api/v1/artifacts` is not mounted.
 
 ## Deployment routes
 
@@ -137,11 +151,10 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/deployments/intents` | Publish `service/deploy` ContextVM command and return `202` command receipt |
 | GET | `/api/v1/deployments/intents/{id}` | Get deployment intent |
-| POST | `/api/v1/deployments/intents/{id}/approve` | Approve intent |
-| POST | `/api/v1/deployments/intents/{id}/reject` | Reject intent |
 | GET | `/api/v1/services/{serviceId}/environments/{envId}/intents` | List intents |
+
+Create, approve, reject, and rollback operations use signer-first ContextVM methods; their former REST mutation routes are not mounted.
 
 ### Deployment runs
 
@@ -153,11 +166,6 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/deployments/intents/{intentId}/runs` | List runs by intent |
 | GET | `/api/v1/deployments/runs/{id}/logs` | Stored run logs |
 
-### Rollback
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/rollback` | Create rollback intent |
 
 ## State and observations
 
@@ -167,8 +175,28 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/state/drifted` | List drifted state |
 | GET | `/api/v1/environments/{envId}/state` | List state by environment |
 | GET | `/api/v1/services/{serviceId}/environments/{envId}/state` | Get state for one service/environment |
-| POST | `/api/v1/observations` | Record runtime observation |
-| GET | `/api/v1/services/{id}/environments/{envId}/logs?follow=true` | Live log stream |
+| GET | `/api/v1/services/{id}/environments/{envId}/logs?follow=true` | Live log stream (SSE); mounted when a runtime resolver is configured |
+
+There is no REST route for recording runtime observations; observations are produced by Bahia's reconcilers and runtime observers.
+
+### Managed instance health and maintenance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/instance-health` | List managed instance health |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health` | Get instance health |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/events` | List health events |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/recovery-attempts` | List recovery attempts |
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance` | Set maintenance mode for the instance |
+| DELETE | `/api/v1/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance` | Clear maintenance |
+
+### Route canaries
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/route-canaries` | List managed route canary results |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary` | Get canary state for one route |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary/events` | List canary events for one route |
 
 ## Repository / worker / policy / payment routes
 
@@ -192,10 +220,8 @@ Compatibility note: representative transitional REST mutation routes for service
 |--------|------|-------------|
 | GET | `/api/v1/policies` | List policies |
 | GET | `/api/v1/policies/{id}` | Get policy |
-| POST | `/api/v1/policies` | Publish `policy/create` ContextVM command and return `202` command receipt |
-| PUT | `/api/v1/policies/{id}` | Publish `policy/update` ContextVM command and return `202` command receipt |
-| DELETE | `/api/v1/policies/{id}` | Publish `policy/delete` ContextVM command and return `202` command receipt |
-| POST | `/api/v1/policies/evaluate` | Evaluate policy |
+
+Policy create, update, delete, and evaluation REST routes are not mounted. Use the corresponding signer-first ContextVM methods.
 
 ### Payments
 
@@ -204,6 +230,14 @@ Compatibility note: representative transitional REST mutation routes for service
 | POST | `/api/v1/payments/estimate` | Estimate run cost |
 | GET | `/api/v1/deployments/runs/{id}/cost` | Get run cost |
 | GET | `/api/v1/payments/history` | Get payment history |
+
+### Config fabric
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/config-fabric/drift` | List desired/applied config drift |
+| POST | `/api/v1/config-fabric/events` | Publish desired config state |
+| POST | `/api/v1/config-fabric/rollback` | Roll back config state |
 
 ## SBOM / signatures / secrets / notifications
 
@@ -247,6 +281,17 @@ Compatibility note: representative transitional REST mutation routes for service
 | POST | `/api/v1/notifications/channels/{id}/test` | Send test notification |
 | GET | `/api/v1/notifications/log` | List notification logs |
 
+### Tool provisioning
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/tools/pending` | List pending tool provisioning intents |
+| GET | `/api/v1/tools/{id}` | Get tool provisioning intent |
+| GET | `/api/v1/tools/denylist` | List denylisted packages |
+| POST | `/api/v1/tools/denylist` | Add a denylist entry |
+| DELETE | `/api/v1/tools/denylist/{package}/{manager}` | Remove a denylist entry |
+| GET | `/api/v1/services/{id}/tools` | Get a service's tool profile |
+
 ## Organization routes
 
 | Method | Path | Description |
@@ -265,14 +310,31 @@ Compatibility note: representative transitional REST mutation routes for service
 | POST | `/api/v1/orgs/{id}/invites` | Create invite |
 | DELETE | `/api/v1/orgs/{id}/invites/{inviteId}` | Revoke invite |
 
+## ML routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/ml/models` | List models |
+| GET | `/api/v1/ml/models/{id}` | Get model |
+| GET | `/api/v1/ml/models/{modelId}/versions` | List model versions |
+| GET | `/api/v1/ml/model-versions/{id}` | Get model version |
+| GET | `/api/v1/ml/endpoints` | List inference endpoints |
+| GET | `/api/v1/ml/endpoints/{id}` | Get inference endpoint |
+| GET | `/api/v1/ml/state` | List ML state |
+| GET | `/api/v1/ml/endpoints/{endpointId}/environments/{envId}/state` | Get endpoint state |
+| GET | `/api/v1/ml/artifacts/{artifactId}/provenance` | Get artifact provenance |
+| POST | `/api/v1/ml/imports` | Publish model import command; returns `202` receipt |
+| POST | `/api/v1/ml/recipes/runs` | Publish recipe run command; returns `202` receipt |
+| POST | `/api/v1/ml/deployments` | Publish ML deploy command; returns `202` receipt |
+| POST | `/api/v1/ml/rollback` | Publish ML rollback command; returns `202` receipt |
+
 ## LLM routes
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/llm/routes` | List LLM routes |
 | GET | `/api/v1/llm/routes/{id}` | Get route |
-| POST | `/api/v1/llm/routes` | Publish `llm/route-create` ContextVM command and return `202` command receipt |
-| PUT | `/api/v1/llm/routes/{id}` | Update route |
+| PUT | `/api/v1/llm/routes/{id}` | Update route (compatibility write) |
 | GET | `/api/v1/llm/routes/{routeId}/releases` | List releases |
 | GET | `/api/v1/llm/releases/{id}` | Get release |
 | GET | `/api/v1/llm/intents/{id}` | Get intent |
@@ -284,7 +346,18 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
 | GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
 
-Most deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. `POST /api/v1/llm/routes` remains as a transitional compatibility route when the control-plane command publisher is configured: it publishes `llm/route-create` and returns a command receipt. Prefer signer-first Nostr LLM control-plane requests and subscribe to canonical observables for completion.
+LLM route creation, release creation, deployment intent/approval/rollback, host, and observation REST mutations are not mounted. `PUT /api/v1/llm/routes/{id}` remains as a compatibility write. Prefer signer-first ContextVM LLM methods and subscribe to canonical observables for completion.
+
+## SoulFactory and Blossom
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/soulfactory/runtimes` | Non-secret agent runtime policy (mounted only when `soul_factory.enabled`) |
+| POST | `/api/v1/blossom/list` | List blobs |
+| GET | `/api/v1/blossom/servers` | List configured Blossom servers |
+| GET | `/api/v1/blossom/health` | Blossom health check |
+| GET | `/api/v1/blossom/stats` | Blossom stats |
+| GET | `/api/v1/blossom/blob/{hash}` | Download a blob (content-addressed; no auth required) |
 
 ## Adoption / import (operator only)
 
@@ -294,7 +367,7 @@ Use `endpoint_ref` targets for production. `docker_host` targets remain a signer
 
 ## Direct runtime actions (operator only)
 
-Direct runtime deploy/restart/stop REST endpoints are removed. Operators should call ContextVM methods such as `service/deploy`, `service/restart`, and `service/stop` over kind `25910` and subscribe for correlated ContextVM responses plus canonical observables (`30900`, `4903`, `30315`).
+Direct runtime deploy/restart/stop REST endpoints are removed. Operators should call the ContextVM method `service/action` (with `action` set to `deploy`, `restart`, or `stop`) over kind `25910` and subscribe for correlated ContextVM responses plus canonical observables (`30900`, `4903`, `30315`).
 
 Direct runtime actions remain limited to adopted `direct_runtime` workloads and authorized operator pubkeys. Deploy responses may include optional `desired_hash` when persisted desired-state metadata is available; restart/stop responses do not create desired-state snapshots.
 

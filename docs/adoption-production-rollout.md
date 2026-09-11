@@ -4,8 +4,8 @@ Scope: production/staging rollout of signer-first adoption/import and direct-run
 Normative gate: [`adoption-live-network-verification.md`](adoption-live-network-verification.md)
 Execution checklist: [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md)
 
-This runbook now assumes signer-first operator execution over Nostr control-plane requests.
-Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
+This runbook assumes signer-first operator execution over Nostr control-plane requests.
+The legacy privileged REST adoption/import and direct-runtime mutation routes are no longer mounted (`internal/api/router/router.go`); signer-first ContextVM `25910` is the only working execution path.
 
 ## Safety defaults
 
@@ -13,7 +13,7 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 - Signer-first operator execution is authorized by operator pubkeys and signed event verification.
 - Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are compatibility/break-glass only.
 - CLI defaults to signer-first operator transport for `bahia adopt ...` and `bahia services actions ...`.
-- explicit relay configuration is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
+- HTTP compatibility fallback is opt-in only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is consulted only before any relay accepts the signed request. For `adopt` and `services actions` the fallback no longer reaches a server: the client returns `REST ... is removed; publish a signed Nostr ... event instead`.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
 - Signed imports must resolve one organization. Pass `--org <organization-uuid>` when target environments/the organization catalog do not make the choice unambiguous; Bahia rejects cross-org reuse.
@@ -40,9 +40,11 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
    ```
 
    Notes:
-   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` scope signer-first operator execution.
-   - `nostr.authorized_pubkeys` remains the global fallback for public operator request authorization.
+   - `nostr.authorized_pubkeys` is the outer gate: the ContextVM transport rejects any requester not in it before dispatch.
+   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` are then checked per method (`adoption/*` and `service/action` respectively).
+   - **Both checks treat an empty list as "allow any signer".** Config validation only requires *some* operator allowlist (subjects, pubkeys, or emails) when a surface is enabled, so a subject- or email-only allowlist passes validation while leaving signer-first execution open. Always set non-empty `allowed_pubkeys` for each enabled surface and a non-empty `nostr.authorized_pubkeys`.
    - Subject/email operator allowlists are compatibility-only and do not authorize signer-first public events.
+   - `direct_runtime_actions.enabled=true` also requires `auth.enabled=true` and `nostr.private_key`.
 
 2. Configure endpoint aliases; do not expose Docker credentials to clients:
 
@@ -63,8 +65,9 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
    - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
 
 4. Prepare signer/operator execution inputs:
-   - local signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`; or NIP-46 is configured with `--nostr-bunker-file` and `--nostr-client-key-file` (plus repeatable `--nostr-bunker-relay` when needed)
-   - operators know whether compatibility explicit relay configuration is approved for this rollout
+   - local signer key material is available via `--nostr-key-file`, `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`; the CLI intentionally has no `--nsec` or `--privkey` flags
+   - or NIP-46 is configured with `--nostr-bunker-file` and `--nostr-client-key-file` (plus repeatable `--nostr-bunker-relay` when needed)
+   - operators know whether HTTP compatibility fallback is approved for this rollout
    - evidence capture includes request event IDs and correlated progress/terminal ContextVM `25910` response IDs, plus canonical observable IDs where emitted
 
 ## Dry-run scan
@@ -123,15 +126,14 @@ Monitor:
 
 ## Compatibility-only fallback mode
 
-Fallback is not the primary operator path.
-Use it only when explicitly approved.
+Fallback is not an operator path for adoption or direct runtime actions.
 
-- Enable with `--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`.
-- Fallback is allowed only before any relay accepts the signer-first request.
-- `--raw-target` is compatibility-only and requires explicit fallback approval.
+- `--http-fallback` / `BAHIA_OPERATOR_HTTP_FALLBACK=true` is consulted only before any relay accepts the signer-first request.
+- For `adopt scan`, `adopt import`, and `services actions {deploy,restart,stop}`, the fallback calls client methods that now return a `REST ... is removed` error. No HTTP request is made and no runtime action runs.
+- `--raw-target` is rejected without `--http-fallback`. With `--http-fallback` it takes the same removed-REST path and fails. Raw Docker hosts cannot be scanned or imported from the CLI; register a `runtime.endpoints.<ref>` alias instead.
 - Do not use fallback to bypass signer-first terminal failures, authorization failures after acceptance, or runtime guardrails.
 
-Example compatibility-only raw-target invocation:
+The raw-target invocation below is kept only as the SF-04 negative check. It must fail without contacting the Docker host:
 
 ```bash
 bahia --http-fallback adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
@@ -139,11 +141,11 @@ bahia --http-fallback adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
 
 ## Rate limits and telemetry
 
-Dedicated operational rate limits remain separate from the generic write limiter:
+Signer-first requests arrive over relays, not REST, so the per-IP REST limiters (100/minute reads, 30/minute writes) do not apply to them. The former dedicated adoption/runtime-action per-IP limits went away with the REST routes.
 
-- adoption scan: 5 requests/minute/IP;
-- adoption import: 10 requests/minute/IP;
-- direct runtime actions: 20 requests/minute/IP.
+> **NOTE (2026-09-11):** No relay-side rate limit specific to adoption or
+> direct runtime actions was found in this checkout. Rely on relay policy and
+> the operator allowlists above for abuse control.
 
 Prometheus-style metrics include:
 
@@ -176,8 +178,8 @@ If adoption or direct-runtime execution causes unexpected behavior:
 
 ## Compatibility notes
 
-- HTTP privileged adoption/import/direct-runtime endpoints are no longer the primary rollout gate.
-- Bearer rejection (`401`) and any legacy NIP-98 execution checks are compatibility evidence only.
+- HTTP privileged adoption/import/direct-runtime endpoints are not mounted in current Bahia and cannot serve as a rollout gate or fallback.
+- Legacy bearer/NIP-98 checks against those routes will see unmounted-route responses, not auth rejections. Record them only as proof the routes are absent.
 - Canonical encrypted request/result terminology: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
 - Encrypted request/result wire marker is `encrypted=bahia-encrypted-v1`.
 - If a release requirement still depends on the legacy HTTP operator path, record that dependency explicitly in the signoff evidence.

@@ -32,19 +32,27 @@ ContextVM methods use the `<domain>/<operation>` convention. The relay indexes t
 
 | Domain | Example methods |
 |--------|-----------------|
-| `service` | `deploy`, `route-attach`, `rollback`, `restart`, `stop`, `update`, `delete` |
+| `service` | `create`, `update`, `delete`, `deploy-preview`, `deploy`, `route-attach`, `rollback`, `action` (runtime `restart`/`stop`/`deploy`, selected by the `action` param and tag) |
 | `environment` | `create`, `get-details`, `update`, `delete` |
-| `artifact` | `register` |
-| `policy` | `create`, `update`, `delete`, `evaluate` |
-| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
-| `llm` / `ml` | `route-create`, `release-register`, `deploy`, `approve`, `rollback`, `model-import`, `recipe-run`, `inference-deploy` |
-| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate`, `backend-register` |
-| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
+| `artifact` | `register`, `register-build-result`, `import-observed` |
+| `approval` | `approve`, `reject` (deployment intents) |
+| `policy` | `create`, `update`, `delete`, `package-prod` |
+| `worker` / `workload` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply`, `cleanup`; `workload/pin` |
+| `package` | `repository-apply`, `repository-delete`, `publish`, `promote`, `yank`, `drift-detect` |
+| `llm` | `route-create`, `release-register`, `deploy`, `approval`, `rollback` |
+| `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-approval`, `inference-rollback` |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `record-override`, `drift-remediate`, `backend-register` |
+| `backup` | `run`, `restore`, `verification`, `retention`, `repository-register`, `repository-probe`, `policy-apply`, `recipe-apply`, `definition-apply` |
+| `sbom` | `generate`, `import` |
 | `adoption` | `scan`, `import` |
-| `assistant` | `prompt`, `approve`, `cancel` |
-| `ci` | `workflow-run`, `cancel`, `retry` |
+| `assistant` | `prompt`, `approval` (`decision=approve`/`reject`/`cancel`) |
+| `ci` | `workflow-run` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
+
+The discovery announcement's `control_plane.methods` list (`discoveryControlPlane` in `internal/adapters/nostr/projector.go`) is what browsers see. Method constants live in `internal/controlplane/encrypted_transport.go` and `operator_contextvm_handlers.go`.
+
+> **NOTE (2026-09-11):** Discovery advertises `llm/deployment-approval`, but `LLMCommandPublisher.PublishLLMApprovalRequest` publishes `llm/approval`. Check the inbound handler before depending on either name.
 
 `environment/get-details` accepts `{"id":"<environment-uuid>"}`, authorizes the signed requester for `environments:read` in the owning organization, and returns the environment (including targeting and `updated_at`) plus its explicit or resolved implicit `deployment_units`.
 
@@ -211,31 +219,35 @@ Because idempotency is based on `migrated-from`, the app is safe to run at every
 
 ## Domain Mutation Surfaces (MCP → Nostr)
 
-Each domain's mutations flow through MCP tools backed by signer-first controlplane publishers. The publisher signs a ContextVM kind `25910` event, publishes to the relay pool, and returns a `CommandReceipt` with the event ID and relay acceptance count. REST never participates in mutation — it serves only read models.
+Each domain's mutations flow through MCP tools backed by signer-first controlplane publishers (`internal/controlplane/*_command_publisher.go`). The publisher signs a request event, publishes it to the relay pool, and returns a receipt with the event ID and relay acceptance. If the corresponding publisher is not configured, the service, deploy, rollback, and artifact tools return a "no longer available as a direct registry mutation" error rather than writing the registry. REST never participates in these domains' mutations; it serves only read models.
 
 ### Services
 
 | MCP tool | ContextVM method | Publisher |
 |----------|-----------------|-----------|
-| `bahia_create_service` | `service/create` | `ServiceCommandPublisher.PublishServiceCreate` |
-| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployIntent` |
-| `bahia_rollback` | `service/rollback` | `ServiceCommandPublisher.PublishRollback` |
+| `bahia_create_service` | `service/create` | `ServiceCommandPublisher.PublishServiceCreateRequest` |
+| `bahia_update_service` | `service/update` | `ServiceCommandPublisher.PublishServiceUpdateRequest` |
+| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployRequest` |
+| `bahia_rollback` | `service/rollback` | `ServiceCommandPublisher.PublishRollbackRequest` |
 
-**CLI path**: `bahia services actions deploy|restart|stop` → `cmd/cli/operator_nostr.go` → ContextVM `25910`
+**CLI path**: `bahia services actions deploy|restart|stop` → `cmd/cli/operator_nostr.go` → `pkg/client` → ContextVM `25910` method `service/action` with `action=<deploy|restart|stop>`
 
 **Read models (REST GET only)**:
 - `GET /api/v1/services` — list services
 - `GET /api/v1/services/{id}` — get service details
-- `GET /api/v1/services/{id}/environments` — list environments
-- `GET /api/v1/services/{id}/deployments` — list deployments
+- `GET /api/v1/environments` and `GET /api/v1/environments/{id}` — list/get environments
+- `GET /api/v1/services/{serviceId}/environments/{envId}/intents` — list deployment intents for one service/environment
 
 ### Policies
 
-| MCP tool | ContextVM method | Publisher |
-|----------|-----------------|-----------|
-| `bahia_policy_create` | `policy/create` | `PolicyCommandPublisher.PublishPolicyCreate` |
-| `bahia_policy_update` | `policy/update` | `PolicyCommandPublisher.PublishPolicyUpdate` |
-| `bahia_policy_delete` | `policy/delete` | `PolicyCommandPublisher.PublishPolicyDelete` |
+| MCP tool | Request kind | Publisher |
+|----------|--------------|-----------|
+| `bahia_create_policy` | `5986` | `PolicyCommandPublisher.PublishPolicyCreateRequest` |
+| `bahia_update_policy` | `5987` | `PolicyCommandPublisher.PublishPolicyUpdateRequest` |
+| `bahia_delete_policy` | `5988` | `PolicyCommandPublisher.PublishPolicyDeleteRequest` |
+| `bahia_evaluate_policy` | `5989` | `PolicyCommandPublisher.PublishPolicyEvaluateRequest` |
+
+> **NOTE (2026-09-11):** `PolicyCommandPublisher` still signs legacy request kinds `5986`–`5989` (`internal/kinds/kinds.go`), not ContextVM `25910`. That conflicts with the legacy-kind policy above. Encrypted ContextVM `policy/create`/`update`/`delete` handlers also exist. Treat the MCP publisher path as pending migration.
 
 **Read models (REST GET only)**:
 - `GET /api/v1/policies` — list policies
@@ -245,42 +257,52 @@ Each domain's mutations flow through MCP tools backed by signer-first controlpla
 
 | MCP tool | ContextVM method | Publisher |
 |----------|-----------------|-----------|
-| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployIntent` |
-| `bahia_create_deployment_intent` | `service/deploy` | Same publisher (alias) |
+| `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployRequest` |
+| `bahia_create_intent` | `service/deploy` | Same handler as `bahia_deploy` (alias) |
+| `bahia_approve_deployment` / `bahia_approve_intent` | `approval/approve` | `ServiceCommandPublisher.PublishDeploymentApprovalRequest` |
+| `bahia_reject_deployment` / `bahia_reject_intent` | `approval/reject` | `ServiceCommandPublisher.PublishDeploymentApprovalRequest` |
 
 Deployment intents are a subset of service mutations. The MCP tool creates a signed deploy intent event; the reactor processes it into an actual deployment.
 
 **Read models (REST GET only)**:
-- `GET /api/v1/deployments` — list deployments
-- `GET /api/v1/deployments/{id}` — get deployment details
+- `GET /api/v1/deployments/intents/{id}` — get one deployment intent
+- `GET /api/v1/services/{serviceId}/environments/{envId}/intents` — list intents for one service/environment
+- `GET /api/v1/deployments/runs/{id}` — get one deployment run
+- `GET /api/v1/deployments/intents/{intentId}/runs` — list runs for one intent
 
 ### LLM Routes
 
 | MCP tool | ContextVM method | Publisher |
 |----------|-----------------|-----------|
-| `bahia_llm_create_route` | `llm/route-create` | `LLMCommandPublisher.PublishRouteCreate` |
-| `bahia_llm_update_route` | `llm/route-update` | `LLMCommandPublisher.PublishRouteUpdate` |
-| `bahia_llm_register_release` | `llm/release-register` | `LLMCommandPublisher.PublishReleaseRegister` |
-| `bahia_llm_deploy` | `llm/deploy` | `LLMCommandPublisher.PublishDeploy` |
-| `bahia_llm_approve_deployment` | `llm/approve` | `LLMCommandPublisher.PublishApproval` |
-| `bahia_llm_rollback` | `llm/rollback` | `LLMCommandPublisher.PublishRollback` |
+| `bahia_llm_create_route` | `llm/route-create` | `LLMCommandPublisher.PublishLLMRouteCreateRequest` |
+| `bahia_llm_register_release` | `llm/release-register` | `LLMCommandPublisher.PublishLLMReleaseRegisterRequest` |
+| `bahia_llm_deploy` | `llm/deploy` | `LLMCommandPublisher.PublishLLMDeployRequest` |
+| `bahia_llm_approve_deployment` / `bahia_llm_reject_deployment` | `llm/approval` | `LLMCommandPublisher.PublishLLMApprovalRequest` |
+| `bahia_llm_rollback` | `llm/rollback` | `LLMCommandPublisher.PublishLLMRollbackRequest` |
+
+> **NOTE (2026-09-11):** `bahia_llm_update_route` currently updates the LLM registry directly (`handleLLMUpdateRoute` in `internal/mcp/server.go`). No `llm/route-update` ContextVM method exists.
 
 **Read models (REST GET only)**:
 - `GET /api/v1/llm/routes` — list LLM routes
 - `GET /api/v1/llm/routes/{id}` — get route details
-- `GET /api/v1/llm/releases` — list releases
+- `GET /api/v1/llm/routes/{routeId}/releases` — list releases for one route
+- `GET /api/v1/llm/releases/{id}` — get one release
 
 ### Artifacts
 
-| MCP tool | ContextVM method | Publisher |
-|----------|-----------------|-----------|
-| `bahia_register_artifact` | `artifact/register` | `ArtifactCommandPublisher.PublishArtifactRegister` |
+| MCP tool | Request | Publisher |
+|----------|---------|-----------|
+| `bahia_register_artifact` | legacy request kind `5985` | `ArtifactCommandPublisher.PublishArtifactRegisterRequest` |
+
+> **NOTE (2026-09-11):** The MCP artifact publisher signs legacy kind `5985`. The ContextVM `artifact/register` method is handled separately.
 
 ### Tool Approvals
 
-| MCP tool | ContextVM method | Publisher |
-|----------|-----------------|-----------|
-| `bahia_approve_tool` | `tool/approve` | `ToolApprovalCommandPublisher.PublishToolApproval` |
+| MCP tool | Request | Publisher |
+|----------|---------|-----------|
+| `bahia_tool_provision_approve` / `bahia_tool_provision_reject` | legacy response kind `7977` | `ToolApprovalCommandPublisher.PublishToolApprovalResponse` |
+
+> **NOTE (2026-09-11):** Tool approval responses are still signed as legacy kind `7977`, with the result expected as ContextVM `25910`.
 
 ### Anti-pattern: REST write endpoints
 

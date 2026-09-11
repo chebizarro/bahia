@@ -9,6 +9,11 @@ The immediate track is intentionally operational glue. The durable track is the 
 
 ## Current Live Shape
 
+> **NOTE (2026-09-11):** The repository verifies the workflow and mutation
+> helper described below, but it cannot verify the current files, images, or
+> ports on `edge-01`. Before acting, compare this section with the live
+> `/srv/data/bahia-controlplane/docker-compose.yml` and record any divergence.
+
 The live `edge-01` control plane currently runs from local Docker images referenced by `/srv/data/bahia-controlplane/docker-compose.yml`:
 
 ```text
@@ -75,7 +80,9 @@ The checked-in workflow is `.github/workflows/deploy-edge.yml`. It:
 11. resolves the locally built backend and web image IDs and writes immutable `repository@sha256:<digest>` references;
 12. validates and applies the updated Compose file;
 13. waits for `/ready`, then requires the same-or-newer hydrated relay-policy projection plus relay, web, and Soul gallery reachability;
-14. automatically restores the previous Compose file and services if any post-mutation gate fails:
+14. automatically restores the previous Compose file and services if any post-mutation gate fails.
+
+The runner is a container, so the workflow reaches the host-published ports through the Docker bridge gateway (`EDGE_HEALTH_HOST=172.17.0.1`) with retries. From a shell on `edge-01` itself, the equivalent checks are:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/ready
@@ -228,7 +235,7 @@ If backend and web stay as separate images, either:
 
 The simpler production path is one canonical backend/control-plane image through Hive CI, while the immediate relief workflow handles the split backend/web local-image deployment until retirement.
 
-### Never Mutate The Database
+### Never hand-edit the database
 
 Bahia production state is never repaired with SQL. Direct inserts or updates to
 `builds`, `artifacts`, `deployment_intents`, or `environment_service_state`
@@ -250,6 +257,10 @@ If live reality and Bahia disagree, use a governed path:
 
 If none of those paths fit, that is a product gap to file, not a reason to open
 a database console.
+
+The reviewed `scripts/seed_hiveci_pipeline_policy.sql` procedure later in this
+runbook is the sole documented pre-config exception. Prefer config-driven
+seeding; do not adapt the SQL for unrelated production-state repair.
 
 ### Bahia Requirements
 
@@ -336,7 +347,7 @@ produces no artifact identity and should not be mapped by a pipeline policy.
 Registration is not promotion. A registered artifact is digest-pinned and
 inert until a separately authorized Bahia deployment promotes it.
 
-Do not add `trusted_release_attestors` for the ordinary Loom result path. That
+Do not add `trusted_release_attestors` for the ordinary Loom result path. (The config-driven seeding example below *does* set it, because it targets the terminal RELEASE path.) That
 key enables the stricter second RELEASE-5402 verifier and additionally requires
 Bahia's OCI evidence service, full lineage/SBOM/provenance descriptors, worker
 admission evidence, and the metadata constraints shown below.
@@ -384,6 +395,13 @@ hiveci:
         health_contract: {type: http, path: /health, timeout_seconds: 10}
         readiness_contract: {type: http, path: /ready, timeout_seconds: 15}
 ```
+
+> **NOTE (2026-09-11):** This repository has no `.gitea/workflows/release.yml`.
+> Bahia's own Hive workflow is `.github/workflows/hive-ci-build.yml`, and it
+> writes `.hiveci-result.json` without printing a `BAHIA_ARTIFACT` line. Before
+> seeding a Bahia policy, confirm which workflow path grasp-gitea actually
+> publishes in the signed 5401 (discovery query below) and that the workflow
+> emits the artifact contract the consuming worker reads.
 
 The `repo_coordinate` is whatever grasp-gitea puts in the `["a", ...]` tag of
 kind-5401 events.  Use the discovery query below to find it once 5401 events
@@ -456,9 +474,9 @@ until an authorized intent is accepted, no environment desired state changes.
 
 1. ✅ Land the immediate self-hosted deploy workflow.
 2. Confirm pushes to `master` rebuild and roll the live edge stack.
-3. ✅ Add the Hive workflow that writes `.hiveci-result.json`.
+3. Partially done: `.github/workflows/hive-ci-build.yml` builds and pushes images and writes `.hiveci-result.json` (the hive-ci-runner contract). It does not yet print the `BAHIA_ARTIFACT=<json>` line that the Loom `ci/workflow-run` profile requires (see §Hive Workflow Contract).
 4. Confirm `grasp-gitea` publishes `5401` for that workflow path.
-5. Confirm `hive-ci-runner` publishes `5402` with image metadata.
+5. Confirm the executing worker (loom-worker, or hive-ci-runner for the legacy result-file contract) publishes a `5402` carrying `image_repo`, `image_tag`, and `image_digest`.
 6. ✅ Script for `hiveci_pipeline_policies` row available; run seeder once
    repo coordinate is known (see §Seeding above).
 7. Verify Bahia creates the artifact instead of `artifact_pending`.

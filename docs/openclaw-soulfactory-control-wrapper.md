@@ -12,10 +12,12 @@ The packaged wrapper currently supports exactly these runtime-control methods:
 soulfactory.provision
 soulfactory.update
 soulfactory.persona.update
+soulfactory.config.reload
+soulfactory.memory.reindex
 soulfactory.revoke
 ```
 
-Any other method, including `soulfactory.suspend`, `soulfactory.resume`, and `soulfactory.redeploy`, is rejected with a structured `unsupported_method` outcome by the wrapper unless a different command implementation is explicitly configured. The sidecar command driver also defaults to the same conservative method set, so unsupported methods are not advertised by default. `soulfactory.update` applies optimistic spec-hash checks and accepts either `update_mode=replace` with `resolved_spec`, or `update_mode=merge` with a patch over the persisted canonical prior spec.
+Any other method, including `soulfactory.suspend`, `soulfactory.resume`, and `soulfactory.redeploy`, is rejected with a structured `unsupported_method` outcome by the wrapper unless a different command implementation is explicitly configured. The sidecar command driver defaults to the same six-method set, so unsupported methods are not advertised by default. `soulfactory.update` applies optimistic spec-hash checks and accepts either `update_mode=replace` with `resolved_spec`, or `update_mode=merge` with a patch over the persisted canonical prior spec.
 
 The wrapper supports dedicated execution and a compatibility-only dry-run mode:
 
@@ -140,6 +142,9 @@ The wrapper reads configuration from environment variables:
 - `OPENCLAW_SOULFACTORY_DEFAULT_BINDINGS`: comma-separated channel bindings to add on non-dry-run provision.
 - `OPENCLAW_SOULFACTORY_REQUIRED_PLUGINS`: comma-separated `plugin-id=install-source` requirements. Non-dry-run external souls require an explicit `nostr=<pinned-install-source>` entry.
 - `OPENCLAW_SOULFACTORY_DRY_RUN`: when truthy (`1`, `true`, `yes`, `y`, or `on`), validate and render state but skip OpenClaw CLI mutations.
+- `OPENCLAW_SOULFACTORY_CONTAINER`: container name used only with dry-run `existing-container` compatibility mode.
+
+When the invocation carries a pinned `31953` fleet-config snapshot (`params.fleet_config`), its `defaults.required_plugins`, `defaults.bindings`, and `defaults.model` replace the corresponding `OPENCLAW_SOULFACTORY_*` environment defaults. Its `template` is expanded into the generated `openclaw.json`. Per-agent SoulFactory settings still override fleet defaults. A `soulfactory.config.reload` with `target_fields=["fleet_config"]` cannot be mixed with agent-scoped targets.
 
 The resolved provision params supply `runtime.model`, `runtime.account_id` (or the Signet-created `bahia.nostr_pubkey`), and optional public `runtime.nostr` channel configuration. `runtime.secret_files` maps secret names to absolute host file paths. Files must be regular, owned by the wrapper user, and mode `0600` or stricter; recognized `nip46_client` and `nip46_connect` files become OpenClaw file SecretRefs under `/run/secrets`. Inline tokens, passwords, private keys, and NIP-46 secrets are rejected.
 
@@ -162,12 +167,12 @@ The sidecar injects these variables when it invokes the command:
 - `SOULFACTORY_AGENT_ID`
 - `SOULFACTORY_SPEC_HASH`
 
-The sidecar's command-driver method advertisement can be configured with `-methods` or `OPENCLAW_SOULFACTORY_METHODS`. Leave it unset, or set it to the implemented conservative set, unless the configured command really supports additional methods:
+The sidecar's command-driver method advertisement can be configured with `-methods` or `OPENCLAW_SOULFACTORY_METHODS`. Leave it unset (it defaults to the six implemented methods), or set it to that same set, unless the configured command really supports additional methods:
 
 ```bash
 openclaw-soulfactory-sidecar \
   -command /usr/local/bin/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
+  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.config.reload,soulfactory.memory.reindex,soulfactory.revoke
 ```
 
 ## Local state layout
@@ -228,6 +233,12 @@ For `soulfactory.provision`, the wrapper:
 10. Writes state/audit files with container/deployment ID, immutable image, config revision, workspace identifier, and agent/account lineage.
 
 Exact replays return the same logical outcome without repeating mutation work. Conflicting replays reject with `duplicate_conflict`.
+
+## Config reload and memory reindex
+
+`soulfactory.config.reload` requires existing non-revoked state, validates optional previous/new spec hashes, applies only the named `target_fields`, rewrites generated identity/runtime files, and returns `restart=false`; it does not restart the gateway.
+
+`soulfactory.memory.reindex` validates `soulfactory-memory-reindex/v1`, `incremental` or `full` mode, a `memory_config` object, and spec-hash continuity. The current wrapper acknowledges the request with `accepted=true`, `started=false`, and an `action_required` object because OpenClaw exposes no stable reindex CLI command; it does not claim that indexing ran.
 
 ## Persona update flow
 

@@ -37,6 +37,8 @@ The sidecar command receives one `OpenClawControlInvocation` JSON document on st
 soulfactory.provision
 soulfactory.update
 soulfactory.persona.update
+soulfactory.config.reload
+soulfactory.memory.reindex
 soulfactory.revoke
 ```
 
@@ -58,7 +60,7 @@ Other methods are rejected unless the operator explicitly configures a driver th
 }
 ```
 
-The wrapper supports dry-run verification and dedicated non-dry-run gateways through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose`. Shared `existing-container` provisioning is rejected. It implements optimistic spec-hash checks for `soulfactory.update`.
+The wrapper supports dry-run verification and dedicated non-dry-run gateways through `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose`. Shared `existing-container` provisioning is rejected. It implements optimistic spec-hash checks for `soulfactory.update` and `soulfactory.config.reload`. `soulfactory.memory.reindex` validates and records the request but reports `started=false` with an `action_required` result because the wrapper has no stable OpenClaw reindex CLI command.
 
 The command receives `SOULFACTORY_METHOD`, `SOULFACTORY_AGENT_ID`, and `SOULFACTORY_SPEC_HASH`.
 
@@ -72,6 +74,25 @@ Controller authorization is persisted in `-controller-policy-file`/`OPENCLAW_SOU
 
 A trusted controller may also grant or revoke another controller with signed ContextVM kind-`25910` methods `soulfactory.controller.grant` and `soulfactory.controller.revoke`; the sidecar persists the event id, timestamp, and complete normalized set before activating it, republishes capability state, and returns a correlated signed `25910` response. Send SIGHUP to re-read an operator-edited persisted file and republish capability state.
 
+## Flags
+
+Every flag also reads the environment variable shown (`cmd/openclaw-soulfactory-sidecar/main.go`).
+
+| Flag | Env | Default / notes |
+| --- | --- | --- |
+| `-relays` | `SOULFACTORY_RELAYS` | Runtime/control relays for `30317`, `38384`, and `38386` (not ngit relays) |
+| `-private-key-file` | `OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE` | Sidecar nsec/hex key file |
+| `-trusted-controller-pubkeys` | `SOULFACTORY_CONTROLLER_PUBKEYS` | One-time seed when the controller policy file is absent |
+| `-controller-policy-file` | `OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE` | Defaults beside the idempotency store |
+| `-identifier` | `OPENCLAW_SOULFACTORY_IDENTIFIER` | `30317` `d` tag; default `openclaw-soulfactory-sidecar` |
+| `-command` | `OPENCLAW_SOULFACTORY_COMMAND` | **Required.** Local control command (normally `openclaw-soulfactory-control`) |
+| `-arg` (repeatable) | `OPENCLAW_SOULFACTORY_ARGS` (CSV) | Extra command arguments |
+| `-methods` | `OPENCLAW_SOULFACTORY_METHODS` | Defaults to the six-method wrapper set above |
+| `-workdir` | `OPENCLAW_SOULFACTORY_WORKDIR` | Optional command working directory |
+| `-read-relays`, `-write-relays`, `-control-relays` | `OPENCLAW_SOULFACTORY_{READ,WRITE,CONTROL}_RELAYS` | Relay hints in the capability announcement |
+| `-idempotency-store` | `OPENCLAW_SOULFACTORY_IDEMPOTENCY_STORE` | Durable JSON store; default under the user cache dir |
+| `-health-addr` | `OPENCLAW_SOULFACTORY_HEALTH_ADDR` | `/health` and `/ready`; default `127.0.0.1:8081` |
+
 ## Example
 
 ```bash
@@ -83,7 +104,7 @@ openclaw-soulfactory-sidecar \
   -control-relays wss://relay.example \
   -idempotency-store /var/lib/bahia/openclaw-soulfactory-sidecar-idempotency.json \
   -command /usr/local/bin/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
+  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.config.reload,soulfactory.memory.reindex,soulfactory.revoke
 ```
 
 See [the control wrapper](openclaw-soulfactory-control-wrapper.md), [runtime contract](soulfactory-runtime-control.md), and [deployment runbook](soul-factory-sidecar-runbook.md).

@@ -15,24 +15,21 @@ A **Deployment Intent** is a request to deploy an artifact:
 ```yaml
 service_id: "svc-123"
 environment_id: "env-456"
+deployment_unit_id: "unit-1"
 artifact_id: "art-789"
 requested_by: "npub1user..."
-reason: "Deploy new feature X"
 ```
 
 ### 2. Policy Evaluation
 
-Bahia evaluates policies:
-- SBOM requirements
-- Test coverage
-- Security scans
-- Custom rules
+Bahia evaluates [policies](policies.md), for example:
+- SBOM presence and quality (`require_sbom`, `sbom_*` rules)
+- Signatures (`require_signature`)
+- Vulnerability and scan gates (`max_critical_vulns`, `max_high_vulns`, `require_scan_status`, `security_osv_scan`)
 
 ### 3. Approval
 
-If policies or environment require approval:
-- Manual approval by authorized pubkey
-- Or automated approval if all policies pass
+If the environment is `protected`, every intent waits for manual approval by an authorized pubkey. Otherwise, intents whose blocking policies pass proceed without approval.
 
 ### 4. Deployment Run
 
@@ -106,7 +103,14 @@ For a single explicit unit, the wizard selects its durable ID automatically. For
 
 ### CLI and MCP
 
-Deployment intent creation is signer-first. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress. Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
+Deployment intent creation is signer-first. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress. There is no REST intent-creation route; `/api/v1` serves intent and run reads only.
+
+```bash
+bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
+  --managed-runtime-config-file runtime.json
+bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789 \
+  --expected-desired-state-hash <hash-from-preview>
+```
 
 ### Nostr (ContextVM)
 
@@ -175,13 +179,18 @@ When an intent requires approval:
 
 ### Web UI
 
-1. Go to **Deployments** → **Pending**
+1. Go to **Pending Approvals** (`/deployments/pending`) in the sidebar
 2. Review the intent details
 3. Click **Approve** or **Reject**
 
 ### CLI and MCP
 
 Approval and rejection mutations are signer-first ContextVM intents. CLI/MCP mutation surfaces publish signed requests and return Nostr correlation receipts; if no signer-first publisher is configured, MCP fails closed instead of mutating the registry directly. Use `approval/approve` or `approval/reject` and follow canonical status/audit/state observables.
+
+```bash
+bahia deployments approve --intent intent-123
+bahia deployments reject --intent intent-123
+```
 
 ### Nostr
 
@@ -245,16 +254,20 @@ The rollout plan records the previous artifact and traffic state before it begin
 
 ## Deployment States
 
+Intent `status`:
+
 | State | Description |
 |-------|-------------|
 | `pending` | Intent created, awaiting policy/approval |
 | `approved` | Ready to execute |
 | `rejected` | Rejected by policy or approver |
-| `queued` | Waiting for available worker |
-| `running` | Execution in progress |
-| `completed` | Successfully deployed |
+| `deploying` | Execution in progress |
+| `deployed` | Successfully deployed |
 | `failed` | Deployment failed |
-| `cancelled` | Manually cancelled |
+| `superseded` | Replaced by a newer intent |
+| `rolled_back` | Rolled back after verified restoration |
+
+Intents also carry `approval_status` (`not_required`, `pending`, `approved`, `rejected`). Run `status` values are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and `timeout`.
 
 ## Run Logs
 
@@ -303,7 +316,7 @@ Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migrat
 
 ## Best Practices
 
-1. **Always provide a reason** — Helps with auditing and debugging
+1. **Review the preview hash** — Deploy with `--expected-desired-state-hash` from a reviewed preview
 2. **Review before approving** — Check artifact changes
 3. **Monitor after deployment** — Watch for drift or errors
 4. **Use policies** — Automate safety checks

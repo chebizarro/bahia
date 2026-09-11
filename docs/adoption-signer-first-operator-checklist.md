@@ -7,7 +7,7 @@ Verification/signoff execution: `bahia-sqfx.5`
 This document is the operator run sheet and evidence template for staged/live signer-first rollout verification of adoption/import and direct-runtime actions.
 
 It is now the primary execution checklist for this feature set.
-Legacy HTTP/NIP-98 operator verification remains compatibility-only and secondary.
+The legacy HTTP/NIP-98 adoption and direct-runtime routes have been removed; they appear here only as negative checks.
 
 ## Gate policy
 
@@ -28,9 +28,9 @@ Primary control surface under test:
 - ContextVM progress/terminal response correlation via relay subscriptions
 - managed endpoint governance, redaction, rollback, concurrency, observability, and disable/rollback checks
 
-Secondary / compatibility-only:
-- legacy privileged HTTP/NIP-98 operator endpoints
-- raw Docker host request mode behind explicit break-glass/fallback behavior
+Negative checks only (these paths no longer execute):
+- legacy privileged HTTP/NIP-98 adoption and direct-runtime endpoints, which are not mounted
+- raw Docker host targets (`--raw-target`), which fail client-side even with `--http-fallback`
 
 ## Operator instructions
 
@@ -67,7 +67,7 @@ Secondary / compatibility-only:
 | ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) capability evidence | `<fill path + timestamp>` |
 | Relay `/relay` reachability evidence | `<fill path + timestamp or N/A>` |
 | Signer capability evidence (`signEvent`, request/response correlation path) | `<fill>` |
-| Compatibility explicit relay configuration approved? | `yes` / `no` |
+| HTTP compatibility fallback approved? | `yes` / `no` |
 
 ## Environment prerequisites
 
@@ -177,9 +177,9 @@ Use one section per SF row. Fill every field.
   bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
   ```
 - Checks:
-  - signer-first path rejects raw-host usage
-  - compatibility explicit relay configuration requires explicit `--http-fallback`
-  - no unmanaged runtime call occurs when raw-host mode is disabled
+  - without `--http-fallback`, the CLI rejects `--raw-target` (`--raw-target is compatibility-only and requires explicit --http-fallback`)
+  - with `--http-fallback`, the command still fails with `REST adoption scan is removed`; no HTTP request is made
+  - no Docker call reaches the raw host in either case
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
 
@@ -290,8 +290,8 @@ Use one section per SF row. Fill every field.
 Run only if the release owner explicitly requires legacy HTTP compatibility evidence.
 These checks are not the primary production gate.
 
-- HTTP privileged endpoints still reject `Authorization: Bearer ...` with `401` when auth is enabled.
-- Any legacy NIP-98 operator flow under test is documented as compatibility-only.
+- Legacy privileged adoption/direct-runtime REST mutation routes are absent (unmounted-route response, not `401`).
+- `--http-fallback` for `adopt` / `services actions` fails client-side with `REST ... is removed`.
 - Compatibility failures do not override signer-first production signoff unless a release requirement explicitly depends on them.
 
 ## Production readiness statement

@@ -13,7 +13,7 @@ Replace the example UUIDs and image coordinate with values from your environment
 
 ## 1. Configure managed DNS and edge routing
 
-Bahia's internal service projection requires a writable DNS backend. This example uses dnsmasq, the deployable internal-LAN backend for mapping `edge-01-production` services into `sharegap.net`; it writes a managed configuration file and runs the configured reload command after an atomic update. The filesystem backend is not deployable because Bahia does not wire the operational activator its snapshots require. Choose dnsmasq, CoreDNS, PowerDNS, or FIPS instead.
+Bahia's internal service projection requires a writable DNS backend. This example uses dnsmasq, the deployable internal-LAN backend for mapping `edge-01-production` services into `sharegap.net`; it writes a managed configuration file and runs the configured reload command after an atomic update. The filesystem backend is not deployable because Bahia does not wire the operational activator its snapshots require. Choose dnsmasq, `dnsmasq_agent`, CoreDNS, PowerDNS, or FIPS instead.
 
 ```yaml
 direct_runtime_actions:
@@ -155,7 +155,7 @@ bahia deployments deploy \
   --idempotency-key deploy:astillero:artifact
 ```
 
-If policy returns a pending intent, approve it with the same signer-first control plane:
+If the environment is protected, the intent stays pending until approved; approve it with the same signer-first control plane:
 
 ```bash
 bahia deployments approve \
@@ -199,7 +199,7 @@ bahia deployments route-attach \
   --idempotency-key route:astillero:sharegap
 ```
 
-The route is part of the signed desired-state hash. Bahia executes it as a route-only deployment run, so the current artifact is preserved. If the route policy requires approval, approve the returned intent:
+The route is part of the signed desired-state hash. Bahia executes it as a route-only deployment run, so the current artifact is preserved. In a protected environment (required for a protected zone), approve the returned intent:
 
 ```bash
 bahia deployments approve \

@@ -10,10 +10,14 @@ interface.
 | Target | Internal endpoint | Metrics | Required |
 |---|---|---|---|
 | Bahia control plane | `bahia:8080/metrics` | Fleet health, drift, workers, relays, audit, authorization, runtime operations | Yes |
+| Host node exporters (`job=node`) | `<infra-address>:9100` per `deploy/observability/exporters/mvp-hosts.tsv` | Memory, filesystem, CPU, host pressure | Yes for `expected_state=up` hosts; see [ws6-host-exporters.md](ws6-host-exporters.md) |
+| Lemmy GPU exporter (`job=nvidia_gpu`) | `192.168.40.110:9835` | NVIDIA utilization, temperature, VRAM | Yes |
 | Legacy Routstr gateway | `fleet-routstr-gateway:<port>/metrics` | Requests, spend, wallet, routing | Only when the legacy custom gateway is intentionally deployed |
 | Loom | deployment-specific `/metrics` | Job lifecycle | When an authenticated internal endpoint exists |
 
-The initial production target is Bahia only. On `edge-01`, Bahia is currently
+The checked-in `prometheus.yml` scrapes the Bahia target plus the `node` and
+`nvidia_gpu` host-exporter jobs above; install and verify the exporters before
+expecting `NodeExporterDown`/`LemmyGPUExporterDown` to stay quiet. On `edge-01`, Bahia is currently
 published on host port 8080, but Prometheus must use `bahia:8080` on the
 internal Compose network. Host-published ports are diagnostic facts, not
 stable scrape addresses. Add optional targets only after their service name,
@@ -38,7 +42,8 @@ and `service`.
       `deploy/observability/bahia-alerts.yml` with `promtool`.
 - [ ] If Bahia auth is enabled, configure and verify the fresh NIP-98 scrape
       bridge outside Git before expecting the Bahia target to be `UP`.
-- [ ] Run `deploy/observability/bahia-alerts.test.yml`.
+- [ ] Run `promtool test rules deploy/observability/bahia-alerts.test.yml`
+      (see [ws6-alerts.md](ws6-alerts.md)).
 - [ ] Confirm `/metrics` returns all zero-valued fleet-health series before
       relying on absence-based alerts.
 - [ ] Create persistent volumes for Prometheus, Alertmanager, and Grafana.

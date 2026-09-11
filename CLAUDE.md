@@ -49,20 +49,28 @@ bd close <id>         # Complete work
 <!-- END BEADS INTEGRATION -->
 
 
-## Build & Test
+## Repository orientation
 
-_Add your build and test commands here_
+Read and follow [`AGENTS.md`](AGENTS.md) before changing code. It is the authoritative repository instruction set for Nostr semantics, Beads/PSTF workflow, testing, documentation, and session closeout.
+
+- Go module: `github.com/openagentsinc/bahia`
+- Required Go version: 1.26.3 or newer
+- Main server: `cmd/server` → `bin/bahia-server`
+- CLI: `cmd/cli` → `bin/bahia`
+- Relay sidecar: `cmd/relay` → `bin/bahia-relay`
+- Additional supported binaries are defined by the `build` target in `Makefile`.
+
+## Build & test
 
 ```bash
-# Example:
-# npm install
-# npm test
+make deps
+make build
+make test
+make lint
 ```
 
-## Architecture Overview
+For local server development, start PostgreSQL and run `make run-dev`. For the bundled stack, set `BAHIA_NOSTR_PRIVATE_KEY` to a 64-character hex Nostr secret key and run `docker compose up --build`.
 
-_Add a brief overview of your project architecture_
+## Architecture overview
 
-## Conventions & Patterns
-
-_Add your project-specific conventions here_
+Bahia is a Nostr-native deployment and runtime control plane. Start with [`README.md`](README.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/control-planes.md`](docs/control-planes.md). HTTP routes are documented separately in [`docs/api.md`](docs/api.md).

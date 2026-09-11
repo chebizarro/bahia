@@ -13,7 +13,7 @@ Each row includes:
 - drift details;
 - deployment information.
 
-Filter the table by **All**, **Drifted**, or **In sync**. Select the Drift cell to inspect the complete state payload in a modal.
+Filter the table by **All states**, **Drifted**, or **In sync**. Select the Drift cell to inspect the complete state payload in a modal.
 
 ## Data model
 
@@ -23,7 +23,7 @@ The page loads services, environments, and canonical state read models from the 
 - **Drifted** means the accepted observation does not match desired state.
 - Missing or stale evidence should be investigated rather than interpreted as healthy.
 
-The route is not currently included in the browser's protected-prefix list. Backend and encrypted-operation authorization remain authoritative; route visibility alone does not grant access to mutate state.
+The route is in the browser's protected-prefix list (`web/src/lib/auth/route-access.js`), so it requires a signer-first session. It is not linked from the sidebar; open `/environment-states` directly. Backend and encrypted-operation authorization remain authoritative; route visibility alone does not grant access to mutate state.
 
 ## Investigating drift
 

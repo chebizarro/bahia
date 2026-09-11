@@ -16,7 +16,9 @@ sudo deploy/observability/exporters/install-node-exporter.sh <listen-address>
 sudo deploy/observability/exporters/install-nvidia-gpu-exporter.sh <listen-address> # Lemmy only
 ```
 
-The scripts are idempotent. They validate that the address exists locally, install or update the package, configure an explicit listener, restart the service, and require a successful local metrics scrape.
+The scripts are idempotent. They validate that the address exists locally, install or update the package, configure an explicit listener, restart the service, and require a successful local metrics scrape. The node installer writes the listener to `/etc/default/prometheus-node-exporter`; the GPU installer requires `nvidia-smi` and writes a systemd drop-in.
+
+Both scripts assume `apt-get` and systemd. A host without them (for example, an OpenWrt resolver) needs an equivalent exporter installed by hand that binds only to the inventory address on TCP 9100.
 
 ## Verification
 
@@ -33,4 +35,4 @@ Also verify `systemctl is-active prometheus-node-exporter` on every expected-up 
 
 ## Rollback
 
-Disable the corresponding service, then remove the package with the host package manager. Removing `prometheus-node-exporter` also removes the exporter listener. For the GPU exporter, remove `/etc/systemd/system/nvidia_gpu_exporter.service.d/listen-address.conf`, run `systemctl daemon-reload`, and remove `nvidia-gpu-exporter`.
+Disable the corresponding service, then remove the package with the host package manager. Removing `prometheus-node-exporter` also removes the exporter listener; delete `/etc/default/prometheus-node-exporter` if it is not purged with the package. For the GPU exporter, remove `/etc/systemd/system/nvidia_gpu_exporter.service.d/listen-address.conf`, run `systemctl daemon-reload`, and remove `nvidia-gpu-exporter`.

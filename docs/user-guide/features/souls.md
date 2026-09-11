@@ -2,6 +2,8 @@
 
 **Souls** in Bahia are AI agents provisioned through Soul Factory with cryptographic identities, personalities, and full infrastructure.
 
+> Soul Factory is feature-gated and disabled by default. Enable it with `soul_factory.enabled: true` (or `BAHIA_SOUL_FACTORY_ENABLED=true`) plus the configuration in [Configuration](#configuration).
+
 ## Overview
 
 Soul Factory provides:
@@ -52,16 +54,11 @@ permissions:
 
 ### Web UI
 
-1. Navigate to **Souls** in the sidebar
-2. Click **New Soul** (or use the Soul Designer)
-3. Choose:
-   - **Template**: Select a pre-made template, or
-   - **Custom Brief**: Write your own personality brief
-4. Configure:
-   - **Agent ID**: Unique identifier
-   - **Name**: Display name
-   - **Tier**: Resource allocation
-5. Click **Provision**
+1. Navigate to **Souls** in the sidebar (the **Soul Gallery**)
+2. Click **New** to open the new-soul wizard (`/souls/new`)
+3. Work through the customization panels: **Identity** (name, brief, and optional template), **Avatar**, **Voice**, **Memory**, **Personality**, and **Runtime** (capability, scope, relays)
+4. Review the permissions, relays, repository, and **Preview full draft**
+5. Sign and publish the draft, then provision
 6. Monitor provisioning progress
 
 ### CLI
@@ -109,17 +106,17 @@ Soul Factory executes 8 steps:
 
 ### Web UI
 
-The **Souls** page (Soul Gallery) shows:
+The **Souls** page (**Soul Gallery**) shows:
 - All provisioned souls
 - Status indicators
 - Quick actions
 
-Click a soul to see:
-- **Identity**: Name, pubkey, avatar
-- **Personality**: Brief, voice, traits
+Click a soul (`/souls/<id>`) to see:
+- **Customization**: **Avatar**, **Voice**, **Memory**, and **Personality** (editable per section)
+- **Identity** and **Runtime**
 - **Infrastructure**: Memory, workspace
 - **Permissions**: What the agent can do
-- **Status**: Active, suspended, revoked
+- **Soul Content** and **Activity & History**
 
 ### CLI
 
@@ -192,16 +189,9 @@ The current MCP server does not register a `soul_factory_regenerate` tool. Use t
 bahia souls templates list
 ```
 
-### Built-in Templates
+### Where templates come from
 
-| Template | Description |
-|----------|-------------|
-| `research-agent` | Investigates topics, synthesizes findings |
-| `code-reviewer` | Reviews code for quality and security |
-| `monitor-agent` | Monitors systems, alerts on issues |
-| `coordinator-agent` | Orchestrates other agents |
-| `assistant-agent` | General-purpose assistant |
-| `builder-agent` | Builds and deploys software |
+Templates are kind `31950` events discovered from the configured relays; Bahia does not ship or seed built-in templates. `bahia souls templates list` shows whatever templates are published to your relays, and `--template` takes a `31950:<pubkey>:<identifier>` reference. Names such as `research-agent` in the examples on this page are placeholders.
 
 ### Getting Template Details
 
@@ -222,7 +212,7 @@ bahia souls templates get research-agent
 | 7950 | ProvisioningResult | Final result |
 | 1950 | SoulAction | Lifecycle actions |
 | 1951 | SoulAction legacy result | Backward-compatible lifecycle result alias |
-| 30317 | RuntimeCapability | Runtime capability announcement |
+| 30317 | RuntimeCapability | Runtime capability announcement (`cascadia.CAS_AGENT_CAPABILITY`) |
 | 38384 | RuntimeControlRequest | Runtime-directed control request |
 | 38386 | RuntimeControlResult | Runtime-directed result |
 

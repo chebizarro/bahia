@@ -4,7 +4,7 @@
 
 ## Overview
 
-LLM Routes are feature-gated and disabled by default unless Bahia is configured with `BAHIA_LLM_ENABLED=true`.
+LLM Routes are feature-gated and disabled by default unless Bahia is configured with `llm.enabled: true` (`BAHIA_LLM_ENABLED=true`). The web UI lives at `/llm` (sidebar **Intelligence → LLM**).
 
 LLM Routes provide:
 - **Model registry** — Track LLM versions and configurations
@@ -84,7 +84,7 @@ Deploying a release to an environment makes it live.
 
 ### Web UI and CLI
 
-LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth. Transitional REST `POST /api/v1/llm/routes` is available only when LLM is enabled, operational REST is enabled, authentication is enabled, a non-empty operator allowlist is configured, and a control-plane command publisher is configured. Even then it publishes the signed `llm/route-create` command, verifies relay `OK` acceptance, and returns a `202` command receipt rather than a synchronous route domain object.
+LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth. In the web UI, use **Create route** on the `/llm` page. There is no REST route-creation endpoint; `/api/v1/llm/*` serves reads only, and the deprecated LLM REST mutations are not mounted.
 
 ### MCP Tool
 
@@ -112,7 +112,7 @@ Returns Nostr correlation metadata:
 
 ### Web UI and CLI
 
-LLM release registration is a signer-first ContextVM operation. Use `llm/release-register` and follow `30900`, `30315`, and `4903` observables scoped by route and release.
+LLM release registration is a signer-first ContextVM operation (**Register release** in the web UI). Use `llm/release-register` and follow `30900`, `30315`, and `4903` observables scoped by route and release.
 
 ### MCP Tool
 
@@ -134,11 +134,9 @@ LLM release registration is a signer-first ContextVM operation. Use `llm/release
 
 ### Web UI
 
-1. Go to route detail
-2. Select a release
-3. Click **Deploy**
-4. Choose environment
-5. Click **Create Deployment**
+1. Open **LLM** (`/llm`)
+2. In the deploy form, select the route, release, and environment
+3. Click **Deploy** to publish the signed `llm/deploy` request
 
 The current CLI does not register a top-level `bahia llm` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
 
@@ -179,23 +177,24 @@ If the environment requires approval:
 
 ### Web UI
 
-1. Go to **LLM** → **Pending Approvals**
-2. Review deployment details
+1. Open **LLM** (`/llm`) and find the **Pending Approvals** panel
+2. Review route, environment, and release
 3. Click **Approve** or **Reject**
 
-The current CLI does not register `bahia llm approve` or `bahia llm reject`. Use the web UI, MCP tools, or signer-first Nostr approval/rejection flows instead.
+The current CLI does not register `bahia llm approve` or `bahia llm reject`. Use the web UI, MCP tools (`bahia_llm_approve_deployment`, `bahia_llm_reject_deployment`), or signer-first Nostr approval/rejection flows instead.
 
 ### Nostr
 
-Publish a ContextVM `llm/approve` or `llm/reject` request and follow canonical observables scoped by `intent`.
+The web UI publishes ContextVM operations `approval/llm-approve` and `approval/llm-reject` with `intent_id` and `decision`, then follows canonical observables scoped by `intent`.
+
+> **NOTE (2026-09-11):** LLM approval method names are inconsistent in code. The web uses `approval/llm-approve`/`approval/llm-reject`, the MCP command publisher sends `llm/approval`, and the relay projector advertises `llm/deployment-approval`. Verify against `internal/controlplane` before hand-building approval requests.
 
 ## Rolling Back
 
 ### Web UI
 
-1. Go to route detail
-2. Find previous successful deployment
-3. Click **Rollback to this release**
+1. Open **LLM** (`/llm`) and find the route/environment row in the state table
+2. Click **Rollback** (shown when the row has a desired release)
 
 The current CLI does not register a top-level `bahia llm rollback` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
 
@@ -239,7 +238,7 @@ Subscribe for real-time updates:
 
 | Surface | Contract | Description |
 |---------|----------|-------------|
-| Mutation intent | ContextVM `25910` (`1059`/`21059` when encrypted) | `llm/route-create`, `llm/release-register`, `llm/deploy`, `llm/approve`, `llm/reject`, `llm/rollback` |
+| Mutation intent | ContextVM `25910` (`1059`/`21059` when encrypted) | `llm/route-create`, `llm/release-register`, `llm/deploy`, `llm/rollback`, plus approval (see the note above) |
 | Observable state | `30900` | Route, release, and route/environment projections |
 | Observable status/audit | `30315`, `4903` | Progress, approvals, terminal facts, and provenance |
 

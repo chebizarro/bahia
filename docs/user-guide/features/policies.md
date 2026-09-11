@@ -18,32 +18,41 @@ A **Policy** defines rules:
 
 ```yaml
 name: "require-sbom"
-description: "Require SBOM for production deployments"
-type: "sbom"
+environment_id: "<env-uuid>"   # omit for a global policy
+enforcement: "block"            # block or warn
+enabled: true
 rules:
-  - require_sbom: true
-  - max_critical_vulns: 0
-environments:
-  - "production"
+  - type: require_sbom
+  - type: max_critical_vulns
+    params: { max: 0 }
 ```
 
-### Policy Types
+A policy has no separate "type"; each rule carries its own `type` and optional `params`.
 
-| Type | Description |
-|------|-------------|
-| `approval` | Manual approval requirements |
-| `sbom` | SBOM and vulnerability rules |
-| `signature` | Artifact signature requirements |
-| `custom` | Custom rule expressions |
+### Rule Types
+
+| Rule `type` | Purpose |
+|-------------|---------|
+| `require_sbom` | Artifact must have an SBOM |
+| `require_signature` | Artifact must have a verified signature |
+| `max_critical_vulns`, `max_high_vulns` | Vulnerability thresholds (`params.max`) |
+| `require_scan_status` | Require a scan status (`params.status`) |
+| `security_osv_scan` | Security OSV freshness/outcome gate |
+| `block_package` | Block a package (`params.package`) |
+| `sbom_subject_digest_match`, `sbom_parseability`, `sbom_ntia_min_fields`, `sbom_trusted_generator`, `sbom_format` | SBOM quality gates |
+| `package_min_age`, `package_min_downloads`, `typosquat_check` | Package supply-chain gates (tool provisioning) |
+| `require_approval` | Offered in the UI rule builder; see the note below |
+
+> **NOTE (2026-09-11):** deployment approval is currently driven by the environment's `protected` flag. The `require_approval` rule type is defined and offered in the web rule builder, but the deployment policy evaluator (`internal/service/policy.go`) does not act on it.
 
 ### Evaluation Result
 
 ```yaml
-policy_id: "require-sbom"
-artifact_id: "art-123"
+policy_id: "<policy-uuid>"
+policy_name: "require-sbom"
 passed: true
+enforcement: "block"
 violations: []
-evaluated_at: "2024-01-15T10:00:00Z"
 ```
 
 ## Config Fabric operator console
@@ -115,17 +124,17 @@ Each request requires `target_ref`, `service_id`, `scope`, and `policy_coordinat
 ### Web UI
 
 1. Navigate to **Policies** in the sidebar
-2. Click **New Policy**
+2. Click **Create Policy**
 3. Configure:
    - **Name**: Policy identifier
-   - **Type**: Policy type
-   - **Rules**: Specific requirements
-   - **Environments**: Where to apply
-4. Click **Create**
+   - **Rules**: Rule types and parameters (rule builder)
+   - **Environment**: Optional scope (global when empty)
+   - **Enforcement**: `warn` or `block`
+4. Submit to publish the signed ContextVM `policy/create` request
 
 ### CLI and MCP
 
-Policy creation is signer-first. CLI and MCP mutation surfaces publish a signed public `PolicyCreate` event (`kind: 5986`), verify relay `OK` acceptance, and return correlation metadata. Durable truth comes from following the returned `request_event_id` in ContextVM reply events (`kind: 25910`) and policy read-model projections (`kind: 30900`). Direct REST/repository mutation fallback is not used for policy creation.
+Policy creation is signer-first. The web UI publishes ContextVM `policy/create`/`policy/update`/`policy/delete` requests (kind `25910`). The CLI (`bahia policies create`) and MCP mutation surfaces instead publish signed public `PolicyCreate`/`PolicyUpdate`/`PolicyDelete`/`PolicyEvaluate` events (kinds `5986`-`5989`, a scoped compatibility exception to the legacy-kind policy), verify relay `OK` acceptance, and return correlation metadata. Durable truth comes from following the returned `request_event_id` in ContextVM reply events (`kind: 25910`) and policy read-model projections (`kind: 30900`). Direct REST/repository mutation fallback is not used for policy creation.
 
 Read-only paths are distinct: listing and getting policies may read durable read models or server projections because they do not change policy semantics.
 
@@ -151,20 +160,18 @@ Read-only paths are distinct: listing and getting policies may read durable read
 
 ### SBOM and Security OSV Rules
 
-```yaml
-rules:
-  require_sbom: true
-  max_critical_vulns: 0
-  max_high_vulns: 5
-  banned_packages:
-    - "log4j<2.17.0"
-    - "lodash<4.17.21"
-  required_licenses:
-    - "MIT"
-    - "Apache-2.0"
-  banned_licenses:
-    - "GPL-3.0"
+```json
+{
+  "rules": [
+    { "type": "require_sbom" },
+    { "type": "max_critical_vulns", "params": { "max": 0 } },
+    { "type": "max_high_vulns", "params": { "max": 5 } },
+    { "type": "block_package", "params": { "package": "log4j" } }
+  ]
+}
 ```
+
+> **NOTE (2026-09-11):** earlier versions of this page showed `banned_packages`, `required_licenses`, and `banned_licenses` keys. Those are not rule types; license rules are not implemented.
 
 Security OSV scan policy settings use the `security_osv_scan` rule. Deployment gates read the latest completed Security scan projection; they do not trigger a scan and wait for completion during deployment evaluation.
 
@@ -194,30 +201,17 @@ Security OSV scan policy settings use the `security_osv_scan` rule. Deployment g
 
 Scheduled rescans are repository-backed due records derived from enabled policy-scoped `security_osv_scan` rules. The scheduler runs once at startup and then on cadence ticks; it skips active duplicate scans and never waits on event delivery for completion.
 
-### Approval Rules
+### Approval
 
-```yaml
-rules:
-  require_approval: true
-  min_approvers: 2
-  approver_pubkeys:
-    - "npub1admin..."
-  auto_approve_if:
-    - "no_vulnerabilities"
-    - "tests_passed"
-```
+Mark the environment `protected` to require approval for every deployment intent. Multi-approver counts, approver allowlists, and auto-approval conditions are not policy parameters.
 
 ### Signature Rules
 
-```yaml
-rules:
-  require_signature: true
-  trusted_keys:
-    - "cosign-key-1"
-  signature_types:
-    - "cosign"
-    - "notation"
+```json
+{ "rules": [ { "type": "require_signature" } ] }
 ```
+
+Trust roots for signature verification are server configuration, not rule parameters.
 
 ## Evaluating Policies
 
@@ -265,15 +259,7 @@ evaluations:
 
 ### Web UI
 
-Navigate to **Policies** in the sidebar:
-- View all policies
-- See which environments they apply to
-- Check recent evaluations
-
-Click a policy to see:
-- **Rules**: Policy configuration
-- **Environments**: Where applied
-- **History**: Recent evaluations
+Navigate to **Policies** in the sidebar to list policies with their scope and enforcement. Click a policy (`/policies/<id>`) to view and **Edit** its rules, environment scope, and enforcement.
 
 ### CLI
 
@@ -281,11 +267,11 @@ Click a policy to see:
 # List policies
 bahia policies list
 
-# Get policy details
-bahia policies get require-sbom
+# Get policy details (by policy ID)
+bahia policies get <policy-id>
 
 # Show policy as YAML
-bahia policies get require-sbom -o yaml
+bahia policies get <policy-id> -o yaml
 ```
 
 ## Updating Policies
@@ -319,7 +305,6 @@ Policy updates are signer-first. Publish a signed `PolicyUpdate` event (`kind: 5
 
 Policy deletion is signer-first. Publish a signed `PolicyDelete` event (`kind: 5988`) with the policy id in content or the `policy` tag. CLI/MCP return relay acceptance and follow metadata; they do not delete the repository row directly.
 
-**Note**: Policies linked to active deployments cannot be deleted.
 
 ## Policy Enforcement
 
@@ -378,9 +363,8 @@ Policy state is published as Nostr events:
 
 ### Policy Not Applied
 
-- Verify environment association
+- Verify environment association (`environment_id`, or global when empty)
 - Check policy is enabled
-- Review policy priority
 
 ## Related
 

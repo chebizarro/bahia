@@ -12,17 +12,18 @@ Services are the primary organizational unit in Bahia. Each service:
 
 ## Creating a Service
 
-Service creation is signer-first. Clients publish a ContextVM JSON-RPC `service/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059` for encrypted transport. Bahia also exposes transitional REST `POST /api/v1/services` when a control-plane command publisher is configured; that route publishes the same signed command, verifies relay `OK` acceptance, and returns a `202` command receipt with `request_event_id`, requester pubkey, request kind, status/result/read-model kinds, and published relay count. The immediate JSON-RPC response or REST receipt is only an acknowledgment; clients follow canonical `30900`, `30315`, and `4903` observables for durable state, progress, and audit truth.
+Service creation is signer-first. Clients publish a ContextVM JSON-RPC `service/create` intent as Nostr kind `25910`, optionally wrapped with CEP-4/NIP-59 `1059` or `21059` for encrypted transport. There is no REST create route: `/api/v1/services` serves only `GET` list/detail reads. The immediate JSON-RPC response is only an acknowledgment; clients follow canonical `30900`, `30315`, and `4903` observables for durable state, progress, and audit truth.
 
 ### Web UI
 
 1. Navigate to **Services** in the sidebar
-2. Click **New Service**
+2. Click **Create Service**
 3. Fill in the form:
    - **Name**: Unique identifier (e.g., `payment-api`)
-   - **Display Name**: Human-friendly name (optional)
-   - **Repository**: Git repository URL, or a NIP-34 repository selected from configured `nostr.nip34_relays`
-   - **Description**: What the service does
+   - **Artifact Repository**: Registry plus repository path
+   - **Repository**: Optional Git URL or NIP-34 repository selected from configured `nostr.nip34_relays`
+   - **Runtime Type**: Runtime used for deployments
+   - **Default Branch**: Optional branch, populated from repository state when available
 4. Click **Create** to publish the signed Nostr command
 
 ### Nostr (ContextVM)
@@ -52,28 +53,25 @@ The service form can use a direct repository URL or a NIP-34 repository announce
 | Property | Description | Required |
 |----------|-------------|----------|
 | `name` | Unique identifier | Yes |
-| `display_name` | Human-readable name | No |
-| `repository` | Git repository URL | No |
-| `description` | Service description | No |
-| `tags` | Key-value metadata | No |
+| `artifact_repo` | Registry repository that CI publishes images to | Yes |
+| `repo_url` | Git repository clone URL | No |
+| `repository` | Structured repository metadata (source, coordinate, clone/web URLs, CI provider/workflow) | No |
+| `default_branch` | Default branch (CLI default `main`) | No |
+| `runtime_type` | `docker`, `compose`, or `kubernetes` (CLI default `compose`) | No |
+| `runtime_config` | Runtime configuration, including the managed Compose definition | No |
 | `org_id` | Owning organization | No |
 
 ## Viewing Services
 
 ### Web UI
 
-The **Services** page shows all services with:
-- Name and description
-- Latest deployment status per environment
-- Drift indicators
-- Quick actions (deploy, view)
+The **Services** page lists services in a filterable table with **Name**, **Artifact Repo**, **Runtime**, **Branch**, and **ID** columns, plus a runtime filter and **Create Service**.
 
-Click a service to see:
-- **Overview**: Current state across environments
-- **Deployments**: Deployment history
-- **Artifacts**: Available container images
-- **Secrets**: Encrypted configuration
-- **Settings**: Edit service properties
+Click a service to open its detail page:
+- Header actions: **Deploy**, **Rollback**, **Edit**, and **Delete**
+- Live service and action activity
+- Repository and runtime summary cards
+- **Recent Builds**, **Artifacts**, and **Secrets** sections
 
 ### CLI
 
@@ -113,29 +111,26 @@ Each service/environment combination has a **state** that tracks:
 ```yaml
 service_id: "svc-123"
 environment_id: "env-456"
-desired_state:
-  artifact_id: "art-789"
-  desired_hash: "sha256:..."
-  renderer: "compose"
-  target: "payment-api-prod"
-  deployed_at: "2024-01-15T10:00:00Z"
-observed_state:
-  artifact_id: "art-789"
-  normalized_hash: "sha256:..."
-  container_status: "running"
-  observed_at: "2024-01-15T10:05:00Z"
+deployment_unit_id: "unit-1"
+desired_artifact_id: "art-789"
+desired_intent_id: "intent-123"
+desired_hash: "sha256:..."
+last_successful_run_id: "run-456"
+current_observation_id: "obs-789"
 drift_status: "in_sync"
 ```
 
 Desired-state fields are additive. Compose/Docker deploys store a canonical desired runtime snapshot and hash; observations store normalized runtime state and hash. Public projections may include hashes, renderer, target, revision, and observation IDs, but never secret plaintext, generated Compose env-file values, raw Docker hosts, or TLS credentials.
 
-### State Lifecycle
+### Drift Status
 
-1. **No State** — Service exists but never deployed to this environment
-2. **Deploying** — Deployment in progress
-3. **Deployed** — Desired state applied, waiting for observation
-4. **Healthy** — Desired matches observed
-5. **Drifted** — Desired doesn't match observed
+No state row exists until a service is first deployed to an environment. After that, `drift_status` is one of:
+
+1. **unknown** — No comparable observation yet
+2. **deploying** — Deployment in progress
+3. **in_sync** — Desired matches observed
+4. **drifted** — Desired doesn't match observed
+5. **remediation_needed** — Reconciliation failed or requires operator action
 
 ## Managed Compose Runtime Configuration
 
@@ -226,7 +221,7 @@ The referenced credential may be a raw API token or a JSON secret containing `ap
 Deploy, restart, and stop are signer-first Nostr control-plane operations.
 
 - Deploy by publishing a ContextVM `service/deploy` intent and subscribing for canonical deployment status, audit, and state events. For Compose/Docker desired-state deploys, status events include the shared step progression and state/result observables may include sanitized desired-state metadata.
-- Restart or stop an adopted direct-runtime workload with ContextVM `service/restart` or `service/stop`.
+- Restart or stop a direct-runtime workload with ContextVM `service/action` (the `action` tag/param is `deploy`, `restart`, or `stop`). The CLI equivalent is `bahia services actions {deploy,restart,stop} --service … --environment …`; direct runtime actions must be enabled (`direct_runtime_actions`).
 
 Legacy Bahia request/status/result kinds and legacy REST-backed service action endpoints are migration-only and are not live service control-plane guidance.
 
@@ -250,15 +245,7 @@ The CLI does not register a reveal command. MCP secret writes additionally requi
 Secrets are:
 - Encrypted at rest
 - Available to deployment workers
-- Scoped to specific environments (optional)
-
-See [Secrets Management](#secrets-management) for details.
-
-## Tags and Metadata
-
-Use tags to organize services by publishing a ContextVM `service/update` intent with the updated metadata.
-
-The CLI service list has no tag flag. Use `bahia_list_services` through MCP and filter the returned metadata in the client.
+- Scoped to specific environments (optional, `bahia secrets set … --environment <env-id>`)
 
 ## Deleting a Service
 
@@ -266,10 +253,9 @@ Services can be deleted when no longer needed by publishing a ContextVM `service
 
 ### Web UI
 
-1. Go to service **Settings**
-2. Scroll to **Danger Zone**
-3. Click **Delete Service**
-4. Confirm deletion to publish the signed ContextVM intent
+1. Open the service detail page
+2. Click **Delete** in the header actions
+3. Confirm in the **Delete Service** dialog to publish the signed ContextVM intent
 
 ### Nostr
 
@@ -308,9 +294,7 @@ Historical `31961`/`31962` read models are startup migration inputs only.
 
 1. **Name consistently** — Use lowercase, hyphenated names (`payment-api`)
 2. **Link repositories** — Enables CI integration and traceability
-3. **Use tags** — Organize by team, tier, criticality
-4. **Set descriptions** — Help others understand the service
-5. **Scope secrets** — Use environment-specific secrets when needed
+3. **Scope secrets** — Use environment-specific secrets when needed
 
 ## Related
 

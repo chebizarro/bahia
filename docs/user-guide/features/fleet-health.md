@@ -14,12 +14,13 @@ The page contains:
   - `reduced`: deploy cautiously and preserve continuity reserve.
   - `open`: normal scheduling capacity.
 - **Topology pressure cards** — each worker card shows liveness, capacity class, pressure level, recommended action, dominant pressure signal, telemetry chips, assignment count, and active cleanup state.
-- **Cleanup status/history** — durable cleanup execution state projected from Bahia cleanup orchestration events.
+- **Cleanup status and history** — durable cleanup execution state projected from Bahia cleanup orchestration events.
+- **Worker job and operation activity** — live job and operation feed.
 - **Action rail** — prioritized blocked, cleanup-needed, and missing-telemetry workers.
 
 ## Cleanup mode flow
 
-Fleet Health and Workers both use the same cleanup dialog.
+Fleet Health and Workers (**Request cleanup**) both use the same cleanup dialog.
 
 Available modes:
 

@@ -8,7 +8,7 @@ The codebase mixes legacy non-runes components and Svelte 5 runes components. Fo
 
 | Component | Current props |
 | --- | --- |
-| `Input` | `id`, `name`, `type`, `value`, `placeholder`, `disabled`, `required`, `error`, `oninput`, `onchange`, `onblur`, `onkeydown` |
+| `Input` | `id`, `name`, `type`, `value`, `placeholder`, `min`, `max`, `step`, `ariaLabel`, `disabled`, `required`, `error`, `oninput`, `onchange`, `onblur`, `onkeydown` |
 | `Select` | `id`, `name`, `value`, `options`, `disabled`, `required`, `error`, `placeholder`, `onchange`, `onblur` |
 | `Textarea` | `id`, `name`, `value`, `placeholder`, `disabled`, `required`, `error`, `rows`, `oninput`, `onchange`, `onblur` |
 | `Checkbox` | `id`, `name`, `checked`, `disabled`, `label`, `onchange`; default slot when `label` is empty |
@@ -146,7 +146,7 @@ The expanded panel shows relay count/list, `lastEventAt`, `lastEoseAt`, and `las
 
 ### ProvisioningProgress
 
-Props are `run` and optional `onComplete`. `run` contains `status`, `step`, `progress`, `message`, and terminal `result`. The component knows all eight stages and never decides completion from EOSE.
+Props are `run` and optional `onComplete`. `run` contains `status`, `step`, `progress`, `message`, and terminal `result`. The component renders the eight provisioning stages (`generate` … `deploy`) followed by the six OpenClaw readiness gates (`runtime_health` … `dm_round_trip`) and highlights whichever `run.step` is current. It never decides completion from EOSE.
 
 ```svelte
 <ProvisioningProgress
@@ -171,7 +171,28 @@ Props are `run` and optional `onComplete`. `run` contains `status`, `step`, `pro
 <TemplateSelector bind:selected onSelect={(template) => selected = template} />
 ```
 
-Souls routes also use `AvatarStudio`, `PersonalityBuilder`, `VoiceStudio`, and top-level `MemoryConfig`. Consult their `$props()` and tests before reuse.
+Souls routes also use the studio editors. Each takes a bindable `value` plus `showAdvanced` and `disabled`:
+
+- `souls/AvatarStudio.svelte` also takes `onGenerate`.
+- `PersonalityBuilder.svelte` also takes `syncStore`. Souls routes import `souls/PersonalityBuilder.svelte`, a thin wrapper around this top-level component.
+- `souls/VoiceStudio.svelte` also takes a bindable `assetRef`, plus `soul`, `draft`, and `onPlay`.
+- `MemoryConfig.svelte` (top level) also takes `soul`, `draft`, and `onReindexComplete`.
+
+Consult their `$props()` and tests before reuse.
+
+## Operator assistant components
+
+The root layout (`web/src/routes/+layout.svelte`) mounts `AssistantChat` from `web/src/lib/components/assistant/`. Its public props are `routeContext` and `defaultSelectedRefs`. It composes `AssistantBubble` and `AssistantPanel` and reads connection/session state from `stores/assistant.svelte.js`.
+
+The remaining assistant components are internal composition pieces:
+
+- `AssistantPanel` renders session tabs (`AssistantSessionTabs`), transcript turns, connection state, and the composer.
+- `AssistantComposer` publishes `assistant/prompt`, plus `assistant/approval` with `decision=cancel`, through the assistant store.
+- `AssistantTurn` renders status, transcript, result, tool, and approval items.
+- `AssistantPlanApproval` handles plan-hash decisions and optional modified plans (`publishAssistantApproval`).
+- `AssistantActionApproval` handles `action_id` approve/reject decisions (`publishAssistantActionDecision`).
+
+Keep protocol parsing and publication in `nostr/assistant.js` and `stores/assistant.svelte.js`; components should consume normalized items rather than decode Nostr events themselves.
 
 ## Svelte conventions
 

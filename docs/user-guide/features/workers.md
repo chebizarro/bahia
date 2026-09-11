@@ -14,64 +14,62 @@ Workers provide:
 
 ### Worker
 
-A **Worker** is an agent identified by its Nostr pubkey:
+A **Worker** is a Loom compute worker discovered from its kind `10100` advertisement and identified by its Nostr pubkey. Abbreviated read model:
 
 ```yaml
-pubkey: "npub1worker..."
+pubkey: "<worker-pubkey-hex>"
 name: "prod-worker-1"
-status: "online"
+architecture: "linux/amd64"
+max_concurrent_jobs: 4
+current_queue_depth: 0
+status: "online"            # advertisement freshness
+scheduling_state: "active"  # operator scheduling intent
 capabilities:
-  - docker
-  - kubernetes
-  - vllm
-hardware:
-  cpu_cores: 32
-  memory_gb: 128
-  gpu: "NVIDIA A100"
+  workload_kinds: ["deployment"]
+  runtimes: ["docker", "compose"]
+  accelerators: []
+labels:
+  zone: "home-lab"
 ```
 
 ### Worker Status
 
+`status` reflects advertisement freshness:
+
 | Status | Description |
 |--------|-------------|
-| `online` | Connected and available |
-| `offline` | Not connected |
-| `busy` | Currently executing a task |
-| `draining` | Finishing current work, not accepting new |
+| `online` | Recent advertisement |
+| `stale` | No advertisement for more than 5 minutes |
+| `offline` | No advertisement for more than 30 minutes |
+
+`scheduling_state` reflects operator intent: `active`, `cordoned`, `draining`, `maintenance`, or `disabled`. Heartbeat freshness is tracked separately in `heartbeat_status`.
 
 ### Capabilities
 
-Workers declare what they can do:
-
-| Capability | Description |
-|------------|-------------|
-| `docker` | Docker container deployment |
-| `kubernetes` | Kubernetes deployment |
-| `compose` | Docker Compose |
-| `vllm` | vLLM inference |
-| `onnx` | ONNX runtime |
-| `rknn` | Rockchip NPU |
+Workers advertise a generic placement capability view (`workload_kinds`, `runtimes`, `artifact_formats`, `accelerators`, `toolchains`, `features`) plus `software`, `resources`, `accelerators`, and a normalized `ml_capabilities` view used for [ML placement](ml-models.md).
 
 ## Viewing Workers
 
 ### Web UI
 
 Navigate to **Workers** in the sidebar:
-- View all registered workers
+- View all discovered workers
 - See status and capabilities
-- Check current tasks
-- Request local cleanup through the cleanup mode dialog
+- Check current jobs
+- Use **Request cleanup** to open the cleanup mode dialog
 
 Navigate to **Fleet Health** for the dedicated resource-pressure view:
 - See the fleet weather map grouped by capacity class
 - Review cleanup history and active cleanup status
 - Open cleanup remediation for workers with cleanup recommendations
 
-Click a worker to see:
-- **Overview**: Status, capabilities, hardware
-- **Tasks**: Current and recent tasks
-- **Pricing**: Cost per task (if configured)
-- **Logs**: Recent activity
+Click a worker (`/workers/<pubkey>`) to see:
+- **Scheduling** state and lifecycle actions
+- **Capabilities**, **Resources**, and **Accelerator inventory**
+- **Labels & Placement** with example selectors
+- **Active Assignments** and **Drain blockers**
+- **Loom Jobs** (active and recent)
+- **Pricing Tiers**, **Execution Details**, **Software**, **Preferred Relays**, and **Timestamps**
 
 ### CLI
 
@@ -96,42 +94,31 @@ bahia workers show npub1worker...
 {
   "tool": "bahia_get_worker",
   "arguments": {
-    "worker_pubkey": "npub1worker..."
+    "pubkey": "<worker-pubkey-hex>"
   }
 }
 ```
 
 ## Worker Selection
 
-When creating a deployment:
+Worker placement is driven by environment and worker metadata rather than a global `deployment.worker_selection` config block (which does not exist):
 
-1. **Automatic** — Bahia selects based on capabilities and availability
-2. **Preferred** — Suggest workers, fall back if unavailable
-3. **Required** — Must use specified worker(s)
-
-### Configuration
-
-```yaml
-deployment:
-  worker_selection:
-    mode: "preferred"
-    workers:
-      - "npub1worker1..."
-      - "npub1worker2..."
-    capabilities_required:
-      - "kubernetes"
-```
+- The environment's `loom_worker_selector` (set with `--loom-worker-selector-file` or the **Worker Placement Policy** section) constrains non-Compose placement.
+- Worker `labels` (updated via `bahia_worker_labels_update`) and advertised capabilities are matched against selectors.
+- Workers that are `cordoned`, `draining`, `maintenance`, or `disabled` are excluded from new assignments.
+- `bahia_worker_preview_eligibility` previews which workers qualify before you commit.
 
 ## Worker Pricing
 
 Workers can have pricing for task execution. The current CLI does not register `bahia workers pricing`; view pricing through the web UI and payment/read-model surfaces.
 
+Pricing comes from each worker's advertisement as a list of tiers:
+
 ```yaml
 pricing:
-  base_cost: 0.01  # per task
-  per_minute: 0.001
-  gpu_multiplier: 2.0
-  currency: "sats"
+  - mint_url: "https://mint.example.com"
+    price_per_second: 1
+    unit: "sat"
 ```
 
 ### Cost Estimation
@@ -140,42 +127,9 @@ Before deployment, use the web UI or the `bahia_estimate_cost` MCP tool to compa
 
 ## Worker Registration
 
-Workers self-register via Nostr:
+Workers self-register via Nostr: Bahia discovers any Loom worker whose replaceable kind `10100` advertisement reaches its configured Loom relays (`loom.relays`). There is no Bahia-side registration step.
 
-### Loom Worker Setup
-
-```bash
-# Install Loom worker
-loom-worker install
-
-# Configure
-loom-worker config \
-  --relays wss://relay.example.com \
-  --bahia-pubkey npub1bahia...
-
-# Start
-loom-worker start
-```
-
-### Registration Event
-
-Workers publish capability announcements:
-
-```json
-{
-  "kind": 10100,
-  "content": {
-    "capabilities": ["docker", "kubernetes"],
-    "hardware": {
-      "cpu_cores": 32,
-      "memory_gb": 128
-    }
-  },
-  "tags": [
-    ["t", "loom-worker"]
-  ]
-}
-```
+> **NOTE (2026-09-11):** installing and configuring the Loom worker itself is documented in the Loom worker project, not in Bahia. The advertisement payload schema is owned by the Cascadia/Loom protocol (`cascadia.CAS_WORKER_AD`); see `internal/adapters/loom/` for the fields Bahia parses.
 
 ## Worker Commands
 
@@ -224,12 +178,9 @@ Kind `31989` is a legacy ML runtime-capability profile, not the Loom worker adve
 
 ## Health Monitoring
 
-### Heartbeats
+### Advertisements and heartbeats
 
-Workers send periodic heartbeats:
-- Update online status
-- Report current load
-- Announce availability changes
+Worker `status` is derived from advertisement freshness (`online` → `stale` after 5 minutes → `offline` after 30 minutes). Active heartbeats are tracked separately as `heartbeat_status` / `last_heartbeat_at`. Resource pressure is summarized on [Fleet Health](fleet-health.md).
 
 ### Notifications
 
@@ -238,10 +189,9 @@ Configure an organization-scoped webhook or Nostr DM channel for the worker even
 ## Best Practices
 
 1. **Run multiple workers** — Redundancy and load distribution
-2. **Match capabilities to needs** — GPU workers for ML
-3. **Monitor health** — Alert on offline workers
-4. **Plan capacity** — Ensure workers for expected load
-5. **Secure workers** — Limit network access
+2. **Label workers** — Make placement selectors explicit
+3. **Drain before maintenance** — Use drain/maintenance instead of stopping workers abruptly
+4. **Monitor health** — Alert on stale or offline workers
 
 ## Troubleshooting
 

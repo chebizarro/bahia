@@ -10,6 +10,7 @@ Soul Factory is Bahia's Nostr-native agent provisioning and lifecycle subsystem.
 | `31950` | Parameterized replaceable soul template |
 | `31951` | Parameterized replaceable authoritative soul read model |
 | `31952` | Parameterized replaceable editable soul draft |
+| `31953` | Parameterized replaceable fleet-wide OpenClaw configuration (`d=soulfactory-fleet-config/v1`), authored by a trusted operator |
 | `5950` | SoulFactory provisioning interoperability request |
 | `1950` | Soul lifecycle action request |
 | `6950` | Correlated provisioning or lifecycle progress |
@@ -71,7 +72,9 @@ The full provisioner executes eight stages:
 5. **Qdrant** — create the vector collection when configured.
 6. **Memory** — register and seed agent-memory when configured.
 7. **Workspace** — initialize the workspace repository when configured.
-8. **Deploy** — register NIP-05, store the soul snapshot, bind the runtime through `38384`/`38386`, create Bahia service/deployment records, and publish final `31951`.
+8. **Deploy** — register NIP-05, store the soul snapshot, bind the runtime through `38384`/`38386`, verify OpenClaw readiness (below), create Bahia service/deployment records, and publish final `31951`.
+
+For OpenClaw targets, the deploy stage then runs six readiness gates before the soul is projected as `running`, and each gate publishes its own `6950` progress step (so OpenClaw provisions report 14 total steps, not 8): `runtime_health`, `account_route`, `nip46_signer`, `nip17_subscriptions`, `model_inference`, and `dm_round_trip` (`internal/soulfactory/openclaw_readiness.go`). The gate timings and probe event IDs are recorded as readiness evidence on the soul. A failing gate fails the deploy stage.
 
 A signed `31952` draft is authoritative: SoulFactory verifies its event reference and `spec_hash` and does not regenerate that approved snapshot through the LLM.
 
@@ -81,9 +84,15 @@ Runtime success is not inferred from timeout, EOSE, or relay closure. The termin
 
 The reactor keeps a live multi-relay subscription with reconnect/backoff behavior and uses EOSE only to mark completion of the stored-event phase.
 
-At startup it requests the newest `5950`, newest `1950`, and up to 100 stored `38386` events. Existing terminal-result checks prevent repeated side effects. This backfill is intentionally bounded to the newest request and newest action globally; it is not a full historical queue scan.
+At startup it backfills up to 1000 stored `5950` requests, up to 1000 stored `1950` actions, and up to 100 stored `38386` results. It also loads the latest trusted `31953` fleet configuration from each `authorized_pubkeys` author. Existing terminal-result checks make replay idempotent, so requests accepted during a reactor or signer outage resume without repeating side effects. The backfill is bounded by those limits; it is not an unbounded historical scan.
 
 If a runtime operation first produces a deploy-stage timeout/error but a valid success `38386` arrives later, the reactor validates the full correlation chain, restores the public-safe soul checkpoint embedded in `38384`, republishes active `31951`, and replaces the terminal provisioning result. It does not repeat Signet, avatar, memory, workspace, or runtime side effects.
+
+## Fleet configuration (kind `31953`)
+
+Trusted operators (`soul_factory.authorized_pubkeys`) publish a complete `soulfactory-fleet-config/v1` document as kind `31953` with `d=soulfactory-fleet-config/v1`. Its `template` is the OpenClaw `openclaw.json` object (it may use `${VAR}` placeholders), and optional `defaults` replace wrapper environment defaults for `model`, `bindings`, and `required_plugins`. New provisions use the latest trusted snapshot. See [event spec](event-spec.md) for the tag contract.
+
+When a newer revision arrives, `FleetConfigReconciler` (`internal/soulfactory/fleet_config_reconciler.go`) fans it out to deployed OpenClaw souls. For each soul it diffs the new revision against the soul's applied revision. An unchanged soul just records the new revision. A changed soul receives `soulfactory.config.reload` with `target_fields=["fleet_config"]`. If the reload fails, the reconciler sends a rollback reload with the previous revision. Revisions are applied in order, and a failure on one soul does not roll back the others.
 
 ## NIP-29 group assignment and NIP-42
 
@@ -193,6 +202,8 @@ Runtime choices are capability-gated by compatible `30317` announcements interse
 - `soulfactory.provision`
 - `soulfactory.update`
 - `soulfactory.persona.update`
+- `soulfactory.config.reload`
+- `soulfactory.memory.reindex` (acknowledged with `started=false`; see the wrapper doc)
 - `soulfactory.revoke`
 
 See [runtime control](soulfactory-runtime-control.md), [OpenClaw sidecar](openclaw-soulfactory-sidecar.md), [control wrapper](openclaw-soulfactory-control-wrapper.md), and [deployment runbook](soul-factory-sidecar-runbook.md).
@@ -236,6 +247,8 @@ soul_factory:
   llm_api_key: <secret>
   llm_timeout: 2m
 ```
+
+Other optional keys cover workspace bootstrap (`workspace_gitea_url`, `workspace_template_dir`, `workspace_private_key_ref`, `workspace_agent_memory_mcp_url_ref`, `workspace_gateway_port`, `agent_memory_task_id_file`) and OpenClaw Signet enrollment (`openclaw_signet_enabled`, `openclaw_signet_state_dir`, `openclaw_signet_client_key_dir`, `openclaw_signet_container`, `openclaw_signet_config_path`, `openclaw_signet_provisioner_file`, `openclaw_signet_provisioner_pubkey`). See `SoulFactoryConfig` in `internal/config/config.go` for defaults.
 
 When enabled outside development mode, validation requires at least one relay, a Signet bunker URI, at least one authorized pubkey, positive timeouts, and a valid LLM origin/model/key. Workspace fields are optional but jointly constrained when `workspace_gitea_url` is set.
 

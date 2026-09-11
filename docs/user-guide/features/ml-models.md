@@ -68,6 +68,10 @@ runtime: "vllm"
 
 ## Importing Models
 
+### Web UI
+
+Open **Inference** in the sidebar (`/ml`) and use the **Import Model** form. It publishes a signed ContextVM `ml/model-import` request.
+
 ### From Hugging Face
 
 **Via MCP:**
@@ -75,38 +79,22 @@ runtime: "vllm"
 {
   "tool": "bahia_ml_import_model",
   "arguments": {
+    "model": "qwen2.5-coder-32b",
+    "model_version": "v1",
     "source": "huggingface",
     "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
-    "revision": "abc123..."
+    "revision": "abc123...",
+    "runtime": "vllm",
+    "task": "chat_completions"
   }
 }
 ```
 
-**Via Nostr:**
-Publish a `38394` MLModelImportRequest:
+Optional arguments include `artifact`, `tags`, and `idempotency_key`.
 
-```json
-{
-  "kind": 38394,
-  "content": {
-    "source": {
-      "kind": "huggingface",
-      "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct"
-    }
-  },
-  "tags": [
-    ["d", "import:qwen-coder"],
-    ["source", "huggingface"],
-    ["task", "chat_completions"]
-  ]
-}
-```
+**Via Nostr:** publish a ContextVM `ml/model-import` request as kind `25910` (or inside encrypted `1059`/`21059`) and follow the correlated result plus canonical `30900` ML state.
 
-### From Other Sources
-
-- **Local files** — Upload model artifacts
-- **S3/GCS** — Import from cloud storage
-- **ONNX Hub** — Import ONNX models
+> **NOTE (2026-09-11):** Hugging Face is the documented source family (`source: huggingface`). Earlier versions of this page listed local-file, S3/GCS, and ONNX Hub imports; those are not verified against the current importer.
 
 ## Running Recipes
 
@@ -125,71 +113,45 @@ Recipes automate multi-step workflows:
     "parameters": {
       "target_environment": "prod",
       "auto_deploy": true
-    }
+    },
+    "runtime": "vllm"
   }
 }
 ```
 
-### Nostr Event
+Optional arguments include `task`, `tags`, and `idempotency_key`. Recipe names and parameters depend on the recipes published in your fleet.
 
-Publish a `38390` MLRecipeRunRequest:
+### Nostr
 
-```json
-{
-  "kind": 38390,
-  "content": {
-    "recipe": "recipe:hf-vllm-import-deploy:1",
-    "inputs": {
-      "model_source": "hf://..."
-    },
-    "parameters": {
-      "target_environment": "prod"
-    }
-  },
-  "tags": [
-    ["d", "recipe-run:qwen-prod-20240115"],
-    ["recipe", "recipe:hf-vllm-import-deploy:1"],
-    ["runtime", "vllm"]
-  ]
-}
-```
+Publish a ContextVM `ml/recipe-run` request as kind `25910` (or encrypted `1059`/`21059`).
 
 ## Deploying Inference
 
 ### Creating an Endpoint
 
+In the web UI, use **Deploy Inference Endpoint** on the **Inference** page.
+
 ```json
 {
   "tool": "bahia_ml_deploy",
   "arguments": {
-    "model_version_id": "mv-123",
-    "environment_id": "env-prod",
+    "endpoint_id": "<endpoint-uuid>",
+    "model_version_id": "<model-version-uuid>",
     "runtime": "vllm",
-    "config": {
-      "replicas": 2,
-      "gpu_type": "a100"
-    }
+    "placement": {}
   }
 }
 ```
 
-### Nostr Event
+You can pass `endpoint`/`model_version` references instead of IDs; `runtime_preference`, `tags`, and `idempotency_key` are optional.
 
-Publish a `38391` MLInferenceDeployRequest.
+### Nostr
+
+Publish a ContextVM `ml/inference-deploy` request as kind `25910` (or encrypted `1059`/`21059`).
 
 ### Approving Deployments
 
-If approval is required:
-
-```json
-{
-  "kind": 38392,
-  "content": {
-    "deployment_id": "dep-123",
-    "approved": true
-  }
-}
-```
+If approval is required, use `bahia_assistant_ml_approve_deployment` or publish the ContextVM `ml/inference-approval` request, then follow canonical observables.
 
 ### Rolling Back
 
@@ -197,19 +159,22 @@ If approval is required:
 {
   "tool": "bahia_ml_rollback",
   "arguments": {
-    "endpoint": "endpoint:qwen-coder:prod"
+    "endpoint_id": "<endpoint-uuid>"
   }
 }
 ```
+
+The ContextVM method is `ml/inference-rollback`.
 
 ## Viewing ML State
 
 ### Web UI
 
-Navigate to **ML** in the sidebar:
-- **Models**: Browse model registry
-- **Endpoints**: View inference endpoints
-- **Recipes**: See available recipes
+Navigate to **Inference** in the sidebar (`/ml`, under **Intelligence**):
+- **Model Catalog**: Browse the model registry and each model's versions
+- **Inference Endpoints**: View endpoints and pin placement
+- **Live ML Operations**: Follow in-flight imports, deploys, and rollbacks
+- **Import Model** and **Deploy Inference Endpoint** forms
 
 ### MCP tools
 
@@ -217,44 +182,29 @@ Use `bahia_ml_list_state` to list inference endpoint state. Use `bahia_ml_get_st
 
 ## Read Models (Nostr)
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31980 | `model:<slug>` | Model registry |
-| 31981 | `model-version:<slug>:<version>` | Model version |
-| 31983 | `recipe:<name>:<version>` | Recipe registry |
-| 31984 | `recipe-run:<run-id>` | Recipe run state |
-| 31985 | `endpoint:<name>:<env>` | Endpoint registry |
-| 31986 | `endpoint-state:<name>:<env>` | Endpoint state |
-| 31988 | `artifact:<sha256>` | Provenance graph |
-| 31989 | `worker:<pubkey>:ai-capability` | Legacy ML runtime-capability profile; not a Loom worker advertisement |
+ML state is published as canonical kind `30900` events with `domain=ml`, schema `bahia.cp-state.v1`, and a `legacy_kind` tag identifying the historical read-model kind. Entities include `model`, `model-version`, `dataset`, `recipe`, `recipe-run`, `endpoint`, `endpoint-state`, `evaluation`, `provenance`, and `runtime-capability`.
 
-New Loom worker discovery uses kind `10100`. Current projected worker state uses canonical kind `30900`; kind `31989` remains a compatibility input for legacy ML capability data.
+| Entity | Historical `legacy_kind` |
+|--------|--------------------------|
+| `model` | `31980` |
+| `endpoint-state` | `31986` |
+| `runtime-capability` | `31989` (legacy ML capability profile; not a Loom worker advertisement) |
 
-## Nostr Event Kinds
+New Loom worker discovery uses kind `10100`. The historical `31980`-`31989` read-model kinds and `38390`-`38399` request/result kinds are migration inventory only; do not publish or subscribe to them directly.
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 38390 | MLRecipeRunRequest | Run a recipe |
-| 38391 | MLInferenceDeployRequest | Deploy inference |
-| 38392 | MLInferenceDeploymentApproval | Approve deploy |
-| 38393 | MLInferenceRollbackRequest | Rollback |
-| 38394 | MLModelImportRequest | Import model |
-| 38395 | MLRecipeRunResult | Recipe result |
-| 38396 | MLInferenceDeployResult | Deploy result |
-| 38397 | MLInferenceDeploymentApprovalResult | Approval result |
-| 38398 | MLInferenceRollbackResult | Rollback result |
-| 38399 | MLModelImportResult | Import result |
+## Nostr Methods
+
+| ContextVM method | Purpose |
+|------------------|---------|
+| `ml/model-import` | Import a model |
+| `ml/recipe-run` | Run a recipe |
+| `ml/inference-deploy` | Deploy an inference endpoint |
+| `ml/inference-approval` | Approve or reject an inference deployment |
+| `ml/inference-rollback` | Roll back an endpoint |
 
 ## Runtimes
 
-Supported inference runtimes:
-
-| Runtime | Use Case |
-|---------|----------|
-| **vLLM** | High-throughput LLM serving |
-| **ONNX** | Cross-platform inference |
-| **RKNN** | Edge deployment (Rockchip NPU) |
-| **TensorRT** | NVIDIA optimized inference |
+The ML runtime kinds recognized by Bahia are `vllm`, `ollama`, `llama_cpp`, `onnxruntime`, `rknn_server`, `triton`, `tensorrt_llm`, `torchserve`, `mlserver`, `tensorflow_serving`, `custom_container`, and `external_api`. Actual placement depends on which runtimes workers advertise.
 
 ## Best Practices
 

@@ -173,7 +173,8 @@ Add `?deployment_unit_id=<uuid>` when a service has more than one managed route 
 Example:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
+# When auth.enabled is true, send a NIP-98 signed Authorization header
+curl -H "Authorization: Nostr <base64-signed-nip98-event>" \
   "https://bahia.example/api/v1/route-canaries?open=true"
 ```
 

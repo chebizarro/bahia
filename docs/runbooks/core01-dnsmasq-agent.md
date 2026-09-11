@@ -35,7 +35,7 @@ make dist-bahia-dns-agent   # linux/amd64 + linux/arm64 static binaries
 Copy the binary matching core-01's architecture:
 
 ```sh
-scp dist/bahia-dns-agent-linux-amd64 core-01:/tmp/
+scp bin/bahia-dns-agent-linux-amd64 core-01:/tmp/
 ssh core-01 install -m 755 /tmp/bahia-dns-agent-linux-amd64 /usr/local/bin/bahia-dns-agent
 ```
 
@@ -156,6 +156,13 @@ internal_routing:
   zones:
     - sharegap.net
 ```
+
+This is not a standalone configuration fragment. Current validation requires
+`direct_runtime_actions.enabled=true` and a complete, valid
+`edge_routing.enabled=true` Cloudflare Tunnel configuration before
+`internal_routing.enabled=true` is accepted. Preserve the deployment's existing
+reviewed `direct_runtime_actions` and `edge_routing` blocks when applying the
+DNS/internal-routing changes above.
 
 `authoritative: true` makes Bahia manage `local=/sharegap.net/` in the zone include. This prevents unanswered query types such as AAAA, HTTPS, and SVCB from being forwarded to public DNS and leaking public Cloudflare/ECH records into the split-DNS path. With the default `allow_empty_authoritative: false`, Bahia refuses to replace a non-empty authoritative include with an empty projected record set, preserving the last listed records during transient projection loss. Set the option to `true` only for an intentional empty authoritative-zone teardown.
 

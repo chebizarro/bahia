@@ -60,14 +60,13 @@ Use ContextVM.
 - Maintenance methods are stricter: `maintenance/*` requests and immediate responses use the standards-conformant NIP-59 rumor → seal → kind-`1059` construction. Plaintext `25910` and the older direct-encryption envelope are transition readers only, never maintenance writer fallbacks.
 - Correlate retries with a stable idempotency key.
 
-Examples:
+Examples (the authoritative advertised list is `discoveryControlPlane` in `internal/adapters/nostr/projector.go`, plus the domain handlers under `internal/controlplane/`):
 
 | Operation | ContextVM method |
 |---|---|
 | Preview managed service desired state | `service/deploy-preview` |
 | Deploy service | `service/deploy` |
 | Attach a public route to the current deployed service without artifact convergence | `service/route-attach` |
-| Restart service | `service/restart` |
 | Roll back service | `service/rollback` |
 | Create DNS zone | `dns/zone-create` |
 | Apply DNS policy | `dns/policy-apply` |
@@ -364,19 +363,22 @@ Desired-state runtime metadata is additive on existing service/deployment observ
 
 ### ContextVM discovery
 
+Bahia's system announcement (built by `systemDiscoveryAnnouncementTags()` in `internal/adapters/nostr/discovery_protocol.go` and `publishSystemDiscoveryAnnouncement` in `projector.go`):
+
 ```json
 {
   "kind": 11316,
   "pubkey": "<bahia-service-pubkey>",
   "tags": [
-    ["name", "Bahia"],
-    ["support_encryption"],
-    ["support_encryption_ephemeral"],
-    ["d", "bahia-contextvm-v1"]
+    ["d", "bahia-system-v1"],
+    ["schema", "bahia.system-discovery.v1"],
+    ["name", "Bahia"]
   ],
-  "content": "{\"protocolVersion\":\"2025-07-02\",\"serverInfo\":{\"name\":\"bahia\",\"version\":\"...\"},\"capabilities\":{\"tools\":{\"listChanged\":true}}}"
+  "content": "{\"schema\":\"bahia.system-discovery.v1\",\"registries\":{...},\"versions\":{...},\"observed_deployments\":[...],\"control_plane\":{\"capabilities\":[...],\"methods\":[...]},\"blossom\":{...},\"runtime\":{...},\"oci\":{...},\"nostr\":{...},\"features\":{...}}"
 }
 ```
+
+The companion NIP-51 relay sets use `d=bahia-browser-v1`, `bahia-contextvm-v1`, `bahia-service-v1`, and `bahia-nip34-v1`, each with a matching `title` tag and one `relay` tag per URL.
 
 SBOM reference app-data uses NIP-78 `30078` with `domain=sbom`, `schema=bahia.sbom.ref.v1`, and a stable `d` coordinate of `sbom:ref:<subject-key>:<format>:<payload-sha256>`. The content is the in-toto-style SBOM attestation envelope, not the SBOM payload bytes. Required routing and validation tags include `subject_type`, `subject`, `format`, `storage`, `location`, `x=<payload-sha256>`, `media_type`, `generator`, and `ntia`; publishers must verify relay `OK` acceptance before treating the reference as published.
 

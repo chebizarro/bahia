@@ -12,7 +12,7 @@ The page has three tabs:
 
 Simulation does not publish a request or change runtime state. Treat it as planning assistance, not proof that a failover has executed successfully.
 
-The `/continuity` route is not currently included in the browser's protected-prefix list. Its relay-derived view must therefore be treated as visible to anyone who can load the app and relay data. Backend and signed-event authorization still govern mutations; route visibility does not grant failover authority.
+The `/continuity` route is in the browser's protected-prefix list, so it requires a signer-first session. The underlying relay data is still readable by anyone with relay access, so treat it as non-secret. Backend and signed-event authorization govern mutations; route visibility does not grant failover authority.
 
 ## Nostr inputs
 
@@ -25,6 +25,9 @@ The view reads current continuity state from canonical events:
 | `30315` | Heartbeat observation with `domain=continuity` |
 | `31400`–`31404` | Continuity profile, failover policy, standby, replication, and recovery workflow definitions |
 | `30900` | Canonical worker state used in the topology assessment |
+| `38430`, `38431` | Failover and recovery request events, read for run history |
+
+> **NOTE (2026-09-11):** `38430`/`38431` fall inside the range that [Core Concepts](../core-concepts.md) lists as legacy migration inventory, and `internal/nostrmigration/manifest.go` maps `31400`-`31404` onto canonical `30900` `continuity` schemas. `web/src/lib/nostr/continuity.ts` still subscribes to the raw kinds listed above. Confirm which kinds remain live before building new continuity clients.
 
 The browser requests at most 1,000 events for each continuity filter and deduplicates replaceable events before projecting the page.
 

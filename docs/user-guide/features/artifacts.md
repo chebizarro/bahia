@@ -15,10 +15,13 @@ Artifacts represent:
 
 | Property | Description | Required |
 |----------|-------------|----------|
-| `image` | Container image reference | Yes |
-| `digest` | Image digest (sha256) | Yes |
+| `image_repo` | Container image repository | Yes |
+| `image_tag` | Image tag (build handle) | Yes |
+| `image_digest` | Immutable manifest digest (`sha256:`) | Yes |
 | `service_id` | Associated service | Yes |
-| `build_id` | Source build | No |
+| `build_id` | Source build | Yes for registration |
+| `manifest_media_type`, `size_bytes` | Manifest details | No |
+| `sbom_url`, `signature_ref`, `scan_status` | Supply-chain evidence (`scan_status` defaults to `unknown`) | No |
 | `metadata` | Custom key-value pairs | No |
 
 ## Registering Artifacts
@@ -40,7 +43,7 @@ The **Builds** page also provides an idempotent **Register verified build artifa
 
 ### Advanced manual registration
 
-The legacy `POST /api/v1/artifacts` mutation has been removed. Signed kind `5985`/`bahia_register_artifact` registration is an advanced recovery path and is rejected unless `hiveci.allow_manual_artifact_registration: true` is explicitly configured.
+The legacy `POST /api/v1/artifacts` mutation has been removed. The signer-first ContextVM `artifact/register` path is available through `bahia artifacts register` and is rejected unless `hiveci.allow_manual_artifact_registration: true` is explicitly configured. The signed kind `5985` handler remains a narrowly scoped compatibility exception for artifact registration.
 
 Even when enabled, the server requires an existing service/build binding, the service's exact artifact repository, a non-empty tag, and a full `sha256:` manifest digest. It resolves the tag in the configured registry and refuses missing, mutable-only, unverifiable, or tag/digest-mismatched references. Manual registration cannot bypass canonical deduplication or verification.
 
@@ -49,7 +52,7 @@ Even when enabled, the server requires an existing service/build binding, the se
 ### Web UI
 
 1. Go to **Artifacts** in the sidebar
-2. Browse all artifacts or filter by service
+2. Use the **Registry** tab for registered artifacts (with **SBOM Status** and **Signature Status** badges) or the **Blossom** tab for stored blobs
 3. Click an artifact to see:
    - Image details
    - Build provenance
@@ -58,11 +61,11 @@ Even when enabled, the server requires an existing service/build binding, the se
 
 Or from a service:
 1. Go to **Services** → select service
-2. Click **Artifacts** tab
+2. Scroll to the **Artifacts** section
 
 ### CLI
 
-The current CLI does not register `bahia artifacts` or `bahia builds` commands. Use the web UI or signer-first Nostr flows. The MCP tools below are usable only in an embedding that explicitly configures external MCP authorization.
+The CLI registers `bahia artifacts register` for explicitly enabled manual recovery and `bahia artifacts import-observed` for observation-verified live imports. It does not register a `bahia builds` group. Use the web UI or trusted HiveCI flow for normal registration. The MCP tools below are usable only in an embedding that explicitly configures external MCP authorization and the required backing services.
 
 ### MCP Tool
 
@@ -139,12 +142,11 @@ Use `bahia_get_sbom` for the compatibility projection, `bahia_get_sbom_packages`
 
 ### Web UI
 
-1. Go to **Artifacts → Registry**.
-2. Use the per-row **Generate SBOM** or **Regenerate SBOM** action to open the artifact directly on its SBOM tab.
-3. On artifact detail, the same **Generate SBOM** or **Regenerate SBOM** action is also visible in the page header and on the SBOM tab.
-4. The browser opens the SBOM tab, subscribes to artifact-scoped `30078` SBOM reference events and the subject `30004` availability list, then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
-5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The ContextVM reply only acknowledges request handling; durable completion is shown when canonical SBOM reference or availability events arrive.
-6. View attestation details, Blossom location, hashes, NTIA status, and package list directly from the canonical SBOM events and compatibility projection data.
+1. Go to **Artifacts → Registry** and open the artifact.
+2. On artifact detail, use the **Generate SBOM** or **Regenerate SBOM** action in the page header or on the SBOM tab.
+3. The browser opens the SBOM tab, subscribes to artifact-scoped `30078` SBOM reference events and the subject `30004` availability list, then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
+4. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The ContextVM reply only acknowledges request handling; durable completion is shown when canonical SBOM reference or availability events arrive.
+5. View attestation details, Blossom location, hashes, NTIA status, and package list directly from the canonical SBOM events and compatibility projection data.
 
 ## Signatures
 
@@ -191,42 +193,19 @@ Build (CI run) → produces → Artifact (container image)
 
 ### Registering Builds
 
-Builds are typically registered by CI integration with the `bahia_register_build` MCP tool or the canonical signed build-registration event. The current CLI does not register a build command.
+Builds are normally registered by trusted signed HiveCI results (see [Builds](builds.md)). The `bahia_register_build` MCP tool exists for embeddings that authorize external MCP callers. The current CLI does not register a build command.
 
 ### Linking to Artifacts
 
-When publishing an `ArtifactRegister` event, include the source build id so the artifact is linked to build provenance:
+Every registration path binds the artifact to its source build: automatic HiveCI registration and **Register verified build artifact** derive the binding from the trusted result, and `bahia artifacts register --build <build-id> --service <service-id> …` requires it explicitly.
 
-```json
-{
-  "kind": 5985,
-  "content": {
-    "service_id": "svc-123",
-    "build_id": "build-456",
-    "image_repo": "registry.example.com/my-api",
-    "image_tag": "v2.0.0",
-    "image_digest": "sha256:abc123..."
-  },
-  "tags": [
-    ["service", "svc-123"],
-    ["build", "build-456"],
-    ["digest", "sha256:abc123..."]
-  ]
-}
-```
+## Canonical Observables
 
-## Read Models
-
-Artifact state is published as Nostr events:
-
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31966 | `artifact_id` | Artifact registry entry |
-| 31969 | `build_id` | Build registry entry |
+Artifact and build state is published as canonical `30900` state projections with `30315` status and `4903` audit facts. The historical `31966` (artifact registry) and `31969` (build registry) read-model kinds are legacy migration inventory only; do not subscribe to them for live state.
 
 ## OCI Registry Integration
 
-Bahia includes an OCI Distribution API (`/v2/`) that can serve as your container registry.
+When `oci.enabled: true`, Bahia serves an OCI Distribution API (`/v2/`) that can act as your container registry (set `oci.public_host` for the advertised host).
 
 ### Pushing Images
 
@@ -240,14 +219,15 @@ docker push bahia.example.com/my-api:v2.0.0
 
 - **NIP-98**: Nostr-signed HTTP auth
 - **Basic Auth**: Service account credentials
-- **Anonymous**: For allowed CIDRs (pull only)
+- **Anonymous**: Pull only, from `oci.allow_anonymous_pull_cidrs`
 
 ### Benefits
 
-- Integrated artifact registration
-- Automatic SBOM generation
+- Registry-verified digests for artifact registration
 - Unified access control
 - Blossom-backed blob storage
+
+> **NOTE (2026-09-11):** pushing to the embedded registry does not by itself register a Bahia artifact or generate an SBOM; registration still flows through HiveCI or the explicit registration commands above.
 
 ## Best Practices
 

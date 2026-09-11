@@ -49,7 +49,7 @@ Bahia observes runtime state → Bahia publishes status, results, and read model
 - **Loom workers / direct runtime targets** — Execute deployments or host workloads
 - **PostgreSQL** — Stores canonical persisted state
 - **Nostr relays / relay sidecar** — Carry public control-plane events, status/results, and read models
-- **Encrypted request relays** — Carry sensitive encrypted Nostr request/result traffic where configured
+- **ContextVM request/reply relays** — Carry ContextVM traffic; sensitive payloads are wrapped with NIP-59/NIP-44 where configured
 
 ## Architecture at a glance
 
@@ -68,8 +68,8 @@ Bahia observes runtime state → Bahia publishes status, results, and read model
            │                       │
            ▼                       ▼
    ┌───────────────┐       ┌──────────────────┐
-   │    Bahia      │       │ encrypted relays │
-   │ reactor/router│       │ sensitive flows  │
+   │    Bahia      │       │ ContextVM relays │
+   │ reactor/router│       │ wrapped payloads │
    └──────┬────────┘       └──────────────────┘
           │
           ├──────────────▶ PostgreSQL
@@ -84,7 +84,7 @@ For a fuller architectural description, see [`docs/architecture.md`](docs/archit
 
 - ✅ Service, environment, build, and artifact registration
 - ✅ Deployment intents, approvals, execution, and rollback workflows
-- ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes)
+- ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes, QEMU/KVM, and Firecracker)
 - ✅ Nostr-native control plane with canonical request/status/result/read-model kinds
 - ✅ Sidecar-first relay discovery via ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`)
 - ✅ Durable relay history with bounded replay/retention and a retrying outbound Nostr publish outbox
@@ -103,11 +103,15 @@ See [`docs/control-planes.md`](docs/control-planes.md) for the current product t
 ## Quick Start
 
 ```bash
-# Start with Docker Compose (includes PostgreSQL, API server, and Web UI)
+# Compose requires a 64-character hex Nostr secret key for the Bahia service.
+export BAHIA_NOSTR_PRIVATE_KEY=<64-hex-secret-key>
+
+# Start PostgreSQL, the API server, relay sidecar, and Web UI.
 docker compose up --build
 
-# API health
+# API liveness and readiness
 curl http://localhost:8080/health
+curl http://localhost:8080/ready
 
 # Browser UI
 open http://localhost:3000
@@ -116,7 +120,7 @@ open http://localhost:3000
 ## Development
 
 ```bash
-# Prerequisites: Go 1.24+, PostgreSQL 16+
+# Prerequisites: Go 1.26.3+, PostgreSQL 16+
 
 # Install dependencies
 make deps
@@ -127,9 +131,11 @@ make run-dev
 # Run tests
 make test
 
-# Build binaries
+# Build the supported binaries into bin/
 make build
 ```
+
+The Go module is `github.com/openagentsinc/bahia`. `make build` produces `bahia-server`, `bahia`, `bahia-relay`, `fips-bahia-bridge`, `openclaw-soulfactory-sidecar`, `openclaw-soulfactory-control`, and `bahia-dns-agent`. Additional specialized entrypoints live under `cmd/` and are built explicitly when needed.
 
 ## Control planes
 
@@ -143,7 +149,7 @@ Important: the web app's shared state is **not** primarily a REST polling client
 
 Also note: ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) expose the core control-plane discovery map. Broader kind families are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
 
-## Key Nostr event contracts
+## Key integration endpoints
 
 Full HTTP reference: [`docs/api.md`](docs/api.md)
 
@@ -151,9 +157,9 @@ Full HTTP reference: [`docs/api.md`](docs/api.md)
 |----------|-------------|
 | `ContextVM discovery (11316-11320) + NIP-51 relay sets (30002)` | Capability + relay/bootstrap discovery (core kind map; broader families documented separately) |
 | `POST /mcp` | Native MCP JSON-RPC endpoint |
-| `POST /api/v1/services` | Create a service (REST compatibility surface) |
-| `POST /api/v1/deployments/intents` | Create deployment intent |
-| `service/rollback` over ContextVM kind `25910` | Create signer-first rollback intent |
+| `service/create`, `service/deploy`, `service/rollback` over ContextVM kind `25910` | Signer-first service creation, deployment intents, and rollbacks (no REST mutation routes are mounted for these) |
+| `GET /api/v1/services` | List services (REST query surface) |
+| `GET /health` / `GET /ready` | Liveness / readiness |
 | `GET /api/v1/state/drifted` | List drifted service state |
 | `GET /v2/` | OCI Distribution API |
 

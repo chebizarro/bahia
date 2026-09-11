@@ -2,7 +2,7 @@
 
 Canonical event contract for the LLM-enabled Bahia operator assistant.
 
-This document defines Milestone 1 protocol contracts only. It does not define orchestrator implementation, LLM provider behavior, UI components, or recovery runners.
+This document defines the wire contract shared by the orchestrator, recovery path, and browser assistant UI. Implementation entry points are `internal/controlplane/assistant_handlers.go`, `internal/domain/assistant.go`, `internal/service/assistant_*`, and `web/src/lib/components/assistant/`.
 
 ## Design constraints
 
@@ -16,7 +16,7 @@ This document defines Milestone 1 protocol contracts only. It does not define or
 
 | Surface | Kind(s) | Author | Semantics |
 | --- | --- | --- | --- |
-| Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | JSON-RPC methods such as `assistant/prompt`, `assistant/approve`, `assistant/reject`, and `assistant/cancel` |
+| Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | JSON-RPC methods `assistant/prompt` and `assistant/approval`; the latter carries `decision=approve`, `reject`, or `cancel` |
 | Assistant session state | `30900` or `30078` | Bahia service pubkey | Replaceable canonical projection keyed by `d=<assistant-session-coordinate>` |
 | Assistant status | `30315` | Bahia service pubkey | NIP-38 progress/status events correlated to the ContextVM request with `e` and resource tags |
 | Assistant transcript | `30316` | Bahia service pubkey | Append-only encrypted conversation/tool transcript entries using a service-held symmetric-key AEAD envelope in `content` |
@@ -66,11 +66,11 @@ Content JSON contract inside kind `25910`:
 }
 ```
 
-### `assistant/approve`, `assistant/reject`, and `assistant/cancel`
+### `assistant/approval`
 
 Author: operator browser key.
 
-Semantics: approval/cancel decision. Legacy approvals remain valid by `plan_hash`; agentic approvals add `action_id` to resume one deferred action. `cancel_scope` scopes cancel decisions (`action`, `turn`, or `session`) without removing the existing `plan_hash` compatibility field.
+Semantics: approval/cancel decision selected by the `decision` param (`approve`, `reject`, or `cancel`). Plan approvals use `plan_hash` and an optional `message`; agentic action approvals use `action_id` and an optional `reason` (`AssistantApprovalRequest` in `internal/domain/assistant.go`). `cancel_scope` may scope cancel decisions to an action, turn, or session. Action decisions permit only `approve` or `reject`, and `modified_plan` is valid only for a plan-hash decision. The browser mirrors the correlation fields as tags: `session`, `decision`, and either `plan-hash` or `action`.
 
 Content JSON contract:
 
@@ -78,14 +78,12 @@ Content JSON contract:
 {
   "jsonrpc": "2.0",
   "id": "assistant-approval:<session_id>:<plan_hash>",
-  "method": "assistant/approve",
+  "method": "assistant/approval",
   "params": {
     "session_id": "<session_id>",
     "plan_hash": "<sha256_hex>",
-    "action_id": "<agentic-action-id>",
-    "cancel_scope": "action",
     "decision": "approve",
-    "reason": "operator-provided note",
+    "message": "operator-provided note",
     "_meta": { "progressToken": "assistant-approval:<session_id>:<plan_hash>" }
   }
 }
@@ -95,7 +93,7 @@ Content JSON contract:
 
 Author: Bahia service pubkey.
 
-- `30900`/`30078` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema` tags.
+- `30900`/`30078` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema=bahia.assistant-session.v1` tags. Status events use `schema=bahia.assistant-status.v1`.
 - `30315` carries non-terminal progress such as `planning`, `planned`, `awaiting_approval`, `executing`, `step_started`, `step_completed`, or `blocked`.
 - `30316` carries durable transcript messages. Its `content` is not per-recipient sealed; it is a service-held symmetric-key AEAD envelope with `schema=bahia.assistant-transcript.v1`, `envelope=service-held-symmetric-key-aead`, `key_ref`, `key_version`, `nonce`, and `ciphertext`. Tags mirror `domain=assistant`, `schema`, `session`, `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation`, and `envelope` for scoped replay and key rotation.
 - `4903` carries immutable approval, execution, and terminal facts such as `completed`, `blocked`, `failed`, `rejected`, `cancelled`, or `needs_clarification`.
@@ -178,7 +176,7 @@ JSON Schema:
 sha256(canonical_json({"session_id": <session_id>, "plan": <AssistantPlan>}))
 ```
 
-The hash binds an operator approval to one exact session plan. An `assistant/approve` ContextVM request with a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
+The hash binds an operator approval to one exact session plan. An `assistant/approval` request with `decision=approve` and a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
 
 At execution time, each step receives a derived idempotency key:
 
@@ -238,17 +236,20 @@ The assistant MUST NOT use timeout-based completion logic for event delivery or 
 
 Assistant tools are backed by ContextVM JSON-RPC methods carried as Nostr kind `25910`, usually encrypted with CEP-4 / NIP-59 wrappers (`1059` or `21059`) for sensitive payloads. Tool responses are acknowledgments only; the assistant follows canonical observables for progress and terminal truth.
 
-| Action | ContextVM method | Observable follow-up |
+The catalog is defined in `internal/mcp/agent_async_tools.go`. Each tool requires an `idempotency_key`; the backend stamps the assistant `agent` attribution. Any tool name outside this list is rejected as `not allowlisted`.
+
+| Plan `tool_name` | ContextVM method published | Observable follow-up |
 | --- | --- | --- |
-| Service deploy | `service/deploy` | `30315`, `4903`, `30900` scoped by `service` / `environment` / `artifact` |
-| Service rollback | `service/rollback` | `30315`, `4903`, `30900` scoped by `service` / `environment` |
-| Service restart/stop | `service/restart`, `service/stop` | `30315`, `4903`, `30900` scoped by `service` / `environment` |
-| LLM deploy | `llm/deploy` | `30315`, `4903`, `30900` scoped by `route` / `environment` / `release` |
-| LLM approval | `llm/approve` | `30315`, `4903`, `30900` scoped by `intent` |
-| LLM rollback | `llm/rollback` | `30315`, `4903`, `30900` scoped by `route` / `environment` |
-| ML deploy | `ml/inference-deploy` | `30315`, `4903`, `30900` / `30078` scoped by endpoint/model tags |
-| ML approval | `ml/inference-approve` | `30315`, `4903`, `30900` scoped by deployment/intent tags |
-| ML rollback | `ml/inference-rollback` | `30315`, `4903`, `30900` scoped by endpoint/environment tags |
+| `bahia_assistant_service_deploy` | `service/deploy` | `30315`, `4903`, `30900` scoped by `service` / `environment` / `artifact` |
+| `bahia_assistant_service_rollback` | `service/rollback` | `30315`, `4903`, `30900` scoped by `service` / `environment` |
+| `bahia_assistant_llm_deploy` | `llm/deploy` | `30315`, `4903`, `30900` scoped by `route` / `environment` / `release` |
+| `bahia_assistant_llm_approve_deployment` | `llm/approval` | `30315`, `4903`, `30900` scoped by `intent` |
+| `bahia_assistant_llm_rollback` | `llm/rollback` | `30315`, `4903`, `30900` scoped by `route` / `environment` |
+| `bahia_assistant_ml_deploy` | `ml/inference-deploy` | `30315`, `4903`, `30900` / `30078` scoped by endpoint/model tags |
+| `bahia_assistant_ml_approve_deployment` | `ml/inference-approval` | `30315`, `4903`, `30900` scoped by deployment/intent tags |
+| `bahia_assistant_ml_rollback` | `ml/inference-rollback` | `30315`, `4903`, `30900` scoped by endpoint/environment tags |
+
+Service restart/stop are not in the assistant-safe catalog.
 
 Excluded unless explicitly allowlisted:
 
@@ -257,6 +258,12 @@ Excluded unless explicitly allowlisted:
 - legacy Bahia request/status/result kinds except as migration fixtures
 
 The planner output MUST be validated against this catalog before a plan is shown to the operator.
+
+## Agentic mode
+
+Besides the single-shot planner, `assistant.agentic` (`enabled`, `provider`, `tool_mode` = `native` or `prompted`, `base_url`, `model`, `api_key`, `max_iterations`, `max_consecutive_tool_failures`, `request_timeout`) enables the multi-step agent loop in `internal/service/assistant_agent_loop.go`. In that mode, side-effecting tool calls are deferred as actions with an `action_id`, and each one is resumed by an `assistant/approval` action decision. The permission posture (`assistant.permissions.mode`) and the extension loaders (`assistant.subagents`, `skills`, `commands`, `hooks`) are configured under the same `assistant` block. Their tests in `internal/service/assistant_*_test.go` are the current behavioral reference.
+
+> **NOTE (2026-09-11):** The agentic observation and state contract (tool observation statuses such as `deferred` and `waiting_async` in `internal/domain/assistant_agent.go`) is not yet specified in this document. Verify against the source before relying on it.
 
 ## Normalized async tool receipt
 

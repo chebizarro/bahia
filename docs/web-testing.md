@@ -54,7 +54,7 @@ Reset stateful modules with `vi.resetModules()` where needed and restore timers/
 
 ## HTTP client tests
 
-`BahiaClient` currently implements SBOM and Blossom helpers only. Instantiate it and mock global `fetch`.
+`BahiaClient` currently implements managed-instance health/maintenance, config-fabric, SBOM, and Blossom helpers. Instantiate it and mock global `fetch`.
 
 ```javascript
 import { beforeEach, expect, it, vi } from 'vitest';

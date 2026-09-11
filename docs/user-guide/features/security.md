@@ -83,9 +83,7 @@ Browser authentication is fail-closed:
 
 NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; capability advertisement alone is provisional.
 
-The browser route guard currently covers `/souls`, `/services`, `/deployments`, `/policies`, `/environments`, `/workers`, `/fleet-health`, `/llm`, `/artifacts`, `/payments`, `/notifications`, `/events`, `/orgs`, and `/settings`. It checks authentication only. Backend handlers, organization membership, signed-event validation, and encrypted-operation authorization remain authoritative. Production-only auth overrides are not compiled into production builds.
-
-The `/security` route itself is not in that prefix list, but its encrypted ContextVM operations still require a valid signer and backend authorization. Route visibility never grants mutation authority.
+The browser route guard (`PROTECTED_PREFIXES` in `web/src/lib/auth/route-access.js`) covers every product route, including `/security`: `/souls`, `/services`, `/builds`, `/artifacts`, `/packages`, `/deployments`, `/policies`, `/config-fabric`, `/instance-health`, `/environments`, `/environment-states`, `/workers`, `/fleet-health`, `/backup`, `/continuity`, `/dns`, `/security`, `/notifications`, `/events`, `/ml`, `/llm`, `/payments`, `/orgs`, and `/settings`. It checks authentication only. Backend handlers, organization membership, signed-event validation, and encrypted-operation authorization remain authoritative. Production-only auth overrides are not compiled into production builds. Route visibility never grants mutation authority.
 
 ## Nostr Event Semantics
 

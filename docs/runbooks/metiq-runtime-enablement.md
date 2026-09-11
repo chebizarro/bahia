@@ -21,7 +21,7 @@ umask 077
 change_dir=/var/lib/bahia/changes/metiq-runtime-<CHANGE_ID>
 install -d -m 0700 "$change_dir"
 install -m 0600 "$BAHIA_CONFIG" "$change_dir/prior.yaml"
-shasum -a 256 "$change_dir/prior.yaml" >"$change_dir/prior.sha256"
+sha256sum "$change_dir/prior.yaml" >"$change_dir/prior.sha256"
 ```
 
 Render the candidate by changing only the runtime list, exact runtime-pubkey pins, and approved relay/controller values. Preserve all other prior keys byte-for-byte where the renderer permits. Store it as `candidate.yaml` mode `0600`; record its digest, not its contents, in evidence. Review a redacted structural diff. A runtime pubkey not listed under `runtime_pubkeys.metiq` must not be eligible even if it publishes a valid signed capability naming the controller.
@@ -41,7 +41,14 @@ The command applies candidate and prior copies in an isolated temporary director
 
 ## Provision the dedicated Metiq Signet identity
 
-Build the tool from the reviewed commit. The `enroll` action invokes containerized `signetctl provision`, creates a persistent file-backed NIP-46 client key, installs a deny-by-default policy for the exact client pubkey, verifies the managed identity and signing path, persists a secret-free contract, and deletes the one-time bunker handoff only after proof succeeds:
+Build the tool from the reviewed commit (there is no Makefile target; build it directly):
+
+```sh
+go build -o bin/metiq-signet-enrollment ./cmd/metiq-signet-enrollment
+go build -o bin/soulfactory-runtime-validate ./cmd/soulfactory-runtime-validate
+```
+
+The `enroll` action invokes containerized `signetctl provision`, creates a persistent file-backed NIP-46 client key, installs a deny-by-default policy for the exact client pubkey, verifies the managed identity and signing path, persists a secret-free contract, and deletes the one-time bunker handoff only after proof succeeds:
 
 ```sh
 metiq-signet-enrollment -config /etc/bahia/metiq-signet-enrollment.json enroll \
@@ -90,6 +97,7 @@ soulfactory-runtime-validate \
   -scenario "$change_dir/metiq-runtime-validation.json" \
   -relays "$CANONICAL_SOULFACTORY_RELAYS" \
   >"$change_dir/metiq-runtime-validation-report.json"
+# Optional: -timeout (default 45s) bounds the EOSE-backed query.
 chmod 0444 "$change_dir/metiq-runtime-validation-report.json"
 ```
 

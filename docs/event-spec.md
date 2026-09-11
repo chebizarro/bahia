@@ -89,21 +89,22 @@ Implementations may use `21059` when ephemeral gift-wrap support is available.
 
 ## Method Naming
 
-Methods follow `<domain>/<operation>`:
+Methods follow `<domain>/<operation>`. The authoritative list of server-registered methods is the table in [`control-planes.md`](control-planes.md#contextvm-mutation-methods). Representative examples:
 
 | Domain | Example methods |
 |--------|-----------------|
-| `service` | `deploy`, `rollback`, `restart`, `stop`, `update`, `delete` |
+| `service` | `create`, `update`, `delete`, `deploy`, `deploy-preview`, `rollback`, `route-attach`, `action` (`deploy`/`restart`/`stop` for direct-runtime operators) |
 | `environment` | `create`, `get-details`, `update`, `delete` |
-| `artifact` | `register` |
-| `policy` | `create`, `update`, `delete`, `evaluate` |
-| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
-| `llm` / `ml` | `route-create`, `release-register`, `deploy`, `approve`, `rollback`, `model-import`, `recipe-run`, `inference-deploy` |
-| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate`, `backend-register` |
-| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
+| `artifact` | `register`, `import-observed`, `register-build-result` |
+| `policy` | `create`, `update`, `delete` |
+| `approval` | `approve`, `reject`, `backup-restore-approve` |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `cleanup` |
+| `ml` | `recipe-run` (other `ml/*` and `llm/*` names are advertised in discovery; see the note in `control-planes.md`) |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate` |
+| `backup` | `run`, `restore`, `verification`, `retention`, `repository-register`, `repository-probe`, `policy-apply`, `recipe-apply`, `definition-apply` |
 | `adoption` | `scan`, `import` |
-| `assistant` | `prompt`, `approve`, `cancel` |
-| `ci` | `workflow-run`, `cancel`, `retry` |
+| `assistant` | `prompt`, `approval` |
+| `ci` | `workflow-run` (Cascadia method that Bahia emits toward Hive-CI/Loom for push-to-deploy builds; not a Bahia server handler) |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `soul-factory` | `provision`, `action` |
 
@@ -186,9 +187,9 @@ Relays and clients should treat audit as long-retention evidence. Audit deletion
 
 The configured Bahia service publisher persists events to its SQL outbox before relay delivery, marks accepted or duplicate `OK` responses as published, and retries pending rows with bounded backoff. This durability guarantee applies to publishers wired through that adapter; direct relay clients must implement their own retry and acknowledgment handling.
 
-The relay sidecar persists accepted events to SQLite before asynchronous subscriber fanout. Queries are SQL-scoped and capped at 2,000 results. Retention cleanup runs at startup and every 15 minutes; request and gift-wrap kinds `25910`, `1059`, and `21059` use the shorter request-retention window.
+The relay sidecar persists accepted events to SQLite before asynchronous subscriber fanout. Queries are SQL-scoped and capped at `nostr.sidecar.max_query_limit` results (default 2,000). Retention cleanup runs at startup and every 15 minutes; request and gift-wrap kinds `25910`, `1059`, and `21059` use the shorter request-retention window.
 
-Consumers replay stored `EVENT` messages until `EOSE`, then keep subscriptions open for realtime convergence. `EOSE` completes only that bounded query; if the 2,000-event cap may be reached, narrow filters by resource tags and time windows, overlap windows, and deduplicate by event id. Apply replacement semantics by `(kind, pubkey, d)` where the event kind is replaceable.
+Consumers replay stored `EVENT` messages until `EOSE`, then keep subscriptions open for realtime convergence. `EOSE` completes only that bounded query; if the query cap may be reached, narrow filters by resource tags and time windows, overlap windows, and deduplicate by event id. Apply replacement semantics by `(kind, pubkey, d)` where the event kind is replaceable.
 
 ## Discovery and Relay Topology
 

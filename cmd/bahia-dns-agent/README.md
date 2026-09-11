@@ -22,7 +22,7 @@ include dir that do not match the prefix are never read, written, or deleted.
 |---|---|
 | `dns-agent/health` | Status, config echo, last applied serial |
 | `dns-agent/list` | Current records + serial for one allowed zone |
-| `dns-agent/sync` | Apply desired records for a zone at a serial. Stale serial → error; equal serial → idempotent no-op |
+| `dns-agent/sync` | Apply desired records for a zone at a serial. A lower serial returns `status=stale` with the current serial; an equal serial is an idempotent `status=ok` no-op |
 
 Requests are only accepted from `--authorized-pubkey` (the Bahia service).
 With `--require-encryption`, bare kind-25910 requests are rejected; only
@@ -71,7 +71,7 @@ ContextVM responses with it.
 
 ```sh
 make build-bahia-dns-agent      # host build, CGO_ENABLED=0
-make dist-bahia-dns-agent       # linux/amd64, linux/arm64, linux/mips softfloat
+make dist-bahia-dns-agent       # linux/amd64 and linux/arm64
 ```
 
 Known limitation: the `linux/mips` (GOMIPS=softfloat) target currently fails

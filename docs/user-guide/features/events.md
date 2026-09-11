@@ -16,14 +16,14 @@ The relay indicator identifies the current connection and provenance. A connecte
 
 ## Filtering and inspection
 
-Use the category filter to narrow the list to:
+Use the category filter (default **All Events**) to narrow the list to:
 
-- Deployment
-- Service
-- LLM
-- Policy
+- Deployments
+- Services
+- LLM Routes
+- Policies
 - SBOM
-- Artifact
+- Artifacts
 
 Choose 25, 50, or 100 rows per page. Select an event to open its complete JSON payload, including kind, author, tags, content, and timestamps.
 

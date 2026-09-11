@@ -7,11 +7,15 @@ This runbook is for a human operator deploying the OpenClaw SoulFactory runtime 
 On a trusted Bahia build host:
 
 ```bash
-go build -o ./bin/openclaw-soulfactory-control ./cmd/openclaw-soulfactory-control
-go build -o ./bin/openclaw-soulfactory-sidecar ./cmd/openclaw-soulfactory-sidecar
+make build-openclaw-soulfactory-control build-openclaw-soulfactory-sidecar
+# equivalent without version ldflags:
+# go build -o ./bin/openclaw-soulfactory-control ./cmd/openclaw-soulfactory-control
+# go build -o ./bin/openclaw-soulfactory-sidecar ./cmd/openclaw-soulfactory-sidecar
 ```
 
 Install both binaries on the runtime host, for example under `/opt/bahia/soulfactory/`.
+
+For the fleet's `max` host there is also a release workflow, `.github/workflows/deploy-openclaw-soulfactory-sidecar.yml`. It runs on a published GitHub release or on `workflow_dispatch` with an exact 40-character `release_sha`, on a `[self-hosted, max, docker]` runner. It builds `local/bahia-openclaw-soulfactory-sidecar` from the repository `Dockerfile`, which packages both binaries, and recreates the `openclaw-soulfactory-sidecar` Compose service. The existing Compose project must define a `/ready`-based healthcheck. The workflow consumes no host SSH credentials or runtime secrets; key, policy, and idempotency files must already exist on the host as described below.
 
 ## 2. Persist the sidecar runtime key
 
@@ -33,11 +37,14 @@ Pass this file through:
 
 ## 3. Configure the control wrapper
 
-The packaged wrapper supports:
+The packaged wrapper defaults to these supported methods:
 
 ```text
-soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke
+soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.config.reload,soulfactory.memory.reindex,soulfactory.revoke
 ```
+
+Omit `-methods` to advertise that complete default set. Supply `-methods` only
+to intentionally restrict the sidecar to a reviewed subset.
 
 For real execution use `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose` (the default), an immutable `OPENCLAW_SOULFACTORY_IMAGE`, a pinned `OPENCLAW_SOULFACTORY_SOURCE_COMMIT`, and an explicit Nostr plugin requirement. Shared `existing-container` provisioning is rejected. Dry-run mode renders deterministic state/workspace/runtime files without calling Docker or the OpenClaw CLI.
 
@@ -45,13 +52,12 @@ If `openclaw` is not on PATH, set `OPENCLAW_SOULFACTORY_OPENCLAW_BIN`. The older
 
 ## 4. Start the sidecar
 
-Use the Bahia SoulFactory controller pubkey (resolved from the controller's Signet identity) as the trusted controller. Configure runtime/control relays, not ngit repository relays.
+Use the Bahia SoulFactory controller pubkey (resolved from the controller's Signet identity) as the trusted controller. Configure runtime/control relays, not ngit repository relays. Every flag below also has an environment fallback (`SOULFACTORY_RELAYS`, `SOULFACTORY_CONTROLLER_PUBKEYS`, and `OPENCLAW_SOULFACTORY_*` for the rest, e.g. `OPENCLAW_SOULFACTORY_CONTROL_RELAYS`, `OPENCLAW_SOULFACTORY_HEALTH_ADDR`).
 
 ```bash
 /opt/bahia/soulfactory/openclaw-soulfactory-sidecar \
   -private-key-file /etc/bahia/soulfactory/sidecar.key \
   -command /opt/bahia/soulfactory/openclaw-soulfactory-control \
-  -methods soulfactory.provision,soulfactory.update,soulfactory.persona.update,soulfactory.revoke \
   -controller-policy-file /var/lib/bahia/openclaw-soulfactory-controller-policy.json \
   -trusted-controller-pubkeys '<one-time-bootstrap-controller-pubkey>' \
   -relays wss://relay.example.com \
@@ -73,7 +79,7 @@ Subscribe for factory-authored runtime capability kind `30317` from the sidecar 
 - `schema=soulfactory-runtime-capability/v1`;
 - `control_schema=soulfactory-runtime-control/v1`;
 - `runtime=openclaw`;
-- the four configured methods;
+- the configured method set (by default the six wrapper-supported methods listed in step 3);
 - `controller_pubkeys` containing the SoulFactory controller;
 - accurate relay hints.
 

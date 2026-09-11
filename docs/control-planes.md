@@ -4,7 +4,7 @@ Bahia's supported control-plane contract is now sidecar-first and Nostr-native. 
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.
 2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
-3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
+3. **REST API** — narrowed query/log surface plus a small set of compatibility writes (see `docs/api.md`), protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
 Removed legacy surfaces:
 
@@ -49,19 +49,39 @@ curl -X POST http://localhost:8080/mcp \
 
 ### ContextVM mutation methods
 
-Client mutation publication should use ContextVM JSON-RPC methods rather than Bahia legacy request kinds. Method names follow `<domain>/<operation>`:
+Client mutation publication should use ContextVM JSON-RPC methods rather than Bahia legacy request kinds. Method names follow `<domain>/<operation>`. The table below lists the methods Bahia's server registers with `RegisterContextVMHandler` in `internal/controlplane` (as of 2026-09-11). Domain handlers are only registered when that subsystem is enabled and configured.
 
-| Domain | Methods |
+| Domain | Registered methods |
 |--------|---------|
-| `service` | `deploy`, `rollback`, `scale`, `restart`, `stop`, `update`, `delete` |
+| `service` | `create`, `update`, `delete`, `deploy`, `deploy-preview`, `rollback`, `route-attach`, `action` (`params.action` = `deploy`, `restart`, or `stop`; direct-runtime operators only) |
+| `services` | `secrets-list`, `secrets-create`, `secrets-update`, `secrets-delete`, `secrets-reveal` |
 | `environment` | `create`, `get-details`, `update`, `delete` |
-| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update` |
-| `package` | `publish`, `promote`, `yank`, `deprecate`, `drift-detect` |
-| `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
-| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
-| `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-rollback` |
+| `artifact` | `register`, `import-observed`, `register-build-result` |
+| `build` | `request` |
+| `approval` | `approve`, `reject`, `backup-restore-approve` |
+| `policy` | `create`, `update`, `delete` |
+| `adoption` | `scan`, `import` |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `cleanup` |
+| `loom` | `submit`, `cancel` |
+| `package` | `promote` |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate` |
+| `backup` | `run`, `restore`, `verification`, `retention`, `repository-register`, `repository-probe`, `policy-apply`, `recipe-apply`, `definition-apply` |
+| `ml` | `recipe-run` |
 | `security` | `scan`, `rescan`, `findings-list`, `schedules-list` |
 | `sbom` | `generate`, `import` |
+| `config` | `reconcile`, `reload`, `status` |
+| `settings` | `relay-policy.get`, `relay-policy.apply`, `relay-admin.call` |
+| `tools` | `call` |
+| `soul-factory` | `provision`, `action` |
+| `assistant` | `prompt`, `approval` |
+| `deployments` | `run-logs-get` |
+| `notifications` | `list`, `get`, `create` (alias `new`), `update`, `delete`, `test`, `logs` |
+| `orgs` | `list`, `detail`, `create`, `delete`, `my_invites`, `accept_invite`, `create_invite`, `revoke_invite`, `update_member_role`, `remove_member` |
+| `payments` | `history` |
+
+The dotted encrypted-operation names listed later in this document (for example `notifications.channels.list`) are also registered as ContextVM method names alongside these slash-form aliases.
+
+> **NOTE (2026-09-11):** ContextVM discovery (`internal/adapters/nostr/projector.go`) also advertises methods that have no `RegisterContextVMHandler` registration on the server transport: `package/publish|yank|drift-detect|repository-apply|repository-delete`, `worker/policy-apply`, `workload/pin`, `llm/*`, `ml/model-import|inference-deploy|inference-approval|inference-rollback`, and `dns/record-override|backend-register`. Several of these are emitted by Bahia's own REST/MCP command publishers. Verify the consuming path before relying on them from a new client (tracked as `bahia-ubg10`). Worker-side methods such as `maintenance/*` and `dns-agent/*` are served by workers or agents, not by `bahia-server`.
 
 Example ContextVM request:
 
@@ -180,7 +200,7 @@ The app is idempotent and can run on every startup. Non-dry-run migration requir
 
 Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecycle invariants:
 
-1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/route-attach`, `service/restart`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `security/scan`.
+1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/route-attach`, `service/action`, `worker/cordon`, `package/promote`, `dns/zone-create`, `backup/run`, or `security/scan`.
 2. Publish the request as ContextVM kind `25910`, usually wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`) when encrypted transport is available.
 3. Require relay `OK` with `accepted=true` for the signed Nostr event. A JSON-RPC acknowledgment is only command receipt, not proof of long-running completion.
 4. Subscribe with scoped filters for the correlated ContextVM response plus canonical observables: `30900` state, `4903` audit, `30315` status, `30316` assistant transcript ciphertext for assistant flows, relevant domain NIPs, NIP-09 `5` deletes where applicable, `30078` app data, `30004` curation sets, and discovery/relay updates (`11316`-`11320`, `30002`).
@@ -279,7 +299,7 @@ Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usua
 
 CLI behavior:
 
-- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.
+- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use the ContextVM methods `adoption/scan`, `adoption/import`, and `service/action` (with `action` set to `deploy`, `restart`, or `stop`).
 - Production operators can sign through NIP-46 without holding the operator
   identity key. Provide `--nostr-bunker-file` and
   `--nostr-client-key-file`; when the signer relay is stored separately from
@@ -311,7 +331,7 @@ Adoption requests use ContextVM methods `adoption/scan` and `adoption/import`. T
 
 #### Direct-runtime actions
 
-Direct-runtime deploy/restart/stop use ContextVM methods `service/deploy`, `service/restart`, and `service/stop`. Historical `5963` service-action events and `6963`/`7962` status/result events are migration inventory only and are not production runtime subscriptions.
+Direct-runtime deploy/restart/stop use the ContextVM method `service/action` with `params.action` set to `deploy`, `restart`, or `stop`. The caller must be listed in `direct_runtime_actions.allowed_pubkeys`. Historical `5963` service-action events and `6963`/`7962` status/result events are migration inventory only and are not production runtime subscriptions.
 
 Deploy actions that reach the desired-state runtime path expose additive metadata through the existing ContextVM response and canonical observables. Status progress includes desired-state build, image pull, create/start, and health observation phases; terminal results may include the desired hash and observation identifier.
 
@@ -348,7 +368,7 @@ Browser signer support:
 
 Encrypted operation catalog:
 
-The following legacy operation names are retained only to document startup migration inputs and historical fixtures. New encrypted browser-facing operations must use ContextVM method names instead of extending `5980`/`7980`.
+These dotted operation names are live ContextVM method names on the encrypted transport. Most also have a slash-form alias; see the method table above (`artifacts.signatures.verify` has no alias). Only the legacy `5980`/`7980` envelope is migration inventory. New encrypted browser-facing operations must use ContextVM method names instead of extending `5980`/`7980`.
 
 Notification encrypted operations:
 
@@ -398,13 +418,13 @@ Clients should wait for EOSE on bootstrap queries, then keep subscriptions open 
 
 ---
 
-## REST API: Read-Only Surface
+## REST API: Query and Compatibility Surface
 
-The REST API (`/api/v1/*`) is strictly a **read-only** query and compatibility surface. It serves GET endpoints for registry listing, service/environment/deployment read models, health checks, and log retrieval. It does **not** expose mutation endpoints.
+The REST API (`/api/v1/*`) is primarily a query surface. It serves GET endpoints for registry listing, service/environment/deployment read models, health checks, and log retrieval. A small set of compatibility writes remains mounted: deployment-run bookkeeping, build registration, orgs, secrets, notifications, ML command receipts, SBOM ingestion, signature verification, config fabric, tool denylist, managed-instance maintenance, and `PUT /api/v1/llm/routes/{id}`. `docs/api.md` is the authoritative route list.
 
 ### Prohibition
 
-REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deleting services, policies, deployments, LLM routes, or any domain entity) are architecturally prohibited. This prohibition exists because:
+New REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deleting services, environments, artifacts, policies, deployments, LLM routes, or other domain entities) are architecturally prohibited, and the core registry/deployment mutation routes have been removed. The remaining compatibility writes must not be extended. This prohibition exists because:
 
 1. **Nostr is the source of truth.** Every mutation must be a signed Nostr event published to relays, giving relay-side indexing, signature verification, replay protection, and audit lineage. REST writes bypass all of this.
 2. **Command receipts are relay-acknowledged.** The `CommandReceipt` contract requires a signed event ID and relay `OK` acceptance. REST-originated writes cannot produce authentic receipts because no Nostr event was published.
@@ -417,7 +437,7 @@ REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deletin
 | **MCP tools** | `POST /mcp` with `tools/call` JSON-RPC | `internal/mcp/server.go` → controlplane publishers |
 | **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import` | `cmd/cli/operator_nostr.go` → ContextVM `25910` |
 | **Browser** | ContextVM `25910` via NIP-07/NIP-46 signer | Direct Nostr event publication to relay |
-| **REST** | Read-only `GET` endpoints only | `internal/api/handlers/*.go` (Get/List methods) |
+| **REST** | Query `GET` endpoints plus the legacy compatibility writes listed in `docs/api.md` | `internal/api/handlers/*.go` |
 
 ### Correct mutation flow
 
@@ -436,7 +456,7 @@ REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deletin
                      idempotency key)               endpoints
 ```
 
-REST GET endpoints serve the **read models** that reactors and projectors maintain after processing Nostr events. The mutation path never touches REST.
+REST GET endpoints serve the **read models** that reactors and projectors maintain after processing Nostr events. The canonical mutation path never touches REST.
 
 ---
 

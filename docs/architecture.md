@@ -32,7 +32,7 @@ ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertise
 - registry/runtime/blossom metadata
 - feature flags such as `relay_read_models`, `direct_nostr_http_auth`, and `encrypted_nostr_requests`
 
-This endpoint is the browser and tooling bootstrap contract.
+These signed events are the browser and tooling bootstrap contract.
 
 ### 2. Public Nostr control plane
 Bahia's canonical public control-plane contract is ContextVM CRU (`25910`, normally wrapped by CEP-4/NIP-59 `1059`/`21059`) plus canonical observable events described in `docs/control-planes.md`.
@@ -48,7 +48,7 @@ Production examples:
 Legacy Bahia request/status/result/read-model/encrypted kinds are migration inventory only and are not production runtime contracts.
 
 ### 3. Encrypted Nostr request/result plane
-Sensitive browser-facing domains use encrypted ContextVM events (`25910` inside `1059`/`21059` where supported) on configured encrypted-request relays.
+Sensitive browser-facing domains use encrypted ContextVM events (`25910` inside `1059`/`21059` where supported). Requests and replies use the configured ContextVM relay policy; encryption, not a separate legacy “encrypted relay” configuration, protects their payloads.
 
 ### 4. Native MCP transport
 Bahia exposes JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`. Tool responses include correlation metadata so clients can follow async truth on relays.
@@ -60,12 +60,34 @@ Managed runtime observation and policy-bounded exact-target recovery are operate
 
 ---
 
+## Processes and binaries
+
+All Go entrypoints live under `cmd/` in module `github.com/openagentsinc/bahia`.
+
+| Binary (`make build`) | Source | Role |
+|--------|--------|------|
+| `bahia-server` | `cmd/server` | Main control-plane server: HTTP API, MCP, OCI registry, ContextVM reactor, reconcilers, projectors (`-config <file>`) |
+| `bahia` | `cmd/cli` | Operator CLI; signer-first NIP-46 requests over ContextVM, with REST queries |
+| `bahia-relay` | `cmd/relay` | Khatru-based relay sidecar (`--config <file>`); see `docs/relay-sidecar.md` |
+| `fips-bahia-bridge` | `cmd/fips-bahia-bridge` | Subscribes to the Bahia service pubkey's endpoint events on Nostr relays and writes healthy endpoints into a managed section of the FIPS hosts file (`FIPS_BAHIA_*` env or flags) |
+| `openclaw-soulfactory-sidecar` | `cmd/openclaw-soulfactory-sidecar` | Soul Factory runtime sidecar; see `docs/openclaw-soulfactory-sidecar.md` |
+| `openclaw-soulfactory-control` | `cmd/openclaw-soulfactory-control` | Soul Factory control wrapper; see `docs/openclaw-soulfactory-control-wrapper.md` |
+| `bahia-dns-agent` | `cmd/bahia-dns-agent` | LAN resolver agent; see `cmd/bahia-dns-agent/README.md` |
+
+Specialized entrypoints that `make build` does not build: `cmd/bahia-test-relay` (local test relay), `cmd/metiq-signet-enrollment`, and `cmd/soulfactory-runtime-validate`.
+
+The root `Dockerfile` image contains every `make build` binary except `bahia-dns-agent`, with `bahia-server` as the entrypoint. The web UI (`web/`) is a separate SvelteKit build served by nginx.
+
+Key internal packages: `internal/app` (wiring and background runners), `internal/api` (HTTP router, handlers, middleware), `internal/controlplane` (ContextVM handlers, reactor, command publishers), `internal/service` and `internal/domain` (business logic), `internal/adapters` (runtime, Loom, Nostr, OCI/registry, Blossom, Hive-CI, telemetry, and more), `internal/repository` and `internal/db` (PostgreSQL), `internal/relaysidecar`, `internal/kinds` (Nostr kind constants), and `internal/config`.
+
+---
+
 ## Major components
 
 ### Browser / CLI / MCP clients
 Clients discover capabilities from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), then interact with Bahia through a mix of:
 - public relay traffic
-- encrypted relay traffic
+- encrypted ContextVM traffic (`1059`/`21059` gift wraps)
 - MCP JSON-RPC
 - selected REST endpoints
 
@@ -149,6 +171,8 @@ Runtime targets may include:
 - Compose
 - Kubernetes
 - Podman
+- QEMU/KVM (`vm-qemu`)
+- Firecracker (`vm-firecracker`)
 - adopted direct-runtime targets
 
 ### Persistence

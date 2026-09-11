@@ -9,6 +9,17 @@ Production-ready means:
 
 ---
 
+## Repository Quick Reference
+
+- Go module: `github.com/openagentsinc/bahia` (Go 1.26.3+, see `go.mod`)
+- Entry points: `cmd/server` (`bin/bahia-server`), `cmd/cli` (`bin/bahia`), `cmd/relay` (`bin/bahia-relay`), plus `fips-bahia-bridge`, `openclaw-soulfactory-sidecar`, `openclaw-soulfactory-control`, and `bahia-dns-agent`. `cmd/bahia-test-relay`, `cmd/metiq-signet-enrollment`, and `cmd/soulfactory-runtime-validate` are specialized tools not built by `make build`.
+- Application wiring: `internal/app`; HTTP routes: `internal/api/router/router.go`; ContextVM/Nostr control plane: `internal/controlplane`; configuration: `internal/config` (YAML via `-config`, overridden by `BAHIA_<SECTION>_<FIELD>` environment variables)
+- Web UI: `web/` (SvelteKit, served by nginx in Docker)
+- Quality gates: `make build`, `make test`, `make race`, `make lint` (`golangci-lint`)
+- Local stack: see `DOCKER.md`; production deployment: see `docs/deployment.md`
+
+---
+
 ## Non-Negotiable Architecture
 Nostr is an event stream, not a request/response API.
 Use:
@@ -44,34 +55,37 @@ await subscribe_filter(
     on_eose=handle_eose,
     on_closed=handle_closed,
 )
+```
 
 Filters must be narrow:
 
-* kinds
-* #p
-* #agent
-* #t
-* #d for parameterized replaceable events
-* since / until / limit where appropriate
+* `kinds`
+* `#p`
+* `#agent`
+* `#t`
+* `#d` for parameterized replaceable events
+* `since` / `until` / `limit` where appropriate
 
 Do not subscribe broadly and filter locally unless explicitly justified.
 
-Backfill + Realtime
+### Backfill + Realtime
 
 For historical data:
 
-1. Subscribe with since / until / limit
+1. Subscribe with `since` / `until` / `limit`
 2. Process stored EVENTs
 3. Treat EOSE as historical catch-up complete
 4. Keep subscription open for realtime events when needed
 
 Never use sleeps to wait for history.
 
-Publishing
+### Publishing
 
-Every publish must verify OK:
+Every publish must verify `OK`:
 
+```text
 ["OK", <event_id>, <accepted:bool>, <message>]
+```
 
 Check both:
 
@@ -82,7 +96,7 @@ Handle rejection reasons such as auth required, rate limits, invalid events, and
 
 Batch publishes must collect all OKs and handle partial failure. Do not assume batch atomicity.
 
-Relay Management
+### Relay Management
 
 Agents must:
 
@@ -108,9 +122,9 @@ Timers are not allowed for:
 * relay response waiting
 * completion detection
 
-⸻
+---
 
-Event Correctness
+## Event Correctness
 
 Inbound events must be validated before trust:
 
@@ -129,13 +143,13 @@ Handlers must be idempotent:
     * replaceable kinds: latest by pubkey
     * parameterized replaceable kinds: latest by pubkey + d tag
 
-⸻
+---
 
-Forbidden Code Smells
+## Forbidden Code Smells
 
 Flag and fix these during implementation and review:
 
-Nostr protocol smells
+### Nostr protocol smells
 
 * sleep, setTimeout, setInterval, or retry loops used to wait for events
 * repeated short-lived subscriptions used to “peek”
@@ -146,7 +160,7 @@ Nostr protocol smells
 * missing dedupe or non-idempotent event handlers
 * assuming all relays support the same NIPs
 
-Production-readiness smells
+### Production-readiness smells
 
 * TODO, FIXME, XXX, HACK, TEMP, WIP
 * “for now”, “later”, “future work”, “MVP”, “simplified”, “minimal”
@@ -163,24 +177,26 @@ Production-readiness smells
 
 Do not leave these behind unless they are outside scope, unreachable from production paths, and tracked in Beads.
 
-⸻
+---
 
-PSTF Workflow
+## PSTF Workflow
 
 Use PSTF to convert intent into verified behavior.
 
 For each meaningful feature or fix, maintain artifacts under:
 
-/pstf/features/<FEATURE_ID>/
+```text
+pstf/features/<FEATURE_ID>/
+```
 
 Relevant files may include:
 
-feature_spec.json
-acceptance_criteria.json
-test_matrix.json
-defects.json
-verification_report.md
-hitl_decisions.md
+* `feature_spec.json`
+* `acceptance_criteria.json`
+* `test_matrix.json`
+* `defects.json`
+* `verification_report.md`
+* `hitl_decisions.md`
 
 Rules:
 
@@ -202,17 +218,19 @@ Escalate for human decision when:
 * UX expectations are subjective
 * security, privacy, billing, permissions, destructive data, or broad architecture changes are involved
 
-Record these in hitl_decisions.md and Beads.
+Record these in `hitl_decisions.md` and Beads.
 
-⸻
+---
 
-Beads Issue Tracking
+## Beads Issue Tracking
 
-This project uses bd for all task tracking.
+This project uses `bd` for all task tracking.
 
 Run:
 
+```bash
 bd prime
+```
 
 Use Beads instead of:
 
@@ -223,11 +241,13 @@ Use Beads instead of:
 
 Quick commands:
 
+```bash
 bd ready
 bd show <id>
 bd update <id> --claim
 bd close <id>
 bd remember
+```
 
 Create or update Beads issues for:
 
@@ -252,18 +272,20 @@ A good Beads issue includes:
 
 Do not hide remaining work in prose. Track it in bd.
 
-⸻
+---
 
-Implementation Standard
+## Implementation Standard
 
-Before changing code:
+### Before changing code
 
-1. Run bd prime
+
+1. Run `bd prime`
 2. Inspect relevant code and tests
 3. Identify intended behavior via PSTF
 4. Claim or create the relevant Beads issue
 
-While changing code:
+### While changing code
+
 
 1. Preserve Nostr event-driven semantics
 2. Remove fake or placeholder behavior in touched paths
@@ -273,7 +295,8 @@ While changing code:
 6. Handle relay failures explicitly
 7. Add deterministic tests without sleep-based waiting
 
-After changing code:
+### After changing code
+
 
 1. Run relevant tests, linters, builds
 2. Update PSTF verification artifacts
@@ -282,13 +305,13 @@ After changing code:
 
 Passing tests is not enough. Tests must prove the intended behavior, not merely ratify current fakery.
 
-⸻
+---
 
-Testing Rules
+## Testing Rules
 
 Tests must be deterministic and event-driven.
 
-Do:
+### Do
 
 * inject mock EVENT, EOSE, OK, CLOSED, and AUTH messages
 * verify handlers and state transitions directly
@@ -296,7 +319,7 @@ Do:
 * test reconnect and dedupe behavior
 * map tests to acceptance criteria
 
-Do not:
+### Do not
 
 * sleep to wait for async behavior
 * assert only that a mock was called while real behavior is absent
@@ -305,21 +328,25 @@ Do not:
 
 Bad:
 
+```python
 await asyncio.sleep(0.5)
 assert len(received_events) > 0
+```
 
 Good:
 
+```python
 mock_relay.inject_event(test_event)
 assert handler.call_count == 1
+```
 
-⸻
+---
 
-Review Checklist
+## Review Checklist
 
 Before calling work complete, verify:
 
-Nostr
+### Nostr
 
 * no polling for message delivery
 * no timeout-based completion
@@ -336,7 +363,7 @@ Nostr
 * relay capabilities checked with NIP-11
 * no ad hoc queue/RPC abstraction replaces Nostr semantics; ContextVM use and event-kind selection follow `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/nostr-commands.md`, and `docs/event-spec.md`
 
-PSTF
+### PSTF
 
 * intended behavior is documented
 * acceptance criteria exist
@@ -344,7 +371,7 @@ PSTF
 * defects map to failing tests or observed gaps
 * verification evidence exists
 
-Production Readiness
+### Production Readiness
 
 * no stubs, mocks, fakes, placeholders, TODOs, or hardcoded production values in touched paths
 * no silent fallbacks hiding missing behavior
@@ -354,9 +381,9 @@ Production Readiness
 * integrations are real or clearly tracked as blocked
 * remaining work is in Beads
 
-⸻
+---
 
-Documentation Maintenance
+## Documentation Maintenance
 
 User-facing documentation lives in `docs/user-guide/`. When you add or change app behavior, update the corresponding documentation.
 
@@ -383,8 +410,17 @@ Documentation scope:
 | CLI commands | `docs/user-guide/cli-reference.md` |
 | Nostr events | `docs/nostr-event-implementation-guide.md`, `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md` |
 | Nostr control planes / migration app | `docs/nostr-event-implementation-guide.md`, `docs/control-planes.md`, `docs/user-guide/nostr-integration.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `pstf/features/NOSTR_NATIVE_CONTEXTVM_MIGRATION/verification_report.md` |
+| Builds | `docs/user-guide/features/builds.md` |
+| Environment states / drift | `docs/user-guide/features/environment-states.md` |
+| Route canaries | `docs/user-guide/features/route-canaries.md` |
+| Fleet health | `docs/user-guide/features/fleet-health.md` |
+| Continuity | `docs/user-guide/features/continuity.md` |
+| Security | `docs/user-guide/features/security.md` |
+| Events | `docs/user-guide/features/events.md` |
+| Ops widgets | `docs/user-guide/features/ops-widgets.md` |
+| HTTP routes | `docs/api.md` |
 | Core concepts | `docs/user-guide/core-concepts.md` |
-| Setup/config | `docs/user-guide/getting-started.md` |
+| Setup/config | `docs/user-guide/getting-started.md`, `README.md`, `DOCKER.md`, `docs/deployment.md` |
 
 Rules:
 
@@ -399,9 +435,9 @@ Rules:
 
 Documentation is part of the deliverable. Undocumented features are incomplete features.
 
-⸻
+---
 
-Session Completion
+## Session Completion
 
 Work is not complete until changes are committed and pushed.
 
@@ -414,11 +450,13 @@ Mandatory closeout:
 5. Commit changes
 6. Push to remote
 
+```bash
 git pull --rebase
 git push
 git status
+```
 
-git status must show the branch is up to date with origin.
+`git status` must show the branch is up to date with origin.
 
 Never say:
 
@@ -439,9 +477,9 @@ Final handoff must include:
 * blockers, if any
 * confirmation that no fake, stubbed, hardcoded, or placeholder production-path behavior remains in the touched scope
 
-⸻
+---
 
-Enforcement
+## Enforcement
 
 These instructions are architectural constraints, not preferences.
 

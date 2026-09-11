@@ -1,7 +1,5 @@
 # SoulFactory Runtime Control Contract
 
-> Source plan: [`docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md`](plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md)
-
 This document defines the shared `soulfactory.*` runtime control contract for the Bahia-owned OpenClaw sidecar/control-driver path and Metiq Go implementations. It is the schema source for bridge work and tests; implementation must not fork field names or error shapes by runtime.
 
 ## Event kinds
@@ -30,7 +28,7 @@ Every runtime control request MUST include:
 | `spec-hash` | hash of resolved desired spec | Draft/runtime consistency. |
 | `schema` | `soulfactory-runtime-control/v1` | Compatibility gate. |
 
-Recommended tags: `capability` (`30317` event id or coordinate), `request-kind` (`5950` or `1950`), `action`, `relay` hints, and `t` task/correlation ids.
+Bahia's encoder (`BuildRuntimeControlRequestEvent` in `internal/soulfactory/event_codec.go`) also adds `draft` and `runtime` tags when known. Recommended tags: `capability` (`30317` event id or coordinate), `request-kind` (`5950`, `1950`, or `31953` for fleet-config reloads), `action`, `relay` hints, and `t` task/correlation ids.
 
 ## Request content envelope
 
@@ -104,6 +102,16 @@ Recreates or refreshes runtime deployment/session bindings for the same soul.
 
 Required params: `reason`, `strategy` (`restart`, `rebuild`, or `migrate`), and optional `target_environment`.
 
+### `soulfactory.config.reload`
+
+Applies selected configuration sections to an existing managed agent. Params use `schema=soulfactory-config-reload/v1`. The packaged OpenClaw wrapper validates spec-hash continuity, accepts `target_fields` plus `patch` or `resolved_spec`, rewrites generated files, and returns `restart=false` without claiming a gateway restart.
+
+Bahia's fleet-config reconciler also sends this method when a trusted `31953` revision changes. It uses `target_fields=["fleet_config"]`, `patch.fleet_config=<snapshot>`, unchanged previous/new spec hashes, and `request-kind=31953`. If the apply fails, it sends a second reload that rolls back to the previous revision.
+
+### `soulfactory.memory.reindex`
+
+Validates a `soulfactory-memory-reindex/v1` request with `mode` set to `incremental` or `full` and a `memory_config` object. The packaged OpenClaw wrapper currently returns `accepted=true`, `started=false`, and an `action_required` description; it does not claim that runtime-native indexing ran.
+
 ### `soulfactory.revoke`
 
 Terminates runtime authority for the managed agent. This is destructive for runtime access but MUST preserve enough audit/read-model state for Bahia to publish final `31951/7950` results.
@@ -165,7 +173,7 @@ Standard codes: `invalid_schema`, `unsupported_method`, `unsupported_schema_vers
 
 ## Recovery and reconciliation
 
-The Bahia reactor subscribes continuously across the stored/live EOSE boundary and reconnects relay subscriptions with backoff. On restart it backfills the newest `5950`, newest `1950`, and up to 100 `38386` events. Existing terminal checks and runtime idempotency prevent exact replay from repeating side effects. The request/action backfill is bounded globally and is not a complete historical work queue.
+The Bahia reactor subscribes continuously across the stored/live EOSE boundary and reconnects relay subscriptions with backoff. On restart it backfills up to 1000 stored `5950` requests, up to 1000 stored `1950` actions, and up to 100 `38386` results, plus the latest trusted `31953` fleet configuration from each authorized operator (`internal/soulfactory/reactor.go`). Existing terminal checks and runtime idempotency prevent exact replay from repeating side effects. The backfill is bounded by those limits; it is not an unbounded historical work queue.
 
 The OpenClaw sidecar persists idempotency/result fingerprints; exact `38384` replay after restart republishes cached `38386`. A conflicting reuse returns `duplicate_conflict`.
 
@@ -205,14 +213,14 @@ Runtime capabilities SHOULD include JSON content with:
 {
   "schema": "soulfactory-runtime-capability/v1",
   "runtime": "openclaw",
-  "methods": ["soulfactory.provision", "soulfactory.update", "soulfactory.persona.update", "soulfactory.revoke"],
+  "methods": ["soulfactory.provision", "soulfactory.update", "soulfactory.persona.update", "soulfactory.config.reload", "soulfactory.memory.reindex", "soulfactory.revoke"],
   "control_schema": "soulfactory-runtime-control/v1",
   "controller_pubkeys": ["<trusted-controller-pubkey>"],
   "relay_hints": { "read": [], "write": [], "control": [] }
 }
 ```
 
-The example is the packaged `OpenClawCommandDriver` default. A different driver may advertise only methods it actually implements; the in-process OpenClaw driver also has avatar, voice, memory, persona configure/preview, and config-reload extensions. Do not advertise suspend/resume/redeploy through the packaged command wrapper because it rejects them.
+The example is the packaged `OpenClawCommandDriver` default. A different driver may advertise only methods it actually implements; the in-process OpenClaw driver also has avatar, voice, memory configure/status, and persona configure/preview extensions. Do not advertise suspend/resume/redeploy through the packaged command wrapper because it rejects them.
 
 Bahia MUST capability-gate runtime target choices on live, trusted, compatible `30317` announcements. Static allowlists may remain as an additional safety gate until both bridges are deployed.
 

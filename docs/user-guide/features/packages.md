@@ -7,7 +7,7 @@
 Package features include:
 - **Repository management** — Define package repositories
 - **Package publishing** — Upload and version packages
-- **Promotion workflow** — Move packages between stages
+- **Promotion workflow** — Move packages between repositories and channels
 - **Drift detection** — Ensure repository consistency
 
 ## Key Concepts
@@ -18,9 +18,14 @@ A **Repository** hosts packages:
 
 ```yaml
 name: "internal-npm"
-type: "npm"
-url: "https://npm.example.com"
-upstream: "https://registry.npmjs.org"
+format: "npm"
+backend_ref: "nexus-main"          # configured backend reference
+backend_type: "nexus"              # nexus, pulp, or filesystem_mock
+external_repository_name: "internal-npm"
+namespace_prefix: "@company"
+policy: {}
+public_url: "https://npm.example.com/repository/internal-npm/"
+status: "ready"
 ```
 
 ### Package
@@ -29,17 +34,16 @@ A **Package** is a versioned artifact:
 
 ```yaml
 repository: "internal-npm"
-name: "@company/utils"
+namespace: "@company"
+package_name: "utils"
 version: "1.2.3"
-checksum: "sha256:..."
+filename: "utils-1.2.3.tgz"
+sha256: "<hex>"
 ```
 
-### Package Stage
+### Promotion targets
 
-Packages can move through stages:
-- **unstable** — Development/testing
-- **testing** — QA/integration
-- **stable** — Production ready
+Promotion copies an artifact from a source repository to a target repository, optionally recording a target `channel`, `environment`, approver, and policy reference. Bahia does not define built-in stage names; model stages as repositories (for example `internal-npm` → `stable-npm`) and/or channels.
 
 ## Managing Repositories
 
@@ -108,7 +112,7 @@ In an embedding that configures external MCP authorization, use `bahia_package_u
 
 ## Package Promotion
 
-Move packages between stages:
+Move packages between repositories:
 
 ### Promoting Package
 
@@ -174,15 +178,9 @@ Bahia stores the payload on Blossom and publishes a `30078` SBOM reference plus 
 
 ### Web UI
 
-Navigate to **Packages** in the sidebar:
-- Browse repositories
-- View package versions
-- Check promotion status
+Navigate to **Packages** in the sidebar. The repository table shows **Name**, **Backend Type**, **Format**, **Status**, **Live outcome**, and **Artifacts**.
 
-Click a package to see:
-- Version history
-- Checksums
-- Stage/promotion status
+Click a repository (`/packages/<id>`) to see its artifacts, versions, checksums, and promotion status.
 
 ### CLI and MCP
 
@@ -194,7 +192,7 @@ The CLI package group publishes mutations but does not register list/get/version
 {
   "tool": "bahia_package_list",
   "arguments": {
-    "repository": "internal-npm"
+    "repository_name": "internal-npm"
   }
 }
 ```
@@ -211,38 +209,20 @@ bahia package drift --repository internal-npm
 {
   "tool": "bahia_package_drift_detect",
   "arguments": {
-    "repository": "internal-npm"
+    "repository_name": "internal-npm",
+    "include_artifacts": true
   }
 }
 ```
 
-Drift is detected when:
-- Expected packages missing
-- Checksum mismatches
-- Stage inconsistencies
+Drift detection compares Bahia's projected repository (and, with `--include-artifacts`, artifact) state against the backend. Add `--wait` to the CLI command to subscribe for the correlated result event.
 
-## Upstream Proxying
-
-Repositories can proxy upstream registries:
-
-```yaml
-repository:
-  name: "npm-proxy"
-  type: "npm"
-  upstream:
-    url: "https://registry.npmjs.org"
-    cache_ttl: 3600
-```
-
-Benefits:
-- Cache packages locally
-- Survive upstream outages
-- Audit package usage
+> **NOTE (2026-09-11):** earlier versions of this page described upstream-proxy repositories (`upstream.url`, `cache_ttl`). The package repository model has no upstream fields; configure proxying in the backend (for example Nexus) if needed.
 
 ## Best Practices
 
 1. **Use semantic versioning** — Clear version progression
-2. **Promote through stages** — Test before stable
+2. **Promote through repositories** — Test before stable
 3. **Yank bad versions** — Don't delete, mark unavailable
 4. **Document packages** — Include README and changelog
 5. **Monitor drift** — Ensure consistency
@@ -257,8 +237,8 @@ Benefits:
 
 ### Promotion Failed
 
-- Verify package exists
-- Check stage requirements
+- Verify package exists in the source repository
+- Check the target repository and channel
 - Review promotion policies
 
 ### Drift Detected

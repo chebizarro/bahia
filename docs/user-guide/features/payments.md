@@ -1,103 +1,84 @@
 # Payments
 
-**Payments** in Bahia track costs for deployment runs, worker usage, and resource consumption.
+**Payments** in Bahia record worker payments for deployment runs and estimate run costs from worker pricing.
 
 ## Overview
 
-Payments documentation currently covers the web and MCP surfaces. Bahia does not currently register a top-level `bahia payments` CLI command.
+Payments documentation covers the web and MCP surfaces. Bahia does not currently register a top-level `bahia payments` CLI command.
 
 Payment features include:
-- **Cost estimation** — Predict deployment costs
-- **Usage tracking** — Record actual consumption
-- **Payment history** — View past transactions
-- **Worker pricing** — Per-worker cost models
+- **Cost estimation** — Estimate a run's cost from the assigned worker's advertised pricing
+- **Payment history** — View payment and change records per run and worker
+- **Worker pricing** — Per-worker pricing tiers from Loom worker advertisements
+
+> Cashu mint-backed token flows are not implemented. Setting `cashu.enabled: true` fails configuration validation.
 
 ## Key Concepts
 
-### Cost Estimate
+### Worker pricing
 
-A **Cost Estimate** predicts deployment cost:
+Workers advertise pricing tiers in their kind `10100` advertisement:
 
 ```yaml
-service_id: "svc-123"
-environment_id: "env-456"
-worker_pubkey: "npub1worker..."
-estimated_cost:
-  amount: 1000
-  currency: "sats"
-breakdown:
-  base: 500
-  compute_minutes: 300
-  storage_mb: 200
+pricing:
+  - mint_url: "https://mint.example.com"
+    price_per_second: 1
+    unit: "sat"
+```
+
+See [Workers](workers.md) (**Pricing Tiers** on the worker detail page).
+
+### Cost Estimate
+
+A **Cost Estimate** is `price_per_second × estimated_secs` for the assigned worker:
+
+```yaml
+worker_pubkey: "<worker-pubkey-hex>"
+worker_name: "prod-worker-1"
+mint_url: "https://mint.example.com"
+price_per_second: 1
+estimated_secs: 600
+estimated_cost_sats: 600
+unit: "sat"
 ```
 
 ### Payment Record
 
-A **Payment Record** tracks actual cost:
+A **Payment Record** tracks one payment or change transfer for a deployment run:
 
 ```yaml
-run_id: "run-789"
-worker_pubkey: "npub1worker..."
-amount: 950
-currency: "sats"
-status: "completed"
-paid_at: "2024-01-15T10:30:00Z"
+id: "<uuid>"
+deployment_run_id: "run-789"
+worker_pubkey: "<worker-pubkey-hex>"
+mint_url: "https://mint.example.com"
+amount_sats: 600
+direction: "payment"   # payment or change
+status: "sent"         # pending, sent, redeemed, failed, refunded
+token_hash: "..."      # idempotency hash, when present
+created_at: "2024-01-15T10:30:00Z"
 ```
 
 ## Estimating Costs
 
-### Before Deployment
+### Web UI
 
-Use the web UI or the `bahia_estimate_cost` MCP tool. The current CLI does not register `bahia payments estimate`.
+The service **Deploy** wizard shows a **Cost Estimate** step before you sign the deployment.
 
 ### MCP Tool
+
+`bahia_estimate_cost` estimates the cost for a deployment run based on its assigned worker's pricing. `run_id` is required; `estimated_duration_secs` is optional.
 
 ```json
 {
   "tool": "bahia_estimate_cost",
   "arguments": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789"
+    "run_id": "run-789",
+    "estimated_duration_secs": 600
   }
 }
 ```
 
-### Estimate Response
-
-```json
-{
-  "estimated_cost": {
-    "amount": 1000,
-    "currency": "sats"
-  },
-  "breakdown": {
-    "base_cost": 500,
-    "compute_minutes": 10,
-    "compute_cost": 300,
-    "storage_mb": 100,
-    "storage_cost": 200
-  },
-  "worker": {
-    "pubkey": "npub1worker...",
-    "pricing_model": "standard"
-  }
-}
-```
-
-## Viewing Costs
-
-### Run Cost
-
-After deployment, use the web UI or the `bahia_get_run_cost` MCP tool. The current CLI does not register `bahia payments cost`.
-
-### Web UI
-
-1. Go to deployment run detail
-2. View **Cost** section
-3. See breakdown and payment status
-
-### MCP Tool
+`bahia_get_run_cost` returns the recorded cost for a run:
 
 ```json
 {
@@ -108,14 +89,13 @@ After deployment, use the web UI or the `bahia_get_run_cost` MCP tool. The curre
 }
 ```
 
+The REST compatibility reads are `GET /api/v1/payments/estimate`, `GET /api/v1/payments/history`, and `GET /api/v1/deployments/runs/{id}/cost`.
+
 ## Payment History
 
 ### Web UI
 
-Navigate to **Payments** in the sidebar:
-- View transaction history
-- Filter by worker, date, status
-- See totals and trends
+Navigate to **Payments** in the sidebar. The table shows **Created**, **Amount**, **Status**, **Direction**, **Worker**, **Run**, **Mint**, and **Token Hash**, with status and direction filters and a page size of up to 250.
 
 ### Web transport and MCP tool
 
@@ -127,115 +107,42 @@ The MCP tool is a separate authenticated per-tool call; MCP transport does not m
 {
   "tool": "bahia_get_payment_history",
   "arguments": {
-    "worker_pubkey": "npub1worker...",
+    "worker_pubkey": "<worker-pubkey-hex>",
     "limit": 50
   }
 }
 ```
-
-## Worker Pricing
-
-### Viewing Worker Pricing
-
-Worker pricing is currently exposed through the web UI and payment/read-model surfaces; the current CLI does not register `bahia workers pricing`.
-
-### Pricing Models
-
-Workers can define pricing:
-
-```yaml
-pricing:
-  model: "standard"
-  base_cost: 100        # sats per run
-  per_minute: 10        # sats per minute
-  per_mb_storage: 1     # sats per MB
-  gpu_multiplier: 2.0   # multiplier for GPU tasks
-  currency: "sats"
-```
-
-### Pricing Tiers
-
-| Tier | Description | Typical Rate |
-|------|-------------|--------------|
-| `free` | No charge | 0 sats |
-| `standard` | Normal pricing | 100-500 sats |
-| `premium` | Priority/GPU | 500-2000 sats |
-| `enterprise` | Custom | Negotiated |
-
-## Cost Breakdown
-
-### Compute Costs
-
-Based on execution time:
-- CPU minutes
-- GPU minutes (if applicable)
-- Memory hours
-
-### Storage Costs
-
-Based on data transferred:
-- Image pull size
-- Artifact storage
-- Log storage
-
-### Base Costs
-
-Fixed per-run costs:
-- Job scheduling
-- Infrastructure overhead
 
 ## Payment Status
 
 | Status | Description |
 |--------|-------------|
 | `pending` | Awaiting payment |
-| `processing` | Payment in progress |
-| `completed` | Successfully paid |
-| `failed` | Payment failed |
+| `sent` | Payment sent to the worker |
+| `redeemed` | Worker redeemed the payment |
+| `failed` | Payment failed (see `error_message`) |
 | `refunded` | Payment reversed |
-
-## Currency
-
-Bahia primarily uses **sats** (satoshis):
-- 1 sat = 0.00000001 BTC
-- Lightning-oriented pricing/history surfaces are documented here
-- Cashu mint-backed token flows are not currently implemented and enabling them fails configuration validation
 
 ## Encrypted Operations
 
 Payment data is sensitive:
-- History is accessed via encrypted Nostr (`5980` requests / `7980` terminal results)
+- Browser history requests use encrypted ContextVM messages (kind `25910` wrapped in NIP-59 `1059`/`21059`); the legacy `5980`/`7980` kinds are migration inputs only
 - Requires a NIP-44 capable signer
-- Requires Bahia discovery to advertise `features.encrypted_nostr_requests` so browser-safe relays and the backend encrypted transport are available
+- Requires Bahia discovery to advertise encrypted request support so browser-safe relays and the backend encrypted transport are available
 - Not published to public relays
-
-## Best Practices
-
-1. **Estimate before deploying** — Know costs upfront
-2. **Monitor spending** — Track trends over time
-3. **Choose workers wisely** — Balance cost and capability
-4. **Set budgets** — Alert on spending thresholds
-5. **Review regularly** — Audit payment history
 
 ## Troubleshooting
 
-### Cost Higher Than Estimated
-
-- Check actual runtime vs estimated
-- Review storage usage
-- Check for retries/failures
-
-### Payment Failed
-
-- Verify payment method
-- Check worker connectivity
-- Review error details
-
 ### Missing History
 
-- Check date range
-- Verify worker filter
-- Ensure encrypted access configured
+- Check the status and direction filters
+- Verify the worker filter
+- Ensure encrypted access is configured
+
+### No Cost Estimate
+
+- The run must have an assigned worker that advertises pricing
+- Check the worker's **Pricing Tiers** on its detail page
 
 ## Related
 

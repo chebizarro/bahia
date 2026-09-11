@@ -52,6 +52,10 @@ The gateway's wallet float should use:
 
 Use signer-first ContextVM control-plane writes as the canonical path. REST write endpoints for LLM route/release creation are not mounted in current Bahia; the REST examples below are payload shapes for deployments that still expose an operator command bridge, not the preferred path.
 
+Bahia advertises `llm/route-create`, `llm/release-register`, `llm/deploy`, `llm/deployment-approval`, and `llm/rollback` in its ContextVM discovery only when the LLM subsystem is enabled; confirm they appear before publishing. The MCP tools `bahia_llm_create_route` and `bahia_llm_register_release` publish the same canonical requests with correlation metadata and are the least error-prone way to issue them.
+
+> **NOTE (2026-09-11):** The raw kind `25910` wrappers below are illustrative. Verify the current envelope (encryption, required tags, `_meta`) against `internal/controlplane/llm_command_publisher.go` before hand-crafting events.
+
 Set these variables before running examples:
 
 ```bash

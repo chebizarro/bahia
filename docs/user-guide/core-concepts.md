@@ -19,19 +19,20 @@ Bahia manages deployments through a **desired state** model:
 A **Service** is an application you deploy — a web API, worker process, or any containerized workload.
 
 ```yaml
-# Example service
+# Example service (fields from the service read model)
 name: "payment-api"
-repository: "https://github.com/company/payment-api"
-description: "Handles payment processing"
-tags:
-  team: "payments"
-  criticality: "high"
+org_id: "<org-uuid>"
+artifact_repo: "ghcr.io/company/payment-api"
+repo_url: "https://github.com/company/payment-api"
+default_branch: "main"
+runtime_type: "compose"
 ```
 
 Key attributes:
-- **name**: Human-readable identifier
-- **repository**: Source code location
-- **tags**: Metadata for filtering and organization
+- **name**: Unique identifier
+- **artifact_repo**: Registry repository that CI publishes images to (required)
+- **repo_url** / **repository**: Source code location, including structured Git or NIP-34 repository metadata
+- **runtime_type**: Runtime used for deployments (`compose` by default in the CLI)
 
 ### Environment
 
@@ -40,16 +41,22 @@ An **Environment** is a deployment target — staging, production, edge, etc.
 ```yaml
 # Example environment
 name: "production"
-slug: "prod"
-deployment_target:
-  type: "kubernetes"
-  cluster: "prod-us-east"
+org_id: "<org-uuid>"
+deploy_strategy: "replace"   # replace, blue_green, or canary
+protected: true
+targeting:
+  default_unit_key: "default"
+deployment_units:
+  - key: "default"
+    runtime_type: "compose"     # docker, compose, kubernetes, podman, vm-firecracker, vm-qemu
+    endpoint_ref: "prod-docker"
 ```
 
-Environments can require:
-- **Approval policies** (manual or automated)
-- **Runtime targets** (Kubernetes, Docker, Compose)
-- **Notification channels**
+Environments carry:
+- **Deployment units** — explicit runtime targets, or an implicit default when none are declared
+- **Protection and approval** — `protected` environments require approval for every deployment; [policies](features/policies.md) can block or warn
+- **Reconcile modes** — `observe_only`, `auto_apply`, `approval_required`, or `disabled`
+- **Secret scope** — `service`, `environment`, or `unit`
 
 ### Build
 
@@ -57,16 +64,20 @@ A **Build** represents a CI workflow execution that produces deployable output.
 
 ```yaml
 # Build metadata from CI
-workflow_id: "ci-123"
-commit_sha: "abc123def"
-branch: "main"
-status: "completed"
+service_id: "svc-123"
+ci_system: "hiveci"
+ci_run_id: "run-123"
+git_sha: "abc123def"
+git_ref: "main"
+status: "succeeded"   # queued, running, succeeded, failed, cancelled
 ```
 
 Bahia integrates with CI systems through:
-- **Hive-CI Bridge** for Hive-CI workflows
-- **Webhook receivers** for other CI systems
-- **Manual registration** via API/CLI
+- **Hive-CI** — trusted signed results (kind `5402` carrying `BAHIA_ARTIFACT`) register builds and digest-pinned artifacts automatically
+- **Manual recovery registration** — `bahia artifacts register`, only when `hiveci.allow_manual_artifact_registration` is enabled
+- **Observed-image import** — `bahia artifacts import-observed`, only when `hiveci.allow_live_artifact_import` is enabled
+
+> **NOTE (2026-09-11):** there is no generic CI webhook receiver in the current HTTP router; non-Hive-CI systems should publish through the signer-first flows above.
 
 ### Artifact
 
@@ -74,12 +85,14 @@ An **Artifact** is an immutable container image with metadata.
 
 ```yaml
 # Example artifact
-image: "registry.example.com/payment-api:v2.1.0"
-digest: "sha256:abc123..."
+service_id: "svc-123"
 build_id: "build-456"
+image_repo: "registry.example.com/payment-api"
+image_tag: "v2.1.0"
+image_digest: "sha256:abc123..."
+scan_status: "unknown"
 metadata:
   git_commit: "abc123"
-  build_timestamp: "2024-01-15T10:30:00Z"
 ```
 
 Artifacts are immutable — once registered, their digest never changes.
@@ -92,17 +105,19 @@ A **Deployment Intent** is a request to deploy an artifact to an environment.
 # Deployment intent
 service_id: "svc-123"
 environment_id: "env-456"
+deployment_unit_id: "unit-1"
 artifact_id: "art-789"
 requested_by: "npub1..."
-status: "pending_approval"
+approval_status: "pending"   # not_required, pending, approved, rejected
+status: "pending"
 ```
 
-Intents go through a lifecycle:
-1. **Created** → Intent submitted
-2. **Pending Approval** → Waiting for policy/manual approval
-3. **Approved** → Ready to execute
-4. **Executing** → Run in progress
-5. **Completed** / **Failed** → Terminal state
+Intents go through a lifecycle (`status`):
+1. **pending** → Intent submitted; may be waiting on approval (`approval_status: pending`)
+2. **approved** → Ready to execute
+3. **deploying** → Run in progress
+4. **deployed** / **failed** / **rejected** → Terminal outcomes
+5. **superseded** / **rolled_back** → Replaced by a newer intent or a rollback
 
 ### Deployment Run
 
@@ -110,7 +125,7 @@ A **Deployment Run** is a concrete execution of a deployment intent.
 
 ```yaml
 # Deployment run
-intent_id: "intent-123"
+deployment_intent_id: "intent-123"
 worker_pubkey: "npub1worker..."
 status: "running"
 started_at: "2024-01-15T10:35:00Z"
@@ -130,14 +145,16 @@ An **Observation** is a snapshot of what's actually running.
 # Runtime observation
 service_id: "svc-123"
 environment_id: "env-456"
-observed_artifact: "art-789"
-container_status: "running"
+deployment_unit_id: "unit-1"
+observed_image_repo: "registry.example.com/payment-api"
+observed_image_digest: "sha256:abc123..."
+health_status: "healthy"   # unknown, starting, healthy, unhealthy, stopped
 observed_at: "2024-01-15T10:40:00Z"
 ```
 
 Observations enable drift detection by comparing:
-- **Desired artifact** (from latest successful deployment)
-- **Observed artifact** (from runtime inspection)
+- **Desired state** (from the latest deployed intent)
+- **Observed state** (image digest and normalized runtime state from inspection)
 
 ### Drift
 
@@ -151,8 +168,8 @@ Causes of drift:
 
 Bahia can:
 - **Alert** on drift via notifications
-- **Auto-remediate** drift (when configured)
-- **Track** historical drift events
+- **Auto-remediate** drift when the environment or unit reconcile mode is `auto_apply`
+- **Surface** drift on the **Environment States** page and via `bahia state drifted`
 
 ## Nostr Event Model
 
@@ -237,10 +254,12 @@ For **AI agent** interactions:
 
 ### 3. REST API
 
-A **compatibility** surface for:
-- CRUD operations on registry entities
+A **compatibility** surface under `/api/v1` for:
 - Query and list operations
+- A small set of remaining compatibility mutations
 - Legacy client support
+
+Most mutations (service, environment, deployment, artifact, adoption, direct runtime, and LLM operations) are signer-first only; the corresponding legacy REST mutations are not mounted.
 
 ## Authorization Model
 
@@ -257,11 +276,11 @@ Control-plane operations use **Nostr pubkey** authorization:
 
 ### Organization-Based Access
 
-Within organizations:
-- **Owner** — Full access, can delete org
-- **Admin** — Manage members and settings
-- **Editor** — Create/modify resources
-- **Viewer** — Read-only access
+Within organizations (roles from `internal/domain/tenant.go`):
+- **owner** — Full access, can delete org
+- **admin** — Manage members and settings
+- **deployer** — Create/modify resources and deploy
+- **viewer** — Read-only access
 
 ## Encrypted Operations
 

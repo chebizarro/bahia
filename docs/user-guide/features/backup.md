@@ -19,27 +19,25 @@ A **Backup Definition** specifies what to back up:
 
 ```yaml
 name: "database-daily"
-target:
-  type: "postgresql"
-  connection: "postgres://..."
-schedule: "0 2 * * *"  # Daily at 2 AM
-policy_id: "policy-123"
-repository_id: "repo-456"
+repository_name: "kopia-main"
+policy_name: "production-policy"
+recipe_name: "postgres-dump"
+recipe_version: "1"
+schedule_expression: "0 2 * * *"  # Daily at 2 AM
+schedule_enabled: true
+environment_id: "<env-uuid>"
 ```
+
+A definition binds a **recipe** (what and how to back up) to a repository and policy, with an optional schedule and tenant/environment scope.
 
 ### Backup Policy
 
-A **Backup Policy** defines retention and verification:
+A **Backup Policy** defines verification requirements:
 
 ```yaml
 name: "production-policy"
-retention:
-  daily: 7
-  weekly: 4
-  monthly: 12
-verification:
-  required: true
-  frequency: "weekly"
+require_verification: true
+verification_mode: "kopia_snapshot_verify"   # or none
 ```
 
 ### Backup Repository
@@ -47,11 +45,10 @@ verification:
 A **Backup Repository** is where backups are stored:
 
 ```yaml
-name: "s3-backup-repo"
-type: "s3"
-config:
-  bucket: "company-backups"
-  region: "us-east-1"
+name: "kopia-main"
+backend: "kopia"          # kopia or velero
+repository_uri: "s3://company-backups/bahia"
+credential_profile: "backup-s3"   # server-side credential reference
 ```
 
 ## Creating Backups
@@ -93,7 +90,9 @@ Use `request_backup_run` (or `bahia_request_backup_run`) with a recipe identity 
 | `running` | In progress |
 | `succeeded` | Completed successfully |
 | `failed` | Encountered error |
-| `verified` | Verified restorable |
+| `cancelled` / `timeout` | Did not complete |
+
+Verification is tracked separately in `verification_status` (`pending`, `succeeded`, `failed`, `skipped`, `unsupported`), and restores in their own approval status (`pending`, `approved`, `rejected`, `not_required`).
 
 ## Verification
 
@@ -105,23 +104,7 @@ Call `request_backup_verification` or `bahia_request_backup_verification` with `
 
 ### Verification Process
 
-1. Download backup from repository
-2. Restore to test environment
-3. Validate data integrity
-4. Report verification status
-
-### Verification Results
-
-```yaml
-verification:
-  run_id: "run-123"
-  status: "verified"
-  verified_at: "2024-01-15T10:00:00Z"
-  details:
-    tables_checked: 42
-    rows_sampled: 10000
-    integrity: "pass"
-```
+The supported verification mode is `kopia_snapshot_verify`, which runs Kopia's snapshot verification against the run's snapshot. The outcome is recorded on the run as `verification_status` and determines restore eligibility.
 
 ## Restore
 
@@ -143,36 +126,20 @@ Use `list_backup_restores` and `inspect_backup_restore`.
 
 Use the web mutation panel or `apply_backup_policy` / `bahia_apply_backup_policy`. The CLI does not register a backup group.
 
-### Retention Rules
+### Retention
 
-```yaml
-retention:
-  daily: 7      # Keep 7 daily backups
-  weekly: 4     # Keep 4 weekly backups
-  monthly: 12   # Keep 12 monthly backups
-  yearly: 3     # Keep 3 yearly backups
-```
+Retention is enforced on demand with **Enforce retention** on a definition (`backup/retention`, MCP `request_backup_retention`) and tracked as retention runs (`list_backup_retention_runs`, `inspect_backup_retention_run`).
 
-### Verification Requirements
-
-```yaml
-verification:
-  required: true
-  frequency: "weekly"  # Verify at least weekly
-  auto_verify: true    # Verify immediately after backup
-```
+> **NOTE (2026-09-11):** earlier versions of this page showed daily/weekly/monthly/yearly retention tiers and verification frequency settings on policies. The current policy model carries only `require_verification` and `verification_mode`; check the recipe/backend configuration for retention parameters.
 
 ## Backup Repositories
 
-### Types
+### Backends
 
-| Type | Description |
-|------|-------------|
-| `s3` | Amazon S3 or compatible |
-| `gcs` | Google Cloud Storage |
-| `azure` | Azure Blob Storage |
-| `local` | Local filesystem |
-| `blossom` | Blossom blob storage |
+| Backend | Description |
+|---------|-------------|
+| `kopia` | Kopia repository (storage location given by `repository_uri`) |
+| `velero` | Velero (Kubernetes) backups |
 
 ### Creating a repository
 
@@ -182,35 +149,23 @@ Use the web mutation panel or `apply_backup_repository` / `bahia_apply_backup_re
 
 Use `probe_backup_repository` / `bahia_probe_backup_repository` with a repository identity and idempotency key.
 
-## Nostr Event Kinds
+## Nostr Methods and Kinds
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 38400 | BackupRunRequest | Trigger backup |
-| 38401 | BackupVerificationRequest | Verify backup |
-| 38402 | BackupRestoreRequest | Restore backup |
-| 38403 | BackupRestoreApproval | Approve restore |
-| 6981 | BackupRunStatus | Run progress |
-| 6982 | BackupRestoreStatus | Restore progress |
-| 6983 | BackupVerificationStatus | Verification progress |
-| 31310 | BackupRunAttestation | Signed attestation |
+Backup mutations are ContextVM methods over kind `25910`: `backup/repository-register`, `backup/policy-apply`, `backup/recipe-apply`, `backup/definition-apply`, `backup/run`, `backup/verification`, `backup/restore`, `backup/retention`, `backup/repository-probe`, and `approval/backup-restore-approve`.
 
-## Read Models
+| Kind | Purpose |
+|------|---------|
+| `30900` | Canonical backup state (`domain=backup`; definitions, policies, repositories, recipes, runs, verifications, restores) |
+| `30315` / `4903` | Status and audit facts |
+| `31310` | Signed backup run attestation |
 
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31991 | `backup-definition:<name>` | Definition |
-| 31992 | `backup-policy:<id>` | Policy |
-| 31993 | `backup-repository:<id>` | Repository |
-| 31996 | `backup-run:<id>` | Run state |
-| 31997 | `backup-verification:<id>` | Verification state |
-| 31998 | `backup-restore:<id>` | Restore state |
+The historical `38400`-`38403` request kinds, `6981`-`6983` status kinds, and `31991`-`31998` read-model kinds are migration inventory only.
 
 ## Best Practices
 
 1. **Test restores regularly** — Don't assume backups work
 2. **Use policies** — Consistent retention and verification
-3. **Multiple repositories** — Geographic redundancy
+3. **Require verification** — Set `require_verification` on production policies
 4. **Monitor failures** — Alert on backup issues
 5. **Document recovery** — Know how to restore
 
@@ -219,8 +174,8 @@ Use `probe_backup_repository` / `bahia_probe_backup_repository` with a repositor
 ### Backup Failed
 
 - Check target connectivity
-- Verify credentials
-- Review backup logs
+- Verify the repository `credential_profile`
+- Use **Probe repository** to check repository health
 - Check repository space
 
 ### Verification Failed

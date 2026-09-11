@@ -4,6 +4,13 @@ Task: **bahia-openclaw-rollout-conformance-20260819**
 
 This runbook operates the durable saga and dedicated runtime contract. Supply values through protected environment or files; never put bunker URIs, NIP-46 keys, tokens, private keys, or DM plaintext on a command line, in logs, or in evidence.
 
+> **NOTE (2026-09-11):** `internal/soulfactory/saga.Operator` defines
+> `inspect`, `retry`, `reconcile`, and `safe-abort`, but this checkout does not
+> expose that operator through a binary under `cmd/`, the REST router, or the
+> public ContextVM handlers. The steps below describe the contract for a
+> deployment-supplied authenticated adapter; do not invent a CLI command or
+> operate the saga database directly.
+
 ## Deploy
 
 1. Verify the release record contains exact Bahia/OpenClaw/Signet/relay image digests and source commits.
@@ -19,7 +26,16 @@ Run the saga operator inspect dry-run first. Correlate request_id, run_id, agent
 
 Do not infer success from Compose health, an agent record, 100% progress, ContextVM acknowledgment, or subscription closure. Success requires dm_verified, running, and correlated terminal evidence.
 
-Prometheus series use the bahia_openclaw_provisioning_ prefix. Run labels are intentional for tracing and must not contain payload content.
+Prometheus series use the `bahia_openclaw_provisioning_` prefix. Run labels are intentional for tracing and must not contain payload content.
+
+> **NOTE (2026-09-11):** These series are rendered by
+> `internal/soulfactory/saga.Monitor.WritePrometheus`, but no binary under
+> `cmd/` currently imports the `saga` package, so Bahia's `/metrics` endpoint
+> (`bahia:8080`) does not expose them. The `BahiaOpenClaw*` alerts in
+> `deploy/observability/bahia-alerts.yml` therefore cannot fire until the
+> deployment-supplied adapter publishes these series to a scraped endpoint.
+> Verify the series are present in Prometheus before relying on those alerts as
+> a rollout gate.
 
 ## Retry
 

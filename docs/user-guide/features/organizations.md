@@ -13,14 +13,14 @@ Organizations enable:
 
 ### Web UI
 
-The Organizations web route is protected by signer-first authentication and currently requires backend REST compatibility auth. If the backend does not advertise `direct_nostr_http_auth`, the page fails closed with a compatibility message and does not issue organization REST requests.
+The Organizations web route is protected by signer-first authentication. The browser performs every organization operation through encrypted ContextVM requests (see [Encrypted request/result facade](#encrypted-requestresult-facade)); if Bahia service pubkey discovery or standard Bahia relays are not configured, the page fails closed instead of falling back to REST.
 
-1. Navigate to **Organizations** in the sidebar
-2. Click **New Organization**
+1. Navigate to **Orgs** in the sidebar
+2. Click **+ New Organization**
 3. Fill in:
    - **Name**: Unique org identifier (e.g., `acme-corp`)
    - **Display Name**: Human-readable name (e.g., "ACME Corporation")
-4. Click **Create**
+4. Click **Create Organization**
 
 ### CLI
 
@@ -28,9 +28,11 @@ The Organizations web route is protected by signer-first authentication and curr
 bahia orgs create acme-corp --display-name "ACME Corporation"
 ```
 
-### Encrypted request/result flow
+Unlike most CLI mutations, the `orgs` commands call the REST compatibility API (`/api/v1/orgs`, NIP-98 authenticated) rather than publishing ContextVM requests.
 
-Bahia does not currently expose `bahia_org_*` MCP tools. Organization operations use encrypted Nostr request/result messages instead.
+### MCP
+
+Bahia does not currently expose `bahia_org_*` MCP tools.
 
 ## Organization Roles
 
@@ -55,10 +57,9 @@ Higher roles inherit all lower role permissions.
 
 **Via Web UI:**
 1. Go to organization detail
-2. Click **Members** tab
-3. Click **Invite Member**
-4. Enter pubkey and role
-5. Click **Send Invite**
+2. In the **Members** section, click **Invite Member**
+3. Enter pubkey and role
+4. Click **Send Invite**
 
 **Via CLI:**
 ```bash
@@ -89,10 +90,9 @@ The **Organizations** page shows:
 - Pending invites
 
 Click an org to see:
-- **Overview**: Org info and stats
-- **Members**: Current members and roles
-- **Invites**: Pending invitations
-- **Settings**: Edit org (admins+)
+- **Members**: Current members and roles, with **Invite Member**
+- **Pending Invites**: Outstanding invitations (revocable)
+- **Danger Zone**: Delete the organization (owner)
 
 ### CLI
 
@@ -123,14 +123,17 @@ bahia services create \
 
 ```bash
 bahia environments create \
+  --org <org-uuid> \
   --name "production" \
   --strategy replace \
   --protected
 ```
 
+Pass `--org <org-uuid>` to `bahia services create` as well to bind a service to an organization.
+
 ### Policies
 
-Policy creation is signer-first. Publish a ContextVM `policy/create` command scoped to the organization, or use transitional REST policy mutations when the control-plane command publisher is configured. Policy mutation routes require the `policies:write` permission, granted to admin and owner roles.
+Policy creation is signer-first. Publish a ContextVM `policy/create` command scoped to the organization (or `bahia policies create`); there are no REST policy mutation routes. Policy mutations require the `policies:write` permission, granted to admin and owner roles.
 
 ## Access Control
 
@@ -159,13 +162,13 @@ Policy creation is signer-first. Publish a ContextVM `policy/create` command sco
 
 ## Deleting Organizations
 
-Organization deletion is part of the encrypted request/result facade. The current CLI does not expose `bahia orgs delete`, so use the authenticated web flow or the underlying encrypted `orgs.delete` operation when your deployment enables it.
+Organization deletion is available from the org detail page's **Danger Zone** (encrypted `orgs.delete` operation). The current CLI does not expose `bahia orgs delete`.
 
 ## Encrypted Request/Result Facade
 
-Organization operations use the **encrypted request/result facade** over Nostr events (`5980` requests and `7980` terminal results):
+Web organization operations use the **encrypted request/result facade**: ContextVM kind `25910` messages wrapped in NIP-59 gift wraps (`1059`, or ephemeral `21059`). The legacy `5980`/`7980` encrypted request/result kinds are migration inputs only.
 
-- The browser signs and encrypts a scoped org operation such as `orgs.create`, `orgs.list`, `orgs.detail`, `orgs.create_invite`, `orgs.accept_invite`, `orgs.update_member_role`, or `orgs.remove_member`.
+- The browser signs and encrypts a scoped org operation: `orgs.list`, `orgs.my_invites`, `orgs.detail`, `orgs.create`, `orgs.delete`, `orgs.create_invite`, `orgs.revoke_invite`, `orgs.accept_invite`, `orgs.update_member_role`, or `orgs.remove_member`.
 - Bahia decrypts the request, validates the requester, applies RBAC/repository changes, and publishes an encrypted terminal result correlated to the request event id.
 - Member lists, invites, and org CRUD responses are not public Nostr read models; durable org state remains repository-backed and is returned only through encrypted request/result responses.
 - The UI treats relay `OK`, `AUTH`, `CLOSED`, and encrypted terminal result outcomes according to the shared request/result lifecycle contract.

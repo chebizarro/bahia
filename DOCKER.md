@@ -4,7 +4,7 @@ This document describes the Docker Compose setup for running the complete Bahia 
 
 ## Services
 
-The docker-compose.yml file defines three services:
+The `docker-compose.yml` file defines four services. Compose interpolation requires `BAHIA_NOSTR_PRIVATE_KEY` to be set before startup.
 
 ### 1. PostgreSQL (`postgres`)
 - **Image**: postgres:16-alpine
@@ -17,26 +17,41 @@ The docker-compose.yml file defines three services:
 - **Build**: From root Dockerfile
 - **Port**: 8080
 - **Dependencies**: PostgreSQL (waits for healthy status)
-- **Health Check**: `wget` on `/health` endpoint
-- **Environment**: See docker-compose.yml for full config
+- **Health Check**: `wget` on `/health` endpoint (liveness only, so a Signet/dependency outage does not restart the container; use `/ready` for traffic gating)
+- **Config**: `config.compose.yaml` mounted at `/etc/bahia/config.yaml` (`dev_mode: true`, relay sidecar settings, ContextVM relay `ws://relay:3334/relay`, reconcile every 60s)
+- **Docker socket**: `/var/run/docker.sock` is mounted so Bahia can observe and drive local Docker workloads
+- **Environment**: `BAHIA_DB_*`, `BAHIA_SERVER_*`, `BAHIA_LOG_*`, `BAHIA_NOSTR_PRIVATE_KEY` (required), and optional `BAHIA_NOSTR_AUTHORIZED_PUBKEYS`. See `docker-compose.yml` for the full list.
 
-### 3. Web Frontend (`web`)
+### 3. Relay sidecar (`relay`)
+- **Build**: From the root Dockerfile, with the entrypoint changed to `bahia-relay`
+- **Port**: 3334
+- **Storage**: Named `relaydata` volume at `/var/lib/bahia/relay-sidecar`
+- **Health Check**: Nostr relay metadata request on `/relay`
+
+### 4. Web Frontend (`web`)
 - **Build**: From web/Dockerfile (SvelteKit → nginx)
 - **Port**: 3000 (maps to nginx port 80)
-- **Dependencies**: Bahia API (waits for healthy status)
-- **Proxy**: `/api` requests are proxied to `bahia:8080`
+- **Dependencies**: Bahia API and relay sidecar (waits for healthy status)
+- **Proxy**: `/api` requests are proxied to `bahia:8080`; `/relay` WebSocket traffic is proxied to `relay:3334`
+- **Build args**: `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` (default `ws://localhost:3334/relay`) and `PUBLIC_BAHIA_SERVICE_PUBKEYS` (default empty), plus version metadata
+
+> **NOTE (2026-09-11):** `web/docker-entrypoint.d/40-bahia-bootstrap-env.sh` exits non-zero at container start unless `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` are set as **runtime** environment variables. `docker-compose.yml` passes them only as build args, and the service pubkey defaults to empty. If the `web` container exits on startup, add both values under `web.environment` in a local override. `PUBLIC_BAHIA_SERVICE_PUBKEYS` should be the hex pubkey that matches `BAHIA_NOSTR_PRIVATE_KEY`. Tracked as `bahia-zdbam`; verify against the current compose file before relying on this note.
 
 ## Usage
 
 ### Start the stack
 ```bash
+# Required by docker-compose.yml; use deployment secret management outside local development.
+export BAHIA_NOSTR_PRIVATE_KEY=<64-hex-secret-key>
 docker compose up --build
 ```
 
 ### Access the services
 - **Web UI**: http://localhost:3000
 - **API**: http://localhost:8080
-- **API Health**: http://localhost:8080/health
+- **API liveness**: http://localhost:8080/health
+- **API readiness**: http://localhost:8080/ready
+- **Relay sidecar**: ws://localhost:3334/relay
 - **Postgres**: localhost:5432 (user: bahia, password: bahia, db: bahia)
 
 ### Stop the stack
@@ -58,38 +73,46 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml up --build
 ```
 
 This provides:
-- Debug logging
-- Web UI on port 3001 (avoiding conflicts with dev server)
+- Debug logging for `bahia`
+- Bahia API also published on port 8081
+- Web UI also published on port 3001
+
+Compose concatenates `ports` lists across files, so the default `8080` and `3000` mappings remain published alongside the override ports.
 - Faster PostgreSQL startup (no fsync)
-- Direct postgres port exposure for test connections
+- Direct PostgreSQL port exposure for test connections
+
+The relay sidecar remains on port 3334.
 
 ## Service Communication
 
 Services communicate via Docker's internal network:
 - Web → API: `http://bahia:8080/api/v1/...`
+- Web → relay: `http://relay:3334/relay` (WebSocket proxy)
+- Bahia → relay: `ws://relay:3334/relay`
 - API → DB: `postgres:5432`
 
 External access:
 - Web UI: http://localhost:3000
 - API: http://localhost:8080
+- Relay sidecar: ws://localhost:3334/relay (also reachable through the web proxy at ws://localhost:3000/relay, which is the sidecar's configured `public_url`)
 
 ## Health Checks
 
-All services have health checks:
+Three services have health checks:
 - **postgres**: Checks `pg_isready`
-- **bahia**: Checks `/health` endpoint with wget
-- **web**: Checks nginx is responding (via wget)
+- **bahia**: Checks the liveness endpoint `/health` with `wget`
+- **relay**: Requests `/relay` with `Accept: application/nostr+json`
 
-Services start in dependency order and wait for health checks to pass:
-1. PostgreSQL starts and becomes healthy
-2. Bahia API starts (waits for postgres) and becomes healthy
-3. Web frontend starts (waits for bahia)
+The `web` service has no Compose-level health check. Its image defines a Docker `HEALTHCHECK` that runs `wget --spider` against nginx. Startup dependencies are:
+1. PostgreSQL becomes healthy before Bahia starts.
+2. Bahia and the relay become healthy before the web container starts.
 
 ## Troubleshooting
 
 ### Check service logs
 ```bash
 docker compose logs -f bahia
+docker compose logs -f relay
 docker compose logs -f web
 docker compose logs -f postgres
 ```
