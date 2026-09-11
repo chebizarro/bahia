@@ -8,9 +8,11 @@ import {
   instanceStatusLabel,
   isNotFoundError,
   isOutage,
+  isRenderedOutage,
+  isRenderedWarning,
   isWarning,
   routeCanaryKey
-} from '../../src/routes/route-canaries/page-model.js';
+} from '../../src/lib/route-canaries.js';
 
 // Classifications are the authoritative set from internal/domain/route_canary.go
 // (AllRouteCanaryClassifications). Kept in sync manually since the UI has no
@@ -54,6 +56,34 @@ describe('route canary page model', () => {
     expect(classificationClass('route_ok')).toBe('healthy');
   });
 
+  it('always renders an open route as an outage, even with a warning classification', () => {
+    // health_path_not_discriminating is a warning classification by default,
+    // but a target with require_discriminating_health_path set promotes it to
+    // failing, which can open the route. Presentation must key off `open`
+    // first so that case still renders as an outage rather than a warning.
+    for (const classification of WARNING_CLASSIFICATIONS) {
+      expect(isRenderedOutage({ classification, open: true }), classification).toBe(true);
+      expect(isRenderedWarning({ classification, open: true }), classification).toBe(false);
+      expect(classificationClass(classification, true), classification).toBe('critical');
+    }
+
+    // The same classification while closed (not yet promoted / not open)
+    // still renders as a warning, not an outage.
+    for (const classification of WARNING_CLASSIFICATIONS) {
+      expect(isRenderedOutage({ classification, open: false }), classification).toBe(false);
+      expect(isRenderedWarning({ classification, open: false }), classification).toBe(true);
+      expect(classificationClass(classification, false), classification).toBe('warning');
+    }
+  });
+
+  it('renders an outage classification as critical regardless of open, and defaults open to false', () => {
+    for (const classification of OUTAGE_CLASSIFICATIONS) {
+      expect(isRenderedOutage({ classification, open: false }), classification).toBe(true);
+      expect(classificationClass(classification), classification).toBe('critical');
+      expect(classificationClass(classification, false), classification).toBe('critical');
+    }
+  });
+
   it('falls back to the raw classification string for unknown labels', () => {
     expect(classificationLabel('route_ok')).toBe('OK');
     expect(classificationLabel('upstream_error')).toBe('Upstream Error');
@@ -83,6 +113,14 @@ describe('route canary page model', () => {
     // not be double-counted.
     const rows = [{ open: false, classification: 'route_ok', service_healthy_route_broken: true }];
     expect(buildRouteCanarySummary(rows)).toEqual({ total: 1, open: 0, warnings: 0, healthyContainerBrokenRoute: 0 });
+  });
+
+  it('counts an open route with a promoted warning classification as an outage, not a warning', () => {
+    // require_discriminating_health_path can open a route while its latest
+    // classification is still health_path_not_discriminating. The summary
+    // must not double-count it under both "open" and "warnings".
+    const rows = [{ open: true, classification: 'health_path_not_discriminating', service_healthy_route_broken: false }];
+    expect(buildRouteCanarySummary(rows)).toEqual({ total: 1, open: 1, warnings: 0, healthyContainerBrokenRoute: 0 });
   });
 
   it('formats timestamps and falls back to an em dash for missing or invalid values', () => {
