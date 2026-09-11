@@ -224,3 +224,29 @@ Payloads carry the container-level status observed at the same moment, so a noti
 Response bodies are bounded and passed through evidence sanitization before being stored or published, so credentials echoed by a broken upstream never reach durable state.
 
 Body assertions are matched against the raw bounded body rather than the sanitized one, so redaction can never silently change whether an assertion passes.
+
+
+## Web UI
+
+The dashboard surfaces route canary state under **Operations → Route Canaries**
+(`/route-canaries`), plus inline on the **Service** and **Environment** detail
+pages, so an operator does not have to call the API directly during an
+incident.
+
+- The Route Canaries page lists every monitored route with its classification,
+  open/closed state, and the paired container-level `observed_instance_status`.
+  Outage classifications (`dns_unresolved`, `connect_failed`, `tls_invalid`,
+  `upstream_error`, `status_mismatch`, `body_mismatch`) render as a critical
+  badge; the two classifications that still serve traffic (`tls_expiring`,
+  `health_path_not_discriminating`) render as a distinct warning badge instead.
+- When a route is open and `service_healthy_route_broken` is true, the UI
+  calls out the contradiction explicitly ("Container healthy, route broken")
+  next to a colored instance-status badge, so the routing-layer-only failure
+  is visible at a glance rather than requiring the operator to cross-reference
+  two screens.
+- A service's detail page lists that service's own route canaries; an
+  environment's detail page lists open route state across every service
+  deployed to it, under a **Route Outages** section.
+- Route canary endpoints are tier-2 gated and are not registered when the
+  `route_canaries` feature is disabled. The UI treats that as "nothing to
+  show" rather than an error.
