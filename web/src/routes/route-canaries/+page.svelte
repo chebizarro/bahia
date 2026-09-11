@@ -4,6 +4,8 @@
     routeCanaryKey,
     classificationLabel,
     classificationClass,
+    transitionLabel,
+    transitionClass,
     buildRouteCanarySummary,
     formatRouteTimestamp,
     instanceStatusLabel,
@@ -70,8 +72,8 @@
     const key = routeCanaryKey(row);
     try {
       const [nextDetail, nextEvents] = await Promise.all([
-        api.getRouteCanary(row.service_id, row.environment_id, row.hostname),
-        api.listRouteCanaryEvents(row.service_id, row.environment_id, row.hostname)
+        api.getRouteCanary(row.service_id, row.environment_id, row.hostname, row.deployment_unit_id),
+        api.listRouteCanaryEvents(row.service_id, row.environment_id, row.hostname, undefined, row.deployment_unit_id)
       ]);
       if (!selected || routeCanaryKey(selected) !== key) return;
       detail = nextDetail;
@@ -129,7 +131,7 @@
     <section class="route-grid" aria-label="Route canary states">
       {#each filteredRows as row (routeCanaryKey(row))}
         <button class:selected={selected && routeCanaryKey(selected) === routeCanaryKey(row)} class="route-card" type="button" onclick={() => selectRoute(row)}>
-          <header><strong>{row.hostname}</strong><span class={`badge ${classificationClass(row.classification, row.open)}`}>{classificationLabel(row.classification)}</span></header>
+          <header><strong>{row.hostname}</strong><span class={`badge ${classificationClass(row.classification, row.open, row.consecutive_failures)}`}>{classificationLabel(row.classification)}</span></header>
           <p>{row.perspective || 'unknown'} · {row.open ? 'Open' : 'Closed'}</p>
           {#if row.open && row.service_healthy_route_broken}
             <p class="contradiction">⚠ Container healthy, route broken</p>
@@ -153,7 +155,7 @@
       {:else if detailError}<p class="error">{detailError}</p>
       {:else if detail}
         <dl class="detail-grid">
-          <div><dt>Classification</dt><dd><span class={`badge ${classificationClass(detail.classification, detail.open)}`}>{classificationLabel(detail.classification)}</span></dd></div>
+          <div><dt>Classification</dt><dd><span class={`badge ${classificationClass(detail.classification, detail.open, detail.consecutive_failures)}`}>{classificationLabel(detail.classification)}</span></dd></div>
           <div><dt>Open</dt><dd>{detail.open ? 'Yes' : 'No'}</dd></div>
           <div><dt>Perspective</dt><dd>{detail.perspective || 'unknown'}</dd></div>
           <div><dt>Consecutive failures</dt><dd>{detail.consecutive_failures}</dd></div>
@@ -175,8 +177,8 @@
             <div class="events-list">
               {#each events as event}
                 <article>
-                  <header><span class={`badge ${classificationClass(event.classification)}`}>{classificationLabel(event.classification)}</span><time>{formatRouteTimestamp(event.observed_at)}</time></header>
-                  <p>{event.reason || 'Classification changed'}</p>
+                  <header><span class={`badge ${transitionClass(event.transition)}`}>{transitionLabel(event.transition)}</span><time>{formatRouteTimestamp(event.observed_at)}</time></header>
+                  <p>{classificationLabel(event.classification)}{event.reason ? ` — ${event.reason}` : ''}</p>
                 </article>
               {/each}
             </div>
@@ -213,7 +215,7 @@
   dl { display: grid; gap: 0.55rem; grid-template-columns: 1fr 1fr; margin: 0.85rem 0; }
   dl div { display: grid; gap: 0.15rem; } dt { color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; } dd { margin: 0; overflow-wrap: anywhere; }
   .badge { border-radius: 999px; font-size: 0.68rem; font-weight: 700; padding: 0.25rem 0.5rem; text-transform: uppercase; }
-  .badge.healthy { background: rgba(34,197,94,.15); color: #4ade80; } .badge.warning { background: rgba(245,158,11,.15); color: #fbbf24; } .badge.critical { background: rgba(239,68,68,.15); color: #f87171; } .badge.unknown { background: rgba(148,163,184,.15); color: #94a3b8; }
+  .badge.healthy { background: rgba(34,197,94,.15); color: #4ade80; } .badge.warning { background: rgba(245,158,11,.15); color: #fbbf24; } .badge.degraded { background: rgba(249,115,22,.15); color: #fb923c; } .badge.critical { background: rgba(239,68,68,.15); color: #f87171; } .badge.unknown { background: rgba(148,163,184,.15); color: #94a3b8; }
   .reason, .error { color: #f87171; } .muted { color: var(--text-muted); } .state { padding: 2rem; text-align: center; }
   .detail-panel { display: grid; gap: 1.2rem; } .section-heading h2, h3 { margin: 0; } .section-heading p { color: var(--text-muted); font-size: .75rem; overflow-wrap: anywhere; }
   .detail-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin: 0; }

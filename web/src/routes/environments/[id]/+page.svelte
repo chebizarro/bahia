@@ -47,9 +47,11 @@
   let loading = $state(true);
   let error = $state(null);
 
-  // Route canary count for the section heading; RouteCanaryOutages owns the
-  // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
-  // page stays nostr_native and never imports $lib/api/client.js.
+  // Open route outage count for the section heading (Route Outages); scoped
+  // with open={true} so the count matches what the heading claims.
+  // RouteCanaryOutages owns the REST read itself (see
+  // $lib/components/RouteCanaryOutages.svelte) so this page stays
+  // nostr_native and never imports $lib/api/client.js.
   let routeCanaryCount = $state(0);
 
   // Service detail dialog
@@ -513,6 +515,7 @@
       <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Outages ({routeCanaryCount})</span></h2>
       <RouteCanaryOutages
         environmentId={environmentId}
+        open={true}
         showServiceNames
         resolveServiceName={serviceDisplayName}
         emptyTitle="No route canaries configured"
