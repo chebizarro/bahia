@@ -64,6 +64,16 @@
         "internal/service/route_canary_projector_test.go:TestRouteCanaryProjectorRejectsUnattributablePayloads",
         "internal/service/route_canary_projector_test.go:TestNewRouteCanaryProjectorRequiresBusAndPublisher"
       ]
+    },
+    {
+      "id": "AC9",
+      "statement": "Fleet-health observation is idempotent under redelivery: observing the same event ID repeatedly moves no entity count, projection error counter, heartbeat lag, or event/ingestion timestamp after the first observation, while distinct rejected events are still each counted.",
+      "verification": [
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRedeliveryDoesNotMoveCounters",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthOverLimitRejectionIsCountedOncePerEvent",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestBoundedEventIDSetEvictsOldestAndStaysBounded",
+        "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate"
+      ]
     }
   ]
 }

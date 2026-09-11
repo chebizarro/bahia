@@ -4,7 +4,7 @@ Branch: `task/bahia-canary-nostr-projection` (base `origin/master` 2520343a).
 
 ## Result
 
-All eight acceptance criteria are verified by deterministic tests. The full module passes `go build ./...`, `go vet ./...` and `GOFLAGS=-p=2 go test ./... -count=1`: 76 packages ok, 11 without test files, 0 failures.
+All nine acceptance criteria are verified by deterministic tests. The full module passes `go build ./...`, `go vet ./...` and `GOFLAGS=-p=2 go test ./... -count=1`: 76 packages ok, 11 without test files, 0 failures.
 
 ## Evidence by criterion
 
@@ -17,6 +17,7 @@ All eight acceptance criteria are verified by deterministic tests. The full modu
 | AC5 relay-OK-verified, idempotent, partial-failure retry, no replaceable regression | `TestRouteCanaryProjectorRetriesOnlyRejectedPublishes`, `TestRouteCanaryProjectorNeverRegressesReplaceableStateButKeepsAuditHistory`, redelivery assertion in the shape test | PASS |
 | AC6 exact route counts: audits are lineage, `d`-less route observable is an error | `TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain`, `TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate` | PASS |
 | AC7 self-published echoes reach telemetry; handlers stay gated | `TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated`, `TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents` | PASS |
+| AC9 redelivery never moves counters, gauges or timestamps | `TestNostrFleetHealthRedeliveryDoesNotMoveCounters` (4 redeliveries of each of 4 signed events with the clock advancing), `TestNostrFleetHealthOverLimitRejectionIsCountedOncePerEvent`, `TestBoundedEventIDSetEvictsOldestAndStaysBounded`; a mutation removing the dedupe makes them fail (5 and 3 errors instead of 1) | PASS |
 | AC8 malformed payloads rejected; constructor requirements; subscriptions | `TestRouteCanaryProjectorRejectsUnattributablePayloads`, `TestNewRouteCanaryProjectorRequiresBusAndPublisher` | PASS |
 
 ## Nostr review checklist (touched scope)
@@ -29,6 +30,6 @@ All eight acceptance criteria are verified by deterministic tests. The full modu
 
 ## Not verified here (open defects)
 
-- D3: gate-declared outages are projected only on the next supervisor transition (gate owned by concurrent work).
+- D3: the gate never publishes bus events, so gate-declared outages reach the projection only through a later supervisor transition, and never while they persist with an unchanged classification (gate owned by concurrent work).
 - D4: fleet-health telemetry is not hydrated from relay history on restart (pre-existing, all domains).
 - D5: route state that predates the projector is projected on its next transition.
