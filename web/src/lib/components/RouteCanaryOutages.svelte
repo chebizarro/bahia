@@ -11,6 +11,7 @@
   // environment_id, exactly like the standalone /route-canaries page.
   import api from '$lib/api/client.js';
   import {
+    routeCanaryKey,
     classificationLabel,
     classificationClass,
     formatRouteTimestamp,
@@ -24,6 +25,7 @@
   let {
     serviceId = null,
     environmentId = null,
+    open = null,
     showServiceNames = false,
     resolveServiceName = null,
     emptyTitle = 'No route canaries configured',
@@ -37,14 +39,14 @@
   let unavailable = $state(false);
 
   $effect(() => {
-    // Re-read whenever the scoping id changes (e.g. navigating between
-    // service or environment detail pages re-uses the same component
-    // instance in some routers; explicit dependency keeps this correct
-    // either way).
-    void load(serviceId, environmentId);
+    // Re-read whenever the scoping id (or the open filter) changes (e.g.
+    // navigating between service or environment detail pages re-uses the
+    // same component instance in some routers; explicit dependency keeps
+    // this correct either way).
+    void load(serviceId, environmentId, open);
   });
 
-  async function load(scopedServiceId, scopedEnvironmentId) {
+  async function load(scopedServiceId, scopedEnvironmentId, scopedOpen) {
     loading = true;
     error = '';
     unavailable = false;
@@ -52,6 +54,7 @@
       const params = {};
       if (scopedServiceId) params.service_id = scopedServiceId;
       if (scopedEnvironmentId) params.environment_id = scopedEnvironmentId;
+      if (scopedOpen !== null && scopedOpen !== undefined) params.open = scopedOpen;
       rows = await api.listRouteCanaries(params);
       onCount?.(rows.length);
     } catch (err) {
@@ -68,10 +71,6 @@
     } finally {
       loading = false;
     }
-  }
-
-  function rowKey(row) {
-    return `${row.service_id}:${row.environment_id}:${row.hostname}:${row.perspective}`;
   }
 </script>
 
@@ -91,14 +90,14 @@
   />
 {:else if rows.length > 0}
   <div class="route-canary-list">
-    {#each rows as row (rowKey(row))}
+    {#each rows as row (routeCanaryKey(row))}
       <a href="/route-canaries" class="route-canary-row">
         <div class="route-canary-info">
           {#if showServiceNames}
             <strong>{resolveServiceName ? resolveServiceName(row.service_id) : row.service_id}</strong>
           {/if}
           <code class="route-canary-hostname">{row.hostname}</code>
-          <span class="badge-sm {classificationClass(row.classification, row.open)}">{classificationLabel(row.classification)}</span>
+          <span class="badge-sm {classificationClass(row.classification, row.open, row.consecutive_failures)}">{classificationLabel(row.classification)}</span>
           {#if row.observed_instance_status}
             <span class="badge-sm {instanceStatusClass(row.observed_instance_status)}">Instance: {instanceStatusLabel(row.observed_instance_status)}</span>
           {/if}
@@ -176,6 +175,7 @@
   }
   .badge-sm.healthy { background: rgba(34,197,94,.15); color: #4ade80; }
   .badge-sm.warning { background: rgba(245,158,11,.15); color: #fbbf24; }
+  .badge-sm.degraded { background: rgba(249,115,22,.15); color: #fb923c; }
   .badge-sm.critical { background: rgba(239,68,68,.15); color: #f87171; }
   .badge-sm.unknown { background: rgba(148,163,184,.15); color: #94a3b8; }
   .contradiction-badge {
