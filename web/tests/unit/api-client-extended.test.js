@@ -141,10 +141,16 @@ describe('BahiaClient HTTP-native interop contract', () => {
   });
 
   it('exposes route canary list, detail, and event-lineage HTTP methods', async () => {
+    // Mock the real wire shapes: a list response is {data: [...], total,
+    // limit, offset} (the repo's writeData convention with pagination
+    // metadata), and a single-route detail response is {data: <summary>}. An
+    // earlier version of this test mocked shapes that did not match the real
+    // detail endpoint, which hid the +page.svelte bug of never passing
+    // deployment_unit_id through to getRouteCanary/listRouteCanaryEvents.
     global.fetch
-      .mockResolvedValueOnce(jsonResponse({ data: [{ hostname: 'git.example.com' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ hostname: 'git.example.com' }], total: 1, limit: 50, offset: 0 }))
       .mockResolvedValueOnce(jsonResponse({ data: { hostname: 'git.example.com', open: true } }))
-      .mockResolvedValueOnce(jsonResponse({ data: [{ transition: 'opened' }] }));
+      .mockResolvedValueOnce(jsonResponse({ data: [{ transition: 'opened' }], total: 1, limit: 50, offset: 0 }));
 
     await expect(client.listRouteCanaries({ service_id: 'svc-1', open: true })).resolves.toEqual([{ hostname: 'git.example.com' }]);
     await expect(client.getRouteCanary('svc-1', 'env-1', 'git.example.com', 'unit-1')).resolves.toEqual({ hostname: 'git.example.com', open: true });
