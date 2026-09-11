@@ -20,7 +20,7 @@
     ],
     "out": [
       "RouteCanaryChanged payload and RouteCanarySupervisor (consumed as-is)",
-      "RouteCanaryGate (records outcomes without publishing in-process events)",
+      "RouteCanaryGate (out of scope for the original change, which left it recording outcomes without publishing; D3 later gave it the shared transition publisher on task/bahia-canary-integration-fix-go)",
       "Fleet-health telemetry hydration from relay history on restart"
     ]
   },

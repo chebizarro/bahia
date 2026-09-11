@@ -167,3 +167,14 @@ Independent review of the combined route canary tree (integration `22b84636`) fo
 ## Evidence
 
 Six handler tests in `internal/api/handlers/route_canary_test.go` decode responses exactly as the web client does. Reverting `Get` to `writeJSON` makes the envelope tests fail with the unwrapped body, so a green result is meaningful.
+
+---
+
+# Addendum 4 — gate outcomes are announced (defect D7)
+
+The post-deploy gate persisted its verdicts (thresholds 1/1) but held no event publisher. Notifications, alerting and the Nostr projector only learn of transitions from `RouteCanaryChanged` events, and the supervisor publishes only transitions it observes itself. As a result:
+
+- a gate that recovered a supervisor-opened outage sent no `route.canary_recovered`, and the next sweep, seeing a closed `route_ok`, never sent one either;
+- a gate-opened outage sent no `route.canary_outage_opened`.
+
+The gate now takes the shared bus and publishes persisted transitions through `publishRouteCanaryTransition`, the same implementation the supervisor uses, so event types, payloads and severities are identical. Everything else about the gate is unchanged, including rollback on a non-cancelled context. Evidence is in `internal/service/route_canary_gate_publish_test.go`; see the D3 addendum in `BAHIA_ROUTE_CANARY_NOSTR_PROJECTION/verification_report.md` for the projection side.

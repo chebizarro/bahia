@@ -443,7 +443,7 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 	if err := s.repo.UpsertStateWithEvent(ctx, &next, &event); err != nil {
 		return err
 	}
-	s.publishTransition(ctx, next, event, instanceStatus, now)
+	publishRouteCanaryTransition(ctx, s.publisher, next, event, instanceStatus, now)
 	return nil
 }
 
@@ -458,16 +458,20 @@ func (s *RouteCanarySupervisor) instanceStatus(ctx context.Context, key domain.R
 	return status
 }
 
-func (s *RouteCanarySupervisor) publishTransition(
-	ctx context.Context,
+// routeCanaryTransitionEvent builds the in-process event announcing one
+// persisted route canary transition. It reports false for a non-transition,
+// which announces nothing.
+//
+// It is the only place a route transition becomes an event: the periodic
+// supervisor and the post-deploy gate both publish through it, so the
+// projector, notifications and alerting see identical event types, payloads
+// and severities whichever of them observed the transition.
+func routeCanaryTransitionEvent(
 	state domain.RouteCanaryState,
 	event domain.RouteCanaryEvent,
 	instanceStatus domain.InstanceHealthStatus,
 	now time.Time,
-) {
-	if s.publisher == nil {
-		return
-	}
+) (events.Event, bool) {
 	var eventType events.EventType
 	var severity domain.AlertSeverity
 	switch event.Transition {
@@ -484,9 +488,9 @@ func (s *RouteCanarySupervisor) publishTransition(
 			severity = domain.AlertSeverityError
 		}
 	default:
-		return
+		return events.Event{}, false
 	}
-	s.publisher.Publish(ctx, events.Event{
+	return events.Event{
 		Type:     eventType,
 		EntityID: state.Coordinate(),
 		Data: RouteCanaryChanged{
@@ -498,7 +502,26 @@ func (s *RouteCanarySupervisor) publishTransition(
 			Reason:                 state.FailureReason,
 			OccurredAt:             now,
 		},
-	})
+	}, true
+}
+
+// publishRouteCanaryTransition publishes one persisted route canary transition.
+// Callers publish only after the transition and its lineage are durable, so an
+// announced transition always has a stored record behind it.
+func publishRouteCanaryTransition(
+	ctx context.Context,
+	publisher events.Publisher,
+	state domain.RouteCanaryState,
+	event domain.RouteCanaryEvent,
+	instanceStatus domain.InstanceHealthStatus,
+	now time.Time,
+) {
+	if publisher == nil {
+		return
+	}
+	if e, ok := routeCanaryTransitionEvent(state, event, instanceStatus, now); ok {
+		publisher.Publish(ctx, e)
+	}
 }
 
 func (s *RouteCanarySupervisor) lockFor(coordinate string) *sync.Mutex {

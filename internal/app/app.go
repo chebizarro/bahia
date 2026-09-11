@@ -448,7 +448,10 @@ func New(cfg *config.Config) (*App, error) {
 		// coordinator, so the route-only and combined deploy paths are both
 		// verified through the single apply call each already makes.
 		if canaryCfg.GateEnabled {
-			gate, gateErr := service.NewRouteCanaryGate(publicRoutePlanner, routeCanaryEvaluator, routeCanaryStore, routeHealthSource,
+			// The gate publishes its transitions on the same bus as the
+			// supervisor, so a gate-opened or gate-recovered outage reaches the
+			// Nostr projection and notifications instead of only the database.
+			gate, gateErr := service.NewRouteCanaryGate(publicRoutePlanner, routeCanaryEvaluator, routeCanaryStore, routeHealthSource, publisher,
 				service.RouteCanaryGateConfig{Timeout: canaryCfg.GateTimeout, RetryInterval: canaryCfg.GateRetryInterval}, logger)
 			if gateErr != nil {
 				return nil, fmt.Errorf("configuring route canary gate: %w", gateErr)

@@ -16,7 +16,11 @@
     {"ac":"AC8","test":"TestNewRouteCanaryProjectorRequiresBusAndPublisher","file":"internal/service/route_canary_projector_test.go","kind":"unit"},
     {"ac":"AC9","test":"TestNostrFleetHealthRedeliveryDoesNotMoveCounters","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"behavioral"},
     {"ac":"AC9","test":"TestNostrFleetHealthOverLimitRejectionIsCountedOncePerEvent","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"behavioral"},
-    {"ac":"AC9","test":"TestBoundedEventIDSetEvictsOldestAndStaysBounded","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"unit"}
+    {"ac":"AC9","test":"TestBoundedEventIDSetEvictsOldestAndStaysBounded","file":"internal/adapters/telemetry/nostr_fleet_health_test.go","kind":"unit"},
+    {"ac":"AC10","test":"TestGateRecoveryClearsSupervisorOutageInNostrProjection","file":"internal/service/route_canary_gate_publish_test.go","kind":"integration"},
+    {"ac":"AC10","test":"TestGateOpenedOutageIsPublishedProjectedAndRolledBack","file":"internal/service/route_canary_gate_publish_test.go","kind":"integration"},
+    {"ac":"AC10","test":"TestGateAndSupervisorPublishTheCanonicalTransitionPayload","file":"internal/service/route_canary_gate_publish_test.go","kind":"event-shape"},
+    {"ac":"AC10","test":"TestRouteCanaryTransitionEventMapsEveryTransition","file":"internal/service/route_canary_gate_publish_test.go","kind":"unit"}
   ],
-  "determinism": "No test sleeps or waits on goroutines: the projector is driven through a synchronous in-test bus, relay acceptance and rejection are injected through the publisher, and fleet-health ingestion is driven by direct observation of signed events."
+  "determinism": "No test sleeps or waits on goroutines: the projector is driven through a synchronous in-test bus (the gate and supervisor publish into a recording variant of it, with fixed clocks), relay acceptance and rejection are injected through the publisher, and fleet-health ingestion is driven by direct observation of signed events."
 }
