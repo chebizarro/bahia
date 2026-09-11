@@ -1,0 +1,18 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARIES",
+  "title": "Route canaries and outage detection for managed public and internal routes",
+  "task": "bahia-managed-route-canaries-and-outage-detection-20260907",
+  "beads": "bahia-kedzy",
+  "problem": "A managed service can be healthy at the container level while its user-facing route is broken. On git.sharegap.net, Gitea and grasp-bridge were healthy and nginx accepted its configuration and reloaded successfully, but nginx-git had cached a stale Docker upstream IP after grasp-bridge was recreated and returned HTTP 502 until reloaded by hand. Bahia had no signal: CloudflareBackend.verifyHTTPS runs only at apply time and only for the public edge, and NginxBackend never probed the route at all.",
+  "intended_behavior": "Bahia treats a managed route as a first-class observable. It probes each route from the public edge and, where configured, from the LAN under split DNS; asserts DNS, TLS trust and expiry, response status and body; classifies failures by the outermost broken layer so a 502 behind valid TLS is reported as an upstream error; blocks or rolls back a deployment whose route fails post-deploy verification; re-probes continuously; and surfaces an open route outage alongside the container-level status of the service behind it.",
+  "observed_behavior_before": "Route correctness was inferred from provider convergence. nginx -t plus a successful reload was accepted as proof the internal route worked. No periodic route probing existed. No route outage state, lineage, events, or API existed.",
+  "non_goals": [
+    "Detecting the specific provider-internal cause of a stale upstream, which is not externally observable. The operator-actionable fact is that the edge is reachable, TLS is valid, the upstream is broken, and the container is fine.",
+    "Making canary expectations part of signed desired state. They are control-plane policy, so changing them must not invalidate a deployed plan hash."
+  ],
+  "boundaries": [
+    "Route verdicts never depend on container health; the contrast is joined at the read model and event layer only.",
+    "The gate decorates the route lifecycle rather than being spliced into the coordinator, so both the route-only and combined deploy paths are covered by the single apply call each already makes.",
+    "TLS verification is never disabled on any probe path."
+  ]
+}
