@@ -1,0 +1,41 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_NOSTR_PROJECTION",
+  "title": "Project route canary outages as a first-class Nostr fleet-health observable",
+  "beads": "bahia-dblkq",
+  "depends_on": ["BAHIA_ROUTE_CANARIES (bahia-kedzy)"],
+  "problem": "Route outage state was exposed only through the REST API and in-process events (route.canary_outage_opened, route.canary_recovered, route.canary_classification_changed). Nothing projected it to Nostr, and fleet-health classification in internal/adapters/telemetry/nostr_fleet_health.go had no route domain, so a route outage was invisible to Nostr-native consumers, dashboards and the bahia_fleet_health_nostr_entities gauge. Separately, the inbound subscriber skipped all handlers for already-persisted events, and because the publisher persists every signed event before its relay attempt, fleet-health telemetry never observed any Bahia-published observable, including the existing runtime managed-instance projection.",
+  "observed_behavior": [
+    "internal/service/route_canary.go publishes RouteCanaryChanged on the in-process bus only; no subscriber projected it to Nostr.",
+    "boundedFleetDomain accepted only agent, worker, service, deployment, runtime, relay, control_plane; renderNostrFleetHealthMetrics used a separate hardcoded copy of that list.",
+    "Subscriber.handleEvent returned before invoking handlers when eventRepo.Record reported inserted=false; Publisher.PublishSignedEventWithResults records into the same repository before publishing, so self-published echoes were always inserted=false."
+  ],
+  "intended_behavior": "Every route canary transition is projected to existing canonical kinds under domain=route: 30315 status and 30900 state addressed by the route coordinate, and a 4903 audit fact per transition. Each carries a truthful bounded fleet-health status, the outage state, the classification, the observed container status and the service_healthy_route_broken contrast. Fleet-health telemetry counts route entities under a distinct route domain (one per route coordinate), treats route audit facts as lineage, and observes Bahia's own relay echoes so the gauge counts them.",
+  "scope": {
+    "in": [
+      "internal/service/route_canary_projector.go (new)",
+      "internal/adapters/telemetry/nostr_fleet_health.go, telemetry.go",
+      "internal/adapters/nostr/subscriber.go (WithObserver)",
+      "internal/app/app.go (projector wiring, telemetry registered as observer)",
+      "docs listed in AGENTS.md for Nostr event changes, fleet-health.md, route-canaries.md Events and alerting section"
+    ],
+    "out": [
+      "RouteCanaryChanged payload and RouteCanarySupervisor (consumed as-is)",
+      "RouteCanaryGate (records outcomes without publishing in-process events)",
+      "Fleet-health telemetry hydration from relay history on restart"
+    ]
+  },
+  "event_shape": {
+    "kinds": {"status": "kinds.NIP38Status (30315)", "state": "kinds.CASControlState (30900)", "audit": "kinds.CASAudit (4903)"},
+    "domain": "route",
+    "schemas": ["bahia.status.route-canary.v1", "bahia.state.route-canary.v1", "bahia.audit.route-canary.v1"],
+    "d": "route:<service>:<environment>:<deployment-unit|none>:<hostname> (domain.RouteCanaryKey.Coordinate)",
+    "tags": ["domain", "schema", "entity=route-canary (status/state)", "service", "environment", "deployment_unit (when bound)", "hostname", "status", "outage=open|closed", "classification", "perspective (when known)", "instance_status (when observed)", "service_healthy_route_broken", "type and transition and state=<coordinate> (audit)"],
+    "status_mapping": {
+      "outage open": "unhealthy",
+      "failing below open threshold": "degraded",
+      "tls_expiring / health_path_not_discriminating (warning)": "degraded",
+      "route_ok": "healthy",
+      "unrecognized classification": "unknown"
+    }
+  }
+}

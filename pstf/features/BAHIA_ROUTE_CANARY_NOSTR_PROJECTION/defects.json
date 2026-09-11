@@ -1,0 +1,40 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_NOSTR_PROJECTION",
+  "defects": [
+    {
+      "id": "D1",
+      "statement": "Fleet-health telemetry never observed Bahia-published observables. Publisher.PublishSignedEventWithResults records each signed event in nostr_events before the first relay attempt, and Subscriber.handleEvent skips every handler when Record reports inserted=false, so the relay echo of a self-published event never reached telemetryProvider.ObserveNostrEvent. This affected the existing runtime managed-instance projection as well as the new route projection.",
+      "status": "fixed",
+      "fix": "Subscriber gained WithObserver for idempotent read-side projections that run for every validated, durably persisted event regardless of insert state; fleet-health telemetry is registered as an observer while side-effect handlers remain gated.",
+      "verification": ["internal/adapters/nostr/subscriber_test.go:TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated"]
+    },
+    {
+      "id": "D2",
+      "statement": "The fleet-health domain vocabulary was duplicated: boundedFleetDomain and renderNostrFleetHealthMetrics each held their own list, so a domain could be classified without being exported.",
+      "status": "fixed",
+      "fix": "Single nostrFleetHealthDomains list read by both classification and rendering.",
+      "verification": ["internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain"]
+    },
+    {
+      "id": "D3",
+      "statement": "RouteCanaryGate.record persists gate outcomes, including an immediately opened outage, without publishing an in-process transition, so a gate-declared outage reaches Nostr only when the supervisor next reports a transition for that route.",
+      "status": "open",
+      "owner_note": "internal/service/route_canary_gate.go is owned by concurrent route canary work (bahia-6xztt / bahia-j9liz) and was deliberately not modified; needs a follow-up bead.",
+      "verification": []
+    },
+    {
+      "id": "D4",
+      "statement": "Fleet-health telemetry keeps its projection in memory and the subscriber backfills from the latest persisted created_at, so after a restart subject gauges (all domains, including route) start empty until new observables arrive; a long-running outage is uncounted until its next transition.",
+      "status": "open",
+      "owner_note": "Pre-existing fleet-health ingestion design; needs a follow-up bead for replaceable-state hydration.",
+      "verification": []
+    },
+    {
+      "id": "D5",
+      "statement": "Route state is projected on transition only, so a route whose outage opened before the projector was deployed is projected on its next transition.",
+      "status": "open",
+      "owner_note": "Resolved together with D4 by a startup projection of current durable route state, or by hydration; needs a follow-up bead.",
+      "verification": []
+    }
+  ]
+}
