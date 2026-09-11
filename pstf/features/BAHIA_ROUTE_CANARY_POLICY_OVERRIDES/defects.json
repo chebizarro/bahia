@@ -1,0 +1,24 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_POLICY_OVERRIDES",
+  "defects": [
+    {
+      "id": "D1",
+      "statement": "Unknown keys under a route override would be silently dropped by the config decoder, so a misspelled field such as expected_status would leave the route on fleet-wide policy while the operator believed it had been tuned.",
+      "status": "fixed",
+      "fix": "Config loading walks route_canaries.overrides as a nested map (hostnames contain the koanf delimiter, so the flattened key list is ambiguous) and rejects any key not declared on RouteCanaryOverrideConfig, with a nearest-key hint. An override that sets nothing is rejected by validation.",
+      "verification": [
+        "internal/config/route_canary_test.go:TestLoadRejectsUnknownRouteCanaryOverrideKey",
+        "internal/config/route_canary_test.go:TestValidateRouteCanariesFailsClosedOnUnusableOverrides"
+      ]
+    },
+    {
+      "id": "D2",
+      "statement": "Wrapping a user pattern in an anchoring group by string concatenation can change its structure: an unbalanced pattern such as a)|(b would become \\A(?:a)|(b)\\z and match any body ending in b.",
+      "status": "fixed",
+      "fix": "The pattern is parsed on its own before being wrapped, so an unbalanced group is rejected, and a pattern that parses alone but not when wrapped (an unterminated \\Q quote) is rejected as unanchorable.",
+      "verification": [
+        "internal/domain/route_canary_policy_overrides_test.go:TestCompileRouteCanaryBodyRegexRejectsUnsafePatterns"
+      ]
+    }
+  ]
+}

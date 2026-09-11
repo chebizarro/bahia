@@ -26,8 +26,10 @@ Every probe asserts:
 - **DNS resolution** from the configured resolver
 - **TLS validity** - the certificate chain must verify for the requested hostname. Verification is never disabled.
 - **Response status** within the configured expected range
-- **Response body** contains the configured marker, when one is set
+- **Response body** contains the configured marker and/or matches the configured anchored regex, when set (see [Body assertions](#body-assertions))
 - **Certificate expiry** warning when the leaf expires within the configured window
+
+Each of these expectations, plus the probe interval and timeout, can be tuned for an individual route (see [Per-route overrides](#per-route-overrides)).
 
 ## Classifications
 
@@ -41,7 +43,7 @@ Failures are classified by the outermost layer that broke, so you see the most a
 | `connect_failed` | The address resolved but no HTTP response came back. |
 | `upstream_error` | **The route is published and the edge is reachable, but the origin returned 502, 503, or 504.** This is the stale-or-unreachable-upstream signature. |
 | `status_mismatch` | The response status fell outside the expected range. |
-| `body_mismatch` | Status was acceptable but the expected body marker was absent. |
+| `body_mismatch` | Status was acceptable but a configured body assertion did not hold: the marker was absent, or the body did not match the regex. |
 | `tls_expiring` | The route works, but the certificate expires soon. This is a **warning**: it never opens an outage and never blocks a deployment. |
 | `health_path_not_discriminating` | The health path returned the same response as a deliberately bogus control path, so the check proves only that *something* answered. A **warning** by default. |
 
@@ -139,6 +141,8 @@ route_canaries:
   expected_status_min: 200
   expected_status_max: 299
   expected_body_contains: ""
+  # Anchored RE2 pattern the whole bounded body must match. See "Body assertions".
+  expected_body_regex: ""
   tls_min_days_remaining: 14
   # Also request a random control path each probe. If the health path answers
   # identically, report health_path_not_discriminating instead of route_ok.
@@ -152,11 +156,80 @@ route_canaries:
   # Zone -> LAN address. Enables the internal_lan perspective for that zone.
   internal_dial_addresses:
     sharegap.net: "192.168.40.10"
+  # Per-route tuning, keyed by route hostname. See "Per-route overrides".
+  overrides:
+    git.sharegap.net:
+      interval: 15s
+      probe_timeout: 30s
+      expected_body_regex: '(?s).*"status"\s*:\s*"ok".*'
+    auth.sharegap.net:
+      expected_status_min: 401
+      expected_status_max: 401
 ```
 
 `route_canaries.enabled` requires `edge_routing.enabled`. `internal_dial_addresses` requires `internal_routing.enabled` - mapping a zone that internal routing does not serve would probe a host that never carries the vhost, so it is rejected at startup rather than silently probing the wrong thing.
 
 Canary settings are control-plane policy, not signed desired state. Changing an expectation does not invalidate an already-deployed route plan hash.
+
+### Body assertions
+
+Two body assertions are available, fleet-wide and per route. When both are set, both must hold.
+
+| Key | Semantics |
+|---|---|
+| `expected_body_contains` | Plain substring. Passes when the marker appears anywhere in the bounded body. |
+| `expected_body_regex` | [RE2](https://github.com/google/re2/wiki/Syntax) pattern that must match the **entire** bounded body. |
+
+The regex is **anchored at both ends**: it is evaluated as `\A(?:pattern)\z`, the same whole-value contract Prometheus relabel regexes use. A pattern can therefore never pass by matching an incidental fragment. `ok` matches a body of exactly `ok`, and does not match `not ok`. To assert on part of a body, write the wildcards explicitly:
+
+```yaml
+# A JSON health endpoint, in any key order, compact or pretty-printed
+expected_body_regex: '(?s).*"status"\s*:\s*"ok".*'
+```
+
+`(?s)` lets `.` match newlines, which a pretty-printed document needs. The anchors are `\A` and `\z`, not `^` and `$`, so a `(?m)` flag inside the pattern cannot turn them into line anchors.
+
+Bounds and validation, all enforced at startup:
+
+- The pattern is at most **256 bytes** and must compile to at most **2048 RE2 instructions**. RE2 matches in linear time, so there is no catastrophic backtracking; the bounds keep every assertion's cost fixed and the pattern reviewable.
+- The pattern must be valid RE2 on its own. Backreferences and lookarounds are not RE2 and are rejected. So is an unbalanced group such as `a)|(b` that would otherwise escape the anchors.
+- A pattern that matches an empty body, such as `(?s).*`, is rejected. It asserts nothing, and it would also silence the catch-all warning.
+
+Both assertions see only the first **512 bytes** of the response, and they match those raw bytes. The copy stored as evidence is sanitized, but the match never runs against it, so redaction cannot change the outcome. A marker beyond the first 512 bytes is invisible to both forms.
+
+A regex failure is reported as `body_mismatch`, the same classification as a missing marker, and the reason names which assertion was configured. Like a marker, a regex that held is real evidence about the application, so it suppresses the `health_path_not_discriminating` warning.
+
+### Per-route overrides
+
+`route_canaries.overrides` tunes individual routes without changing any other route. It is keyed by route hostname. Case and a trailing dot are ignored, so `Git.ShareGap.net.` addresses `git.sharegap.net`.
+
+| Key | Overrides |
+|---|---|
+| `interval` | Periodic probe interval for this route. Minimum `5s`. |
+| `probe_timeout` | Per-probe timeout, for a slow origin. |
+| `expected_status_min` / `expected_status_max` | Either bound of the accepted status range, for a route with a non-2xx health contract. |
+| `expected_body_contains` | Substring assertion. An explicit `""` removes the fleet-wide marker for this route. |
+| `expected_body_regex` | Anchored regex assertion. An explicit `""` removes the fleet-wide pattern for this route. |
+| `tls_min_days_remaining` | Expiry warning window. An explicit `0` disables the warning for this route. Chain validity is still required. |
+
+Each key set in an override replaces that fleet-wide value for that route only. Unset keys inherit. An explicit empty or zero value counts as set, which is how a route opts out of a fleet-wide marker or expiry window.
+
+Overrides apply to periodic probing **and** to the post-deploy gate, so a route with a non-2xx health contract deploys on its own terms. `interval` affects only periodic probing; the gate keeps retrying on `gate_retry_interval` until `gate_timeout`. Failure and success thresholds stay fleet-wide.
+
+The supervisor keeps a next-due time for each route and wakes at the earliest one. A route overridden to `15s` is probed every 15 seconds while its neighbours stay on the fleet-wide `interval`. Newly added routes are still picked up within the fleet-wide `interval`.
+
+Overrides are repo-configured control-plane policy, like every other canary setting. They are never part of a signed route plan, so tuning a route does not invalidate its deployed plan hash.
+
+When `route_canaries.enabled` is true, startup fails rather than silently probing with the wrong expectations if an override:
+
+- has an unknown key (the error suggests the closest valid key) or sets nothing at all;
+- appears twice once hostnames are canonicalized;
+- is a wildcard, URL or `host:port` rather than a bare hostname;
+- sets an interval below `5s`, or a negative timeout or window;
+- produces an invalid effective status range, for example `expected_status_min: 401` while inheriting a fleet-wide maximum of `299`;
+- carries an invalid regex.
+
+Unknown keys are rejected even while canaries are disabled.
 
 ## Schema
 
