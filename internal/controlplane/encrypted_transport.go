@@ -321,9 +321,14 @@ const contextVMDedupDefaultLimit = 4096
 // contextVMDedupCache is a bounded LRU cache for ContextVM command idempotency.
 // It evicts the oldest entry when the configured limit is reached.
 type contextVMDedupCache struct {
-	entries map[string]ContextVMJSONRPCResponse
+	entries map[string]contextVMDedupEntry
 	order   []string // insertion order for LRU eviction
 	limit   int
+}
+
+type contextVMDedupEntry struct {
+	response           ContextVMJSONRPCResponse
+	requestFingerprint string
 }
 
 func newContextVMDedupCache(limit int) *contextVMDedupCache {
@@ -331,20 +336,20 @@ func newContextVMDedupCache(limit int) *contextVMDedupCache {
 		limit = contextVMDedupDefaultLimit
 	}
 	return &contextVMDedupCache{
-		entries: make(map[string]ContextVMJSONRPCResponse, limit),
+		entries: make(map[string]contextVMDedupEntry, limit),
 		order:   make([]string, 0, limit),
 		limit:   limit,
 	}
 }
 
-func (c *contextVMDedupCache) get(key string) (ContextVMJSONRPCResponse, bool) {
-	resp, ok := c.entries[key]
-	return resp, ok
+func (c *contextVMDedupCache) get(key string) (contextVMDedupEntry, bool) {
+	entry, ok := c.entries[key]
+	return entry, ok
 }
 
-func (c *contextVMDedupCache) put(key string, response ContextVMJSONRPCResponse) {
+func (c *contextVMDedupCache) put(key string, entry contextVMDedupEntry) {
 	if _, exists := c.entries[key]; exists {
-		c.entries[key] = response
+		c.entries[key] = entry
 		return
 	}
 	if len(c.order) >= c.limit {
@@ -352,8 +357,22 @@ func (c *contextVMDedupCache) put(key string, response ContextVMJSONRPCResponse)
 		c.order = c.order[1:]
 		delete(c.entries, oldest)
 	}
-	c.entries[key] = response
+	c.entries[key] = entry
 	c.order = append(c.order, key)
+}
+
+func (c *contextVMDedupCache) deleteIfFingerprintMatches(key, requestFingerprint string) {
+	entry, ok := c.entries[key]
+	if !ok || entry.requestFingerprint != requestFingerprint {
+		return
+	}
+	delete(c.entries, key)
+	for i, orderedKey := range c.order {
+		if orderedKey == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			return
+		}
+	}
 }
 
 func (c *contextVMDedupCache) len() int {
@@ -692,8 +711,20 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, err.Error()), rpc.Method)
 		return
 	}
+	requestFingerprint := ""
 	if progressToken != "" {
-		if cached, ok := t.cachedContextVMResponse(ctx, innerPubkey, rpc.Method, progressToken); ok {
+		requestFingerprint, err = contextVMRequestFingerprint(rpc.Params)
+		if err != nil {
+			t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request params"), rpc.Method)
+			return
+		}
+		cached, ok, fingerprintMismatch := t.cachedContextVMResponse(ctx, innerPubkey, rpc.Method, progressToken, requestFingerprint)
+		if fingerprintMismatch {
+			t.logger.Warn("ContextVM idempotency key reused with different request parameters", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey_prefix", pubkeyPrefix(innerPubkey)))
+			t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters"), rpc.Method)
+			return
+		}
+		if ok {
 			cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
 			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached, rpc.Method)
 			return
@@ -708,7 +739,9 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	if handler == nil {
 		t.logger.Warn("ContextVM method not found", zap.String("event_id", innerID), zap.String("method", rpc.Method))
 		response := cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found")
-		t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
+		if t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, requestFingerprint, response) {
+			response = cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters")
+		}
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
 		return
 	}
@@ -743,7 +776,10 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		}
 		response.Error = &JSONRPCError{Code: code, Message: err.Error()}
 	}
-	t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, response)
+	if t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, requestFingerprint, response) {
+		t.logger.Warn("ContextVM terminal response conflicted with a different request fingerprint", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey_prefix", pubkeyPrefix(innerPubkey)))
+		response = cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters")
+	}
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
 }
 
@@ -1055,16 +1091,25 @@ func contextVMCacheKey(pubkey, method, progressToken string) string {
 	return strings.Join([]string{pubkey, method, progressToken}, "\x00")
 }
 
-func (t *EncryptedRequestTransport) cachedContextVMResponse(ctx context.Context, pubkey, method, progressToken string) (ContextVMJSONRPCResponse, bool) {
+func (t *EncryptedRequestTransport) cachedContextVMResponse(ctx context.Context, pubkey, method, progressToken, requestFingerprint string) (ContextVMJSONRPCResponse, bool, bool) {
 	if progressToken == "" {
-		return ContextVMJSONRPCResponse{}, false
+		return ContextVMJSONRPCResponse{}, false, false
 	}
 	key := contextVMCacheKey(pubkey, method, progressToken)
 	t.contextVMMu.Lock()
-	response, ok := t.contextVMDedup.get(key)
+	entry, ok := t.contextVMDedup.get(key)
 	t.contextVMMu.Unlock()
-	if ok || t.contextVMResponseStore == nil {
-		return response, ok
+	if ok {
+		if entry.requestFingerprint != "" && entry.requestFingerprint != requestFingerprint {
+			return ContextVMJSONRPCResponse{}, false, true
+		}
+		if entry.requestFingerprint == "" {
+			t.logger.Warn("replaying legacy ContextVM response without request fingerprint", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)))
+		}
+		return entry.response, true, false
+	}
+	if t.contextVMResponseStore == nil {
+		return ContextVMJSONRPCResponse{}, false, false
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, contextVMResponseStoreTimeout)
@@ -1072,53 +1117,75 @@ func (t *EncryptedRequestTransport) cachedContextVMResponse(ctx context.Context,
 	cancel()
 	if err != nil {
 		t.logger.Warn("load persisted ContextVM response failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
-		return ContextVMJSONRPCResponse{}, false
+		return ContextVMJSONRPCResponse{}, false, false
 	}
 	if record == nil {
-		return ContextVMJSONRPCResponse{}, false
+		return ContextVMJSONRPCResponse{}, false, false
+	}
+	if record.RequestFingerprint != "" && record.RequestFingerprint != requestFingerprint {
+		return ContextVMJSONRPCResponse{}, false, true
+	}
+	if record.RequestFingerprint == "" {
+		t.logger.Warn("replaying legacy ContextVM response without request fingerprint", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)))
 	}
 	var persisted persistedContextVMJSONRPCResponse
 	if err := json.Unmarshal(record.Response, &persisted); err != nil {
 		t.logger.Error("decode persisted ContextVM response failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
-		return ContextVMJSONRPCResponse{}, false
+		return ContextVMJSONRPCResponse{}, false, false
 	}
-	response = ContextVMJSONRPCResponse{JSONRPC: persisted.JSONRPC, ID: persisted.ID, Error: persisted.Error}
+	response := ContextVMJSONRPCResponse{JSONRPC: persisted.JSONRPC, ID: persisted.ID, Error: persisted.Error}
 	if len(persisted.Result) > 0 {
 		response.Result = persisted.Result
 	}
 	t.contextVMMu.Lock()
-	t.contextVMDedup.put(key, response)
+	t.contextVMDedup.put(key, contextVMDedupEntry{response: response, requestFingerprint: record.RequestFingerprint})
 	t.contextVMMu.Unlock()
-	return response, true
+	return response, true, false
 }
 
-func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, method, progressToken string, response ContextVMJSONRPCResponse) {
+// cacheContextVMResponse returns true when another terminal writer already
+// bound this cache key to a different request fingerprint. The first terminal
+// fingerprint wins; a conflicting response never replaces it.
+func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, method, progressToken, requestFingerprint string, response ContextVMJSONRPCResponse) bool {
 	if progressToken == "" {
-		return
+		return false
 	}
+	key := contextVMCacheKey(pubkey, method, progressToken)
 	t.contextVMMu.Lock()
-	t.contextVMDedup.put(contextVMCacheKey(pubkey, method, progressToken), response)
+	if entry, ok := t.contextVMDedup.get(key); ok && entry.requestFingerprint != "" && entry.requestFingerprint != requestFingerprint {
+		t.contextVMMu.Unlock()
+		return true
+	}
+	t.contextVMDedup.put(key, contextVMDedupEntry{response: response, requestFingerprint: requestFingerprint})
 	t.contextVMMu.Unlock()
 	if t.contextVMResponseStore == nil {
-		return
+		return false
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		t.logger.Error("marshal ContextVM response for persistence failed", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
-		return
+		return false
 	}
 	storeCtx, cancel := context.WithTimeout(context.Background(), contextVMResponseStoreTimeout)
 	err = t.contextVMResponseStore.Put(storeCtx, repository.ContextVMResponseRecord{
-		RequesterPubkey: pubkey,
-		Method:          method,
-		ProgressToken:   progressToken,
-		Response:        encoded,
-		CreatedAt:       time.Now().UTC(),
+		RequesterPubkey:    pubkey,
+		Method:             method,
+		ProgressToken:      progressToken,
+		RequestFingerprint: requestFingerprint,
+		Response:           encoded,
+		CreatedAt:          time.Now().UTC(),
 	})
 	cancel()
 	if err != nil {
+		if errors.Is(err, repository.ErrContextVMResponseFingerprintConflict) {
+			t.contextVMMu.Lock()
+			t.contextVMDedup.deleteIfFingerprintMatches(key, requestFingerprint)
+			t.contextVMMu.Unlock()
+			return true
+		}
 		t.logger.Warn("persist ContextVM response failed; in-memory replay remains available", zap.String("method", method), zap.String("requester_pubkey_prefix", pubkeyPrefix(pubkey)), zap.Error(err))
 	}
+	return false
 }
 
 func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) bool {

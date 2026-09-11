@@ -23,15 +23,21 @@ func newPgContextVMResponseStoreWithDB(db pgQueryer) *PgContextVMResponseStore {
 }
 
 func (s *PgContextVMResponseStore) Put(ctx context.Context, record ContextVMResponseRecord) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO contextvm_responses (requester_pubkey, method, progress_token, response, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+	result, err := s.pool.Exec(ctx, `
+		INSERT INTO contextvm_responses (requester_pubkey, method, progress_token, request_fingerprint, response, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (requester_pubkey, method, progress_token) DO UPDATE SET
+			request_fingerprint = EXCLUDED.request_fingerprint,
 			response = EXCLUDED.response,
 			created_at = EXCLUDED.created_at
-	`, record.RequesterPubkey, record.Method, record.ProgressToken, record.Response, record.CreatedAt.UTC())
+		WHERE contextvm_responses.request_fingerprint IS NULL
+			OR contextvm_responses.request_fingerprint = EXCLUDED.request_fingerprint
+	`, record.RequesterPubkey, record.Method, record.ProgressToken, nullableString(record.RequestFingerprint), record.Response, record.CreatedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("storing ContextVM response: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrContextVMResponseFingerprintConflict
 	}
 	return nil
 }
@@ -39,13 +45,14 @@ func (s *PgContextVMResponseStore) Put(ctx context.Context, record ContextVMResp
 func (s *PgContextVMResponseStore) Get(ctx context.Context, requesterPubkey, method, progressToken string, createdAfter time.Time) (*ContextVMResponseRecord, error) {
 	record := &ContextVMResponseRecord{}
 	err := s.pool.QueryRow(ctx, `
-		SELECT requester_pubkey, method, progress_token, response, created_at
+		SELECT requester_pubkey, method, progress_token, COALESCE(request_fingerprint, ''), response, created_at
 		FROM contextvm_responses
 		WHERE requester_pubkey = $1 AND method = $2 AND progress_token = $3 AND created_at >= $4
 	`, requesterPubkey, method, progressToken, createdAfter.UTC()).Scan(
 		&record.RequesterPubkey,
 		&record.Method,
 		&record.ProgressToken,
+		&record.RequestFingerprint,
 		&record.Response,
 		&record.CreatedAt,
 	)
@@ -58,6 +65,13 @@ func (s *PgContextVMResponseStore) Get(ctx context.Context, requesterPubkey, met
 	record.Response = append([]byte(nil), record.Response...)
 	record.CreatedAt = record.CreatedAt.UTC()
 	return record, nil
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *PgContextVMResponseStore) DeleteCreatedBefore(ctx context.Context, cutoff time.Time) (int64, error) {

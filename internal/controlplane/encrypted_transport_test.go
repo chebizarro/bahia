@@ -1019,6 +1019,158 @@ func TestContextVMTransport_IdempotencyCachesProgressToken(t *testing.T) {
 	}
 }
 
+func TestContextVMTransport_RejectsProgressTokenReuseWithDifferentParams(t *testing.T) {
+	store := newMemoryContextVMResponseStore()
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	firstPublisher := &mockEncryptedPublisher{}
+	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	firstCalls := 0
+	firstTransport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+		firstCalls++
+		return map[string]any{"promoted": true}, nil
+	})
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"package/promote","params":{"package_id":"package-a","_meta":{"progressToken":"promote-conflict"}}}`)
+	firstTransport.HandleEvent(context.Background(), first)
+
+	secondPublisher := &mockEncryptedPublisher{}
+	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	secondCalls := 0
+	secondTransport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+		secondCalls++
+		return map[string]any{"promoted": true}, nil
+	})
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"package/promote","params":{"package_id":"package-b","_meta":{"progressToken":"promote-conflict"}}}`)
+	secondTransport.HandleEvent(context.Background(), second)
+
+	if firstCalls != 1 || secondCalls != 0 {
+		t.Fatalf("handler calls before=%d after=%d, want 1 and 0", firstCalls, secondCalls)
+	}
+	if len(secondPublisher.events) != 1 {
+		t.Fatalf("conflicting retry events = %d, want one terminal rejection", len(secondPublisher.events))
+	}
+	response := contextVMResponse(t, secondPublisher.events[0])
+	if response.Error == nil || response.Error.Code != cascontextvm.InvalidRequestCode || response.Error.Message != "idempotency key was already used with different request parameters" {
+		t.Fatalf("conflicting retry response = %+v", response)
+	}
+	if strings.Contains(secondPublisher.events[0].Content, "package-a") || strings.Contains(secondPublisher.events[0].Content, "package-b") {
+		t.Fatalf("conflicting retry response leaked request payload: %s", secondPublisher.events[0].Content)
+	}
+
+	original := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"original-retry","method":"package/promote","params":{"_meta":{"progressToken":"promote-conflict"},"package_id":"package-a"}}`)
+	secondTransport.HandleEvent(context.Background(), original)
+	if secondCalls != 0 {
+		t.Fatalf("handler calls after original retry = %d, want 0", secondCalls)
+	}
+	if len(secondPublisher.events) != 2 {
+		t.Fatalf("events after original retry = %d, want conflict plus original replay", len(secondPublisher.events))
+	}
+	if originalResponse := contextVMResponse(t, secondPublisher.events[1]); originalResponse.Error != nil || string(originalResponse.ID) != `"original-retry"` {
+		t.Fatalf("original response was poisoned by conflicting retry: %+v", originalResponse)
+	}
+}
+
+func TestContextVMTransport_RejectsInMemoryFingerprintMismatch(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
+	calls := 0
+	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, func(context.Context, ContextVMRequest) (any, error) {
+		calls++
+		return map[string]any{"cordoned": true}, nil
+	})
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"worker/cordon","params":{"worker_id":"worker-a","_meta":{"progressToken":"cordon-conflict"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"worker/cordon","params":{"worker_id":"worker-b","_meta":{"progressToken":"cordon-conflict"}}}`)
+
+	transport.HandleEvent(context.Background(), first)
+	transport.HandleEvent(context.Background(), second)
+
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls)
+	}
+	if len(publisher.events) != 3 {
+		t.Fatalf("events = %d, want progress, terminal, conflict", len(publisher.events))
+	}
+	if response := contextVMResponse(t, publisher.events[2]); response.Error == nil || response.Error.Code != cascontextvm.InvalidRequestCode {
+		t.Fatalf("in-memory fingerprint conflict response = %+v", response)
+	}
+}
+
+func TestContextVMTransport_CanonicalParamsReplayAcrossReserialization(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
+	calls := 0
+	transport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+		calls++
+		return map[string]any{"call": calls}, nil
+	})
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"package/promote","params":{"package":{"version":1.0,"name":"bahia"},"_meta":{"progressToken":"canonical-retry"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{ "jsonrpc": "2.0", "id": 2, "method": "package/promote", "params": { "_meta": { "progressToken": "canonical-retry" }, "package": { "name": "bahia", "version": 1 } } }`)
+
+	transport.HandleEvent(context.Background(), first)
+	transport.HandleEvent(context.Background(), second)
+
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want one canonical replay", calls)
+	}
+	if len(publisher.events) != 3 {
+		t.Fatalf("events = %d, want progress, terminal, replay", len(publisher.events))
+	}
+	if response := contextVMResponse(t, publisher.events[2]); response.Error != nil || string(response.ID) != "2" {
+		t.Fatalf("canonical replay response = %+v", response)
+	}
+}
+
+func TestContextVMTransport_LegacyPersistedResponseWithoutFingerprintReplays(t *testing.T) {
+	store := newMemoryContextVMResponseStore()
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	store.records[contextVMCacheKey(requesterPubkey, ContextVMMethodBackupRun, "legacy-retry")] = repository.ContextVMResponseRecord{
+		RequesterPubkey: requesterPubkey,
+		Method:          ContextVMMethodBackupRun,
+		ProgressToken:   "legacy-retry",
+		Response:        []byte(`{"jsonrpc":"2.0","id":"legacy","result":{"run_id":"existing"}}`),
+		CreatedAt:       time.Now().UTC(),
+	}
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
+	calls := 0
+	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		calls++
+		return nil, nil
+	})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry","method":"backup/run","params":{"run":"changed-but-legacy-unverifiable","_meta":{"progressToken":"legacy-retry"}}}`)
+
+	transport.HandleEvent(context.Background(), event)
+
+	if calls != 0 {
+		t.Fatalf("handler calls = %d, want legacy cached replay", calls)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("legacy replay events = %d, want one terminal response", len(publisher.events))
+	}
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error != nil || string(response.ID) != `"retry"` {
+		t.Fatalf("legacy replay response = %+v", response)
+	}
+}
+
+func TestContextVMTransport_TerminalCacheFirstFingerprintWins(t *testing.T) {
+	transport := NewEncryptedRequestTransport(nil, nil, nil, zap.NewNop())
+	first := ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage(`"first"`), Result: map[string]any{"winner": true}}
+	second := ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage(`"second"`), Result: map[string]any{"winner": false}}
+	if conflict := transport.cacheContextVMResponse("requester", "method", "token", "fingerprint-a", first); conflict {
+		t.Fatal("first terminal response unexpectedly conflicted")
+	}
+	if conflict := transport.cacheContextVMResponse("requester", "method", "token", "fingerprint-b", second); !conflict {
+		t.Fatal("second terminal response with different fingerprint did not conflict")
+	}
+
+	cached, ok, mismatch := transport.cachedContextVMResponse(context.Background(), "requester", "method", "token", "fingerprint-a")
+	if !ok || mismatch || string(cached.ID) != `"first"` {
+		t.Fatalf("first terminal response was overwritten: cached=%+v ok=%t mismatch=%t", cached, ok, mismatch)
+	}
+}
+
 func TestContextVMTransport_FailedTerminalRetryDoesNotBlockSubscriptionLoop(t *testing.T) {
 	subscriber := newScriptedEncryptedRequestSubscriber()
 	publisher := &loopLivenessPublisher{secondPublished: make(chan struct{})}
@@ -1655,16 +1807,16 @@ func TestContextVMCacheKeyScopesBySignerAndMethod(t *testing.T) {
 func TestContextVMDedupCache_BoundsEntries(t *testing.T) {
 	cache := newContextVMDedupCache(3)
 
-	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
-	cache.put("b", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
-	cache.put("c", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("a", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
+	cache.put("b", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
+	cache.put("c", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
 
 	if cache.len() != 3 {
 		t.Fatalf("cache.len() = %d, want 3", cache.len())
 	}
 
 	// Adding a 4th entry should evict the oldest ("a").
-	cache.put("d", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("d", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
 
 	if cache.len() != 3 {
 		t.Fatalf("cache.len() = %d after eviction, want 3", cache.len())
@@ -1683,11 +1835,11 @@ func TestContextVMDedupCache_BoundsEntries(t *testing.T) {
 func TestContextVMDedupCache_UpdateExistingDoesNotEvict(t *testing.T) {
 	cache := newContextVMDedupCache(2)
 
-	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
-	cache.put("b", ContextVMJSONRPCResponse{JSONRPC: "2.0"})
+	cache.put("a", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
+	cache.put("b", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0"}})
 
 	// Updating "a" should not grow the cache or evict "b".
-	cache.put("a", ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: []byte(`"updated"`)})
+	cache.put("a", contextVMDedupEntry{response: ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: []byte(`"updated"`)}})
 
 	if cache.len() != 2 {
 		t.Fatalf("cache.len() = %d after update, want 2", cache.len())
@@ -1696,8 +1848,8 @@ func TestContextVMDedupCache_UpdateExistingDoesNotEvict(t *testing.T) {
 	if !ok {
 		t.Fatal("updated entry 'a' should still be present")
 	}
-	if string(resp.ID) != `"updated"` {
-		t.Fatalf("entry 'a' ID = %s, want \"updated\"", string(resp.ID))
+	if string(resp.response.ID) != `"updated"` {
+		t.Fatalf("entry 'a' ID = %s, want \"updated\"", string(resp.response.ID))
 	}
 	if _, ok := cache.get("b"); !ok {
 		t.Fatal("entry 'b' should still be present after update of 'a'")
