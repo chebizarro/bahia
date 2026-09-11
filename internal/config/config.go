@@ -509,6 +509,7 @@ type LoomConfig struct {
 	Relays              []string                      `koanf:"relays"`
 	JobTimeout          time.Duration                 `koanf:"job_timeout"`
 	CanonicalProjection LoomCanonicalProjectionConfig `koanf:"canonical_projection" yaml:"canonical_projection"`
+	AuthorizedPubkeys   []string                      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
 }
 
 // LoomCanonicalProjectionConfig controls projection of Loom-native status/result
@@ -1770,6 +1771,12 @@ func (c *Config) validateLoom() error {
 	if projection.SignetConnectTimeout == 0 {
 		projection.SignetConnectTimeout = 15 * time.Second
 	}
+
+	authorized, err := normalizePubkeyList(c.Loom.AuthorizedPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: loom.authorized_pubkeys: %w", err)
+	}
+	c.Loom.AuthorizedPubkeys = authorized
 
 	if projection.AllowRawKeyDev {
 		return fmt.Errorf("config validation failed: loom.canonical_projection.allow_raw_key_dev is unavailable in validated runtime configuration; use Signet/NIP-46 projection signing")

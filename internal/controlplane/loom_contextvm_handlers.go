@@ -9,22 +9,40 @@ import (
 	loomadapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 )
 
+type loomJobClient interface {
+	SubmitJob(ctx context.Context, job loomadapter.JobRequest) (string, error)
+	CancelJob(ctx context.Context, jobEventID string, workerPubkey string) error
+	RememberJobSubmitter(jobEventID, submitter string)
+	JobSubmitter(jobEventID string) string
+	CanonicalProjectionReady() bool
+	StartCanonicalProjection(jobEventID string)
+}
+
+var _ loomJobClient = (*loomadapter.Client)(nil)
+
 // RegisterLoomContextVMHandlers exposes Bahia's canonical ContextVM Loom methods.
 // The adapter boundary is ContextVM kind 25910 using loom/submit and loom/cancel;
 // this handler maps those intents to Loom's native 5100/5102 protocol through the
 // existing Loom client. Durable job visibility is emitted by the Loom projection
 // helpers as 30900 loom-job:<id> state plus 4903 audit events.
-func RegisterLoomContextVMHandlers(transport *EncryptedRequestTransport, client *loomadapter.Client) {
+//
+// fleetOperatorPubkeys authorizes cancel for operators in addition to the
+// original submitter. An empty list is fail-closed: only the submitter can cancel.
+func RegisterLoomContextVMHandlers(transport *EncryptedRequestTransport, client loomJobClient, fleetOperatorPubkeys []string) {
 	if transport == nil || client == nil {
 		return
 	}
-	h := loomContextVMHandlers{client: client}
+	h := loomContextVMHandlers{
+		client:               client,
+		fleetOperatorPubkeys: fleetOperatorPubkeys,
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodLoomSubmit, h.submit)
 	transport.RegisterContextVMHandler(ContextVMMethodLoomCancel, h.cancel)
 }
 
 type loomContextVMHandlers struct {
-	client *loomadapter.Client
+	client               loomJobClient
+	fleetOperatorPubkeys []string
 }
 
 type loomSubmitContextVMPayload struct {
@@ -91,6 +109,10 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 		return nil, err
 	}
 	h.client.StartCanonicalProjection(jobID)
+
+	submitterPubkey := request.Event.PubKey.Hex()
+	h.client.RememberJobSubmitter(jobID, submitterPubkey)
+
 	return map[string]any{
 		"status":       "accepted",
 		"schema":       ContextVMLoomSchema,
@@ -140,6 +162,13 @@ func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequ
 	if jobID == "" {
 		return nil, fmt.Errorf("job_event_id is required")
 	}
+
+	callerPubkey := request.Event.PubKey.Hex()
+	submitterPubkey := h.client.JobSubmitter(jobID)
+	if !authorizedForLoomCancel(callerPubkey, submitterPubkey, h.fleetOperatorPubkeys) {
+		return nil, fmt.Errorf("caller not authorized to cancel loom job")
+	}
+
 	if err := h.client.CancelJob(ctx, jobID, strings.TrimSpace(payload.WorkerPubkey)); err != nil {
 		return nil, err
 	}
@@ -150,4 +179,24 @@ func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequ
 		"job_event_id": jobID,
 		"state_d_tag":  "loom-job:" + jobID,
 	}, nil
+}
+
+func authorizedForLoomCancel(callerPubkey, jobSubmitter string, fleetOperatorPubkeys []string) bool {
+	callerPubkey = strings.TrimSpace(callerPubkey)
+	if callerPubkey == "" {
+		return false
+	}
+	jobSubmitter = strings.TrimSpace(jobSubmitter)
+	if jobSubmitter == "" {
+		return false
+	}
+	if callerPubkey == jobSubmitter {
+		return true
+	}
+	for _, op := range fleetOperatorPubkeys {
+		if callerPubkey == strings.TrimSpace(op) {
+			return true
+		}
+	}
+	return false
 }

@@ -137,6 +137,7 @@ type Client struct {
 
 	jobsMu           sync.RWMutex
 	submittedWorkers map[string]string
+	jobSubmitters    map[string]string
 
 	jobTimeout             time.Duration
 	jobSubscriptionBackoff time.Duration
@@ -737,6 +738,26 @@ func (c *Client) submittedWorker(jobEventID string) string {
 	c.jobsMu.RLock()
 	defer c.jobsMu.RUnlock()
 	return c.submittedWorkers[jobEventID]
+}
+func (c *Client) RememberJobSubmitter(jobEventID, submitter string) {
+	if jobEventID == "" || submitter == "" {
+		return
+	}
+	c.jobsMu.Lock()
+	defer c.jobsMu.Unlock()
+	if c.jobSubmitters == nil {
+		c.jobSubmitters = make(map[string]string)
+	}
+	c.jobSubmitters[jobEventID] = submitter
+}
+
+func (c *Client) JobSubmitter(jobEventID string) string {
+	if jobEventID == "" {
+		return ""
+	}
+	c.jobsMu.RLock()
+	defer c.jobsMu.RUnlock()
+	return c.jobSubmitters[jobEventID]
 }
 
 func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWorkerPubkey string) error {
