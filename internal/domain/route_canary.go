@@ -65,8 +65,11 @@ const (
 	// RouteCanaryClassificationStatusMismatch means the response status fell
 	// outside the configured expected range for a non-upstream reason.
 	RouteCanaryClassificationStatusMismatch RouteCanaryClassification = "status_mismatch"
-	// RouteCanaryClassificationBodyMismatch means status assertions held but the
-	// configured expected body substring was absent.
+	// RouteCanaryClassificationBodyMismatch means status assertions held but a
+	// configured body assertion did not: the expected substring was absent, or
+	// the body did not match the anchored expected_body_regex. Both forms share
+	// one classification because both mean "the intended application did not
+	// answer"; the reason string names which assertion was configured.
 	RouteCanaryClassificationBodyMismatch RouteCanaryClassification = "body_mismatch"
 	// RouteCanaryClassificationHealthPathNotDiscriminating means the health path
 	// returned the same response as a deliberately bogus control path, so the
@@ -176,8 +179,11 @@ type RouteCanaryTarget struct {
 	ExpectedStatusMin    int                    `json:"expected_status_min"`
 	ExpectedStatusMax    int                    `json:"expected_status_max"`
 	ExpectedBodyContains string                 `json:"expected_body_contains,omitempty"`
-	TLSMinDaysRemaining  int                    `json:"tls_min_days_remaining,omitempty"`
-	Timeout              time.Duration          `json:"timeout"`
+	// ExpectedBodyRegex, when set, must match the whole bounded body. See
+	// CompileRouteCanaryBodyRegex for the anchoring and bounding contract.
+	ExpectedBodyRegex   string        `json:"expected_body_regex,omitempty"`
+	TLSMinDaysRemaining int           `json:"tls_min_days_remaining,omitempty"`
+	Timeout             time.Duration `json:"timeout"`
 	// ControlPath is a deliberately bogus path used as a negative control. When
 	// set, the probe also requests it; if the health path is indistinguishable
 	// from it, the health assertion is proving nothing.
@@ -246,6 +252,11 @@ func (t RouteCanaryTarget) Validate() error {
 	if t.TLSMinDaysRemaining < 0 {
 		return fmt.Errorf("route canary target: tls_min_days_remaining must not be negative")
 	}
+	if t.ExpectedBodyRegex != "" {
+		if _, err := CompileRouteCanaryBodyRegex(t.ExpectedBodyRegex); err != nil {
+			return fmt.Errorf("route canary target: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -290,9 +301,10 @@ type RouteCanaryObservation struct {
 	StatusCode int `json:"status_code,omitempty"`
 	// Body is the bounded, sanitized response prefix.
 	Body string `json:"body,omitempty"`
-	// BodyMatched reports whether the configured expected substring was found.
-	// It is evaluated by the probe against the unsanitized, bounded body so that
-	// redaction cannot change match semantics.
+	// BodyMatched reports whether every configured body assertion held, the
+	// substring and the anchored regex alike. It is evaluated by the probe
+	// against the unsanitized, bounded body so that redaction cannot change
+	// match semantics. It is false when no body assertion is configured.
 	BodyMatched bool `json:"body_matched"`
 	// Error is the sanitized transport-level error, when any.
 	Error string `json:"error,omitempty"`
@@ -363,13 +375,13 @@ func ClassifyRouteObservation(observation RouteCanaryObservation, now time.Time)
 	if observation.StatusCode < observation.Target.ExpectedStatusMin || observation.StatusCode > observation.Target.ExpectedStatusMax {
 		return RouteCanaryClassificationStatusMismatch
 	}
-	if observation.Target.ExpectedBodyContains != "" && !observation.BodyMatched {
+	if observation.Target.HasBodyAssertion() && !observation.BodyMatched {
 		return RouteCanaryClassificationBodyMismatch
 	}
 	// An explicit body assertion that held is real evidence about the
 	// application, so it outranks the catch-all warning: the operator has
 	// already proven the response is the intended one.
-	if observation.Target.ExpectedBodyContains == "" && observation.Indistinguishable() {
+	if !observation.Target.HasBodyAssertion() && observation.Indistinguishable() {
 		return RouteCanaryClassificationHealthPathNotDiscriminating
 	}
 	if observation.Target.TLSMinDaysRemaining > 0 &&
@@ -655,13 +667,13 @@ func DescribeRouteObservation(observation RouteCanaryObservation, classification
 		return SanitizeEvidence(fmt.Sprintf("%s: HTTP %d outside expected range %d..%d",
 			target.Describe(), observation.StatusCode, target.ExpectedStatusMin, target.ExpectedStatusMax))
 	case RouteCanaryClassificationBodyMismatch:
-		return SanitizeEvidence(fmt.Sprintf("%s: HTTP %d but response body did not contain the expected marker",
-			target.Describe(), observation.StatusCode))
+		return SanitizeEvidence(fmt.Sprintf("%s: HTTP %d but %s",
+			target.Describe(), observation.StatusCode, target.describeBodyMismatch()))
 	case RouteCanaryClassificationHealthPathNotDiscriminating:
 		return SanitizeEvidence(fmt.Sprintf(
 			"%s: health path returned HTTP %d with the same body as control path %s, so it does not discriminate; "+
 				"this route serves a catch-all and the health path proves only that something answered. "+
-				"Configure a real health endpoint or expected_body_contains to make this check meaningful",
+				"Configure a real health endpoint, expected_body_contains or expected_body_regex to make this check meaningful",
 			target.Describe(), observation.StatusCode, target.ControlPath))
 	default:
 		return SanitizeEvidence(fmt.Sprintf("%s: unclassified route failure", target.Describe()))
