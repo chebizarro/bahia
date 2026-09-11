@@ -7,6 +7,10 @@ function instanceHealthPath(key) {
   return `/services/${serviceId}/environments/${environmentId}/managed-instances/${deploymentUnitId}`;
 }
 
+function routeCanaryPath(serviceId, environmentId, hostname) {
+  return `/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(environmentId)}/routes/${encodeURIComponent(hostname)}`;
+}
+
 export class BahiaClient {
   constructor() {
     this.authProvider = null;
@@ -82,7 +86,12 @@ export class BahiaClient {
       } catch {
         // Keep the HTTP status fallback when the response is not JSON.
       }
-      throw new Error(errorMessage);
+      const httpError = new Error(errorMessage);
+      // Attach the HTTP status so callers can distinguish "not found / feature
+      // disabled" (404, e.g. a tier-2-gated route that is not registered) from
+      // a genuine failure without parsing the message string.
+      httpError.status = res.status;
+      throw httpError;
     }
 
     const contentType = res.headers.get('content-type');
@@ -163,6 +172,18 @@ export class BahiaClient {
 
   getSBOMNTIACompliance(artifactId) {
     return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/ntia`);
+  }
+
+  listRouteCanaries(params = {}) {
+    return this.fetch(`/route-canaries${this.query(params)}`).then((result) => result ?? []);
+  }
+
+  getRouteCanary(serviceId, envId, hostname, deploymentUnitId = null) {
+    return this.fetch(`${routeCanaryPath(serviceId, envId, hostname)}/canary${this.query({ deployment_unit_id: deploymentUnitId })}`);
+  }
+
+  listRouteCanaryEvents(serviceId, envId, hostname, limit = 50, deploymentUnitId = null) {
+    return this.fetch(`${routeCanaryPath(serviceId, envId, hostname)}/canary/events${this.query({ limit, deployment_unit_id: deploymentUnitId })}`).then((result) => result ?? []);
   }
 
   async listBlossomBlobs(pubkey = null) {

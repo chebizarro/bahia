@@ -97,6 +97,7 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'getSBOM',
       'getSBOMAttestation',
       'getSBOMNTIACompliance',
+      'getRouteCanary',
       'getSBOMPackages',
       'ingestSBOM',
       'listBlossomBlobs',
@@ -104,6 +105,8 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'listInstanceHealth',
       'listInstanceHealthEvents',
       'listInstanceRecoveryAttempts',
+      'listRouteCanaries',
+      'listRouteCanaryEvents',
       'publishConfigFabricEvent',
       'query',
       'rollbackConfigFabricEvent',
@@ -123,5 +126,32 @@ describe('BahiaClient HTTP-native interop contract', () => {
   it('normalizes backend and HTTP errors', async () => {
     global.fetch.mockResolvedValueOnce(jsonResponse({ error: 'SBOM not found' }, { ok: false, status: 404, statusText: 'Not Found' }));
     await expect(client.getSBOM('missing')).rejects.toThrow('SBOM not found');
+  });
+
+  it('attaches the HTTP status to thrown errors so callers can detect 404s without parsing the message', async () => {
+    // 404 is not in the default retriable status set, so a single mocked response suffices.
+    global.fetch.mockResolvedValueOnce(jsonResponse({}, { ok: false, status: 404, statusText: 'Not Found' }));
+    await expect(client.getSBOM('missing')).rejects.toMatchObject({ status: 404 });
+
+    // 5xx is retried once by default for GET requests, so mock both attempts.
+    global.fetch
+      .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, { ok: false, status: 500, statusText: 'Internal Server Error' }))
+      .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, { ok: false, status: 500, statusText: 'Internal Server Error' }));
+    await expect(client.getSBOM('missing')).rejects.toMatchObject({ status: 500 });
+  });
+
+  it('exposes route canary list, detail, and event-lineage HTTP methods', async () => {
+    global.fetch
+      .mockResolvedValueOnce(jsonResponse({ data: [{ hostname: 'git.example.com' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: { hostname: 'git.example.com', open: true } }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ transition: 'opened' }] }));
+
+    await expect(client.listRouteCanaries({ service_id: 'svc-1', open: true })).resolves.toEqual([{ hostname: 'git.example.com' }]);
+    await expect(client.getRouteCanary('svc-1', 'env-1', 'git.example.com', 'unit-1')).resolves.toEqual({ hostname: 'git.example.com', open: true });
+    await expect(client.listRouteCanaryEvents('svc-1', 'env-1', 'git.example.com')).resolves.toEqual([{ transition: 'opened' }]);
+
+    expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/route-canaries?service_id=svc-1&open=true', expect.any(Object));
+    expect(global.fetch).toHaveBeenNthCalledWith(2, '/api/v1/services/svc-1/environments/env-1/routes/git.example.com/canary?deployment_unit_id=unit-1', expect.any(Object));
+    expect(global.fetch).toHaveBeenNthCalledWith(3, '/api/v1/services/svc-1/environments/env-1/routes/git.example.com/canary/events?limit=50', expect.any(Object));
   });
 });

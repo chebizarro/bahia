@@ -48,6 +48,7 @@
     loadRepositories
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
+  import RouteCanaryOutages from '$lib/components/RouteCanaryOutages.svelte';
   import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
   import {
     buildManagedRuntimeConfig,
@@ -188,6 +189,10 @@
     mode: 'previous',
     artifact_id: ''
   });
+  // Route canary count for the section heading; RouteCanaryOutages owns the
+  // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
+  // page stays nostr_native and never imports $lib/api/client.js.
+  let routeCanaryCount = $state(0);
   // Secret create modal state
   let secretCreateOpen = $state(false);
   let secretCreating = $state(false);
@@ -309,6 +314,7 @@
     secretsLoading = false;
     secretsError = null;
     hydratedRelatedForServiceId = null;
+    routeCanaryCount = 0;
 
     try {
       await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
@@ -1187,6 +1193,19 @@
           </LoadingButton>
         </div>
       {/if}
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Canaries ({routeCanaryCount})</span></h2>
+        <a class="button-link" href="/route-canaries">View all</a>
+      </div>
+      <RouteCanaryOutages
+        serviceId={serviceId}
+        emptyTitle="No route canaries configured"
+        emptyMessage="No route canaries configured for this service"
+        onCount={(count) => (routeCanaryCount = count)}
+      />
     </section>
   {/if}
 </div>

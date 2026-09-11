@@ -19,6 +19,7 @@ const OPERATIONS_LINKS = [
   { href: '/fleet-health', label: 'Fleet Health', statusKey: 'fleetHealth', docTopic: 'features-fleet-health' },
   { href: '/widgets', label: 'Ops Widgets', docTopic: 'features-ops-widgets' },
   { href: '/instance-health', label: 'Instance Health' },
+  { href: '/route-canaries', label: 'Route Canaries', docTopic: 'features-route-canaries' },
   { href: '/backup', label: 'Backup', docTopic: 'features-backup' },
   { href: '/continuity', label: 'Continuity', docTopic: 'features-continuity' },
   { href: '/dns', label: 'DNS', docTopic: 'features-dns' },

@@ -29,6 +29,7 @@
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
+  import RouteCanaryOutages from '$lib/components/RouteCanaryOutages.svelte';
   import {
     ArtifactIcon,
     DeploymentIcon,
@@ -45,6 +46,11 @@
   let deploymentHistory = $state([]);
   let loading = $state(true);
   let error = $state(null);
+
+  // Route canary count for the section heading; RouteCanaryOutages owns the
+  // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
+  // page stays nostr_native and never imports $lib/api/client.js.
+  let routeCanaryCount = $state(0);
 
   // Service detail dialog
   let selectedService = $state(null);
@@ -501,6 +507,18 @@
           message="No services are currently deployed to this environment"
         />
       {/if}
+    </section>
+
+    <section>
+      <h2 class="section-title"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Route Outages ({routeCanaryCount})</span></h2>
+      <RouteCanaryOutages
+        environmentId={environmentId}
+        showServiceNames
+        resolveServiceName={serviceDisplayName}
+        emptyTitle="No route canaries configured"
+        emptyMessage="No managed routes are currently being probed for this environment"
+        onCount={(count) => (routeCanaryCount = count)}
+      />
     </section>
 
     <section>
