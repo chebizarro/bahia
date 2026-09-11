@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -26,6 +27,8 @@ var (
 	fullGitSHA           = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 	buildArgNamePattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 	repositoryURLPattern = regexp.MustCompile(`(?i)(?:^|[:/])([^/:]+)/([^/]+?)(?:\.git)?/?$`)
+	// Frozen namespace for build IDs derived from signed ContextVM request events.
+	contextVMBuildRequestNamespace = uuid.MustParse("24ac457f-f5f6-4eb2-bdd5-d67ca47b8b45")
 )
 
 var ArcanaPublicBuildArgNames = []string{
@@ -155,7 +158,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	if h == nil || h.starter == nil {
 		return nil, fmt.Errorf("Gitea mirror and HiveCI build initiation are not configured")
 	}
-	if h.registry == nil || h.services == nil || h.secrets == nil {
+	if h.registry == nil || h.builds == nil || h.services == nil || h.secrets == nil {
 		return nil, fmt.Errorf("build request handling is not configured")
 	}
 
@@ -174,6 +177,26 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	if err != nil {
 		return nil, err
 	}
+	sourceEventID := ""
+	requesterPubkey := ""
+	if request.Event != nil {
+		if request.Event.ID == (nostr.ID{}) {
+			return nil, fmt.Errorf("build/request requires a signed source event ID")
+		}
+		sourceEventID = request.Event.ID.Hex()
+		requesterPubkey = request.Event.PubKey.Hex()
+	}
+	buildID := contextVMBuildID(sourceEventID)
+	existing, err := h.builds.GetByID(ctx, buildID)
+	if err != nil {
+		return nil, fmt.Errorf("load canonical build: %w", err)
+	}
+	if existing != nil {
+		if err := validateCanonicalBuildIdentity(existing, buildID, payload.ServiceID, sourceEventID); err != nil {
+			return nil, err
+		}
+		return buildRequestResult(existing), nil
+	}
 
 	secret, err := h.secrets.GetByID(ctx, payload.RepositoryCredentialRef)
 	if err != nil {
@@ -186,13 +209,6 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 		return nil, fmt.Errorf("repository credential reference must belong to the selected service")
 	}
 
-	buildID := uuid.New()
-	sourceEventID := ""
-	requesterPubkey := ""
-	if request.Event != nil {
-		sourceEventID = request.Event.ID.Hex()
-		requesterPubkey = request.Event.PubKey.Hex()
-	}
 	result, err := h.starter.StartHiveCIBuild(ctx, HiveCIBuildStartRequest{
 		BuildID: buildID, ServiceID: payload.ServiceID,
 		RepositoryCoordinate: repositoryCoordinate,
@@ -222,13 +238,70 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 			"evidence":              map[string]any{"request_event_id": sourceEventID},
 		},
 	}
-	if err := h.registry.RegisterBuild(ctx, build); err != nil {
-		return nil, fmt.Errorf("register queued build: %w", err)
+	existing, err = h.builds.GetByID(ctx, build.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load canonical build: %w", err)
 	}
+	if existing != nil {
+		if err := validateCanonicalBuild(existing, build); err != nil {
+			return nil, err
+		}
+		build = existing
+	} else if err := h.registry.RegisterBuild(ctx, build); err != nil {
+		// PgBuildRepository intentionally uses a plain INSERT. A concurrent exact
+		// replay can therefore lose the insert race; accept that error only when
+		// the canonical deterministic row is now present and matches this request.
+		existing, loadErr := h.builds.GetByID(ctx, build.ID)
+		if loadErr != nil {
+			return nil, fmt.Errorf("register queued build: %v; reload canonical build: %w", err, loadErr)
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("register queued build: %w", err)
+		}
+		if conflictErr := validateCanonicalBuild(existing, build); conflictErr != nil {
+			return nil, fmt.Errorf("register queued build: %v; %w", err, conflictErr)
+		}
+		build = existing
+	}
+	return buildRequestResult(build), nil
+}
+
+func contextVMBuildID(sourceEventID string) uuid.UUID {
+	// The signed ContextVM request event is the replay key already used by the
+	// Gitea initiator. Namespacing that immutable event ID gives Bahia the same
+	// local build primary key on every exact replay.
+	return uuid.NewSHA1(contextVMBuildRequestNamespace, []byte(strings.TrimSpace(sourceEventID)))
+}
+
+func validateCanonicalBuildIdentity(existing *domain.Build, buildID, serviceID uuid.UUID, sourceEventID string) error {
+	if existing == nil || existing.ID != buildID || existing.ServiceID != serviceID ||
+		existing.CISystem != domain.CISystemHiveCI || strings.TrimSpace(existing.CIRunID) == "" ||
+		existing.SourceEventID != sourceEventID {
+		return fmt.Errorf("canonical build %s conflicts with replayed build request", buildID)
+	}
+	return nil
+}
+
+func validateCanonicalBuild(existing, requested *domain.Build) error {
+	if existing == nil || requested == nil {
+		return fmt.Errorf("canonical build replay is incomplete")
+	}
+	if existing.ID != requested.ID ||
+		existing.ServiceID != requested.ServiceID ||
+		!strings.EqualFold(strings.TrimSpace(existing.GitSHA), strings.TrimSpace(requested.GitSHA)) ||
+		strings.TrimSpace(existing.GitRef) != strings.TrimSpace(requested.GitRef) ||
+		existing.CISystem != requested.CISystem || existing.CIRunID != requested.CIRunID ||
+		existing.SourceEventID != requested.SourceEventID {
+		return fmt.Errorf("canonical build %s conflicts with replayed build request", requested.ID)
+	}
+	return nil
+}
+
+func buildRequestResult(build *domain.Build) map[string]any {
 	return map[string]any{
 		"build_id": build.ID, "status": build.Status, "git_sha": build.GitSHA,
 		"git_ref": build.GitRef, "ci_system": build.CISystem, "ci_run_id": build.CIRunID,
-	}, nil
+	}
 }
 
 func (h *EncryptedBuildHandlers) GetBuild(ctx context.Context, request ContextVMRequest) (any, error) {

@@ -2,17 +2,68 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
+	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type replayBuildStarter struct {
+	result controlplane.HiveCIBuildStartResult
+	calls  int
+}
+
+func (s *replayBuildStarter) StartHiveCIBuild(context.Context, controlplane.HiveCIBuildStartRequest) (*controlplane.HiveCIBuildStartResult, error) {
+	s.calls++
+	result := s.result
+	return &result, nil
+}
+
+type replayBuildRegistry struct {
+	builds        *mockBuildRepo
+	registrations int
+}
+
+func (r *replayBuildRegistry) RegisterBuild(ctx context.Context, build *domain.Build) error {
+	if existing, _ := r.builds.GetByID(ctx, build.ID); existing != nil || r.builds.byRun[build.CIRunID] != nil {
+		return errors.New("duplicate key value violates unique constraint")
+	}
+	r.registrations++
+	return r.builds.Create(ctx, build)
+}
+
+func (r *replayBuildRegistry) ListBuilds(context.Context, uuid.UUID, int, int) ([]domain.Build, error) {
+	return nil, nil
+}
+
+type replayBuildCredential struct {
+	secret *domain.ServiceSecret
+}
+
+func (r replayBuildCredential) GetByID(context.Context, uuid.UUID) (*domain.ServiceSecret, error) {
+	return r.secret, nil
+}
+
+type replayBuildMembers struct{}
+
+func (replayBuildMembers) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+	return &domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: domain.RoleOwner}, nil
+}
+
+func (replayBuildMembers) ListByPubkey(context.Context, string) ([]domain.OrgMember, error) {
+	return nil, nil
+}
 
 type mockHiveRepo struct {
 	runs    map[string]*domain.HiveCIWorkflowRun
@@ -436,6 +487,112 @@ func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i 
 	services := &mockServiceRepo{service: &domain.Service{ID: serviceID, ArtifactRepo: imageRepo}}
 	registry := &mockCanonicalRegistry{builds: b, artifacts: a, intents: i}
 	return NewBridge(h, services, b, a, i, e, o, nil, registry, []string{"trusted-pub"}, true, nil)
+}
+
+func TestBuildRequestReplayPreservesCanonical5401CorrelationFor5402(t *testing.T) {
+	ctx := context.Background()
+	serviceID, orgID, credentialID := uuid.New(), uuid.New(), uuid.New()
+	runEventID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	resultEventID := "result-5402"
+	gitSHA := "0123456789abcdef0123456789abcdef01234567"
+	repoCoordinate := "github.com/acme/api"
+	workflowPath := ".github/workflows/ci.yml"
+	imageRepo := "ghcr.io/acme/api"
+	imageDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	builds := newMockBuildRepo()
+	requestRegistry := &replayBuildRegistry{builds: builds}
+	starter := &replayBuildStarter{result: controlplane.HiveCIBuildStartResult{
+		GitSHA: gitSHA, GitRef: "refs/heads/main", CIRunID: runEventID,
+	}}
+	services := &mockServiceRepo{service: &domain.Service{
+		ID: serviceID, OrgID: orgID, ArtifactRepo: imageRepo,
+		Repository: &domain.RepositoryRef{RepoCoordinate: repoCoordinate},
+	}}
+	handler := controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+		Starter:  starter,
+		Registry: requestRegistry, Builds: builds, Services: services,
+		Secrets: replayBuildCredential{secret: &domain.ServiceSecret{
+			ID: credentialID, ServiceID: serviceID, Name: "git-repository",
+		}},
+		RBAC: auth.NewRBAC(replayBuildMembers{}),
+	})
+	params, err := json.Marshal(controlplane.ArcanaBuildRequest{
+		ServiceID: serviceID, GitRef: "refs/heads/main",
+		RepositoryCredentialRef: credentialID, ArtifactRepo: imageRepo,
+		BuildArgs: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := controlplane.ContextVMRequest{
+		Event: &nostr.Event{ID: nostr.ID{1}, PubKey: nostr.PubKey{2}},
+		RPC:   controlplane.ContextVMJSONRPCRequest{Params: params},
+	}
+	firstRaw, err := handler.RequestBuild(ctx, request)
+	if err != nil {
+		t.Fatalf("first RequestBuild: %v", err)
+	}
+	replayedRaw, err := handler.RequestBuild(ctx, request)
+	if err != nil {
+		t.Fatalf("replayed RequestBuild: %v", err)
+	}
+	first := firstRaw.(map[string]any)
+	replayed := replayedRaw.(map[string]any)
+	buildID := first["build_id"].(uuid.UUID)
+	if replayed["build_id"] != buildID {
+		t.Fatalf("replay forked canonical build/run correlation: first=%#v replayed=%#v", first, replayed)
+	}
+	if starter.calls != 1 || requestRegistry.registrations != 1 || len(builds.byRun) != 1 {
+		t.Fatalf("exact replay started=%d registered=%d rows=%d, want one each", starter.calls, requestRegistry.registrations, len(builds.byRun))
+	}
+	queued, err := builds.GetByID(ctx, buildID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued == nil || queued.ID != buildID || queued.Status != domain.BuildStatusQueued {
+		t.Fatalf("canonical queued build = %#v", queued)
+	}
+
+	hive := newMockHiveRepo()
+	hive.runs[runEventID] = &domain.HiveCIWorkflowRun{
+		RunEventID: runEventID, RepoCoordinate: repoCoordinate, CommitSHA: gitSHA,
+		Branch: "refs/heads/main", WorkflowPath: workflowPath, PublisherPubkey: "trusted-pub",
+	}
+	hive.results[resultEventID] = &domain.HiveCIWorkflowResult{
+		ResultEventID: resultEventID, RunEventID: runEventID, Status: "success",
+		PublisherPubkey: "trusted-pub", ImageRepo: imageRepo, ImageTag: "main", ImageDigest: imageDigest,
+	}
+	hive.policy = &domain.HiveCIPipelinePolicy{
+		ServiceID: serviceID, RepoCoordinate: repoCoordinate, WorkflowPath: workflowPath,
+	}
+	artifacts, oci := newMockArtifactRepo(), newMockOCIRepo()
+	oci.manifests[artifactKey(imageRepo, "main")] = &domain.OCIManifest{
+		Digest: imageDigest, MediaType: "application/vnd.oci.image.manifest.v1+json", SizeBytes: 123,
+	}
+	registry := &mockCanonicalRegistry{builds: builds, artifacts: artifacts, intents: newMockIntentRepo()}
+	bridge := NewBridge(hive, services, builds, artifacts, registry.intents, newMockEnvRepo(), oci, nil, registry, nil, true, nil)
+	if err := bridge.ProcessResult(ctx, resultEventID); err != nil {
+		t.Fatalf("process correlated 5402: %v", err)
+	}
+	advanced, err := builds.GetByID(ctx, buildID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advanced == nil || advanced.ID != buildID || advanced.CIRunID != runEventID || advanced.Status != domain.BuildStatusSucceeded {
+		t.Fatalf("5402 did not advance canonical build: %#v", advanced)
+	}
+	afterResultRaw, err := handler.RequestBuild(ctx, request)
+	if err != nil {
+		t.Fatalf("replay after correlated 5402: %v", err)
+	}
+	afterResult := afterResultRaw.(map[string]any)
+	if afterResult["build_id"] != buildID || afterResult["ci_run_id"] != runEventID ||
+		afterResult["status"] != domain.BuildStatusSucceeded || starter.calls != 1 ||
+		requestRegistry.registrations != 1 || len(builds.byRun) != 1 {
+		t.Fatalf("post-5402 replay lost canonical state: result=%#v starts=%d registrations=%d rows=%d",
+			afterResult, starter.calls, requestRegistry.registrations, len(builds.byRun))
+	}
 }
 
 func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {

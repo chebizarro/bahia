@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
-	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	giteaadapter "github.com/openagentsinc/bahia/internal/adapters/gitea"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -14,6 +13,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
+
+// Pin the historical wire value: the Cascadia registry entry is deprecated
+// and may be removed, but this guard must continue rejecting regressions.
+const historicalContextVMWorkflowRunKind = 25910
 
 type selfDispatchMirror struct{}
 
@@ -87,18 +90,14 @@ func TestBahiaSelfDispatchRoundTripsThroughSubscriberAndLineageReference(t *test
 
 	run := publisher.events[0]
 	t.Run("durable kind and run ID correlation", func(t *testing.T) {
+		if int(run.Kind) == historicalContextVMWorkflowRunKind {
+			t.Errorf("published run used historical ContextVM kind %d", run.Kind)
+		}
 		if int(run.Kind) != 5401 {
 			t.Errorf("published run kind = %d, want wire kind 5401", run.Kind)
 		}
 		if int(run.Kind) != kinds.HiveCIWorkflowRun {
 			t.Errorf("published run kind = %d, want Bahia constant %d", run.Kind, kinds.HiveCIWorkflowRun)
-		}
-		contextVMKind := cascadia.ContextVMMethods["ci/workflow-run"].Kind
-		if contextVMKind != 25910 {
-			t.Errorf("ci/workflow-run ContextVM binding kind = %d, want 25910", contextVMKind)
-		}
-		if int(run.Kind) == contextVMKind {
-			t.Errorf("published run used ephemeral ContextVM kind %d", run.Kind)
 		}
 		if run.ID.Hex() != started.CIRunID {
 			t.Errorf("CIRunID = %s, published run ID = %s", started.CIRunID, run.ID.Hex())
