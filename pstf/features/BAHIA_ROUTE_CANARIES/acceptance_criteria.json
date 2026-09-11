@@ -14,7 +14,8 @@
       "statement": "A deployment whose post-deploy route canary fails is blocked and the route is rolled back through the routing backend's own compensation, with the failure classified as a canary gate failure rather than a provider failure.",
       "verification": [
         "internal/service/route_canary_test.go:TestGateRollsBackRouteThatDoesNotServeTraffic",
-        "internal/service/route_canary_test.go:TestGatePropagatesApplyFailureWithoutProbing"
+        "internal/service/route_canary_test.go:TestGatePropagatesApplyFailureWithoutProbing",
+        "internal/service/route_canary_gate_publish_test.go:TestGateCanceledDeploymentStillAnnouncesAndRollsBack"
       ]
     },
     {
@@ -22,7 +23,8 @@
       "statement": "An open route outage clears when the route returns, recording recovery and dropping the stale failure reason.",
       "verification": [
         "internal/service/route_canary_test.go:TestSupervisorClearsOutageWhenRouteReturns",
-        "internal/domain/route_canary_test.go:TestEvaluateRouteCanaryHysteresis"
+        "internal/domain/route_canary_test.go:TestEvaluateRouteCanaryHysteresis",
+        "internal/service/route_canary_gate_publish_test.go:TestGateRecoveryClearsSupervisorOutageInNostrProjection"
       ]
     },
     {
@@ -67,7 +69,10 @@
         "internal/api/handlers/route_canary.go",
         "internal/api/router/router.go",
         "internal/repository/pg_route_canary.go",
-        "internal/db/migrations/000060_route_canary.up.sql"
+        "internal/db/migrations/000060_route_canary.up.sql",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitResolvesUniqueRouteInDataEnvelope",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsConflictWhenSeveralUnitsMatch",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsWithoutUnitUseTheResolvedRouteKey"
       ]
     },
     {

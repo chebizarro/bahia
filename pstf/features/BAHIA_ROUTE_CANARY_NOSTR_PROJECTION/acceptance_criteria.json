@@ -74,6 +74,16 @@
         "internal/adapters/telemetry/nostr_fleet_health_test.go:TestBoundedEventIDSetEvictsOldestAndStaysBounded",
         "internal/adapters/telemetry/nostr_fleet_health_test.go:TestNostrFleetHealthRejectsRouteObservableWithoutCoordinate"
       ]
+    },
+    {
+      "id": "AC10",
+      "statement": "Post-deploy gate transitions reach the projection exactly as supervisor transitions do: a gate-opened outage is projected unhealthy/open immediately, a gate recovery of a supervisor-opened outage projects healthy/closed, clears the route unhealthy gauge and announces route.canary_recovered, and both observers publish the identical canonical RouteCanaryChanged payload and severity for the state and lineage they persisted.",
+      "verification": [
+        "internal/service/route_canary_gate_publish_test.go:TestGateRecoveryClearsSupervisorOutageInNostrProjection",
+        "internal/service/route_canary_gate_publish_test.go:TestGateOpenedOutageIsPublishedProjectedAndRolledBack",
+        "internal/service/route_canary_gate_publish_test.go:TestGateAndSupervisorPublishTheCanonicalTransitionPayload",
+        "internal/service/route_canary_gate_publish_test.go:TestRouteCanaryTransitionEventMapsEveryTransition"
+      ]
     }
   ]
 }

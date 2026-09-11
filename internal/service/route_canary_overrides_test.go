@@ -312,7 +312,7 @@ func TestGateAppliesRouteOverride(t *testing.T) {
 		if err != nil {
 			t.Fatalf("evaluator: %v", err)
 		}
-		gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil,
+		gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil, nil,
 			RouteCanaryGateConfig{Timeout: 50 * time.Millisecond, RetryInterval: 5 * time.Millisecond}, nil)
 		if err != nil {
 			t.Fatalf("gate: %v", err)

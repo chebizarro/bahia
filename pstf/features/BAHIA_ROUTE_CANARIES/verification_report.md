@@ -139,3 +139,42 @@ Its own sensitivity was verified: removing `000061` makes it fail with the SQLST
 ## Deployment note
 
 This is an additive constraint widening with no data migration. It must be applied before or with the candidate that emits the new classification. Rolling the application back past `000061` without running its down migration would leave rows the older binary's constraints reject.
+
+---
+
+# Addendum 3 — route detail API contract (defect D6)
+
+Independent review of the combined route canary tree (integration `22b84636`) found that the route detail endpoint could not be used as documented. AC8 had been verified by file references alone, so no test ever decoded a real response.
+
+## Root cause
+
+- `GET …/routes/{hostname}/canary` wrote the bare state object. Every other single-resource endpoint (for example instance health `Get`) uses the `{data: …}` envelope, and the web client unwraps `data.data`, so the detail view received `undefined`.
+- Both detail endpoints keyed the lookup without a deployment unit unless `?deployment_unit_id=` was passed. `ValidateDesiredPublicRoute` requires a deployment unit on every plan, so every stored row carries one and every unit-less lookup was a 404.
+
+## Fix
+
+- `Get` responds through `writeData`. `ListEvents` keeps the `{data, total, limit, offset}` list envelope it shares with `List`, and `data` is always an array.
+- With `deployment_unit_id` omitted, both endpoints resolve the route from stored state for (service, environment, normalized hostname):
+
+| Matches | Response |
+|---|---|
+| exactly one | `200`, the resolved route (its `deployment_unit_id` is in the body) |
+| none | `404 route canary state not found` |
+| more than one | `409`, naming every candidate unit and asking for `deployment_unit_id` |
+
+  An explicit `deployment_unit_id` addresses that key directly (`404` when absent, `400` when malformed). `limit` is validated before resolution.
+
+## Evidence
+
+Six handler tests in `internal/api/handlers/route_canary_test.go` decode responses exactly as the web client does. Reverting `Get` to `writeJSON` makes the envelope tests fail with the unwrapped body, so a green result is meaningful.
+
+---
+
+# Addendum 4 — gate outcomes are announced (defect D7)
+
+The post-deploy gate persisted its verdicts (thresholds 1/1) but held no event publisher. Notifications, alerting and the Nostr projector only learn of transitions from `RouteCanaryChanged` events, and the supervisor publishes only transitions it observes itself. As a result:
+
+- a gate that recovered a supervisor-opened outage sent no `route.canary_recovered`, and the next sweep, seeing a closed `route_ok`, never sent one either;
+- a gate-opened outage sent no `route.canary_outage_opened`.
+
+The gate now takes the shared bus and publishes persisted transitions through `publishRouteCanaryTransition`, the same implementation the supervisor uses, so event types, payloads and severities are identical. Everything else about the gate is unchanged, including rollback on a non-cancelled context. Evidence is in `internal/service/route_canary_gate_publish_test.go`; see the D3 addendum in `BAHIA_ROUTE_CANARY_NOSTR_PROJECTION/verification_report.md` for the projection side.

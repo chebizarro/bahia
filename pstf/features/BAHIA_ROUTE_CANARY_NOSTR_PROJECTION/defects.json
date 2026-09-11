@@ -21,10 +21,17 @@
     },
     {
       "id": "D3",
-      "statement": "RouteCanaryGate.record persists gate outcomes, including an immediately opened outage, through RouteCanaryRepository.UpsertStateWithEvent only; the gate holds no events.Publisher, so gate outcomes never reach the projector directly. A gate-declared outage reaches Nostr only when the supervisor later reports a transition for that route, and not at all while it persists with an unchanged classification, because the supervisor sees the already-open state and reports no transition.",
-      "status": "open",
-      "owner_note": "internal/service/route_canary_gate.go is owned by concurrent route canary work (bahia-6xztt / bahia-j9liz) and was deliberately not modified; needs a follow-up bead.",
-      "verification": []
+      "statement": "RouteCanaryGate.record persists gate outcomes, including an immediately opened outage, through RouteCanaryRepository.UpsertStateWithEvent only; the gate holds no events.Publisher, so gate outcomes never reach the projector directly. A gate-declared outage reaches Nostr only when the supervisor later reports a transition for that route, and not at all while it persists with an unchanged classification, because the supervisor sees the already-open state and reports no transition. Consequence found by independent review of the combined tree (integration 22b84636): after a supervisor-opened outage, a passing post-deploy gate saved Recovered with thresholds 1/1 and published nothing, later sweeps saw a closed route_ok and reported no transition, so 30315/30900 and bahia_fleet_health_nostr_entities{domain=\"route\",status=\"unhealthy\"} stayed on the outage indefinitely and route.canary_recovered was never announced.",
+      "status": "fixed",
+      "verification": [
+        "internal/service/route_canary_gate_publish_test.go:TestGateRecoveryClearsSupervisorOutageInNostrProjection",
+        "internal/service/route_canary_gate_publish_test.go:TestGateOpenedOutageIsPublishedProjectedAndRolledBack",
+        "internal/service/route_canary_gate_publish_test.go:TestGateAndSupervisorPublishTheCanonicalTransitionPayload",
+        "internal/service/route_canary_gate_publish_test.go:TestRouteCanaryTransitionEventMapsEveryTransition",
+        "internal/service/route_canary_gate_publish_test.go:TestGateDoesNotAnnounceUnpersistedTransitions",
+        "internal/service/route_canary_gate_publish_test.go:TestGateCanceledDeploymentStillAnnouncesAndRollsBack"
+      ],
+      "fix": "RouteCanaryGate now takes an events.Publisher (wired to the shared in-process bus in internal/app/app.go) and, after UpsertStateWithEvent succeeds, publishes through publishRouteCanaryTransition, the single transition-publishing implementation the supervisor also uses (routeCanaryTransitionEvent builds the event). Gate and supervisor therefore announce identical RouteCanaryChanged payloads, event types and severities. Publication happens only for persisted transitions, on context.WithoutCancel so a canceled deployment still announces a durable transition; rollback remains on its own non-canceled context. Owner note superseded: the gate change was made in the integration fix branch (task/bahia-canary-integration-fix-go)."
     },
     {
       "id": "D4",

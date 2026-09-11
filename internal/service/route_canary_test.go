@@ -349,7 +349,7 @@ func newTestGate(t *testing.T, prober RouteProber, applier RouteApplier, repo Ro
 	if err != nil {
 		t.Fatalf("evaluator: %v", err)
 	}
-	gate, err := NewRouteCanaryGate(applier, evaluator, repo, health, RouteCanaryGateConfig{
+	gate, err := NewRouteCanaryGate(applier, evaluator, repo, health, nil, RouteCanaryGateConfig{
 		Timeout:       50 * time.Millisecond,
 		RetryInterval: 5 * time.Millisecond,
 	}, nil)
@@ -473,7 +473,7 @@ func TestGateSkipsVerificationWhenPolicyDerivesNoTargets(t *testing.T) {
 		t.Fatalf("evaluator: %v", err)
 	}
 	applier := &stubRouteApplier{}
-	gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil, RouteCanaryGateConfig{}, nil)
+	gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil, nil, RouteCanaryGateConfig{}, nil)
 	if err != nil {
 		t.Fatalf("gate: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestGateAllowsCatchAllRouteByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evaluator: %v", err)
 	}
-	gate, err := NewRouteCanaryGate(applier, evaluator, repo, nil,
+	gate, err := NewRouteCanaryGate(applier, evaluator, repo, nil, nil,
 		RouteCanaryGateConfig{Timeout: 50 * time.Millisecond, RetryInterval: 5 * time.Millisecond}, nil)
 	if err != nil {
 		t.Fatalf("gate: %v", err)
@@ -593,7 +593,7 @@ func TestGateBlocksCatchAllWhenDiscriminationRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evaluator: %v", err)
 	}
-	gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil,
+	gate, err := NewRouteCanaryGate(applier, evaluator, newMemoryRouteCanaryRepo(), nil, nil,
 		RouteCanaryGateConfig{Timeout: 50 * time.Millisecond, RetryInterval: 5 * time.Millisecond}, nil)
 	if err != nil {
 		t.Fatalf("gate: %v", err)

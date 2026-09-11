@@ -54,6 +54,34 @@
         "internal/db/migrations/000061_route_canary_health_path_classification.up.sql",
         "internal/db/route_canary_constraint_conformance_test.go:TestRouteCanaryClassificationsMatchDatabaseConstraint"
       ]
+    },
+    {
+      "id": "D6",
+      "statement": "The route canary detail endpoint could not be used as documented. RouteCanaryHandler.Get wrote the bare state object with writeJSON instead of the {data: ...} detail envelope (writeData) every other single-resource endpoint uses, so the web client, which unwraps data.data, received undefined. Separately, Get and ListEvents built the route key without a deployment unit unless ?deployment_unit_id= was passed, but every valid plan carries a non-nil DeploymentUnitID (ValidateDesiredPublicRoute), so every stored row is keyed with a unit and every unit-less lookup returned 404, contradicting the documented contract that the unit is needed only when a service has more than one managed route per environment. AC8 was verified by file references only, so no test exercised the real response shape. Found by independent review of the combined route canary tree (integration 22b84636).",
+      "status": "fixed",
+      "fix": "Get now writes the detail through writeData. ListEvents keeps the {data, total, limit, offset} list envelope shared with List (data is always an array, never null). When deployment_unit_id is omitted, both endpoints resolve the route from stored state for (service, environment, normalized hostname) via ListStateByEnvironment: exactly one match is used (200, with the resolved deployment_unit_id in the body), no match is 404, and several matches are 409 naming the candidate units and asking for deployment_unit_id. An explicit deployment_unit_id addresses that key directly as before; an invalid one is 400. Query validation (limit) runs before resolution.",
+      "verification": [
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitResolvesUniqueRouteInDataEnvelope",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsConflictWhenSeveralUnitsMatch",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsNotFoundWhenNoRouteMatches",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithExplicitUnitAddressesThatUnit",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsWithoutUnitUseTheResolvedRouteKey",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsResolutionFailuresAndEmptyLineage"
+      ]
+    },
+    {
+      "id": "D7",
+      "statement": "Post-deploy gate outcomes were persisted but never announced. RouteCanaryGate.record saved gate verdicts through UpsertStateWithEvent with thresholds 1/1 and held no events.Publisher, while every consumer of route transitions (notifications, alerting, the Nostr projector) learns of them only from RouteCanaryChanged events that RouteCanarySupervisor published for transitions it observed itself. A gate that recovered a supervisor-opened outage therefore sent no route.canary_recovered, and the supervisor, seeing a closed route_ok afterwards, never reported one either; a gate-opened outage sent no route.canary_outage_opened. Found by independent review of the combined route canary tree (integration 22b84636).",
+      "status": "fixed",
+      "fix": "The gate takes an events.Publisher, wired in internal/app/app.go to the same bus as the supervisor, and publishes persisted transitions through publishRouteCanaryTransition, the single implementation shared with the supervisor, so event types, payloads and severities are identical. Unpersisted transitions are not announced. Publication uses context.WithoutCancel; the gate's other behavior, including rollback on a non-canceled context, is unchanged.",
+      "verification": [
+        "internal/service/route_canary_gate_publish_test.go:TestGateRecoveryClearsSupervisorOutageInNostrProjection",
+        "internal/service/route_canary_gate_publish_test.go:TestGateOpenedOutageIsPublishedProjectedAndRolledBack",
+        "internal/service/route_canary_gate_publish_test.go:TestGateAndSupervisorPublishTheCanonicalTransitionPayload",
+        "internal/service/route_canary_gate_publish_test.go:TestRouteCanaryTransitionEventMapsEveryTransition",
+        "internal/service/route_canary_gate_publish_test.go:TestGateDoesNotAnnounceUnpersistedTransitions",
+        "internal/service/route_canary_gate_publish_test.go:TestGateCanceledDeploymentStillAnnouncesAndRollsBack"
+      ]
     }
   ]
 }

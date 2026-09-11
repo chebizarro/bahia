@@ -10,6 +10,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/adapters/routing"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 )
 
 // RouteApplier applies a reviewed route plan and can undo a successful apply.
@@ -46,22 +47,30 @@ func (c RouteCanaryGateConfig) Normalized() RouteCanaryGateConfig {
 // successful reload while serving 502 from a stale upstream. The gate requires
 // an end-to-end observation from every configured perspective, and withdraws the
 // route when that observation does not come.
+//
+// A gate verdict is a route canary observation like any other: when it opens,
+// clears or reclassifies an outage it is announced on the event bus exactly as
+// a supervisor transition is, so Nostr projection, notifications and alerting
+// never disagree with durable state about a route the gate touched.
 type RouteCanaryGate struct {
 	applier      RouteApplier
 	evaluator    *RouteCanaryEvaluator
 	repo         RouteCanaryRepository
 	healthSource RouteInstanceHealthSource
+	publisher    events.Publisher
 	cfg          RouteCanaryGateConfig
 	logger       *zap.Logger
 	now          func() time.Time
 }
 
-// NewRouteCanaryGate builds a post-deploy route gate.
+// NewRouteCanaryGate builds a post-deploy route gate. publisher receives the
+// gate's route canary transitions; nil disables publication.
 func NewRouteCanaryGate(
 	applier RouteApplier,
 	evaluator *RouteCanaryEvaluator,
 	repo RouteCanaryRepository,
 	healthSource RouteInstanceHealthSource,
+	publisher events.Publisher,
 	cfg RouteCanaryGateConfig,
 	logger *zap.Logger,
 ) (*RouteCanaryGate, error) {
@@ -79,6 +88,7 @@ func NewRouteCanaryGate(
 		evaluator:    evaluator,
 		repo:         repo,
 		healthSource: healthSource,
+		publisher:    publisher,
 		cfg:          cfg.Normalized(),
 		logger:       logger.Named("route-canary-gate"),
 		now:          func() time.Time { return time.Now().UTC() },
@@ -179,7 +189,14 @@ func (g *RouteCanaryGate) verify(ctx context.Context, plan *domain.DesiredPublic
 }
 
 // record persists the gate's observation so a blocked deployment leaves durable,
-// operator-visible lineage rather than only a run error string.
+// operator-visible lineage rather than only a run error string, and announces
+// any resulting transition.
+//
+// The gate records with thresholds of 1, so a passing verdict on an open outage
+// recovers it and a failing verdict on a closed route opens one. Those
+// transitions must be published: the supervisor only publishes transitions it
+// observes itself, and after the gate has changed state it sees none, so an
+// unpublished gate recovery would leave the projected outage open forever.
 func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublicRoutePlan, verdict RouteCanaryVerdict) {
 	if g.repo == nil {
 		return
@@ -230,5 +247,11 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 	if err := g.repo.UpsertStateWithEvent(recordCtx, &next, &event); err != nil {
 		g.logger.Error("record route canary gate outcome",
 			zap.String("route", key.Coordinate()), zap.Error(err))
+		return
 	}
+	// Publish on a context that outlives a canceled deployment, like the record
+	// itself: the transition is already durable and must be announced. The bus
+	// detaches handlers from cancellation but inherits a deadline, so the
+	// short-lived record context would needlessly bound relay publication.
+	publishRouteCanaryTransition(context.WithoutCancel(ctx), g.publisher, next, event, instanceStatus, now)
 }
