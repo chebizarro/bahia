@@ -68,6 +68,7 @@ type Subscriber struct {
 	eventRepo              repository.NostrEventRepository
 	kinds                  []int
 	handlers               []EventHandler
+	observers              []EventHandler
 	logger                 *zap.Logger
 	dedup                  *EventDeduplicator
 	backfillLimit          int // max events to fetch on catch-up (0 = no limit)
@@ -101,6 +102,26 @@ func WithKinds(kinds []int) SubscriberOption {
 // WithHandler adds a callback invoked for each received event.
 func WithHandler(h EventHandler) SubscriberOption {
 	return func(s *Subscriber) { s.handlers = append(s.handlers, h) }
+}
+
+// WithObserver adds an idempotent projection callback invoked for every
+// validated event that is durably persisted, whether this delivery inserted it
+// or it was already recorded.
+//
+// Handlers registered with WithHandler run only for newly persisted events so
+// that side effects never repeat. That gate also hides Bahia's own
+// publications: the publisher persists each signed event before its first relay
+// attempt, so the relay echo always arrives as an already-persisted duplicate.
+// Observers exist for read-side projections such as fleet-health telemetry that
+// must see those self-published canonical observables. An observer must be
+// idempotent under redelivery, for example by keeping only the latest event per
+// replaceable coordinate.
+func WithObserver(h EventHandler) SubscriberOption {
+	return func(s *Subscriber) {
+		if h != nil {
+			s.observers = append(s.observers, h)
+		}
+	}
 }
 
 // WithIngestionObserver registers a subscription lifecycle observer.
@@ -371,6 +392,11 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 			zap.Error(err),
 		)
 		return
+	}
+	// Observers see validated, persisted events regardless of insert state; see
+	// WithObserver for why self-published echoes must reach them.
+	for _, observe := range s.observers {
+		observe(ctx, ev)
 	}
 	if !inserted {
 		s.logger.Debug("skipping already-persisted event",
