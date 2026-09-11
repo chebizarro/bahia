@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,6 +23,9 @@ const (
 // RouteCanaryReader is the read surface of the route canary store.
 type RouteCanaryReader interface {
 	ListState(ctx context.Context) ([]domain.RouteCanaryState, error)
+	// ListStateByEnvironment backs detail lookups that omit deployment_unit_id,
+	// which must resolve the route's deployment unit from stored state.
+	ListStateByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.RouteCanaryState, error)
 	GetState(ctx context.Context, key domain.RouteCanaryKey) (*domain.RouteCanaryState, error)
 	ListRecentEvents(ctx context.Context, key domain.RouteCanaryKey, limit int) ([]domain.RouteCanaryEvent, error)
 }
@@ -102,26 +107,38 @@ func (h *RouteCanaryHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.ListResponse{Data: summaries, Total: len(summaries), Limit: len(summaries), Offset: 0})
 }
 
-// Get returns state for one managed route.
+// Get returns state for one managed route, wrapped in the {data: ...} detail
+// envelope every other single-resource endpoint uses.
 func (h *RouteCanaryHandler) Get(w http.ResponseWriter, r *http.Request) {
 	key, ok := h.routeKeyFromRequest(w, r)
 	if !ok {
 		return
 	}
-	state, err := h.canaries.GetState(r.Context(), key)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	route, ok := h.resolveRoute(w, r, key)
+	if !ok {
 		return
 	}
+	state := route.state
 	if state == nil {
-		writeError(w, http.StatusNotFound, "route canary state not found")
-		return
+		var err error
+		state, err = h.canaries.GetState(r.Context(), route.key)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if state == nil {
+			writeError(w, http.StatusNotFound, "route canary state not found")
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, h.summarize(r.Context(), *state))
+	writeData(w, http.StatusOK, h.summarize(r.Context(), *state))
 }
 
 // ListEvents returns append-only failure lineage for one managed route, newest
 // first, so an operator can see how an outage developed and cleared.
+//
+// Lineage is a collection, so it uses the same {data, total, limit, offset}
+// list envelope as List; data is always a JSON array.
 func (h *RouteCanaryHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
 	key, ok := h.routeKeyFromRequest(w, r)
 	if !ok {
@@ -136,12 +153,74 @@ func (h *RouteCanaryHandler) ListEvents(w http.ResponseWriter, r *http.Request) 
 		}
 		limit = parsed
 	}
-	events, err := h.canaries.ListRecentEvents(r.Context(), key, limit)
+	route, ok := h.resolveRoute(w, r, key)
+	if !ok {
+		return
+	}
+	events, err := h.canaries.ListRecentEvents(r.Context(), route.key, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if events == nil {
+		events = []domain.RouteCanaryEvent{}
+	}
 	writeJSON(w, http.StatusOK, dto.ListResponse{Data: events, Total: len(events), Limit: limit, Offset: 0})
+}
+
+// resolvedRoute is the managed route a detail request names. state is set when
+// resolution already loaded it.
+type resolvedRoute struct {
+	key   domain.RouteCanaryKey
+	state *domain.RouteCanaryState
+}
+
+// resolveRoute resolves the managed route a detail request names.
+//
+// Every valid route plan carries a deployment unit, so every stored route is
+// keyed by one. An explicit deployment_unit_id addresses that key directly.
+// Without it, the route is resolved from stored state for (service,
+// environment, hostname): a unique match is used, no match is 404, and more
+// than one match is 409 naming the candidate units, because silently picking
+// one would show an operator the wrong route's outage.
+func (h *RouteCanaryHandler) resolveRoute(w http.ResponseWriter, r *http.Request, key domain.RouteCanaryKey) (resolvedRoute, bool) {
+	if key.DeploymentUnitID != nil {
+		return resolvedRoute{key: key}, true
+	}
+	states, err := h.canaries.ListStateByEnvironment(r.Context(), key.EnvironmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return resolvedRoute{}, false
+	}
+	var matches []domain.RouteCanaryState
+	for _, state := range states {
+		if state.ServiceID == key.ServiceID && state.EnvironmentID == key.EnvironmentID &&
+			domain.NormalizeRouteCanaryHostname(state.Hostname) == key.Hostname {
+			matches = append(matches, state)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		writeError(w, http.StatusNotFound, "route canary state not found")
+		return resolvedRoute{}, false
+	case 1:
+		state := matches[0]
+		return resolvedRoute{key: state.RouteCanaryKey, state: &state}, true
+	default:
+		units := make([]string, 0, len(matches))
+		for _, state := range matches {
+			if state.DeploymentUnitID == nil {
+				units = append(units, "none")
+				continue
+			}
+			units = append(units, state.DeploymentUnitID.String())
+		}
+		sort.Strings(units)
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"route %s matches %d deployment units; pass deployment_unit_id (one of: %s)",
+			key.Hostname, len(matches), strings.Join(units, ", ")))
+		return resolvedRoute{}, false
+	}
 }
 
 // routeKeyFromRequest builds the route key from path and query parameters.
@@ -159,7 +238,7 @@ func (h *RouteCanaryHandler) routeKeyFromRequest(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid environment id")
 		return domain.RouteCanaryKey{}, false
 	}
-	hostname := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(chi.URLParam(r, "hostname")), "."))
+	hostname := domain.NormalizeRouteCanaryHostname(chi.URLParam(r, "hostname"))
 	if hostname == "" {
 		writeError(w, http.StatusBadRequest, "hostname is required")
 		return domain.RouteCanaryKey{}, false

@@ -54,6 +54,20 @@
         "internal/db/migrations/000061_route_canary_health_path_classification.up.sql",
         "internal/db/route_canary_constraint_conformance_test.go:TestRouteCanaryClassificationsMatchDatabaseConstraint"
       ]
+    },
+    {
+      "id": "D6",
+      "statement": "The route canary detail endpoint could not be used as documented. RouteCanaryHandler.Get wrote the bare state object with writeJSON instead of the {data: ...} detail envelope (writeData) every other single-resource endpoint uses, so the web client, which unwraps data.data, received undefined. Separately, Get and ListEvents built the route key without a deployment unit unless ?deployment_unit_id= was passed, but every valid plan carries a non-nil DeploymentUnitID (ValidateDesiredPublicRoute), so every stored row is keyed with a unit and every unit-less lookup returned 404, contradicting the documented contract that the unit is needed only when a service has more than one managed route per environment. AC8 was verified by file references only, so no test exercised the real response shape. Found by independent review of the combined route canary tree (integration 22b84636).",
+      "status": "fixed",
+      "fix": "Get now writes the detail through writeData. ListEvents keeps the {data, total, limit, offset} list envelope shared with List (data is always an array, never null). When deployment_unit_id is omitted, both endpoints resolve the route from stored state for (service, environment, normalized hostname) via ListStateByEnvironment: exactly one match is used (200, with the resolved deployment_unit_id in the body), no match is 404, and several matches are 409 naming the candidate units and asking for deployment_unit_id. An explicit deployment_unit_id addresses that key directly as before; an invalid one is 400. Query validation (limit) runs before resolution.",
+      "verification": [
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitResolvesUniqueRouteInDataEnvelope",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsConflictWhenSeveralUnitsMatch",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsNotFoundWhenNoRouteMatches",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithExplicitUnitAddressesThatUnit",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsWithoutUnitUseTheResolvedRouteKey",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsResolutionFailuresAndEmptyLineage"
+      ]
     }
   ]
 }

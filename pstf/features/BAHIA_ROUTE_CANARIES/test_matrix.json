@@ -30,6 +30,12 @@
     {"ac":"AC8","test":"TestRouteCanaryKeyCoordinateIsStable","file":"internal/domain/route_canary_test.go","kind":"unit"},
     {"ac":"AC8","test":"TestRouteCanaryKeyForPlanMatchesInstanceCoordinate","file":"internal/domain/route_canary_targets_test.go","kind":"unit"},
     {"ac":"AC8","test":"TestSupervisorSweepContinuesAfterOneRouteFails","file":"internal/service/route_canary_test.go","kind":"behavioral"},
+    {"ac":"AC8","test":"TestRouteCanaryGetWithoutUnitResolvesUniqueRouteInDataEnvelope","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
+    {"ac":"AC8","test":"TestRouteCanaryGetWithoutUnitIsConflictWhenSeveralUnitsMatch","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
+    {"ac":"AC8","test":"TestRouteCanaryGetWithoutUnitIsNotFoundWhenNoRouteMatches","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
+    {"ac":"AC8","test":"TestRouteCanaryGetWithExplicitUnitAddressesThatUnit","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
+    {"ac":"AC8","test":"TestRouteCanaryEventsWithoutUnitUseTheResolvedRouteKey","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
+    {"ac":"AC8","test":"TestRouteCanaryEventsResolutionFailuresAndEmptyLineage","file":"internal/api/handlers/route_canary_test.go","kind":"api-shape"},
     {"ac":"AC9","test":"TestTLSExpiringDoesNotOpenAnOutage","file":"internal/domain/route_canary_test.go","kind":"unit"},
     {"ac":"AC9","test":"TestDescribeRouteObservationNamesTheStaleUpstream","file":"internal/domain/route_canary_test.go","kind":"unit"}
   ]

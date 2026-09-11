@@ -67,7 +67,10 @@
         "internal/api/handlers/route_canary.go",
         "internal/api/router/router.go",
         "internal/repository/pg_route_canary.go",
-        "internal/db/migrations/000060_route_canary.up.sql"
+        "internal/db/migrations/000060_route_canary.up.sql",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitResolvesUniqueRouteInDataEnvelope",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryGetWithoutUnitIsConflictWhenSeveralUnitsMatch",
+        "internal/api/handlers/route_canary_test.go:TestRouteCanaryEventsWithoutUnitUseTheResolvedRouteKey"
       ]
     },
     {
