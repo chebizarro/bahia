@@ -176,7 +176,8 @@ type InternalRoutingConfig struct {
 // where configured, from the LAN under split DNS.
 type RouteCanaryConfig struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled"`
-	// Interval is how often every managed route is re-probed.
+	// Interval is how often a managed route is re-probed, unless its override
+	// sets a per-route interval.
 	Interval time.Duration `koanf:"interval" yaml:"interval"`
 	// ProbeTimeout bounds a single probe.
 	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
@@ -198,6 +199,10 @@ type RouteCanaryConfig struct {
 	ExpectedStatusMax int `koanf:"expected_status_max" yaml:"expected_status_max"`
 	// ExpectedBodyContains, when set, must appear in the bounded response body.
 	ExpectedBodyContains string `koanf:"expected_body_contains" yaml:"expected_body_contains"`
+	// ExpectedBodyRegex, when set, is an RE2 pattern that must match the whole
+	// bounded response body, as if written \A(?:pattern)\z. It is bounded in
+	// length and compiled size and validated at startup.
+	ExpectedBodyRegex string `koanf:"expected_body_regex" yaml:"expected_body_regex"`
 	// TLSMinDaysRemaining warns when a leaf certificate expires sooner than this.
 	// Zero disables the warning; chain validity is always required.
 	TLSMinDaysRemaining int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
@@ -216,6 +221,31 @@ type RouteCanaryConfig struct {
 	// InternalDialAddresses maps a DNS zone to the LAN IP that serves its
 	// hostnames, enabling the internal split-DNS perspective for that zone.
 	InternalDialAddresses map[string]string `koanf:"internal_dial_addresses" yaml:"internal_dial_addresses"`
+	// Overrides tunes individual managed routes, keyed by route hostname. Each
+	// field set in an override replaces that fleet-wide value for that route
+	// only; unset fields inherit. Overrides are control-plane policy and never
+	// part of a signed route plan.
+	Overrides map[string]RouteCanaryOverrideConfig `koanf:"overrides" yaml:"overrides"`
+}
+
+// RouteCanaryOverrideConfig is the repo-configured canary policy for one
+// managed route. Pointer fields distinguish "inherit" (unset) from an explicit
+// zero value such as an empty body marker or a disabled expiry warning.
+type RouteCanaryOverrideConfig struct {
+	// Interval replaces the periodic probe interval for this route.
+	Interval time.Duration `koanf:"interval" yaml:"interval"`
+	// ProbeTimeout replaces the per-probe timeout for this route.
+	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	// ExpectedStatusMin and ExpectedStatusMax replace either bound of the
+	// accepted status range for this route.
+	ExpectedStatusMin *int `koanf:"expected_status_min" yaml:"expected_status_min"`
+	ExpectedStatusMax *int `koanf:"expected_status_max" yaml:"expected_status_max"`
+	// ExpectedBodyContains replaces the substring assertion; "" removes it.
+	ExpectedBodyContains *string `koanf:"expected_body_contains" yaml:"expected_body_contains"`
+	// ExpectedBodyRegex replaces the anchored regex assertion; "" removes it.
+	ExpectedBodyRegex *string `koanf:"expected_body_regex" yaml:"expected_body_regex"`
+	// TLSMinDaysRemaining replaces the expiry warning window; 0 disables it.
+	TLSMinDaysRemaining *int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
 }
 
 // DNSConfig controls DNS orchestration projection and backend settings.
@@ -1413,6 +1443,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	if err := rejectUnknownInternalRoutingKeys(k); err != nil {
+		return nil, err
+	}
+	if err := rejectUnknownRouteCanaryOverrideKeys(k); err != nil {
 		return nil, err
 	}
 	if err := k.Unmarshal("", cfg); err != nil {

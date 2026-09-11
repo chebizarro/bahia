@@ -1,0 +1,24 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_POLICY_OVERRIDES",
+  "title": "Per-route route canary overrides and anchored regex body assertions",
+  "task": "bahia-canary-policy-overrides-regex",
+  "beads": ["bahia-6xztt", "bahia-j9liz"],
+  "builds_on": "BAHIA_ROUTE_CANARIES",
+  "problem": "Route canary expectations were fleet-wide policy. A route with a slow origin or a non-2xx health contract could not be tuned without changing the expectations for every route, and every route was probed on one fleet-wide interval. The only body assertion was a substring, so a JSON health endpoint could not be asserted on a field without depending on exact serialization order.",
+  "intended_behavior": "A managed route can override its probe interval, probe timeout, expected status range, expected body (substring and regex) and TLS expiry window through repo configuration keyed by hostname, without affecting any other route. Overrides apply to periodic probing and to the post-deploy gate alike. Canaries additionally support an RE2 body assertion that must match the whole bounded body, bounded in source length and compiled size, validated at startup, and evaluated against the raw bounded body.",
+  "observed_behavior_before": "RouteCanaryPolicy carried one set of expectations applied to every route. RouteCanarySupervisor swept every route on a single ticker. expected_body_contains was the only body assertion.",
+  "config_shape": {
+    "fleet_wide": "route_canaries.expected_body_regex",
+    "per_route": "route_canaries.overrides.<hostname>.{interval, probe_timeout, expected_status_min, expected_status_max, expected_body_contains, expected_body_regex, tls_min_days_remaining}"
+  },
+  "non_goals": [
+    "Making canary expectations part of signed desired state. Overrides are control-plane policy keyed by hostname, so tuning a route does not invalidate its deployed plan hash.",
+    "Per-route failure/success thresholds, per-route catch-all detection, and per-route gate timing. Thresholds and gate timing stay fleet-wide.",
+    "A new classification for regex failures. body_mismatch is reused, so no database constraint migration is required."
+  ],
+  "boundaries": [
+    "Body assertions match the raw bounded body; only stored evidence is sanitized.",
+    "Enabled-but-unusable override or regex configuration fails at startup.",
+    "The supervisor's wake-up timer is used only for health-check scheduling; tests drive EvaluateDue and EvaluateOnce with an injected clock and never run Run or sleep."
+  ]
+}

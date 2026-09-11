@@ -139,12 +139,28 @@ func (e *RouteCanaryEvaluator) Evaluate(ctx context.Context, plan *domain.Desire
 	return verdict, true, nil
 }
 
+// routeCanaryScheduleTolerance lets a route whose next probe is due within this
+// window be probed in the current sweep. Wake-ups are driven by a monotonic
+// timer while due times are wall-clock, so without a tolerance a small clock
+// slew could leave a route one full wake-up short of due. It also batches routes
+// that fall due a moment apart into a single sweep.
+const routeCanaryScheduleTolerance = time.Second
+
+// minRouteCanaryWakeDelay floors the delay between sweeps so a scheduling
+// anomaly can never turn the supervisor into a busy loop.
+const minRouteCanaryWakeDelay = 100 * time.Millisecond
+
 // RouteCanarySupervisor periodically probes every managed route and maintains
 // durable outage state.
 //
-// The ticker is a health-check timer, which is the permitted use of a timer in
-// this codebase: it schedules observation, it never waits for an event or infers
-// completion from elapsed time.
+// Each route is probed on its own interval: the fleet-wide interval unless the
+// route's override sets one. The supervisor records when each route is next
+// due and wakes at the earliest due time, so a route tuned to 15s is probed
+// every 15s while its neighbours stay on the fleet-wide cadence.
+//
+// The wake-up timer is a health-check timer, which is the permitted use of a
+// timer in this codebase: it schedules observation, it never waits for an event
+// or infers completion from elapsed time.
 type RouteCanarySupervisor struct {
 	source       RouteCanaryPlanSource
 	repo         RouteCanaryRepository
@@ -157,6 +173,13 @@ type RouteCanarySupervisor struct {
 
 	routeLocksMu sync.Mutex
 	routeLocks   map[string]*sync.Mutex
+
+	// scheduleMu guards nextDue, the instant each route coordinate is next due,
+	// and enumerationFailed, whether the latest sweep could not list routes.
+	// A route with no entry is due immediately.
+	scheduleMu        sync.Mutex
+	nextDue           map[string]time.Time
+	enumerationFailed bool
 }
 
 // NewRouteCanarySupervisor builds a periodic route canary supervisor.
@@ -194,48 +217,167 @@ func NewRouteCanarySupervisor(
 		logger:       logger.Named("route-canary-supervisor"),
 		now:          func() time.Time { return time.Now().UTC() },
 		routeLocks:   map[string]*sync.Mutex{},
+		nextDue:      map[string]time.Time{},
 	}, nil
 }
 
 // Name identifies the supervisor in background-runner logging and health.
 func (s *RouteCanarySupervisor) Name() string { return "route-canary-supervisor" }
 
-// Run evaluates immediately and then on every tick until the context is done.
+// Run probes every route immediately and then each route whenever it falls
+// due, until the context is done.
 func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
-	s.EvaluateOnce(ctx)
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
 	for {
+		s.EvaluateDue(ctx)
+		timer := time.NewTimer(s.NextWakeDelay(s.now()))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-ticker.C:
-			s.EvaluateOnce(ctx)
+		case <-timer.C:
 		}
 	}
 }
 
-// EvaluateOnce probes every managed route exactly once.
+// EvaluateOnce probes every managed route exactly once, whether or not it is
+// due, and restarts each route's schedule from now.
 //
 // A failure for one route never aborts the sweep: an unreachable route must not
 // prevent the rest of the fleet from being observed.
 func (s *RouteCanarySupervisor) EvaluateOnce(ctx context.Context) {
-	plans, err := s.source.ListManagedRoutePlans(ctx)
+	s.sweep(ctx, true)
+}
+
+// EvaluateDue probes every managed route whose interval has elapsed since it
+// was last probed, and routes never probed before. It is what the periodic
+// loop runs; tests drive it directly with an injected clock.
+func (s *RouteCanarySupervisor) EvaluateDue(ctx context.Context) {
+	s.sweep(ctx, false)
+}
+
+// sweep enumerates managed routes and probes those that are due, or all of
+// them when force is set.
+func (s *RouteCanarySupervisor) sweep(ctx context.Context, force bool) {
+	listed, err := s.source.ListManagedRoutePlans(ctx)
+	s.scheduleMu.Lock()
+	s.enumerationFailed = err != nil
+	s.scheduleMu.Unlock()
 	if err != nil {
 		s.logger.Error("list managed route plans", zap.Error(err))
 		return
 	}
+	plans := make([]*domain.DesiredPublicRoutePlan, 0, len(listed))
+	for _, plan := range listed {
+		if plan != nil {
+			plans = append(plans, plan)
+		}
+	}
 	sort.Slice(plans, func(i, j int) bool {
 		return domain.RouteCanaryKeyForPlan(plans[i]).Coordinate() < domain.RouteCanaryKeyForPlan(plans[j]).Coordinate()
 	})
+
+	// Scheduling uses one instant for the whole sweep, so routes that share an
+	// interval stay batched however long an individual probe takes.
+	sweepAt := s.now()
+	s.pruneSchedule(plans)
 	for _, plan := range plans {
 		if ctx.Err() != nil {
 			return
 		}
+		coordinate := domain.RouteCanaryKeyForPlan(plan).Coordinate()
+		interval := s.IntervalFor(plan)
+		if !force && !s.isDue(coordinate, interval, sweepAt) {
+			continue
+		}
+		// Schedule before probing, so a route whose evaluation errors waits a
+		// full interval rather than being retried on every wake-up.
+		s.schedule(coordinate, sweepAt.Add(interval))
 		if err := s.EvaluatePlan(ctx, plan); err != nil {
 			s.logger.Error("evaluate managed route",
-				zap.String("route", domain.RouteCanaryKeyForPlan(plan).Coordinate()),
+				zap.String("route", coordinate),
 				zap.Error(err))
+		}
+	}
+}
+
+// IntervalFor reports the periodic probe interval that applies to a route: its
+// override when one is configured, otherwise the fleet-wide interval.
+func (s *RouteCanarySupervisor) IntervalFor(plan *domain.DesiredPublicRoutePlan) time.Duration {
+	if plan != nil {
+		if interval, ok := s.evaluator.Policy().ProbeIntervalFor(plan.Hostname); ok {
+			return interval
+		}
+	}
+	return s.interval
+}
+
+// NextWakeDelay reports how long the periodic loop should wait before the next
+// sweep, given the current instant.
+//
+// It is the time until the earliest due route, capped at the fleet-wide
+// interval so newly added routes are still discovered on the fleet-wide
+// cadence.
+//
+// A route can already be overdue when the sweep that scheduled it took longer
+// than its interval, for example while several routes time out. The next sweep
+// then starts at once, as the previous ticker did. The exception is a sweep that
+// could not list routes at all: retrying a failing plan source immediately
+// would only hammer it, so overdue entries are ignored and the loop backs off to
+// the next future due time or the fleet-wide interval.
+func (s *RouteCanarySupervisor) NextWakeDelay(now time.Time) time.Duration {
+	delay := s.interval
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	for _, due := range s.nextDue {
+		wait := due.Sub(now)
+		if wait <= 0 && s.enumerationFailed {
+			continue
+		}
+		if wait < delay {
+			delay = wait
+		}
+	}
+	if delay < minRouteCanaryWakeDelay {
+		delay = minRouteCanaryWakeDelay
+	}
+	return delay
+}
+
+// isDue reports whether a route should be probed at the given instant.
+func (s *RouteCanarySupervisor) isDue(coordinate string, interval time.Duration, now time.Time) bool {
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	due, ok := s.nextDue[coordinate]
+	if !ok {
+		return true
+	}
+	// A due time further away than one interval can only mean the wall clock
+	// stepped backwards. Probe now rather than going silent until the clock
+	// catches up.
+	if due.Sub(now) > interval {
+		return true
+	}
+	return !now.Before(due.Add(-routeCanaryScheduleTolerance))
+}
+
+func (s *RouteCanarySupervisor) schedule(coordinate string, due time.Time) {
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	s.nextDue[coordinate] = due
+}
+
+// pruneSchedule forgets routes that are no longer in desired state, so a route
+// that is withdrawn and later re-added is probed immediately.
+func (s *RouteCanarySupervisor) pruneSchedule(plans []*domain.DesiredPublicRoutePlan) {
+	current := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		current[domain.RouteCanaryKeyForPlan(plan).Coordinate()] = struct{}{}
+	}
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	for coordinate := range s.nextDue {
+		if _, ok := current[coordinate]; !ok {
+			delete(s.nextDue, coordinate)
 		}
 	}
 }

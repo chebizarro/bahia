@@ -133,8 +133,9 @@ func (RouteProber) ProbeRoute(ctx context.Context, target domain.RouteCanaryTarg
 	}
 	// Match against the raw bounded body, not the sanitized one, so redaction can
 	// never change assertion semantics. Only the stored evidence is sanitized.
-	if target.ExpectedBodyContains != "" {
-		observation.BodyMatched = strings.Contains(string(body), target.ExpectedBodyContains)
+	// This covers the substring and the anchored regex assertion alike.
+	if target.HasBodyAssertion() {
+		observation.BodyMatched = target.MatchBody(body)
 	}
 	observation.Body = domain.SanitizeEvidence(string(body))
 	observation.BodyFingerprint = fingerprintBody(body)

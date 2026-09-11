@@ -1,0 +1,191 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_POLICY_OVERRIDES",
+  "tests": [
+    {
+      "ac": "AC1",
+      "test": "TestDeriveRouteCanaryTargetsAppliesOverrideOnlyToItsRoute",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC1",
+      "test": "TestForHostnameInheritsUnsetFields",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC1",
+      "test": "TestOverrideCanRemoveFleetRegexForItsRoute",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC1",
+      "test": "TestSupervisorAppliesStatusOverrideOnlyToItsRoute",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorProbesEachRouteOnItsOwnInterval",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorScheduleToleratesSlightlyEarlyWakeups",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorEvaluateOnceProbesEveryRoute",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorBacksOffWhenPlanSourceFails",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorSweepsAgainAtOnceWhenASweepOverranTheInterval",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorWakeDelayIsCappedAtFleetInterval",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorProbesReaddedRouteImmediately",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC2",
+      "test": "TestSupervisorReprobesAfterWallClockStepsBackwards",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC3",
+      "test": "TestGateAppliesRouteOverride",
+      "file": "internal/service/route_canary_overrides_test.go",
+      "kind": "behavioral"
+    },
+    {
+      "ac": "AC4",
+      "test": "TestLoadDecodesRouteCanaryOverridesFromRepoConfig",
+      "file": "internal/config/route_canary_test.go",
+      "kind": "config"
+    },
+    {
+      "ac": "AC4",
+      "test": "TestRouteCanaryOverrideFieldsCoverEveryDecodedField",
+      "file": "internal/config/route_canary_test.go",
+      "kind": "config"
+    },
+    {
+      "ac": "AC5",
+      "test": "TestLoadRejectsUnknownRouteCanaryOverrideKey",
+      "file": "internal/config/route_canary_test.go",
+      "kind": "config"
+    },
+    {
+      "ac": "AC5",
+      "test": "TestLoadRejectsMalformedRouteCanaryOverrides",
+      "file": "internal/config/route_canary_test.go",
+      "kind": "config"
+    },
+    {
+      "ac": "AC5",
+      "test": "TestValidateRouteCanariesFailsClosedOnUnusableOverrides",
+      "file": "internal/config/route_canary_test.go",
+      "kind": "config"
+    },
+    {
+      "ac": "AC5",
+      "test": "TestRouteCanaryPolicyValidateRejectsUnusableOverrides",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC6",
+      "test": "TestCompileRouteCanaryBodyRegexAnchorsTheWholeBody",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC6",
+      "test": "TestMatchBodyRequiresEveryConfiguredAssertion",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC6",
+      "test": "TestProbeRouteRegexAssertsJSONFieldRegardlessOfOrder",
+      "file": "internal/adapters/runtime/route_probe_regex_test.go",
+      "kind": "adapter"
+    },
+    {
+      "ac": "AC7",
+      "test": "TestCompileRouteCanaryBodyRegexRejectsUnsafePatterns",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC7",
+      "test": "TestCompileRouteCanaryBodyRegexIsLinearTime",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC7",
+      "test": "TestRouteCanaryPolicyValidateRejectsInvalidFleetRegex",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC7",
+      "test": "TestRouteCanaryTargetValidateRejectsInvalidBodyRegex",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC7",
+      "test": "TestProbeRouteRejectsTargetWithInvalidRegex",
+      "file": "internal/adapters/runtime/route_probe_regex_test.go",
+      "kind": "adapter"
+    },
+    {
+      "ac": "AC8",
+      "test": "TestProbeRouteRegexMatchesRawBodyNotSanitizedEvidence",
+      "file": "internal/adapters/runtime/route_probe_regex_test.go",
+      "kind": "adapter"
+    },
+    {
+      "ac": "AC8",
+      "test": "TestProbeRouteRegexSeesOnlyTheBoundedBody",
+      "file": "internal/adapters/runtime/route_probe_regex_test.go",
+      "kind": "adapter"
+    },
+    {
+      "ac": "AC8",
+      "test": "TestClassifyRegexMismatchReusesBodyMismatch",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    },
+    {
+      "ac": "AC8",
+      "test": "TestClassifyHeldRegexOutranksCatchAllWarning",
+      "file": "internal/domain/route_canary_policy_overrides_test.go",
+      "kind": "unit"
+    }
+  ]
+}

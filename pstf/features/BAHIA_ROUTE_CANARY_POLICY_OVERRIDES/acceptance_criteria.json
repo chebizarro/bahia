@@ -1,0 +1,93 @@
+{
+  "feature_id": "BAHIA_ROUTE_CANARY_POLICY_OVERRIDES",
+  "criteria": [
+    {
+      "id": "AC1",
+      "beads": "bahia-6xztt",
+      "statement": "A managed route can override expected status range, expected body (substring and regex), probe timeout and TLS expiry window, and the override changes that route's targets from every perspective without affecting any other route.",
+      "verification": [
+        "internal/domain/route_canary_policy_overrides_test.go:TestDeriveRouteCanaryTargetsAppliesOverrideOnlyToItsRoute",
+        "internal/domain/route_canary_policy_overrides_test.go:TestForHostnameInheritsUnsetFields",
+        "internal/domain/route_canary_policy_overrides_test.go:TestOverrideCanRemoveFleetRegexForItsRoute",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorAppliesStatusOverrideOnlyToItsRoute"
+      ]
+    },
+    {
+      "id": "AC2",
+      "beads": "bahia-6xztt",
+      "statement": "A managed route can override its periodic probe interval. The supervisor tracks when each route is next due and probes an overridden route on its own cadence while other routes stay on the fleet-wide interval.",
+      "verification": [
+        "internal/service/route_canary_overrides_test.go:TestSupervisorProbesEachRouteOnItsOwnInterval",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorScheduleToleratesSlightlyEarlyWakeups",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorEvaluateOnceProbesEveryRoute",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorBacksOffWhenPlanSourceFails",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorSweepsAgainAtOnceWhenASweepOverranTheInterval",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorWakeDelayIsCappedAtFleetInterval",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorProbesReaddedRouteImmediately",
+        "internal/service/route_canary_overrides_test.go:TestSupervisorReprobesAfterWallClockStepsBackwards"
+      ]
+    },
+    {
+      "id": "AC3",
+      "beads": "bahia-6xztt",
+      "statement": "Overrides apply to the post-deploy gate: an overridden route deploys on its own health contract, the gate probes targets carrying the override, and the same response from a route on fleet-wide policy is still blocked and rolled back.",
+      "verification": [
+        "internal/service/route_canary_overrides_test.go:TestGateAppliesRouteOverride"
+      ]
+    },
+    {
+      "id": "AC4",
+      "beads": "bahia-6xztt",
+      "statement": "Overrides stay repo-configured control-plane policy keyed by hostname, never signed desired state. They decode from YAML with dotted hostnames intact, distinguish an explicit empty or zero value from an unset field, and canonicalize hostnames.",
+      "verification": [
+        "internal/config/route_canary_test.go:TestLoadDecodesRouteCanaryOverridesFromRepoConfig",
+        "internal/config/route_canary_test.go:TestRouteCanaryOverrideFieldsCoverEveryDecodedField"
+      ]
+    },
+    {
+      "id": "AC5",
+      "beads": "bahia-6xztt",
+      "statement": "Enabled-but-unusable override configuration fails at startup: unknown keys, empty overrides, duplicate canonical hostnames, non-hostname keys, intervals below the minimum, negative values, invalid effective status ranges, and invalid regexes.",
+      "verification": [
+        "internal/config/route_canary_test.go:TestLoadRejectsUnknownRouteCanaryOverrideKey",
+        "internal/config/route_canary_test.go:TestLoadRejectsMalformedRouteCanaryOverrides",
+        "internal/config/route_canary_test.go:TestValidateRouteCanariesFailsClosedOnUnusableOverrides",
+        "internal/domain/route_canary_policy_overrides_test.go:TestRouteCanaryPolicyValidateRejectsUnusableOverrides"
+      ]
+    },
+    {
+      "id": "AC6",
+      "beads": "bahia-j9liz",
+      "statement": "Route canaries support a regex body assertion alongside the substring form, with pinned anchoring semantics: the pattern must match the whole bounded body (\\A(?:pattern)\\z), (?m) cannot weaken the anchors, and a JSON field can be asserted regardless of key order or formatting. When both forms are set both must hold.",
+      "verification": [
+        "internal/domain/route_canary_policy_overrides_test.go:TestCompileRouteCanaryBodyRegexAnchorsTheWholeBody",
+        "internal/domain/route_canary_policy_overrides_test.go:TestMatchBodyRequiresEveryConfiguredAssertion",
+        "internal/adapters/runtime/route_probe_regex_test.go:TestProbeRouteRegexAssertsJSONFieldRegardlessOfOrder"
+      ]
+    },
+    {
+      "id": "AC7",
+      "beads": "bahia-j9liz",
+      "statement": "The regex is bounded against pathological patterns: RE2 is linear-time, the source is limited to 256 bytes and the compiled program to 2048 instructions, non-RE2 constructs and patterns that would escape or swallow the anchors are rejected, vacuous patterns that match an empty body are rejected, and all of this is validated at config load.",
+      "verification": [
+        "internal/domain/route_canary_policy_overrides_test.go:TestCompileRouteCanaryBodyRegexRejectsUnsafePatterns",
+        "internal/domain/route_canary_policy_overrides_test.go:TestCompileRouteCanaryBodyRegexIsLinearTime",
+        "internal/domain/route_canary_policy_overrides_test.go:TestRouteCanaryPolicyValidateRejectsInvalidFleetRegex",
+        "internal/domain/route_canary_policy_overrides_test.go:TestRouteCanaryTargetValidateRejectsInvalidBodyRegex",
+        "internal/adapters/runtime/route_probe_regex_test.go:TestProbeRouteRejectsTargetWithInvalidRegex"
+      ]
+    },
+    {
+      "id": "AC8",
+      "beads": "bahia-j9liz",
+      "statement": "The regex matches the raw bounded body, not the sanitized evidence copy, and sees only the bounded prefix. A regex failure reuses the body_mismatch classification, so the database constraint conformance test holds without a migration, and a held regex suppresses the catch-all warning exactly like the substring form.",
+      "verification": [
+        "internal/adapters/runtime/route_probe_regex_test.go:TestProbeRouteRegexMatchesRawBodyNotSanitizedEvidence",
+        "internal/adapters/runtime/route_probe_regex_test.go:TestProbeRouteRegexSeesOnlyTheBoundedBody",
+        "internal/domain/route_canary_policy_overrides_test.go:TestClassifyRegexMismatchReusesBodyMismatch",
+        "internal/domain/route_canary_policy_overrides_test.go:TestClassifyHeldRegexOutranksCatchAllWarning",
+        "internal/db/route_canary_constraint_conformance_test.go"
+      ]
+    }
+  ]
+}

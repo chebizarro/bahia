@@ -27,6 +27,9 @@ type RouteCanaryPolicy struct {
 	ExpectedStatusMax int
 	// ExpectedBodyContains, when set, must appear in the bounded response body.
 	ExpectedBodyContains string
+	// ExpectedBodyRegex, when set, must match the whole bounded response body.
+	// See CompileRouteCanaryBodyRegex for the anchoring and bounding contract.
+	ExpectedBodyRegex string
 	// TLSMinDaysRemaining raises the tls_expiring warning below this many days.
 	// Zero disables expiry warning while still requiring a verifiable chain.
 	TLSMinDaysRemaining int
@@ -48,6 +51,11 @@ type RouteCanaryPolicy struct {
 	InternalDialAddresses map[string]string
 	// Thresholds is the open/close hysteresis policy.
 	Thresholds RouteCanaryThresholds
+	// Overrides tunes individual routes, keyed by normalized hostname. A route
+	// without an entry uses the fleet-wide values above unchanged. Overrides
+	// apply to periodic probing and to the post-deploy gate alike, because both
+	// derive targets through DeriveRouteCanaryTargets.
+	Overrides map[string]RouteCanaryOverride
 }
 
 // Validate enforces that an enabled policy is fully specified. A policy that is
@@ -57,14 +65,8 @@ func (p RouteCanaryPolicy) Validate() error {
 	if !p.Enabled {
 		return nil
 	}
-	if p.ProbeTimeout <= 0 {
-		return fmt.Errorf("route canary policy: probe_timeout must be positive")
-	}
-	if p.ExpectedStatusMin < 100 || p.ExpectedStatusMax > 599 || p.ExpectedStatusMin > p.ExpectedStatusMax {
-		return fmt.Errorf("route canary policy: invalid expected status range %d..%d", p.ExpectedStatusMin, p.ExpectedStatusMax)
-	}
-	if p.TLSMinDaysRemaining < 0 {
-		return fmt.Errorf("route canary policy: tls_min_days_remaining must not be negative")
+	if err := p.validateExpectations(); err != nil {
+		return fmt.Errorf("route canary policy: %w", err)
 	}
 	// Requiring a discriminating health path is only meaningful if the control
 	// probe that detects one is actually performed.
@@ -86,6 +88,27 @@ func (p RouteCanaryPolicy) Validate() error {
 	}
 	if p.Thresholds.FailureThreshold < 0 || p.Thresholds.SuccessThreshold < 0 {
 		return fmt.Errorf("route canary policy: thresholds must not be negative")
+	}
+	return p.validateOverrides()
+}
+
+// validateExpectations checks the fields a per-route override can change, so
+// the same rules apply to the fleet-wide policy and to every effective
+// per-route policy.
+func (p RouteCanaryPolicy) validateExpectations() error {
+	if p.ProbeTimeout <= 0 {
+		return fmt.Errorf("probe_timeout must be positive")
+	}
+	if p.ExpectedStatusMin < 100 || p.ExpectedStatusMax > 599 || p.ExpectedStatusMin > p.ExpectedStatusMax {
+		return fmt.Errorf("invalid expected status range %d..%d", p.ExpectedStatusMin, p.ExpectedStatusMax)
+	}
+	if p.TLSMinDaysRemaining < 0 {
+		return fmt.Errorf("tls_min_days_remaining must not be negative")
+	}
+	if p.ExpectedBodyRegex != "" {
+		if _, err := CompileRouteCanaryBodyRegex(p.ExpectedBodyRegex); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -125,12 +148,15 @@ func DeriveRouteCanaryTargets(plan *DesiredPublicRoutePlan, policy RouteCanaryPo
 	if !policy.Enabled {
 		return nil, nil
 	}
-	if err := policy.Validate(); err != nil {
-		return nil, err
-	}
-	hostname := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(plan.Hostname), "."))
+	hostname := NormalizeRouteCanaryHostname(plan.Hostname)
 	if hostname == "" {
 		return nil, fmt.Errorf("route canary: plan hostname is required")
+	}
+	// Resolve this route's override before deriving anything, so every target
+	// for the route, from every perspective, carries the same expectations.
+	policy = policy.ForHostname(hostname)
+	if err := policy.Validate(); err != nil {
+		return nil, err
 	}
 	path := plan.Proxy.HealthPath
 	if strings.TrimSpace(path) == "" {
@@ -149,6 +175,7 @@ func DeriveRouteCanaryTargets(plan *DesiredPublicRoutePlan, policy RouteCanaryPo
 		ExpectedStatusMin:    policy.ExpectedStatusMin,
 		ExpectedStatusMax:    policy.ExpectedStatusMax,
 		ExpectedBodyContains: policy.ExpectedBodyContains,
+		ExpectedBodyRegex:    policy.ExpectedBodyRegex,
 		TLSMinDaysRemaining:  policy.TLSMinDaysRemaining,
 		Timeout:              policy.ProbeTimeout,
 
@@ -216,7 +243,7 @@ func RouteCanaryKeyForPlan(plan *DesiredPublicRoutePlan) RouteCanaryKey {
 	key := RouteCanaryKey{
 		ServiceID:     plan.ServiceID,
 		EnvironmentID: plan.EnvironmentID,
-		Hostname:      strings.ToLower(strings.TrimSuffix(strings.TrimSpace(plan.Hostname), ".")),
+		Hostname:      NormalizeRouteCanaryHostname(plan.Hostname),
 	}
 	if plan.DeploymentUnitID != uuid.Nil {
 		unit := plan.DeploymentUnitID
