@@ -1188,6 +1188,13 @@ func secretsCommands() *cobra.Command {
 		Short: "List secrets for a service",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
+			if err != nil {
+				return err
+			}
+			if closeSigner != nil {
+				defer closeSigner()
+			}
 			secrets, err := apiClient.ListSecrets(cmd.Context(), args[0])
 			if err != nil {
 				return err
@@ -1247,6 +1254,13 @@ func secretsCommands() *cobra.Command {
 		Short: "Delete a secret",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
+			if err != nil {
+				return err
+			}
+			if closeSigner != nil {
+				defer closeSigner()
+			}
 			if err := apiClient.DeleteSecret(cmd.Context(), args[0], args[1]); err != nil {
 				return err
 			}
