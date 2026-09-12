@@ -206,6 +206,109 @@ func TestReconcilerRepairsStuckSuccessfulRouteOnlyState(t *testing.T) {
 	require.Equal(t, 1, stateEvents)
 }
 
+func TestReconcilerSuccessfulFullDeploymentResumesObservation(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	intentID := uuid.New()
+	desiredHash := "sha256:" + strings.Repeat("c", 64)
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{
+		ServiceID: serviceID, EnvironmentID: envID, DesiredIntentID: &intentID,
+		DesiredHash: desiredHash, DriftStatus: domain.DriftStatusDeploying,
+	}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	intentRepo := &mockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		intentID: {ID: intentID, ServiceID: serviceID, EnvironmentID: envID, Status: domain.IntentStatusDeployed},
+	}}
+	runRepo := &reconcilerRunRepo{runs: []domain.DeploymentRun{{
+		ID: uuid.New(), DeploymentIntentID: intentID, LoomJobID: "runtime:direct",
+		Status: domain.RunStatusSucceeded, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}}}
+	observations := &mockObservationRepo{}
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "astillero", RuntimeType: domain.RuntimeTypeDocker}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
+		observations, stateRepo,
+		&mockRuntimeResolver{rt: &mockRuntime{observeNormHash: desiredHash, observeHealth: domain.HealthStatusHealthy}},
+		&mockPublisher{}, time.Minute, zap.NewNop(), WithDeploymentHistory(intentRepo, runRepo),
+	)
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Len(t, observations.observations, 1)
+	require.Equal(t, domain.DriftStatusInSync, stateRepo.states[stateKey].DriftStatus)
+	require.Equal(t, domain.HealthStatusHealthy, observations.observations[0].HealthStatus)
+}
+
+func TestReconcilerActiveFullDeploymentRemainsExcludedFromObservation(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	intentID := uuid.New()
+	state := &domain.EnvironmentServiceState{
+		ServiceID: serviceID, EnvironmentID: envID, DesiredIntentID: &intentID,
+		DriftStatus: domain.DriftStatusDeploying,
+	}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateMapKey(serviceID, envID): state}}
+	intentRepo := &mockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		intentID: {ID: intentID, ServiceID: serviceID, EnvironmentID: envID, Status: domain.IntentStatusDeployed},
+	}}
+	runRepo := &reconcilerRunRepo{runs: []domain.DeploymentRun{{
+		ID: uuid.New(), DeploymentIntentID: intentID, LoomJobID: "runtime:direct",
+		Status: domain.RunStatusRunning, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}}}
+	observations := &mockObservationRepo{}
+	reconciler := NewReconciler(nil, nil, nil, nil, observations, stateRepo, nil, &mockPublisher{}, time.Minute, zap.NewNop(), WithDeploymentHistory(intentRepo, runRepo))
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Empty(t, observations.observations)
+	require.Equal(t, domain.DriftStatusDeploying, state.DriftStatus)
+}
+
+func TestReconcilerSuccessfulFullDeploymentStartingRemainsObservable(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	intentID := uuid.New()
+	desiredHash := "sha256:" + strings.Repeat("d", 64)
+	stateKey := stateMapKey(serviceID, envID)
+	state := &domain.EnvironmentServiceState{
+		ServiceID: serviceID, EnvironmentID: envID, DesiredIntentID: &intentID,
+		DesiredHash: desiredHash, DriftStatus: domain.DriftStatusDeploying,
+	}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{stateKey: state}}
+	intentRepo := &mockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
+		intentID: {ID: intentID, ServiceID: serviceID, EnvironmentID: envID, Status: domain.IntentStatusDeployed},
+	}}
+	runRepo := &reconcilerRunRepo{runs: []domain.DeploymentRun{{
+		ID: uuid.New(), DeploymentIntentID: intentID, LoomJobID: "runtime:direct",
+		Status: domain.RunStatusSucceeded, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}}}
+	rt := &mockRuntime{observeNormHash: desiredHash, observeHealth: domain.HealthStatusStarting}
+	observations := &mockObservationRepo{}
+	reconciler := NewReconciler(
+		&mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "astillero", RuntimeType: domain.RuntimeTypeDocker}}},
+		&mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly}}}},
+		&mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&mockDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}},
+		observations, stateRepo, &mockRuntimeResolver{rt: rt}, &mockPublisher{}, time.Minute, zap.NewNop(), WithDeploymentHistory(intentRepo, runRepo),
+	)
+
+	require.NoError(t, reconciler.reconcileOne(ctx, state))
+	require.Equal(t, domain.DriftStatusUnknown, stateRepo.states[stateKey].DriftStatus)
+	require.Contains(t, stateRepo.states[stateKey].ReconcileFailureMetadata, startingSinceKey)
+
+	rt.mu.Lock()
+	rt.observeHealth = domain.HealthStatusHealthy
+	rt.mu.Unlock()
+	require.NoError(t, reconciler.reconcileOne(ctx, stateRepo.states[stateKey]))
+	require.Len(t, observations.observations, 2)
+	require.Equal(t, domain.DriftStatusInSync, stateRepo.states[stateKey].DriftStatus)
+	require.Nil(t, stateRepo.states[stateKey].ReconcileFailureMetadata)
+}
+
 func TestReconcilerRouteCarryingDesiredAcceptsPreRouteHashAcrossPasses(t *testing.T) {
 	ctx := context.Background()
 	serviceID := uuid.New()
@@ -252,8 +355,8 @@ func TestReconcilerKeepsOtherDeployingStatesSkipped(t *testing.T) {
 		runs []domain.DeploymentRun
 	}{
 		{
-			name: "latest run is not route-only",
-			runs: []domain.DeploymentRun{{LoomJobID: "runtime:direct", Status: domain.RunStatusSucceeded}},
+			name: "latest full run is still active",
+			runs: []domain.DeploymentRun{{LoomJobID: "runtime:direct", Status: domain.RunStatusRunning}},
 		},
 		{
 			name: "latest route-only run did not succeed",
