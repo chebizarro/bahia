@@ -82,6 +82,28 @@ func TestHealthProviderReadinessWithNoChecksPasses(t *testing.T) {
 	requireCheckStatus(t, snapshot.Checks, "background_runners", HealthStatusPass)
 }
 
+func TestHealthProviderReadinessIncludesBootstrapBlockingRelays(t *testing.T) {
+	provider := NewHealthProvider(NewModePolicy(ModeFull), nil)
+	provider.SetBootstrapFunc(func() (string, bool) { return "snapshot", false })
+	provider.SetBootstrapDetailsFunc(func() map[string]string {
+		return map[string]string{
+			"current_group":   "state_snapshot",
+			"blocking_relays": "wss://slow.example",
+		}
+	})
+
+	snapshot := provider.Readiness()
+	var bootstrap HealthCheck
+	for _, check := range snapshot.Checks {
+		if check.Name == "bootstrap_ready" {
+			bootstrap = check
+			break
+		}
+	}
+	require.Equal(t, HealthStatusFail, bootstrap.Status)
+	require.Equal(t, "wss://slow.example", bootstrap.Details["blocking_relays"])
+}
+
 func TestHealthProviderWarningDependencyIsDegradedButReady(t *testing.T) {
 	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
 	provider.RegisterCheck("signet-test", int(Tier1), func() HealthCheck {

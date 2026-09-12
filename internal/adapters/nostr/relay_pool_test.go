@@ -313,6 +313,32 @@ func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {
 	close(subs[1].Events)
 }
 
+func TestActiveMergedSubscriptionDoesNotReportTerminationAsRelayEOSE(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	var sub *gonostr.Subscription
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub = newTestSubscription()
+		return sub, nil
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
+	require.NoError(t, err)
+	require.Equal(t, []string{relayURL}, merged.PendingEOSE())
+	close(sub.Events)
+	<-merged.EndOfStoredEvents
+	require.Empty(t, merged.PendingEOSE())
+	require.False(t, merged.HasRealEOSE())
+	select {
+	case eose, ok := <-merged.RelayEOSE:
+		if ok {
+			t.Fatalf("termination was reported as real EOSE: %+v", eose)
+		}
+	default:
+	}
+}
+
 func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t *testing.T) {
 	const relayURL = "wss://auth-eose.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
@@ -500,6 +526,43 @@ func TestRelayPoolReconfigureRelayURLsAddRemoveDeduplicatesReplay(t *testing.T) 
 	subs[newURL].Events <- duplicate
 	subs[newURL].Events <- unique
 	require.Equal(t, unique.ID, (<-merged.Events).ID, "replayed event ID must be suppressed across relay migration")
+	merged.Close()
+}
+
+func TestRelayPoolReconfigureRelayURLsCanonicalRelayEOSEDoesNotWaitForRemovedInitialRelay(t *testing.T) {
+	const (
+		initialURL   = "wss://initial.example"
+		canonicalURL = "wss://canonical.example"
+	)
+	pool := newRelayPoolWithManagedRelays(initialURL)
+	markRelayConnectedForSubscribeTest(pool, initialURL)
+	subs := make(map[string]*gonostr.Subscription)
+	setSubscribeOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub := newTestSubscription()
+		subs[relay.URL] = sub
+		return sub, nil
+	})
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
+	require.NoError(t, err)
+	require.Equal(t, []string{initialURL}, merged.PendingEOSE())
+
+	result := pool.ReconfigureRelayURLs([]string{canonicalURL})
+	require.Empty(t, result.MigrationErrors)
+	require.Equal(t, 1, result.MigratedSubscriptions)
+	close(subs[initialURL].Events)
+	close(subs[canonicalURL].EndOfStoredEvents)
+
+	require.Equal(t, RelayEOSE{RelayURL: canonicalURL}, <-merged.RelayEOSE)
+	select {
+	case <-merged.EndOfStoredEvents:
+	case <-time.After(time.Second):
+		t.Fatal("removed initial relay stranded aggregate EOSE")
+	}
+	require.Empty(t, merged.PendingEOSE())
 	merged.Close()
 }
 

@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"sync"
+	"time"
 
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"go.uber.org/zap"
 )
+
+const relayTopologyApplyTimeout = 30 * time.Second
 
 type relayTopologyCoordinator struct {
 	mu                    sync.Mutex
@@ -53,6 +56,11 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	applyCtx, cancel := context.WithTimeout(ctx, relayTopologyApplyTimeout)
+	defer cancel()
 
 	if !relayPolicySnapshotHasRuntimeTopology(state) {
 		c.logger.Info("relay topology snapshot has no runtime relay topology; retaining existing relay pools")
@@ -64,19 +72,19 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	serviceRelays, reconfigureService := c.serviceRelaysForSnapshot(state, controlPlaneRelays)
 
 	if reconfigureControlPlane && c.controlPlanePool != nil {
-		result := c.controlPlanePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays)
+		result := c.controlPlanePool.ReconfigureRelayURLsContext(applyCtx, controlPlaneRelays)
 		c.logReconfigureResult("control_plane", result)
 	}
 	if reconfigureContextVM && c.contextVMRequestPool != nil {
-		result := c.contextVMRequestPool.ReconfigureRelayURLsContext(ctx, contextVMRelays)
+		result := c.contextVMRequestPool.ReconfigureRelayURLsContext(applyCtx, contextVMRelays)
 		c.logReconfigureResult("contextvm_request", result)
 	}
 	if reconfigureContextVM && c.contextVMResponsePool != nil {
-		result := c.contextVMResponsePool.ReconfigureRelayURLsContext(ctx, contextVMRelays)
+		result := c.contextVMResponsePool.ReconfigureRelayURLsContext(applyCtx, contextVMRelays)
 		c.logReconfigureResult("contextvm_response", result)
 	}
 	if reconfigureService && c.servicePool != nil {
-		result := c.servicePool.ReconfigureRelayURLsContext(ctx, serviceRelays)
+		result := c.servicePool.ReconfigureRelayURLsContext(applyCtx, serviceRelays)
 		c.logReconfigureResult("service_interop", result)
 	}
 	return nil

@@ -155,6 +155,71 @@ func TestBootstrapperLiveCatchupCompletesAfterFirstRelayEOSE(t *testing.T) {
 	require.Equal(t, 3, cache.count())
 }
 
+func TestBootstrapperSnapshotCompletesAfterFirstRelayEOSEAndToleratesClosedRelay(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	cache := &bootstrapApplyRecorder{}
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		kind := int(filters[0].Kinds[0])
+		if kind != testKindTier1Snapshot {
+			return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{
+				events: []*gonostr.Event{signedBootstrapEvent(t, kind, "complete")},
+				eose:   true,
+			}), nil
+		}
+		events := make(chan *gonostr.Event, 1)
+		relayEOSE := make(chan RelayEOSE, 1)
+		closed := make(chan RelayClosed, 1)
+		events <- signedBootstrapEvent(t, kind, "snapshot")
+		closed <- RelayClosed{RelayURL: "wss://closed.example", Reason: "maintenance"}
+		relayEOSE <- RelayEOSE{RelayURL: "wss://ready.example"}
+		return &MergedSubscription{
+			Events:            events,
+			EndOfStoredEvents: make(chan struct{}),
+			RelayEOSE:         relayEOSE,
+			Closed:            closed,
+			relayURLs:         []string{"wss://closed.example", "wss://ready.example", "wss://slow.example"},
+			closeFn:           func() {},
+		}, nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
+		RequestedTier:   1,
+		SnapshotTimeout: 50 * time.Millisecond,
+		CatchupTimeout:  50 * time.Millisecond,
+	})
+
+	require.NoError(t, bootstrapper.Run(context.Background()))
+	require.True(t, bootstrapper.Ready())
+	require.Equal(t, 3, cache.count())
+}
+
+func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, _ context.Context, _ []gonostr.Filter) (*MergedSubscription, error) {
+		return &MergedSubscription{
+			Events:            make(chan *gonostr.Event),
+			EndOfStoredEvents: make(chan struct{}),
+			RelayEOSE:         make(chan RelayEOSE),
+			Closed:            make(chan RelayClosed),
+			relayURLs:         []string{"wss://one.example", "wss://two.example"},
+			closeFn:           func() {},
+		}, nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, testBootstrapCatalog(), nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
+		RequestedTier:   0,
+		SnapshotTimeout: 10 * time.Millisecond,
+	})
+	_, _, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], []gonostr.Filter{{}}, 10*time.Millisecond)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "wss://one.example")
+	require.Equal(t, "tier0_snapshot", bootstrapper.Progress().CurrentGroup)
+	require.Equal(t, []string{"wss://one.example", "wss://two.example"}, bootstrapper.Progress().BlockingRelays)
+}
+
 func TestBootstrapperNoRelayDataFails(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{

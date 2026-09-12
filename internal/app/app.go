@@ -643,6 +643,20 @@ func New(cfg *config.Config) (*App, error) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
 	})
+	healthProvider.SetBootstrapDetailsFunc(func() map[string]string {
+		progress := bootstrapper.Progress()
+		details := map[string]string{}
+		if progress.CurrentGroup != "" {
+			details["current_group"] = progress.CurrentGroup
+		}
+		if len(progress.BlockingRelays) > 0 {
+			details["blocking_relays"] = strings.Join(progress.BlockingRelays, ",")
+		}
+		if progress.LastError != "" {
+			details["last_error"] = progress.LastError
+		}
+		return details
+	})
 	migrationEventRepo, ok := nostrEventRepo.(nostrmigration.EventRepository)
 	if !ok {
 		return nil, fmt.Errorf("nostr event repository does not support durable migration cursors")
