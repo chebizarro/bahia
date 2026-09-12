@@ -193,14 +193,26 @@ func (r *Reconciler) reconcileMode(env *domain.Environment, unit *domain.Deploym
 }
 
 func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
-	// Deploying entries remain excluded from runtime observation. The sole
-	// exception repairs route-only runs completed before their success path
-	// explicitly transitioned state to in_sync.
+	// Active deployments remain excluded from runtime observation. Once a full
+	// deployment has succeeded, however, its terminal health verdict may still
+	// be "starting". Let the normal observation path resume so the unit can
+	// converge to in_sync (or exhaust the bounded startup budget) instead of
+	// remaining parked in deploying forever.
 	if currentState.DriftStatus == domain.DriftStatusDeploying {
-		if err := r.repairStuckRouteOnlyState(ctx, currentState); err != nil {
+		repaired, err := r.repairStuckRouteOnlyState(ctx, currentState)
+		if err != nil {
 			return err
 		}
-		return nil
+		if repaired {
+			return nil
+		}
+		ready, err := r.successfulFullDeploymentReadyForObservation(ctx, currentState)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return nil
+		}
 	}
 	if currentState.ReconcileBackoffUntil != nil && currentState.ReconcileBackoffUntil.After(time.Now().UTC()) {
 		return nil
@@ -394,38 +406,38 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	return nil
 }
 
-func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
+func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState *domain.EnvironmentServiceState) (bool, error) {
 	if r.intents == nil || r.runs == nil || currentState.DesiredIntentID == nil {
-		return nil
+		return false, nil
 	}
 	intent, err := r.intents.GetByID(ctx, *currentState.DesiredIntentID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if intent == nil || intent.Status != domain.IntentStatusDeployed {
-		return nil
+		return false, nil
 	}
 	runs, err := r.runs.ListByIntent(ctx, intent.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	latest := latestDeploymentRun(runs)
 	if latest == nil || latest.Status != domain.RunStatusSucceeded || !domain.IsRouteOnlyDeploymentRun(latest) {
-		return nil
+		return false, nil
 	}
 
 	// Reload immediately before the write so only DriftStatus is merged into the
 	// latest observation, run-linkage, and reconcile-health fields.
 	state, err := r.state.Get(ctx, currentState.ServiceID, currentState.EnvironmentID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if state == nil || state.DriftStatus != domain.DriftStatusDeploying || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
-		return nil
+		return false, nil
 	}
 	state.DriftStatus = domain.DriftStatusInSync
 	if err := r.state.Upsert(ctx, state); err != nil {
-		return err
+		return false, err
 	}
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
@@ -443,7 +455,29 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 		zap.String("intent_id", intent.ID.String()),
 		zap.String("run_id", latest.ID.String()),
 	)
-	return nil
+	return true, nil
+}
+
+func (r *Reconciler) successfulFullDeploymentReadyForObservation(ctx context.Context, currentState *domain.EnvironmentServiceState) (bool, error) {
+	if r.intents == nil || r.runs == nil || currentState.DesiredIntentID == nil {
+		return false, nil
+	}
+	intent, err := r.intents.GetByID(ctx, *currentState.DesiredIntentID)
+	if err != nil {
+		return false, err
+	}
+	if intent == nil || intent.Status != domain.IntentStatusDeployed {
+		return false, nil
+	}
+	runs, err := r.runs.ListByIntent(ctx, intent.ID)
+	if err != nil {
+		return false, err
+	}
+	latest := latestDeploymentRun(runs)
+	if latest == nil || latest.Status != domain.RunStatusSucceeded || domain.IsRouteOnlyDeploymentRun(latest) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func latestDeploymentRun(runs []domain.DeploymentRun) *domain.DeploymentRun {
