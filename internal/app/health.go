@@ -51,11 +51,12 @@ type HealthProvider struct {
 	modePolicy *ModePolicy
 	background *BackgroundManager
 	// Slots for future providers (relay pool, bootstrap state, etc.)
-	mu                sync.RWMutex
-	relayHealthFn     func() (connected, healthy int)
-	bootstrapFn       func() (phase string, ready bool)
-	relayQuorumConfig RelayQuorumConfig
-	checks            []registeredHealthCheck
+	mu                 sync.RWMutex
+	relayHealthFn      func() (connected, healthy int)
+	bootstrapFn        func() (phase string, ready bool)
+	bootstrapDetailsFn func() map[string]string
+	relayQuorumConfig  RelayQuorumConfig
+	checks             []registeredHealthCheck
 }
 
 func NewHealthProvider(policy *ModePolicy, bg *BackgroundManager) *HealthProvider {
@@ -87,6 +88,14 @@ func (p *HealthProvider) SetBootstrapFunc(fn func() (phase string, ready bool)) 
 	p.bootstrapFn = fn
 }
 
+// SetBootstrapDetailsFunc supplies non-secret bootstrap diagnostics for the
+// readiness response while preserving the existing readiness contract.
+func (p *HealthProvider) SetBootstrapDetailsFunc(fn func() map[string]string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bootstrapDetailsFn = fn
+}
+
 func (p *HealthProvider) RegisterCheck(name string, tier int, fn func() HealthCheck) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -106,12 +115,13 @@ func (p *HealthProvider) Readiness() HealthSnapshot {
 	p.mu.RLock()
 	relayHealthFn := p.relayHealthFn
 	bootstrapFn := p.bootstrapFn
+	bootstrapDetailsFn := p.bootstrapDetailsFn
 	relayQuorumConfig := p.relayQuorumConfig
 	registeredChecks := append([]registeredHealthCheck(nil), p.checks...)
 	p.mu.RUnlock()
 
 	snapshot.Checks = append(snapshot.Checks, relayQuorumCheck(relayHealthFn, snapshot.ActiveTier, currentMode(p.modePolicy), relayQuorumConfig))
-	snapshot.Checks = append(snapshot.Checks, bootstrapReadyCheck(bootstrapFn, snapshot.ActiveTier))
+	snapshot.Checks = append(snapshot.Checks, bootstrapReadyCheck(bootstrapFn, bootstrapDetailsFn, snapshot.ActiveTier))
 	snapshot.Checks = append(snapshot.Checks, p.backgroundRunnersCheck(snapshot.ActiveTier))
 	for _, registered := range registeredChecks {
 		if registered.fn == nil || registered.tier > snapshot.ActiveTier {
@@ -211,7 +221,7 @@ func normalizeRelayQuorumConfig(config RelayQuorumConfig) RelayQuorumConfig {
 	return config
 }
 
-func bootstrapReadyCheck(fn func() (phase string, ready bool), tier int) HealthCheck {
+func bootstrapReadyCheck(fn func() (phase string, ready bool), detailsFn func() map[string]string, tier int) HealthCheck {
 	check := HealthCheck{Name: "bootstrap_ready", Status: HealthStatusPass, Message: "bootstrap provider not configured", Tier: tier}
 	if fn == nil {
 		return check
@@ -219,6 +229,9 @@ func bootstrapReadyCheck(fn func() (phase string, ready bool), tier int) HealthC
 
 	phase, ready := fn()
 	check.Message = fmt.Sprintf("phase=%s", phase)
+	if detailsFn != nil {
+		check.Details = detailsFn()
+	}
 	if ready {
 		return check
 	}

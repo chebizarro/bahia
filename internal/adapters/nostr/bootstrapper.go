@@ -30,6 +30,9 @@ type BootstrapProgress struct {
 	GroupsTotal    int
 	GroupsComplete int
 	StartedAt      time.Time
+	CurrentGroup   string
+	BlockingRelays []string
+	LastError      string
 }
 
 type BootstrapConfig struct {
@@ -176,6 +179,9 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		progress.GroupsTotal = len(groups)
 		progress.GroupsComplete = 0
 		progress.StartedAt = startedAt
+		progress.CurrentGroup = ""
+		progress.BlockingRelays = nil
+		progress.LastError = ""
 	})
 
 	completed := make(map[string]bool, len(groups))
@@ -191,9 +197,10 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 			b.logger.Warn("bootstrap snapshot filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout, true)
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout)
 		decodedEvents += applied
 		if err != nil {
+			b.recordGroupFailure(group.Name, err)
 			b.logger.Warn("bootstrap snapshot group failed", zap.String("group", group.Name), zap.Error(err))
 		}
 		if ok {
@@ -212,9 +219,10 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 			b.logger.Warn("bootstrap live filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
 			continue
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout, false)
+		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout)
 		decodedEvents += applied
 		if err != nil {
+			b.recordGroupFailure(group.Name, err)
 			b.logger.Warn("bootstrap live catch-up group failed", zap.String("group", group.Name), zap.Error(err))
 		}
 		if ok {
@@ -245,7 +253,9 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 func (b *Bootstrapper) Progress() BootstrapProgress {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.progress
+	progress := b.progress
+	progress.BlockingRelays = append([]string(nil), b.progress.BlockingRelays...)
+	return progress
 }
 
 func (b *Bootstrapper) Ready() bool {
@@ -263,7 +273,7 @@ func (b *Bootstrapper) requiredGroupsAtOrBelowRequestedTier() []ReplayGroup {
 	return b.catalog.RequiredGroupsForTier(b.config.RequestedTier)
 }
 
-func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters []gonostr.Filter, timeout time.Duration, waitForAllRelays bool) (bool, int, error) {
+func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters []gonostr.Filter, timeout time.Duration) (bool, int, error) {
 	if err := ctx.Err(); err != nil {
 		return false, 0, err
 	}
@@ -272,49 +282,143 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 		return false, 0, err
 	}
 	defer subscription.Close()
+	b.setProgress(func(progress *BootstrapProgress) {
+		progress.CurrentGroup = group.Name
+		progress.BlockingRelays = subscription.RelayURLs()
+		progress.LastError = ""
+	})
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	eventsCh := subscription.Events
+	aggregateEOSECh := subscription.EndOfStoredEvents
+	relayEOSECh := subscription.RelayEOSE
+	closedCh := subscription.Closed
 
 	applied := 0
+	applyEvent := func(event *gonostr.Event) error {
+		if event == nil {
+			return nil
+		}
+		if err := b.decodeAndApply(ctx, group, event); err != nil {
+			var decodeErr *bootstrapEventDecodeError
+			if errors.As(err, &decodeErr) {
+				b.logger.Warn("bootstrap event skipped",
+					zap.String("group", group.Name),
+					zap.Int("kind", eventKindInt(event)),
+					zap.String("event_id", eventIDHex(event)),
+					zap.Error(decodeErr))
+				return nil
+			}
+			return err
+		}
+		applied++
+		return nil
+	}
+	drainEvents := func() error {
+		for eventsCh != nil {
+			select {
+			case event, ok := <-eventsCh:
+				if !ok {
+					eventsCh = nil
+					return nil
+				}
+				if err := applyEvent(event); err != nil {
+					return err
+				}
+			default:
+				return nil
+			}
+		}
+		return nil
+	}
 	for {
+		if eventsCh == nil && aggregateEOSECh == nil && relayEOSECh == nil && closedCh == nil {
+			return false, applied, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
+		}
 		select {
 		case <-ctx.Done():
 			return false, applied, ctx.Err()
 		case <-timer.C:
-			return false, applied, fmt.Errorf("bootstrap group %q timed out waiting for EOSE", group.Name)
-		case <-subscription.EndOfStoredEvents:
-			return true, applied, nil
-		case _, ok := <-subscription.RelayEOSE:
-			if ok && !waitForAllRelays {
-				return true, applied, nil
+			blocking := subscription.PendingEOSE()
+			if len(blocking) == 0 {
+				blocking = subscription.RelayURLs()
 			}
-		case closed, ok := <-subscription.Closed:
-			if ok {
-				return false, applied, fmt.Errorf("relay closed bootstrap group %q subscription %q: %s", group.Name, closed.SubscriptionID, closed.Reason)
+			b.setBlockingRelays(blocking)
+			return false, applied, fmt.Errorf("bootstrap group %q timed out waiting for EOSE from relays %v", group.Name, blocking)
+		case <-aggregateEOSECh:
+			if !subscription.HasRealEOSE() {
+				return false, applied, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
 			}
-		case event, ok := <-subscription.Events:
-			if !ok {
-				continue
-			}
-			if event == nil {
-				continue
-			}
-			if err := b.decodeAndApply(ctx, group, event); err != nil {
-				var decodeErr *bootstrapEventDecodeError
-				if errors.As(err, &decodeErr) {
-					b.logger.Warn("bootstrap event skipped",
-						zap.String("group", group.Name),
-						zap.Int("kind", eventKindInt(event)),
-						zap.String("event_id", eventIDHex(event)),
-						zap.Error(decodeErr))
-					continue
-				}
+			if err := drainEvents(); err != nil {
 				return false, applied, err
 			}
-			applied++
+			b.clearGroupProgress()
+			return true, applied, nil
+		case relayEOSE, ok := <-relayEOSECh:
+			if ok {
+				if err := drainEvents(); err != nil {
+					return false, applied, err
+				}
+				b.removeBlockingRelay(relayEOSE.RelayURL)
+				b.clearGroupProgress()
+				return true, applied, nil
+			}
+			relayEOSECh = nil
+		case closed, ok := <-closedCh:
+			if ok {
+				b.removeBlockingRelay(closed.RelayURL)
+				b.logger.Warn("relay closed during bootstrap group; waiting for remaining relay quorum",
+					zap.String("group", group.Name),
+					zap.String("relay", closed.RelayURL),
+					zap.String("subscription_id", closed.SubscriptionID),
+					zap.String("reason", closed.Reason))
+			} else {
+				closedCh = nil
+			}
+		case event, ok := <-eventsCh:
+			if !ok {
+				eventsCh = nil
+				continue
+			}
+			if err := applyEvent(event); err != nil {
+				return false, applied, err
+			}
 		}
 	}
+}
+
+func (b *Bootstrapper) setBlockingRelays(relays []string) {
+	b.setProgress(func(progress *BootstrapProgress) {
+		progress.BlockingRelays = append([]string(nil), relays...)
+	})
+}
+
+func (b *Bootstrapper) removeBlockingRelay(relayURL string) {
+	b.setProgress(func(progress *BootstrapProgress) {
+		filtered := progress.BlockingRelays[:0]
+		for _, current := range progress.BlockingRelays {
+			if current != relayURL {
+				filtered = append(filtered, current)
+			}
+		}
+		progress.BlockingRelays = filtered
+	})
+}
+
+func (b *Bootstrapper) clearGroupProgress() {
+	b.setProgress(func(progress *BootstrapProgress) {
+		progress.CurrentGroup = ""
+		progress.BlockingRelays = nil
+		progress.LastError = ""
+	})
+}
+
+func (b *Bootstrapper) recordGroupFailure(group string, err error) {
+	b.setProgress(func(progress *BootstrapProgress) {
+		progress.CurrentGroup = group
+		progress.LastError = err.Error()
+	})
 }
 
 func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, event *gonostr.Event) error {

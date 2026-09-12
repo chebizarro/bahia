@@ -730,6 +730,27 @@ type MergedSubscription struct {
 	active       *activeMergedSubscription
 }
 
+// PendingEOSE exposes the initial relay URLs that have not yet reached a
+// terminal state. It is intended for bounded bootstrap diagnostics; callers
+// must not use it as a synchronization primitive.
+func (m *MergedSubscription) PendingEOSE() []string {
+	if m == nil || m.active == nil {
+		return nil
+	}
+	return m.active.pendingEOSESnapshot()
+}
+
+// HasRealEOSE reports whether any relay explicitly sent protocol EOSE. A
+// terminal subscription without EOSE is not sufficient bootstrap evidence.
+func (m *MergedSubscription) HasRealEOSE() bool {
+	if m == nil || m.active == nil {
+		// Synthetic and legacy merged subscriptions close their aggregate EOSE
+		// channel only when their caller has supplied EOSE semantics.
+		return true
+	}
+	return m.active.hasRealEOSE()
+}
+
 // Close cancels all relay subscriptions represented by the merged subscription.
 func (m *MergedSubscription) Close() {
 	if m == nil || m.closeFn == nil {
@@ -840,6 +861,8 @@ type activeMergedSubscription struct {
 	mu               sync.Mutex
 	groups           map[string]*activeRelayGroup
 	initialRemaining int
+	initialPending   map[string]int
+	realEOSECount    int
 	eoseOnce         sync.Once
 	workers          sync.WaitGroup
 	closeOnce        sync.Once
@@ -859,6 +882,7 @@ func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel cont
 		dedup:            NewEventDeduplicator(10000),
 		groups:           make(map[string]*activeRelayGroup),
 		initialRemaining: len(subs),
+		initialPending:   make(map[string]int),
 	}
 
 	p.mu.Lock()
@@ -869,6 +893,7 @@ func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel cont
 
 	state.mu.Lock()
 	for _, relaySub := range subs {
+		state.initialPending[relaySub.relayURL]++
 		group := state.groups[relaySub.relayURL]
 		if group == nil {
 			group = &activeRelayGroup{cancel: relaySub.cancel}
@@ -910,23 +935,25 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 		eventsCh = sub.Events
 		closedCh = sub.ClosedReason
 	}
-	eoseSent := false
-	markEOSE := func() {
-		if eoseSent {
+	terminal := false
+	markTerminal := func(realEOSE bool) {
+		if terminal {
 			return
 		}
-		eoseSent = true
-		info := RelayEOSE{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub)}
-		select {
-		case s.relayEOSE <- info:
-		case <-s.ctx.Done():
-			return
+		terminal = true
+		if realEOSE {
+			s.markRealEOSE()
+			info := RelayEOSE{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub)}
+			select {
+			case s.relayEOSE <- info:
+			case <-s.ctx.Done():
+			}
 		}
 		if initial {
-			s.markInitialEOSE()
+			s.markInitialTerminal(relaySub.relayURL)
 		}
 	}
-	defer markEOSE()
+	defer markTerminal(false)
 
 	for eoseCh != nil || eventsCh != nil || closedCh != nil {
 		select {
@@ -934,7 +961,7 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 			return
 		case _, ok := <-eoseCh:
 			if ok || eoseCh != nil {
-				markEOSE()
+				markTerminal(true)
 			}
 			eoseCh = nil
 		case reason, ok := <-closedCh:
@@ -970,16 +997,46 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 	}
 }
 
-func (s *activeMergedSubscription) markInitialEOSE() {
+func (s *activeMergedSubscription) markInitialTerminal(relayURL string) {
 	s.mu.Lock()
 	if s.initialRemaining > 0 {
 		s.initialRemaining--
+	}
+	if remaining := s.initialPending[relayURL]; remaining <= 1 {
+		delete(s.initialPending, relayURL)
+	} else {
+		s.initialPending[relayURL] = remaining - 1
 	}
 	complete := s.initialRemaining == 0
 	s.mu.Unlock()
 	if complete {
 		s.eoseOnce.Do(func() { close(s.eose) })
 	}
+}
+
+func (s *activeMergedSubscription) pendingEOSESnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	urls := make([]string, 0, len(s.initialPending))
+	for url := range s.initialPending {
+		if url != "" {
+			urls = append(urls, url)
+		}
+	}
+	sort.Strings(urls)
+	return urls
+}
+
+func (s *activeMergedSubscription) markRealEOSE() {
+	s.mu.Lock()
+	s.realEOSECount++
+	s.mu.Unlock()
+}
+
+func (s *activeMergedSubscription) hasRealEOSE() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.realEOSECount > 0
 }
 
 func (s *activeMergedSubscription) workerDone(relayURL string, group *activeRelayGroup) {
@@ -1257,17 +1314,18 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 				eventsCh = s.Events
 				closedCh = s.ClosedReason
 			}
-			eoseSent := false
-			markEOSE := func() {
-				if eoseSent {
+			terminal := false
+			markTerminal := func(realEOSE bool) {
+				if terminal {
 					return
 				}
-				eoseSent = true
-				info := RelayEOSE{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s)}
-				select {
-				case relayEOSE <- info:
-				case <-ctx.Done():
-					return
+				terminal = true
+				if realEOSE {
+					info := RelayEOSE{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s)}
+					select {
+					case relayEOSE <- info:
+					case <-ctx.Done():
+					}
 				}
 				if eoseCount.Add(1) == int32(len(subs)) {
 					closeEOSE.Do(func() { close(eoseChan) })
@@ -1276,7 +1334,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 			// A subscription that terminates before protocol EOSE is still terminal
 			// for this catch-up attempt. Counting it prevents one dead relay from
 			// wedging the merged subscription while surviving relays continue.
-			defer markEOSE()
+			defer markTerminal(false)
 
 			for eoseCh != nil || eventsCh != nil || closedCh != nil {
 				if closedCh != nil {
@@ -1296,7 +1354,7 @@ func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buff
 					return
 				case _, ok := <-eoseCh:
 					if ok || eoseCh != nil {
-						markEOSE()
+						markTerminal(true)
 					}
 					eoseCh = nil
 				case reason, ok := <-closedCh:
