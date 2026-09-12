@@ -30,6 +30,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.compose.yaml:/etc/bahia/config.yaml:ro
+      - nostrarchive:/var/lib/bahia/nostr-archive
     environment:
       BAHIA_DB_HOST: postgres
       BAHIA_DB_PORT: "5432"
@@ -109,3 +110,4 @@ services:
 volumes:
   pgdata:
   relaydata:
+  nostrarchive:

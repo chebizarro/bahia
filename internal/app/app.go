@@ -1751,10 +1751,14 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	outboxRepo, _ := nostrEventRepo.(repository.NostrEventOutboxRepository)
-	bgManager.RegisterWithOptions(newNostrTransportMetricsRunner(
+	nostrTransportMetrics := newNostrTransportMetricsRunner(
 		telemetryProvider.GetMetrics(), outboxRepo, 15*time.Second, logger,
 		controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPool, fipsRelayPool,
-	), RunnerTier(Tier1), RunnerRequired(false))
+	)
+	if pool != nil {
+		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
+	}
+	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerTier(Tier1), RunnerRequired(false))
 
 	application := &App{
 		Config:                    cfg,

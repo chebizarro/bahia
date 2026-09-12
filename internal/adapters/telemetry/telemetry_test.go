@@ -356,6 +356,7 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	m.RecordCashuPayment("sent", 100)
 	m.SetNostrRelayTransportHealth("wss://relay.example", map[string]int64{"auth-required": 2}, 3, 4)
 	m.SetNostrOutboxDepth(5)
+	m.SetNostrEventStorage(100, 60, 30, 7, 2, 1234, map[string]int64{"protected": 1})
 
 	// Get metrics output
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -377,6 +378,10 @@ func TestProvider_MetricsHandler(t *testing.T) {
 		`bahia_nostr_relay_rereq_attempts_total{relay="wss://relay.example"} 3`,
 		`bahia_nostr_relay_reconnect_attempts_total{relay="wss://relay.example"} 4`,
 		"bahia_nostr_outbox_depth 5",
+		`bahia_nostr_event_store_bytes{component="total"} 100`,
+		`bahia_nostr_event_store_rows{state="dead"} 2`,
+		"bahia_nostr_event_store_oldest_hot_timestamp_seconds 1234",
+		`bahia_nostr_archive_batches{status="protected"} 1`,
 	}
 
 	for _, check := range checks {

@@ -1,0 +1,13 @@
+{
+  "feature_id": "BAHIA_NOSTR_EVENT_STORE_LIFECYCLE",
+  "tests": [
+    {"ac":"AC1","test":"TestNostrEventArchiveProductionShapedLifecycle","file":"internal/repository/pg_nostr_event_archive_integration_test.go","kind":"integration"},
+    {"ac":"AC2","test":"TestExporterWritesAtomicDigestVerifiedArtifact","file":"internal/nostrarchive/archive_test.go","kind":"behavioral"},
+    {"ac":"AC3","test":"TestNostrEventArchiveProductionShapedLifecycle","file":"internal/repository/pg_nostr_event_archive_integration_test.go","kind":"integration"},
+    {"ac":"AC4","test":"TestNostrEventArchiveProductionShapedLifecycle","file":"internal/repository/pg_nostr_event_archive_integration_test.go","kind":"integration"},
+    {"ac":"AC5","test":"TestRestoreRejectsDigestMismatchAndIsIdempotent","file":"internal/nostrarchive/archive_test.go","kind":"behavioral"},
+    {"ac":"AC6","test":"TestNostrEventArchiveMigrationIsMetadataOnly; TestOnlineIndexStatementsAreConcurrent","file":"internal/db/migrate_nostr_event_archive_test.go; internal/repository/pg_nostr_event_archive_test.go","kind":"schema"},
+    {"ac":"AC7","test":"TestNostrTransportMetricsRunnerRefresh; TestProvider_MetricsHandler_NostrProtocol","file":"internal/app/nostr_transport_metrics_test.go; internal/adapters/telemetry/telemetry_test.go","kind":"metrics"},
+    {"ac":"AC8","test":"production rollout evidence","file":"pstf/features/BAHIA_NOSTR_EVENT_STORE_LIFECYCLE/verification_report.md","kind":"live"}
+  ]
+}

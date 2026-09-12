@@ -1,0 +1,14 @@
+{
+  "feature_id": "BAHIA_NOSTR_EVENT_STORE_LIFECYCLE",
+  "title": "Bounded, recoverable lifecycle for Bahia's PostgreSQL Nostr event store",
+  "task": "bahia-nostr-events-growth-retention-partitioning-20260911",
+  "beads": "bahia-0r4vz",
+  "problem": "The append-only nostr_events audit/outbox relation reached 19 GB and approximately 12 million live rows in about six weeks, with no archival or pruning lifecycle.",
+  "intended_behavior": "Bahia exports bounded non-pending batches to immutable digest-addressed artifacts, requires a protected object receipt before pruning the exact claimed rows, restores idempotently, builds large indexes online, and exposes storage/backlog metrics.",
+  "non_goals": [
+    "Rewriting the existing 19 GB table during application startup",
+    "Deleting pending or failed outbound events",
+    "Treating local filesystem durability as protected archival",
+    "Manually mutating production rows"
+  ]
+}

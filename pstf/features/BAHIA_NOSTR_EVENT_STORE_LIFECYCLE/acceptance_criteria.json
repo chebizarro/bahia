@@ -1,0 +1,13 @@
+{
+  "feature_id": "BAHIA_NOSTR_EVENT_STORE_LIFECYCLE",
+  "criteria": [
+    {"id":"AC1","statement":"Only rows older than the selected cutoff and not pending publication may be claimed, in a bounded deterministic batch."},
+    {"id":"AC2","statement":"Export writes a mode-0600 gzip NDJSON artifact atomically and records its SHA-256 digest and byte size."},
+    {"id":"AC3","statement":"Pruning is impossible until a non-file protected object URI, immutable version, and matching digest are recorded."},
+    {"id":"AC4","statement":"Pruning deletes only exact protected batch members in bounded transactions and is retry-safe after crashes."},
+    {"id":"AC5","statement":"Restore validates the digest and idempotently restores every archived event without retaining archive ownership."},
+    {"id":"AC6","statement":"Large access indexes are built concurrently outside startup migrations."},
+    {"id":"AC7","statement":"Metrics expose hot bytes/rows/age, archive states, and outbox depth without scanning the full relation on every scrape."},
+    {"id":"AC8","statement":"Production rollout proves backup, canary export/protection/prune/restore, bounded startup, relay failure recovery, and rollback without manual SQL."}
+  ]
+}
