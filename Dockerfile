@@ -47,6 +47,11 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
     -o /bin/openclaw-soulfactory-control ./cmd/openclaw-soulfactory-control
 
+RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
+    -o /bin/bahia-event-archive ./cmd/bahia-event-archive
+
 # Runtime stage
 FROM alpine:3.21
 
@@ -65,6 +70,7 @@ COPY --from=builder /bin/bahia-relay /usr/local/bin/bahia-relay
 COPY --from=builder /bin/fips-bahia-bridge /usr/local/bin/fips-bahia-bridge
 COPY --from=builder /bin/openclaw-soulfactory-sidecar /usr/local/bin/openclaw-soulfactory-sidecar
 COPY --from=builder /bin/openclaw-soulfactory-control /usr/local/bin/openclaw-soulfactory-control
+COPY --from=builder /bin/bahia-event-archive /usr/local/bin/bahia-event-archive
 
 EXPOSE 8080 3334
 

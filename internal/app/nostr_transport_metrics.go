@@ -13,9 +13,14 @@ import (
 type nostrTransportMetricsRunner struct {
 	metrics  *telemetry.Metrics
 	outbox   repository.NostrEventOutboxRepository
+	storage  nostrEventStorageStatsSource
 	pools    []*nostrAdapter.RelayPool
 	interval time.Duration
 	logger   *zap.Logger
+}
+
+type nostrEventStorageStatsSource interface {
+	StorageStats(context.Context) (repository.NostrEventStorageStats, error)
 }
 
 func newNostrTransportMetricsRunner(metrics *telemetry.Metrics, outbox repository.NostrEventOutboxRepository, interval time.Duration, logger *zap.Logger, pools ...*nostrAdapter.RelayPool) *nostrTransportMetricsRunner {
@@ -26,6 +31,10 @@ func newNostrTransportMetricsRunner(metrics *telemetry.Metrics, outbox repositor
 		logger = zap.NewNop()
 	}
 	return &nostrTransportMetricsRunner{metrics: metrics, outbox: outbox, pools: pools, interval: interval, logger: logger}
+}
+
+func (r *nostrTransportMetricsRunner) setStorageSource(source nostrEventStorageStatsSource) {
+	r.storage = source
 }
 
 func (r *nostrTransportMetricsRunner) Name() string { return "nostr-transport-metrics" }
@@ -87,12 +96,28 @@ func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 		r.metrics.SetNostrRelayTransportHealth(relayURL, values.closedReasons, values.reREQAttempts, values.reconnects)
 	}
 	if r.outbox == nil {
+		if r.storage == nil {
+			return
+		}
+	} else {
+		depth, err := r.outbox.CountUnpublished(ctx)
+		if err != nil {
+			r.logger.Warn("failed to refresh Nostr outbox depth metric", zap.Error(err))
+		} else {
+			r.metrics.SetNostrOutboxDepth(depth)
+		}
+	}
+	if r.storage == nil {
 		return
 	}
-	depth, err := r.outbox.CountUnpublished(ctx)
+	stats, err := r.storage.StorageStats(ctx)
 	if err != nil {
-		r.logger.Warn("failed to refresh Nostr outbox depth metric", zap.Error(err))
+		r.logger.Warn("failed to refresh Nostr event storage metrics", zap.Error(err))
 		return
 	}
-	r.metrics.SetNostrOutboxDepth(depth)
+	oldestUnix := int64(0)
+	if stats.OldestHotEvent != nil {
+		oldestUnix = stats.OldestHotEvent.Unix()
+	}
+	r.metrics.SetNostrEventStorage(stats.TotalBytes, stats.HeapBytes, stats.IndexBytes, stats.EstimatedLiveRows, stats.EstimatedDeadRows, oldestUnix, stats.ArchiveBatches)
 }

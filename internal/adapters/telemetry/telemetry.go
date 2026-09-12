@@ -114,6 +114,13 @@ type Metrics struct {
 	NostrRelayReREQAttempts     map[string]int64            // key: relay_url
 	NostrRelayReconnectAttempts map[string]int64            // key: relay_url
 	NostrOutboxDepth            int64
+	NostrEventStoreTotalBytes   int64
+	NostrEventStoreHeapBytes    int64
+	NostrEventStoreIndexBytes   int64
+	NostrEventStoreLiveRows     int64
+	NostrEventStoreDeadRows     int64
+	NostrEventStoreOldestUnix   int64
+	NostrArchiveBatches         map[string]int64 // key: claimed, exported, protected, pruned
 
 	// Worker metrics
 	WorkersActive    int64
@@ -148,6 +155,7 @@ func NewMetrics() *Metrics {
 		NostrRelayClosedReasons:     make(map[string]map[string]int64),
 		NostrRelayReREQAttempts:     make(map[string]int64),
 		NostrRelayReconnectAttempts: make(map[string]int64),
+		NostrArchiveBatches:         make(map[string]int64),
 		LoomJobsTotal:               make(map[string]int64),
 		CashuPaymentsTotal:          make(map[string]int64),
 		CashuWalletBalance:          make(map[string]int64),
@@ -633,6 +641,21 @@ func (m *Metrics) SetNostrOutboxDepth(depth int64) {
 	m.NostrOutboxDepth = depth
 }
 
+// SetNostrEventStorage records catalog-backed event-store lifecycle gauges.
+func (m *Metrics) SetNostrEventStorage(totalBytes, heapBytes, indexBytes, liveRows, deadRows, oldestUnix int64, batches map[string]int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.NostrEventStoreTotalBytes = totalBytes
+	m.NostrEventStoreHeapBytes = heapBytes
+	m.NostrEventStoreIndexBytes = indexBytes
+	m.NostrEventStoreLiveRows = liveRows
+	m.NostrEventStoreDeadRows = deadRows
+	m.NostrEventStoreOldestUnix = oldestUnix
+	for _, status := range []string{"claimed", "exported", "protected", "pruned"} {
+		m.NostrArchiveBatches[status] = batches[status]
+	}
+}
+
 // --- Worker Metrics ---
 
 // SetWorkersActive sets the active worker gauge.
@@ -959,6 +982,24 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintln(w, "# HELP bahia_nostr_outbox_depth Unpublished events in the durable Nostr publish outbox")
 		fmt.Fprintln(w, "# TYPE bahia_nostr_outbox_depth gauge")
 		fmt.Fprintf(w, "bahia_nostr_outbox_depth %d\n", m.NostrOutboxDepth)
+
+		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_bytes gauge")
+		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"total\"} %d\n", m.NostrEventStoreTotalBytes)
+		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"heap\"} %d\n", m.NostrEventStoreHeapBytes)
+		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"indexes\"} %d\n", m.NostrEventStoreIndexBytes)
+		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_rows Estimated PostgreSQL Nostr event rows by state")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_rows gauge")
+		fmt.Fprintf(w, "bahia_nostr_event_store_rows{state=\"live\"} %d\n", m.NostrEventStoreLiveRows)
+		fmt.Fprintf(w, "bahia_nostr_event_store_rows{state=\"dead\"} %d\n", m.NostrEventStoreDeadRows)
+		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_oldest_hot_timestamp_seconds Oldest eligible hot Nostr event Unix timestamp; zero until the online archive index exists")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_oldest_hot_timestamp_seconds gauge")
+		fmt.Fprintf(w, "bahia_nostr_event_store_oldest_hot_timestamp_seconds %d\n", m.NostrEventStoreOldestUnix)
+		fmt.Fprintln(w, "# HELP bahia_nostr_archive_batches Archive batches by bounded lifecycle state")
+		fmt.Fprintln(w, "# TYPE bahia_nostr_archive_batches gauge")
+		for _, status := range []string{"claimed", "exported", "protected", "pruned"} {
+			fmt.Fprintf(w, "bahia_nostr_archive_batches{status=%q} %d\n", status, m.NostrArchiveBatches[status])
+		}
 
 		// Aggregate relay health counts
 		healthyCount := 0
