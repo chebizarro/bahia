@@ -558,7 +558,7 @@ func TestRemediatorRollbackFailsClosedWithoutPriorArtifactHistory(t *testing.T) 
 func TestRemediatorRollbackRestoresPriorDeployedArtifactAndState(t *testing.T) {
 	serviceID, envID := uuid.New(), uuid.New()
 	currentArtifactID, priorArtifactID := uuid.New(), uuid.New()
-	currentIntentID, priorIntentID := uuid.New(), uuid.New()
+	currentIntentID := uuid.New()
 	now := time.Now().UTC()
 
 	svcRepo := &mockServiceRepo{services: map[uuid.UUID]*domain.Service{
@@ -568,14 +568,14 @@ func TestRemediatorRollbackRestoresPriorDeployedArtifactAndState(t *testing.T) {
 		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"auto_remediation": map[string]any{"enabled": true, "on_health_failure": "rollback"}}},
 	}}
 	artifactRepo := &mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{
-		priorArtifactID: {ID: priorArtifactID, ServiceID: serviceID, ImageRepo: "registry.example/web", ImageDigest: "sha256:prior"},
+		currentArtifactID: {ID: currentArtifactID, ServiceID: serviceID, ImageRepo: "registry.example/web", ImageDigest: "sha256:current"},
+		priorArtifactID:   {ID: priorArtifactID, ServiceID: serviceID, ImageRepo: "registry.example/web", ImageDigest: "sha256:prior"},
 	}}
 	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
 		stateMapKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &currentArtifactID, DesiredIntentID: &currentIntentID},
 	}}
 	intentRepo := &mockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{
-		currentIntentID: {ID: currentIntentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: currentArtifactID, Status: domain.IntentStatusDeployed, CreatedAt: now},
-		priorIntentID:   {ID: priorIntentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: priorArtifactID, Status: domain.IntentStatusDeployed, CreatedAt: now.Add(-time.Hour)},
+		currentIntentID: {ID: currentIntentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: currentArtifactID, SourceKind: domain.SourceKindAutoPromote, PriorArtifactDigest: "sha256:prior", Status: domain.IntentStatusDeployed, CreatedAt: now},
 	}}
 	rt := &mockRuntime{observeDigest: "sha256:broken"}
 	pub := &mockPublisher{}
@@ -588,7 +588,7 @@ func TestRemediatorRollbackRestoresPriorDeployedArtifactAndState(t *testing.T) {
 		t.Fatalf("rollback deployments = %#v", rt.deployed)
 	}
 	state := stateRepo.states[stateMapKey(serviceID, envID)]
-	if state.DesiredArtifactID == nil || *state.DesiredArtifactID != priorArtifactID || state.DesiredIntentID == nil || *state.DesiredIntentID != priorIntentID {
+	if state.DesiredArtifactID == nil || *state.DesiredArtifactID != priorArtifactID {
 		t.Fatalf("rollback state = %+v", state)
 	}
 	if intentRepo.statuses[currentIntentID] != domain.IntentStatusRolledBack {

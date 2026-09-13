@@ -303,6 +303,7 @@ type DeploymentIntent struct {
 	ArtifactID         uuid.UUID              `json:"artifact_id"`
 	RequestedBy        string                 `json:"requested_by"`
 	SourceKind         SourceKind             `json:"source_kind"`
+	PriorArtifactDigest string                 `json:"prior_artifact_digest,omitempty"`
 	ApprovalStatus     ApprovalStatus         `json:"approval_status"`
 	Status             DeploymentIntentStatus `json:"status"`
 	SupersedesIntentID *uuid.UUID             `json:"supersedes_intent_id,omitempty"`
