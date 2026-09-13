@@ -19,32 +19,77 @@ import (
 
 type testOrgRepo struct {
 	created []*domain.Organization
+	org     *domain.Organization
 }
 
 func (r *testOrgRepo) Create(_ context.Context, org *domain.Organization) error {
 	r.created = append(r.created, org)
 	return nil
 }
-func (r *testOrgRepo) GetByID(context.Context, uuid.UUID) (*domain.Organization, error) {
-	return nil, repository.ErrNotFound
+func (r *testOrgRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Organization, error) {
+	if r.org == nil || r.org.ID != id {
+		return nil, repository.ErrNotFound
+	}
+	copy := *r.org
+	return &copy, nil
 }
-func (r *testOrgRepo) GetByName(context.Context, string) (*domain.Organization, error) {
-	return nil, repository.ErrNotFound
+func (r *testOrgRepo) GetByName(_ context.Context, name string) (*domain.Organization, error) {
+	if r.org == nil || r.org.Name != name {
+		return nil, repository.ErrNotFound
+	}
+	copy := *r.org
+	return &copy, nil
 }
 func (r *testOrgRepo) List(context.Context) ([]domain.Organization, error) { return nil, nil }
 func (r *testOrgRepo) Update(context.Context, *domain.Organization) error  { return nil }
 func (r *testOrgRepo) Delete(context.Context, uuid.UUID) error             { return nil }
 
 type testMemberRepo struct {
-	added []*domain.OrgMember
+	added  []*domain.OrgMember
+	member *domain.OrgMember
 }
 
 func (r *testMemberRepo) Add(_ context.Context, member *domain.OrgMember) error {
 	r.added = append(r.added, member)
 	return nil
 }
-func (r *testMemberRepo) GetMember(context.Context, uuid.UUID, string) (*domain.OrgMember, error) {
-	return nil, repository.ErrNotFound
+func (r *testMemberRepo) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+	if r.member == nil || r.member.OrgID != orgID || r.member.Pubkey != pubkey {
+		return nil, repository.ErrNotFound
+	}
+	copy := *r.member
+	return &copy, nil
+}
+
+func TestGetOrgRequiresMembershipInRequestedOrganization(t *testing.T) {
+	org := &domain.Organization{ID: uuid.New(), Name: "private-org"}
+	pubkey := strings.Repeat("a", 64)
+	for _, tc := range []struct {
+		name       string
+		membership *domain.OrgMember
+		wantStatus int
+	}{
+		{name: "unknown signed principal", wantStatus: http.StatusForbidden},
+		{name: "member", membership: &domain.OrgMember{OrgID: org.ID, Pubkey: pubkey, Role: domain.RoleViewer}, wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orgs := &testOrgRepo{org: org}
+			members := &testMemberRepo{member: tc.membership}
+			h := NewTenantHandler(orgs, members, &testInviteRepo{}, auth.NewRBAC(members), nil, zap.NewNop())
+			req := httptest.NewRequest(http.MethodGet, "/orgs/"+org.ID.String(), nil)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("id", org.ID.String())
+			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{Method: auth.MethodNIP98, PubKey: pubkey}))
+			w := httptest.NewRecorder()
+
+			h.GetOrg(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
 }
 func (r *testMemberRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.OrgMember, error) {
 	return nil, nil

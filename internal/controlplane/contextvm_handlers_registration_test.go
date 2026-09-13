@@ -45,7 +45,7 @@ func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.method, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
-			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 			RegisterWorkerContextVMHandlers(transport, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
@@ -91,7 +91,7 @@ func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
 		t.Run(tc.method, func(t *testing.T) {
 			tc.params["tenant_id"] = tenantID.String()
 			publisher := &mockEncryptedPublisher{}
-			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 			RegisterBackupAliasContextVMHandlers(transport, encryptedAdminRBAC(t, tenantID))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
@@ -133,7 +133,7 @@ func TestDNSContextVMHandlersDispatchWebMethods(t *testing.T) {
 		t.Run(tc.method, func(t *testing.T) {
 			operator := &fakeDNSContextVMOperator{zones: map[string]bool{"prod.example": true}}
 			publisher := &mockEncryptedPublisher{}
-			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 			RegisterDNSContextVMHandlers(transport, operator, true, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
@@ -163,7 +163,7 @@ func TestDNSContextVMHandlersReturnConfigurationErrorWhenDisabled(t *testing.T) 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
-			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 			RegisterDNSContextVMHandlers(transport, nil, false, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, method, map[string]any{"unexpected": true}))

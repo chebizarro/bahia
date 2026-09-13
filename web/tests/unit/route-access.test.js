@@ -24,19 +24,19 @@ describe('route access', () => {
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',
       protectedRoute: true,
-      requiredRoles: [],
+      requiredRoles: ['admin', 'owner'],
       requiresRestCompatibility: false
     });
     expect(getRouteAccess('/llm')).toMatchObject({
       pathname: '/llm',
       protectedRoute: true,
-      requiredRoles: [],
+      requiredRoles: ['admin', 'owner'],
       requiresRestCompatibility: false
     });
     expect(getRouteAccess('/settings')).toMatchObject({
       pathname: '/settings',
       protectedRoute: true,
-      requiredRoles: [],
+      requiredRoles: ['owner'],
       requiresRestCompatibility: false
     });
     expect(getRouteAccess('/orgs')).toMatchObject({
@@ -51,11 +51,6 @@ describe('route access', () => {
     const auditedPrefixes = [
       '/builds',
       '/packages',
-      '/backup',
-      '/continuity',
-      '/dns',
-      '/security',
-      '/ml',
       '/environment-states'
     ];
 
@@ -73,13 +68,38 @@ describe('route access', () => {
         roleAuthorized: false,
         compatibilityAuthorized: false
       });
-      expect(canAccessRoute({ pathname, authState: {}, isAuthenticated: true })).toMatchObject({
+      expect(canAccessRoute({ pathname, authState: { backendAuthenticated: true }, isAuthenticated: true })).toMatchObject({
         protectedRoute: true,
         authorized: true,
         roleAuthorized: true,
         compatibilityAuthorized: true
       });
     }
+  });
+
+  it('requires explicit elevated roles for global control-plane pages', () => {
+    for (const pathname of ['/souls', '/backup', '/continuity', '/dns', '/security', '/ml', '/llm']) {
+      expect(canAccessRoute({
+        pathname,
+        authState: { backendAuthenticated: true, roles: ['viewer'] },
+        isAuthenticated: true
+      })).toMatchObject({ authorized: false, roleAuthorized: false });
+      expect(canAccessRoute({
+        pathname,
+        authState: { backendAuthenticated: true, roles: ['admin'] },
+        isAuthenticated: true
+      })).toMatchObject({ authorized: true, roleAuthorized: true });
+    }
+    expect(canAccessRoute({
+      pathname: '/settings',
+      authState: { backendAuthenticated: true, roles: ['admin'] },
+      isAuthenticated: true
+    })).toMatchObject({ authorized: false, roleAuthorized: false });
+    expect(canAccessRoute({
+      pathname: '/settings',
+      authState: { backendAuthenticated: true, roles: ['owner'] },
+      isAuthenticated: true
+    })).toMatchObject({ authorized: true, roleAuthorized: true });
   });
 
   it('denies protected routes to unauthenticated users and allows public routes', () => {
@@ -112,7 +132,7 @@ describe('route access', () => {
     })).toMatchObject({
       protectedRoute: true,
       authorized: false,
-      roleAuthorized: true,
+      roleAuthorized: false,
       compatibilityAuthorized: false,
       requiresRestCompatibility: true
     });
@@ -126,18 +146,31 @@ describe('route access', () => {
     });
   });
 
+  it('denies a valid browser signer when Bahia rejects platform membership', () => {
+    expect(canAccessRoute({
+      pathname: '/services',
+      authState: { backendAuthenticated: false },
+      isAuthenticated: true
+    })).toMatchObject({
+      protectedRoute: true,
+      authorized: false,
+      roleAuthorized: false,
+      compatibilityAuthorized: false
+    });
+  });
+
   it('ignores mutable E2E authorization globals outside development builds', () => {
     vi.stubEnv('DEV', false);
     window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = { '/settings': ['admin'] };
     window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS = { '/settings': true };
 
     expect(getRouteAccess('/settings')).toMatchObject({
-      requiredRoles: [],
+      requiredRoles: ['owner'],
       requiresRestCompatibility: false
     });
     expect(canAccessRoute({
       pathname: '/settings',
-      authState: {},
+      authState: { backendAuthenticated: true, roles: ['owner'] },
       isAuthenticated: true
     })).toMatchObject({ authorized: true, roleAuthorized: true, compatibilityAuthorized: true });
   });
@@ -153,6 +186,7 @@ describe('route access', () => {
     expect(canAccessRoute({
       pathname: '/llm/admin',
       authState: {
+        backendAuthenticated: true,
         roles: ['viewer'],
         compatibility: { restNip98Ready: false },
         directNip98Ready: false
@@ -169,6 +203,7 @@ describe('route access', () => {
     expect(canAccessRoute({
       pathname: '/llm/admin',
       authState: {
+        backendAuthenticated: true,
         capabilities: { roles: ['operator'] },
         compatibility: { restNip98Ready: true },
         directNip98Ready: false

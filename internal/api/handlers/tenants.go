@@ -136,6 +136,11 @@ func (h *TenantHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 // GetOrg retrieves an organization by ID or name.
 // GET /orgs/{id}
 func (h *TenantHandler) GetOrg(w http.ResponseWriter, r *http.Request) {
+	p := auth.GetPrincipal(r.Context())
+	if p == nil || !p.IsAuthenticated() {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	idOrName := chi.URLParam(r, "id")
 
 	var org *domain.Organization
@@ -154,6 +159,14 @@ func (h *TenantHandler) GetOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch organization")
+		return
+	}
+	if err := h.rbac.CheckOrgAccess(r.Context(), p, org.ID, domain.RoleViewer); err != nil {
+		if auth.IsAccessDenied(err) {
+			writeError(w, http.StatusForbidden, "access denied")
+		} else {
+			writeError(w, http.StatusInternalServerError, "authorization check failed")
+		}
 		return
 	}
 

@@ -512,7 +512,7 @@ describe('Auth Store', () => {
         status: 200,
         statusText: 'OK',
         headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [] })
+        json: async () => ({ data: [{ id: 'org-1', role: 'admin' }] })
       });
 
       await authModule.login();
@@ -523,6 +523,7 @@ describe('Auth Store', () => {
       expect(authModule.authState.compatibility.restNip98Advertised).toBe(true);
       expect(authModule.authState.compatibility.restNip98Ready).toBe(true);
       expect(authModule.authState.compatibility.restNip98LastError).toBeNull();
+      expect(authModule.authState.roles).toEqual(['admin']);
       expect(localStorage.getItem('bahia_token')).toBeNull();
       expect(global.fetch).toHaveBeenCalledWith('/api/v1/orgs', expect.objectContaining({
         method: 'GET',

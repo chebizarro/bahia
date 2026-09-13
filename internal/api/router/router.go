@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -115,6 +116,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	tier1Gate := routeTierGate(deps.ModePolicy, 1)
 	tier2Gate := routeTierGate(deps.ModePolicy, 2)
 	tier3Gate := routeTierGate(deps.ModePolicy, 3)
+	platformAdminGate := platformRoleRBAC(deps, authMiddleware, domain.RoleAdmin)
+	platformDeployerGate := platformRoleRBAC(deps, authMiddleware, domain.RoleDeployer)
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		if deps.HealthProvider == nil {
@@ -200,13 +203,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	if deps.MCP != nil {
-		r.With(tier3Gate, middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
+		r.With(tier3Gate, middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), platformAdminGate, middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
 	}
 
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.ContentType)
 		r.Use(auth.MiddlewareFromConfig(authMiddleware))
+		r.Use(platformRBAC(deps, authMiddleware))
 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
@@ -261,7 +265,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Managed instance health (read)
 			if instanceHealthH != nil {
-				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
+				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true, domain.PermWriteDeployments)
 				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/instance-health", instanceHealthH.List)
 				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health", instanceHealthH.Get)
 				r.With(tier2Gate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/events", instanceHealthH.ListEvents)
@@ -277,35 +281,35 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Repository CI lookup (read)
-			r.With(tier3Gate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+			r.With(tier3Gate, platformAdminGate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
 
 			// ML control plane (read)
 			if mlH != nil {
-				r.With(tier3Gate).Get("/ml/models", mlH.ListModels)
-				r.With(tier3Gate).Get("/ml/models/{id}", mlH.GetModel)
-				r.With(tier3Gate).Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
-				r.With(tier3Gate).Get("/ml/model-versions/{id}", mlH.GetModelVersion)
-				r.With(tier3Gate).Get("/ml/endpoints", mlH.ListEndpoints)
-				r.With(tier3Gate).Get("/ml/endpoints/{id}", mlH.GetEndpoint)
-				r.With(tier3Gate).Get("/ml/state", mlH.ListState)
-				r.With(tier3Gate).Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
-				r.With(tier3Gate).Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/models", mlH.ListModels)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/models/{id}", mlH.GetModel)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/model-versions/{id}", mlH.GetModelVersion)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/endpoints", mlH.ListEndpoints)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/endpoints/{id}", mlH.GetEndpoint)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/state", mlH.ListState)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
+				r.With(tier3Gate, platformAdminGate).Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
 			}
 
 			// LLM control plane (read)
 			if llmH != nil {
-				r.With(tier3Gate).Get("/llm/routes", llmH.ListRoutes)
-				r.With(tier3Gate).Get("/llm/routes/{id}", llmH.GetRoute)
-				r.With(tier3Gate).Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
-				r.With(tier3Gate).Get("/llm/releases/{id}", llmH.GetRelease)
-				r.With(tier3Gate).Get("/llm/intents/{id}", llmH.GetIntent)
-				r.With(tier3Gate).Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
-				r.With(tier3Gate).Get("/llm/runs/{id}", llmH.GetRun)
-				r.With(tier3Gate).Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
-				r.With(tier3Gate).Get("/llm/state", llmH.ListAllState)
-				r.With(tier3Gate).Get("/llm/state/drifted", llmH.ListDriftedState)
-				r.With(tier3Gate).Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
-				r.With(tier3Gate).Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/routes", llmH.ListRoutes)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/routes/{id}", llmH.GetRoute)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/releases/{id}", llmH.GetRelease)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/intents/{id}", llmH.GetIntent)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/runs/{id}", llmH.GetRun)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/state", llmH.ListAllState)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/state/drifted", llmH.ListDriftedState)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
+				r.With(tier3Gate, platformAdminGate).Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
 			}
 
 			// Workers (read)
@@ -326,14 +330,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Config fabric desired/applied drift (read)
 			if deps.ConfigFabric != nil {
 				configFabricH := handlers.NewConfigFabricHandler(deps.ConfigFabric)
-				r.With(tier3Gate).Get("/config-fabric/drift", configFabricH.ListDrift)
+				r.With(tier3Gate, platformAdminGate).Get("/config-fabric/drift", configFabricH.ListDrift)
 			}
 
 			// Policies (read)
 			if deps.Policies != nil {
 				polH := handlers.NewPolicyHandler(deps.Policies)
-				r.With(tier2Gate).Get("/policies", polH.List)
-				r.With(tier2Gate).Get("/policies/{id}", polH.Get)
+				r.With(tier2Gate, platformAdminGate).Get("/policies", polH.List)
+				r.With(tier2Gate, platformAdminGate).Get("/policies/{id}", polH.Get)
 			}
 
 			// SBOM (read)
@@ -342,7 +346,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
 				r.With(tier3Gate, artifactRBAC).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
 				r.With(tier3Gate, artifactRBAC).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
-				r.With(tier3Gate).Get("/sbom/search", sbomH.SearchPackages)
+				r.With(tier3Gate, platformAdminGate).Get("/sbom/search", sbomH.SearchPackages)
 			}
 
 			// Signatures (read)
@@ -358,7 +362,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Secrets (read)
 			if deps.Secrets != nil && deps.Encryptor != nil {
 				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/secrets", secretH.List)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true, domain.PermReadSecrets)).Get("/services/{id}/secrets", secretH.List)
 			}
 
 			// Notifications (read)
@@ -382,16 +386,16 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// SoulFactory agent runtime policy (read, non-secret)
 			if deps.Config != nil && deps.Config.SoulFactory.Enabled {
 				sfH := handlers.NewSoulFactoryHandler(deps.Config)
-				r.With(tier3Gate).Get("/soulfactory/runtimes", sfH.GetRuntimes)
+				r.With(tier3Gate, platformAdminGate).Get("/soulfactory/runtimes", sfH.GetRuntimes)
 			}
 
 			// Blossom (read)
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)
-				r.With(tier3Gate).Post("/blossom/list", blossomH.ListBlobs)
-				r.With(tier3Gate).Get("/blossom/servers", blossomH.GetServers)
-				r.With(tier3Gate).Get("/blossom/health", blossomH.HealthCheck)
-				r.With(tier3Gate).Get("/blossom/stats", blossomH.GetStats)
+				r.With(tier3Gate, platformAdminGate).Post("/blossom/list", blossomH.ListBlobs)
+				r.With(tier3Gate, platformAdminGate).Get("/blossom/servers", blossomH.GetServers)
+				r.With(tier3Gate, platformAdminGate).Get("/blossom/health", blossomH.HealthCheck)
+				r.With(tier3Gate, platformAdminGate).Get("/blossom/stats", blossomH.GetStats)
 				// Blob download is unauthenticated: content-addressable blobs are
 				// publicly verifiable by SHA-256 hash and the Blossom server itself
 				// may be HTTP-only, requiring this HTTPS proxy to avoid mixed-content.
@@ -423,50 +427,50 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Builds (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermWriteServices)).Post("/builds", buildH.Register)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true, domain.PermWriteServices)).Patch("/builds/{id}/status", buildH.UpdateStatus)
 
 			// Config fabric desired-state publisher and rollback
 			if deps.ConfigFabric != nil {
 				configFabricH := handlers.NewConfigFabricHandler(deps.ConfigFabric)
-				r.With(tier3Gate).Post("/config-fabric/events", configFabricH.Publish)
-				r.With(tier3Gate).Post("/config-fabric/rollback", configFabricH.Rollback)
+				r.With(tier3Gate, platformAdminGate).Post("/config-fabric/events", configFabricH.Publish)
+				r.With(tier3Gate, platformAdminGate).Post("/config-fabric/rollback", configFabricH.Rollback)
 			}
 
 			// ML control plane (write compatibility actions publish Nostr commands)
 			if mlH != nil {
-				r.With(tier3Gate).Post("/ml/imports", mlH.ImportModel)
-				r.With(tier3Gate).Post("/ml/recipes/runs", mlH.RunRecipe)
-				r.With(tier3Gate).Post("/ml/deployments", mlH.Deploy)
-				r.With(tier3Gate).Post("/ml/rollback", mlH.Rollback)
+				r.With(tier3Gate, platformAdminGate).Post("/ml/imports", mlH.ImportModel)
+				r.With(tier3Gate, platformAdminGate).Post("/ml/recipes/runs", mlH.RunRecipe)
+				r.With(tier3Gate, platformAdminGate).Post("/ml/deployments", mlH.Deploy)
+				r.With(tier3Gate, platformAdminGate).Post("/ml/rollback", mlH.Rollback)
 			}
 
 			// LLM control plane (write): route updates remain REST-compatible;
 			// route/release creation moved to signer-first Nostr commands.
 			if llmH != nil {
-				r.With(tier3Gate).Put("/llm/routes/{id}", llmH.UpdateRoute)
+				r.With(tier3Gate, platformAdminGate).Put("/llm/routes/{id}", llmH.UpdateRoute)
 			}
 
 			// Deployment Runs (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/runs", deployH.CreateRun)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermWriteDeployments)).Post("/deployments/runs", deployH.CreateRun)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true, domain.PermWriteDeployments)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
 
 			// Payments (write)
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
-				r.With(tier2Gate).Post("/payments/estimate", payH.EstimateCost)
+				r.With(tier2Gate, platformDeployerGate).Post("/payments/estimate", payH.EstimateCost)
 			}
 
 			// SBOM (write compatibility import)
 			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
-				r.With(tier3Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true, domain.PermWriteServices)).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
 			}
 
 			// Signatures (write)
 			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
 				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true, domain.PermWriteServices)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
 			// Deprecated policy REST mutations are intentionally not mounted.
@@ -475,7 +479,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Secrets (write)
 			if deps.Secrets != nil && deps.Encryptor != nil {
 				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				secretRBAC := coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)
+				secretRBAC := coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true, domain.PermWriteSecrets)
 				r.With(secretRBAC).Post("/services/{id}/secrets", secretH.Create)
 				r.With(secretRBAC).Put("/services/{id}/secrets/{secretId}", secretH.Update)
 				r.With(secretRBAC).Delete("/services/{id}/secrets/{secretId}", secretH.Delete)
@@ -484,8 +488,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Notifications (write)
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/notifications/channels", notifH.CreateChannel)
+				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true, domain.PermManageSettings)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Post("/notifications/channels", notifH.CreateChannel)
 				r.With(tier2Gate, notificationRBAC).Put("/notifications/channels/{id}", notifH.UpdateChannel)
 				r.With(tier2Gate, notificationRBAC).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
 				r.With(tier2Gate, notificationRBAC).Post("/notifications/channels/{id}/test", notifH.TestChannel)
@@ -494,12 +498,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Tool provisioning (write)
 			if deps.ToolProvisioning != nil {
 				toolH := handlers.NewToolHandler(deps.ToolProvisioning)
-				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/tools/denylist", toolH.AddDenylist)
-				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Post("/tools/denylist", toolH.AddDenylist)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
 			}
 
 			if deps.MCP != nil {
-				r.With(tier3Gate).Post("/mcp", deps.MCP.HandleJSONRPC)
+				r.With(tier3Gate, platformAdminGate).Post("/mcp", deps.MCP.HandleJSONRPC)
 			}
 		})
 
@@ -655,7 +659,46 @@ func coreRBACEnabled(deps RouterDeps, authCfg auth.MiddlewareConfig) bool {
 	return authCfg.Enabled && deps.RBAC != nil
 }
 
-func coreRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig, resolver middleware.ResourceOrgResolver, requireOrg bool) func(http.Handler) http.Handler {
+func platformRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig) func(http.Handler) http.Handler {
+	return platformRoleRBAC(deps, authCfg, "")
+}
+
+func platformRoleRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig, minimumRole domain.Role) func(http.Handler) http.Handler {
+	if !authCfg.Enabled {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	var bootstrapOwners []string
+	if deps.Config != nil {
+		bootstrapOwners = deps.Config.Auth.BootstrapOwnerPubkeys
+	}
+	return middleware.PlatformAccess(middleware.PlatformAccessConfig{
+		RBAC:                  deps.RBAC,
+		BootstrapOwnerPubkeys: bootstrapOwners,
+		MinimumRole:           minimumRole,
+		AllowUnaffiliated:     isUnaffiliatedOnboardingRoute,
+	})
+}
+
+func isUnaffiliatedOnboardingRoute(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/invites" {
+		return true
+	}
+	if r.Method != http.MethodPost {
+		return false
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	return len(parts) == 5 &&
+		parts[0] == "api" &&
+		parts[1] == "v1" &&
+		parts[2] == "invites" &&
+		parts[3] != "" &&
+		parts[4] == "accept"
+}
+
+func coreRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig, resolver middleware.ResourceOrgResolver, requireOrg bool, permissions ...domain.Permission) func(http.Handler) http.Handler {
 	if authCfg.Enabled && deps.RBAC == nil {
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -666,12 +709,19 @@ func coreRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig, resolver middlewar
 	if !coreRBACEnabled(deps, authCfg) {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	return middleware.RBAC(middleware.RBACConfig{
+	loadAuthz := middleware.RBAC(middleware.RBACConfig{
 		RBAC:          deps.RBAC,
 		Required:      true,
 		RequireOrg:    requireOrg,
 		OrgIDResolver: resolver,
 	})
+	return func(next http.Handler) http.Handler {
+		guarded := middleware.RequireMember()(next)
+		for i := len(permissions) - 1; i >= 0; i-- {
+			guarded = middleware.RequirePermission(permissions[i])(guarded)
+		}
+		return loadAuthz(guarded)
+	}
 }
 
 func serviceOrgResolver(services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {

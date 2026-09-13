@@ -1221,7 +1221,10 @@ func contextVMResponseID(id json.RawMessage) json.RawMessage {
 }
 
 func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
-	return len(t.authorizedPubkeys) == 0 || slices.Contains(t.authorizedPubkeys, pubkey)
+	// An empty operator allowlist must never turn signature verification into
+	// authorization. ContextVM carries control-plane reads and mutations, so a
+	// missing authorization configuration fails closed.
+	return len(t.authorizedPubkeys) > 0 && slices.Contains(t.authorizedPubkeys, pubkey)
 }
 
 func (t *EncryptedRequestTransport) matchesRoutingTags(event *nostr.Event) bool {

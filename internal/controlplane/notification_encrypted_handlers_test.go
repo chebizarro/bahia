@@ -296,7 +296,7 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	repo := newFakeNotificationRepo()
 	orgID := uuid.New()
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil, newNotificationTestRBAC(t, map[uuid.UUID]domain.Role{orgID: domain.RoleOwner}))
 
 	event := makeNotificationContextVMWrappedRequest(t, "create-1", EncryptedOperationNotificationChannelsCreate, map[string]any{
@@ -342,7 +342,7 @@ func TestNotificationEncryptedHandlers_NotificationsNewAliasCreatesChannel(t *te
 	repo := newFakeNotificationRepo()
 	orgID := uuid.New()
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil, newNotificationTestRBAC(t, map[uuid.UUID]domain.Role{orgID: domain.RoleOwner}))
 
 	event := makeNotificationContextVMWrappedRequest(t, "create-alias-1", "notifications/new", map[string]any{
@@ -374,7 +374,7 @@ func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *te
 		Enabled:     true,
 	}
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil, newNotificationTestRBAC(t, map[uuid.UUID]domain.Role{orgID: domain.RoleOwner}))
 	event := makeNotificationContextVMWrappedRequest(t, "update-1", EncryptedOperationNotificationChannelsUpdate, map[string]any{
 		"id":     channelID.String(),
@@ -407,7 +407,7 @@ func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedContextVMResponse
 		Attempts:  1,
 	}}
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil, newNotificationTestRBAC(t, map[uuid.UUID]domain.Role{orgID: domain.RoleViewer}))
 	event := makeNotificationContextVMWrappedRequest(t, "logs-1", EncryptedOperationNotificationLogsList, map[string]any{"limit": 50})
 

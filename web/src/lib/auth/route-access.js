@@ -25,12 +25,27 @@ const PROTECTED_PREFIXES = [
   '/settings'
 ];
 
-// Route authorization is intentionally authentication-only in the browser. Bahia's
-// signed-event and HTTP contracts remain the authoritative authorization boundary;
-// listing each protected prefix makes that policy explicit instead of looking unfinished.
-const ROUTE_ROLE_REQUIREMENTS = Object.fromEntries(
-  PROTECTED_PREFIXES.map((prefix) => [prefix, []])
-);
+// The backend remains authoritative, but the browser must not render protected
+// routes for a signer that failed Bahia's membership probe.
+const ADMIN_ROLES = ['admin', 'owner'];
+const DEPLOYER_ROLES = ['deployer', 'admin', 'owner'];
+const ROUTE_ROLE_REQUIREMENTS = {
+  ...Object.fromEntries(PROTECTED_PREFIXES.map((prefix) => [prefix, []])),
+  '/souls': ADMIN_ROLES,
+  '/policies': ADMIN_ROLES,
+  '/config-fabric': ADMIN_ROLES,
+  '/workers': ADMIN_ROLES,
+  '/fleet-health': ADMIN_ROLES,
+  '/backup': ADMIN_ROLES,
+  '/continuity': ADMIN_ROLES,
+  '/dns': ADMIN_ROLES,
+  '/security': ADMIN_ROLES,
+  '/notifications': ADMIN_ROLES,
+  '/ml': ADMIN_ROLES,
+  '/llm': ADMIN_ROLES,
+  '/payments': DEPLOYER_ROLES,
+  '/settings': ['owner']
+};
 
 // Routes that still require REST compatibility in the signer-first migration.
 const ROUTE_COMPATIBILITY_REQUIREMENTS = {
@@ -102,7 +117,7 @@ export function canAccessRoute({ pathname, authState, isAuthenticated }) {
     return { ...access, authorized: true, roleAuthorized: true, compatibilityAuthorized: true };
   }
 
-  const authenticated = Boolean(isAuthenticated);
+  const authenticated = Boolean(isAuthenticated) && Boolean(authState?.backendAuthenticated);
   if (!authenticated) {
     return { ...access, authorized: false, roleAuthorized: false, compatibilityAuthorized: false };
   }

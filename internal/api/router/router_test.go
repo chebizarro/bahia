@@ -869,6 +869,11 @@ func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) 
 func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
+	secret, err := nostr.SecretKeyFromHex(routerNIP98Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Auth.BootstrapOwnerPubkeys = []string{secret.Public().Hex()}
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
@@ -1100,6 +1105,32 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-member read status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestSignedUnknownPrincipalCannotCrossPlatformBoundary(t *testing.T) {
+	const unknownKey = "0000000000000000000000000000000000000000000000000000000000000003"
+	lookup := &rbacMemberLookup{members: map[uuid.UUID]map[string]domain.Role{}}
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+		AuthMiddleware: auth.MiddlewareConfig{Enabled: true, NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config())},
+		RBAC:           auth.NewRBAC(lookup),
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	url := server.URL + "/api/v1/services"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, unknownKey, http.MethodGet, url))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
 	}
 }
 

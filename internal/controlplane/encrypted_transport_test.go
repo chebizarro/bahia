@@ -526,7 +526,7 @@ func assertNoAuthRequest(t *testing.T, ch <-chan string) {
 func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequiredClosed(t *testing.T) {
 	subscriber := newScriptedEncryptedRequestSubscriber()
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	processed := make(chan string, 1)
 	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, func(_ context.Context, request ContextVMRequest) (any, error) {
 		processed <- request.RPC.Method
@@ -570,6 +570,11 @@ func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequired
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Run shutdown")
 	}
+}
+
+func contextVMTestAuthorizedPubkeys(t *testing.T) []string {
+	t.Helper()
+	return []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}
 }
 
 func TestContextVMSubscriptionFiltersAllowBackdatedNIP59OuterEvents(t *testing.T) {
@@ -731,6 +736,31 @@ func TestContextVMTransport_RejectsUnauthorizedRequester(t *testing.T) {
 	}
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected ContextVM unauthorized result, got %d events", len(publisher.events))
+	}
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error == nil || response.Error.Code != -32001 {
+		t.Fatalf("unexpected unauthorized response: %+v", response)
+	}
+}
+
+func TestContextVMTransport_EmptyAllowlistDeniesAll(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	called := false
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"orgs-1","method":"orgs/list"}`)
+	transport := NewEncryptedRequestTransport(nil, responder, nil, zap.NewNop())
+	transport.RegisterContextVMHandler("orgs/list", func(context.Context, ContextVMRequest) (any, error) {
+		called = true
+		return map[string]any{"ok": true}, nil
+	})
+
+	transport.HandleEvent(context.Background(), event)
+
+	if called {
+		t.Fatal("empty ContextVM allowlist allowed a signed requester")
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one unauthorized response, got %d", len(publisher.events))
 	}
 	response := contextVMResponse(t, publisher.events[0])
 	if response.Error == nil || response.Error.Code != -32001 {

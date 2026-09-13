@@ -224,7 +224,7 @@ func TestEncryptedDomainHandlers_RegisterContextVMPaymentHistoryAlias(t *testing
 		Logger:   zap.NewNop(),
 	})
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	handlers.Register(transport)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, "payments/history", map[string]any{"worker": "worker-a", "limit": 50}))
@@ -250,7 +250,7 @@ func TestEncryptedDomainHandlers_RegisterContextVMOrgListAlias(t *testing.T) {
 	members := &encryptedMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleOwner}}}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{Orgs: orgs, Members: members, Invites: &encryptedInviteRepo{}, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	handlers.Register(transport)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, "orgs/list", map[string]any{}))

@@ -49,7 +49,7 @@ func assertFleetOperatorRegistrationAuthorization(t *testing.T, authorizedPubkey
 				method := method
 				t.Run(method.method, func(t *testing.T) {
 					publisher := &mockEncryptedPublisher{}
-					transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+					transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 					registration.register(t, transport, NewFleetOperatorGate(authorizedPubkeys))
 					handler, ok := transport.contextVMHandlers[method.method]
 					if !ok {

@@ -414,7 +414,7 @@ func (v fakeEncryptedSignatureVerifier) VerifySignatures(context.Context, *domai
 func encryptedRouteTransport(t *testing.T, handlers *EncryptedRouteHandlers) (*EncryptedRequestTransport, *mockEncryptedPublisher) {
 	t.Helper()
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	handlers.Register(transport)
 	return transport, publisher
 }
@@ -448,7 +448,7 @@ func routeResultPayload(t *testing.T, ev nostr.Event) map[string]any {
 
 func TestEncryptedRouteHandlers_ContextVMAliasPreservesCanonicalOperation(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	var observedOperation string
 	h := &EncryptedRouteHandlers{}
 	h.registerRouteHandler(transport, "canonical.operation", func(_ context.Context, request EncryptedRequest) (any, error) {

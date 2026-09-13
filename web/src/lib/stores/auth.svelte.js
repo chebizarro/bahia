@@ -39,6 +39,7 @@ const initialState = {
   pubkey: null,
   relays: {},
   capabilities: {},
+  roles: [],
   error: null,
   profile: null,
   lastAuthenticatedAt: null,
@@ -454,7 +455,11 @@ async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
       error: null
     });
     try {
-      await api.fetch('/orgs', { method: 'GET', retries: 0 });
+      const organizations = await api.fetch('/orgs', { method: 'GET', retries: 0 });
+      const roles = Array.isArray(organizations)
+        ? [...new Set(organizations.map((organization) => organization?.role).filter(Boolean))]
+        : [];
+      updateAuthState({ roles });
     } catch (error) {
       updateAuthState(compatibilityPatch({
         restNip98Advertised: true,
@@ -466,6 +471,7 @@ async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
     }
     updateAuthState({
       ...compatibilityPatch({ restNip98Advertised: true, restNip98Ready: true }),
+      roles: authState.roles,
       error: null
     });
     return { method: 'nip98', pubkey };

@@ -23,7 +23,9 @@
       authState.status === 'authenticating'
   );
 
-  const isAuthorized = $derived(isAuthenticated());
+  // A browser signer proves identity only. The backend membership probe is the
+  // authoritative platform-access decision for every protected route.
+  const isAuthorized = $derived(isAuthenticated() && Boolean(authState.backendAuthenticated));
 
   const compatibilityAuthorized = $derived(
     !requiresRestCompatibility || Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready)
