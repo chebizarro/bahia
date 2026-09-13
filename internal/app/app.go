@@ -728,6 +728,14 @@ func New(cfg *config.Config) (*App, error) {
 	bgManager.RegisterWithOptions(backupCoordinator, RunnerTier(Tier3))
 	bgManager.RegisterWithOptions(backupRestoreCoordinator, RunnerTier(Tier3))
 	bgManager.RegisterWithOptions(backupRetentionCoordinator, RunnerTier(Tier3))
+
+	backupScheduler := service.NewBackupSchedulerService(backupRegistry, logger,
+		service.WithBackupSchedulerIdentity(servicePubkey),
+	)
+	bgManager.RegisterWithOptions(NewBackupSchedulerRunner(backupScheduler, 0, logger), RunnerTier(Tier3))
+	healthProvider.RegisterCheck("backup_scheduler", int(Tier3), func() HealthCheck {
+		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered", Tier: int(Tier3)}
+	})
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
