@@ -2937,10 +2937,12 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 				return nil, nil, nil, fmt.Errorf("configuring DNS dnsmasq agent backend %q: %w", ref, err)
 			}
 			closers = append(closers, backend)
-			// Keep the same startup health contract as every operational DNS backend:
-			// enabled DNS must not start with an unreachable or unhealthy authority.
-			if err := backend.Health(ctx); err != nil {
-				return nil, nil, nil, fmt.Errorf("checking DNS dnsmasq agent backend %q: %w", ref, err)
+			// The agent is a remote, relay-backed dependency. Do not make Bahia's
+			// process startup depend on a synchronous ContextVM round trip: the DNS
+			// reconciler performs the same health check continuously and surfaces
+			// failures without taking down the control plane that must repair them.
+			if logger != nil {
+				logger.Info("DNS dnsmasq agent startup health deferred to reconciler", zap.String("backend", ref))
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		case string(domain.DNSBackendTypeFIPS):
@@ -3787,13 +3789,23 @@ func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap
 	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}, signetClient
 }
 
+const assistantSessionStartupTimeout = 5 * time.Second
+
 func loadAssistantSessions(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger) []domain.AssistantSession {
+	return loadAssistantSessionsWithTimeout(ctx, repo, logger, assistantSessionStartupTimeout)
+}
+
+func loadAssistantSessionsWithTimeout(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger, timeout time.Duration) []domain.AssistantSession {
 	if repo == nil {
 		return nil
 	}
-	records, err := repo.ListByKind(ctx, domain.KindAssistantSessionState, 500)
+	loadCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	records, err := repo.ListByKind(loadCtx, domain.KindAssistantSessionState, 500)
 	if err != nil {
-		logger.Warn("failed to load assistant session read models", zap.Error(err))
+		if logger != nil {
+			logger.Warn("failed to load assistant session read models", zap.Error(err))
+		}
 		return nil
 	}
 	seen := map[string]struct{}{}
@@ -3801,7 +3813,9 @@ func loadAssistantSessions(ctx context.Context, repo repository.NostrEventReposi
 	for _, record := range records {
 		var session domain.AssistantSession
 		if err := json.Unmarshal([]byte(record.Content), &session); err != nil {
-			logger.Warn("failed to parse assistant session read model", zap.String("event_id", record.ID), zap.Error(err))
+			if logger != nil {
+				logger.Warn("failed to parse assistant session read model", zap.String("event_id", record.ID), zap.Error(err))
+			}
 			continue
 		}
 		if session.SessionID == "" {
