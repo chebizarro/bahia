@@ -485,7 +485,9 @@ func (r *Reactor) Run(ctx context.Context) error {
 					authAttempted = make(map[string]struct{})
 					filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 					r.pool.RecordRelayReREQ()
-					merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
+					merged, err = keepSubscriptionOnResubscribeFailure(merged, func() (*nostrpool.MergedSubscription, error) {
+						return r.pool.SubscribeAllWithEOSE(ctx, filters)
+					})
 					if err != nil {
 						r.logger.Error("resubscribe after relay auth failed", "error", err)
 						continue
@@ -513,7 +515,9 @@ func (r *Reactor) Run(ctx context.Context) error {
 				authAttempted = make(map[string]struct{})
 				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 				r.pool.RecordRelayReREQ()
-				merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
+				merged, err = keepSubscriptionOnResubscribeFailure(merged, func() (*nostrpool.MergedSubscription, error) {
+					return r.pool.SubscribeAllWithEOSE(ctx, filters)
+				})
 				if err != nil {
 					r.logger.Error("reconnect failed", "error", err)
 					continue
@@ -525,6 +529,20 @@ func (r *Reactor) Run(ctx context.Context) error {
 			r.handleEvent(ctx, ev)
 		}
 	}
+}
+
+// keepSubscriptionOnResubscribeFailure prevents a transient relay failure from
+// replacing a usable subscription object with nil. The old subscription may be
+// closed, but its channels remain safe to select on while the reactor retries.
+func keepSubscriptionOnResubscribeFailure(current *nostrpool.MergedSubscription, subscribe func() (*nostrpool.MergedSubscription, error)) (*nostrpool.MergedSubscription, error) {
+	next, err := subscribe()
+	if err != nil {
+		return current, err
+	}
+	if next == nil {
+		return current, fmt.Errorf("relay resubscribe returned a nil subscription")
+	}
+	return next, nil
 }
 
 func (r *Reactor) handleRelayEOSE(eose nostrpool.RelayEOSE) {
