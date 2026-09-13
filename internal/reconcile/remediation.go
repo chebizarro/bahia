@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,9 +48,11 @@ func DefaultRemediationConfig() RemediationConfig {
 
 // remediationState tracks per-service remediation attempts.
 type remediationState struct {
-	attempts   int
-	lastAction time.Time
-	inProgress bool
+	attempts                int
+	lastAction              time.Time
+	inProgress              bool
+	rollbackSuppressedAt    *time.Time
+	rollbackSuppressedReason string
 }
 
 // Remediator handles automatic remediation of drift and health failures.
@@ -214,17 +215,14 @@ func (r *Remediator) canRemediate(key string, cfg RemediationConfig) bool {
 		return true
 	}
 
-	// Check if already in progress.
 	if state.inProgress {
 		return false
 	}
 
-	// Check max retries.
 	if cfg.MaxRetries > 0 && state.attempts >= cfg.MaxRetries {
 		return false
 	}
 
-	// Check cooldown.
 	if time.Since(state.lastAction) < cfg.Cooldown {
 		return false
 	}
@@ -287,7 +285,7 @@ func (r *Remediator) remediate(ctx context.Context, serviceID, envID uuid.UUID, 
 	case ActionRedeploy:
 		remediateErr = r.redeploy(ctx, serviceID, envID, svc)
 	case ActionRollback:
-		remediateErr = r.rollback(ctx, serviceID, envID, svc)
+		remediateErr = r.rollbackAttributable(ctx, serviceID, envID, svc, trigger)
 	default:
 		r.logger.Warn("unknown remediation action", zap.String("action", string(action)))
 		return nil
@@ -328,7 +326,6 @@ func (r *Remediator) remediate(ctx context.Context, serviceID, envID uuid.UUID, 
 
 func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service) error {
 	serviceName := svc.RuntimeTargetName()
-	// Get the desired artifact for this service/environment.
 	st, err := r.state.Get(ctx, serviceID, envID)
 	if err != nil || st == nil || st.DesiredArtifactID == nil {
 		return err
@@ -344,7 +341,6 @@ func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, s
 		image = artifact.ImageRepo + "@" + artifact.ImageDigest
 	}
 
-	// Deploy using the runtime.
 	opts := deployOptionsFromAdoptedConfig(svc)
 	if opts.Labels == nil {
 		opts.Labels = map[string]string{}
@@ -355,7 +351,11 @@ func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, s
 	return r.rt.Deploy(ctx, serviceName, image, opts)
 }
 
-func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service) error {
+// rollbackAttributable checks whether the current health regression is attributable to a
+// promoted-release intent and, if so, rolls back to that intent's recorded prior digest.
+// Unrelated outages, already-rolled-back intents, and suppressed remediations are
+// skipped and audited.
+func (r *Remediator) rollbackAttributable(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service, trigger string) error {
 	if r.intents == nil || r.state == nil || r.artifacts == nil || r.rt == nil {
 		return fmt.Errorf("rollback requires deployment intent history, state, artifact, and runtime dependencies")
 	}
@@ -367,37 +367,139 @@ func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, s
 	if err != nil {
 		return fmt.Errorf("loading current deployment state: %w", err)
 	}
-	if st == nil || st.DesiredArtifactID == nil {
-		return fmt.Errorf("current deployment state has no desired artifact")
+	if st == nil {
+		return fmt.Errorf("current deployment state not found")
 	}
 
-	intents, err := r.intents.ListByServiceEnv(ctx, serviceID, envID, 50, 0)
-	if err != nil {
-		return fmt.Errorf("listing deployment history: %w", err)
-	}
-	sort.SliceStable(intents, func(i, j int) bool { return intents[i].CreatedAt.After(intents[j].CreatedAt) })
-	var target *domain.DeploymentIntent
-	for i := range intents {
-		intent := &intents[i]
-		if intent.Status == domain.IntentStatusDeployed && intent.ArtifactID != *st.DesiredArtifactID {
-			target = intent
-			break
-		}
-	}
-	if target == nil {
-		return fmt.Errorf("no previous successfully deployed artifact to roll back to")
+	if st.DesiredIntentID == nil {
+		r.logger.Info("rollback skipped: no desired intent (no promoted release to attribute)",
+			zap.String("service", svc.Name),
+		)
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "no_desired_intent")
+		return nil
 	}
 
-	artifact, err := r.artifacts.GetByID(ctx, target.ArtifactID)
+	intent, err := r.intents.GetByID(ctx, *st.DesiredIntentID)
 	if err != nil {
-		return fmt.Errorf("loading rollback artifact: %w", err)
+		return fmt.Errorf("loading desired intent %s: %w", st.DesiredIntentID.String(), err)
 	}
-	if artifact == nil {
-		return fmt.Errorf("rollback artifact %s no longer exists", target.ArtifactID)
+	if intent == nil {
+		r.logger.Info("rollback skipped: desired intent not found",
+			zap.String("service", svc.Name),
+		)
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "desired_intent_not_found")
+		return nil
 	}
-	image := artifactImage(artifact)
+
+	key := stateKey(serviceID, envID)
+
+	// Check suppression state.
+	r.mu.Lock()
+	state := r.states[key]
+	var alreadySuppressed bool
+	if state != nil && state.rollbackSuppressedAt != nil {
+		alreadySuppressed = true
+	}
+	r.mu.Unlock()
+
+	if alreadySuppressed {
+		r.logger.Info("rollback suppressed: already rolled back or suppressed for this intent",
+			zap.String("service", svc.Name),
+			zap.String("intent_id", intent.ID.String()),
+			zap.String("reason", state.rollbackSuppressedReason),
+		)
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, state.rollbackSuppressedReason)
+		return nil
+	}
+
+	r.mu.Lock()
+	r.states[key] = &remediationState{
+		attempts:    state.attempts,
+		lastAction:  state.lastAction,
+		inProgress:  state.inProgress,
+	}
+	r.mu.Unlock()
+
+	// Check if the intent has already been rolled back.
+	if intent.Status == domain.IntentStatusRolledBack {
+		r.logger.Info("rollback suppressed: intent already rolled back",
+			zap.String("service", svc.Name),
+			zap.String("intent_id", intent.ID.String()),
+		)
+		r.recordRollbackSuppressed(key, "intent_already_rolled_back")
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "intent_already_rolled_back")
+		return nil
+	}
+
+	// CD-5: Only roll back when regression is attributable to a promoted-release intent.
+	if intent.SourceKind != domain.SourceKindAutoPromote {
+		r.logger.Info("rollback skipped: current intent is not a promoted release",
+			zap.String("service", svc.Name),
+			zap.String("source_kind", string(intent.SourceKind)),
+		)
+		r.recordRollbackSuppressed(key, "not_promoted_release")
+		r.publishRollbackNotAttributable(ctx, serviceID, envID, svc.Name, trigger, intent.ID.String(), string(intent.SourceKind))
+		return nil
+	}
+
+	if intent.PriorArtifactDigest == "" {
+		r.logger.Info("rollback skipped: promoted intent has no prior artifact digest",
+			zap.String("service", svc.Name),
+			zap.String("intent_id", intent.ID.String()),
+		)
+		r.recordRollbackSuppressed(key, "no_prior_digest")
+		r.publishRollbackNotAttributable(ctx, serviceID, envID, svc.Name, trigger, intent.ID.String(), "no_prior_digest")
+		return nil
+	}
+
+	if st.DesiredArtifactID == nil {
+		r.logger.Info("rollback skipped: no desired artifact to compare",
+			zap.String("service", svc.Name),
+		)
+		r.recordRollbackSuppressed(key, "no_desired_artifact")
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "no_desired_artifact")
+		return nil
+	}
+
+	// Find the rollback artifact by prior digest.
+	currentArtifact, err := r.artifacts.GetByID(ctx, *st.DesiredArtifactID)
+	if err != nil {
+		return fmt.Errorf("loading current artifact: %w", err)
+	}
+	if currentArtifact == nil {
+		r.logger.Info("rollback skipped: current artifact not found",
+			zap.String("service", svc.Name),
+		)
+		r.recordRollbackSuppressed(key, "current_artifact_not_found")
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "current_artifact_not_found")
+		return nil
+	}
+
+	priorArtifact, err := r.artifacts.GetByImageRepoDigest(ctx, currentArtifact.ImageRepo, intent.PriorArtifactDigest)
+	if err != nil {
+		return fmt.Errorf("loading prior artifact by digest %s: %w", intent.PriorArtifactDigest, err)
+	}
+	if priorArtifact == nil {
+		r.logger.Info("rollback skipped: prior artifact not found for digest",
+			zap.String("service", svc.Name),
+			zap.String("digest", intent.PriorArtifactDigest),
+		)
+		r.recordRollbackSuppressed(key, "prior_artifact_not_found")
+		r.publishRollbackSuppressed(ctx, serviceID, envID, svc.Name, trigger, "prior_artifact_not_found")
+		return nil
+	}
+
+	// Attributable regression confirmed — proceed with rollback.
+	r.publishRollbackAttributable(ctx, serviceID, envID, svc.Name, trigger, intent.ID.String(), priorArtifact.ImageRepo+"@"+intent.PriorArtifactDigest)
+
+	return r.executeRollback(ctx, serviceID, envID, svc, st, intent, priorArtifact, key)
+}
+
+// executeRollback performs the actual rollback deployment and state update.
+func (r *Remediator) executeRollback(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service, st *domain.EnvironmentServiceState, intent *domain.DeploymentIntent, priorArtifact *domain.Artifact, key string) error {
+	image := artifactImage(priorArtifact)
 	if image == "" {
-		return fmt.Errorf("rollback artifact %s has no deployable image", target.ArtifactID)
+		return fmt.Errorf("prior artifact %s has no deployable image", priorArtifact.ID)
 	}
 
 	serviceName := svc.RuntimeTargetName()
@@ -416,7 +518,7 @@ func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, s
 	if err != nil {
 		return fmt.Errorf("verifying rollback deployment: %w", err)
 	}
-	if obs == nil || !artifactMatchesObservation(artifact, obs) {
+	if obs == nil || !artifactMatchesObservation(priorArtifact, obs) {
 		return fmt.Errorf("verifying rollback deployment: runtime does not report artifact %s", image)
 	}
 	if obs.HealthStatus != domain.HealthStatusHealthy {
@@ -430,10 +532,10 @@ func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, s
 	}
 
 	currentIntentID := st.DesiredIntentID
-	st.DesiredArtifactID = &target.ArtifactID
-	st.DesiredIntentID = &target.ID
-	st.DesiredRuntimeState = target.DesiredState
-	st.DesiredHash = target.DesiredHash
+	st.DesiredArtifactID = &priorArtifact.ID
+	st.DesiredIntentID = &intent.ID
+	st.DesiredRuntimeState = intent.DesiredState
+	st.DesiredHash = intent.DesiredHash
 	st.DriftStatus = domain.DriftStatusInSync
 	now := time.Now().UTC()
 	st.LastReconciledAt = &now
@@ -446,12 +548,77 @@ func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, s
 		}
 	}
 
-	r.logger.Info("rollback restored previous artifact",
+	r.logger.Info("rollback restored prior artifact from promoted-release intent",
 		zap.String("service", serviceName),
-		zap.String("artifact_id", target.ArtifactID.String()),
+		zap.String("intent_id", intent.ID.String()),
+		zap.String("artifact_id", priorArtifact.ID.String()),
 		zap.String("image", image),
 	)
 	return nil
+}
+
+// recordRollbackSuppressed persists the suppression reason in remediation state.
+func (r *Remediator) recordRollbackSuppressed(key, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state, ok := r.states[key]
+	if !ok {
+		state = &remediationState{}
+		r.states[key] = state
+	}
+	now := time.Now()
+	state.rollbackSuppressedAt = &now
+	state.rollbackSuppressedReason = reason
+}
+
+// publishRollbackAttributable emits an audit event when a rollback is triggered.
+func (r *Remediator) publishRollbackAttributable(ctx context.Context, serviceID, envID uuid.UUID, service, trigger, intentID, targetImage string) {
+	r.publisher.Publish(ctx, events.Event{
+		Type:     events.EventRollbackAttributableRollback,
+		EntityID: serviceID.String(),
+		Data: map[string]string{
+			"service_id":     serviceID.String(),
+			"environment_id": envID.String(),
+			"service":        service,
+			"trigger":        trigger,
+			"intent_id":      intentID,
+			"target_image":   targetImage,
+			"source_kind":    string(domain.SourceKindAutoPromote),
+		},
+	})
+}
+
+// publishRollbackNotAttributable emits an audit event when rollback is skipped because
+// the regression is not attributable to a promoted release.
+func (r *Remediator) publishRollbackNotAttributable(ctx context.Context, serviceID, envID uuid.UUID, service, trigger, intentID, reason string) {
+	r.publisher.Publish(ctx, events.Event{
+		Type:     events.EventRollbackNotAttributable,
+		EntityID: serviceID.String(),
+		Data: map[string]string{
+			"service_id":     serviceID.String(),
+			"environment_id": envID.String(),
+			"service":        service,
+			"trigger":        trigger,
+			"intent_id":      intentID,
+			"reason":         reason,
+		},
+	})
+}
+
+// publishRollbackSuppressed emits an audit event when a rollback is suppressed.
+func (r *Remediator) publishRollbackSuppressed(ctx context.Context, serviceID, envID uuid.UUID, service, trigger, reason string) {
+	r.publisher.Publish(ctx, events.Event{
+		Type:     events.EventRollbackSuppressedDouble,
+		EntityID: serviceID.String(),
+		Data: map[string]string{
+			"service_id":     serviceID.String(),
+			"environment_id": envID.String(),
+			"service":        service,
+			"trigger":        trigger,
+			"reason":         reason,
+		},
+	})
 }
 
 func artifactImage(artifact *domain.Artifact) string {

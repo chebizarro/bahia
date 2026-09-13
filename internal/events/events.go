@@ -68,6 +68,9 @@ const (
 	EventWorkerCleanupFailed              EventType = "worker.cleanup.failed"
 	EventSecurityPolicyBreached           EventType = "security.policy_breached"
 	EventHygienePressureBreached         EventType = "hygiene.pressure_breached"
+	EventRollbackAttributableRollback    EventType = "rollback.attributable_rollback"
+	EventRollbackNotAttributable         EventType = "rollback.not_attributable"
+	EventRollbackSuppressedDouble        EventType = "rollback.suppressed_double"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal
