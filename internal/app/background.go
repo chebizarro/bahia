@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -406,4 +407,70 @@ func (m *BackgroundManager) Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.runners)
+}
+
+// BackupScheduleProcessor processes due backup schedules for periodic dispatch.
+type BackupScheduleProcessor interface {
+	ProcessDueSchedules(ctx context.Context) (*service.BackupScheduleProcessResult, error)
+}
+
+const defaultBackupSchedulerInterval = 5 * time.Minute
+
+type BackupSchedulerRunner struct {
+	scheduler BackupScheduleProcessor
+	interval  time.Duration
+	logger    *zap.Logger
+}
+
+func NewBackupSchedulerRunner(scheduler BackupScheduleProcessor, interval time.Duration, logger *zap.Logger) *BackupSchedulerRunner {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if interval <= 0 {
+		interval = defaultBackupSchedulerInterval
+	}
+	return &BackupSchedulerRunner{scheduler: scheduler, interval: interval, logger: logger}
+}
+
+func (r *BackupSchedulerRunner) Name() string { return "backup-scheduler" }
+
+func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
+	if r.scheduler == nil {
+		return nil
+	}
+	result, err := r.scheduler.ProcessDueSchedules(ctx)
+	if err != nil {
+		r.logger.Error("backup scheduler initial run failed", zap.Error(err))
+	} else {
+		r.logger.Info("backup scheduler initial run complete",
+			zap.Int("checked", result.Checked),
+			zap.Int("dispatched", result.Dispatched),
+			zap.Int("skipped", result.Skipped),
+			zap.Int("missed_runs", result.MissedRuns),
+			zap.Int("errors", len(result.Errors)),
+		)
+	}
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			result, err := r.scheduler.ProcessDueSchedules(ctx)
+			if err != nil {
+				r.logger.Error("backup scheduler periodic run failed", zap.Error(err))
+				continue
+			}
+			if result.Dispatched > 0 || len(result.Errors) > 0 {
+				r.logger.Info("backup scheduler periodic run complete",
+					zap.Int("checked", result.Checked),
+					zap.Int("dispatched", result.Dispatched),
+					zap.Int("skipped", result.Skipped),
+					zap.Int("missed_runs", result.MissedRuns),
+					zap.Int("errors", len(result.Errors)),
+				)
+			}
+		}
+	}
 }
