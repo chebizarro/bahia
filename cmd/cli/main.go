@@ -92,6 +92,7 @@ func newRootCommand() *cobra.Command {
 		orgsCommands(),
 		packageCommands(),
 		soulFactoryCommands(),
+		appCommands(),
 	)
 
 	return rootCmd

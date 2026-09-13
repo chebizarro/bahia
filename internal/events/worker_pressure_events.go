@@ -35,3 +35,11 @@ type WorkerCleanupEvent struct {
 	StartedAt        time.Time  `json:"started_at"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 }
+
+// HygienePressureBreachData carries the pressure-breach event payload emitted
+// when a hygiene reconcile pass detects a fresh threshold breach.
+type HygienePressureBreachData struct {
+	WorkerPubKey string   `json:"worker_pubkey"`
+	Alerts       []string `json:"alerts"`
+	GCRequested  bool     `json:"gc_requested"`
+}

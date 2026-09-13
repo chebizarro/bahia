@@ -10,6 +10,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 )
 
 type fakeMaintenancePublisher struct {
@@ -103,7 +104,7 @@ func TestHygieneReconcilerIssuesScanAndTier1Actions(t *testing.T) {
 			ObservedAt: time.Now(),
 		},
 	}}
-	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, metrics, time.Minute, zap.NewNop())
+	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, metrics, time.Minute, &events.NoopPublisher{}, zap.NewNop())
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestHygieneReconcilerPressureBreachTriggersGC(t *testing.T) {
 			ObservedAt: time.Now(),
 		},
 	}}
-	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, metrics, time.Minute, zap.NewNop())
+	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, metrics, time.Minute, &events.NoopPublisher{}, zap.NewNop())
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestHygieneReconcilerRespectsAutoFlagsAndDisabledPolicy(t *testing.T) {
 	rec, err := NewHygieneReconciler(testHygienePolicy(func(p *domain.HygienePolicy) {
 		p.AutoQuarantine = false
 		p.AutoGC = false
-	}), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, zap.NewNop())
+	}), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, &events.NoopPublisher{}, zap.NewNop())
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestHygieneReconcilerRespectsAutoFlagsAndDisabledPolicy(t *testing.T) {
 
 	// Disabled policy: nothing at all.
 	publisher2 := &fakeMaintenancePublisher{}
-	rec2, err := NewHygieneReconciler(testHygienePolicy(func(p *domain.HygienePolicy) { p.Enabled = false }), []string{"worker-a"}, publisher2, source, nil, time.Minute, zap.NewNop())
+	rec2, err := NewHygieneReconciler(testHygienePolicy(func(p *domain.HygienePolicy) { p.Enabled = false }), []string{"worker-a"}, publisher2, source, nil, time.Minute, &events.NoopPublisher{}, zap.NewNop())
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestHygieneReconcilerFreshnessUsesPassStartBoundary(t *testing.T) {
 					ObservedAt:   tc.observedAt,
 				},
 			}}
-			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, zap.NewNop())
+			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, &events.NoopPublisher{}, zap.NewNop())
 			if err != nil {
 				t.Fatalf("new reconciler: %v", err)
 			}
@@ -313,7 +314,7 @@ func TestHygieneReconcilerEvaluatesScanAndPressureFreshnessIndependently(t *test
 					PressureObservedAt: tc.pressureAt,
 				},
 			}}
-			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, zap.NewNop())
+			rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{worker}, publisher, source, nil, interval, &events.NoopPublisher{}, zap.NewNop())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -346,5 +347,155 @@ func TestHygienePolicyValidation(t *testing.T) {
 	}
 	if err := testHygienePolicy(nil).WithDefaults().Validate(); err != nil {
 		t.Fatalf("valid policy rejected: %v", err)
+	}
+}
+
+type recordingEventPublisher struct {
+	events []events.Event
+}
+
+func (p *recordingEventPublisher) Publish(_ context.Context, e events.Event) {
+	p.events = append(p.events, e)
+}
+func (p *recordingEventPublisher) Subscribe(_ events.EventType, _ events.Handler) {}
+func (p *recordingEventPublisher) SubscribeWithError(_ events.EventType, _ events.ErrorHandler) {}
+
+func TestHygieneReconcilerPressureBreachPublishesEvent(t *testing.T) {
+	publisher := &fakeMaintenancePublisher{}
+	eventPub := &recordingEventPublisher{}
+	source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+		"worker-a": {
+			WorkerPubKey: "worker-a",
+			Pressure:     []HygieneMountPressure{{Path: "/", UsedPct: 92, TotalInodes: 100, FreeInodes: 50}},
+			ObservedAt:   time.Now(),
+		},
+	}}
+	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, eventPub, zap.NewNop())
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+	_, err = rec.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(eventPub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(eventPub.events))
+	}
+	e := eventPub.events[0]
+	if e.Type != events.EventHygienePressureBreached {
+		t.Fatalf("expected EventHygienePressureBreached, got %v", e.Type)
+	}
+	data, ok := e.Data.(events.HygienePressureBreachData)
+	if !ok {
+		t.Fatalf("expected HygienePressureBreachData, got %T", e.Data)
+	}
+	if data.WorkerPubKey != "worker-a" {
+		t.Fatalf("expected worker-a, got %s", data.WorkerPubKey)
+	}
+	if len(data.Alerts) == 0 {
+		t.Fatal("expected at least one alert")
+	}
+	if !data.GCRequested {
+		t.Fatal("expected GC requested on pressure breach with auto_gc=true")
+	}
+}
+
+func TestHygieneReconcilerPressureBreachDedup(t *testing.T) {
+	publisher := &fakeMaintenancePublisher{}
+	eventPub := &recordingEventPublisher{}
+	source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+		"worker-a": {
+			WorkerPubKey: "worker-a",
+			Pressure:     []HygieneMountPressure{{Path: "/", UsedPct: 92, TotalInodes: 100, FreeInodes: 50}},
+			ObservedAt:   time.Now(),
+		},
+	}}
+	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, eventPub, zap.NewNop())
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+	// First pass: should publish.
+	if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if len(eventPub.events) != 1 {
+		t.Fatalf("expected 1 event after first pass, got %d", len(eventPub.events))
+	}
+	// Second pass with same alerts: dedup should suppress.
+	if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(eventPub.events) != 1 {
+		t.Fatalf("expected no new events after dedup, got %d", len(eventPub.events))
+	}
+}
+
+func TestHygieneReconcilerPressureBreachGCRequestedWhenAutoGCEnabled(t *testing.T) {
+	publisher := &fakeMaintenancePublisher{}
+	eventPub := &recordingEventPublisher{}
+	source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+		"worker-a": {
+			WorkerPubKey: "worker-a",
+			Pressure:     []HygieneMountPressure{{Path: "/", UsedPct: 92, TotalInodes: 100, FreeInodes: 50}},
+			ObservedAt:   time.Now(),
+		},
+	}}
+	rec, err := NewHygieneReconciler(testHygienePolicy(nil), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, eventPub, zap.NewNop())
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+	if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// Verify GC was called via the maintenance publisher.
+	gcIssued := false
+	for _, call := range publisher.calls {
+		if call == "maintenance/gc:worker-a" {
+			gcIssued = true
+		}
+	}
+	if !gcIssued {
+		t.Fatalf("expected GC call on pressure breach: %v", publisher.calls)
+	}
+	if len(eventPub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(eventPub.events))
+	}
+	data := eventPub.events[0].Data.(events.HygienePressureBreachData)
+	if !data.GCRequested {
+		t.Fatal("expected GCRequested=true in breach event")
+	}
+}
+
+func TestHygieneReconcilerPressureBreachGCNotRequestedWhenAutoGCDisabled(t *testing.T) {
+	publisher := &fakeMaintenancePublisher{}
+	eventPub := &recordingEventPublisher{}
+	source := &fakeObservationSource{observations: map[string]*HygieneObservation{
+		"worker-a": {
+			WorkerPubKey: "worker-a",
+			Pressure:     []HygieneMountPressure{{Path: "/", UsedPct: 99, TotalInodes: 100, FreeInodes: 50}},
+			ObservedAt:   time.Now(),
+		},
+	}}
+	rec, err := NewHygieneReconciler(testHygienePolicy(func(p *domain.HygienePolicy) {
+		p.AutoGC = false
+	}), []string{"worker-a"}, publisher, source, newFakeHygieneMetrics(), time.Minute, eventPub, zap.NewNop())
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+	if _, err := rec.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// GC must NOT have been called.
+	for _, call := range publisher.calls {
+		if call == "maintenance/gc:worker-a" {
+			t.Fatalf("GC must not be issued when auto_gc is disabled")
+		}
+	}
+	if len(eventPub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(eventPub.events))
+	}
+	data := eventPub.events[0].Data.(events.HygienePressureBreachData)
+	if data.GCRequested {
+		t.Fatal("expected GCRequested=false when auto_gc is disabled")
 	}
 }

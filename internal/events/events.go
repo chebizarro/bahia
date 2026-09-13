@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// EventType identifies the kind of event.
 type EventType string
 
 const (
@@ -68,6 +67,7 @@ const (
 	EventWorkerCleanupCompleted           EventType = "worker.cleanup.completed"
 	EventWorkerCleanupFailed              EventType = "worker.cleanup.failed"
 	EventSecurityPolicyBreached           EventType = "security.policy_breached"
+	EventHygienePressureBreached         EventType = "hygiene.pressure_breached"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal

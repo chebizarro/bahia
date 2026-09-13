@@ -13,6 +13,7 @@ import (
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
 )
 
@@ -141,7 +142,7 @@ func newHygieneIntegrationHarness(t *testing.T, mutateRelay func(*hygieneProject
 	source.now = func() time.Time { return now }
 	transport.RegisterContextVMResponseHandler(source.HandleContextVMResponse)
 	publisher := controlplane.NewMaintenanceCommandPublisher(relay, serviceSigner, source)
-	reconciler, err := NewHygieneReconciler(testHygienePolicy(nil), []string{workerPubKey.Hex()}, publisher, source, nil, time.Minute, zap.NewNop())
+	reconciler, err := NewHygieneReconciler(testHygienePolicy(nil), []string{workerPubKey.Hex()}, publisher, source, nil, time.Minute, &events.NoopPublisher{}, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
