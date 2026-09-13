@@ -712,7 +712,7 @@ func New(cfg *config.Config) (*App, error) {
 	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
 	backupRestoreResponder := controlplane.NewBackupRestoreResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
 	backupRetentionResponder := controlplane.NewBackupRetentionResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend(), backupAdapter.NewVeleroBackend())
+	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend(), backupAdapter.NewVeleroBackend(), backupAdapter.NewPgBackend(), backupAdapter.NewQdrantBackend())
 	if err != nil {
 		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
 	}

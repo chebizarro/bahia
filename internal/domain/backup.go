@@ -12,8 +12,10 @@ import (
 type BackupBackendKind string
 
 const (
-	BackupBackendKopia  BackupBackendKind = "kopia"
-	BackupBackendVelero BackupBackendKind = "velero"
+	BackupBackendKopia         BackupBackendKind = "kopia"
+	BackupBackendVelero        BackupBackendKind = "velero"
+	BackupBackendPgDump        BackupBackendKind = "pgdump"
+	BackupBackendQdrantSnapshot BackupBackendKind = "qdrant-snapshot"
 )
 
 // BackupVerificationMode identifies the verification procedure required after a snapshot.
@@ -22,6 +24,8 @@ type BackupVerificationMode string
 const (
 	BackupVerificationNone                BackupVerificationMode = "none"
 	BackupVerificationKopiaSnapshotVerify BackupVerificationMode = "kopia_snapshot_verify"
+	BackupVerificationPgDumpVerify        BackupVerificationMode = "pg_dump_verify"
+	BackupVerificationQdrantSnapshotVerify BackupVerificationMode = "qdrant_snapshot_verify"
 )
 
 // BackupVerificationStatus records verification outcome for backup restore eligibility.
@@ -325,7 +329,7 @@ type BackupRetentionRun struct {
 
 func (k BackupBackendKind) IsValid() bool {
 	switch k {
-	case BackupBackendKopia, BackupBackendVelero:
+	case BackupBackendKopia, BackupBackendVelero, BackupBackendPgDump, BackupBackendQdrantSnapshot:
 		return true
 	default:
 		return false
@@ -334,7 +338,7 @@ func (k BackupBackendKind) IsValid() bool {
 
 func (m BackupVerificationMode) IsValid() bool {
 	switch m {
-	case BackupVerificationNone, BackupVerificationKopiaSnapshotVerify:
+	case BackupVerificationNone, BackupVerificationKopiaSnapshotVerify, BackupVerificationPgDumpVerify, BackupVerificationQdrantSnapshotVerify:
 		return true
 	default:
 		return false
@@ -402,8 +406,8 @@ func ValidateBackupRecipe(recipe *BackupRecipe) error {
 	if !recipe.Backend.IsValid() {
 		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, recipe.Backend)
 	}
-	if recipe.Backend != BackupBackendKopia {
-		return fmt.Errorf("%w: backup recipes currently support backend %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, recipe.Backend)
+	if recipe.Backend != BackupBackendKopia && recipe.Backend != BackupBackendPgDump && recipe.Backend != BackupBackendQdrantSnapshot {
+		return fmt.Errorf("%w: backup recipes currently support backend %q, %q, and %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, BackupBackendPgDump, BackupBackendQdrantSnapshot, recipe.Backend)
 	}
 	if err := ValidateRequiredUUID(recipe.RepositoryID, "repository_id"); err != nil {
 		return err
@@ -604,8 +608,8 @@ func ValidateBackupRun(run *BackupRun) error {
 	if !run.Backend.IsValid() {
 		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, run.Backend)
 	}
-	if run.Backend != BackupBackendKopia {
-		return fmt.Errorf("%w: backup runs currently support backend %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, run.Backend)
+	if run.Backend != BackupBackendKopia && run.Backend != BackupBackendPgDump && run.Backend != BackupBackendQdrantSnapshot {
+		return fmt.Errorf("%w: backup runs currently support backend %q, %q, and %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, BackupBackendPgDump, BackupBackendQdrantSnapshot, run.Backend)
 	}
 	if err := ValidateRequiredString(run.TargetRef, "target_ref"); err != nil {
 		return err
