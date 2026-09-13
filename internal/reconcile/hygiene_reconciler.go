@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -94,6 +95,8 @@ type HygieneReconcileResult struct {
 // work (relocate/purge) as pending instead of acting — the tier gate
 // (doctrine, J6) is enforced both here and in the driver's method ACL.
 type HygieneReconciler struct {
+	eventPublisher  events.Publisher
+	publishedAlerts map[string]bool
 	policy    domain.HygienePolicy
 	workers   []string
 	publisher MaintenanceIntentPublisher
@@ -111,6 +114,7 @@ func NewHygieneReconciler(
 	source HygieneObservationSource,
 	metrics HygieneMetrics,
 	interval time.Duration,
+	eventPublisher events.Publisher,
 	logger *zap.Logger,
 ) (*HygieneReconciler, error) {
 	policy = policy.WithDefaults()
@@ -131,14 +135,16 @@ func NewHygieneReconciler(
 		targets = workers
 	}
 	return &HygieneReconciler{
-		policy:    policy,
-		workers:   targets,
-		publisher: publisher,
-		source:    source,
-		metrics:   metrics,
-		interval:  interval,
-		now:       time.Now,
-		logger:    logger,
+		policy:          policy,
+		workers:         targets,
+		publisher:       publisher,
+		source:          source,
+		metrics:         metrics,
+		interval:        interval,
+		eventPublisher:  eventPublisher,
+		publishedAlerts: make(map[string]bool),
+		now:             time.Now,
+		logger:          logger,
 	}, nil
 }
 
@@ -174,6 +180,45 @@ func (r *HygieneReconciler) ReconcileOnce(ctx context.Context) (HygieneReconcile
 		}
 		if err := r.reconcileWorker(ctx, worker, &result); err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+	// Publish pressure breach events for fresh alerts only (dedup).
+	// GC request is already issued by convergePressure via MaintenanceIntentPublisher.
+	if r.eventPublisher != nil && len(result.PressureAlerts) > 0 {
+		var freshAlerts []string
+		for _, alert := range result.PressureAlerts {
+			if !r.publishedAlerts[alert] {
+				freshAlerts = append(freshAlerts, alert)
+				r.publishedAlerts[alert] = true
+			}
+		}
+		if len(freshAlerts) > 0 {
+			gcRequested := false
+			for _, a := range result.Actions {
+				if a.Method == controlplane.ContextVMMethodMaintenanceGC && a.Deferred == "" {
+					gcRequested = true
+					break
+				}
+			}
+			// Collect workers with fresh alerts.
+			workerSet := make(map[string]struct{})
+			for _, alert := range freshAlerts {
+				parts := strings.SplitN(alert, " ", 2)
+				if len(parts) > 0 {
+					workerSet[parts[0]] = struct{}{}
+				}
+			}
+			for worker := range workerSet {
+				r.eventPublisher.Publish(ctx, events.Event{
+					Type:     events.EventHygienePressureBreached,
+					EntityID: worker,
+					Data: events.HygienePressureBreachData{
+						WorkerPubKey: worker,
+						Alerts:       freshAlerts,
+						GCRequested:  gcRequested,
+					},
+				})
+			}
 		}
 	}
 	return result, firstErr

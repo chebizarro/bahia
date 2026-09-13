@@ -1221,7 +1221,7 @@ func New(cfg *config.Config) (*App, error) {
 				return nil, fmt.Errorf("hygiene observation source: %w", err)
 			}
 			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, controlPlaneSigner, hygieneObservationSource)
-			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, hygieneObservationSource, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, logger)
+			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, hygieneObservationSource, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, publisher, logger)
 			if err != nil {
 				return nil, fmt.Errorf("hygiene reconciler: %w", err)
 			}
