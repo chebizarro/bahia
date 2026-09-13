@@ -676,6 +676,7 @@ func New(cfg *config.Config) (*App, error) {
 			policy:          policy,
 			statusProjector: bahiaStatusProjector,
 			catalogVersion:  catalog.Version,
+			logger:          logger,
 		},
 	}}, RunnerTier(Tier0), RunnerRequired(false))
 
@@ -2005,7 +2006,10 @@ type bootstrapperRunner struct {
 	policy          *ModePolicy
 	statusProjector *service.BahiaStatusProjector
 	catalogVersion  string
+	logger          *zap.Logger
 }
+
+const bootstrapStatusPublishTimeout = 5 * time.Second
 
 func (r *bootstrapperRunner) Name() string { return "relay-bootstrapper" }
 func (r *bootstrapperRunner) Run(ctx context.Context) error {
@@ -2015,12 +2019,17 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 
 	// Publish identity at startup.
 	if r.statusProjector != nil {
-		_ = r.statusProjector.PublishIdentity(ctx, service.BahiaIdentityPayload{
-			Version:        "1.0.0",
-			CatalogVersion: r.catalogVersion,
-			Mode:           string(r.policy.RequestedMode),
-			StartedAt:      time.Now().Unix(),
+		err := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
+			return r.statusProjector.PublishIdentity(publishCtx, service.BahiaIdentityPayload{
+				Version:        "1.0.0",
+				CatalogVersion: r.catalogVersion,
+				Mode:           string(r.policy.RequestedMode),
+				StartedAt:      time.Now().Unix(),
+			})
 		})
+		if err != nil && r.logger != nil {
+			r.logger.Warn("Bahia identity publication did not complete before bootstrap; continuing", zap.Error(err))
+		}
 	}
 
 	err := r.bootstrapper.Run(ctx)
@@ -2031,19 +2040,49 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 	// Publish checkpoint and readiness after bootstrap completes.
 	if r.statusProjector != nil {
 		progress := r.bootstrapper.Progress()
-		_ = r.statusProjector.PublishCheckpoint(ctx, service.ReplayCheckpointPayload{
-			CatalogVersion: r.catalogVersion,
-			Phase:          string(progress.Phase),
+		_ = runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
+			return r.statusProjector.PublishCheckpoint(publishCtx, service.ReplayCheckpointPayload{
+				CatalogVersion: r.catalogVersion,
+				Phase:          string(progress.Phase),
+			})
 		})
-		_ = r.statusProjector.PublishReadiness(ctx, service.ReadinessStatusPayload{
-			Phase:         string(progress.Phase),
-			ActiveTier:    int(r.policy.ActiveTier),
-			RequestedTier: int(r.policy.RequestedTier),
-			Ready:         r.bootstrapper.Ready(),
+		_ = runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
+			return r.statusProjector.PublishReadiness(publishCtx, service.ReadinessStatusPayload{
+				Phase:         string(progress.Phase),
+				ActiveTier:    int(r.policy.ActiveTier),
+				RequestedTier: int(r.policy.RequestedTier),
+				Ready:         r.bootstrapper.Ready(),
+			})
 		})
 	}
 
 	return err
+}
+
+func runBootstrapStatusPublication(ctx context.Context, timeout time.Duration, publish func(context.Context) error) error {
+	if publish == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = bootstrapStatusPublishTimeout
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	result := make(chan error, 1)
+	go func() {
+		result <- publish(publishCtx)
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-publishCtx.Done():
+		return publishCtx.Err()
+	}
 }
 
 type failoverTriggerRunner struct {
