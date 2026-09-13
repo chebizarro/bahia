@@ -53,6 +53,14 @@ func (m *mockUsageLedgerRepo) GetCorrections(ctx context.Context, originalID uui
 	return m.getCorrections, nil
 }
 
+
+func (m *mockUsageLedgerRepo) SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {
+	if m.sumByAgentErr != nil {
+		return 0, m.sumByAgentErr
+	}
+	return m.sumByAgentVal, nil
+}
+
 func (m *mockUsageLedgerRepo) SumByAgent(ctx context.Context, agentPubkey string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {
 	if m.sumByAgentErr != nil {
 		return 0, m.sumByAgentErr
