@@ -17,6 +17,7 @@ type UsageLedgerRepository interface {
 	List(ctx context.Context, filter domain.UsageLedgerFilter) ([]domain.UsageLedgerRecord, error)
 	GetCorrections(ctx context.Context, originalID uuid.UUID) ([]domain.UsageLedgerRecord, error)
 	SumByAgent(ctx context.Context, agentPubkey string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error)
+	SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error)
 }
 
 type PgUsageLedgerRepository struct {
@@ -121,6 +122,36 @@ func (r *PgUsageLedgerRepository) GetCorrections(ctx context.Context, originalID
 	}
 	defer rows.Close()
 	return scanUsageLedgerRecords(rows)
+}
+
+
+func (r *PgUsageLedgerRepository) SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {
+	query := "SELECT COALESCE(SUM(amount), 0) FROM usage_ledger_records WHERE task_id = $1"
+	args := []any{taskID}
+	argIdx := 2
+
+	if resourceType != "" {
+		query += fmt.Sprintf(" AND resource_type = $%d", argIdx)
+		args = append(args, resourceType)
+		argIdx++
+	}
+	if !since.IsZero() {
+		query += fmt.Sprintf(" AND recorded_at >= $%d", argIdx)
+		args = append(args, since)
+		argIdx++
+	}
+	if !until.IsZero() {
+		query += fmt.Sprintf(" AND recorded_at <= $%d", argIdx)
+		args = append(args, until)
+	}
+	query += " AND correction_of IS NULL"
+
+	var total int64
+	err := r.pool.QueryRow(ctx, query, args...).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("summing usage ledger by task: %w", err)
+	}
+	return total, nil
 }
 
 func (r *PgUsageLedgerRepository) SumByAgent(ctx context.Context, agentPubkey string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {

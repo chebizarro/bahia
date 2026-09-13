@@ -16,6 +16,7 @@ type UsageLedgerRepository interface {
 	List(ctx context.Context, filter domain.UsageLedgerFilter) ([]domain.UsageLedgerRecord, error)
 	GetCorrections(ctx context.Context, originalID uuid.UUID) ([]domain.UsageLedgerRecord, error)
 	SumByAgent(ctx context.Context, agentPubkey string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error)
+	SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error)
 }
 
 type UsageLedgerService struct {
