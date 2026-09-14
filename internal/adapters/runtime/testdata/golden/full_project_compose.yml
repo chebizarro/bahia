@@ -72,7 +72,7 @@ services:
       - backend
       - frontend
     restart: unless-stopped
-    pull_policy: if-not-present
+    pull_policy: missing
 networks:
   backend: {}
   frontend: {}

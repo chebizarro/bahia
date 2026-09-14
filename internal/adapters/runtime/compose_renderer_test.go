@@ -427,7 +427,7 @@ func TestComposeRenderer_RenderEnvironmentPlan_AllFieldsRendered(t *testing.T) {
 		{"depends_on", "depends_on"},
 		{"restart (api)", "always"},
 		{"restart (web)", "unless-stopped"},
-		{"pull_policy", "if-not-present"},
+		{"pull_policy", "missing"},
 		{"networks section", "networks:"},
 		{"volumes section", "volumes:"},
 		{"env_file", ".bahia/env/web-frontend.env"},

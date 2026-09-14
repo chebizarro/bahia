@@ -623,9 +623,12 @@ func buildServiceNode(svc composeService) *yaml.Node {
 		addScalarPair(node, "restart", svc.Restart)
 	}
 
-	// pull_policy
-	if svc.PullPolicy != "" {
-		addScalarPair(node, "pull_policy", svc.PullPolicy)
+	// pull_policy uses Docker Compose vocabulary. Desired state intentionally
+	// uses the runtime-neutral "if-not-present" spelling, which Compose calls
+	// "missing". Normalize before rendering so the staged project passes the
+	// same Compose validation used by the SDK executor.
+	if pullPolicy := normalizeComposePullPolicy(svc.PullPolicy); pullPolicy != "" {
+		addScalarPair(node, "pull_policy", pullPolicy)
 	}
 
 	return node

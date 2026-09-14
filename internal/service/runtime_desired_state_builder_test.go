@@ -1,6 +1,7 @@
 package service
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -485,6 +486,10 @@ func TestDesiredStateBuilderBuildsManagedComposeDefinition(t *testing.T) {
 	}
 	if spec.Healthcheck == nil || spec.Healthcheck.Method != "GET" || spec.Healthcheck.Path != "/healthz" || spec.Healthcheck.Port != 8080 {
 		t.Fatalf("managed healthcheck mismatch: %#v", spec.Healthcheck)
+	}
+	wantProbe := []string{"CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"}
+	if !reflect.DeepEqual(spec.Healthcheck.Test, wantProbe) {
+		t.Fatalf("managed healthcheck probe = %#v, want %#v", spec.Healthcheck.Test, wantProbe)
 	}
 	if len(spec.SecretRefs) != 1 || spec.SecretRefs[0].EnvVar != "API_TOKEN" || spec.SecretRefs[0].RedactedValue != "REDACTED(API_TOKEN)" {
 		t.Fatalf("secret references mismatch: %#v", spec.SecretRefs)
