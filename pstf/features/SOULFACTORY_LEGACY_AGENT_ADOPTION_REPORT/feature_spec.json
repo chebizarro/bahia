@@ -1,0 +1,17 @@
+{
+  "feature_id": "SOULFACTORY_LEGACY_AGENT_ADOPTION_REPORT",
+  "title": "Read-only legacy fleet agent Soul adoption report",
+  "intent": "Classify sanitized running-agent evidence deterministically and produce explicit operator-review plans without mutating identity, custody, grants, Bahia services, or Nostr events.",
+  "scope": [
+    "internal/soulfactory/legacy_adoption_report.go",
+    "cmd/soulfactory-legacy-adoption-report",
+    "docs/soulfactory-legacy-agent-adoption.md"
+  ],
+  "non_goals": [
+    "Publishing kind-31951 events",
+    "Generating, rotating, revoking, or replacing keys",
+    "Changing ACLs, grants, custody, or Bahia services",
+    "Inferring identity from display or container names",
+    "Executing an approved adoption"
+  ]
+}

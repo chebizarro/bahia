@@ -1,0 +1,41 @@
+{
+  "feature_id": "SOULFACTORY_LEGACY_AGENT_ADOPTION_REPORT",
+  "tests": [
+    {
+      "criteria": ["AC-1", "AC-3"],
+      "test": "TestClassifyLegacyAgentsNoMatch"
+    },
+    {
+      "criteria": ["AC-1", "AC-2", "AC-5"],
+      "test": "TestClassifyLegacyAgentsSingleStrongMatch"
+    },
+    {
+      "criteria": ["AC-4"],
+      "test": "TestClassifyLegacyAgentsMultiCandidateAmbiguity"
+    },
+    {
+      "criteria": ["AC-3"],
+      "test": "TestClassifyLegacyAgentsIgnoresNameOnlyFalsePositive"
+    },
+    {
+      "criteria": ["AC-3"],
+      "test": "TestClassifyLegacyAgentsContainerNameMismatchDoesNotOverrideIdentity"
+    },
+    {
+      "criteria": ["AC-1", "AC-5"],
+      "test": "TestRunFixtureProducesReadOnlyReport"
+    },
+    {
+      "criteria": ["AC-4"],
+      "test": "TestRunRefusesAmbiguousClassification"
+    },
+    {
+      "criteria": ["AC-4"],
+      "test": "TestClassifyLegacyAgentsConflictingIdentityEvidenceIsAmbiguous"
+    },
+    {
+      "criteria": ["AC-5"],
+      "test": "TestClassifyLegacyAgentsTrustedSoulPreventsReadoption"
+    }
+  ]
+}

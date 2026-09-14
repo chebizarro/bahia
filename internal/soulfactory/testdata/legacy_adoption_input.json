@@ -1,0 +1,46 @@
+{
+  "schema": "soulfactory-legacy-adoption-input/v1",
+  "running_agents": [
+    {
+      "inventory_id": "ai-02/openclaw/main",
+      "running": true,
+      "documented_agent_id": "donny",
+      "managed_pubkey": "f7d546c6237383b9c4192542ebb53dedfc261613c649d54103d520f7a6a281da",
+      "runtime_binding": "openclaw:ai-02:account=main",
+      "workspace": "https://git.sharegap.net/cascadia/donny",
+      "persona_ref": "docs/agents/donny.md",
+      "custody_ref": "signet-agent:donny",
+      "display_name": "Donny",
+      "container_name": "edge-gateway-production",
+      "source_ref": "fixtures/runtime-inventory.json#ai-02/openclaw/main"
+    },
+    {
+      "inventory_id": "max/container/stew",
+      "running": true,
+      "display_name": "Stew",
+      "container_name": "stew",
+      "source_ref": "fixtures/runtime-inventory.json#max/container/stew"
+    }
+  ],
+  "identity_records": [
+    {
+      "agent_id": "donny",
+      "managed_pubkey": "f7d546c6237383b9c4192542ebb53dedfc261613c649d54103d520f7a6a281da",
+      "runtime_binding": "openclaw:ai-02:account=main",
+      "workspace": "https://git.sharegap.net/cascadia/donny",
+      "persona_ref": "docs/agents/donny.md",
+      "custody_ref": "signet-agent:donny",
+      "display_name": "Donny",
+      "source_refs": [
+        "docs/agents/donny.md",
+        "sanitized-signet-inventory.json#donny"
+      ]
+    },
+    {
+      "agent_id": "stew",
+      "display_name": "Stew",
+      "source_refs": ["docs/agents/stew.md"]
+    }
+  ],
+  "trusted_souls": []
+}

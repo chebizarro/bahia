@@ -1,0 +1,25 @@
+{
+  "feature_id": "SOULFACTORY_LEGACY_AGENT_ADOPTION_REPORT",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "statement": "The classifier produces deterministic classifications from sanitized read-only input and exposes no mutation path."
+    },
+    {
+      "id": "AC-2",
+      "statement": "A single authoritative identity match produces an explicit operator-review plan that preserves existing identity evidence."
+    },
+    {
+      "id": "AC-3",
+      "statement": "No match, name-only similarity, and container-name mismatch behavior follow the documented fail-closed matching policy."
+    },
+    {
+      "id": "AC-4",
+      "statement": "Multiple authoritative candidates or conflicting trusted Souls halt adoption classification with a stable reason code and non-zero CLI status."
+    },
+    {
+      "id": "AC-5",
+      "statement": "The report does not authorize re-adoption, key lifecycle operations, ACL/grant changes, custody changes, Bahia service changes, or event publication."
+    }
+  ]
+}

@@ -496,6 +496,17 @@ bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111
 
 `--org` is part of the signed import request. Use the destination organization UUID; it is not client-only display metadata.
 
+### Legacy agent Soul adoption report
+
+`soulfactory-legacy-adoption-report` is a separate, read-only planning binary. It reads a sanitized JSON snapshot and writes a deterministic JSON report; it does not contact Docker, Bahia, Signet, or a relay.
+
+```bash
+go run ./cmd/soulfactory-legacy-adoption-report \
+  -input internal/soulfactory/testdata/legacy_adoption_input.json
+```
+
+The command exits `3` if any running agent has multiple authoritative matches or conflicting trusted Soul identity evidence. Container and display names are report context only and never matching evidence. See [Legacy agent Soul adoption plan](../soulfactory-legacy-agent-adoption.md) for the input contract and operator review boundary.
+
 ## Output formats
 
 ```bash
