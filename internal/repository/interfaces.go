@@ -509,3 +509,16 @@ type ServiceAccountRepository interface {
 	UpdateEnabled(ctx context.Context, accountID string, enabled bool) error
 	Delete(ctx context.Context, accountID string) error
 }
+
+// AgentRuntimeReleaseRepository stores immutable runtime provenance and
+// append-only many-to-many agent-service release bindings.
+type AgentRuntimeReleaseRepository interface {
+	CreateSource(ctx context.Context, source *domain.AgentRuntimeSource) error
+	CreateRelease(ctx context.Context, release *domain.AgentRuntimeRelease) error
+	GetSource(ctx context.Context, orgID, sourceID uuid.UUID) (*domain.AgentRuntimeSource, error)
+	GetRelease(ctx context.Context, orgID, releaseID uuid.UUID) (*domain.AgentRuntimeRelease, error)
+	GetReleaseByDigest(ctx context.Context, orgID uuid.UUID, imageRepo, imageDigest string) (*domain.AgentRuntimeRelease, error)
+	BindRelease(ctx context.Context, binding *domain.AgentServiceReleaseBinding) error
+	ListServiceReleases(ctx context.Context, orgID, serviceID uuid.UUID) ([]domain.AgentServiceRuntimeRelease, error)
+	GetRollbackRelease(ctx context.Context, orgID uuid.UUID, agentID string, serviceID uuid.UUID, channel string) (*domain.AgentServiceRuntimeRelease, error)
+}

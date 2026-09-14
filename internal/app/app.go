@@ -199,9 +199,11 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
 	var contextVMResponseStore repository.ContextVMResponseStore
 	var managedInstanceHealthRepo repository.ManagedInstanceHealthRepository
+	var agentRuntimeReleaseRepo repository.AgentRuntimeReleaseRepository
 
 	if dbAvailable {
 		serviceRepo = repository.NewPgServiceRepository(pool)
+		agentRuntimeReleaseRepo = repository.NewPgAgentRuntimeReleaseRepository(pool)
 		envRepo = repository.NewPgEnvironmentRepository(pool)
 		buildRepo = repository.NewPgBuildRepository(pool)
 		artifactRepo = repository.NewPgArtifactRepository(pool)
@@ -1707,45 +1709,51 @@ func New(cfg *config.Config) (*App, error) {
 		NIP05Resolver:  nip05Resolver,
 	}
 
+	var agentRuntimeReleaseSvc *service.AgentRuntimeReleaseService
+	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
+		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
+	}
+
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Config:           cfg,
-			AuthMiddleware:   authMiddleware,
-			Workers:          workerRepo,
-			Builds:           buildRepo,
-			Runs:             runRepo,
-			Services:         serviceRepo,
-			Environments:     envRepo,
-			DeploymentUnits:  deploymentUnitRepo,
-			EnvStates:        stateRepo,
-			InstanceHealth:   managedInstanceHealthRepo,
-			RouteCanaries:    routeCanaryReader,
-			RouteHealth:      routeCanaryHealthReader,
-			InstanceOperator: managedInstanceSupervisor,
-			RuntimeResolver:  runtimeResolver,
-			Payments:         paymentSvc,
-			SBOMs:            sbomRepo,
-			SBOMImporter:     sbomOrchestrator,
-			Artifacts:        artifactRepo,
-			Policies:         policySvc,
-			Adoption:         adoptionSvc,
-			RuntimeLifecycle: runtimeLifecycleSvc,
-			Secrets:          secretRepo,
-			Encryptor:        secretEncryptor,
-			Notifications:    notifRepo,
-			Dispatcher:       notifDispatcher,
-			MCP:              mcpHandler,
-			Blossom:          blossomClient,
-			OCI:              ociHandler,
-			Orgs:             orgRepo,
-			OrgMembers:       orgMemberRepo,
-			OrgInvites:       orgInviteRepo,
-			RBAC:             tenantRBAC,
-			MLRegistry:       mlRegistry,
-			MLCommands:       mlCommandPublisher,
-			LLMRegistry:      llmRegistry,
-			ConfigFabric:     configFabricSvc,
+			Config:               cfg,
+			AuthMiddleware:       authMiddleware,
+			Workers:              workerRepo,
+			Builds:               buildRepo,
+			Runs:                 runRepo,
+			Services:             serviceRepo,
+			Environments:         envRepo,
+			DeploymentUnits:      deploymentUnitRepo,
+			EnvStates:            stateRepo,
+			InstanceHealth:       managedInstanceHealthRepo,
+			RouteCanaries:        routeCanaryReader,
+			RouteHealth:          routeCanaryHealthReader,
+			InstanceOperator:     managedInstanceSupervisor,
+			RuntimeResolver:      runtimeResolver,
+			Payments:             paymentSvc,
+			SBOMs:                sbomRepo,
+			SBOMImporter:         sbomOrchestrator,
+			Artifacts:            artifactRepo,
+			Policies:             policySvc,
+			Adoption:             adoptionSvc,
+			RuntimeLifecycle:     runtimeLifecycleSvc,
+			AgentRuntimeReleases: agentRuntimeReleaseSvc,
+			Secrets:              secretRepo,
+			Encryptor:            secretEncryptor,
+			Notifications:        notifRepo,
+			Dispatcher:           notifDispatcher,
+			MCP:                  mcpHandler,
+			Blossom:              blossomClient,
+			OCI:                  ociHandler,
+			Orgs:                 orgRepo,
+			OrgMembers:           orgMemberRepo,
+			OrgInvites:           orgInviteRepo,
+			RBAC:                 tenantRBAC,
+			MLRegistry:           mlRegistry,
+			MLCommands:           mlCommandPublisher,
+			LLMRegistry:          llmRegistry,
+			ConfigFabric:         configFabricSvc,
 
 			HealthProvider: healthProvider,
 			ModePolicy:     policy,

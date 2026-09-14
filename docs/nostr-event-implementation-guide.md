@@ -540,3 +540,7 @@ Known limits:
 - The post-deploy route gate records its outcome durably but does not publish in-process transitions, so a gate-declared outage reaches Nostr when the supervisor next reports a transition for that route.
 - Route state is projected on transition. A route whose state predates the projector is projected on its next transition.
 - Fleet-health telemetry keeps its projection in memory and does not replay relay history on restart. Replaceable route state remains queryable on relays.
+
+### Agent runtime release read models
+
+Shared verified agent runtime releases use canonical CAS control-state kind `30315` with schema `bahia.agent-runtime-release.v1`. `domain=agent-runtime-release` projects immutable runtime source and provenance; `domain=agent-service-release` projects an append-only agent/service binding and its optional `previous_binding`. Runtime source `repository`, `branch`, and `release_channel` are distinct from Soul workspace/persona repository fields. These are observables, not deployment intent (`25910`) commands.

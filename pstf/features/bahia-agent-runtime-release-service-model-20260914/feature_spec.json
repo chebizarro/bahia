@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-agent-runtime-release-service-model-20260914",
+  "title": "Shared immutable agent runtime releases",
+  "status": "implemented",
+  "intent": "Separate workspace/persona repositories from verified runtime source and permit one verified runtime digest to bind to multiple agent services without fabricated build evidence.",
+  "in_scope": [
+    "tenant-owned runtime sources with explicit branch and release channel",
+    "immutable verified runtime releases with producer provenance",
+    "append-only many-to-many agent-service release bindings",
+    "tenant-scoped API reads and exact rollback lookup",
+    "CAS control-state release and binding projections"
+  ],
+  "out_of_scope": [
+    "agent key or identity lifecycle",
+    "ACL, grant, or custody mutation",
+    "deployment intent publication",
+    "real-host desired-state mutation",
+    "Harbor pushes"
+  ]
+}

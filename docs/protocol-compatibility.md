@@ -199,3 +199,7 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 ### Route canary projection
 
 Route canary transitions use existing canonical observable kinds only, under `domain=route`: `30315` route status (`bahia.status.route-canary.v1`) and `30900` route state (`bahia.state.route-canary.v1`), both addressed by `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>`, plus `4903` transition audit facts (`bahia.audit.route-canary.v1`, `state=<route coordinate>`). Every event carries the bounded fleet-health `status`, `outage=open|closed`, `classification`, `hostname`, `instance_status` when observed, and `service_healthy_route_broken`. An open outage is `unhealthy`, a warning or pre-threshold failure is `degraded`, and `route_ok` is `healthy`. Projection reacts to internal route canary subscriptions and publishes through the verified signed outbox path. It adds no mutation command or polling transport. See `docs/nostr-event-implementation-guide.md` for the full shape.
+
+### Agent runtime release schema compatibility
+
+`bahia.agent-runtime-release.v1` is additive on canonical kind `30315`. Older consumers may ignore the two new `domain` values. Consumers that understand them must preserve tenant tags, immutable provenance, explicit branch/channel, and previous-binding rollback linkage; they must not infer per-agent build evidence from a shared release.

@@ -322,3 +322,16 @@ Historical `31961`/`31962` read models are startup migration inputs only.
 ## Managed-instance health and recovery
 
 When supervision is enabled, Bahia observes configured targets and Bahia-managed deployment units without rebuilding images or changing configuration. Automatic recovery restarts only the exact unhealthy target, obeys desired-stopped intent, maintenance overrides, restart budgets, exponential backoff, and the shared runtime apply lock. Operators can set or clear a maintenance override through the supervisor service; these changes and recovery attempts are durable audit facts.
+
+## Shared agent runtime releases
+
+Bahia stores an agent's workspace/persona repository separately from the source repository used to build its runtime. A runtime source records an explicit repository, branch, and release channel. Its verified OCI release is immutable and carries the original release event, workflow run, manifest, SBOM, provenance, and attestor evidence.
+
+The same verified runtime release may be bound to multiple agent services. Each binding is append-only and points to its previous binding, so rollback lookup returns the exact prior verified digest rather than reconstructing or fabricating per-agent build evidence.
+
+Tenant-scoped read endpoints are:
+
+- `GET /api/v1/services/{serviceId}/runtime-releases`
+- `GET /api/v1/services/{serviceId}/runtime-releases/rollback?agent_id={agentId}&release_channel={channel}`
+
+Release registration and binding are backend interfaces for signer-first promotion workflows; these endpoints do not create deployment intent or mutate a runtime host.

@@ -35,48 +35,49 @@ var Version = version.Semantic()
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
-	Config           *config.Config
-	AuthMiddleware   auth.MiddlewareConfig
-	Workers          repository.WorkerRepository
-	Builds           repository.BuildRepository
-	Runs             repository.DeploymentRunRepository
-	Services         repository.ServiceRepository
-	Environments     repository.EnvironmentRepository
-	DeploymentUnits  repository.DeploymentUnitRepository
-	EnvStates        repository.EnvironmentServiceStateRepository
-	InstanceHealth   repository.ManagedInstanceHealthRepository
-	RouteCanaries    handlers.RouteCanaryReader
-	RouteHealth      handlers.RouteInstanceHealthReader
-	InstanceOperator handlers.InstanceMaintenanceOperator
-	RuntimeResolver  runtimeadapter.RuntimeResolver
-	Payments         *service.PaymentService
-	SBOMs            repository.SBOMRepository
-	SBOMImporter     *service.SBOMOrchestrator
-	Artifacts        repository.ArtifactRepository
-	Signatures       repository.ArtifactSignatureRepository
-	SignVerifier     SignatureVerifier
-	Policies         *service.PolicyService
-	Adoption         *service.AdoptionService
-	RuntimeLifecycle *service.RuntimeLifecycleService
-	Secrets          repository.SecretRepository
-	Encryptor        *secrets.Encryptor
-	Notifications    repository.NotificationRepository
-	Dispatcher       *notifications.Dispatcher
-	ToolProvisioning repository.ToolProvisioningRepository
-	MCP              *handlers.MCPHandler
-	HiveCI           repository.HiveCIRepository
-	Blossom          *blossom.Client
-	OCI              http.Handler
-	Orgs             repository.OrganizationRepository
-	OrgMembers       repository.OrgMemberRepository
-	OrgInvites       repository.OrgInviteRepository
-	RBAC             *auth.RBAC
-	LLMRegistry      *service.LLMRegistryService
-	MLRegistry       *service.MLRegistryService
-	MLCommands       handlers.MLCommandPublisher
-	ConfigFabric     *service.ConfigFabricService
-	HealthProvider   any
-	ModePolicy       any
+	Config               *config.Config
+	AuthMiddleware       auth.MiddlewareConfig
+	Workers              repository.WorkerRepository
+	Builds               repository.BuildRepository
+	Runs                 repository.DeploymentRunRepository
+	Services             repository.ServiceRepository
+	Environments         repository.EnvironmentRepository
+	DeploymentUnits      repository.DeploymentUnitRepository
+	EnvStates            repository.EnvironmentServiceStateRepository
+	InstanceHealth       repository.ManagedInstanceHealthRepository
+	RouteCanaries        handlers.RouteCanaryReader
+	RouteHealth          handlers.RouteInstanceHealthReader
+	InstanceOperator     handlers.InstanceMaintenanceOperator
+	RuntimeResolver      runtimeadapter.RuntimeResolver
+	Payments             *service.PaymentService
+	SBOMs                repository.SBOMRepository
+	SBOMImporter         *service.SBOMOrchestrator
+	Artifacts            repository.ArtifactRepository
+	Signatures           repository.ArtifactSignatureRepository
+	SignVerifier         SignatureVerifier
+	Policies             *service.PolicyService
+	Adoption             *service.AdoptionService
+	RuntimeLifecycle     *service.RuntimeLifecycleService
+	AgentRuntimeReleases handlers.AgentRuntimeReleaseReader
+	Secrets              repository.SecretRepository
+	Encryptor            *secrets.Encryptor
+	Notifications        repository.NotificationRepository
+	Dispatcher           *notifications.Dispatcher
+	ToolProvisioning     repository.ToolProvisioningRepository
+	MCP                  *handlers.MCPHandler
+	HiveCI               repository.HiveCIRepository
+	Blossom              *blossom.Client
+	OCI                  http.Handler
+	Orgs                 repository.OrganizationRepository
+	OrgMembers           repository.OrgMemberRepository
+	OrgInvites           repository.OrgInviteRepository
+	RBAC                 *auth.RBAC
+	LLMRegistry          *service.LLMRegistryService
+	MLRegistry           *service.MLRegistryService
+	MLCommands           handlers.MLCommandPublisher
+	ConfigFabric         *service.ConfigFabricService
+	HealthProvider       any
+	ModePolicy           any
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -161,6 +162,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	envH := handlers.NewEnvironmentHandler(registry, deps.DeploymentUnits)
 	buildH := handlers.NewBuildHandler(registry)
 	artifactH := handlers.NewArtifactHandler(registry)
+	var agentRuntimeReleaseH *handlers.AgentRuntimeReleaseHandler
+	if deps.AgentRuntimeReleases != nil {
+		agentRuntimeReleaseH = handlers.NewAgentRuntimeReleaseHandler(deps.AgentRuntimeReleases)
+	}
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
 	var routeCanaryH *handlers.RouteCanaryHandler
@@ -240,6 +245,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Artifacts (read)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Get("/artifacts/{id}", artifactH.Get)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/artifacts", artifactH.ListByService)
+
+			// Shared agent runtime releases (read-only; mutations remain signer-first).
+			if agentRuntimeReleaseH != nil {
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/runtime-releases", agentRuntimeReleaseH.ListServiceReleases)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/runtime-releases/rollback", agentRuntimeReleaseH.GetRollbackRelease)
+			}
 
 			// Deployment Intents (read)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/intents/{id}", deployH.GetIntent)

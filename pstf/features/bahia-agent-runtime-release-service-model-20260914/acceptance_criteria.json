@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-agent-runtime-release-service-model-20260914",
+  "criteria": [
+    {"id":"AC-1","statement":"One verified digest binds to multiple agents while retaining one provenance record.","tests":["TestAgentRuntimeReleaseSharedPromotionDedupeTenancyAndRollback"]},
+    {"id":"AC-2","statement":"Cross-tenant bindings and conflicting digest provenance fail closed.","tests":["TestAgentRuntimeReleaseSharedPromotionDedupeTenancyAndRollback","TestAgentRuntimeReleaseRejectsConflictingProvenance"]},
+    {"id":"AC-3","statement":"Rollback lookup returns the exact previous append-only binding.","tests":["TestAgentRuntimeReleaseSharedPromotionDedupeTenancyAndRollback"]},
+    {"id":"AC-4","statement":"Upgrade and dependency-safe downgrade migrations remain embedded.","tests":["TestAgentRuntimeReleaseMigrationUpgradeAndDowngradeAreEmbedded"]},
+    {"id":"AC-5","statement":"Nostr projections preserve provenance, branch, channel, tenant, agent, service, and rollback linkage without workspace conflation.","tests":["TestAgentRuntimeReleaseAndBindingProjectionsPreserveProvenanceAndSeparation"]},
+    {"id":"AC-6","statement":"HTTP reads pass tenant and rollback selectors to the model.","tests":["TestAgentRuntimeReleaseHandlersPreserveTenantAndRollbackSelectors"]}
+  ]
+}
