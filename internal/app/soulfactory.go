@@ -16,6 +16,7 @@ import (
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"go.uber.org/zap"
 )
@@ -49,9 +50,10 @@ var (
 	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
 		return llm.NewSoulGenerator(cfg, logger)
 	}
+	newSoulFactoryBahiaIntegration = soulfactory.NewBahiaIntegration
 )
 
-func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*soulFactoryRuntime, error) {
+func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, logger *zap.Logger) (*soulFactoryRuntime, error) {
 	if cfg == nil || !cfg.SoulFactory.Enabled {
 		return nil, nil
 	}
@@ -130,6 +132,12 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		}
 	}
 
+	bahiaIntegration, err := newSoulFactoryBahiaIntegration(registry, soulfactory.BahiaIntegrationConfig{}, slogLogger)
+	if err != nil {
+		_ = closeSigner()
+		return nil, fmt.Errorf("configuring SoulFactory Bahia integration: %w", err)
+	}
+
 	reactor := soulfactory.NewReactor(soulfactory.Config{
 		Relays:             sf.Relays,
 		AdditionalRelays:   sf.AdditionalRelays,
@@ -174,7 +182,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, logger *za
 		RuntimeAdapters:         runtimeAdapters,
 		SignetEnrollment:        signetEnrollment,
 		SignetProvisionerPubkey: sf.OpenClawSignetProvisionerPubkey,
-	}, nil)
+	}, bahiaIntegration)
 	if err := reactor.InstallProvisioningEngine(provisioner); err != nil {
 		_ = closeSigner()
 		return nil, err

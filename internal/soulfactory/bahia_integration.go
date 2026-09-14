@@ -34,6 +34,12 @@ type BahiaIntegrationConfig struct {
 
 // NewBahiaIntegration creates a new bahia integration.
 func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrationConfig, logger *slog.Logger) (*BahiaIntegration, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("bahia registry is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	bi := &BahiaIntegration{
 		registry:               registry,
 		deployRuntimeArtifacts: config.DeployRuntimeArtifacts,
@@ -57,12 +63,26 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	logger := bi.logger.With("agent_id", soul.AgentID, "soul_id", soul.ID)
 	logger.Info("registering soul as bahia service")
 
-	// Build service entry
+	serviceName := fmt.Sprintf("agent-%s", soul.AgentID)
+	artifactRepo := fmt.Sprintf("agents/%s", soul.AgentID)
+	existing, err := bi.registry.GetServiceByName(ctx, serviceName)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("look up existing service: %w", err)
+	}
+	if existing != nil {
+		if existing.ArtifactRepo != artifactRepo {
+			return uuid.Nil, fmt.Errorf("existing service %q has artifact repository %q, want %q", serviceName, existing.ArtifactRepo, artifactRepo)
+		}
+		logger.Info("reusing existing soul service", "service_id", existing.ID, "service_name", existing.Name)
+		return existing.ID, nil
+	}
+
+	// Build service entry.
 	svc := &domain.Service{
 		ID:            uuid.New(),
-		Name:          fmt.Sprintf("agent-%s", soul.AgentID),
+		Name:          serviceName,
 		RepoURL:       soul.WorkspaceRepoURL,
-		ArtifactRepo:  fmt.Sprintf("agents/%s", soul.AgentID),
+		ArtifactRepo:  artifactRepo,
 		DefaultBranch: "main",
 		RuntimeType:   bi.getRuntimeType(soul.Tier),
 		CreatedAt:     time.Now().UTC(),
@@ -70,6 +90,13 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	}
 
 	if err := bi.registry.CreateService(ctx, svc); err != nil {
+		// Service names are unique. A concurrent replay may have won between
+		// lookup and create, so reconcile the durable record before failing.
+		existing, lookupErr := bi.registry.GetServiceByName(ctx, serviceName)
+		if lookupErr == nil && existing != nil && existing.ArtifactRepo == artifactRepo {
+			logger.Info("reusing concurrently registered soul service", "service_id", existing.ID, "service_name", existing.Name)
+			return existing.ID, nil
+		}
 		return uuid.Nil, fmt.Errorf("create service: %w", err)
 	}
 

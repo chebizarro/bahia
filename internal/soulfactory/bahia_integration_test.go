@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,10 @@ import (
 	"go.uber.org/zap"
 )
 
-type sfMockServiceRepo struct{ services map[uuid.UUID]*domain.Service }
+type sfMockServiceRepo struct {
+	services  map[uuid.UUID]*domain.Service
+	createErr error
+}
 
 type sfMockEnvRepo struct {
 	envs map[uuid.UUID]*domain.Environment
@@ -66,6 +70,56 @@ func newSoulFactoryRegistryHarness() (*service.RegistryService, *sfMockBuildRepo
 		service.WithManualArtifactRegistration(true),
 	)
 	return registry, builds, artifacts, intents, observations, states
+}
+
+func TestBahiaIntegrationRegistrationIsRestartReplayIdempotent(t *testing.T) {
+	registry, builds, artifacts, intents, _, _ := newSoulFactoryRegistryHarness()
+	first, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration(first) error = %v", err)
+	}
+	firstID, err := first.RegisterSoulAsService(t.Context(), &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard})
+	if err != nil {
+		t.Fatalf("RegisterSoulAsService(first) error = %v", err)
+	}
+
+	restarted, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration(restarted) error = %v", err)
+	}
+	replayedID, err := restarted.RegisterSoulAsService(t.Context(), &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard})
+	if err != nil {
+		t.Fatalf("RegisterSoulAsService(replay) error = %v", err)
+	}
+	if replayedID != firstID {
+		t.Fatalf("replayed service ID = %s, want stable %s", replayedID, firstID)
+	}
+	services, err := registry.ListServices(t.Context())
+	if err != nil {
+		t.Fatalf("ListServices() error = %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("service count after restart replay = %d, want 1", len(services))
+	}
+	if len(builds.builds) != 0 || len(artifacts.artifacts) != 0 || len(intents.intents) != 0 {
+		t.Fatalf("restart replay fabricated deployables: builds=%d artifacts=%d intents=%d", len(builds.builds), len(artifacts.artifacts), len(intents.intents))
+	}
+}
+
+func TestBahiaIntegrationRegistrationFailureIsReturned(t *testing.T) {
+	services := &sfMockServiceRepo{services: map[uuid.UUID]*domain.Service{}, createErr: errors.New("service store unavailable")}
+	registry := service.NewRegistryService(services, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+	serviceID, err := integration.RegisterSoulAsService(t.Context(), &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard})
+	if err == nil || !strings.Contains(err.Error(), "service store unavailable") {
+		t.Fatalf("RegisterSoulAsService() error = %v, want storage failure", err)
+	}
+	if serviceID != uuid.Nil {
+		t.Fatalf("RegisterSoulAsService() ID = %s, want nil UUID on failure", serviceID)
+	}
 }
 
 func TestBahiaIntegrationDoesNotCreateSyntheticInitialDeployment(t *testing.T) {
@@ -294,6 +348,9 @@ func runtimeArtifactResult() *RuntimeControlResultEnvelope {
 }
 
 func (m *sfMockServiceRepo) Create(_ context.Context, svc *domain.Service) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
 	if svc.ID == uuid.Nil {
 		svc.ID = uuid.New()
 	}

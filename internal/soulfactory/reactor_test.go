@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
 )
 
 type capturedPublish struct {
@@ -697,6 +701,41 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 	}
 }
 
+func TestFullProvisionerFailsClosedWhenBahiaRegistrationFails(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		scriptedGenerator{}, signer, slog.Default(),
+	)
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	capture := attachPublishCapture(reactor)
+	services := &sfMockServiceRepo{services: map[uuid.UUID]*domain.Service{}, createErr: errors.New("service store unavailable")}
+	registry := service.NewRegistryService(services, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+	reactor.provisioner = NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
+
+	request := buildProvisioningEvent(t, signer.pubkey, "bahia-registration-failure", nostr.Tags{{"agent-id", "scout"}, {"name", "Scout"}}, `{"brief":"Handle incidents"}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if got := len(capture.eventsByKind(domain.KindAgentSoul)); got != 0 {
+		t.Fatalf("kind:31951 publish count = %d, want 0 after Bahia registration failure", got)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || findTag(results[0], "status") != "error" {
+		t.Fatalf("terminal results = %+v, want one error", results)
+	}
+	registered, err := registry.ListServices(t.Context())
+	if err != nil {
+		t.Fatalf("ListServices() error = %v", err)
+	}
+	if len(registered) != 0 {
+		t.Fatalf("registered services = %+v, want none", registered)
+	}
+}
+
 func TestConfiguredIntegrationFailureStopsProvisioning(t *testing.T) {
 	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, newFakeSigner(t), slog.Default())
 	attachPublishCapture(reactor)
@@ -1192,7 +1231,12 @@ func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *te
 	)
 	reactor.relayBus = newEOSEOnlyRelayBus(t)
 	capture := attachPublishCapture(reactor)
-	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
+	registry, builds, artifacts, intents, _, _ := newSoulFactoryRegistryHarness()
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
 	reactor.provisioner = full
 
 	request := buildProvisioningEvent(
@@ -1227,6 +1271,20 @@ func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *te
 	if !strings.Contains(soulEvent.Content, "Map operator state") {
 		t.Fatalf("soul content = %q, want generated brief", soulEvent.Content)
 	}
+	serviceID := findTag(soulEvent, "service")
+	if serviceID == "" {
+		t.Fatal("kind:31951 soul event missing stable Bahia service ID")
+	}
+	services, err := registry.ListServices(t.Context())
+	if err != nil {
+		t.Fatalf("ListServices() error = %v", err)
+	}
+	if len(services) != 1 || services[0].ID.String() != serviceID {
+		t.Fatalf("Bahia services = %+v, want exactly service %s", services, serviceID)
+	}
+	if len(builds.builds) != 0 || len(artifacts.artifacts) != 0 || len(intents.intents) != 0 {
+		t.Fatalf("provisioning fabricated deployables: builds=%d artifacts=%d intents=%d", len(builds.builds), len(artifacts.artifacts), len(intents.intents))
+	}
 
 	results := capture.eventsByKind(domain.KindProvisioningResult)
 	if len(results) != 1 {
@@ -1248,5 +1306,8 @@ func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *te
 	}
 	if got := payload["npub"]; got == "" {
 		t.Fatal("result payload missing npub")
+	}
+	if got := payload["bahia_service_id"]; got != serviceID {
+		t.Fatalf("result bahia_service_id = %#v, want %s", got, serviceID)
 	}
 }

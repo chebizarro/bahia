@@ -17,6 +17,7 @@ import (
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -118,6 +119,52 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	require.Equal(t, signer.pubkey, adapterConfig.ControllerPubkey)
 	require.Equal(t, []string{"wss://relay.example", "wss://private.example", "wss://browser.example"}, adapterConfig.Relays)
 	require.Same(t, signer, adapterConfig.Signer)
+}
+
+func TestNewWiresBahiaIntegrationIntoSoulFactory(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signer := newFakeSoulFactorySigner(t)
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, nil)
+	defer restoreSoulFactoryHooks()
+	previousFactory := newSoulFactoryBahiaIntegration
+	var wiredRegistry *service.RegistryService
+	newSoulFactoryBahiaIntegration = func(registry *service.RegistryService, cfg soulfactory.BahiaIntegrationConfig, logger *slog.Logger) (*soulfactory.BahiaIntegration, error) {
+		wiredRegistry = registry
+		return previousFactory(registry, cfg, logger)
+	}
+	defer func() { newSoulFactoryBahiaIntegration = previousFactory }()
+
+	cfg := startupTestConfig(ModeFull)
+	configureValidSoulFactory(t, cfg, signer.pubkey)
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer app.Logger.Sync()
+	defer closeRelayPools(app.relayPools...)
+	defer app.soulFactoryCloser()
+	require.Same(t, app.Registry, wiredRegistry)
+}
+
+func TestNewFailsClosedWhenBahiaIntegrationCannotStart(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	signer := newFakeSoulFactorySigner(t)
+	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, nil)
+	defer restoreSoulFactoryHooks()
+	previousFactory := newSoulFactoryBahiaIntegration
+	newSoulFactoryBahiaIntegration = func(*service.RegistryService, soulfactory.BahiaIntegrationConfig, *slog.Logger) (*soulfactory.BahiaIntegration, error) {
+		return nil, errors.New("Bahia registry unavailable")
+	}
+	defer func() { newSoulFactoryBahiaIntegration = previousFactory }()
+
+	cfg := startupTestConfig(ModeFull)
+	configureValidSoulFactory(t, cfg, signer.pubkey)
+	app, err := New(cfg)
+	require.Nil(t, app)
+	require.ErrorContains(t, err, "configuring SoulFactory Bahia integration")
+	require.True(t, signer.closed, "failed startup must close the SoulFactory signer")
 }
 
 func TestNewRegistersMultipleSoulFactoryRuntimes(t *testing.T) {
