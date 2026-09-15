@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -133,7 +134,8 @@ type DNSPolicyProjectionSource interface {
 }
 
 type dnsPublishedEndpoint struct {
-	FQDN string
+	FQDN        string
+	Fingerprint string
 }
 
 type dnsPublishedZone struct {
@@ -195,12 +197,19 @@ type Projector struct {
 	systemConfig          *config.Config
 	mcpTransport          bool
 	dnsPublishMu          sync.Mutex
+	dnsRetryAfter         time.Time
+	dnsRetryDelay         time.Duration
 	dnsPublished          map[string]dnsPublishedEndpoint
 	dnsPublishedZones     map[string]dnsPublishedZone
 	dnsPublishedBackends  map[string]dnsPublishedBackend
 	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
 }
+
+const (
+	dnsPublishRetryMin = 2 * time.Second
+	dnsPublishRetryMax = time.Minute
+)
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
@@ -1553,6 +1562,9 @@ func (p *Projector) publishDNSEndpointSnapshot(ctx context.Context) (int, int, e
 	}
 	p.dnsPublishMu.Lock()
 	defer p.dnsPublishMu.Unlock()
+	if !p.dnsRetryAfter.IsZero() && time.Now().UTC().Before(p.dnsRetryAfter) {
+		return 0, 0, nil
+	}
 	if err := p.hydrateDNSPublishedCache(ctx); err != nil {
 		return 0, 0, err
 	}
@@ -1578,12 +1590,22 @@ func (p *Projector) publishDNSEndpointSnapshot(ctx context.Context) (int, int, e
 			continue
 		}
 		desired[endpoint.Coordinate] = struct{}{}
+		fingerprint, err := dnsEndpointFingerprint(endpoint)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("fingerprint %s: %v", endpoint.Coordinate, err))
+			p.logger.Warn("fingerprint DNS endpoint projection failed", zap.String("coordinate", endpoint.Coordinate), zap.Error(err))
+			continue
+		}
+		if previous, ok := p.dnsPublished[endpoint.Coordinate]; ok && previous.Fingerprint == fingerprint {
+			current[endpoint.Coordinate] = previous
+			continue
+		}
 		if err := p.publishDNSEndpoint(ctx, endpoint); err != nil {
 			failures = append(failures, fmt.Sprintf("publish %s: %v", endpoint.Coordinate, err))
 			p.logger.Warn("publish DNS endpoint projection failed", zap.String("coordinate", endpoint.Coordinate), zap.Error(err))
 			continue
 		}
-		current[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN}
+		current[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN, Fingerprint: fingerprint}
 		published++
 	}
 	nextPublished := make(map[string]dnsPublishedEndpoint, len(current))
@@ -1609,9 +1631,33 @@ func (p *Projector) publishDNSEndpointSnapshot(ctx context.Context) (int, int, e
 	}
 	p.dnsPublished = nextPublished
 	if len(failures) > 0 {
+		p.noteDNSPublishFailure(time.Now().UTC())
 		return published, tombstones, fmt.Errorf("DNS endpoint projection completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
 	}
+	p.dnsRetryAfter = time.Time{}
+	p.dnsRetryDelay = 0
 	return published, tombstones, nil
+}
+
+func (p *Projector) noteDNSPublishFailure(now time.Time) {
+	if p.dnsRetryDelay <= 0 {
+		p.dnsRetryDelay = dnsPublishRetryMin
+	} else {
+		p.dnsRetryDelay *= 2
+		if p.dnsRetryDelay > dnsPublishRetryMax {
+			p.dnsRetryDelay = dnsPublishRetryMax
+		}
+	}
+	p.dnsRetryAfter = now.Add(p.dnsRetryDelay)
+}
+
+func dnsEndpointFingerprint(endpoint domain.DNSEndpoint) (string, error) {
+	endpoint.MaterializedAt = time.Time{}
+	content, err := json.Marshal(endpoint)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(content)), nil
 }
 
 func (p *Projector) publishDNSEndpoint(ctx context.Context, endpoint domain.DNSEndpoint) error {
@@ -2091,7 +2137,12 @@ func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 		if deleted {
 			continue
 		}
-		p.dnsPublished[coordinate] = dnsPublishedEndpoint{FQDN: fqdn}
+		fingerprint := ""
+		var endpoint domain.DNSEndpoint
+		if err := json.Unmarshal([]byte(record.Content), &endpoint); err == nil {
+			fingerprint, _ = dnsEndpointFingerprint(endpoint)
+		}
+		p.dnsPublished[coordinate] = dnsPublishedEndpoint{FQDN: fqdn, Fingerprint: fingerprint}
 	}
 	return nil
 }

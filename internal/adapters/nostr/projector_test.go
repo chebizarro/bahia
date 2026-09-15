@@ -28,6 +28,7 @@ const projectorTestPrivateKey = "11111111111111111111111111111111111111111111111
 type captureProjectionPublisher struct {
 	mu                 sync.Mutex
 	events             []gonostr.Event
+	attempts           int
 	errorsByKind       map[int]error
 	zeroAcceptedKind   map[int]bool
 	errorsByRelayD     map[string]error
@@ -37,6 +38,7 @@ type captureProjectionPublisher struct {
 func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.attempts++
 	kind := eventKindInt(&ev)
 	if p.errorsByKind != nil {
 		if err := p.errorsByKind[kind]; err != nil {
@@ -59,6 +61,12 @@ func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event
 	}
 	p.events = append(p.events, ev)
 	return 1, nil
+}
+
+func (p *captureProjectionPublisher) publishAttempts() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attempts
 }
 
 func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
@@ -1293,6 +1301,14 @@ func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 	assertNoTag(t, endpointEvent, "mesh", "")
 	assertJSONField(t, endpointEvent.Content, "coordinate", "endpoint:service:api:prod")
 
+	dnsSource.endpoints[0].MaterializedAt = time.Now().UTC()
+	if _, _, err := projector.publishDNSEndpointSnapshot(ctx); err != nil {
+		t.Fatalf("republish unchanged endpoint snapshot: %v", err)
+	}
+	if got := len(sink.byKind(KindDNSEndpointState)); got != 1 {
+		t.Fatalf("unchanged endpoint snapshot published %d events, want 1 total", got)
+	}
+
 	dnsSource.endpoints = nil
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot after removal: %v", err)
@@ -1307,6 +1323,31 @@ func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 	assertTag(t, tombstone, "dns", "api.prod.cascadia")
 	assertJSONField(t, tombstone.Content, "deleted", true)
 	assertJSONField(t, tombstone.Content, "coordinate", "endpoint:service:api:prod")
+}
+
+func TestProjectorBacksOffAfterDNSEndpointPublishFailure(t *testing.T) {
+	ctx := context.Background()
+	dnsSource := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{{
+		Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod",
+		Zone: "prod.cascadia", FQDN: "api.prod.cascadia", Address: "10.0.1.44",
+		Health: domain.HealthStatusHealthy, DriftStatus: domain.DriftStatusInSync, Source: "test",
+	}}}
+	sink := &captureProjectionPublisher{errorsByKind: map[int]error{KindCASControlState: errors.New("rate-limited")}}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
+
+	if _, _, err := projector.publishDNSEndpointSnapshot(ctx); err == nil {
+		t.Fatal("first publish unexpectedly succeeded")
+	}
+	firstAttempts := sink.publishAttempts()
+	if firstAttempts == 0 {
+		t.Fatal("first publish made no attempt")
+	}
+	if _, _, err := projector.publishDNSEndpointSnapshot(ctx); err != nil {
+		t.Fatalf("backoff call returned error: %v", err)
+	}
+	if got := sink.publishAttempts(); got != firstAttempts {
+		t.Fatalf("publish attempted during backoff: got %d attempts, want %d", got, firstAttempts)
+	}
 }
 
 func TestProjectorPublishesDNSEndpointFIPSTagsWhenWorkerPubkeyPresent(t *testing.T) {
