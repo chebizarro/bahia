@@ -59,9 +59,10 @@ func (m *memoryAgentReleaseRepo) GetReleaseByDigest(_ context.Context, org uuid.
 	return nil, nil
 }
 func (m *memoryAgentReleaseRepo) BindRelease(_ context.Context, v *domain.AgentServiceReleaseBinding) error {
+	// Event-based idempotency: same source_event_id -> return the existing binding.
 	for i := range m.bindings {
 		b := m.bindings[i]
-		if b.OrgID == v.OrgID && b.AgentID == v.AgentID && b.ServiceID == v.ServiceID && b.ReleaseChannel == v.ReleaseChannel && b.ReleaseID == v.ReleaseID {
+		if b.OrgID == v.OrgID && b.SourceEventID == v.SourceEventID {
 			*v = b
 			return nil
 		}
@@ -69,6 +70,8 @@ func (m *memoryAgentReleaseRepo) BindRelease(_ context.Context, v *domain.AgentS
 	if v.ID == uuid.Nil {
 		v.ID = uuid.New()
 	}
+	// Compute previous_binding_id as the current chain head, so A->B->A produces
+	// three distinct bindings and rollback resolves to the exact prior release.
 	for i := len(m.bindings) - 1; i >= 0; i-- {
 		b := m.bindings[i]
 		if b.OrgID == v.OrgID && b.AgentID == v.AgentID && b.ServiceID == v.ServiceID && b.ReleaseChannel == v.ReleaseChannel {
@@ -202,5 +205,96 @@ func TestAgentRuntimeReleaseRejectsConflictingProvenance(t *testing.T) {
 	conflict.Provenance.ReleaseEventID = "different"
 	if err := svc.RegisterVerifiedRelease(ctx, &conflict); !errors.Is(err, ErrRuntimeReleaseConflict) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+// TestAgentRuntimeReleaseBindReleaseAppendsOnAToBToAPromotion pins the
+// append-only promotion semantics for A->B->A: three real promotion events
+// must produce three durable bindings, with the latest re-binding A resolving
+// back to the intermediate B via rollback.
+func TestAgentRuntimeReleaseBindReleaseAppendsOnAToBToAPromotion(t *testing.T) {
+	ctx := context.Background()
+	org := uuid.New()
+	serviceID := uuid.New()
+	sourceID := uuid.New()
+	repo := newMemoryAgentReleaseRepo()
+	repo.sources[sourceID] = domain.AgentRuntimeSource{ID: sourceID, OrgID: org, ReleaseChannel: "stable"}
+	svc := NewAgentRuntimeReleaseService(repo, memoryServiceRepo{values: map[uuid.UUID]domain.Service{serviceID: {ID: serviceID, OrgID: org}}})
+
+	rA := verifiedRuntimeRelease(org, sourceID, "1")
+	rB := verifiedRuntimeRelease(org, sourceID, "2")
+	if err := svc.RegisterVerifiedRelease(ctx, &rA); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RegisterVerifiedRelease(ctx, &rB); err != nil {
+		t.Fatal(err)
+	}
+
+	bind := func(releaseID uuid.UUID, event string) domain.AgentServiceReleaseBinding {
+		b := domain.AgentServiceReleaseBinding{OrgID: org, AgentID: "agent-a", ServiceID: serviceID, ReleaseID: releaseID, ReleaseChannel: "stable", SourceEventID: event}
+		if err := svc.BindRelease(ctx, &b); err != nil {
+			t.Fatalf("BindRelease(%s) error = %v", event, err)
+		}
+		return b
+	}
+	a1 := bind(rA.ID, "promo-a1")
+	b1 := bind(rB.ID, "promo-b1")
+	a2 := bind(rA.ID, "promo-a2")
+
+	if a1.ID == a2.ID {
+		t.Fatalf("second A promotion collapsed onto first A: a1=%s a2=%s", a1.ID, a2.ID)
+	}
+	if a2.PreviousBindingID == nil || *a2.PreviousBindingID != b1.ID {
+		t.Fatalf("A->B->A: latest A previous_binding_id=%v, want %s", a2.PreviousBindingID, b1.ID)
+	}
+	if len(repo.bindings) != 3 {
+		t.Fatalf("bindings=%d, want 3 after A->B->A", len(repo.bindings))
+	}
+
+	list, err := svc.ListServiceReleases(ctx, org, serviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("ListServiceReleases=%d, want 3", len(list))
+	}
+	rollback, err := svc.GetRollbackRelease(ctx, org, "agent-a", serviceID, "stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rollback == nil || rollback.Binding.ID != b1.ID || rollback.Release.ID != rB.ID {
+		t.Fatalf("rollback binding/release = %+v, want binding %s release %s", rollback, b1.ID, rB.ID)
+	}
+}
+
+// TestAgentRuntimeReleaseBindReleaseSameSourceEventIsIdempotent pins the
+// event-based idempotency contract: replaying the same source_event_id must
+// return the stored binding and never append.
+func TestAgentRuntimeReleaseBindReleaseSameSourceEventIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	org := uuid.New()
+	serviceID := uuid.New()
+	sourceID := uuid.New()
+	repo := newMemoryAgentReleaseRepo()
+	repo.sources[sourceID] = domain.AgentRuntimeSource{ID: sourceID, OrgID: org, ReleaseChannel: "stable"}
+	svc := NewAgentRuntimeReleaseService(repo, memoryServiceRepo{values: map[uuid.UUID]domain.Service{serviceID: {ID: serviceID, OrgID: org}}})
+	release := verifiedRuntimeRelease(org, sourceID, "1")
+	if err := svc.RegisterVerifiedRelease(ctx, &release); err != nil {
+		t.Fatal(err)
+	}
+
+	first := domain.AgentServiceReleaseBinding{OrgID: org, AgentID: "agent-a", ServiceID: serviceID, ReleaseID: release.ID, ReleaseChannel: "stable", SourceEventID: "promo"}
+	if err := svc.BindRelease(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+	replay := domain.AgentServiceReleaseBinding{OrgID: org, AgentID: "agent-a", ServiceID: serviceID, ReleaseID: release.ID, ReleaseChannel: "stable", SourceEventID: "promo"}
+	if err := svc.BindRelease(ctx, &replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.ID != first.ID {
+		t.Fatalf("replay ID = %s, want stable %s", replay.ID, first.ID)
+	}
+	if len(repo.bindings) != 1 {
+		t.Fatalf("bindings=%d, want 1 for same source_event_id replay", len(repo.bindings))
 	}
 }
