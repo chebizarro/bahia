@@ -302,6 +302,16 @@ func classifyLegacyReconcileSoul(soul LegacyReconcileSoul, agents []LegacyRunnin
 	match := matches[0]
 	classification.MatchedRuntimeIDs = []string{match.agent.InventoryID}
 	classification.MatchedEvidence = match.fields
+	if reuseService != nil && !legacyServiceAdoptsRuntime(*reuseService, match.agent) {
+		classification.Status = legacyReconcileStatusAmbiguous
+		classification.ReasonCode = "existing_service_not_adopted_compatible"
+		if reuseService.RuntimeConfig != nil && reuseService.RuntimeConfig.Managed != nil {
+			classification.ReasonCode = "managed_service_reuse_refused"
+		}
+		classification.ExistingServiceID = reuseService.ID
+		classification.CandidateServiceIDs = []string{reuseService.ID}
+		return classification
+	}
 	if linkedService != nil {
 		classification.ExistingServiceID = linkedService.ID
 		if !legacyServiceAdoptsRuntime(*linkedService, match.agent) {
@@ -648,7 +658,7 @@ func (r *LegacyAgentReconciler) ReconcileApprovedLink(ctx context.Context, reque
 	if confirmed.Name != name || confirmed.ArtifactRepo != soulServiceArtifactRepo(soul.AgentID) {
 		return receipt, fmt.Errorf("%w: service identity does not match current Soul", ErrLegacyReconciliationRefused)
 	}
-	if err := r.ensureExactAdoptedService(ctx, confirmed, matched); err != nil {
+	if err := r.ensureExactAdoptedService(ctx, confirmed, matched, existing == nil); err != nil {
 		return receipt, err
 	}
 	unit, err := r.ensureExactAdoptedUnit(ctx, confirmed, matched, request.ReviewedPlacement)
@@ -727,13 +737,19 @@ func matchedLegacyRuntime(agents []LegacyRunningAgent, classification LegacyAgen
 	return LegacyRunningAgent{}, fmt.Errorf("%w: matched runtime evidence is unavailable", ErrLegacyReconciliationRefused)
 }
 
-func (r *LegacyAgentReconciler) ensureExactAdoptedService(ctx context.Context, service *domain.Service, runtime LegacyRunningAgent) error {
+func (r *LegacyAgentReconciler) ensureExactAdoptedService(ctx context.Context, service *domain.Service, runtime LegacyRunningAgent, allowInitialize bool) error {
 	desired := cloneAdoptedRuntime(runtime.AdoptedRuntime)
+	if service.RuntimeConfig != nil && service.RuntimeConfig.Managed != nil {
+		return fmt.Errorf("%w: managed or mixed-mode service cannot be reused for adopted reconciliation", ErrLegacyReconciliationRefused)
+	}
 	if service.RuntimeConfig != nil && service.RuntimeConfig.Adopted != nil {
 		if service.RuntimeType != runtime.RuntimeType || !reflect.DeepEqual(service.RuntimeConfig.Adopted, desired) {
 			return fmt.Errorf("%w: existing service adoption does not match the exact runtime", ErrLegacyReconciliationRefused)
 		}
 		return nil
+	}
+	if !allowInitialize {
+		return fmt.Errorf("%w: existing service is not already adopted-compatible with the exact runtime", ErrLegacyReconciliationRefused)
 	}
 	service.RuntimeType = runtime.RuntimeType
 	service.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: desired}
@@ -890,8 +906,13 @@ func legacyReconcileRollback(previousEventID string, created bool, serviceID uui
 }
 
 func validateLegacyReconcileApproval(approval LegacyReconcileApproval, current LegacyAgentReconciliationClassification) error {
-	if approval.Principal == nil || !approval.Principal.IsAuthenticated() || strings.TrimSpace(approval.Principal.Subject) == "" {
-		return fmt.Errorf("%w: authenticated operator principal is required", ErrLegacyReconciliationRefused)
+	if approval.Principal == nil || !approval.Principal.IsAuthenticated() || approval.Principal.Method != auth.MethodNIP98 {
+		return fmt.Errorf("%w: authenticated NIP-98 operator principal is required", ErrLegacyReconciliationRefused)
+	}
+	subject := strings.TrimSpace(approval.Principal.Subject)
+	pubkey := strings.TrimSpace(approval.Principal.PubKey)
+	if subject == "" || pubkey == "" || subject != pubkey {
+		return fmt.Errorf("%w: NIP-98 principal subject and pubkey must identify the same operator", ErrLegacyReconciliationRefused)
 	}
 	if approval.AgentID != current.AgentID || approval.Action != LegacyAgentReconcileActionLink {
 		return fmt.Errorf("%w: approval is not bound to the exact agent_id and action", ErrLegacyReconciliationRefused)
@@ -899,7 +920,7 @@ func validateLegacyReconcileApproval(approval LegacyReconcileApproval, current L
 	if approval.SoulEventID != current.SoulEventID || approval.SoulContentHash != current.SoulContentHash {
 		return fmt.Errorf("%w: approval is not bound to the current Soul event and content hash", ErrLegacyReconciliationRefused)
 	}
-	if strings.TrimSpace(approval.ApprovedBy) == "" || approval.ApprovedBy != approval.Principal.Subject {
+	if strings.TrimSpace(approval.ApprovedBy) == "" || approval.ApprovedBy != subject {
 		return fmt.Errorf("%w: approved_by does not match authenticated principal", ErrLegacyReconciliationRefused)
 	}
 	if strings.TrimSpace(approval.ApprovalRef) == "" {

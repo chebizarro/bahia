@@ -229,6 +229,87 @@ func TestLegacyAgentReconciliationRejectsForgedUnauthenticatedApproval(t *testin
 	}
 }
 
+func TestLegacyAgentReconciliationCoreRequiresBoundNIP98Principal(t *testing.T) {
+	tests := []struct {
+		name      string
+		principal *auth.Principal
+	}{
+		{name: "system method", principal: &auth.Principal{Subject: "operator-pubkey", PubKey: "operator-pubkey", Method: auth.MethodSystem}},
+		{name: "missing subject", principal: &auth.Principal{PubKey: "operator-pubkey", Method: auth.MethodNIP98}},
+		{name: "missing pubkey", principal: &auth.Principal{Subject: "operator-pubkey", Method: auth.MethodNIP98}},
+		{name: "mismatched subject and pubkey", principal: &auth.Principal{Subject: "operator-pubkey", PubKey: "different-pubkey", Method: auth.MethodNIP98}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newLegacyReconcileHarness(t)
+			classification := h.preview(t)
+			approval := legacyApproval(classification)
+			approval.Principal = test.principal
+			approval.ApprovedBy = test.principal.Subject
+			_, err := h.reconciler.ReconcileApprovedLink(t.Context(), LegacyAgentReconcileApplyRequest{LegacyAgentReconciliationRequest: h.request, Classification: classification}, approval)
+			if !errors.Is(err, ErrLegacyReconciliationRefused) {
+				t.Fatalf("core approval error=%v", err)
+			}
+			services, listErr := h.registry.ListServices(t.Context())
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if len(services) != 0 || len(h.units.units) != 0 || len(h.publisher.published) != 0 {
+				t.Fatalf("invalid core approval mutated state")
+			}
+		})
+	}
+}
+
+func TestLegacyAgentReconciliationQuarantinesManagedServiceWithoutOverwrite(t *testing.T) {
+	h := newLegacyReconcileHarness(t)
+	managed := domain.NormalizeManagedRuntimeConfig(&domain.ManagedRuntimeConfig{
+		ServiceName: "agent-bravo",
+		Environment: map[string]string{"PRESERVE": "managed"},
+	})
+	serviceID := uuid.New()
+	creator, ok := h.registry.(interface {
+		CreateService(context.Context, *domain.Service) error
+	})
+	if !ok {
+		t.Fatal("test registry cannot create services")
+	}
+	if err := creator.CreateService(t.Context(), &domain.Service{
+		ID: serviceID, Name: "agent-bravo", ArtifactRepo: "agents/bravo", RuntimeType: domain.RuntimeTypeDocker,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Managed: managed}, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	managedBefore := domain.NormalizeManagedRuntimeConfig(managed)
+
+	report, err := h.reconciler.Preview(t.Context(), h.request)
+	if !errors.Is(err, ErrLegacyReconciliationAmbiguous) {
+		t.Fatalf("preview error=%v", err)
+	}
+	if len(report.Classifications) != 1 {
+		t.Fatalf("classifications=%d", len(report.Classifications))
+	}
+	classification := report.Classifications[0]
+	if classification.Status != legacyReconcileStatusAmbiguous || classification.ReasonCode != "managed_service_reuse_refused" || classification.ExistingServiceID != serviceID.String() {
+		t.Fatalf("managed service was not quarantined: %+v", classification)
+	}
+
+	_, err = h.reconciler.ReconcileApprovedLink(t.Context(), LegacyAgentReconcileApplyRequest{LegacyAgentReconciliationRequest: h.request, Classification: classification}, legacyApproval(classification))
+	if !errors.Is(err, ErrLegacyReconciliationRefused) {
+		t.Fatalf("managed service apply error=%v", err)
+	}
+	services, listErr := h.registry.ListServices(t.Context())
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(services) != 1 || services[0].ID != serviceID || services[0].RuntimeConfig == nil || !reflect.DeepEqual(services[0].RuntimeConfig.Managed, managedBefore) || services[0].RuntimeConfig.Adopted != nil {
+		t.Fatalf("managed service changed: %+v", services)
+	}
+	if len(h.units.units) != 0 || len(h.publisher.published) != 0 {
+		t.Fatalf("managed service refusal created units or published a Soul")
+	}
+}
+
 func TestLegacyAgentReconciliationAdoptsExactRuntimeAndIsIdempotent(t *testing.T) {
 	h := newLegacyReconcileHarness(t)
 	classification := h.preview(t)
