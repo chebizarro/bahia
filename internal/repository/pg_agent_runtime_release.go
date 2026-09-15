@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -82,28 +84,74 @@ func (r *PgAgentRuntimeReleaseRepository) GetReleaseByDigest(ctx context.Context
 	return scanAgentRuntimeRelease(r.db.QueryRow(ctx, `SELECT `+agentRuntimeReleaseColumns+` FROM agent_runtime_releases WHERE org_id=$1 AND image_repo=$2 AND image_digest=$3`, orgID, imageRepo, imageDigest))
 }
 
+// bindReleaseChainRetryLimit bounds the retries triggered by concurrent producers
+// racing to append to the same (org, agent, service, channel) linear history.
+// The per-chain UNIQUE indexes serialize appenders at the database level; the
+// loop only exists to reload the current head and try again if we lost the
+// race. Real-world concurrency is bounded by producers-per-chain.
+const bindReleaseChainRetryLimit = 32
+
+// BindRelease durably records a promotion event. It is idempotent on
+// source_event_id (replays return the stored binding) and appends a new
+// binding whenever a fresh source_event_id refers to any release, including a
+// previously bound one. Concurrent appenders on the same chain are serialized
+// by the chain_head_idx / chain_next_idx unique indexes; a loser retries.
 func (r *PgAgentRuntimeReleaseRepository) BindRelease(ctx context.Context, binding *domain.AgentServiceReleaseBinding) error {
 	if binding.ID == uuid.Nil {
 		binding.ID = uuid.New()
 	}
-	return r.db.QueryRow(ctx, `
-		WITH previous AS (
-			SELECT id FROM agent_service_runtime_release_bindings
-			WHERE org_id=$2 AND agent_id=$3 AND service_id=$4 AND release_channel=$6
-			ORDER BY created_at DESC, id DESC LIMIT 1
-		), inserted AS (
-			INSERT INTO agent_service_runtime_release_bindings
-				(id, org_id, agent_id, service_id, release_id, release_channel, source_event_id, previous_binding_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT id FROM previous))
-			ON CONFLICT (org_id, agent_id, service_id, release_channel, release_id) DO NOTHING
-			RETURNING id, previous_binding_id, created_at
-		)
-		SELECT id, previous_binding_id, created_at FROM inserted
-		UNION ALL
-		SELECT id, previous_binding_id, created_at FROM agent_service_runtime_release_bindings
-		WHERE org_id=$2 AND agent_id=$3 AND service_id=$4 AND release_channel=$6 AND release_id=$5
-		LIMIT 1`, binding.ID, binding.OrgID, binding.AgentID, binding.ServiceID, binding.ReleaseID, binding.ReleaseChannel, binding.SourceEventID).
-		Scan(&binding.ID, &binding.PreviousBindingID, &binding.CreatedAt)
+	originalID := binding.ID
+	for attempt := 0; attempt < bindReleaseChainRetryLimit; attempt++ {
+		err := r.db.QueryRow(ctx, `
+			WITH previous AS (
+				SELECT id FROM agent_service_runtime_release_bindings
+				WHERE org_id=$2 AND agent_id=$3 AND service_id=$4 AND release_channel=$6
+				ORDER BY created_at DESC, id DESC LIMIT 1
+			), inserted AS (
+				INSERT INTO agent_service_runtime_release_bindings
+					(id, org_id, agent_id, service_id, release_id, release_channel, source_event_id, previous_binding_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT id FROM previous))
+				ON CONFLICT (source_event_id) DO NOTHING
+				RETURNING id, release_id, previous_binding_id, created_at
+			)
+			SELECT id, release_id, previous_binding_id, created_at FROM inserted
+			UNION ALL
+			SELECT id, release_id, previous_binding_id, created_at FROM agent_service_runtime_release_bindings
+			WHERE org_id=$2 AND source_event_id=$7
+			LIMIT 1`, binding.ID, binding.OrgID, binding.AgentID, binding.ServiceID, binding.ReleaseID, binding.ReleaseChannel, binding.SourceEventID).
+			Scan(&binding.ID, &binding.ReleaseID, &binding.PreviousBindingID, &binding.CreatedAt)
+		if err == nil {
+			return nil
+		}
+		if isBindReleaseChainRace(err) {
+			// Another producer appended to the chain between our SELECT of the
+			// current head and our INSERT. Reset the ID we tried to allocate so
+			// the caller does not accidentally observe our failed candidate, and
+			// retry with a fresh view of the head.
+			binding.ID = originalID
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("bind release: contention on (%s,%s,%s,%s) did not resolve after %d retries", binding.OrgID, binding.AgentID, binding.ServiceID, binding.ReleaseChannel, bindReleaseChainRetryLimit)
+}
+
+// isBindReleaseChainRace matches the two partial UNIQUE indexes that serialize
+// concurrent appenders on the same chain. Any other error is not retryable.
+func isBindReleaseChainRace(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	if pgErr.Code != "23505" { // unique_violation
+		return false
+	}
+	switch pgErr.ConstraintName {
+	case "agent_service_runtime_release_bindings_chain_head_idx",
+		"agent_service_runtime_release_bindings_chain_next_idx":
+		return true
+	}
+	return false
 }
 
 func scanAgentServiceRuntimeRelease(row pgx.Row) (*domain.AgentServiceRuntimeRelease, error) {
