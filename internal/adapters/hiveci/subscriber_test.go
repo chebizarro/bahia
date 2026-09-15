@@ -408,6 +408,17 @@ func TestTrustedLoomWorkerSignerAcceptedForBahiaDispatched5402(t *testing.T) {
 	}
 }
 
+func TestParseWorkflowResultContentExtractsLoomBahiaArtifactMarker(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	stdout := "[Build release] docker exec\n[Build release] | BAHIA_ARTIFACT={\"image_repo\":\"harbor.example/cascadia/metiq\",\"image_tag\":\"sha-deadbeef\",\"image_digest\":\"" + digest + "\"}"
+
+	content, err := parseWorkflowResultContent(stdout)
+	require.NoError(t, err)
+	require.Equal(t, "harbor.example/cascadia/metiq", content.ImageRepo)
+	require.Equal(t, "sha-deadbeef", content.ImageTag)
+	require.Equal(t, digest, content.ImageDigest)
+}
+
 func TestCandidateDiagnosticsLogReasonsAndMonotonicCounter(t *testing.T) {
 	repo := newTestHiveRepo()
 	now := time.Unix(1_700_000_000, 0).UTC()

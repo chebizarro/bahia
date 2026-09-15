@@ -105,7 +105,10 @@ func (m *stubBuildRepo) GetByCISystemRunID(_ context.Context, ciSystem, ciRunID 
 	return nil, nil
 }
 
-type stubArtifactRepo struct{ art *domain.Artifact }
+type stubArtifactRepo struct {
+	art      *domain.Artifact
+	getCalls int
+}
 
 func (m *stubArtifactRepo) Create(_ context.Context, a *domain.Artifact) error {
 	if a.ID == uuid.Nil {
@@ -115,6 +118,7 @@ func (m *stubArtifactRepo) Create(_ context.Context, a *domain.Artifact) error {
 	return nil
 }
 func (m *stubArtifactRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Artifact, error) {
+	m.getCalls++
 	return m.art, nil
 }
 func (m *stubArtifactRepo) GetByDigest(_ context.Context, repo, digest string) (*domain.Artifact, error) {
@@ -213,6 +217,35 @@ func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, eventID strin
 	for _, intent := range m.intents {
 		if intent.Metadata != nil && intent.Metadata["hive_ci_result_event_id"] == eventID {
 			return intent, nil
+		}
+	}
+	return nil, nil
+}
+func (m *stubIntentRepo) CreateForRuntimeRelease(_ context.Context, releaseID uuid.UUID, di *domain.DeploymentIntent) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.intents {
+		if existing.ServiceID == di.ServiceID && existing.RuntimeReleaseID != nil && *existing.RuntimeReleaseID == releaseID {
+			*di = *existing
+			return false, nil
+		}
+	}
+	if di.ID == uuid.Nil {
+		di.ID = uuid.New()
+	}
+	di.ArtifactID = uuid.Nil
+	di.RuntimeReleaseID = &releaseID
+	copyIntent := *di
+	m.intents[di.ID] = &copyIntent
+	return true, nil
+}
+func (m *stubIntentRepo) GetByServiceRuntimeRelease(_ context.Context, serviceID, releaseID uuid.UUID) (*domain.DeploymentIntent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, intent := range m.intents {
+		if intent.ServiceID == serviceID && intent.RuntimeReleaseID != nil && *intent.RuntimeReleaseID == releaseID {
+			copyIntent := *intent
+			return &copyIntent, nil
 		}
 	}
 	return nil, nil
@@ -324,6 +357,67 @@ func (m *stubObsRepo) ListByServiceEnv(_ context.Context, _, _ uuid.UUID, _ int)
 type stubStateRepo struct {
 	mu     sync.Mutex
 	states map[string]*domain.EnvironmentServiceState
+}
+
+type stubRuntimeReleaseRepo struct {
+	bound *domain.AgentServiceRuntimeRelease
+}
+
+func (r *stubRuntimeReleaseRepo) CreateSource(_ context.Context, source *domain.AgentRuntimeSource) error {
+	if source.ID == uuid.Nil {
+		source.ID = uuid.New()
+	}
+	return nil
+}
+func (r *stubRuntimeReleaseRepo) CreateRelease(_ context.Context, release *domain.AgentRuntimeRelease) error {
+	if release.ID == uuid.Nil {
+		release.ID = uuid.New()
+	}
+	return nil
+}
+func (r *stubRuntimeReleaseRepo) GetSource(_ context.Context, orgID, sourceID uuid.UUID) (*domain.AgentRuntimeSource, error) {
+	if r.bound == nil || r.bound.Source.OrgID != orgID || r.bound.Source.ID != sourceID {
+		return nil, nil
+	}
+	source := r.bound.Source
+	return &source, nil
+}
+func (r *stubRuntimeReleaseRepo) GetRelease(_ context.Context, orgID, releaseID uuid.UUID) (*domain.AgentRuntimeRelease, error) {
+	if r.bound == nil || r.bound.Release.OrgID != orgID || r.bound.Release.ID != releaseID {
+		return nil, nil
+	}
+	release := r.bound.Release
+	return &release, nil
+}
+func (r *stubRuntimeReleaseRepo) GetReleaseByDigest(_ context.Context, orgID uuid.UUID, imageRepo, imageDigest string) (*domain.AgentRuntimeRelease, error) {
+	if r.bound == nil || r.bound.Release.OrgID != orgID || r.bound.Release.ImageRepo != imageRepo || r.bound.Release.ImageDigest != imageDigest {
+		return nil, nil
+	}
+	release := r.bound.Release
+	return &release, nil
+}
+func (r *stubRuntimeReleaseRepo) BindRelease(_ context.Context, binding *domain.AgentServiceReleaseBinding) error {
+	if r.bound == nil {
+		return errors.New("runtime release fixture is not configured")
+	}
+	r.bound.Binding = *binding
+	return nil
+}
+func (r *stubRuntimeReleaseRepo) ListServiceReleases(_ context.Context, orgID, serviceID uuid.UUID) ([]domain.AgentServiceRuntimeRelease, error) {
+	if r.bound == nil || r.bound.Release.OrgID != orgID || r.bound.Binding.ServiceID != serviceID {
+		return nil, nil
+	}
+	return []domain.AgentServiceRuntimeRelease{*r.bound}, nil
+}
+func (r *stubRuntimeReleaseRepo) GetServiceRelease(_ context.Context, orgID, serviceID, releaseID uuid.UUID) (*domain.AgentServiceRuntimeRelease, error) {
+	if r.bound == nil || r.bound.Release.OrgID != orgID || r.bound.Binding.ServiceID != serviceID || r.bound.Release.ID != releaseID {
+		return nil, nil
+	}
+	resolved := *r.bound
+	return &resolved, nil
+}
+func (r *stubRuntimeReleaseRepo) GetRollbackRelease(_ context.Context, _ uuid.UUID, _ string, _ uuid.UUID, _ string) (*domain.AgentServiceRuntimeRelease, error) {
+	return nil, nil
 }
 
 func newStubStateRepo() *stubStateRepo {
@@ -1179,6 +1273,83 @@ func TestExecuteDeployment_AuthorizedReleasePromotionCreatesDigestOnlyCanary(t *
 	if request.Image != artifact.ImageRepo+"@"+digest || request.Digest != digest ||
 		request.Params["rollout_strategy"] != "canary" || request.Params["canary_weight"] != "10" {
 		t.Fatalf("canary job did not preserve digest/strategy: %+v", request)
+	}
+}
+
+func TestExecuteDeploymentResolvesRuntimeReleaseIDWithoutFabricatedArtifact(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	orgID := uuid.New()
+	svc := &domain.Service{Name: "metiq-soul", OrgID: orgID, ArtifactRepo: "must-not-be-used"}
+	if err := svcRepo.Create(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	env := &domain.Environment{Name: "staging", OrgID: orgID, DeployStrategy: domain.DeployStrategyReplace}
+	if err := envRepo.Create(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	releaseID := uuid.New()
+	digest := "sha256:" + strings.Repeat("a", 64)
+	provenanceDigest := "sha256:" + strings.Repeat("b", 64)
+	releaseRepo := &stubRuntimeReleaseRepo{bound: &domain.AgentServiceRuntimeRelease{
+		Binding: domain.AgentServiceReleaseBinding{
+			ID: uuid.New(), OrgID: orgID, AgentID: "soul-a", ServiceID: svc.ID,
+			ReleaseID: releaseID, ReleaseChannel: "stable", SourceEventID: "promotion-binding-event",
+		},
+		Release: domain.AgentRuntimeRelease{
+			ID: releaseID, OrgID: orgID, ImageRepo: "harbor.example/cascadia/metiq", ImageDigest: digest,
+			Provenance: domain.RuntimeReleaseProvenance{
+				ReleaseEventID: "release-event", WorkflowRunEventID: "workflow-run-event",
+				ManifestDigest: digest, SBOMDigest: "sha256:" + strings.Repeat("c", 64),
+				ProvenanceDigest: provenanceDigest, AttestorPubkey: strings.Repeat("d", 64),
+			},
+		},
+		Source: domain.AgentRuntimeSource{ID: uuid.New(), OrgID: orgID, ReleaseChannel: "stable"},
+	}}
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "metiq-loom", RuntimeType: domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly, OwnershipMode: domain.OwnershipModeBahiaManaged,
+		RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, RuntimeReleaseID: &releaseID,
+		RequestedBy: "soul-factory-promotion", SourceKind: domain.SourceKindAutoPromote,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := intentRepo.Create(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	registry := service.NewRegistryService(
+		svcRepo, envRepo, &stubBuildRepo{}, artRepo, intentRepo, runRepo, &stubObsRepo{}, stateRepo,
+		nil, &events.NoopPublisher{}, zap.NewNop(), service.WithAgentRuntimeReleaseRepository(releaseRepo),
+	)
+	loomClient := &stubLoomClient{status: &loom.JobStatus{Status: "succeeded"}}
+	lifecycle := &stubDeploymentRuntimeLifecycle{}
+	coord := NewCoordinator(
+		registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentLoomClient(loomClient),
+		WithDeploymentUnitRouting(&stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}, lifecycle),
+	)
+	defer coord.Shutdown(time.Second)
+
+	if err := coord.ExecuteDeployment(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if artRepo.getCalls != 0 || artRepo.art != nil {
+		t.Fatalf("runtime release execution fabricated or resolved a service artifact: calls=%d artifact=%+v", artRepo.getCalls, artRepo.art)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("Loom-backed runtime release unexpectedly used direct lifecycle: calls=%d", lifecycle.calls)
+	}
+	request := loomClient.lastJobReq
+	if request.Image != releaseRepo.bound.Release.ImageRepo+"@"+digest || request.Digest != digest {
+		t.Fatalf("runtime release image identity was not resolved from projection: %+v", request)
+	}
+	if request.Params["runtime_release_id"] != releaseID.String() ||
+		request.Params["release_event_id"] != "release-event" ||
+		request.Params["workflow_run_event_id"] != "workflow-run-event" ||
+		request.Params["provenance_digest"] != provenanceDigest ||
+		request.Params["runtime_release_binding_id"] != releaseRepo.bound.Binding.ID.String() {
+		t.Fatalf("runtime release provenance was not carried into execution: %+v", request.Params)
 	}
 }
 
