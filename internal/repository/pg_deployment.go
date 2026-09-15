@@ -29,7 +29,8 @@ func NewPgDeploymentIntentRepository(pool *pgxpool.Pool) *PgDeploymentIntentRepo
 	return &PgDeploymentIntentRepository{pool: pool}
 }
 
-const intentColumns = `id, service_id, environment_id, deployment_unit_id, artifact_id, requested_by, source_kind, approval_status, status, supersedes_intent_id, approval_metadata, metadata, desired_state, desired_hash, created_at, approved_at, updated_at`
+const intentColumns = `id, service_id, environment_id, deployment_unit_id, artifact_id, agent_runtime_release_id, requested_by, source_kind, approval_status, status, supersedes_intent_id, approval_metadata, metadata, desired_state, desired_hash, created_at, approved_at, updated_at`
+const intentSelectColumns = `id, service_id, environment_id, deployment_unit_id, artifact_id::text, agent_runtime_release_id::text, requested_by, source_kind, approval_status, status, supersedes_intent_id, approval_metadata, metadata, desired_state, desired_hash, created_at, approved_at, updated_at`
 
 func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.DeploymentIntent) error {
 	if di.ID == uuid.Nil {
@@ -54,8 +55,8 @@ func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.De
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO deployment_intents (`+intentColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-	`, di.ID, di.ServiceID, di.EnvironmentID, di.DeploymentUnitID, di.ArtifactID, di.RequestedBy, di.SourceKind, di.ApprovalStatus, di.Status,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+	`, di.ID, di.ServiceID, di.EnvironmentID, di.DeploymentUnitID, di.ArtifactID, di.RuntimeReleaseID, di.RequestedBy, di.SourceKind, di.ApprovalStatus, di.Status,
 		di.SupersedesIntentID, approvalJSON, metaJSON, desiredStateJSON, di.DesiredHash, di.CreatedAt, di.ApprovedAt, di.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting deployment intent: %w", err)
@@ -67,11 +68,26 @@ func (r *PgDeploymentIntentRepository) scanIntent(row pgx.Row) (*domain.Deployme
 	di := &domain.DeploymentIntent{}
 	var approvalJSON, metaJSON, desiredStateJSON []byte
 	var desiredHash sql.NullString
-	err := row.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.DeploymentUnitID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
+	var artifactID, runtimeReleaseID sql.NullString
+	err := row.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.DeploymentUnitID, &artifactID, &runtimeReleaseID, &di.RequestedBy, &di.SourceKind,
 		&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
 		&desiredStateJSON, &desiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if artifactID.Valid {
+		id, parseErr := uuid.Parse(artifactID.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("decode deployment intent artifact id: %w", parseErr)
+		}
+		di.ArtifactID = id
+	}
+	if runtimeReleaseID.Valid {
+		id, parseErr := uuid.Parse(runtimeReleaseID.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("decode deployment intent runtime release id: %w", parseErr)
+		}
+		di.RuntimeReleaseID = &id
 	}
 	di.DesiredHash = nullStringValue(desiredHash)
 	if err := unmarshalJSON(approvalJSON, &di.ApprovalMetadata, "approval metadata"); err != nil {
@@ -90,7 +106,7 @@ func (r *PgDeploymentIntentRepository) scanIntent(row pgx.Row) (*domain.Deployme
 }
 
 func (r *PgDeploymentIntentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
-	row := r.pool.QueryRow(ctx, `SELECT `+intentColumns+` FROM deployment_intents WHERE id = $1`, id)
+	row := r.pool.QueryRow(ctx, `SELECT `+intentSelectColumns+` FROM deployment_intents WHERE id = $1`, id)
 	di, err := r.scanIntent(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -107,7 +123,7 @@ func (r *PgDeploymentIntentRepository) GetByReleasePromotionKey(
 	requester, idempotencyKey string,
 ) (*domain.DeploymentIntent, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT `+intentColumns+` FROM deployment_intents
+		SELECT `+intentSelectColumns+` FROM deployment_intents
 		WHERE service_id = $1
 		AND environment_id = $2
 		AND metadata->>'release_promotion' = 'true'
@@ -125,9 +141,68 @@ func (r *PgDeploymentIntentRepository) GetByReleasePromotionKey(
 	return di, nil
 }
 
+// CreateForRuntimeRelease persists a deployment intent backed directly by one
+// shared verified runtime release. The partial unique index makes replay for a
+// (service, release) pair return the original intent without creating a second row.
+func (r *PgDeploymentIntentRepository) CreateForRuntimeRelease(ctx context.Context, releaseID uuid.UUID, di *domain.DeploymentIntent) (bool, error) {
+	if di.ID == uuid.Nil {
+		di.ID = uuid.New()
+	}
+	di.ArtifactID = uuid.Nil
+	di.RuntimeReleaseID = &releaseID
+	now := time.Now().UTC()
+	di.CreatedAt, di.UpdatedAt = now, now
+	approvalJSON, err := marshalJSON(di.ApprovalMetadata, "approval metadata")
+	if err != nil {
+		return false, err
+	}
+	metaJSON, err := marshalJSON(di.Metadata, "intent metadata")
+	if err != nil {
+		return false, err
+	}
+	desiredStateJSON, err := marshalJSON(di.DesiredState, "desired state")
+	if err != nil {
+		return false, err
+	}
+	tag, err := r.pool.Exec(ctx, `
+		INSERT INTO deployment_intents (`+intentColumns+`)
+		VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		ON CONFLICT (service_id, agent_runtime_release_id)
+		WHERE agent_runtime_release_id IS NOT NULL DO NOTHING
+	`, di.ID, di.ServiceID, di.EnvironmentID, di.DeploymentUnitID, releaseID, di.RequestedBy,
+		di.SourceKind, di.ApprovalStatus, di.Status, di.SupersedesIntentID, approvalJSON,
+		metaJSON, desiredStateJSON, di.DesiredHash, di.CreatedAt, di.ApprovedAt, di.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("inserting runtime release deployment intent: %w", err)
+	}
+	created := tag.RowsAffected() == 1
+	stored, err := r.GetByServiceRuntimeRelease(ctx, di.ServiceID, releaseID)
+	if err != nil {
+		return false, err
+	}
+	if stored == nil {
+		return false, fmt.Errorf("runtime release deployment intent was not persisted")
+	}
+	*di = *stored
+	return created, nil
+}
+
+// GetByServiceRuntimeRelease resolves the durable intent identity for a
+// (service, shared runtime release) pair.
+func (r *PgDeploymentIntentRepository) GetByServiceRuntimeRelease(ctx context.Context, serviceID, releaseID uuid.UUID) (*domain.DeploymentIntent, error) {
+	di, err := r.scanIntent(r.pool.QueryRow(ctx, `SELECT `+intentSelectColumns+` FROM deployment_intents WHERE service_id=$1 AND agent_runtime_release_id=$2`, serviceID, releaseID))
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying runtime release deployment intent: %w", err)
+	}
+	return di, nil
+}
+
 func (r *PgDeploymentIntentRepository) GetByHiveResultEventID(ctx context.Context, eventID string) (*domain.DeploymentIntent, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT `+intentColumns+` FROM deployment_intents
+		SELECT `+intentSelectColumns+` FROM deployment_intents
 		WHERE metadata->>'hive_ci_result_event_id' = $1
 		LIMIT 1
 	`, eventID)
@@ -143,7 +218,7 @@ func (r *PgDeploymentIntentRepository) GetByHiveResultEventID(ctx context.Contex
 
 func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+intentColumns+` FROM deployment_intents
+		SELECT `+intentSelectColumns+` FROM deployment_intents
 		WHERE service_id = $1 AND environment_id = $2
 		ORDER BY created_at DESC LIMIT $3 OFFSET $4
 	`, serviceID, envID, limit, offset)
@@ -154,28 +229,11 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 
 	var intents []domain.DeploymentIntent
 	for rows.Next() {
-		var di domain.DeploymentIntent
-		var approvalJSON, metaJSON, desiredStateJSON []byte
-		var desiredHash sql.NullString
-		if err := rows.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.DeploymentUnitID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
-			&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
-			&desiredStateJSON, &desiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scanning deployment intent: %w", err)
+		di, scanErr := r.scanIntent(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scanning deployment intent: %w", scanErr)
 		}
-		di.DesiredHash = nullStringValue(desiredHash)
-		if err := unmarshalJSON(approvalJSON, &di.ApprovalMetadata, "approval metadata"); err != nil {
-			return nil, fmt.Errorf("reading intent %s: %w", di.ID, err)
-		}
-		if err := unmarshalJSON(metaJSON, &di.Metadata, "intent metadata"); err != nil {
-			return nil, fmt.Errorf("reading intent %s: %w", di.ID, err)
-		}
-		if len(desiredStateJSON) > 0 && string(desiredStateJSON) != "null" {
-			di.DesiredState = &domain.DesiredServiceSpec{}
-			if err := unmarshalJSON(desiredStateJSON, di.DesiredState, "desired state"); err != nil {
-				return nil, fmt.Errorf("reading intent %s desired state: %w", di.ID, err)
-			}
-		}
-		intents = append(intents, di)
+		intents = append(intents, *di)
 	}
 	return intents, rows.Err()
 }
@@ -184,7 +242,7 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 // a durable run, covering the crash window between approval publication and run creation.
 func (r *PgDeploymentIntentRepository) ListApprovedWithoutRuns(ctx context.Context) ([]domain.DeploymentIntent, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+intentColumns+` FROM deployment_intents di
+		SELECT `+intentSelectColumns+` FROM deployment_intents di
 		WHERE di.approval_status IN ('approved', 'not_required')
 		  AND di.status = 'approved'
 		  AND NOT EXISTS (

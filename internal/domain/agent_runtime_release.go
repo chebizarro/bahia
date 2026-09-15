@@ -63,3 +63,12 @@ type AgentServiceRuntimeRelease struct {
 	Release AgentRuntimeRelease        `json:"release"`
 	Source  AgentRuntimeSource         `json:"source"`
 }
+
+// RuntimeReleaseDeploymentIntent is the durable deployment identity derived
+// from a shared verified runtime release. Release is the canonical source of
+// image digest and provenance; no service-scoped Artifact is synthesized.
+type RuntimeReleaseDeploymentIntent struct {
+	Intent  DeploymentIntent           `json:"intent"`
+	Binding AgentServiceReleaseBinding `json:"binding"`
+	Release AgentRuntimeRelease        `json:"release"`
+}

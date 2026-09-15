@@ -93,6 +93,16 @@ func (m *memoryAgentReleaseRepo) ListServiceReleases(_ context.Context, org, ser
 	}
 	return out, nil
 }
+func (m *memoryAgentReleaseRepo) GetServiceRelease(_ context.Context, org, service, release uuid.UUID) (*domain.AgentServiceRuntimeRelease, error) {
+	for i := len(m.bindings) - 1; i >= 0; i-- {
+		b := m.bindings[i]
+		if b.OrgID == org && b.ServiceID == service && b.ReleaseID == release {
+			return &domain.AgentServiceRuntimeRelease{Binding: b, Release: m.releases[b.ReleaseID]}, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *memoryAgentReleaseRepo) GetRollbackRelease(_ context.Context, org uuid.UUID, agent string, service uuid.UUID, channel string) (*domain.AgentServiceRuntimeRelease, error) {
 	var current *domain.AgentServiceReleaseBinding
 	for i := range m.bindings {

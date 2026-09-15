@@ -73,3 +73,33 @@ func TestAgentRuntimeReleaseBindingEventIdempotencyMigrationIsEmbedded(t *testin
 		last = index
 	}
 }
+
+func TestRuntimeReleaseDeploymentIntentMigrationUpgradeAndDowngradeAreEmbedded(t *testing.T) {
+	up, err := migrationsFS.ReadFile("migrations/000065_runtime_release_deployment_intents.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := migrationsFS.ReadFile("migrations/000065_runtime_release_deployment_intents.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"ALTER COLUMN artifact_id DROP NOT NULL",
+		"agent_runtime_release_id UUID REFERENCES agent_runtime_releases(id)",
+		"num_nonnulls(artifact_id, agent_runtime_release_id) = 1",
+		"deployment_intents_service_runtime_release_uq",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Fatalf("upgrade missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS deployment_intents_service_runtime_release_uq",
+		"DROP COLUMN IF EXISTS agent_runtime_release_id",
+		"ALTER COLUMN artifact_id SET NOT NULL",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Fatalf("downgrade missing %q", required)
+		}
+	}
+}
