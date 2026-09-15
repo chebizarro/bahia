@@ -26,8 +26,8 @@ func TestPgDeploymentIntentRepository_GetByHiveResultEventID(t *testing.T) {
 
 	mock.ExpectQuery("metadata->>'hive_ci_result_event_id' = \\$1").
 		WithArgs("result-evt-123").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind", "approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata", "desired_state", "desired_hash", "created_at", "approved_at", "updated_at"}).
-			AddRow(id, svcID, envID, nil, artifactID, "npub1xyz", "auto_promote", "approved", "pending", nil, []byte(`{"reviewer":"ops"}`), []byte(`{"hive_ci_result_event_id":"result-evt-123"}`), nil, "", now, nil, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "agent_runtime_release_id", "requested_by", "source_kind", "approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata", "desired_state", "desired_hash", "created_at", "approved_at", "updated_at"}).
+			AddRow(id, svcID, envID, nil, artifactID.String(), nil, "npub1xyz", "auto_promote", "approved", "pending", nil, []byte(`{"reviewer":"ops"}`), []byte(`{"hive_ci_result_event_id":"result-evt-123"}`), nil, "", now, nil, now))
 
 	intent, err := repo.GetByHiveResultEventID(context.Background(), "result-evt-123")
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestPgDeploymentIntentRepository_ListApprovedWithoutRuns(t *testing.T) {
 	autoApprovedID := uuid.New()
 
 	expectedQuery := `
-		SELECT ` + intentColumns + ` FROM deployment_intents di
+		SELECT ` + intentSelectColumns + ` FROM deployment_intents di
 		WHERE di.approval_status IN ('approved', 'not_required')
 		  AND di.status = 'approved'
 		  AND NOT EXISTS (
@@ -60,9 +60,9 @@ func TestPgDeploymentIntentRepository_ListApprovedWithoutRuns(t *testing.T) {
 		  )
 		ORDER BY di.approved_at ASC NULLS LAST, di.created_at ASC
 	`
-	rows := pgxmock.NewRows([]string{"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind", "approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata", "desired_state", "desired_hash", "created_at", "approved_at", "updated_at"}).
-		AddRow(approvedID, serviceID, environmentID, nil, artifactID, "operator", "manual", "approved", "approved", nil, []byte(`{}`), []byte(`{}`), nil, "", now, nil, now).
-		AddRow(autoApprovedID, serviceID, environmentID, nil, artifactID, "hive-ci-bridge", "auto_promote", "not_required", "approved", nil, []byte(`{}`), []byte(`{}`), nil, "", now, nil, now)
+	rows := pgxmock.NewRows([]string{"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "agent_runtime_release_id", "requested_by", "source_kind", "approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata", "desired_state", "desired_hash", "created_at", "approved_at", "updated_at"}).
+		AddRow(approvedID, serviceID, environmentID, nil, artifactID.String(), nil, "operator", "manual", "approved", "approved", nil, []byte(`{}`), []byte(`{}`), nil, "", now, nil, now).
+		AddRow(autoApprovedID, serviceID, environmentID, nil, artifactID.String(), nil, "hive-ci-bridge", "auto_promote", "not_required", "approved", nil, []byte(`{}`), []byte(`{}`), nil, "", now, nil, now)
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).WillReturnRows(rows)
 
 	intents, err := repo.ListApprovedWithoutRuns(context.Background())

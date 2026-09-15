@@ -259,6 +259,32 @@ func (m *mockIntentRepo) Create(_ context.Context, di *domain.DeploymentIntent) 
 	m.intents[di.ID] = di
 	return nil
 }
+func (m *mockIntentRepo) CreateForRuntimeRelease(_ context.Context, releaseID uuid.UUID, di *domain.DeploymentIntent) (bool, error) {
+	for _, existing := range m.intents {
+		if existing.ServiceID == di.ServiceID && existing.RuntimeReleaseID != nil && *existing.RuntimeReleaseID == releaseID {
+			*di = *existing
+			return false, nil
+		}
+	}
+	if di.ID == uuid.Nil {
+		di.ID = uuid.New()
+	}
+	di.ArtifactID = uuid.Nil
+	di.RuntimeReleaseID = &releaseID
+	now := time.Now().UTC()
+	di.CreatedAt, di.UpdatedAt = now, now
+	m.intents[di.ID] = di
+	return true, nil
+}
+func (m *mockIntentRepo) GetByServiceRuntimeRelease(_ context.Context, serviceID, releaseID uuid.UUID) (*domain.DeploymentIntent, error) {
+	for _, intent := range m.intents {
+		if intent.ServiceID == serviceID && intent.RuntimeReleaseID != nil && *intent.RuntimeReleaseID == releaseID {
+			return intent, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockIntentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
 	if m.getByIDErr != nil {
 		return nil, m.getByIDErr

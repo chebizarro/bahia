@@ -56,6 +56,7 @@ func TestPgDeploymentIntentRepository_DesiredStateRoundTrip(t *testing.T) {
 			pgxmock.AnyArg(), // environment_id
 			pgxmock.AnyArg(), // deployment_unit_id
 			pgxmock.AnyArg(), // artifact_id
+			pgxmock.AnyArg(), // agent_runtime_release_id
 			pgxmock.AnyArg(), // requested_by
 			pgxmock.AnyArg(), // source_kind
 			pgxmock.AnyArg(), // approval_status
@@ -92,11 +93,11 @@ func TestPgDeploymentIntentRepository_DesiredStateRoundTrip(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM deployment_intents WHERE id").
 		WithArgs(di.ID).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind",
+			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "agent_runtime_release_id", "requested_by", "source_kind",
 			"approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata",
 			"desired_state", "desired_hash", "created_at", "approved_at", "updated_at",
 		}).AddRow(
-			di.ID, svcID, envID, nil, artID, "npub1test", "manual",
+			di.ID, svcID, envID, nil, artID.String(), nil, "npub1test", "manual",
 			"not_required", "pending", nil, []byte(`{}`), []byte(`{}`),
 			specJSON, spec.DesiredHash, di.CreatedAt, nil, di.UpdatedAt,
 		))
@@ -126,11 +127,11 @@ func TestPgDeploymentIntentRepository_NilDesiredState(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM deployment_intents WHERE id").
 		WithArgs(id).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind",
+			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "agent_runtime_release_id", "requested_by", "source_kind",
 			"approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata",
 			"desired_state", "desired_hash", "created_at", "approved_at", "updated_at",
 		}).AddRow(
-			id, uuid.New(), uuid.New(), nil, uuid.New(), "npub1test", "manual",
+			id, uuid.New(), uuid.New(), nil, uuid.New().String(), nil, "npub1test", "manual",
 			"not_required", "pending", nil, []byte(`{}`), []byte(`{}`),
 			nil, nil, now, nil, now,
 		))

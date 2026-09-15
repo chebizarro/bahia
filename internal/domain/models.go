@@ -296,24 +296,25 @@ type Artifact struct {
 
 // DeploymentIntent represents a request to deploy an artifact to an environment.
 type DeploymentIntent struct {
-	ID                 uuid.UUID              `json:"id"`
-	ServiceID          uuid.UUID              `json:"service_id"`
-	EnvironmentID      uuid.UUID              `json:"environment_id"`
-	DeploymentUnitID   *uuid.UUID             `json:"deployment_unit_id,omitempty"`
-	ArtifactID         uuid.UUID              `json:"artifact_id"`
-	RequestedBy        string                 `json:"requested_by"`
-	SourceKind         SourceKind             `json:"source_kind"`
+	ID                  uuid.UUID              `json:"id"`
+	ServiceID           uuid.UUID              `json:"service_id"`
+	EnvironmentID       uuid.UUID              `json:"environment_id"`
+	DeploymentUnitID    *uuid.UUID             `json:"deployment_unit_id,omitempty"`
+	ArtifactID          uuid.UUID              `json:"artifact_id,omitempty"`
+	RuntimeReleaseID    *uuid.UUID             `json:"runtime_release_id,omitempty"`
+	RequestedBy         string                 `json:"requested_by"`
+	SourceKind          SourceKind             `json:"source_kind"`
 	PriorArtifactDigest string                 `json:"prior_artifact_digest,omitempty"`
-	ApprovalStatus     ApprovalStatus         `json:"approval_status"`
-	Status             DeploymentIntentStatus `json:"status"`
-	SupersedesIntentID *uuid.UUID             `json:"supersedes_intent_id,omitempty"`
-	ApprovalMetadata   map[string]any         `json:"approval_metadata"`
-	Metadata           map[string]any         `json:"metadata"`
-	DesiredState       *DesiredServiceSpec    `json:"desired_state,omitempty"`
-	DesiredHash        string                 `json:"desired_hash,omitempty"`
-	CreatedAt          time.Time              `json:"created_at"`
-	ApprovedAt         *time.Time             `json:"approved_at,omitempty"`
-	UpdatedAt          time.Time              `json:"updated_at"`
+	ApprovalStatus      ApprovalStatus         `json:"approval_status"`
+	Status              DeploymentIntentStatus `json:"status"`
+	SupersedesIntentID  *uuid.UUID             `json:"supersedes_intent_id,omitempty"`
+	ApprovalMetadata    map[string]any         `json:"approval_metadata"`
+	Metadata            map[string]any         `json:"metadata"`
+	DesiredState        *DesiredServiceSpec    `json:"desired_state,omitempty"`
+	DesiredHash         string                 `json:"desired_hash,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
+	ApprovedAt          *time.Time             `json:"approved_at,omitempty"`
+	UpdatedAt           time.Time              `json:"updated_at"`
 }
 
 const RouteOnlyDeploymentRunLoomJobID = "runtime:route-only"

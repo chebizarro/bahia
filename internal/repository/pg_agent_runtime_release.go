@@ -203,6 +203,15 @@ func (r *PgAgentRuntimeReleaseRepository) ListServiceReleases(ctx context.Contex
 	return result, rows.Err()
 }
 
+// GetServiceRelease resolves a shared release only through a durable binding
+// to the requested service. The release remains the canonical digest and
+// provenance source; the binding contributes no duplicated artifact evidence.
+func (r *PgAgentRuntimeReleaseRepository) GetServiceRelease(ctx context.Context, orgID, serviceID, releaseID uuid.UUID) (*domain.AgentServiceRuntimeRelease, error) {
+	return scanAgentServiceRuntimeRelease(r.db.QueryRow(ctx, agentServiceReleaseJoin+`
+		WHERE b.org_id=$1 AND b.service_id=$2 AND b.release_id=$3
+		ORDER BY b.created_at DESC,b.id DESC LIMIT 1`, orgID, serviceID, releaseID))
+}
+
 func (r *PgAgentRuntimeReleaseRepository) GetRollbackRelease(ctx context.Context, orgID uuid.UUID, agentID string, serviceID uuid.UUID, channel string) (*domain.AgentServiceRuntimeRelease, error) {
 	return scanAgentServiceRuntimeRelease(r.db.QueryRow(ctx, agentServiceReleaseJoin+`
 		WHERE b.id=(

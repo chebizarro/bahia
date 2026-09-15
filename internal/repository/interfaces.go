@@ -520,5 +520,6 @@ type AgentRuntimeReleaseRepository interface {
 	GetReleaseByDigest(ctx context.Context, orgID uuid.UUID, imageRepo, imageDigest string) (*domain.AgentRuntimeRelease, error)
 	BindRelease(ctx context.Context, binding *domain.AgentServiceReleaseBinding) error
 	ListServiceReleases(ctx context.Context, orgID, serviceID uuid.UUID) ([]domain.AgentServiceRuntimeRelease, error)
+	GetServiceRelease(ctx context.Context, orgID, serviceID, releaseID uuid.UUID) (*domain.AgentServiceRuntimeRelease, error)
 	GetRollbackRelease(ctx context.Context, orgID uuid.UUID, agentID string, serviceID uuid.UUID, channel string) (*domain.AgentServiceRuntimeRelease, error)
 }

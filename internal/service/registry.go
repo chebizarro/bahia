@@ -46,6 +46,7 @@ type RegistryService struct {
 	environments                    repository.EnvironmentRepository
 	builds                          repository.BuildRepository
 	artifacts                       repository.ArtifactRepository
+	runtimeReleases                 repository.AgentRuntimeReleaseRepository
 	intents                         repository.DeploymentIntentRepository
 	runs                            repository.DeploymentRunRepository
 	observations                    repository.RuntimeObservationRepository
@@ -65,6 +66,14 @@ type RegistryOption func(*RegistryService)
 func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
 	return func(s *RegistryService) {
 		s.txExecutor = executor
+	}
+}
+
+// WithAgentRuntimeReleaseRepository enables deployment intents backed directly
+// by a shared verified agent runtime release.
+func WithAgentRuntimeReleaseRepository(releases repository.AgentRuntimeReleaseRepository) RegistryOption {
+	return func(s *RegistryService) {
+		s.runtimeReleases = releases
 	}
 }
 
@@ -1305,6 +1314,122 @@ func (s *RegistryService) DecideDeploymentIntentWithAudit(
 		},
 	})
 	return nil
+}
+
+type runtimeReleaseDeploymentIntentRepository interface {
+	CreateForRuntimeRelease(context.Context, uuid.UUID, *domain.DeploymentIntent) (bool, error)
+	GetByServiceRuntimeRelease(context.Context, uuid.UUID, uuid.UUID) (*domain.DeploymentIntent, error)
+}
+
+// CreateDeploymentIntentForRuntimeRelease is the release-backed intent entry
+// point for AgentRuntimePromotionService (#5). It creates at most one durable
+// deployment intent for a (service, release) pair and resolves image identity
+// from the service's bound AgentRuntimeRelease. It never creates an Artifact.
+func (s *RegistryService) CreateDeploymentIntentForRuntimeRelease(
+	ctx context.Context,
+	releaseID uuid.UUID,
+	di *domain.DeploymentIntent,
+) (*domain.RuntimeReleaseDeploymentIntent, error) {
+	if s == nil || s.services == nil || s.environments == nil || s.runtimeReleases == nil || s.intents == nil {
+		return nil, fmt.Errorf("runtime release deployment intent is not configured")
+	}
+	if di == nil || releaseID == uuid.Nil || di.ServiceID == uuid.Nil || di.EnvironmentID == uuid.Nil || strings.TrimSpace(di.RequestedBy) == "" || di.SourceKind == "" {
+		return nil, fmt.Errorf("runtime release deployment intent requires release, service, environment, requester, and source kind")
+	}
+	releaseIntents, ok := s.intents.(runtimeReleaseDeploymentIntentRepository)
+	if !ok {
+		return nil, fmt.Errorf("deployment intent repository does not support runtime releases")
+	}
+	svc, err := s.services.GetByID(ctx, di.ServiceID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up service: %w", err)
+	}
+	if svc == nil {
+		return nil, fmt.Errorf("service %s not found", di.ServiceID)
+	}
+	env, err := s.environments.GetByID(ctx, di.EnvironmentID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up environment: %w", err)
+	}
+	if env == nil {
+		return nil, fmt.Errorf("environment %s not found", di.EnvironmentID)
+	}
+	if svc.OrgID == uuid.Nil || env.OrgID != svc.OrgID {
+		return nil, fmt.Errorf("service and environment must belong to the same organization")
+	}
+	bound, err := s.runtimeReleases.GetServiceRelease(ctx, svc.OrgID, di.ServiceID, releaseID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bound runtime release: %w", err)
+	}
+	if bound == nil {
+		return nil, fmt.Errorf("runtime release %s is not bound to service %s", releaseID, di.ServiceID)
+	}
+	if env.Protected {
+		di.ApprovalStatus = domain.ApprovalStatusPending
+		di.Status = domain.IntentStatusPending
+	} else {
+		di.ApprovalStatus = domain.ApprovalStatusNotRequired
+		if di.Status == "" {
+			di.Status = domain.IntentStatusApproved
+		}
+	}
+	if di.Metadata == nil {
+		di.Metadata = map[string]any{}
+	}
+	di.Metadata["runtime_release_id"] = bound.Release.ID.String()
+	di.Metadata["image_repo"] = bound.Release.ImageRepo
+	di.Metadata["image_digest"] = bound.Release.ImageDigest
+	created, err := releaseIntents.CreateForRuntimeRelease(ctx, releaseID, di)
+	if err != nil {
+		return nil, err
+	}
+	if !created && di.EnvironmentID != env.ID {
+		return nil, fmt.Errorf("runtime release %s already has an intent for service %s in environment %s", releaseID, di.ServiceID, di.EnvironmentID)
+	}
+	return &domain.RuntimeReleaseDeploymentIntent{Intent: *di, Binding: bound.Binding, Release: bound.Release}, nil
+}
+
+// SubmitPromotionIntent implements the #5 PromotionIntentSink contract. The
+// runtime release ID is taken from the constructed intent metadata, then the
+// input is replaced with the durable replay-safe intent identity.
+func (s *RegistryService) SubmitPromotionIntent(ctx context.Context, intent *domain.DeploymentIntent) error {
+	if intent == nil || intent.Metadata == nil {
+		return fmt.Errorf("promotion intent requires runtime release metadata")
+	}
+	releaseID, err := uuid.Parse(strings.TrimSpace(fmt.Sprint(intent.Metadata["runtime_release_id"])))
+	if err != nil || releaseID == uuid.Nil {
+		return fmt.Errorf("promotion intent requires a valid runtime_release_id")
+	}
+	resolved, err := s.CreateDeploymentIntentForRuntimeRelease(ctx, releaseID, intent)
+	if err != nil {
+		return err
+	}
+	*intent = resolved.Intent
+	return nil
+}
+
+// GetDeploymentIntentForRuntimeRelease resolves the durable intent plus the
+// bound release's canonical digest and provenance for a (service, release) pair.
+func (s *RegistryService) GetDeploymentIntentForRuntimeRelease(
+	ctx context.Context,
+	orgID, serviceID, releaseID uuid.UUID,
+) (*domain.RuntimeReleaseDeploymentIntent, error) {
+	if s == nil || s.runtimeReleases == nil || s.intents == nil {
+		return nil, fmt.Errorf("runtime release deployment intent is not configured")
+	}
+	releaseIntents, ok := s.intents.(runtimeReleaseDeploymentIntentRepository)
+	if !ok {
+		return nil, fmt.Errorf("deployment intent repository does not support runtime releases")
+	}
+	bound, err := s.runtimeReleases.GetServiceRelease(ctx, orgID, serviceID, releaseID)
+	if err != nil || bound == nil {
+		return nil, err
+	}
+	intent, err := releaseIntents.GetByServiceRuntimeRelease(ctx, serviceID, releaseID)
+	if err != nil || intent == nil {
+		return nil, err
+	}
+	return &domain.RuntimeReleaseDeploymentIntent{Intent: *intent, Binding: bound.Binding, Release: bound.Release}, nil
 }
 
 // CreateDeploymentIntent creates a new deployment intent and updates the environment service state.
