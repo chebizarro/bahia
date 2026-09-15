@@ -131,6 +131,9 @@ func systemFor(stage Stage) string {
 	if stage == StageSignerEnrolled {
 		return "signet"
 	}
+	if stage == StageServiceRegistered || stage == StageReleaseSelected {
+		return "bahia_registry"
+	}
 	if stage == StageRuntimeAllocated {
 		return "runtime"
 	}
@@ -143,6 +146,10 @@ func rankFor(stage Stage) CompensationRank {
 	switch stage {
 	case StageSignerEnrolled:
 		return CompensateSignetPolicy
+	case StageServiceRegistered:
+		return CompensateServiceRegistration
+	case StageReleaseSelected:
+		return CompensateReleaseSelection
 	case StageRuntimeAllocated:
 		return CompensateContainer
 	case StageRunning:
@@ -251,7 +258,7 @@ func TestConflictIsRejectedBeforeMutationAndCreatedResourcesRollBack(t *testing.
 	if drivers[StageSignerEnrolled].applyCount != 0 {
 		t.Fatal("conflicting stage mutated")
 	}
-	if fmt.Sprint(order) != fmt.Sprint([]Stage{StageIdentityReserved, StageRuntimeAllocated}) {
+	if fmt.Sprint(order) != fmt.Sprint([]Stage{StageIdentityReserved, StageServiceRegistered, StageReleaseSelected, StageRuntimeAllocated}) {
 		t.Fatalf("compensation order = %v", order)
 	}
 }
