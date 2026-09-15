@@ -2,6 +2,8 @@ package soulfactory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -95,6 +97,15 @@ func (r GovernedProvisioningRequest) validate() error {
 	}
 }
 
+// runtimeBoundSpecHash makes the runtime target part of the durable saga spec
+// identity without widening the generic saga checkpoint schema. A restart with
+// a different runtime therefore presents a different spec to the existing
+// immutable-spec conflict guard.
+func runtimeBoundSpecHash(specHash string, runtime domain.RuntimeTarget) string {
+	sum := sha256.Sum256([]byte("bahia-governed-provisioning-spec/v1\x00" + strings.TrimSpace(specHash) + "\x00runtime\x00" + string(runtime)))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // ProvisioningSpec is the secret-free identity presented to provisioning ports.
 type ProvisioningSpec struct {
 	RequestID string
@@ -173,6 +184,7 @@ func NewGovernedProvisioner(store saga.Store, request GovernedProvisioningReques
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
+	request.SpecHash = runtimeBoundSpecHash(request.SpecHash, request.Runtime)
 	drivers := make([]saga.StageDriver, 0, len(governedOrder)+1)
 	for _, binding := range governedOrder {
 		drivers = append(drivers, &orderedStepDriver{binding: binding, port: steps, request: request})
@@ -190,19 +202,42 @@ func (g *GovernedProvisioner) Start(ctx context.Context) (*saga.Run, error) {
 }
 
 func (g *GovernedProvisioner) Reconcile(ctx context.Context, dryRun bool) (*saga.Report, error) {
+	if err := g.validateDurableRequest(ctx); err != nil {
+		return nil, err
+	}
 	return g.engine.Reconcile(ctx, g.request.RequestID, dryRun)
 }
 
 func (g *GovernedProvisioner) Retry(ctx context.Context, dryRun bool) (*saga.Report, error) {
+	if err := g.validateDurableRequest(ctx); err != nil {
+		return nil, err
+	}
 	return g.engine.Retry(ctx, g.request.RequestID, dryRun)
 }
 
 func (g *GovernedProvisioner) Inspect(ctx context.Context) (*saga.Report, error) {
+	if err := g.validateDurableRequest(ctx); err != nil {
+		return nil, err
+	}
 	return g.engine.Inspect(ctx, g.request.RequestID)
 }
 
 func (g *GovernedProvisioner) SafeAbort(ctx context.Context, dryRun bool) (*saga.Report, error) {
+	if err := g.validateDurableRequest(ctx); err != nil {
+		return nil, err
+	}
 	return g.engine.SafeAbort(ctx, g.request.RequestID, dryRun)
+}
+
+func (g *GovernedProvisioner) validateDurableRequest(ctx context.Context) error {
+	run, err := g.store.Load(ctx, g.request.RequestID)
+	if err != nil {
+		return err
+	}
+	if run.RunID != g.request.RunID || run.AgentID != g.request.AgentID || run.SpecHash != g.request.SpecHash {
+		return fmt.Errorf("%w: governed provisioning request identity, spec, or runtime differs", saga.ErrConflict)
+	}
+	return nil
 }
 
 // Run loads the durable checkpoint so callers can inspect saga status after a

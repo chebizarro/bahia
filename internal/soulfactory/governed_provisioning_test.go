@@ -516,6 +516,69 @@ func TestGovernedProvisioningStatusSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestGovernedProvisioningRestartRejectsRuntimeTargetChange(t *testing.T) {
+	dir := t.TempDir()
+	steps := newFakeProvisioningPort()
+	steps.inspectErr[StepDeployViaBahia] = &saga.SafeError{Code: "stage_failed", Retryable: true}
+	projection := newFakeProjectionPort()
+	request := openClawRequest("runtime-switch")
+	provisioner, store := newGovernedProvisioner(t, dir, request, steps, projection)
+	ctx := context.Background()
+	if _, err := provisioner.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provisioner.Reconcile(ctx, false); err == nil {
+		t.Fatal("expected interrupted OpenClaw deployment")
+	}
+	inflight, err := store.Load(ctx, request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inflight.Stage != saga.StageFailedRecoverable || inflight.ResumeStage != saga.StageRuntimeAllocated {
+		t.Fatalf("in-flight checkpoint = %s/%s", inflight.Stage, inflight.ResumeStage)
+	}
+	if inflight.SpecHash == request.SpecHash {
+		t.Fatal("durable spec hash did not bind the runtime target")
+	}
+
+	delete(steps.inspectErr, StepDeployViaBahia)
+	switched := request
+	switched.Runtime = domain.RuntimeTargetMetiq
+	restartedStore, err := saga.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewGovernedProvisioner(restartedStore, switched, steps, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Start(ctx); !errors.Is(err, saga.ErrConflict) {
+		t.Fatalf("runtime-switch restart error = %v", err)
+	}
+	if _, err := restarted.Reconcile(ctx, false); !errors.Is(err, saga.ErrConflict) {
+		t.Fatalf("runtime-switch reconcile error = %v", err)
+	}
+	if _, err := restarted.Retry(ctx, false); !errors.Is(err, saga.ErrConflict) {
+		t.Fatalf("runtime-switch retry error = %v", err)
+	}
+	after, err := restartedStore.Load(ctx, request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Stage != inflight.Stage || after.ResumeStage != inflight.ResumeStage || after.Version != inflight.Version {
+		t.Fatalf("runtime mismatch changed durable state: before=%#v after=%#v", inflight, after)
+	}
+	if steps.count(StepDeployViaBahia) != 0 {
+		t.Fatal("runtime mismatch resumed deployment")
+	}
+	if steps.releaseProv != "openclaw-hiveci" {
+		t.Fatalf("runtime release switched to %q", steps.releaseProv)
+	}
+	if projection.activePublished() {
+		t.Fatal("runtime mismatch activated the Soul")
+	}
+}
+
 func TestGovernedProvisioningOpenClawRuntimePath(t *testing.T) {
 	steps := newFakeProvisioningPort()
 	projection := newFakeProjectionPort()
