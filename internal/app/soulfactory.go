@@ -34,10 +34,11 @@ type soulFactorySignerClient interface {
 }
 
 type soulFactoryRuntime struct {
-	reactor    *soulfactory.Reactor
-	runner     BackgroundRunner
-	connection *signetAdapter.ConnectionManager
-	close      func() error
+	reactor     *soulfactory.Reactor
+	integration *soulfactory.BahiaIntegration
+	runner      BackgroundRunner
+	connection  *signetAdapter.ConnectionManager
+	close       func() error
 }
 
 var (
@@ -193,10 +194,11 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	})
 	logger.Info("SoulFactory runtime reactor configured; Signet connection will start asynchronously", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.Strings("agent_runtimes", sf.AgentRuntimes), zap.String("controller_pubkey", controllerPubkey))
 	return &soulFactoryRuntime{
-		reactor:    reactor,
-		runner:     &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
-		connection: connection,
-		close:      closeSigner,
+		reactor:     reactor,
+		integration: bahiaIntegration,
+		runner:      &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
+		connection:  connection,
+		close:       closeSigner,
 	}, nil
 }
 

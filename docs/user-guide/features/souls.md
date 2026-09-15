@@ -329,6 +329,15 @@ The OpenClaw sidecar stores its trusted controller set in a mounted policy file 
 
 If `workspace_gitea_url` is set, generated OpenClaw workspace config uses the configured SoulFactory/OpenClaw runtime-control relays, Signet/controller pubkey, LLM model, and secret/config references above. Workspace repository publication is a separate NIP-34/ngit operation: ngit publication relays are required independently from OpenClaw runtime-control relays and are not treated as generic control-plane substitutes. Bahia fails configuration or workspace generation explicitly when required values are missing or pubkeys are not 64-character hex strings; it does not write placeholder relays, controllers, inline private keys, fake MCP URLs, or silently substitute OpenClaw control relays for missing ngit publication relays in production workspace files.
 
+## Legacy Runtime Reconciliation
+
+Platform administrators can reconcile an active kind-`31951` Soul that already has an exact running runtime but lacks `bahia_service_id`. The supported HTTP surface is dry-run-first:
+
+- `POST /api/v1/soulfactory/legacy-reconciliation/preview` reloads the current authoritative Soul and returns its linked, unlinked, ambiguous, or orphaned classification.
+- `POST /api/v1/soulfactory/legacy-reconciliation/apply` accepts that exact classification plus `approval_ref`. The NIP-98 signed request body binds the authenticated operator to the agent ID, link action, Soul event ID, content hash, matched evidence, and reviewed placement.
+
+Both endpoints require an authenticated NIP-98 platform administrator and fail closed when HTTP authentication is disabled. Apply creates or reuses the canonical service and one adopted, observe-only deployment unit, records the exact supplied runtime configuration, and publishes a superseding kind-`31951` that only adds `bahia_service_id`. It does not publish kind `25910`, deploy, restart, re-key, or change mounts, grants, ACLs, or custody. Live runtime evidence and reviewed placement must be supplied in the request; ambiguous, orphaned, stale, forged, or mismatched input is refused.
+
 ## Authorization
 
 Provisioning requires configured requester pubkeys in `soul_factory.authorized_pubkeys`. Use 64-character hex Nostr pubkeys, not npub strings, in server config.

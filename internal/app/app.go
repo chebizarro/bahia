@@ -1691,6 +1691,21 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
+	var legacyAgentReconciler *soulfactory.LegacyAgentReconciler
+	if soulFactoryRuntime != nil && deploymentUnitRepo != nil {
+		legacyAgentReconciler, err = soulfactory.NewLegacyAgentReconciler(
+			soulFactoryRuntime.integration,
+			registry,
+			deploymentUnitRepo,
+			soulFactoryRuntime.reactor,
+			soulFactoryRuntime.reactor,
+			slog.Default(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure legacy Soul reconciliation: %w", err)
+		}
+	}
+
 	var nip98Validator *auth.NIP98Validator
 	var nip05Resolver *auth.NIP05Resolver
 	if cfg.Auth.Enabled {
@@ -1717,43 +1732,44 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Config:               cfg,
-			AuthMiddleware:       authMiddleware,
-			Workers:              workerRepo,
-			Builds:               buildRepo,
-			Runs:                 runRepo,
-			Services:             serviceRepo,
-			Environments:         envRepo,
-			DeploymentUnits:      deploymentUnitRepo,
-			EnvStates:            stateRepo,
-			InstanceHealth:       managedInstanceHealthRepo,
-			RouteCanaries:        routeCanaryReader,
-			RouteHealth:          routeCanaryHealthReader,
-			InstanceOperator:     managedInstanceSupervisor,
-			RuntimeResolver:      runtimeResolver,
-			Payments:             paymentSvc,
-			SBOMs:                sbomRepo,
-			SBOMImporter:         sbomOrchestrator,
-			Artifacts:            artifactRepo,
-			Policies:             policySvc,
-			Adoption:             adoptionSvc,
-			RuntimeLifecycle:     runtimeLifecycleSvc,
-			AgentRuntimeReleases: agentRuntimeReleaseSvc,
-			Secrets:              secretRepo,
-			Encryptor:            secretEncryptor,
-			Notifications:        notifRepo,
-			Dispatcher:           notifDispatcher,
-			MCP:                  mcpHandler,
-			Blossom:              blossomClient,
-			OCI:                  ociHandler,
-			Orgs:                 orgRepo,
-			OrgMembers:           orgMemberRepo,
-			OrgInvites:           orgInviteRepo,
-			RBAC:                 tenantRBAC,
-			MLRegistry:           mlRegistry,
-			MLCommands:           mlCommandPublisher,
-			LLMRegistry:          llmRegistry,
-			ConfigFabric:         configFabricSvc,
+			Config:                    cfg,
+			AuthMiddleware:            authMiddleware,
+			Workers:                   workerRepo,
+			Builds:                    buildRepo,
+			Runs:                      runRepo,
+			Services:                  serviceRepo,
+			Environments:              envRepo,
+			DeploymentUnits:           deploymentUnitRepo,
+			EnvStates:                 stateRepo,
+			InstanceHealth:            managedInstanceHealthRepo,
+			RouteCanaries:             routeCanaryReader,
+			RouteHealth:               routeCanaryHealthReader,
+			InstanceOperator:          managedInstanceSupervisor,
+			RuntimeResolver:           runtimeResolver,
+			Payments:                  paymentSvc,
+			SBOMs:                     sbomRepo,
+			SBOMImporter:              sbomOrchestrator,
+			Artifacts:                 artifactRepo,
+			Policies:                  policySvc,
+			Adoption:                  adoptionSvc,
+			RuntimeLifecycle:          runtimeLifecycleSvc,
+			AgentRuntimeReleases:      agentRuntimeReleaseSvc,
+			LegacyAgentReconciliation: legacyAgentReconciler,
+			Secrets:                   secretRepo,
+			Encryptor:                 secretEncryptor,
+			Notifications:             notifRepo,
+			Dispatcher:                notifDispatcher,
+			MCP:                       mcpHandler,
+			Blossom:                   blossomClient,
+			OCI:                       ociHandler,
+			Orgs:                      orgRepo,
+			OrgMembers:                orgMemberRepo,
+			OrgInvites:                orgInviteRepo,
+			RBAC:                      tenantRBAC,
+			MLRegistry:                mlRegistry,
+			MLCommands:                mlCommandPublisher,
+			LLMRegistry:               llmRegistry,
+			ConfigFabric:              configFabricSvc,
 
 			HealthProvider: healthProvider,
 			ModePolicy:     policy,

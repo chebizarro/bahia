@@ -2,6 +2,9 @@ package soulfactory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -25,7 +29,7 @@ const (
 	// legacyAgentReconcileActionLink is the only mutation the reconciliation
 	// write path is authorized to perform: attach an already-existing Soul to
 	// exactly one Bahia service without reprovisioning.
-	legacyAgentReconcileActionLink = "link_existing_soul_to_bahia_service"
+	LegacyAgentReconcileActionLink = "link_existing_soul_to_bahia_service"
 
 	legacyReconcileStatusLinked    = "linked"
 	legacyReconcileStatusUnlinked  = "unlinked"
@@ -46,12 +50,21 @@ var (
 // running runtimes, and Bahia services. Collection and mutation are deliberately
 // outside this classifier; the classifier only previews.
 type LegacyAgentReconciliationInput struct {
-	Schema            string                    `json:"schema"`
-	Souls             []LegacyReconcileSoul     `json:"souls"`
-	RuntimeAgents     []LegacyRunningAgent      `json:"running_agents"`
-	Services          []LegacyReconcileService  `json:"services"`
-	Approvals         []LegacyReconcileApproval `json:"approvals,omitempty"`
-	ReviewedPlacement map[string]string         `json:"operator_reviewed_placement,omitempty"`
+	Schema            string                             `json:"schema"`
+	Souls             []LegacyReconcileSoul              `json:"souls"`
+	RuntimeAgents     []LegacyRunningAgent               `json:"running_agents"`
+	Services          []LegacyReconcileService           `json:"services"`
+	Approvals         []LegacyReconcileApproval          `json:"approvals,omitempty"`
+	ReviewedPlacement map[string]LegacyReviewedPlacement `json:"operator_reviewed_placement,omitempty"`
+}
+
+// LegacyReviewedPlacement is the operator-reviewed Bahia placement for the
+// already-running runtime. Reconciliation records it but never starts or moves
+// the runtime.
+type LegacyReviewedPlacement struct {
+	Ref               string `json:"ref"`
+	EnvironmentID     string `json:"environment_id"`
+	DeploymentUnitKey string `json:"deployment_unit_key,omitempty"`
 }
 
 // LegacyReconcileSoul is the read-only projection of one kind:31951 Soul.
@@ -74,21 +87,24 @@ type LegacyReconcileSoul struct {
 
 // LegacyReconcileService is the read-only projection of one Bahia service.
 type LegacyReconcileService struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	ArtifactRepo string `json:"artifact_repo"`
-	RuntimeType  string `json:"runtime_type,omitempty"`
-	SourceRef    string `json:"source_ref"`
+	ID            string                       `json:"id"`
+	Name          string                       `json:"name"`
+	ArtifactRepo  string                       `json:"artifact_repo"`
+	RuntimeType   string                       `json:"runtime_type,omitempty"`
+	SourceRef     string                       `json:"source_ref"`
+	RuntimeConfig *domain.ServiceRuntimeConfig `json:"runtime_config,omitempty"`
 }
 
 // LegacyReconcileApproval is the explicit operator authorization required
 // before any write. It must name the exact agent identity and action.
 type LegacyReconcileApproval struct {
-	AgentID      string `json:"agent_id"`
-	Action       string `json:"action"`
-	ApprovedBy   string `json:"approved_by"`
-	ApprovalRef  string `json:"approval_ref"`
-	PlacementRef string `json:"placement_ref,omitempty"`
+	AgentID         string          `json:"agent_id"`
+	Action          string          `json:"action"`
+	SoulEventID     string          `json:"soul_event_id"`
+	SoulContentHash string          `json:"soul_content_hash"`
+	ApprovedBy      string          `json:"approved_by"`
+	ApprovalRef     string          `json:"approval_ref"`
+	Principal       *auth.Principal `json:"-"`
 }
 
 // LegacyAgentReconciliationReport is the dry-run preview. It never mutates.
@@ -113,6 +129,7 @@ type LegacyAgentReconciliationSummary struct {
 type LegacyAgentReconciliationClassification struct {
 	AgentID             string               `json:"agent_id"`
 	SoulEventID         string               `json:"soul_event_id"`
+	SoulContentHash     string               `json:"soul_content_hash,omitempty"`
 	Status              string               `json:"status"`
 	ReasonCode          string               `json:"reason_code"`
 	ExistingServiceID   string               `json:"existing_service_id,omitempty"`
@@ -131,7 +148,7 @@ type LegacyReconcilePlan struct {
 	ServiceName         string                  `json:"service_name"`
 	ServiceArtifactRepo string                  `json:"service_artifact_repo"`
 	ReuseServiceID      string                  `json:"reuse_service_id,omitempty"`
-	PlacementRef        string                  `json:"operator_reviewed_placement,omitempty"`
+	Placement           LegacyReviewedPlacement `json:"operator_reviewed_placement"`
 	PreservePubkey      string                  `json:"preserve_managed_pubkey,omitempty"`
 	PreserveRuntime     string                  `json:"preserve_runtime_binding,omitempty"`
 	PreserveWorkspace   string                  `json:"preserve_workspace,omitempty"`
@@ -158,6 +175,8 @@ type LegacyAgentReconcileReceipt struct {
 	NoOp                    bool                    `json:"no_op"`
 	ServiceCreated          bool                    `json:"service_created"`
 	ServiceID               uuid.UUID               `json:"service_id"`
+	DeploymentUnitID        uuid.UUID               `json:"deployment_unit_id"`
+	RuntimeAdopted          bool                    `json:"runtime_adopted"`
 	SupersedingSoulEventID  string                  `json:"superseding_soul_event_id,omitempty"`
 	PreviousSoulEventID     string                  `json:"previous_soul_event_id,omitempty"`
 	PreservedRuntimeBinding string                  `json:"preserved_runtime_binding,omitempty"`
@@ -212,41 +231,46 @@ func ClassifyLegacyAgentReconciliation(input LegacyAgentReconciliationInput) (Le
 	return report, nil
 }
 
-func classifyLegacyReconcileSoul(soul LegacyReconcileSoul, agents []LegacyRunningAgent, services []LegacyReconcileService, placement map[string]string) LegacyAgentReconciliationClassification {
+func classifyLegacyReconcileSoul(soul LegacyReconcileSoul, agents []LegacyRunningAgent, services []LegacyReconcileService, placement map[string]LegacyReviewedPlacement) LegacyAgentReconciliationClassification {
 	classification := LegacyAgentReconciliationClassification{AgentID: soul.AgentID, SoulEventID: soul.EventID}
 
+	var linkedService *LegacyReconcileService
 	if strings.TrimSpace(soul.BahiaServiceID) != "" {
-		svc := findLegacyServiceByID(services, soul.BahiaServiceID)
-		if svc == nil {
+		linkedService = findLegacyServiceByID(services, soul.BahiaServiceID)
+		if linkedService == nil {
 			classification.Status = legacyReconcileStatusOrphaned
 			classification.ReasonCode = "missing_service_reference"
 			return classification
 		}
-		classification.Status = legacyReconcileStatusLinked
-		classification.ReasonCode = "service_link_present"
-		classification.ExistingServiceID = svc.ID
-		return classification
+		if linkedService.Name != soulServiceName(soul.AgentID) || linkedService.ArtifactRepo != soulServiceArtifactRepo(soul.AgentID) {
+			classification.Status = legacyReconcileStatusAmbiguous
+			classification.ReasonCode = "linked_service_identity_mismatch"
+			classification.CandidateServiceIDs = []string{linkedService.ID}
+			return classification
+		}
 	}
 
 	nameMatches, conflicts := findLegacyServicesByName(services, soul.AgentID)
-	if len(conflicts) > 0 {
+	if linkedService == nil && len(conflicts) > 0 {
 		classification.Status = legacyReconcileStatusAmbiguous
 		classification.ReasonCode = "service_identity_conflict"
 		classification.CandidateServiceIDs = conflicts
 		return classification
 	}
 	var reuseService *LegacyReconcileService
-	switch len(nameMatches) {
-	case 0:
-	case 1:
-		reuseService = &nameMatches[0]
-	default:
-		classification.Status = legacyReconcileStatusAmbiguous
-		classification.ReasonCode = "multiple_service_matches"
-		for _, svc := range nameMatches {
-			classification.CandidateServiceIDs = append(classification.CandidateServiceIDs, svc.ID)
+	if linkedService == nil {
+		switch len(nameMatches) {
+		case 0:
+		case 1:
+			reuseService = &nameMatches[0]
+		default:
+			classification.Status = legacyReconcileStatusAmbiguous
+			classification.ReasonCode = "multiple_service_matches"
+			for _, svc := range nameMatches {
+				classification.CandidateServiceIDs = append(classification.CandidateServiceIDs, svc.ID)
+			}
+			return classification
 		}
-		return classification
 	}
 
 	matches, runtimeConflicts := legacyReconcileRuntimeMatches(soul, agents)
@@ -267,22 +291,81 @@ func classifyLegacyReconcileSoul(soul LegacyReconcileSoul, agents []LegacyRunnin
 	if len(matches) == 0 {
 		classification.Status = legacyReconcileStatusOrphaned
 		classification.ReasonCode = "no_runtime_match"
-		if reuseService != nil {
+		if linkedService != nil {
+			classification.ExistingServiceID = linkedService.ID
+		} else if reuseService != nil {
 			classification.ExistingServiceID = reuseService.ID
 		}
 		return classification
 	}
 
 	match := matches[0]
-	classification.Status = legacyReconcileStatusUnlinked
-	classification.ReasonCode = "single_authoritative_runtime_match_requires_operator_approval"
 	classification.MatchedRuntimeIDs = []string{match.agent.InventoryID}
 	classification.MatchedEvidence = match.fields
-	if reuseService != nil {
-		classification.ExistingServiceID = reuseService.ID
+	if linkedService != nil {
+		classification.ExistingServiceID = linkedService.ID
+		if !legacyServiceAdoptsRuntime(*linkedService, match.agent) {
+			classification.Status = legacyReconcileStatusOrphaned
+			classification.ReasonCode = "linked_service_runtime_mismatch"
+			return classification
+		}
+		classification.Status = legacyReconcileStatusLinked
+		classification.ReasonCode = "service_link_and_runtime_adoption_verified"
+	} else {
+		classification.Status = legacyReconcileStatusUnlinked
+		classification.ReasonCode = "single_authoritative_runtime_match_requires_operator_approval"
+		if reuseService != nil {
+			classification.ExistingServiceID = reuseService.ID
+		}
+		classification.Plan = buildLegacyReconcilePlan(soul, match, reuseService, placement)
 	}
-	classification.Plan = buildLegacyReconcilePlan(soul, match, reuseService, placement)
+	classification.SoulContentHash = legacyClassificationContentHash(soul, classification.MatchedRuntimeIDs, classification.MatchedEvidence, placement[soul.AgentID], agents)
 	return classification
+}
+
+func legacyServiceAdoptsRuntime(service LegacyReconcileService, runtime LegacyRunningAgent) bool {
+	return runtime.AdoptedRuntime != nil &&
+		service.RuntimeType == string(runtime.RuntimeType) &&
+		service.RuntimeConfig != nil &&
+		reflect.DeepEqual(service.RuntimeConfig.Adopted, runtime.AdoptedRuntime)
+}
+
+func legacyClassificationContentHash(soul LegacyReconcileSoul, runtimeIDs, evidence []string, placement LegacyReviewedPlacement, runtimeAgents []LegacyRunningAgent) string {
+	payload := struct {
+		AgentID           string                  `json:"agent_id"`
+		ManagedPubkey     string                  `json:"managed_pubkey"`
+		RuntimeBinding    string                  `json:"runtime_binding"`
+		RuntimeState      string                  `json:"runtime_state"`
+		RuntimeTarget     string                  `json:"runtime_target"`
+		Workspace         string                  `json:"workspace"`
+		PersonaRef        string                  `json:"persona_ref"`
+		CustodyRef        string                  `json:"custody_ref"`
+		AllowedKinds      []int                   `json:"allowed_kinds"`
+		MatchedRuntimeIDs []string                `json:"matched_runtime_ids"`
+		MatchedEvidence   []string                `json:"matched_evidence"`
+		Placement         LegacyReviewedPlacement `json:"operator_reviewed_placement"`
+		RuntimeEvidence   []LegacyRunningAgent    `json:"runtime_evidence"`
+	}{
+		AgentID: soul.AgentID, ManagedPubkey: soul.AgentPubkey, RuntimeBinding: soul.RuntimeBinding,
+		RuntimeState: soul.RuntimeState, RuntimeTarget: soul.RuntimeTarget, Workspace: soul.Workspace,
+		PersonaRef: soul.PersonaRef, CustodyRef: soul.CustodyRef, AllowedKinds: append([]int(nil), soul.AllowedKinds...),
+		MatchedRuntimeIDs: sortedCopy(runtimeIDs), MatchedEvidence: sortedCopy(evidence), Placement: placement,
+	}
+	wanted := make(map[string]struct{}, len(runtimeIDs))
+	for _, id := range runtimeIDs {
+		wanted[id] = struct{}{}
+	}
+	for _, runtime := range runtimeAgents {
+		if _, ok := wanted[runtime.InventoryID]; ok {
+			payload.RuntimeEvidence = append(payload.RuntimeEvidence, runtime)
+		}
+	}
+	sort.Slice(payload.RuntimeEvidence, func(i, j int) bool {
+		return payload.RuntimeEvidence[i].InventoryID < payload.RuntimeEvidence[j].InventoryID
+	})
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 type legacyReconcileRuntimeMatch struct {
@@ -319,7 +402,7 @@ func legacyReconcileRuntimeMatches(soul LegacyReconcileSoul, agents []LegacyRunn
 	return matches, conflicts
 }
 
-func buildLegacyReconcilePlan(soul LegacyReconcileSoul, match legacyReconcileRuntimeMatch, reuse *LegacyReconcileService, placement map[string]string) *LegacyReconcilePlan {
+func buildLegacyReconcilePlan(soul LegacyReconcileSoul, match legacyReconcileRuntimeMatch, reuse *LegacyReconcileService, placement map[string]LegacyReviewedPlacement) *LegacyReconcilePlan {
 	rollback := LegacyReconcileRollback{
 		PreviousSoulEventID: soul.EventID,
 		Steps: []string{
@@ -334,7 +417,7 @@ func buildLegacyReconcilePlan(soul LegacyReconcileSoul, match legacyReconcileRun
 	}
 
 	plan := &LegacyReconcilePlan{
-		Action:              legacyAgentReconcileActionLink,
+		Action:              LegacyAgentReconcileActionLink,
 		OperatorApproval:    "Explicitly name this agent identity and this exact action; classification alone performs no mutation.",
 		AgentID:             soul.AgentID,
 		ServiceName:         soulServiceName(soul.AgentID),
@@ -364,7 +447,7 @@ func buildLegacyReconcilePlan(soul LegacyReconcileSoul, match legacyReconcileRun
 		plan.ReuseServiceID = reuse.ID
 	}
 	if placement != nil {
-		plan.PlacementRef = strings.TrimSpace(placement[soul.AgentID])
+		plan.Placement = placement[soul.AgentID]
 	}
 	return plan
 }
@@ -402,9 +485,22 @@ type LegacyServiceRegistrar interface {
 	RegisterSoulAsService(ctx context.Context, soul *domain.AgentSoul) (uuid.UUID, error)
 }
 
-// LegacyServiceLookup is satisfied by *service.RegistryService.
-type LegacyServiceLookup interface {
+// LegacyServiceStore is satisfied by *service.RegistryService.
+type LegacyServiceStore interface {
 	GetServiceByName(ctx context.Context, name string) (*domain.Service, error)
+	ListServices(ctx context.Context) ([]domain.Service, error)
+	UpdateService(ctx context.Context, service *domain.Service) error
+}
+
+// LegacyDeploymentUnitStore is satisfied by repository.DeploymentUnitRepository.
+type LegacyDeploymentUnitStore interface {
+	Create(ctx context.Context, unit *domain.DeploymentUnit) error
+	GetByEnvironmentKey(ctx context.Context, environmentID uuid.UUID, key string) (*domain.DeploymentUnit, error)
+}
+
+// LegacySoulSource returns the current authoritative replaceable Soul event.
+type LegacySoulSource interface {
+	GetSoul(ctx context.Context, agentID string) (*domain.AgentSoul, error)
 }
 
 // LegacySoulLinkPublisher is satisfied by *Reactor.
@@ -412,125 +508,324 @@ type LegacySoulLinkPublisher interface {
 	PublishSoul(ctx context.Context, soul *domain.AgentSoul) error
 }
 
-// LegacyAgentReconciler performs the approval-gated write side of
-// reconciliation. It never reprovisions, restarts, re-keys, or mutates grants.
+// LegacyAgentReconciliationRequest is the authenticated dry-run request.
+type LegacyAgentReconciliationRequest struct {
+	AgentID           string                  `json:"agent_id"`
+	RuntimeAgents     []LegacyRunningAgent    `json:"running_agents"`
+	ReviewedPlacement LegacyReviewedPlacement `json:"operator_reviewed_placement"`
+}
+
+// LegacyAgentReconcileApplyRequest is dry-run-first: apply must present the
+// exact classification returned by Preview plus the same runtime evidence and
+// reviewed placement.
+type LegacyAgentReconcileApplyRequest struct {
+	LegacyAgentReconciliationRequest
+	Classification LegacyAgentReconciliationClassification `json:"classification"`
+}
+
+// LegacyAgentReconciler performs the authenticated write side of reconciliation.
+// It records the already-running runtime but never starts, stops, or changes it.
 type LegacyAgentReconciler struct {
 	registrar LegacyServiceRegistrar
-	lookup    LegacyServiceLookup
+	services  LegacyServiceStore
+	units     LegacyDeploymentUnitStore
+	souls     LegacySoulSource
 	publisher LegacySoulLinkPublisher
 	logger    *slog.Logger
 }
 
-// NewLegacyAgentReconciler builds a reconciler. All dependencies are required.
-func NewLegacyAgentReconciler(registrar LegacyServiceRegistrar, lookup LegacyServiceLookup, publisher LegacySoulLinkPublisher, logger *slog.Logger) (*LegacyAgentReconciler, error) {
-	if registrar == nil || lookup == nil || publisher == nil {
-		return nil, fmt.Errorf("legacy agent reconciler requires registrar, service lookup, and soul publisher")
+// NewLegacyAgentReconciler builds the production-capable reconciler. All
+// dependencies are required so the supported surface fails closed.
+func NewLegacyAgentReconciler(registrar LegacyServiceRegistrar, services LegacyServiceStore, units LegacyDeploymentUnitStore, souls LegacySoulSource, publisher LegacySoulLinkPublisher, logger *slog.Logger) (*LegacyAgentReconciler, error) {
+	if registrar == nil || services == nil || units == nil || souls == nil || publisher == nil {
+		return nil, fmt.Errorf("legacy agent reconciler requires registrar, service store, deployment units, authoritative soul source, and soul publisher")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LegacyAgentReconciler{registrar: registrar, lookup: lookup, publisher: publisher, logger: logger}, nil
+	return &LegacyAgentReconciler{registrar: registrar, services: services, units: units, souls: souls, publisher: publisher, logger: logger}, nil
 }
 
-// ReconcileApprovedLink links exactly one already-existing Soul to exactly one
-// Bahia service and publishes a superseding kind:31951 read model that adds
-// bahia_service_id. It reuses an existing service by name, so re-runs create no
-// duplicate service. Ambiguous and orphaned classifications are refused.
-func (r *LegacyAgentReconciler) ReconcileApprovedLink(ctx context.Context, soul *domain.AgentSoul, classification LegacyAgentReconciliationClassification, approval LegacyReconcileApproval) (LegacyAgentReconcileReceipt, error) {
-	receipt := LegacyAgentReconcileReceipt{
-		Schema:  legacyAgentReconciliationReceiptSchema,
-		AgentID: approval.AgentID,
-		Action:  legacyAgentReconcileActionLink,
+// Preview reloads the authoritative Soul and Bahia services before classifying.
+func (r *LegacyAgentReconciler) Preview(ctx context.Context, request LegacyAgentReconciliationRequest) (LegacyAgentReconciliationReport, error) {
+	_, report, err := r.loadCurrentClassification(ctx, request)
+	return report, err
+}
+
+func (r *LegacyAgentReconciler) loadCurrentClassification(ctx context.Context, request LegacyAgentReconciliationRequest) (*domain.AgentSoul, LegacyAgentReconciliationReport, error) {
+	agentID := strings.TrimSpace(request.AgentID)
+	if agentID == "" {
+		return nil, LegacyAgentReconciliationReport{}, fmt.Errorf("%w: agent_id is required", ErrLegacyReconciliationRefused)
 	}
-	if soul == nil {
-		return receipt, fmt.Errorf("%w: soul is required", ErrLegacyReconciliationRefused)
+	soul, err := r.souls.GetSoul(ctx, agentID)
+	if err != nil {
+		return nil, LegacyAgentReconciliationReport{}, fmt.Errorf("load current authoritative soul: %w", err)
 	}
-	if err := validateLegacyReconcileApproval(approval); err != nil {
+	if soul == nil || soul.AgentID != agentID {
+		return nil, LegacyAgentReconciliationReport{}, fmt.Errorf("%w: current authoritative Soul not found", ErrLegacyReconciliationRefused)
+	}
+	services, err := r.services.ListServices(ctx)
+	if err != nil {
+		return nil, LegacyAgentReconciliationReport{}, fmt.Errorf("list Bahia services: %w", err)
+	}
+	input := LegacyAgentReconciliationInput{
+		Schema:            LegacyAgentReconciliationInputSchemaV1,
+		Souls:             []LegacyReconcileSoul{legacySoulProjection(soul)},
+		RuntimeAgents:     append([]LegacyRunningAgent(nil), request.RuntimeAgents...),
+		ReviewedPlacement: map[string]LegacyReviewedPlacement{agentID: request.ReviewedPlacement},
+	}
+	for i := range services {
+		input.Services = append(input.Services, LegacyReconcileService{
+			ID: services[i].ID.String(), Name: services[i].Name, ArtifactRepo: services[i].ArtifactRepo,
+			RuntimeType: string(services[i].RuntimeType), RuntimeConfig: cloneServiceRuntimeConfig(services[i].RuntimeConfig),
+			SourceRef: "bahia-service:" + services[i].ID.String(),
+		})
+	}
+	report, err := ClassifyLegacyAgentReconciliation(input)
+	return soul, report, err
+}
+
+func legacySoulProjection(soul *domain.AgentSoul) LegacyReconcileSoul {
+	projection := LegacyReconcileSoul{
+		EventID: soul.EventID, AgentID: soul.AgentID, Name: soul.Name, Status: string(soul.Status),
+		AgentPubkey: soul.NostrPubkey, RuntimeBinding: soul.Runtime.RuntimeBinding, RuntimeState: soul.Runtime.State,
+		RuntimeTarget: string(soul.Runtime.Target), Workspace: soul.WorkspaceRepoURL, PersonaRef: "",
+		AllowedKinds: append([]int(nil), soul.AllowedKinds...), SourceRef: "soul-event:" + soul.EventID,
+	}
+	if soul.BahiaServiceID != nil {
+		projection.BahiaServiceID = soul.BahiaServiceID.String()
+	}
+	return projection
+}
+
+// ReconcileApprovedLink reloads and reclassifies the current authoritative Soul,
+// refuses stale/fabricated previews, records the exact runtime as adopted in one
+// observe-only deployment unit, then publishes a Soul that only adds the link.
+func (r *LegacyAgentReconciler) ReconcileApprovedLink(ctx context.Context, request LegacyAgentReconcileApplyRequest, approval LegacyReconcileApproval) (LegacyAgentReconcileReceipt, error) {
+	receipt := LegacyAgentReconcileReceipt{Schema: legacyAgentReconciliationReceiptSchema, AgentID: request.AgentID, Action: LegacyAgentReconcileActionLink}
+	soul, report, err := r.loadCurrentClassification(ctx, request.LegacyAgentReconciliationRequest)
+	if err != nil && !errors.Is(err, ErrLegacyReconciliationAmbiguous) {
 		return receipt, err
 	}
-	if strings.TrimSpace(soul.AgentID) == "" || strings.TrimSpace(approval.AgentID) != soul.AgentID {
-		return receipt, fmt.Errorf("%w: approval agent_id does not match soul", ErrLegacyReconciliationRefused)
+	if len(report.Classifications) != 1 {
+		return receipt, fmt.Errorf("%w: current classification unavailable", ErrLegacyReconciliationRefused)
 	}
-	if classification.AgentID != "" && classification.AgentID != soul.AgentID {
-		return receipt, fmt.Errorf("%w: classification agent_id does not match soul", ErrLegacyReconciliationRefused)
+	current := report.Classifications[0]
+	if request.Classification.SoulEventID != soul.EventID || request.Classification.SoulEventID != current.SoulEventID ||
+		request.Classification.SoulContentHash == "" || request.Classification.SoulContentHash != current.SoulContentHash ||
+		request.Classification.AgentID != current.AgentID || request.Classification.Status != current.Status ||
+		!reflect.DeepEqual(request.Classification.MatchedRuntimeIDs, current.MatchedRuntimeIDs) ||
+		!reflect.DeepEqual(request.Classification.MatchedEvidence, current.MatchedEvidence) {
+		return receipt, fmt.Errorf("%w: classification is stale or does not describe the current Soul and runtime evidence", ErrLegacyReconciliationRefused)
 	}
-	switch classification.Status {
-	case legacyReconcileStatusLinked, legacyReconcileStatusUnlinked:
-	case legacyReconcileStatusAmbiguous:
-		return receipt, fmt.Errorf("%w: ambiguous classification %q", ErrLegacyReconciliationRefused, classification.ReasonCode)
-	case legacyReconcileStatusOrphaned:
-		return receipt, fmt.Errorf("%w: orphaned classification %q", ErrLegacyReconciliationRefused, classification.ReasonCode)
-	default:
-		return receipt, fmt.Errorf("%w: unknown classification status %q", ErrLegacyReconciliationRefused, classification.Status)
+	if err := validateLegacyReconcileApproval(approval, current); err != nil {
+		return receipt, err
+	}
+	if current.Status == legacyReconcileStatusAmbiguous || current.Status == legacyReconcileStatusOrphaned {
+		return receipt, fmt.Errorf("%w: %s classification %q", ErrLegacyReconciliationRefused, current.Status, current.ReasonCode)
 	}
 	if soul.Status != domain.SoulStatusActive {
 		return receipt, fmt.Errorf("%w: soul status %q is not active", ErrLegacyReconciliationRefused, soul.Status)
 	}
+	matched, err := matchedLegacyRuntime(request.RuntimeAgents, current)
+	if err != nil {
+		return receipt, err
+	}
 
 	name := soulServiceName(soul.AgentID)
-	existing, err := r.lookup.GetServiceByName(ctx, name)
+	existing, err := r.services.GetServiceByName(ctx, name)
 	if err != nil {
 		return receipt, fmt.Errorf("look up existing service: %w", err)
 	}
+	serviceID, err := r.registrar.RegisterSoulAsService(ctx, soul)
+	if err != nil {
+		return receipt, fmt.Errorf("register soul as service: %w", err)
+	}
+	confirmed, err := r.services.GetServiceByName(ctx, name)
+	if err != nil || confirmed == nil || confirmed.ID != serviceID {
+		return receipt, fmt.Errorf("confirm service %q after registration: %w", name, err)
+	}
+	if confirmed.Name != name || confirmed.ArtifactRepo != soulServiceArtifactRepo(soul.AgentID) {
+		return receipt, fmt.Errorf("%w: service identity does not match current Soul", ErrLegacyReconciliationRefused)
+	}
+	if err := r.ensureExactAdoptedService(ctx, confirmed, matched); err != nil {
+		return receipt, err
+	}
+	unit, err := r.ensureExactAdoptedUnit(ctx, confirmed, matched, request.ReviewedPlacement)
+	if err != nil {
+		return receipt, err
+	}
 
-	// Idempotency: an already-linked Soul is a no-op even if the caller passed
-	// a stale classification. Re-runs never create a duplicate service.
 	if soul.BahiaServiceID != nil {
-		if existing == nil || existing.ID != *soul.BahiaServiceID {
-			return receipt, fmt.Errorf("%w: soul references service %s that is not present", ErrLegacyReconciliationRefused, soul.BahiaServiceID)
+		if *soul.BahiaServiceID != serviceID || current.Status != legacyReconcileStatusLinked {
+			return receipt, fmt.Errorf("%w: existing Soul link is not fully verified", ErrLegacyReconciliationRefused)
 		}
 		receipt.NoOp = true
-		receipt.ServiceID = *soul.BahiaServiceID
+		receipt.ServiceID = serviceID
+		receipt.DeploymentUnitID = unit.ID
+		receipt.RuntimeAdopted = true
 		receipt.PreviousSoulEventID = soul.EventID
 		receipt.PreservedRuntimeBinding = soul.Runtime.RuntimeBinding
 		receipt.PreservedAgentPubkey = soul.NostrPubkey
 		return receipt, nil
 	}
 
-	before := snapshotLegacySoulIdentity(soul)
-	serviceID, err := r.registrar.RegisterSoulAsService(ctx, soul)
-	if err != nil {
-		return receipt, fmt.Errorf("register soul as service: %w", err)
-	}
-	if serviceID == uuid.Nil {
-		return receipt, fmt.Errorf("register soul as service returned an empty service id")
-	}
-
-	confirmed, err := r.lookup.GetServiceByName(ctx, name)
-	if err != nil {
-		return receipt, fmt.Errorf("confirm service: %w", err)
-	}
-	if confirmed == nil || confirmed.ID != serviceID {
-		return receipt, fmt.Errorf("service confirmation mismatch for %q", name)
-	}
-	if confirmed.ArtifactRepo != soulServiceArtifactRepo(soul.AgentID) {
-		return receipt, fmt.Errorf("service %q artifact repository %q does not match agent", name, confirmed.ArtifactRepo)
-	}
-
 	previousEventID := soul.EventID
-	soul.BahiaServiceID = &serviceID
-	if !reflect.DeepEqual(before, snapshotLegacySoulIdentity(soul)) {
+	linkedSoul := cloneLegacySoul(soul)
+	before := snapshotLegacySoulIdentity(linkedSoul)
+	linkedSoul.BahiaServiceID = &serviceID
+	if !reflect.DeepEqual(before, snapshotLegacySoulIdentity(linkedSoul)) {
 		return receipt, fmt.Errorf("reconciliation mutated preserved soul identity fields")
 	}
-	if err := r.publisher.PublishSoul(ctx, soul); err != nil {
+	latestSoul, err := r.souls.GetSoul(ctx, soul.AgentID)
+	if err != nil {
+		return receipt, fmt.Errorf("recheck authoritative Soul before publish: %w", err)
+	}
+	if latestSoul == nil || latestSoul.EventID != previousEventID || legacyClassificationContentHash(
+		legacySoulProjection(latestSoul), current.MatchedRuntimeIDs, current.MatchedEvidence, request.ReviewedPlacement, request.RuntimeAgents,
+	) != current.SoulContentHash {
+		return receipt, fmt.Errorf("%w: Soul moved after classification and before publish", ErrLegacyReconciliationRefused)
+	}
+	if err := r.publisher.PublishSoul(ctx, linkedSoul); err != nil {
 		return receipt, fmt.Errorf("publish superseding soul link: %w", err)
 	}
 
 	receipt.ServiceCreated = existing == nil
 	receipt.ServiceID = serviceID
+	receipt.DeploymentUnitID = unit.ID
+	receipt.RuntimeAdopted = true
 	receipt.PreviousSoulEventID = previousEventID
-	receipt.SupersedingSoulEventID = soul.EventID
-	receipt.PreservedRuntimeBinding = soul.Runtime.RuntimeBinding
-	receipt.PreservedAgentPubkey = soul.NostrPubkey
+	receipt.SupersedingSoulEventID = linkedSoul.EventID
+	receipt.PreservedRuntimeBinding = linkedSoul.Runtime.RuntimeBinding
+	receipt.PreservedAgentPubkey = linkedSoul.NostrPubkey
 	receipt.Rollback = legacyReconcileRollback(previousEventID, existing == nil, serviceID, soul.AgentID)
-
-	r.logger.Info("reconciled legacy soul into bahia service",
-		"agent_id", soul.AgentID,
-		"service_id", serviceID,
-		"service_created", receipt.ServiceCreated,
-		"superseding_soul_event", receipt.SupersedingSoulEventID,
-	)
+	r.logger.Info("reconciled legacy soul into Bahia without runtime mutation", "agent_id", soul.AgentID, "service_id", serviceID, "deployment_unit_id", unit.ID)
 	return receipt, nil
+}
+
+func matchedLegacyRuntime(agents []LegacyRunningAgent, classification LegacyAgentReconciliationClassification) (LegacyRunningAgent, error) {
+	if len(classification.MatchedRuntimeIDs) != 1 {
+		return LegacyRunningAgent{}, fmt.Errorf("%w: exactly one matched runtime is required", ErrLegacyReconciliationRefused)
+	}
+	for _, agent := range agents {
+		if agent.InventoryID == classification.MatchedRuntimeIDs[0] {
+			if agent.AdoptedRuntime == nil || agent.RuntimeType == "" ||
+				strings.TrimSpace(agent.AdoptedRuntime.TargetName) == "" ||
+				strings.TrimSpace(agent.AdoptedRuntime.SourceRuntime) == "" ||
+				strings.TrimSpace(agent.AdoptedRuntime.HostAlias) == "" {
+				return LegacyRunningAgent{}, fmt.Errorf("%w: matched runtime lacks exact adoption evidence", ErrLegacyReconciliationRefused)
+			}
+			if agent.ContainerName != "" && agent.AdoptedRuntime.TargetName != agent.ContainerName {
+				return LegacyRunningAgent{}, fmt.Errorf("%w: adopted target does not match authoritative runtime name", ErrLegacyReconciliationRefused)
+			}
+			if err := domain.ValidateRuntimeType(agent.RuntimeType); err != nil {
+				return LegacyRunningAgent{}, fmt.Errorf("%w: invalid adopted runtime type: %v", ErrLegacyReconciliationRefused, err)
+			}
+			return agent, nil
+		}
+	}
+	return LegacyRunningAgent{}, fmt.Errorf("%w: matched runtime evidence is unavailable", ErrLegacyReconciliationRefused)
+}
+
+func (r *LegacyAgentReconciler) ensureExactAdoptedService(ctx context.Context, service *domain.Service, runtime LegacyRunningAgent) error {
+	desired := cloneAdoptedRuntime(runtime.AdoptedRuntime)
+	if service.RuntimeConfig != nil && service.RuntimeConfig.Adopted != nil {
+		if service.RuntimeType != runtime.RuntimeType || !reflect.DeepEqual(service.RuntimeConfig.Adopted, desired) {
+			return fmt.Errorf("%w: existing service adoption does not match the exact runtime", ErrLegacyReconciliationRefused)
+		}
+		return nil
+	}
+	service.RuntimeType = runtime.RuntimeType
+	service.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: desired}
+	if err := r.services.UpdateService(ctx, service); err != nil {
+		return fmt.Errorf("record exact adopted runtime on service: %w", err)
+	}
+	return nil
+}
+
+func (r *LegacyAgentReconciler) ensureExactAdoptedUnit(ctx context.Context, service *domain.Service, runtime LegacyRunningAgent, placement LegacyReviewedPlacement) (*domain.DeploymentUnit, error) {
+	environmentID, err := uuid.Parse(strings.TrimSpace(placement.EnvironmentID))
+	if err != nil || strings.TrimSpace(placement.Ref) == "" {
+		return nil, fmt.Errorf("%w: authenticated operator-reviewed placement requires ref and environment_id", ErrLegacyReconciliationRefused)
+	}
+	key := strings.TrimSpace(placement.DeploymentUnitKey)
+	if key == "" {
+		key = service.Name
+	}
+	runtimeConfig := map[string]any{
+		"service_id": service.ID.String(), "inventory_id": runtime.InventoryID, "runtime_binding": runtime.RuntimeBinding,
+		"managed_pubkey": runtime.ManagedPubkey, "source_ref": runtime.SourceRef,
+		"target_name": runtime.AdoptedRuntime.TargetName, "container_id": runtime.AdoptedRuntime.ContainerID,
+		"image_digest": runtime.AdoptedRuntime.ImageDigest, "placement_ref": placement.Ref,
+	}
+	existing, err := r.units.GetByEnvironmentKey(ctx, environmentID, key)
+	if err != nil {
+		return nil, fmt.Errorf("load adopted deployment unit: %w", err)
+	}
+	if existing != nil {
+		if existing.RuntimeType != runtime.RuntimeType || existing.OwnershipMode != domain.OwnershipModeAdopted ||
+			existing.ReconcileMode != domain.ReconcileModeObserveOnly || existing.EndpointRef != runtime.AdoptedRuntime.EndpointRef ||
+			!reflect.DeepEqual(existing.RuntimeConfig, runtimeConfig) {
+			return nil, fmt.Errorf("%w: existing deployment unit does not describe the exact adopted runtime", ErrLegacyReconciliationRefused)
+		}
+		return existing, nil
+	}
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: environmentID, Key: key, DisplayName: service.Name,
+		RuntimeType: runtime.RuntimeType, EndpointRef: runtime.AdoptedRuntime.EndpointRef,
+		ReconcileMode: domain.ReconcileModeObserveOnly, OwnershipMode: domain.OwnershipModeAdopted,
+		RuntimeConfig: runtimeConfig,
+	}
+	if err := r.units.Create(ctx, unit); err != nil {
+		return nil, fmt.Errorf("create adopted deployment unit: %w", err)
+	}
+	return unit, nil
+}
+
+func cloneAdoptedRuntime(in *domain.AdoptedRuntimeConfig) *domain.AdoptedRuntimeConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Environment = cloneStringMap(in.Environment)
+	out.Labels = cloneStringMap(in.Labels)
+	out.Ports = append([]string(nil), in.Ports...)
+	out.Volumes = append([]string(nil), in.Volumes...)
+	out.Command = append([]string(nil), in.Command...)
+	out.Entrypoint = append([]string(nil), in.Entrypoint...)
+	if in.Compose != nil {
+		compose := *in.Compose
+		compose.ConfigFiles = append([]string(nil), in.Compose.ConfigFiles...)
+		out.Compose = &compose
+	}
+	return &out
+}
+
+func cloneServiceRuntimeConfig(in *domain.ServiceRuntimeConfig) *domain.ServiceRuntimeConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Adopted = cloneAdoptedRuntime(in.Adopted)
+	return &out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneLegacySoul(in *domain.AgentSoul) *domain.AgentSoul {
+	out := *in
+	out.AllowedKinds = append([]int(nil), in.AllowedKinds...)
+	out.ToolGrants = append([]domain.ToolGrant(nil), in.ToolGrants...)
+	return &out
 }
 
 type legacySoulIdentitySnapshot struct {
@@ -594,15 +889,18 @@ func legacyReconcileRollback(previousEventID string, created bool, serviceID uui
 	return rollback
 }
 
-func validateLegacyReconcileApproval(approval LegacyReconcileApproval) error {
-	if strings.TrimSpace(approval.AgentID) == "" {
-		return fmt.Errorf("%w: approval agent_id is required", ErrLegacyReconciliationRefused)
+func validateLegacyReconcileApproval(approval LegacyReconcileApproval, current LegacyAgentReconciliationClassification) error {
+	if approval.Principal == nil || !approval.Principal.IsAuthenticated() || strings.TrimSpace(approval.Principal.Subject) == "" {
+		return fmt.Errorf("%w: authenticated operator principal is required", ErrLegacyReconciliationRefused)
 	}
-	if approval.Action != legacyAgentReconcileActionLink {
-		return fmt.Errorf("%w: approval action %q is not %q", ErrLegacyReconciliationRefused, approval.Action, legacyAgentReconcileActionLink)
+	if approval.AgentID != current.AgentID || approval.Action != LegacyAgentReconcileActionLink {
+		return fmt.Errorf("%w: approval is not bound to the exact agent_id and action", ErrLegacyReconciliationRefused)
 	}
-	if strings.TrimSpace(approval.ApprovedBy) == "" {
-		return fmt.Errorf("%w: approval approved_by is required", ErrLegacyReconciliationRefused)
+	if approval.SoulEventID != current.SoulEventID || approval.SoulContentHash != current.SoulContentHash {
+		return fmt.Errorf("%w: approval is not bound to the current Soul event and content hash", ErrLegacyReconciliationRefused)
+	}
+	if strings.TrimSpace(approval.ApprovedBy) == "" || approval.ApprovedBy != approval.Principal.Subject {
+		return fmt.Errorf("%w: approved_by does not match authenticated principal", ErrLegacyReconciliationRefused)
 	}
 	if strings.TrimSpace(approval.ApprovalRef) == "" {
 		return fmt.Errorf("%w: approval approval_ref is required", ErrLegacyReconciliationRefused)
