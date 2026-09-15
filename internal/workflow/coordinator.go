@@ -196,12 +196,6 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		return fmt.Errorf("intent %s is not in approved state (current: %s)", intentID, intent.Status)
 	}
 
-	// Get artifact details for the Loom job.
-	artifact, err := c.registry.GetArtifact(ctx, intent.ArtifactID)
-	if err != nil || artifact == nil {
-		return fmt.Errorf("getting artifact for intent: %w", err)
-	}
-
 	svc, err := c.registry.GetService(ctx, intent.ServiceID)
 	if err != nil || svc == nil {
 		return fmt.Errorf("getting service for intent: %w", err)
@@ -213,15 +207,50 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}
 
 	releasePromotion := intent.Metadata["release_promotion"] == true
-	resolvedImage := strings.TrimSpace(artifact.ImageRepo)
+	var (
+		artifact       *domain.Artifact
+		runtimeRelease *domain.RuntimeReleaseDeploymentIntent
+		resolvedImage  string
+		resolvedDigest string
+	)
+	if intent.RuntimeReleaseID != nil {
+		if *intent.RuntimeReleaseID == uuid.Nil {
+			return fmt.Errorf("runtime release deployment intent has an empty release id")
+		}
+		runtimeRelease, err = c.registry.GetDeploymentIntentForRuntimeRelease(ctx, svc.OrgID, intent.ServiceID, *intent.RuntimeReleaseID)
+		if err != nil {
+			return fmt.Errorf("resolving runtime release for intent: %w", err)
+		}
+		if runtimeRelease == nil || runtimeRelease.Intent.ID != intent.ID {
+			return fmt.Errorf("runtime release projection does not resolve intent %s", intent.ID)
+		}
+		resolvedImage = strings.TrimSpace(runtimeRelease.Release.ImageRepo)
+		resolvedDigest = strings.TrimSpace(runtimeRelease.Release.ImageDigest)
+		if resolvedImage == "" || resolvedDigest == "" {
+			return fmt.Errorf("runtime release projection is missing image repository or digest")
+		}
+		resolvedImage += "@" + resolvedDigest
+	} else {
+		// Traditional deployment intents resolve their service-scoped artifact.
+		artifact, err = c.registry.GetArtifact(ctx, intent.ArtifactID)
+		if err != nil || artifact == nil {
+			return fmt.Errorf("getting artifact for intent: %w", err)
+		}
+		resolvedImage = strings.TrimSpace(artifact.ImageRepo)
+		resolvedDigest = artifact.ImageDigest
+	}
 	if releasePromotion {
+		if artifact == nil {
+			return fmt.Errorf("authorized release promotion requires a service-scoped artifact")
+		}
 		if env.DeployStrategy != domain.DeployStrategyCanary || artifact.ImageTag != "" ||
 			intent.Metadata["promotion_strategy"] != "canary" ||
 			intent.Metadata["artifact_digest"] != artifact.ImageDigest {
 			return fmt.Errorf("authorized release promotion no longer satisfies canary digest binding")
 		}
 		resolvedImage += "@" + artifact.ImageDigest
-	} else if tag := strings.TrimSpace(artifact.ImageTag); tag != "" {
+	} else if artifact != nil && strings.TrimSpace(artifact.ImageTag) != "" {
+		tag := strings.TrimSpace(artifact.ImageTag)
 		resolvedImage += ":" + tag
 	}
 
@@ -269,6 +298,20 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 
 	// Submit the deploy job to Loom.
 	jobParams := map[string]string{}
+	if runtimeRelease != nil {
+		provenance := runtimeRelease.Release.Provenance
+		jobParams = map[string]string{
+			"runtime_release_id":              runtimeRelease.Release.ID.String(),
+			"release_event_id":                provenance.ReleaseEventID,
+			"workflow_run_event_id":           provenance.WorkflowRunEventID,
+			"manifest_digest":                 provenance.ManifestDigest,
+			"sbom_digest":                     provenance.SBOMDigest,
+			"provenance_digest":               provenance.ProvenanceDigest,
+			"release_attestor_pubkey":         provenance.AttestorPubkey,
+			"runtime_release_binding_id":      runtimeRelease.Binding.ID.String(),
+			"runtime_release_source_event_id": runtimeRelease.Binding.SourceEventID,
+		}
+	}
 	if releasePromotion {
 		contractParams, err := releasePromotionContractParams(intent.Metadata)
 		if err != nil {
@@ -292,7 +335,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		ID:           uuid.New().String(),
 		Type:         "deploy",
 		Image:        resolvedImage,
-		Digest:       artifact.ImageDigest,
+		Digest:       resolvedDigest,
 		Environment:  env.Name,
 		Service:      svc.Name,
 		WorkerPubkey: workerPubkey,

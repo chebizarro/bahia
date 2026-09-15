@@ -621,16 +621,11 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		s.logger.Info("hiveci workflow result arrived before run, storing as orphan", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID))
 	}
 
-	type workflowResultContent struct {
-		ImageRepo      string `json:"image_repo"`
-		ImageTag       string `json:"image_tag"`
-		ImageDigest    string `json:"image_digest"`
-		PSTFGateName   string `json:"pstf_gate_name"`
-		PSTFGateStatus string `json:"pstf_gate_status"`
-	}
 	var content workflowResultContent
 	if strings.TrimSpace(ev.Content) != "" {
-		if decodeErr := json.Unmarshal([]byte(ev.Content), &content); decodeErr != nil {
+		var decodeErr error
+		content, decodeErr = parseWorkflowResultContent(ev.Content)
+		if decodeErr != nil {
 			s.warnDecision("ignoring malformed Hive-CI result content and falling back to signed tags", "envelope_parse_failure",
 				zap.String("event_id", eventID), zap.String("run_event_id", runEventID),
 				zap.String("pubkey", pubkey), zap.Error(decodeErr))
@@ -678,6 +673,40 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		s.onResult(ctx, result.ResultEventID)
 	}
 	s.logger.Info("hiveci workflow result ingested", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID), zap.String("status", status), zap.String("processing_state", string(processingState)))
+}
+
+type workflowResultContent struct {
+	ImageRepo      string `json:"image_repo"`
+	ImageTag       string `json:"image_tag"`
+	ImageDigest    string `json:"image_digest"`
+	PSTFGateName   string `json:"pstf_gate_name"`
+	PSTFGateStatus string `json:"pstf_gate_status"`
+}
+
+// parseWorkflowResultContent accepts the signed JSON result envelope and the
+// Loom stdout contract emitted by repository-native workflows. Loom prefixes
+// workflow output under act, so the marker may appear after log text.
+func parseWorkflowResultContent(raw string) (workflowResultContent, error) {
+	var content workflowResultContent
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "{") {
+		if err := json.Unmarshal([]byte(trimmed), &content); err != nil {
+			return workflowResultContent{}, err
+		}
+		return content, nil
+	}
+	const marker = "BAHIA_ARTIFACT="
+	for _, line := range strings.Split(raw, "\n") {
+		offset := strings.Index(line, marker)
+		if offset < 0 {
+			continue
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(line[offset+len(marker):])), &content); err != nil {
+			return workflowResultContent{}, err
+		}
+		return content, nil
+	}
+	return workflowResultContent{}, fmt.Errorf("Hive-CI result content is neither JSON nor a %s marker", marker)
 }
 
 func isTerminalHiveCIResultState(state domain.HiveCIProcessingState) bool {

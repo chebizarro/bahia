@@ -303,12 +303,19 @@ func New(cfg *config.Config) (*App, error) {
 	if dbAvailable && pool != nil {
 		registryOptions = append(registryOptions, service.WithRegistryTxExecutor(repository.NewPgTxExecutor(pool)))
 	}
+	if agentRuntimeReleaseRepo != nil {
+		registryOptions = append(registryOptions, service.WithAgentRuntimeReleaseRepository(agentRuntimeReleaseRepo))
+	}
 	registry := service.NewRegistryService(
 		serviceRepo, envRepo, buildRepo, artifactRepo,
 		intentRepo, runRepo, obsRepo, stateRepo,
 		verifier, publisher, logger,
 		registryOptions...,
 	)
+	var agentRuntimeReleaseSvc *service.AgentRuntimeReleaseService
+	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
+		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
+	}
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
 
 	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
@@ -1030,12 +1037,24 @@ func New(cfg *config.Config) (*App, error) {
 			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
 				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
 			)
+			promotionSvc, err := service.NewProductionAgentRuntimePromotionService(
+				agentRuntimeReleaseRepo, serviceRepo, envRepo, hiveRepo, registry,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("configure accepted Hive-CI runtime promotion: %w", err)
+			}
 			bridge.SetReleaseRegistrationAuditor(releaseAudit)
 			hiveSub.SetReleaseAuditor(releaseAudit)
 			hiveSub.SetReleaseEvidenceRecorder(nostrEventRepo)
 			hiveSub.SetReleaseIngestor(releaseIngestor, func(ctx context.Context, commit domain.HiveCIReleaseCommitResult) {
 				if _, err := bridge.RegisterAcceptedRelease(ctx, commit.Release); err != nil {
 					logger.Error("register accepted Hive-CI release artifact failed",
+						zap.String("release_identity", commit.Release.Result.ReleaseIdentity),
+						zap.Bool("replay", commit.Replay), zap.Error(err))
+					return
+				}
+				if _, err := promotionSvc.PromoteAcceptedHiveCIRelease(ctx, commit); err != nil {
+					logger.Error("promote accepted Hive-CI runtime release failed",
 						zap.String("release_identity", commit.Release.Result.ReleaseIdentity),
 						zap.Bool("replay", commit.Replay), zap.Error(err))
 				}
@@ -1707,11 +1726,6 @@ func New(cfg *config.Config) (*App, error) {
 		Enabled:        cfg.Auth.Enabled,
 		NIP98Validator: nip98Validator,
 		NIP05Resolver:  nip05Resolver,
-	}
-
-	var agentRuntimeReleaseSvc *service.AgentRuntimeReleaseService
-	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
-		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
 
 	// HTTP router.
