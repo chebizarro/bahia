@@ -552,8 +552,10 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error(), run.ID.String()); publishErr != nil {
-			logger.Error("failed to publish provisioning error", "error", publishErr)
+		if _, governed := r.provisioner.(interface{ ownsTerminalFailureProjection() }); !governed {
+			if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error(), run.ID.String()); publishErr != nil {
+				logger.Error("failed to publish provisioning error", "error", publishErr)
+			}
 		}
 		return
 	}

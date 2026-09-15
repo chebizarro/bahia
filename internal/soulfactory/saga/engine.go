@@ -383,6 +383,21 @@ func (e *Engine) SafeAbort(ctx context.Context, requestID string, dryRun bool) (
 		if inspectErr != nil {
 			return e.rollbackFail(ctx, run, resource.Stage, inspectErr, true)
 		}
+		if post.Reality == RealityMatching {
+			// Some production resources are durable or append-only evidence. A
+			// safe compensator may relinquish saga ownership instead of deleting
+			// them. Accept that only when the adapter's post-inspection reports
+			// the exact resource as non-owned; adopted resources can never be
+			// destroyed by this or a later rollback.
+			if observed, ok := observedResource(post.Resources, resource.key()); ok &&
+				(observed.Ownership == OwnershipAdopted || observed.Ownership == OwnershipPreExisting) &&
+				observed.OwnerRunID == "" {
+				if err := e.recordCompensation(ctx, run, resource, "preserved"); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
 		if post.Reality != RealityAbsent {
 			return e.rollbackFail(ctx, run, resource.Stage, &SafeError{Code: "compensation_postcondition_mismatch", Message: "resource remains after compensation", Retryable: true}, true)
 		}

@@ -308,6 +308,15 @@ type DNSProjectionConfig struct {
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	// ProvisioningStateDir contains durable governed-saga checkpoints and the
+	// secret-free production adapter ledger.
+	ProvisioningStateDir string `koanf:"provisioning_state_dir" yaml:"provisioning_state_dir"`
+	// OrganizationID is the tenant that owns Soul Factory services,
+	// environments, release bindings, and release-backed deployment intents.
+	OrganizationID string `koanf:"organization_id" yaml:"organization_id"`
+	// AgentEnvironmentID optionally pins an existing tenant environment. When
+	// empty, the production adapter idempotently ensures the "agents" environment.
+	AgentEnvironmentID string `koanf:"agent_environment_id" yaml:"agent_environment_id"`
 	// AgentRuntimes is the validated list of administratively enabled
 	// SoulFactory agent runtime targets (for example openclaw, metiq).
 	// When unset it defaults to [openclaw] to preserve prior behavior.
@@ -3054,6 +3063,20 @@ func (c *Config) validateSoulFactory() error {
 	}
 	sf.ConcordCommunities = normalizedConcord
 	sf.SoulFactoryPubkey = strings.ToLower(strings.TrimSpace(sf.SoulFactoryPubkey))
+	sf.ProvisioningStateDir = strings.TrimSpace(sf.ProvisioningStateDir)
+	if sf.ProvisioningStateDir == "" {
+		sf.ProvisioningStateDir = "./data/soulfactory/provisioning"
+	}
+	sf.OrganizationID = strings.TrimSpace(sf.OrganizationID)
+	sf.AgentEnvironmentID = strings.TrimSpace(sf.AgentEnvironmentID)
+	for name, value := range map[string]string{"organization_id": sf.OrganizationID, "agent_environment_id": sf.AgentEnvironmentID} {
+		if value == "" {
+			continue
+		}
+		if _, err := uuid.Parse(value); err != nil {
+			return fmt.Errorf("config validation failed: soul_factory.%s must be a UUID", name)
+		}
+	}
 	sf.SignetBunkerURI = strings.TrimSpace(sf.SignetBunkerURI)
 	sf.SignetClientSecretKey = strings.TrimSpace(sf.SignetClientSecretKey)
 	sf.LLMBaseURL = strings.TrimRight(strings.TrimSpace(sf.LLMBaseURL), "/")

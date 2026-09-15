@@ -16,6 +16,7 @@ import (
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"go.uber.org/zap"
@@ -36,6 +37,7 @@ type soulFactorySignerClient interface {
 type soulFactoryRuntime struct {
 	reactor     *soulfactory.Reactor
 	integration *soulfactory.BahiaIntegration
+	provisioner soulfactory.ProvisioningEngine
 	runner      BackgroundRunner
 	connection  *signetAdapter.ConnectionManager
 	close       func() error
@@ -54,7 +56,7 @@ var (
 	newSoulFactoryBahiaIntegration = soulfactory.NewBahiaIntegration
 )
 
-func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, logger *zap.Logger) (*soulFactoryRuntime, error) {
+func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, runtimeReleases *service.AgentRuntimeReleaseService, deploymentUnits repository.DeploymentUnitRepository, logger *zap.Logger) (*soulFactoryRuntime, error) {
 	if cfg == nil || !cfg.SoulFactory.Enabled {
 		return nil, nil
 	}
@@ -133,7 +135,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		}
 	}
 
-	bahiaIntegration, err := newSoulFactoryBahiaIntegration(registry, soulfactory.BahiaIntegrationConfig{}, slogLogger)
+	bahiaIntegration, err := newSoulFactoryBahiaIntegration(registry, soulfactory.BahiaIntegrationConfig{
+		OrganizationID:    sf.OrganizationID,
+		AgentEnvironmentID: sf.AgentEnvironmentID,
+	}, slogLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, fmt.Errorf("configuring SoulFactory Bahia integration: %w", err)
@@ -184,7 +189,16 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		SignetEnrollment:        signetEnrollment,
 		SignetProvisionerPubkey: sf.OpenClawSignetProvisionerPubkey,
 	}, bahiaIntegration)
-	if err := reactor.InstallProvisioningEngine(provisioner); err != nil {
+	governedProvisioner, err := soulfactory.NewProductionGovernedProvisioner(provisioner, soulfactory.ProductionGovernedProvisionerConfig{
+		StateDir:        sf.ProvisioningStateDir,
+		RuntimeReleases: runtimeReleases,
+		DeploymentUnits: deploymentUnits,
+	})
+	if err != nil {
+		_ = closeSigner()
+		return nil, fmt.Errorf("configuring governed SoulFactory provisioning: %w", err)
+	}
+	if err := reactor.InstallProvisioningEngine(governedProvisioner); err != nil {
 		_ = closeSigner()
 		return nil, err
 	}
@@ -196,6 +210,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	return &soulFactoryRuntime{
 		reactor:     reactor,
 		integration: bahiaIntegration,
+		provisioner: governedProvisioner,
 		runner:      &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
 		connection:  connection,
 		close:       closeSigner,

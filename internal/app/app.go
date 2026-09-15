@@ -595,7 +595,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var soulFactoryRuntime *soulFactoryRuntime
-	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, logger)
+	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, agentRuntimeReleaseSvc, deploymentUnitRepo, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
 	}

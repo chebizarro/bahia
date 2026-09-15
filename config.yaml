@@ -157,5 +157,10 @@ direct_runtime_actions:
 
 soul_factory:
   enabled: false
+  # Durable governed provisioning checkpoints and secret-free adapter ledger.
+  provisioning_state_dir: "./data/soulfactory/provisioning"
+  # Tenant and optional existing environment used by release-backed agent deployments.
+  organization_id: ""
+  agent_environment_id: ""
   # Durable identity for agent-memory tasks across Bahia process restarts.
   agent_memory_task_id_file: "./data/soulfactory/agent-memory-task-ids.json"

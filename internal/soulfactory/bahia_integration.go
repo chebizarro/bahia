@@ -17,6 +17,7 @@ import (
 // It handles service registration, deployment intents, status sync, and lifecycle actions.
 type BahiaIntegration struct {
 	registry               *service.RegistryService
+	orgID                  uuid.UUID
 	agentEnvID             uuid.UUID // Default environment for agents
 	deployRuntimeArtifacts bool
 	logger                 *slog.Logger
@@ -24,6 +25,9 @@ type BahiaIntegration struct {
 
 // BahiaIntegrationConfig holds configuration for bahia integration.
 type BahiaIntegrationConfig struct {
+	// OrganizationID owns newly registered services and the shared agent
+	// environment. Release-backed provisioning fails closed when it is absent.
+	OrganizationID string
 	// AgentEnvironmentID is the default environment UUID for deploying agents.
 	// If empty, agents are registered as services but not auto-deployed.
 	AgentEnvironmentID string
@@ -44,6 +48,13 @@ func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrat
 		registry:               registry,
 		deployRuntimeArtifacts: config.DeployRuntimeArtifacts,
 		logger:                 logger,
+	}
+	if strings.TrimSpace(config.OrganizationID) != "" {
+		orgID, err := uuid.Parse(strings.TrimSpace(config.OrganizationID))
+		if err != nil {
+			return nil, fmt.Errorf("invalid Soul Factory organization ID: %w", err)
+		}
+		bi.orgID = orgID
 	}
 
 	if config.AgentEnvironmentID != "" {
@@ -80,6 +91,7 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	// Build service entry.
 	svc := &domain.Service{
 		ID:            uuid.New(),
+		OrgID:         bi.orgID,
 		Name:          serviceName,
 		RepoURL:       soul.WorkspaceRepoURL,
 		ArtifactRepo:  artifactRepo,
@@ -575,6 +587,19 @@ func (bi *BahiaIntegration) getRuntimeType(tier domain.SoulTier) domain.RuntimeT
 // Returns the environment ID.
 func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UUID, error) {
 	const envName = "agents"
+	if bi.agentEnvID != uuid.Nil {
+		existing, err := bi.registry.GetEnvironment(ctx, bi.agentEnvID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("lookup configured agent environment: %w", err)
+		}
+		if existing == nil {
+			return uuid.Nil, fmt.Errorf("configured agent environment not found: %s", bi.agentEnvID)
+		}
+		if bi.orgID != uuid.Nil && existing.OrgID != bi.orgID {
+			return uuid.Nil, fmt.Errorf("configured agent environment belongs to organization %s, want %s", existing.OrgID, bi.orgID)
+		}
+		return existing.ID, nil
+	}
 
 	// Try to get existing environment
 	existing, err := bi.registry.GetEnvironmentByName(ctx, envName)
@@ -582,6 +607,9 @@ func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UU
 		return uuid.Nil, fmt.Errorf("lookup environment: %w", err)
 	}
 	if existing != nil {
+		if bi.orgID != uuid.Nil && existing.OrgID != bi.orgID {
+			return uuid.Nil, fmt.Errorf("existing agent environment belongs to organization %s, want %s", existing.OrgID, bi.orgID)
+		}
 		bi.agentEnvID = existing.ID
 		return existing.ID, nil
 	}
@@ -589,6 +617,7 @@ func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UU
 	// Create the agents environment
 	env := &domain.Environment{
 		ID:             uuid.New(),
+		OrgID:          bi.orgID,
 		Name:           envName,
 		DeployStrategy: domain.DeployStrategyReplace,
 		Protected:      false, // Auto-approve agent deployments
@@ -607,4 +636,21 @@ func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UU
 	bi.agentEnvID = env.ID
 	bi.logger.Info("created agents environment", "environment_id", env.ID)
 	return env.ID, nil
+}
+
+// OrganizationID returns the configured tenant boundary for release-backed
+// Soul Factory provisioning.
+func (bi *BahiaIntegration) OrganizationID() uuid.UUID {
+	if bi == nil {
+		return uuid.Nil
+	}
+	return bi.orgID
+}
+
+// AgentEnvironmentID returns the currently configured or ensured environment.
+func (bi *BahiaIntegration) AgentEnvironmentID() uuid.UUID {
+	if bi == nil {
+		return uuid.Nil
+	}
+	return bi.agentEnvID
 }
