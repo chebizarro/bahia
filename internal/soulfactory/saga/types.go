@@ -16,6 +16,8 @@ type Stage string
 const (
 	StageRequested         Stage = "requested"
 	StageIdentityReserved  Stage = "identity_reserved"
+	StageServiceRegistered Stage = "service_registered"
+	StageReleaseSelected   Stage = "release_selected"
 	StageRuntimeAllocated  Stage = "runtime_allocated"
 	StageSignerEnrolled    Stage = "signer_enrolled"
 	StageNostrConfigured   Stage = "nostr_configured"
@@ -34,9 +36,23 @@ const (
 	ResourceAgentSoul          = "agent_soul_31951"
 )
 
+// forwardStages is the exact governed provisioning order for a new agent:
+//
+//	identity_reserved        reserve identity/spec only (no key lifecycle)
+//	service_registered       register the Bahia service and its deployment unit
+//	release_selected         select and bind a verified runtime release
+//	runtime_allocated        deploy through Bahia
+//	signer_enrolled          configure and verify identity
+//	nostr_configured         configure and verify relay
+//	llm_verified             verify the model/inference path
+//	dm_verified              verify readiness
+//	running                  publish the active kind-31951 Soul (last, gated)
+//
+// Bahia deployment therefore always precedes Soul Factory activation.
 var forwardStages = []Stage{
-	StageIdentityReserved, StageRuntimeAllocated, StageSignerEnrolled,
-	StageNostrConfigured, StageLLMVerified, StageDMVerified, StageRunning,
+	StageIdentityReserved, StageServiceRegistered, StageReleaseSelected,
+	StageRuntimeAllocated, StageSignerEnrolled, StageNostrConfigured,
+	StageLLMVerified, StageDMVerified, StageRunning,
 }
 
 func ForwardStages() []Stage { return append([]Stage(nil), forwardStages...) }
@@ -63,11 +79,13 @@ const (
 type CompensationRank int
 
 const (
-	CompensateSignetPolicy CompensationRank = 100
-	CompensateCredentials  CompensationRank = 200
-	CompensateRuntime      CompensationRank = 300
-	CompensateContainer    CompensationRank = 400
-	CompensateProjection   CompensationRank = 500
+	CompensateSignetPolicy        CompensationRank = 100
+	CompensateCredentials         CompensationRank = 200
+	CompensateServiceRegistration CompensationRank = 250
+	CompensateReleaseSelection    CompensationRank = 350
+	CompensateRuntime             CompensationRank = 300
+	CompensateContainer           CompensationRank = 400
+	CompensateProjection          CompensationRank = 500
 )
 
 // Resource records immutable, secret-free ownership lineage for one side effect.
