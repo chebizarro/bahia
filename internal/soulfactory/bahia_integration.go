@@ -63,8 +63,8 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	logger := bi.logger.With("agent_id", soul.AgentID, "soul_id", soul.ID)
 	logger.Info("registering soul as bahia service")
 
-	serviceName := fmt.Sprintf("agent-%s", soul.AgentID)
-	artifactRepo := fmt.Sprintf("agents/%s", soul.AgentID)
+	serviceName := soulServiceName(soul.AgentID)
+	artifactRepo := soulServiceArtifactRepo(soul.AgentID)
 	existing, err := bi.registry.GetServiceByName(ctx, serviceName)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("look up existing service: %w", err)
@@ -106,6 +106,20 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	)
 
 	return svc.ID, nil
+}
+
+// soulServiceName is the canonical Bahia service name for a Soul Factory agent.
+// Reconciliation and provisioning must agree on this mapping so a re-run never
+// creates a duplicate service for the same agent identity.
+func soulServiceName(agentID string) string {
+	return fmt.Sprintf("agent-%s", agentID)
+}
+
+// soulServiceArtifactRepo is the canonical Bahia artifact repository for an
+// agent service. BahiaIntegration.RegisterSoulAsService rejects a name match
+// whose artifact repository differs, so both call sites must derive it here.
+func soulServiceArtifactRepo(agentID string) string {
+	return fmt.Sprintf("agents/%s", agentID)
 }
 
 // CreateInitialDeployment creates a deployment intent for a newly provisioned soul
