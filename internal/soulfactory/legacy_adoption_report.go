@@ -25,17 +25,19 @@ type LegacyAdoptionInput struct {
 }
 
 type LegacyRunningAgent struct {
-	InventoryID       string `json:"inventory_id"`
-	Running           bool   `json:"running"`
-	DocumentedAgentID string `json:"documented_agent_id,omitempty"`
-	ManagedPubkey     string `json:"managed_pubkey,omitempty"`
-	RuntimeBinding    string `json:"runtime_binding,omitempty"`
-	Workspace         string `json:"workspace,omitempty"`
-	PersonaRef        string `json:"persona_ref,omitempty"`
-	CustodyRef        string `json:"custody_ref,omitempty"`
-	DisplayName       string `json:"display_name,omitempty"`
-	ContainerName     string `json:"container_name,omitempty"`
-	SourceRef         string `json:"source_ref"`
+	InventoryID       string                       `json:"inventory_id"`
+	Running           bool                         `json:"running"`
+	DocumentedAgentID string                       `json:"documented_agent_id,omitempty"`
+	ManagedPubkey     string                       `json:"managed_pubkey,omitempty"`
+	RuntimeBinding    string                       `json:"runtime_binding,omitempty"`
+	Workspace         string                       `json:"workspace,omitempty"`
+	PersonaRef        string                       `json:"persona_ref,omitempty"`
+	CustodyRef        string                       `json:"custody_ref,omitempty"`
+	DisplayName       string                       `json:"display_name,omitempty"`
+	ContainerName     string                       `json:"container_name,omitempty"`
+	RuntimeType       domain.RuntimeType           `json:"runtime_type,omitempty"`
+	AdoptedRuntime    *domain.AdoptedRuntimeConfig `json:"adopted_runtime,omitempty"`
+	SourceRef         string                       `json:"source_ref"`
 }
 
 type LegacyIdentityRecord struct {

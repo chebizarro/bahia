@@ -35,49 +35,50 @@ var Version = version.Semantic()
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
-	Config               *config.Config
-	AuthMiddleware       auth.MiddlewareConfig
-	Workers              repository.WorkerRepository
-	Builds               repository.BuildRepository
-	Runs                 repository.DeploymentRunRepository
-	Services             repository.ServiceRepository
-	Environments         repository.EnvironmentRepository
-	DeploymentUnits      repository.DeploymentUnitRepository
-	EnvStates            repository.EnvironmentServiceStateRepository
-	InstanceHealth       repository.ManagedInstanceHealthRepository
-	RouteCanaries        handlers.RouteCanaryReader
-	RouteHealth          handlers.RouteInstanceHealthReader
-	InstanceOperator     handlers.InstanceMaintenanceOperator
-	RuntimeResolver      runtimeadapter.RuntimeResolver
-	Payments             *service.PaymentService
-	SBOMs                repository.SBOMRepository
-	SBOMImporter         *service.SBOMOrchestrator
-	Artifacts            repository.ArtifactRepository
-	Signatures           repository.ArtifactSignatureRepository
-	SignVerifier         SignatureVerifier
-	Policies             *service.PolicyService
-	Adoption             *service.AdoptionService
-	RuntimeLifecycle     *service.RuntimeLifecycleService
-	AgentRuntimeReleases handlers.AgentRuntimeReleaseReader
-	Secrets              repository.SecretRepository
-	Encryptor            *secrets.Encryptor
-	Notifications        repository.NotificationRepository
-	Dispatcher           *notifications.Dispatcher
-	ToolProvisioning     repository.ToolProvisioningRepository
-	MCP                  *handlers.MCPHandler
-	HiveCI               repository.HiveCIRepository
-	Blossom              *blossom.Client
-	OCI                  http.Handler
-	Orgs                 repository.OrganizationRepository
-	OrgMembers           repository.OrgMemberRepository
-	OrgInvites           repository.OrgInviteRepository
-	RBAC                 *auth.RBAC
-	LLMRegistry          *service.LLMRegistryService
-	MLRegistry           *service.MLRegistryService
-	MLCommands           handlers.MLCommandPublisher
-	ConfigFabric         *service.ConfigFabricService
-	HealthProvider       any
-	ModePolicy           any
+	Config                    *config.Config
+	AuthMiddleware            auth.MiddlewareConfig
+	Workers                   repository.WorkerRepository
+	Builds                    repository.BuildRepository
+	Runs                      repository.DeploymentRunRepository
+	Services                  repository.ServiceRepository
+	Environments              repository.EnvironmentRepository
+	DeploymentUnits           repository.DeploymentUnitRepository
+	EnvStates                 repository.EnvironmentServiceStateRepository
+	InstanceHealth            repository.ManagedInstanceHealthRepository
+	RouteCanaries             handlers.RouteCanaryReader
+	RouteHealth               handlers.RouteInstanceHealthReader
+	InstanceOperator          handlers.InstanceMaintenanceOperator
+	RuntimeResolver           runtimeadapter.RuntimeResolver
+	Payments                  *service.PaymentService
+	SBOMs                     repository.SBOMRepository
+	SBOMImporter              *service.SBOMOrchestrator
+	Artifacts                 repository.ArtifactRepository
+	Signatures                repository.ArtifactSignatureRepository
+	SignVerifier              SignatureVerifier
+	Policies                  *service.PolicyService
+	Adoption                  *service.AdoptionService
+	RuntimeLifecycle          *service.RuntimeLifecycleService
+	AgentRuntimeReleases      handlers.AgentRuntimeReleaseReader
+	LegacyAgentReconciliation handlers.LegacyAgentReconciliationController
+	Secrets                   repository.SecretRepository
+	Encryptor                 *secrets.Encryptor
+	Notifications             repository.NotificationRepository
+	Dispatcher                *notifications.Dispatcher
+	ToolProvisioning          repository.ToolProvisioningRepository
+	MCP                       *handlers.MCPHandler
+	HiveCI                    repository.HiveCIRepository
+	Blossom                   *blossom.Client
+	OCI                       http.Handler
+	Orgs                      repository.OrganizationRepository
+	OrgMembers                repository.OrgMemberRepository
+	OrgInvites                repository.OrgInviteRepository
+	RBAC                      *auth.RBAC
+	LLMRegistry               *service.LLMRegistryService
+	MLRegistry                *service.MLRegistryService
+	MLCommands                handlers.MLCommandPublisher
+	ConfigFabric              *service.ConfigFabricService
+	HealthProvider            any
+	ModePolicy                any
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -165,6 +166,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	var agentRuntimeReleaseH *handlers.AgentRuntimeReleaseHandler
 	if deps.AgentRuntimeReleases != nil {
 		agentRuntimeReleaseH = handlers.NewAgentRuntimeReleaseHandler(deps.AgentRuntimeReleases)
+	}
+	var legacyReconciliationH *handlers.LegacyAgentReconciliationHandler
+	if deps.LegacyAgentReconciliation != nil {
+		legacyReconciliationH = handlers.NewLegacyAgentReconciliationHandler(deps.LegacyAgentReconciliation)
 	}
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
@@ -504,6 +509,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate, notificationRBAC).Put("/notifications/channels/{id}", notifH.UpdateChannel)
 				r.With(tier2Gate, notificationRBAC).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
 				r.With(tier2Gate, notificationRBAC).Post("/notifications/channels/{id}/test", notifH.TestChannel)
+			}
+
+			// Legacy Soul reconciliation is authenticated and dry-run-first.
+			if legacyReconciliationH != nil {
+				r.With(tier3Gate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/preview", legacyReconciliationH.Preview)
+				r.With(tier3Gate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/apply", legacyReconciliationH.Apply)
 			}
 
 			// Tool provisioning (write)
