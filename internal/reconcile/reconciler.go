@@ -9,11 +9,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/driftdecision"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	runtimeService "github.com/openagentsinc/bahia/internal/service"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -131,15 +133,30 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcileAll(ctx context.Context) {
+	started := time.Now()
+	ctx, span := telemetry.StartOperation(ctx, "bahia.reconcile")
+	statesChecked := 0
+	var cycleErr error
+	defer func() {
+		outcome := "success"
+		if cycleErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordReconcile(ctx, time.Since(started), statesChecked, outcome)
+		telemetry.EndOperation(ctx, span, "bahia.reconcile", outcome, cycleErr, attribute.Int("states.checked", statesChecked))
+	}()
 	dueBefore := time.Now().UTC().Add(-r.interval)
 	states, err := r.state.ListDueForObservation(ctx, dueBefore)
 	if err != nil {
+		cycleErr = err
 		r.logger.Error("failed to list all states for reconciliation", zap.Error(err))
 		return
 	}
+	statesChecked = len(states)
 
 	for i := range states {
 		if err := r.reconcileOne(ctx, &states[i]); err != nil {
+			cycleErr = errors.Join(cycleErr, err)
 			r.logger.Error("reconciliation failed",
 				zap.String("service_id", states[i].ServiceID.String()),
 				zap.String("environment_id", states[i].EnvironmentID.String()),
@@ -532,6 +549,7 @@ func latestDeploymentRun(runs []domain.DeploymentRun) *domain.DeploymentRun {
 }
 
 func (r *Reconciler) publishDriftDetected(ctx context.Context, currentState *domain.EnvironmentServiceState, svc *domain.Service, env *domain.Environment, extra map[string]string) {
+	telemetry.RecordDrift(ctx)
 	data := map[string]string{
 		"service_id":     currentState.ServiceID.String(),
 		"environment_id": currentState.EnvironmentID.String(),

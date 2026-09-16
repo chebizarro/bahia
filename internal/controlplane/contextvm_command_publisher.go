@@ -11,9 +11,21 @@ import (
 	canonicalnostr "fiatjaf.com/nostr"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 )
 
-func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (*nostr.Event, int, string, error) {
+func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (_ *nostr.Event, _ int, _ string, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.contextvm.dispatch",
+		attribute.Int("nostr.kind", int(KindContextVMMessage)), attribute.String("rpc.method", method))
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordDispatch(ctx, int(KindContextVMMessage), outcome)
+		telemetry.EndOperation(ctx, span, "bahia.contextvm.dispatch", outcome, retErr)
+	}()
 	if publisher == nil {
 		return nil, 0, "", fmt.Errorf("%s publisher is not configured", label)
 	}
@@ -31,7 +43,17 @@ func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher,
 	return ev, published, dTag, nil
 }
 
-func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string, beforePublish func(*nostr.Event, string) (func(), error)) (*nostr.Event, int, string, error) {
+func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string, beforePublish func(*nostr.Event, string) (func(), error)) (_ *nostr.Event, _ int, _ string, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.contextvm.dispatch",
+		attribute.Int("nostr.kind", int(KindContextVMMessage)), attribute.String("rpc.method", method), attribute.Bool("nostr.nip59", true))
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordDispatch(ctx, int(KindContextVMMessage), outcome)
+		telemetry.EndOperation(ctx, span, "bahia.contextvm.dispatch", outcome, retErr)
+	}()
 	if publisher == nil {
 		return nil, 0, "", fmt.Errorf("%s publisher is not configured", label)
 	}
@@ -108,6 +130,7 @@ func buildContextVMCommand(ctx context.Context, signer canonicalnostr.Signer, me
 	if agentID = strings.TrimSpace(agentID); agentID != "" {
 		eventTags = append(eventTags, nostr.Tag{"agent", agentID})
 	}
+	eventTags = telemetry.InjectTraceContext(ctx, eventTags)
 	ev := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: eventTags, Content: string(contentJSON)}
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return nil, dTag, fmt.Errorf("sign %s ContextVM request: %w", label, err)

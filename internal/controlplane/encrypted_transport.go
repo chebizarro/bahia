@@ -15,8 +15,10 @@ import (
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -669,6 +671,17 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.logger.Warn("invalid ContextVM event", zap.String("event_id", inner.ID.Hex()), zap.Error(err))
 		return
 	}
+	ctx = telemetry.ExtractTraceContext(ctx, inner.Tags)
+	ctx, receiveSpan := telemetry.StartOperation(ctx, "bahia.contextvm.receive",
+		attribute.Int("nostr.kind", int(inner.Kind)))
+	var receiveErr error
+	defer func() {
+		outcome := "success"
+		if receiveErr != nil {
+			outcome = "failure"
+		}
+		telemetry.EndOperation(ctx, receiveSpan, "bahia.contextvm.receive", outcome, receiveErr)
+	}()
 	innerID := inner.ID.Hex()
 	innerPubkey := inner.PubKey.Hex()
 	if !t.matchesContextVMRouting(inner) {
@@ -758,6 +771,7 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 	}()
 	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
 	if err != nil {
+		receiveErr = err
 		t.logger.Warn("ContextVM handler failed", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.Error(err))
 	} else {
 		t.logger.Info("ContextVM handler completed", zap.String("event_id", innerID), zap.String("method", rpc.Method))
