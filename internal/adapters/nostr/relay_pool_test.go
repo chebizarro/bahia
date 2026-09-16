@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,6 +312,60 @@ func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {
 
 	close(subs[0].Events)
 	close(subs[1].Events)
+}
+
+func TestRelayPoolStalledPublishDoesNotBlockBootstrapSubscription(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+
+	publishStarted := make(chan struct{})
+	releasePublish := make(chan struct{})
+	var publishStartedOnce sync.Once
+	setPublishOnRelayForTest(t, func(_ *gonostr.Relay, ctx context.Context, _ gonostr.Event) error {
+		publishStartedOnce.Do(func() { close(publishStarted) })
+		select {
+		case <-releasePublish:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		return newTestSubscription(), nil
+	})
+
+	publishDone := make(chan error, 1)
+	go func() {
+		_, err := pool.PublishWithResults(context.Background(), gonostr.Event{})
+		publishDone <- err
+	}()
+	<-publishStarted
+
+	type subscribeResult struct {
+		merged *MergedSubscription
+		err    error
+	}
+	subscribeDone := make(chan subscribeResult, 1)
+	go func() {
+		merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(4903)}}})
+		subscribeDone <- subscribeResult{merged: merged, err: err}
+	}()
+
+	var merged *MergedSubscription
+	select {
+	case result := <-subscribeDone:
+		require.NoError(t, result.err)
+		merged = result.merged
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("bootstrap subscription was blocked behind stalled relay publish")
+	}
+
+	close(releasePublish)
+	require.NoError(t, <-publishDone)
+	if merged != nil {
+		merged.Close()
+	}
 }
 
 func TestActiveMergedSubscriptionDoesNotReportTerminationAsRelayEOSE(t *testing.T) {
@@ -625,6 +680,13 @@ func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Co
 	original := subscribeOnRelay
 	subscribeOnRelay = fn
 	t.Cleanup(func() { subscribeOnRelay = original })
+}
+
+func setPublishOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, gonostr.Event) error) {
+	t.Helper()
+	original := publishOnRelay
+	publishOnRelay = fn
+	t.Cleanup(func() { publishOnRelay = original })
 }
 
 func setConnectRelayForTest(t *testing.T, pool *RelayPool, fn func(context.Context, string, gonostr.RelayOptions) (*gonostr.Relay, error)) {
