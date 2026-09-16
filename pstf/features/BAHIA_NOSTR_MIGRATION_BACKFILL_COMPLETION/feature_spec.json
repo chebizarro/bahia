@@ -1,0 +1,20 @@
+{
+  "feature_id": "BAHIA_NOSTR_MIGRATION_BACKFILL_COMPLETION",
+  "title": "Completed legacy relay migration does not replay on every startup",
+  "observed_behavior": [
+    "The Tier-0 Nostr migration runner executed relay legacy backfill before the readiness bootstrapper.",
+    "Relay backfill had no durable completion marker, so every Bahia restart queried and replayed the full legacy relay history again.",
+    "Repeated migration publications timed out against multiple relays, kept readiness at bootstrap phase init, and recreated relay pressure during a guarded production canary.",
+    "The deployed database already carries the legacy terminal migration cursor at 9999-12-31T23:59:59Z with event id ~, proving the prior migration was administratively completed."
+  ],
+  "intended_behavior": [
+    "A successful relay legacy backfill records a durable versioned completion marker.",
+    "Subsequent starts skip relay backfill when that marker exists.",
+    "Existing deployments with the exact legacy terminal cursor translate it into the new completion marker without replaying relay history.",
+    "Failed or rate-limited backfills never record completion."
+  ],
+  "scope": [
+    "internal/nostrmigration/runner.go",
+    "internal/nostrmigration/runner_test.go"
+  ]
+}
