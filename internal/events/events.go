@@ -67,10 +67,10 @@ const (
 	EventWorkerCleanupCompleted           EventType = "worker.cleanup.completed"
 	EventWorkerCleanupFailed              EventType = "worker.cleanup.failed"
 	EventSecurityPolicyBreached           EventType = "security.policy_breached"
-	EventHygienePressureBreached         EventType = "hygiene.pressure_breached"
-	EventRollbackAttributableRollback    EventType = "rollback.attributable_rollback"
-	EventRollbackNotAttributable         EventType = "rollback.not_attributable"
-	EventRollbackSuppressedDouble        EventType = "rollback.suppressed_double"
+	EventHygienePressureBreached          EventType = "hygiene.pressure_breached"
+	EventRollbackAttributableRollback     EventType = "rollback.attributable_rollback"
+	EventRollbackNotAttributable          EventType = "rollback.not_attributable"
+	EventRollbackSuppressedDouble         EventType = "rollback.suppressed_double"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal
@@ -85,6 +85,17 @@ type ResourceData struct {
 	IntentID      string `json:"intent_id,omitempty"`
 	RunID         string `json:"run_id,omitempty"`
 	Deleted       bool   `json:"deleted,omitempty"`
+
+	// Deterministic change metadata, populated only when a publisher has
+	// established that a REAL material transition occurred (see the
+	// reconciler's material-state comparison). ChangeReason is a stable,
+	// sorted, comma-joined list of reason codes so consumers can act on which
+	// transition fired without re-diffing state. Absent on events that do not
+	// carry transition semantics. Additive and omitempty: existing consumers
+	// that decode ResourceData are unaffected.
+	ChangeReason        string `json:"change_reason,omitempty"`
+	PreviousDriftStatus string `json:"previous_drift_status,omitempty"`
+	DriftStatus         string `json:"drift_status,omitempty"`
 }
 
 // Event represents an internal domain event.

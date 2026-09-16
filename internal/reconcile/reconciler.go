@@ -269,6 +269,28 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 
 	obs.DeploymentUnitID = currentState.DeploymentUnitID
 
+	// Capture the material baseline from the persisted state and its latest
+	// observation BEFORE this pass mutates anything, so the post-pass comparison
+	// detects only real transitions. Volatile bookkeeping (timestamps, the
+	// rotating observation ID, backoff counters, diagnostics metadata) is
+	// excluded by construction — see materialStateOf.
+	var previousObservation *domain.RuntimeObservation
+	if latest, latestErr := r.observations.GetLatest(ctx, currentState.ServiceID, currentState.EnvironmentID); latestErr == nil {
+		previousObservation = latest
+	}
+	previousMaterial := materialStateOf(currentState, previousObservation)
+
+	// Drift detection is DEFERRED: branches note the drift evidence, and the
+	// event is published at most once per pass, and only when the material
+	// state actually changed. This stops the repeated drift.detected fan-out
+	// that a steadily-drifted unit previously produced on every observation.
+	driftDetected := false
+	var driftExtra map[string]string
+	noteDrift := func(extra map[string]string) {
+		driftDetected = true
+		driftExtra = extra
+	}
+
 	// Record the observation.
 	if err := r.observations.Create(ctx, obs); err != nil {
 		return err
@@ -306,7 +328,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 					if r.startingTimeoutExceeded(currentState, observedAt) {
 						newDrift = r.driftStatusForMode(mode)
 						r.recordStartingTimeout(currentState, obs, observedAt)
-						r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+						noteDrift(map[string]string{
 							"desired_hash":  currentState.DesiredHash,
 							"observed_hash": observedHash,
 							"health_status": string(obs.HealthStatus),
@@ -329,7 +351,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 					recordUnhealthyEvidence(currentState, obs, fmt.Sprintf(
 						"desired configuration is applied but the runtime is %s; the deployment is not healthy",
 						obs.HealthStatus))
-					r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+					noteDrift(map[string]string{
 						"desired_hash":  currentState.DesiredHash,
 						"observed_hash": observedHash,
 						"health_status": string(obs.HealthStatus),
@@ -337,7 +359,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 				}
 			} else {
 				newDrift = r.driftStatusForMode(mode)
-				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+				noteDrift(map[string]string{
 					"desired_hash":  currentState.DesiredHash,
 					"observed_hash": observedHash,
 				})
@@ -347,7 +369,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
 			newDrift = r.digestFallbackStatus(desiredDigest, observedDigest, obs.HealthStatus, mode)
 			if newDrift == domain.DriftStatusDrifted || newDrift == domain.DriftStatusRemediationNeeded {
-				r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+				noteDrift(map[string]string{
 					"desired_digest":  desiredDigest,
 					"observed_digest": observedDigest,
 				})
@@ -358,7 +380,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
 		newDrift = r.digestFallbackStatus(desiredDigest, observedDigest, obs.HealthStatus, mode)
 		if newDrift == domain.DriftStatusDrifted || newDrift == domain.DriftStatusRemediationNeeded {
-			r.publishDriftDetected(ctx, currentState, svc, env, map[string]string{
+			noteDrift(map[string]string{
 				"desired_digest":  desiredDigest,
 				"observed_digest": observedDigest,
 			})
@@ -392,14 +414,27 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 			Health: obs.HealthStatus, ObservationID: obs.ID, Source: obs.Source,
 		})
 	}
-	r.publisher.Publish(ctx, events.Event{
-		Type:     events.EventEnvironmentServiceStateChanged,
-		EntityID: currentState.ServiceID.String() + ":" + currentState.EnvironmentID.String(),
-		Data: events.ResourceData{
-			ServiceID:     currentState.ServiceID.String(),
-			EnvironmentID: currentState.EnvironmentID.String(),
-		},
-	})
+	// Emit exactly one state-changed event — and the deferred drift event —
+	// only for a REAL material transition. Unchanged observations updated the
+	// bookkeeping above but produce zero events, which is what stops the
+	// projector fan-out amplification at its source.
+	newMaterial := materialStateOf(currentState, obs)
+	if changed, reasons := previousMaterial.diff(newMaterial); changed {
+		r.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: currentState.ServiceID.String() + ":" + currentState.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID:           currentState.ServiceID.String(),
+				EnvironmentID:       currentState.EnvironmentID.String(),
+				ChangeReason:        changeReasonString(reasons),
+				PreviousDriftStatus: string(previousDrift),
+				DriftStatus:         string(newDrift),
+			},
+		})
+		if driftDetected {
+			r.publishDriftDetected(ctx, currentState, svc, env, driftExtra)
+		}
+	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
 		return r.autoApplyDesiredState(ctx, currentState)
 	}
