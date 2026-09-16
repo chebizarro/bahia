@@ -19,7 +19,11 @@ import (
 // RelayPool manages persistent connections to a set of Nostr relays.
 // It provides automatic reconnection and shared access across publishers and clients.
 type RelayPool struct {
-	mu                  sync.RWMutex
+	mu sync.RWMutex
+	// subscriptionsMu is deliberately separate from mu: subscription setup must
+	// remain possible while a publisher holds the topology read lock during
+	// network I/O.
+	subscriptionsMu     sync.Mutex
 	reconfigureMu       sync.Mutex
 	relays              map[string]*managedRelay
 	retiredRelays       map[string]*managedRelay
@@ -162,10 +166,12 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 	}
 	p.urls = nextURLs
 
+	p.subscriptionsMu.Lock()
 	active := make([]*activeMergedSubscription, 0, len(p.activeSubscriptions))
 	for _, subscription := range p.activeSubscriptions {
 		active = append(active, subscription)
 	}
+	p.subscriptionsMu.Unlock()
 	addedRelays := make(map[string]*managedRelay, len(addedURLs))
 	for _, url := range addedURLs {
 		addedRelays[url] = p.relays[url]
@@ -397,6 +403,10 @@ var subscribeOnRelay = func(relay *nostr.Relay, ctx context.Context, filter nost
 	return relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{MaxWaitForEOSE: time.Duration(math.MaxInt64)})
 }
 
+var publishOnRelay = func(relay *nostr.Relay, ctx context.Context, event nostr.Event) error {
+	return relay.Publish(ctx, event)
+}
+
 // IsRateLimitedReason returns true if a relay protocol reason indicates rate limiting.
 func IsRateLimitedReason(reason string) bool {
 	return strings.HasPrefix(reason, "rate-limited:")
@@ -434,8 +444,6 @@ func (r PublishResult) IsDuplicate() bool {
 
 func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRelay, ev nostr.Event) PublishResult {
 	mr.mu.Lock()
-	defer mr.mu.Unlock()
-
 	result := PublishResult{RelayURL: mr.url}
 
 	// Reconnect if needed.
@@ -451,6 +459,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 			p.recordRelayConnectionState(mr.url, false)
 			p.recordRelayError(mr.url, err.Error())
 			result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
+			mr.mu.Unlock()
 			return result
 		}
 		mr.relay = relay
@@ -458,14 +467,26 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		mr.lastErr = nil
 		p.recordRelayConnectionState(mr.url, true)
 	}
+	relay := mr.relay
+	mr.mu.Unlock()
 
+	// Do not hold the per-relay state lock across network I/O. Bootstrap and
+	// live-catchup subscriptions need this lock to attach to the same relay and
+	// must not be starved by a slow publish.
 	startedAt := time.Now()
-	err := mr.relay.Publish(ctx, ev)
+	err := publishOnRelay(relay, ctx, ev)
 	if err != nil {
 		if reason, ok := publishRejectionReason(err); ok {
 			if IsAuthRequiredReason(reason) {
-				if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-					err = mr.relay.Publish(ctx, ev)
+				mr.mu.Lock()
+				sameRelay := mr.connected && mr.relay == relay
+				authErr := fmt.Errorf("relay connection changed before AUTH retry")
+				if sameRelay {
+					authErr = p.authenticateManagedRelayLocked(ctx, mr)
+				}
+				mr.mu.Unlock()
+				if authErr == nil {
+					err = publishOnRelay(relay, ctx, ev)
 					if err == nil {
 						p.recordRelayPublishSuccess(mr.url, time.Since(startedAt))
 						p.recordRelayConnectionState(mr.url, true)
@@ -494,9 +515,17 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		}
 
 		// Transport/connection error - mark as disconnected.
-		mr.connected = false
-		mr.lastErr = err
-		p.recordRelayConnectionState(mr.url, false)
+		mr.mu.Lock()
+		markedDisconnected := false
+		if mr.relay == relay {
+			mr.connected = false
+			mr.lastErr = err
+			markedDisconnected = true
+		}
+		mr.mu.Unlock()
+		if markedDisconnected {
+			p.recordRelayConnectionState(mr.url, false)
+		}
 		p.recordRelayPublishFailure(mr.url, err.Error())
 		p.logger.Warn("publish failed (transport error), marking relay disconnected",
 			zap.String("relay", mr.url),
@@ -885,11 +914,11 @@ func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel cont
 		initialPending:   make(map[string]int),
 	}
 
-	p.mu.Lock()
+	p.subscriptionsMu.Lock()
 	p.nextSubscriptionID++
 	state.id = p.nextSubscriptionID
 	p.activeSubscriptions[state.id] = state
-	p.mu.Unlock()
+	p.subscriptionsMu.Unlock()
 
 	state.mu.Lock()
 	for _, relaySub := range subs {
@@ -1217,14 +1246,15 @@ func (p *RelayPool) subscribeConnectedRelay(authCtx, subscriptionCtx context.Con
 }
 
 func (p *RelayPool) unregisterActiveSubscription(id uint64) {
-	p.mu.Lock()
+	p.subscriptionsMu.Lock()
 	delete(p.activeSubscriptions, id)
-	p.mu.Unlock()
+	p.subscriptionsMu.Unlock()
 	p.pruneRetiredRelays()
 }
 
 func (p *RelayPool) pruneRetiredRelays() {
 	p.mu.Lock()
+	p.subscriptionsMu.Lock()
 	toClose := make([]*managedRelay, 0)
 	for url, relay := range p.retiredRelays {
 		inUse := false
@@ -1239,6 +1269,7 @@ func (p *RelayPool) pruneRetiredRelays() {
 			toClose = append(toClose, relay)
 		}
 	}
+	p.subscriptionsMu.Unlock()
 	p.mu.Unlock()
 	for _, relay := range toClose {
 		closeManagedRelay(p, relay)
@@ -1797,12 +1828,12 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 func (p *RelayPool) Close() {
 	p.cancel()
 
-	p.mu.RLock()
+	p.subscriptionsMu.Lock()
 	active := make([]*activeMergedSubscription, 0, len(p.activeSubscriptions))
 	for _, subscription := range p.activeSubscriptions {
 		active = append(active, subscription)
 	}
-	p.mu.RUnlock()
+	p.subscriptionsMu.Unlock()
 	for _, subscription := range active {
 		subscription.close()
 	}

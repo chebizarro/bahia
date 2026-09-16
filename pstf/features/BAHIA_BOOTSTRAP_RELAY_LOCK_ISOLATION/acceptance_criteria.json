@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_BOOTSTRAP_RELAY_LOCK_ISOLATION",
+  "criteria": [
+    {
+      "id": "BBRLI-AC1",
+      "statement": "A stalled relay publication does not block Bootstrapper from establishing a subscription against the same managed relay.",
+      "tests": ["internal/adapters/nostr/relay_pool_test.go:TestRelayPoolStalledPublishDoesNotBlockBootstrapSubscription"]
+    },
+    {
+      "id": "BBRLI-AC2",
+      "statement": "The relay adapter remains free of data races while publication, subscription, and active-subscription bookkeeping execute concurrently.",
+      "tests": ["go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 ./internal/adapters/nostr -count=1"]
+    },
+    {
+      "id": "BBRLI-AC3",
+      "statement": "The production Bahia image builds through the repository Dockerfile after the lock-boundary change.",
+      "tests": ["docker build --build-arg GIT_COMMIT=bootstrap-lock-fix-review -t bahia:bootstrap-lock-fix-review ."]
+    },
+    {
+      "id": "BBRLI-AC4",
+      "statement": "A guarded production canary reaches tier-3 readiness and sustains the relay-amplification task's ten-minute steady-state acceptance window.",
+      "tests": ["Nostrig task bahia-dns-projection-event-amplification-relay-storm-20260914 live canary"]
+    }
+  ]
+}

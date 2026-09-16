@@ -1,0 +1,20 @@
+{
+  "feature_id": "BAHIA_BOOTSTRAP_RELAY_LOCK_ISOLATION",
+  "title": "Bootstrap subscriptions remain independent of slow relay publications",
+  "observed_behavior": [
+    "RelayPool held each managed relay mutex while waiting for relay publication network I/O.",
+    "Active subscription registration reused the topology mutex held for the duration of PublishWithResults.",
+    "A startup burst of payments/history publications could therefore prevent Bootstrapper live-catchup subscriptions from being established before their bounded catch-up timer began.",
+    "Production readiness remained in live_catchup until the rollout context was cancelled."
+  ],
+  "intended_behavior": [
+    "Relay topology remains stable for the duration of an in-flight publication.",
+    "Managed relay state locks are not held across publication network I/O.",
+    "Active subscription bookkeeping does not contend on the topology mutex.",
+    "Bootstrap can establish bounded live-catchup subscriptions while unrelated relay publications are slow or stalled."
+  ],
+  "scope": [
+    "internal/adapters/nostr/relay_pool.go",
+    "internal/adapters/nostr/relay_pool_test.go"
+  ]
+}
