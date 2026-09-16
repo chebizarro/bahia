@@ -200,6 +200,12 @@ type Projector struct {
 	dnsPublishedBackends  map[string]dnsPublishedBackend
 	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
+
+	// Generalized projection dedupe/coalescing/backoff/metrics state; see
+	// projection_dedupe.go. Initialized lazily so the constructor literal is
+	// untouched.
+	projInitOnce sync.Once
+	proj         *projectionState
 }
 
 // ProjectorOption configures a projector.
@@ -3518,7 +3524,9 @@ func isLLMEvent(t events.EventType) bool {
 	}
 }
 
-func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+// publishSignedDirect signs, publishes, and records one event with no dedupe,
+// coalescing, or backoff. Only publishSigned (the gated choke point) calls it.
+func (p *Projector) publishSignedDirect(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
 	ev := gonostr.Event{
 		Kind:      canonicalKind(kind),
 		CreatedAt: gonostr.Now(),
