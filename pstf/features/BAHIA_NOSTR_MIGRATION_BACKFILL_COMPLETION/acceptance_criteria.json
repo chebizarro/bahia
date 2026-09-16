@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_NOSTR_MIGRATION_BACKFILL_COMPLETION",
+  "criteria": [
+    {
+      "id": "BNMBC-AC1",
+      "statement": "A successful relay backfill persists a versioned completion marker and a subsequent runner start performs no relay subscription or publication.",
+      "tests": ["internal/nostrmigration/runner_test.go:TestRunnerPersistsRelayBackfillCompletionAndSkipsReplayOnRestart"]
+    },
+    {
+      "id": "BNMBC-AC2",
+      "statement": "A rate-limited or otherwise failed relay backfill does not persist a completion marker.",
+      "tests": ["internal/nostrmigration/runner_test.go:TestRunnerDoesNotMarkFailedRelayBackfillComplete"]
+    },
+    {
+      "id": "BNMBC-AC3",
+      "statement": "The exact legacy terminal cursor is translated into the new completion marker without replaying relay history.",
+      "tests": ["internal/nostrmigration/runner_test.go:TestRunnerHonorsLegacyTerminalCursorWithoutReplayingRelayHistory"]
+    },
+    {
+      "id": "BNMBC-AC4",
+      "statement": "The production image builds through the repository Dockerfile and a guarded canary reaches tier-3 readiness without migration replay pressure.",
+      "tests": ["repository Docker build", "Nostrig P0 guarded production canary"]
+    }
+  ]
+}

@@ -255,6 +255,62 @@ func TestRunnerMigratesRelayBackfillUntilEOSE(t *testing.T) {
 	require.Len(t, found, 1)
 }
 
+func TestRunnerPersistsRelayBackfillCompletionAndSkipsReplayOnRestart(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
+	firstSubscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
+	firstPublisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
+	config := Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true}
+
+	require.NoError(t, NewRunner(repo, firstPublisher, firstSubscriber, config, zap.NewNop()).Run(ctx))
+	require.Len(t, firstSubscriber.filters, 1)
+	completion, err := repo.GetMigrationCursor(ctx, relayBackfillCompletionName)
+	require.NoError(t, err)
+	require.NotNil(t, completion)
+
+	secondSubscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
+	secondPublisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
+	require.NoError(t, NewRunner(repo, secondPublisher, secondSubscriber, config, zap.NewNop()).Run(ctx))
+	require.Empty(t, secondSubscriber.filters)
+	require.Empty(t, secondPublisher.events)
+}
+
+func TestRunnerHonorsLegacyTerminalCursorWithoutReplayingRelayHistory(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	require.NoError(t, repo.SaveMigrationCursor(ctx, repository.NostrMigrationCursor{
+		Name:      localCursorName,
+		CreatedAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		EventID:   "~",
+	}))
+	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{
+		signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC()),
+	}}
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
+
+	require.NoError(t, NewRunner(repo, publisher, subscriber, Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true}, zap.NewNop()).Run(ctx))
+	require.Empty(t, subscriber.filters)
+	require.Empty(t, publisher.events)
+	completion, err := repo.GetMigrationCursor(ctx, relayBackfillCompletionName)
+	require.NoError(t, err)
+	require.NotNil(t, completion)
+}
+
+func TestRunnerDoesNotMarkFailedRelayBackfillComplete(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
+	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
+	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: false, Reason: "rate-limited: slow down"}}}
+
+	err := NewRunner(repo, publisher, subscriber, Config{PrivateKey: deterministicPrivateKey(t), RelayBackfill: true}, zap.NewNop()).Run(ctx)
+	require.Error(t, err)
+	completion, cursorErr := repo.GetMigrationCursor(ctx, relayBackfillCompletionName)
+	require.NoError(t, cursorErr)
+	require.Nil(t, completion)
+}
+
 func TestRunnerSkipsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()

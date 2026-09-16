@@ -25,8 +25,9 @@ type EventRepository interface {
 }
 
 const (
-	localCursorName = "bahia-nostr-native-v2-local"
-	migrationID     = "bahia-nostr-native-v2"
+	localCursorName             = "bahia-nostr-native-v2-local"
+	relayBackfillCompletionName = "bahia-nostr-native-v2-relay-backfill-complete"
+	migrationID                 = "bahia-nostr-native-v2"
 )
 
 type RelaySubscriber interface {
@@ -100,8 +101,45 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 	if r.config.RelayBackfill && r.subscriber != nil {
-		if err := r.migrateRelayBackfill(ctx, &summary); err != nil {
-			return err
+		completed, err := r.repo.GetMigrationCursor(ctx, relayBackfillCompletionName)
+		if err != nil {
+			return fmt.Errorf("load relay nostr migration completion marker: %w", err)
+		}
+		if completed == nil {
+			localCursor, cursorErr := r.repo.GetMigrationCursor(ctx, localCursorName)
+			if cursorErr != nil {
+				return fmt.Errorf("reload local nostr migration cursor: %w", cursorErr)
+			}
+			if isLegacyMigrationCompletionSentinel(localCursor) {
+				completed = localCursor
+				r.logger.Info("legacy nostr migration completion sentinel found; skipping previously completed relay backfill")
+				if !r.config.DryRun {
+					if err := r.repo.SaveMigrationCursor(ctx, repository.NostrMigrationCursor{
+						Name:      relayBackfillCompletionName,
+						CreatedAt: localCursor.CreatedAt,
+						EventID:   migrationID,
+					}); err != nil {
+						return fmt.Errorf("save relay nostr migration completion marker from legacy sentinel: %w", err)
+					}
+				}
+			}
+		}
+		if completed == nil {
+			if err := r.migrateRelayBackfill(ctx, &summary); err != nil {
+				return err
+			}
+			if !r.config.DryRun {
+				if err := r.repo.SaveMigrationCursor(ctx, repository.NostrMigrationCursor{
+					Name:      relayBackfillCompletionName,
+					CreatedAt: time.Now().UTC(),
+					EventID:   migrationID,
+				}); err != nil {
+					return fmt.Errorf("save relay nostr migration completion marker: %w", err)
+				}
+			}
+		} else {
+			r.logger.Info("nostr relay backfill already complete; skipping startup replay",
+				zap.Time("completed_at", completed.CreatedAt))
 		}
 	}
 	r.logger.Info("nostr native migration complete",
@@ -114,6 +152,11 @@ func (r *Runner) Run(ctx context.Context) error {
 		zap.Any("by_legacy_kind", summary.ByLegacyKind),
 	)
 	return nil
+}
+
+func isLegacyMigrationCompletionSentinel(cursor *repository.NostrMigrationCursor) bool {
+	legacyTerminalTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	return cursor != nil && cursor.EventID == "~" && cursor.CreatedAt.UTC().Equal(legacyTerminalTime)
 }
 
 func (r *Runner) migrateLocal(ctx context.Context, summary *Summary) error {
