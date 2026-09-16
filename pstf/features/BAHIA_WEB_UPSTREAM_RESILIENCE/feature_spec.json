@@ -1,0 +1,15 @@
+{
+  "feature_id": "BAHIA_WEB_UPSTREAM_RESILIENCE",
+  "title": "Bahia web remains available while control-plane upstreams are absent",
+  "observed_behavior": [
+    "nginx resolved the bahia and relay Compose service names while loading its configuration.",
+    "When the Bahia backend was intentionally stopped for incident containment, a recreated web container exited before serving static content because the bahia name was absent from Docker DNS.",
+    "The unless-stopped restart policy produced a persistent restart loop and public HTTP 502 responses."
+  ],
+  "intended_behavior": [
+    "The web container resolves Compose upstream names at request time through Docker's embedded DNS resolver.",
+    "Static UI and web health remain available when the Bahia backend is intentionally stopped.",
+    "Requests to an absent API or relay upstream fail with an upstream error without terminating nginx."
+  ],
+  "scope": ["web/nginx.conf"]
+}

@@ -1,0 +1,20 @@
+{
+  "feature_id": "BAHIA_WEB_UPSTREAM_RESILIENCE",
+  "criteria": [
+    {
+      "id": "BWUR-AC1",
+      "statement": "The repository web image starts healthy on an isolated Docker network with neither bahia nor relay present.",
+      "tests": ["docker build -f web/Dockerfile ... web; isolated docker run health probe"]
+    },
+    {
+      "id": "BWUR-AC2",
+      "statement": "The static app shell returns HTTP 200 while the backend is absent.",
+      "tests": ["isolated GET / returns 200"]
+    },
+    {
+      "id": "BWUR-AC3",
+      "statement": "An API request against an absent backend returns HTTP 502 without terminating or degrading the web container.",
+      "tests": ["isolated GET /api/health returns 502 while container health remains healthy"]
+    }
+  ]
+}
