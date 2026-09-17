@@ -246,7 +246,7 @@ func TestMetiqSignetEnrollmentUsesSigningOnlyExactClientProfile(t *testing.T) {
 	if contract.Schema != RuntimeSignetIdentityContractSchema || len(admin.policies) != 1 || admin.policies[0].ClientPubkey != contract.ClientPubkey {
 		t.Fatalf("contract=%+v policies=%+v", contract, admin.policies)
 	}
-	wantMethods := []string{"connect", "get_public_key", "get_relays", "ping", "sign_event"}
+	wantMethods := []string{"connect", "get_public_key", "get_relays", "ping", "sign_event", "switch_relays"}
 	if !reflect.DeepEqual(admin.policies[0].Methods, wantMethods) {
 		t.Fatalf("methods=%v want=%v", admin.policies[0].Methods, wantMethods)
 	}
