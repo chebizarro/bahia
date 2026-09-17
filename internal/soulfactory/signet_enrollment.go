@@ -62,7 +62,10 @@ func MetiqRuntimeSignetEnrollmentProfile() SignetEnrollmentProfile {
 	return SignetEnrollmentProfile{
 		ContractSchema: RuntimeSignetIdentityContractSchema,
 		Methods:        []string{"connect", "get_public_key", "get_relays", "nip44_decrypt", "nip44_encrypt", "ping", "sign_event", "switch_relays"},
-		EventKinds:     []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult},
+		// Kind 30078 is Metiq's encrypted NIP-78 config/checkpoint store. The
+		// remaining two kinds are its public capability and correlated
+		// SoulFactory result streams. No general-purpose signing is granted.
+		EventKinds: []int{30078, cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult},
 	}
 }
 
