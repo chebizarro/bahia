@@ -294,6 +294,12 @@ func TestContainerSignetctlReadsCredentialAtExecutionAndNeverPlacesItInArgv(t *t
 	if !strings.Contains(joinedArgs, "set-policy") || strings.Contains(joinedArgs, `\"*\"`) {
 		t.Fatalf("signetctl policy argv = %s", joinedArgs)
 	}
+	if !strings.Contains(joinedArgs, "SIGNET_PROVISIONER_NSEC_FILE") || !strings.Contains(joinedArgs, "/dev/shm/signetctl-provisioner") {
+		t.Fatalf("signetctl did not use a file-backed tmpfs provisioner credential: %s", joinedArgs)
+	}
+	if strings.Contains(joinedArgs, "export SIGNET_PROVISIONER_NSEC;") {
+		t.Fatalf("signetctl used the retired inline provisioner environment: %s", joinedArgs)
+	}
 	var policyArg map[string]interface{}
 	if err := json.Unmarshal([]byte(runner.args[len(runner.args)-1]), &policyArg); err != nil {
 		t.Fatalf("parse policy arg: %v", err)

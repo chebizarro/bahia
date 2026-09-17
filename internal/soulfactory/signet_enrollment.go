@@ -581,10 +581,25 @@ func (c *ContainerSignetctl) run(ctx context.Context, args ...string) ([]byte, e
 	if len(credential) == 0 || bytes.IndexByte(credential, '\n') >= 0 {
 		return nil, fmt.Errorf("provisioner credential file is empty or malformed")
 	}
-	// The credential travels only on stdin to a fixed container shell. It is
-	// neither copied into the container filesystem nor exposed in argv/env of
-	// the host-side docker process.
-	script := `IFS= read -r SIGNET_PROVISIONER_NSEC || exit 64; export SIGNET_PROVISIONER_NSEC; exec signetctl "$@"`
+	// The credential travels only on stdin to a fixed container shell. Current
+	// Signet accepts provisioner authority only through
+	// SIGNET_PROVISIONER_NSEC_FILE, so stage it as a mode-0600 file on the
+	// container's tmpfs and scrub it on every exit. It is never exposed in host
+	// argv/env or written to a persistent container layer.
+	script := `set -eu
+umask 077
+credential_path="$(mktemp /dev/shm/signetctl-provisioner.XXXXXX)"
+cleanup() { shred -u "$credential_path" 2>/dev/null || rm -f "$credential_path"; }
+trap cleanup EXIT HUP INT TERM
+cat >"$credential_path"
+export SIGNET_PROVISIONER_NSEC_FILE="$credential_path"
+if [ -r /run/secrets/signet-bunker-nsec ]; then
+  export SIGNET_BUNKER_NSEC_FILE=/run/secrets/signet-bunker-nsec
+fi
+if [ -r /run/secrets/signet-db-key ]; then
+  export SIGNET_DB_KEY="$(cat /run/secrets/signet-db-key)"
+fi
+signetctl "$@"`
 	dockerArgs := []string{"exec", "-i", c.config.Container, "sh", "-c", script, "signetctl", "-c", c.config.ConfigPath}
 	dockerArgs = append(dockerArgs, args...)
 	stdin := append(append([]byte(nil), credential...), '\n')

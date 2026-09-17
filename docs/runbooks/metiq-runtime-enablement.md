@@ -48,7 +48,7 @@ metiq-signet-enrollment -config /etc/bahia/metiq-signet-enrollment.json enroll \
   >"$change_dir/metiq-enrollment-public.json"
 ```
 
-The host process reads the provisioner credential at each `signetctl` execution and sends it only on stdin to the fixed container shell. It is absent from host argv, logs, configuration, and output. The Metiq profile permits only `connect`, `get_public_key`, `get_relays`, `ping`, and `sign_event`, with signing limited to the Cascadia capability kind and Bahia runtime-control result kind. Wildcard clients and methods are rejected.
+The host process reads the provisioner credential at each `signetctl` execution and sends it only on stdin to the fixed container shell. The shell stages it as a mode-`0600` file on container tmpfs for Signet's required `SIGNET_PROVISIONER_NSEC_FILE` interface and scrubs it on every exit. It is absent from host argv/environment, logs, persistent configuration, and output. The Metiq profile permits only `connect`, `get_public_key`, `get_relays`, `ping`, and `sign_event`, with signing limited to the Cascadia capability kind and Bahia runtime-control result kind. Wildcard clients and methods are rejected.
 
 Operations:
 
