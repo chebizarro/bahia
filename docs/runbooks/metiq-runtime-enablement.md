@@ -8,7 +8,7 @@ This is a Track A artifact and a Track B operator procedure. Running the command
 
 - Render `deploy/soulfactory/metiq-enablement.yaml.template` with the exact OpenClaw runtime pubkey, dedicated Metiq runtime pubkey, SoulFactory controller/operator pubkeys, and canonical service relay set from the approved signed `30002`/`10002` topology capture.
 - Keep the existing SoulFactory Signet and LLM secret injection unchanged. The enablement overlay contains no secret.
-- Render `deploy/soulfactory/metiq-signet-enrollment.json.template` to a mode-`0600` host file. It contains public keys and protected file paths only.
+- Render `deploy/soulfactory/metiq-signet-enrollment.json.template` to a mode-`0600` host file. It contains public keys and protected file paths only. Leave `runtime_pubkey` and `managed_pubkey` empty for a new identity; `enroll` binds both to the public key returned by the protected Signet provisioning handoff. For an existing enrollment, they may remain empty and are recovered from the durable secret-free contract.
 - Store the Signet provisioner credential in the configured host file, owned by the executing UID and mode `0600`. Never export it in a host environment, pass it in argv, print it, or copy it into evidence.
 - Pin the Bahia, Metiq bridge, OpenClaw bridge, Signet, and relay images by `repository@sha256:<64-hex>` before Track B starts.
 

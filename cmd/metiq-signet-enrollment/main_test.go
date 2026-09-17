@@ -49,6 +49,30 @@ func TestValidateEnrollmentConfigRejectsSharedIdentity(t *testing.T) {
 	}
 }
 
+func TestValidateEnrollmentConfigAllowsProvisionedIdentityDiscovery(t *testing.T) {
+	cfg := enrollmentConfig{
+		IdentityID: "metiq-runtime", ControllerPubkey: strings.Repeat("b", 64),
+		ProvisionerPubkey: strings.Repeat("c", 64), StateDir: "/state", ClientKeyDir: "/keys",
+		SignetContainer: "signetd", SignetConfigPath: "/etc/signet/signet.conf",
+		ProvisionerCredentialFile: "/run/secrets/provisioner",
+	}
+	if err := validateEnrollmentConfig(cfg); err != nil {
+		t.Fatalf("validateEnrollmentConfig: %v", err)
+	}
+}
+
+func TestValidateEnrollmentConfigRejectsHalfSpecifiedIdentity(t *testing.T) {
+	cfg := enrollmentConfig{
+		IdentityID: "metiq-runtime", ControllerPubkey: strings.Repeat("b", 64),
+		RuntimePubkey: strings.Repeat("a", 64), ProvisionerPubkey: strings.Repeat("c", 64),
+		StateDir: "/state", ClientKeyDir: "/keys", SignetContainer: "signetd",
+		SignetConfigPath: "/etc/signet/signet.conf", ProvisionerCredentialFile: "/run/secrets/provisioner",
+	}
+	if err := validateEnrollmentConfig(cfg); err == nil || !strings.Contains(err.Error(), "same dedicated") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestLoadEnrollmentConfigRejectsUnknownSecretFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"identity_id":"metiq-runtime","bunker_uri":"must-not-be-configured"}`), 0o600); err != nil {

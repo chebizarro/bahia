@@ -1,8 +1,8 @@
 {
   "identity_id": "metiq-runtime",
   "controller_pubkey": "<SOULFACTORY_CONTROLLER_PUBKEY_HEX>",
-  "runtime_pubkey": "<METIQ_RUNTIME_PUBKEY_HEX>",
-  "managed_pubkey": "<METIQ_RUNTIME_PUBKEY_HEX>",
+  "runtime_pubkey": "",
+  "managed_pubkey": "",
   "provisioner_pubkey": "<SIGNET_PROVISIONER_PUBKEY_HEX>",
   "state_dir": "/var/lib/bahia/soulfactory/runtime-signet",
   "client_key_dir": "/var/lib/bahia/soulfactory/runtime-signet/clients",

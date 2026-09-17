@@ -361,6 +361,17 @@ func TestContainerSignetctlProvisionReturnsOneTimeURIWithoutCredentialInArgv(t *
 	}
 }
 
+func TestManagedPubkeyFromBunkerURIDiscardsOneTimeSecret(t *testing.T) {
+	pubkey := strings.Repeat("5", 64)
+	got, err := ManagedPubkeyFromBunkerURI("bunker://" + pubkey + "?relay=wss%3A%2F%2Frelay.example&secret=one-time")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != pubkey || strings.Contains(got, "one-time") {
+		t.Fatalf("managed pubkey = %q", got)
+	}
+}
+
 func newEnrollmentManagerForTest(t *testing.T, root string, admin SignetPolicyAdmin, verifier SignetConnectivityVerifier) *OpenClawSignetEnrollmentManager {
 	t.Helper()
 	manager, err := NewOpenClawSignetEnrollmentManager(OpenClawSignetEnrollmentConfig{
