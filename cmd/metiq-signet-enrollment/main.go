@@ -84,10 +84,26 @@ func run(ctx context.Context, configPath, action string, stdout *os.File) error 
 			if err != nil {
 				return fmt.Errorf("provision dedicated Metiq Signet identity: %w", err)
 			}
+			discoveredPubkey, err := soulfactory.ManagedPubkeyFromBunkerURI(oneTimeBunkerURI)
+			if err != nil {
+				return fmt.Errorf("bind provisioned Metiq Signet identity: %w", err)
+			}
+			if req.RuntimePubkey == "" {
+				req.RuntimePubkey = discoveredPubkey
+				req.ManagedPubkey = discoveredPubkey
+			} else if !strings.EqualFold(req.RuntimePubkey, discoveredPubkey) {
+				return errors.New("provisioned Metiq Signet identity does not match configured runtime_pubkey")
+			}
+			if strings.EqualFold(req.RuntimePubkey, req.ControllerPubkey) || strings.EqualFold(req.RuntimePubkey, req.ProvisionerPubkey) {
+				return errors.New("provisioned Metiq runtime identity must differ from controller and provisioner identities")
+			}
 			if err := manager.StageHandoff(ctx, cfg.IdentityID, oneTimeBunkerURI); err != nil {
 				return fmt.Errorf("stage protected one-time Metiq bunker handoff: %w", err)
 			}
 			oneTimeBunkerURI = ""
+		} else if req.RuntimePubkey == "" {
+			req.RuntimePubkey = existing.RuntimePubkey
+			req.ManagedPubkey = existing.ManagedPubkey
 		}
 		output, err = manager.Enroll(ctx, req)
 		if err != nil {
@@ -144,16 +160,21 @@ func validateEnrollmentConfig(cfg enrollmentConfig) error {
 	if strings.TrimSpace(cfg.IdentityID) == "" {
 		return errors.New("identity_id is required")
 	}
-	if !strings.EqualFold(strings.TrimSpace(cfg.RuntimePubkey), strings.TrimSpace(cfg.ManagedPubkey)) {
+	runtimePubkey := strings.TrimSpace(cfg.RuntimePubkey)
+	managedPubkey := strings.TrimSpace(cfg.ManagedPubkey)
+	if (runtimePubkey == "") != (managedPubkey == "") || !strings.EqualFold(runtimePubkey, managedPubkey) {
 		return errors.New("runtime_pubkey and managed_pubkey must identify the same dedicated Metiq identity")
 	}
-	if strings.EqualFold(strings.TrimSpace(cfg.RuntimePubkey), strings.TrimSpace(cfg.ControllerPubkey)) || strings.EqualFold(strings.TrimSpace(cfg.RuntimePubkey), strings.TrimSpace(cfg.ProvisionerPubkey)) {
+	if runtimePubkey != "" && (strings.EqualFold(runtimePubkey, strings.TrimSpace(cfg.ControllerPubkey)) || strings.EqualFold(runtimePubkey, strings.TrimSpace(cfg.ProvisionerPubkey))) {
 		return errors.New("dedicated Metiq runtime identity must differ from controller and provisioner identities")
 	}
 	for name, value := range map[string]string{
 		"controller_pubkey": cfg.ControllerPubkey, "runtime_pubkey": cfg.RuntimePubkey,
 		"managed_pubkey": cfg.ManagedPubkey, "provisioner_pubkey": cfg.ProvisionerPubkey,
 	} {
+		if value == "" && (name == "runtime_pubkey" || name == "managed_pubkey") {
+			continue
+		}
 		decoded, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(value)))
 		if err != nil || len(decoded) != 32 {
 			return fmt.Errorf("%s must be a 64-character hex pubkey", name)

@@ -720,6 +720,18 @@ func sanitizeOneTimeBunkerURI(raw string) (string, string, []string, error) {
 	return parsed.String(), strings.ToLower(parsed.Host), uniqueSortedStrings(relays), nil
 }
 
+// ManagedPubkeyFromBunkerURI returns only the public identity carried by a
+// one-time bunker URI. It intentionally discards the connection secret so a
+// caller can bind a newly provisioned identity without persisting or printing
+// the secret-bearing URI.
+func ManagedPubkeyFromBunkerURI(raw string) (string, error) {
+	_, pubkey, _, err := sanitizeOneTimeBunkerURI(raw)
+	if err != nil {
+		return "", err
+	}
+	return pubkey, nil
+}
+
 func validateEnrollmentRequest(req OpenClawSignetEnrollmentRequest) error {
 	if !safeAgentID(req.AgentID) {
 		return fmt.Errorf("invalid agent id")
