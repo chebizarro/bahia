@@ -250,7 +250,7 @@ func TestMetiqSignetEnrollmentUsesStateEncryptionAndSigningExactClientProfile(t 
 	if !reflect.DeepEqual(admin.policies[0].Methods, wantMethods) {
 		t.Fatalf("methods=%v want=%v", admin.policies[0].Methods, wantMethods)
 	}
-	wantKinds := []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult}
+	wantKinds := []int{30078, cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult}
 	if !reflect.DeepEqual(admin.policies[0].EventKinds, wantKinds) {
 		t.Fatalf("event kinds=%v want=%v", admin.policies[0].EventKinds, wantKinds)
 	}
