@@ -120,7 +120,7 @@ type SignetClientPolicy struct {
 }
 
 type SignetConnectivityVerifier interface {
-	Verify(context.Context, string, string, string, []int) error
+	Verify(context.Context, string, string, string, []int) (string, error)
 }
 
 type OpenClawSignetEnrollmentConfig struct {
@@ -199,6 +199,10 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 	if existing, err := m.Inspect(ctx, req.AgentID); err != nil {
 		return nil, err
 	} else if existing != nil {
+		if req.RuntimePubkey == "" && req.ManagedPubkey == "" {
+			req.RuntimePubkey = existing.RuntimePubkey
+			req.ManagedPubkey = existing.ManagedPubkey
+		}
 		if err := matchEnrollmentIdentity(*existing, req); err != nil {
 			return nil, err
 		}
@@ -207,7 +211,7 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 		if err := m.config.PolicyAdmin.SetPolicy(ctx, req.AgentID, SignetClientPolicy{ClientPubkey: existing.ClientPubkey, Methods: desiredMethods, EventKinds: desiredKinds}); err != nil {
 			return nil, fmt.Errorf("reconcile existing Signet client policy: %w", err)
 		}
-		if err := m.config.Verifier.Verify(ctx, existing.BunkerURL, existing.ClientKeyRef, existing.ManagedPubkey, desiredKinds); err != nil {
+		if _, err := m.config.Verifier.Verify(ctx, existing.BunkerURL, existing.ClientKeyRef, existing.ManagedPubkey, desiredKinds); err != nil {
 			return nil, fmt.Errorf("verify existing OpenClaw Signet enrollment: %w", err)
 		}
 		if !slices.Equal(existing.Methods, desiredMethods) || !slices.Equal(existing.EventKinds, desiredKinds) {
@@ -256,12 +260,33 @@ func (m *OpenClawSignetEnrollmentManager) Enroll(ctx context.Context, req OpenCl
 		return nil, fmt.Errorf("set exact-client Signet policy: %w", err)
 	}
 
-	if err := m.config.Verifier.Verify(ctx, handoffPath, clientKeyPath, req.ManagedPubkey, kinds); err != nil {
+	managedPubkey, err := m.config.Verifier.Verify(ctx, handoffPath, clientKeyPath, req.ManagedPubkey, kinds)
+	if err != nil {
 		cleanupErr := m.config.PolicyAdmin.RevokeClient(ctx, clientPubkey)
 		if cleanupErr != nil {
 			return nil, errors.Join(fmt.Errorf("verify new OpenClaw Signet enrollment: %w", err), fmt.Errorf("compensating client revoke: %w", cleanupErr))
 		}
 		return nil, fmt.Errorf("verify new OpenClaw Signet enrollment: %w", err)
+	}
+	if req.ManagedPubkey == "" {
+		if !isHexPubkey(managedPubkey) {
+			cleanupErr := m.config.PolicyAdmin.RevokeClient(ctx, clientPubkey)
+			identityErr := errors.New("authenticated NIP-46 managed pubkey is invalid")
+			if cleanupErr != nil {
+				return nil, errors.Join(identityErr, fmt.Errorf("compensating client revoke: %w", cleanupErr))
+			}
+			return nil, identityErr
+		}
+		req.ManagedPubkey = managedPubkey
+		req.RuntimePubkey = managedPubkey
+	}
+	if strings.EqualFold(req.RuntimePubkey, req.ControllerPubkey) || strings.EqualFold(req.RuntimePubkey, req.ProvisionerPubkey) {
+		cleanupErr := m.config.PolicyAdmin.RevokeClient(ctx, clientPubkey)
+		identityErr := errors.New("provisioned runtime identity must differ from controller and provisioner identities")
+		if cleanupErr != nil {
+			return nil, errors.Join(identityErr, fmt.Errorf("compensating client revoke: %w", cleanupErr))
+		}
+		return nil, identityErr
 	}
 
 	contract := &OpenClawSignetIdentityContract{
@@ -375,104 +400,104 @@ func (m *OpenClawSignetEnrollmentManager) loadOrCreateClientKey(path string) (st
 
 type NIP46ConnectivityVerifier struct{}
 
-func (NIP46ConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, clientKeyFile, expectedPubkey string, eventKinds []int) error {
+func (NIP46ConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, clientKeyFile, expectedPubkey string, eventKinds []int) (string, error) {
 	bunkerURI := bunkerURIOrFile
 	if !strings.HasPrefix(bunkerURI, "bunker://") {
 		data, err := readProtectedFile(clientPathClean(bunkerURI), os.Geteuid())
 		if err != nil {
-			return err
+			return "", err
 		}
 		bunkerURI = strings.TrimSpace(string(data))
 	}
 	keyData, err := readProtectedFile(clientPathClean(clientKeyFile), os.Geteuid())
 	if err != nil {
-		return err
+		return "", err
 	}
 	clientKey, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(keyData)))
 	if err != nil {
-		return fmt.Errorf("decode NIP-46 client key: %w", err)
+		return "", fmt.Errorf("decode NIP-46 client key: %w", err)
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	defer cancel()
 	bunker, err := nip46.ConnectBunker(lifetime, clientKey, bunkerURI, nil, nil)
 	if err != nil {
-		return fmt.Errorf("connect NIP-46 bunker: %w", err)
+		return "", fmt.Errorf("connect NIP-46 bunker: %w", err)
 	}
 	pubkey, err := bunker.GetPublicKey(ctx)
 	if err != nil {
-		return fmt.Errorf("get NIP-46 managed pubkey: %w", err)
+		return "", fmt.Errorf("get NIP-46 managed pubkey: %w", err)
 	}
-	if pubkey.Hex() != strings.ToLower(strings.TrimSpace(expectedPubkey)) {
-		return fmt.Errorf("NIP-46 managed pubkey %s does not match expected %s", pubkey.Hex(), expectedPubkey)
+	if expected := strings.ToLower(strings.TrimSpace(expectedPubkey)); expected != "" && pubkey.Hex() != expected {
+		return "", fmt.Errorf("NIP-46 managed pubkey %s does not match expected %s", pubkey.Hex(), expectedPubkey)
 	}
 	if err := bunker.Ping(ctx); err != nil {
-		return fmt.Errorf("ping NIP-46 bunker: %w", err)
+		return "", fmt.Errorf("ping NIP-46 bunker: %w", err)
 	}
 	if len(eventKinds) > 0 {
 		event := &nostr.Event{Kind: nostr.Kind(eventKinds[0]), CreatedAt: nostr.Now(), Tags: nostr.Tags{}, Content: ""}
 		if err := bunker.SignEvent(ctx, event); err != nil {
-			return fmt.Errorf("verify NIP-46 sign_event: %w", err)
+			return "", fmt.Errorf("verify NIP-46 sign_event: %w", err)
 		}
 	}
 	ciphertext, err := bunker.NIP44Encrypt(ctx, pubkey, "bahia-openclaw-enrollment")
 	if err != nil {
-		return fmt.Errorf("verify NIP-46 nip44_encrypt: %w", err)
+		return "", fmt.Errorf("verify NIP-46 nip44_encrypt: %w", err)
 	}
 	plaintext, err := bunker.NIP44Decrypt(ctx, pubkey, ciphertext)
 	if err != nil {
-		return fmt.Errorf("verify NIP-46 nip44_decrypt: %w", err)
+		return "", fmt.Errorf("verify NIP-46 nip44_decrypt: %w", err)
 	}
 	if plaintext != "bahia-openclaw-enrollment" {
-		return fmt.Errorf("verify NIP-46 nip44_decrypt: plaintext mismatch")
+		return "", fmt.Errorf("verify NIP-46 nip44_decrypt: plaintext mismatch")
 	}
-	return nil
+	return pubkey.Hex(), nil
 }
 
 // NIP46SigningConnectivityVerifier verifies the signing-only authority used by
 // a runtime bridge without requesting unrelated NIP-44 permissions.
 type NIP46SigningConnectivityVerifier struct{}
 
-func (NIP46SigningConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, clientKeyFile, expectedPubkey string, eventKinds []int) error {
+func (NIP46SigningConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, clientKeyFile, expectedPubkey string, eventKinds []int) (string, error) {
 	bunkerURI := bunkerURIOrFile
 	if !strings.HasPrefix(bunkerURI, "bunker://") {
 		data, err := readProtectedFile(clientPathClean(bunkerURI), os.Geteuid())
 		if err != nil {
-			return err
+			return "", err
 		}
 		bunkerURI = strings.TrimSpace(string(data))
 	}
 	keyData, err := readProtectedFile(clientPathClean(clientKeyFile), os.Geteuid())
 	if err != nil {
-		return err
+		return "", err
 	}
 	clientKey, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(keyData)))
 	if err != nil {
-		return fmt.Errorf("decode NIP-46 client key: %w", err)
+		return "", fmt.Errorf("decode NIP-46 client key: %w", err)
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	defer cancel()
 	bunker, err := nip46.ConnectBunker(lifetime, clientKey, bunkerURI, nil, nil)
 	if err != nil {
-		return fmt.Errorf("connect NIP-46 bunker: %w", err)
+		return "", fmt.Errorf("connect NIP-46 bunker: %w", err)
 	}
 	pubkey, err := bunker.GetPublicKey(ctx)
 	if err != nil {
-		return fmt.Errorf("get NIP-46 managed pubkey: %w", err)
+		return "", fmt.Errorf("get NIP-46 managed pubkey: %w", err)
 	}
-	if pubkey.Hex() != strings.ToLower(strings.TrimSpace(expectedPubkey)) {
-		return fmt.Errorf("NIP-46 managed pubkey %s does not match expected %s", pubkey.Hex(), expectedPubkey)
+	if expected := strings.ToLower(strings.TrimSpace(expectedPubkey)); expected != "" && pubkey.Hex() != expected {
+		return "", fmt.Errorf("NIP-46 managed pubkey %s does not match expected %s", pubkey.Hex(), expectedPubkey)
 	}
 	if err := bunker.Ping(ctx); err != nil {
-		return fmt.Errorf("ping NIP-46 bunker: %w", err)
+		return "", fmt.Errorf("ping NIP-46 bunker: %w", err)
 	}
 	if len(eventKinds) == 0 {
-		return fmt.Errorf("NIP-46 signing verification requires at least one allowed event kind")
+		return "", fmt.Errorf("NIP-46 signing verification requires at least one allowed event kind")
 	}
 	event := &nostr.Event{Kind: nostr.Kind(eventKinds[0]), CreatedAt: nostr.Now(), Tags: nostr.Tags{}, Content: ""}
 	if err := bunker.SignEvent(ctx, event); err != nil {
-		return fmt.Errorf("verify NIP-46 sign_event: %w", err)
+		return "", fmt.Errorf("verify NIP-46 sign_event: %w", err)
 	}
-	return nil
+	return pubkey.Hex(), nil
 }
 
 type SignetctlConfig struct {
@@ -735,24 +760,20 @@ func sanitizeOneTimeBunkerURI(raw string) (string, string, []string, error) {
 	return parsed.String(), strings.ToLower(parsed.Host), uniqueSortedStrings(relays), nil
 }
 
-// ManagedPubkeyFromBunkerURI returns only the public identity carried by a
-// one-time bunker URI. It intentionally discards the connection secret so a
-// caller can bind a newly provisioned identity without persisting or printing
-// the secret-bearing URI.
-func ManagedPubkeyFromBunkerURI(raw string) (string, error) {
-	_, pubkey, _, err := sanitizeOneTimeBunkerURI(raw)
-	if err != nil {
-		return "", err
-	}
-	return pubkey, nil
-}
-
 func validateEnrollmentRequest(req OpenClawSignetEnrollmentRequest) error {
 	if !safeAgentID(req.AgentID) {
 		return fmt.Errorf("invalid agent id")
 	}
-	for name, value := range map[string]string{"controller": req.ControllerPubkey, "runtime": req.RuntimePubkey, "managed": req.ManagedPubkey, "provisioner": req.ProvisionerPubkey} {
+	for name, value := range map[string]string{"controller": req.ControllerPubkey, "provisioner": req.ProvisionerPubkey} {
 		if !isHexPubkey(value) {
+			return fmt.Errorf("%s pubkey must be 64 hex characters", name)
+		}
+	}
+	if (req.RuntimePubkey == "") != (req.ManagedPubkey == "") {
+		return fmt.Errorf("runtime and managed pubkeys must both be set or both be empty")
+	}
+	for name, value := range map[string]string{"runtime": req.RuntimePubkey, "managed": req.ManagedPubkey} {
+		if value != "" && !isHexPubkey(value) {
 			return fmt.Errorf("%s pubkey must be 64 hex characters", name)
 		}
 	}
