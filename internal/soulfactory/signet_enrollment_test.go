@@ -222,7 +222,7 @@ func TestOpenClawSignetEnrollmentRevokeRemovesBindingAndFiles(t *testing.T) {
 	}
 }
 
-func TestMetiqSignetEnrollmentUsesSigningOnlyExactClientProfile(t *testing.T) {
+func TestMetiqSignetEnrollmentUsesStateEncryptionAndSigningExactClientProfile(t *testing.T) {
 	root := t.TempDir()
 	admin := &recordingSignetPolicyAdmin{}
 	verifier := &recordingConnectivityVerifier{}
@@ -246,7 +246,7 @@ func TestMetiqSignetEnrollmentUsesSigningOnlyExactClientProfile(t *testing.T) {
 	if contract.Schema != RuntimeSignetIdentityContractSchema || len(admin.policies) != 1 || admin.policies[0].ClientPubkey != contract.ClientPubkey {
 		t.Fatalf("contract=%+v policies=%+v", contract, admin.policies)
 	}
-	wantMethods := []string{"connect", "get_public_key", "get_relays", "ping", "sign_event", "switch_relays"}
+	wantMethods := []string{"connect", "get_public_key", "get_relays", "nip44_decrypt", "nip44_encrypt", "ping", "sign_event", "switch_relays"}
 	if !reflect.DeepEqual(admin.policies[0].Methods, wantMethods) {
 		t.Fatalf("methods=%v want=%v", admin.policies[0].Methods, wantMethods)
 	}
@@ -254,8 +254,8 @@ func TestMetiqSignetEnrollmentUsesSigningOnlyExactClientProfile(t *testing.T) {
 	if !reflect.DeepEqual(admin.policies[0].EventKinds, wantKinds) {
 		t.Fatalf("event kinds=%v want=%v", admin.policies[0].EventKinds, wantKinds)
 	}
-	if containsString(admin.policies[0].Methods, "nip44_encrypt") || containsString(admin.policies[0].Methods, "nip44_decrypt") || containsString(admin.policies[0].Methods, "*") {
-		t.Fatalf("Metiq policy is broader than signing-only: %+v", admin.policies[0])
+	if containsString(admin.policies[0].Methods, "nip04_encrypt") || containsString(admin.policies[0].Methods, "nip04_decrypt") || containsString(admin.policies[0].Methods, "*") {
+		t.Fatalf("Metiq policy is broader than encrypted-state and signing requirements: %+v", admin.policies[0])
 	}
 }
 
