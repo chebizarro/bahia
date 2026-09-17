@@ -61,7 +61,7 @@ func run(ctx context.Context, configPath, action string, stdout *os.File) error 
 	manager, err := soulfactory.NewOpenClawSignetEnrollmentManager(soulfactory.OpenClawSignetEnrollmentConfig{
 		StateDir: cfg.StateDir, ClientKeyDir: cfg.ClientKeyDir,
 		FileOwnerUID: os.Geteuid(), PolicyAdmin: admin,
-		Verifier: soulfactory.NIP46SigningConnectivityVerifier{}, Profile: &profile,
+		Verifier: soulfactory.NIP46ConnectivityVerifier{}, Profile: &profile,
 	})
 	if err != nil {
 		return err

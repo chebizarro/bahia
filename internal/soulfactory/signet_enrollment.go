@@ -56,12 +56,12 @@ type SignetEnrollmentProfile struct {
 }
 
 // MetiqRuntimeSignetEnrollmentProfile grants a dedicated Metiq bridge only
-// the operations and event kinds needed to advertise capability and sign
-// correlated runtime-control results.
+// the operations and event kinds needed to persist its encrypted local state,
+// advertise capability, and sign correlated runtime-control results.
 func MetiqRuntimeSignetEnrollmentProfile() SignetEnrollmentProfile {
 	return SignetEnrollmentProfile{
 		ContractSchema: RuntimeSignetIdentityContractSchema,
-		Methods:        []string{"connect", "get_public_key", "get_relays", "ping", "sign_event", "switch_relays"},
+		Methods:        []string{"connect", "get_public_key", "get_relays", "nip44_decrypt", "nip44_encrypt", "ping", "sign_event", "switch_relays"},
 		EventKinds:     []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult},
 	}
 }

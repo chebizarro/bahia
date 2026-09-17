@@ -48,7 +48,7 @@ metiq-signet-enrollment -config /etc/bahia/metiq-signet-enrollment.json enroll \
   >"$change_dir/metiq-enrollment-public.json"
 ```
 
-The host process reads the provisioner credential at each `signetctl` execution and sends it only on stdin to the fixed container shell. The shell stages it as a mode-`0600` file on container tmpfs for Signet's required `SIGNET_PROVISIONER_NSEC_FILE` interface and scrubs it on every exit. It is absent from host argv/environment, logs, persistent configuration, and output. The Metiq profile permits only `connect`, `get_public_key`, `get_relays`, `ping`, and `sign_event`, with signing limited to the Cascadia capability kind and Bahia runtime-control result kind. Wildcard clients and methods are rejected.
+The host process reads the provisioner credential at each `signetctl` execution and sends it only on stdin to the fixed container shell. The shell stages it as a mode-`0600` file on container tmpfs for Signet's required `SIGNET_PROVISIONER_NSEC_FILE` interface and scrubs it on every exit. It is absent from host argv/environment, logs, persistent configuration, and output. The Metiq profile permits only `connect`, `get_public_key`, `get_relays`, `ping`, `switch_relays`, `nip44_encrypt`, `nip44_decrypt`, and `sign_event`. NIP-44 authority is required for encrypted local config/checkpoint persistence; signing remains limited to the Cascadia capability kind and Bahia runtime-control result kind. Wildcard clients and methods are rejected.
 
 Operations:
 
@@ -111,7 +111,7 @@ Evidence may contain only reviewed commit/image/config digests, timestamps, chec
 ## Independent validation checklist
 
 - [ ] Dedicated Metiq managed/runtime/client pubkeys differ from OpenClaw, Marjam, SNR, controller, and provisioner pubkeys.
-- [ ] Signet policy is deny-by-default, exact-client, signing-only, kind-limited, and contains no wildcard.
+- [ ] Signet policy is deny-by-default, exact-client, NIP-44-state-encryption plus signing only, kind-limited, and contains no wildcard.
 - [ ] Credential and one-time handoff are absent from argv, logs, config, public events, and evidence; handoff is removed after durable proof.
 - [ ] Metiq idempotency/binding state survives bridge restart; provision count remains exactly one across replay/conflict/restart.
 - [ ] Every event ID has a valid NIP-01 ID/signature and exact author/kind/address/correlation lineage.
