@@ -35,8 +35,9 @@ func (a *recordingSignetPolicyAdmin) RevokeClient(_ context.Context, client stri
 }
 
 type recordingConnectivityVerifier struct {
-	calls []verifyCall
-	err   error
+	calls  []verifyCall
+	err    error
+	pubkey string
 }
 
 type verifyCall struct {
@@ -46,9 +47,18 @@ type verifyCall struct {
 	kinds  []int
 }
 
-func (v *recordingConnectivityVerifier) Verify(_ context.Context, bunker, key, pubkey string, kinds []int) error {
+func (v *recordingConnectivityVerifier) Verify(_ context.Context, bunker, key, pubkey string, kinds []int) (string, error) {
 	v.calls = append(v.calls, verifyCall{bunker: bunker, key: key, pubkey: pubkey, kinds: append([]int(nil), kinds...)})
-	return v.err
+	if v.err != nil {
+		return "", v.err
+	}
+	if v.pubkey != "" {
+		if pubkey != "" && !strings.EqualFold(v.pubkey, pubkey) {
+			return "", errors.New("authenticated pubkey mismatch")
+		}
+		return v.pubkey, nil
+	}
+	return pubkey, nil
 }
 
 func TestOpenClawSignetEnrollmentIsRestartSafeAndExistingIdentityIsIdempotent(t *testing.T) {
@@ -367,14 +377,60 @@ func TestContainerSignetctlProvisionReturnsOneTimeURIWithoutCredentialInArgv(t *
 	}
 }
 
-func TestManagedPubkeyFromBunkerURIDiscardsOneTimeSecret(t *testing.T) {
-	pubkey := strings.Repeat("5", 64)
-	got, err := ManagedPubkeyFromBunkerURI("bunker://" + pubkey + "?relay=wss%3A%2F%2Frelay.example&secret=one-time")
+func TestMetiqEnrollmentDiscoversManagedPubkeyThroughAuthenticatedConnection(t *testing.T) {
+	root := t.TempDir()
+	authenticated := strings.Repeat("3", 64)
+	verifier := &recordingConnectivityVerifier{pubkey: authenticated}
+	manager, err := NewOpenClawSignetEnrollmentManager(OpenClawSignetEnrollmentConfig{
+		StateDir: filepath.Join(root, "state"), ClientKeyDir: filepath.Join(root, "keys"),
+		FileOwnerUID: os.Geteuid(), PolicyAdmin: &recordingSignetPolicyAdmin{}, Verifier: verifier,
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)), Profile: func() *SignetEnrollmentProfile { p := MetiqRuntimeSignetEnrollmentProfile(); return &p }(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != pubkey || strings.Contains(got, "one-time") {
-		t.Fatalf("managed pubkey = %q", got)
+	req := enrollmentRequestForTest()
+	req.RuntimePubkey, req.ManagedPubkey = "", ""
+	contract, err := manager.Enroll(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.RuntimePubkey != authenticated || contract.ManagedPubkey != authenticated {
+		t.Fatalf("discovered identity = runtime %q managed %q", contract.RuntimePubkey, contract.ManagedPubkey)
+	}
+	if contract.BunkerPubkey != strings.Repeat("5", 64) {
+		t.Fatalf("bunker service pubkey = %q", contract.BunkerPubkey)
+	}
+	if len(verifier.calls) != 1 || verifier.calls[0].pubkey != "" {
+		t.Fatalf("verifier calls = %+v", verifier.calls)
+	}
+}
+
+func TestMetiqEnrollmentRejectsConfiguredManagedPubkeyMismatch(t *testing.T) {
+	root := t.TempDir()
+	verifier := &recordingConnectivityVerifier{pubkey: strings.Repeat("6", 64)}
+	manager := newEnrollmentManagerForTest(t, root, &recordingSignetPolicyAdmin{}, verifier)
+	if _, err := manager.Enroll(t.Context(), enrollmentRequestForTest()); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("Enroll mismatch error = %v", err)
+	}
+}
+
+func TestExistingEnrollmentAcceptsBlankDiscoveredIdentityRequest(t *testing.T) {
+	root := t.TempDir()
+	admin := &recordingSignetPolicyAdmin{}
+	verifier := &recordingConnectivityVerifier{}
+	manager := newEnrollmentManagerForTest(t, root, admin, verifier)
+	req := enrollmentRequestForTest()
+	if _, err := manager.Enroll(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	req.RuntimePubkey, req.ManagedPubkey, req.BunkerURI = "", "", ""
+	contract, err := manager.Reconcile(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.RuntimePubkey != strings.Repeat("2", 64) || contract.ManagedPubkey != strings.Repeat("3", 64) {
+		t.Fatalf("existing identity changed: %+v", contract)
 	}
 }
 

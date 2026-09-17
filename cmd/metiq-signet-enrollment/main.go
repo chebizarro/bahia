@@ -84,19 +84,6 @@ func run(ctx context.Context, configPath, action string, stdout *os.File) error 
 			if err != nil {
 				return fmt.Errorf("provision dedicated Metiq Signet identity: %w", err)
 			}
-			discoveredPubkey, err := soulfactory.ManagedPubkeyFromBunkerURI(oneTimeBunkerURI)
-			if err != nil {
-				return fmt.Errorf("bind provisioned Metiq Signet identity: %w", err)
-			}
-			if req.RuntimePubkey == "" {
-				req.RuntimePubkey = discoveredPubkey
-				req.ManagedPubkey = discoveredPubkey
-			} else if !strings.EqualFold(req.RuntimePubkey, discoveredPubkey) {
-				return errors.New("provisioned Metiq Signet identity does not match configured runtime_pubkey")
-			}
-			if strings.EqualFold(req.RuntimePubkey, req.ControllerPubkey) || strings.EqualFold(req.RuntimePubkey, req.ProvisionerPubkey) {
-				return errors.New("provisioned Metiq runtime identity must differ from controller and provisioner identities")
-			}
 			if err := manager.StageHandoff(ctx, cfg.IdentityID, oneTimeBunkerURI); err != nil {
 				return fmt.Errorf("stage protected one-time Metiq bunker handoff: %w", err)
 			}
