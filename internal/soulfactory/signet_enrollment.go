@@ -61,7 +61,7 @@ type SignetEnrollmentProfile struct {
 func MetiqRuntimeSignetEnrollmentProfile() SignetEnrollmentProfile {
 	return SignetEnrollmentProfile{
 		ContractSchema: RuntimeSignetIdentityContractSchema,
-		Methods:        []string{"connect", "get_public_key", "get_relays", "ping", "sign_event"},
+		Methods:        []string{"connect", "get_public_key", "get_relays", "ping", "sign_event", "switch_relays"},
 		EventKinds:     []int{cascadia.CAS_AGENT_CAPABILITY, domain.KindRuntimeControlResult},
 	}
 }
