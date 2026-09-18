@@ -988,8 +988,8 @@ func ledgerResource(state *productionProvisioningState, step OrderedStep, kind s
 // replay spec. Markers that are present must match exactly. When the ledger
 // says THIS run created the resource, the spec marker must also be present:
 // a created resource whose marker vanished was rewritten externally. Adopted
-// or pre-existing resources may legitimately lack markers, but a present
-// marker belonging to a different spec or agent is still a conflict.
+// or pre-existing resources may legitimately lack markers, but any present
+// marker belonging to a different spec, agent, request, or run is a conflict.
 func verifyGovernedMetadata(what string, meta map[string]any, spec ProvisioningSpec, ledger ObservedResource, requireRunMarkers bool) error {
 	createdByThisRun := ledger.Ownership == saga.OwnershipCreated && ledger.OwnerRunID == spec.RunID
 	get := func(key string) (string, bool) {
@@ -1012,16 +1012,24 @@ func verifyGovernedMetadata(what string, meta map[string]any, spec ProvisioningS
 	if createdByThisRun && !hasSpec {
 		return governedConflict(fmt.Sprintf("%s was created by this run but no longer carries %s", what, governedMetadataSpec))
 	}
+	// Correlation markers: a present governed_request_id / governed_run_id must
+	// belong to THIS replay no matter who owns the resource. A foreign marker on
+	// an adopted or pre-existing resource means another governed request wrote
+	// it, and adopting it would silently take over that request's resource.
+	reqID, hasReq := get(governedMetadataRequest)
+	if hasReq && reqID != spec.RequestID {
+		return governedConflict(fmt.Sprintf("%s %s %q belongs to another request, replay is %s", what, governedMetadataRequest, reqID, spec.RequestID))
+	}
+	runID, hasRun := get(governedMetadataRun)
+	if hasRun && runID != spec.RunID {
+		return governedConflict(fmt.Sprintf("%s %s %q belongs to another run, replay is %s", what, governedMetadataRun, runID, spec.RunID))
+	}
 	if requireRunMarkers && createdByThisRun {
-		if reqID, ok := get(governedMetadataRequest); !ok || reqID != spec.RequestID {
-			return governedConflict(fmt.Sprintf("%s %s does not match replay request %s", what, governedMetadataRequest, spec.RequestID))
+		if !hasReq {
+			return governedConflict(fmt.Sprintf("%s was created by this run but no longer carries %s", what, governedMetadataRequest))
 		}
-		if runID, ok := get(governedMetadataRun); !ok || runID != spec.RunID {
-			return governedConflict(fmt.Sprintf("%s %s does not match replay run %s", what, governedMetadataRun, spec.RunID))
-		}
-	} else {
-		if reqID, ok := get(governedMetadataRequest); ok && createdByThisRun && reqID != spec.RequestID {
-			return governedConflict(fmt.Sprintf("%s %s %q differs from replay %s", what, governedMetadataRequest, reqID, spec.RequestID))
+		if !hasRun {
+			return governedConflict(fmt.Sprintf("%s was created by this run but no longer carries %s", what, governedMetadataRun))
 		}
 	}
 	return nil

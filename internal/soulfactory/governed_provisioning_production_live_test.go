@@ -367,6 +367,32 @@ func TestProductionInspectAdoptedResourcesTolerateAbsentMarkersOnly(t *testing.T
 		f.intent.Metadata["agent_id"] = "intruder"
 		requireOwnershipConflict(t, f.port.inspectRealStep(context.Background(), f.spec, f.state, StepDeployViaBahia), "bound to agent")
 	})
+	t.Run("adopted intent carrying a foreign governed_request_id is a conflict", func(t *testing.T) {
+		f := newLiveFixture(t, saga.OwnershipAdopted)
+		f.intent.Metadata[governedMetadataRequest] = "req-other"
+		requireOwnershipConflict(t, f.port.inspectRealStep(context.Background(), f.spec, f.state, StepDeployViaBahia), governedMetadataRequest)
+	})
+	t.Run("adopted intent carrying a foreign governed_run_id is a conflict", func(t *testing.T) {
+		f := newLiveFixture(t, saga.OwnershipAdopted)
+		f.intent.Metadata[governedMetadataRun] = "run-other"
+		requireOwnershipConflict(t, f.port.inspectRealStep(context.Background(), f.spec, f.state, StepDeployViaBahia), governedMetadataRun)
+	})
+	t.Run("pre-existing intent carrying a foreign governed_request_id is a conflict", func(t *testing.T) {
+		f := newLiveFixture(t, saga.OwnershipPreExisting)
+		f.intent.Metadata[governedMetadataRequest] = "req-other"
+		requireOwnershipConflict(t, f.port.inspectRealStep(context.Background(), f.spec, f.state, StepDeployViaBahia), governedMetadataRequest)
+	})
+	t.Run("adopted unit carrying a foreign governed_request_id is a conflict", func(t *testing.T) {
+		f := newLiveFixture(t, saga.OwnershipAdopted)
+		f.unit.RuntimeConfig[governedMetadataRequest] = "req-other"
+		requireOwnershipConflict(t, f.port.inspectRealStep(context.Background(), f.spec, f.state, StepRegisterServiceUnit), governedMetadataRequest)
+	})
+	t.Run("adopted intent with matching markers is accepted", func(t *testing.T) {
+		f := newLiveFixture(t, saga.OwnershipAdopted)
+		if err := f.port.inspectRealStep(context.Background(), f.spec, f.state, StepDeployViaBahia); err != nil {
+			t.Fatalf("adopted intent with this replay's markers must be accepted, got %v", err)
+		}
+	})
 	t.Run("pre-existing binding still requires this request's correlation", func(t *testing.T) {
 		f := newLiveFixture(t, saga.OwnershipPreExisting)
 		f.binding.SourceEventID = "req-other"
