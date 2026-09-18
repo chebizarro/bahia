@@ -12,8 +12,10 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var promotionDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -79,7 +81,18 @@ func (a *ReleasePromotionAuthorizer) Authorize(
 	serviceID, environmentID, artifactID uuid.UUID,
 	strategy, idempotencyKey string,
 	env *domain.Environment,
-) (ReleasePromotionDecision, error) {
+) (_ ReleasePromotionDecision, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.promotion.authorize",
+		attribute.String("service.id", serviceID.String()),
+		attribute.String("environment.id", environmentID.String()))
+	defer func() {
+		outcome := "accepted"
+		if retErr != nil {
+			outcome = "rejected"
+		}
+		telemetry.RecordReleaseOutcome(ctx, "promotion", outcome)
+		telemetry.EndOperation(ctx, span, "bahia.release.promotion.authorize", outcome, retErr)
+	}()
 	decision := ReleasePromotionDecision{IdempotencyKey: strings.TrimSpace(idempotencyKey)}
 	if a == nil || a.registry == nil {
 		return decision, fmt.Errorf("release promotion authorization is not configured")

@@ -26,10 +26,12 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -266,7 +268,17 @@ func (c *Client) StartCanonicalProjection(jobEventID string) {
 
 // SubmitJob submits a deployment job to Loom workers via a Kind 5100 job request event.
 // If no WorkerPubkey is set and a workerRepo is available, auto-selects an online worker.
-func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) {
+func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.loom.dispatch",
+		attribute.Int("nostr.kind", KindJobRequest), attribute.String("job.type", job.Type))
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordDispatch(ctx, KindJobRequest, outcome)
+		telemetry.EndOperation(ctx, span, "bahia.loom.dispatch", outcome, retErr)
+	}()
 	if c.privateKey == "" {
 		return "", fmt.Errorf("nostr private key not configured")
 	}
@@ -388,6 +400,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 		}
 		tags = append(tags, secretTags...)
 	}
+	tags = telemetry.InjectTraceContext(ctx, tags)
 
 	// Stdin content is empty for deployment jobs.
 	ev := nostr.Event{

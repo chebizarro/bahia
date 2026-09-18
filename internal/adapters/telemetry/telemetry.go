@@ -9,15 +9,21 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otlploggrpc "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	otlploghttp "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	otlpmetricgrpc "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	otlpmetrichttp "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otlptracehttp "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/metric"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -46,10 +52,13 @@ type Provider struct {
 	nostrFleetHealth   *nostrFleetHealthProjector
 	tracerProvider     *sdktrace.TracerProvider
 	meterProvider      *sdkmetric.MeterProvider
+	loggerProvider     *sdklog.LoggerProvider
 	setupErr           error
 	shutdownOnce       sync.Once
 	shutdownErr        error
 }
+
+var activeMetrics atomic.Pointer[Metrics]
 
 // Metrics collects application-level counters and gauges.
 type Metrics struct {
@@ -90,6 +99,8 @@ type Metrics struct {
 	ReconcileDurations     []float64
 	ReconcileStatesChecked int64
 	ReconcileTotal         int64
+	ControlPlaneDispatches map[string]int64 // key: kind:outcome
+	ReleaseOutcomes        map[string]int64 // key: operation:outcome
 
 	// Nostr metrics
 	NostrEventsPublished    map[string]int64 // key: kind
@@ -162,6 +173,8 @@ func NewMetrics() *Metrics {
 		HygieneCandidatesTotal:      make(map[string]int64),
 		HygieneActionsTotal:         make(map[string]int64),
 		FleetHealthEntities:         make(map[string]int64),
+		ControlPlaneDispatches:      make(map[string]int64),
+		ReleaseOutcomes:             make(map[string]int64),
 	}
 }
 
@@ -177,6 +190,7 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		metrics: NewMetrics(),
 		now:     time.Now,
 	}
+	activeMetrics.Store(p.metrics)
 	p.nostrFleetHealth = newNostrFleetHealthProjector(func() time.Time { return p.now() })
 
 	if !cfg.Enabled {
@@ -191,15 +205,17 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 
 	exportMode := "prometheus"
 	if strings.TrimSpace(cfg.OTLPEndpoint) != "" {
-		tracerProvider, meterProvider, err := configureOTLP(context.Background(), cfg, serviceName)
+		tracerProvider, meterProvider, loggerProvider, err := configureOTLP(context.Background(), cfg, serviceName)
 		if err != nil {
 			p.setupErr = fmt.Errorf("configuring OTLP telemetry: %w", err)
 			logger.Error("telemetry OTLP initialization failed", zap.Error(p.setupErr))
 		} else {
 			p.tracerProvider = tracerProvider
 			p.meterProvider = meterProvider
+			p.loggerProvider = loggerProvider
 			otel.SetTracerProvider(tracerProvider)
 			otel.SetMeterProvider(meterProvider)
+			global.SetLoggerProvider(loggerProvider)
 			exportMode = "prometheus+otlp"
 		}
 	}
@@ -235,6 +251,14 @@ func (p *Provider) MeterProvider() metric.MeterProvider {
 	return p.meterProvider
 }
 
+// LoggerProvider returns the configured OTLP logger provider, or nil when OTLP is disabled or failed to initialize.
+func (p *Provider) LoggerProvider() otellog.LoggerProvider {
+	if p.loggerProvider == nil {
+		return nil
+	}
+	return p.loggerProvider
+}
+
 // Err reports any exporter initialization failure retained by Setup.
 func (p *Provider) Err() error {
 	return p.setupErr
@@ -244,6 +268,11 @@ func (p *Provider) Err() error {
 func (p *Provider) Shutdown(ctx context.Context) error {
 	p.shutdownOnce.Do(func() {
 		var shutdownErrors []error
+		if p.loggerProvider != nil {
+			if err := p.loggerProvider.Shutdown(ctx); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("shutting down OTLP logs: %w", err))
+			}
+		}
 		if p.meterProvider != nil {
 			if err := p.meterProvider.Shutdown(ctx); err != nil {
 				shutdownErrors = append(shutdownErrors, fmt.Errorf("shutting down OTLP metrics: %w", err))
@@ -263,7 +292,7 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.shutdownErr
 }
 
-func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktrace.TracerProvider, *sdkmetric.MeterProvider, error) {
+func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktrace.TracerProvider, *sdkmetric.MeterProvider, *sdklog.LoggerProvider, error) {
 	res := resource.NewSchemaless(
 		attribute.String("service.name", serviceName),
 		attribute.String("service.version", cfg.ServiceVersion),
@@ -278,6 +307,7 @@ func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktra
 	var (
 		traceExporter  sdktrace.SpanExporter
 		metricExporter sdkmetric.Exporter
+		logExporter    sdklog.Exporter
 		err            error
 	)
 	switch protocol {
@@ -293,20 +323,36 @@ func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktra
 		if err == nil {
 			metricExporter, err = otlpmetricgrpc.New(ctx, metricOptions...)
 		}
+		if err == nil {
+			logOptions := []otlploggrpc.Option{otlploggrpc.WithEndpoint(endpoint)}
+			if insecure {
+				logOptions = append(logOptions, otlploggrpc.WithInsecure())
+			}
+			logExporter, err = otlploggrpc.New(ctx, logOptions...)
+		}
 	case "http":
 		traceOptions, metricOptions := httpExporterOptions(cfg.OTLPEndpoint)
 		traceExporter, err = otlptracehttp.New(ctx, traceOptions...)
 		if err == nil {
 			metricExporter, err = otlpmetrichttp.New(ctx, metricOptions...)
 		}
+		if err == nil {
+			logExporter, err = otlploghttp.New(ctx, httpLogExporterOptions(cfg.OTLPEndpoint)...)
+		}
 	default:
-		return nil, nil, fmt.Errorf("unsupported OTLP protocol %q", cfg.OTLPProtocol)
+		return nil, nil, nil, fmt.Errorf("unsupported OTLP protocol %q", cfg.OTLPProtocol)
 	}
 	if err != nil {
 		if traceExporter != nil {
 			_ = traceExporter.Shutdown(ctx)
 		}
-		return nil, nil, err
+		if metricExporter != nil {
+			_ = metricExporter.Shutdown(ctx)
+		}
+		if logExporter != nil {
+			_ = logExporter.Shutdown(ctx)
+		}
+		return nil, nil, nil, err
 	}
 
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter), sdktrace.WithResource(res))
@@ -314,7 +360,11 @@ func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktra
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
 		sdkmetric.WithResource(res),
 	)
-	return tracerProvider, meterProvider, nil
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		sdklog.WithResource(res),
+	)
+	return tracerProvider, meterProvider, loggerProvider, nil
 }
 
 func normalizeGRPCEndpoint(endpoint string) (string, bool) {
@@ -337,6 +387,14 @@ func httpExporterOptions(endpoint string) ([]otlptracehttp.Option, []otlpmetrich
 	}
 	return []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure()},
 		[]otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(endpoint), otlpmetrichttp.WithInsecure()}
+}
+
+func httpLogExporterOptions(endpoint string) []otlploghttp.Option {
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return []otlploghttp.Option{otlploghttp.WithEndpointURL(endpoint + "/v1/logs")}
+	}
+	return []otlploghttp.Option{otlploghttp.WithEndpoint(endpoint), otlploghttp.WithInsecure()}
 }
 
 // --- HTTP Metrics ---
@@ -510,6 +568,20 @@ func (m *Metrics) RecordReconcile(duration time.Duration, statesChecked int) {
 	if len(m.ReconcileDurations) > 100 {
 		m.ReconcileDurations = m.ReconcileDurations[len(m.ReconcileDurations)-100:]
 	}
+}
+
+// RecordControlPlaneDispatch records a bounded outbound ContextVM or Loom dispatch outcome.
+func (m *Metrics) RecordControlPlaneDispatch(kind, outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ControlPlaneDispatches[kind+":"+outcome]++
+}
+
+// RecordReleaseOutcome records a bounded promotion or rollback outcome.
+func (m *Metrics) RecordReleaseOutcome(operation, outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ReleaseOutcomes[operation+":"+outcome]++
 }
 
 // --- Nostr Metrics ---
@@ -855,6 +927,28 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
 			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
 			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_controlplane_dispatch_total ContextVM and Loom dispatch outcomes")
+		fmt.Fprintln(w, "# TYPE bahia_controlplane_dispatch_total counter")
+		for key, count := range m.ControlPlaneDispatches {
+			parts := strings.SplitN(key, ":", 2)
+			outcome := ""
+			if len(parts) == 2 {
+				outcome = parts[1]
+			}
+			fmt.Fprintf(w, "bahia_controlplane_dispatch_total{kind=%q,outcome=%q} %d\n", parts[0], outcome, count)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_release_outcomes_total Promotion and rollback outcomes")
+		fmt.Fprintln(w, "# TYPE bahia_release_outcomes_total counter")
+		for key, count := range m.ReleaseOutcomes {
+			parts := strings.SplitN(key, ":", 2)
+			outcome := ""
+			if len(parts) == 2 {
+				outcome = parts[1]
+			}
+			fmt.Fprintf(w, "bahia_release_outcomes_total{operation=%q,outcome=%q} %d\n", parts[0], outcome, count)
 		}
 
 		// Nostr metrics

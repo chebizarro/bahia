@@ -10,11 +10,13 @@ import (
 
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -606,7 +608,16 @@ func cloneDesiredServiceSpec(source *domain.DesiredServiceSpec) (*domain.Desired
 	return &cloned, nil
 }
 
-func (h *encryptedServiceHandlers) rollback(ctx context.Context, request ContextVMRequest) (any, error) {
+func (h *encryptedServiceHandlers) rollback(ctx context.Context, request ContextVMRequest) (_ any, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.rollback", attribute.String("rpc.method", ContextVMMethodServiceRollback))
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordReleaseOutcome(ctx, "rollback", outcome)
+		telemetry.EndOperation(ctx, span, "bahia.release.rollback", outcome, retErr)
+	}()
 	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}

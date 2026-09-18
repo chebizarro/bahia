@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -362,6 +363,7 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 		return
 	}
+	ctx = telemetry.ExtractTraceContext(ctx, ev.Tags)
 
 	// Serialize tags.
 	tagsJSON, err := json.Marshal(ev.Tags)
