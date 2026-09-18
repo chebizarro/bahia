@@ -35,7 +35,7 @@ func validWizardCanaryInput() WizardCanaryInput {
 		},
 		Placement: LegacyReviewedPlacement{
 			Ref: "operator-review:wizard-canary", EnvironmentID: uuid.NewString(),
-			DeploymentUnitKey: "agent-wizard-max",
+			DeploymentUnitKey: WizardCanaryDeploymentUnitKey(),
 		},
 		TargetServiceID: wizardTestServiceID.String(),
 		SecretRefs: []domain.SecretRef{{
@@ -74,7 +74,7 @@ func TestPlanWizardCanaryHappyPathPreservesIdentityAndDefersLiveExecution(t *tes
 	// The plan feeds the supported reconciliation surface verbatim.
 	if plan.ReconciliationRequest.AgentID != WizardCanaryAgentID ||
 		len(plan.ReconciliationRequest.RuntimeAgents) != 1 ||
-		plan.ReconciliationRequest.ReviewedPlacement.DeploymentUnitKey != "agent-wizard-max" {
+		plan.ReconciliationRequest.ReviewedPlacement.DeploymentUnitKey != WizardCanaryDeploymentUnitKey() {
 		t.Fatalf("reconciliation request malformed: %+v", plan.ReconciliationRequest)
 	}
 	if len(plan.ProhibitedActions) == 0 || len(plan.OperatorSteps) == 0 || len(plan.LiveAcceptanceChecks) == 0 {
@@ -201,6 +201,36 @@ func TestPlanWizardCanaryRequiresDedicatedReviewedPlacement(t *testing.T) {
 		input.Placement.DeploymentUnitKey = ""
 		if _, err := PlanWizardCanary(input); !errors.Is(err, ErrWizardCanaryRefused) {
 			t.Fatalf("error = %v, want refusal", err)
+		}
+	})
+	// Reviewer adversarial case: wizard-dock running on the wrong host.
+	t.Run("wizard-dock on edge-01 is refused; planner must require max", func(t *testing.T) {
+		input := validWizardCanaryInput()
+		input.Runtime.AdoptedRuntime.HostAlias = "edge-01"
+		if _, err := PlanWizardCanary(input); !errors.Is(err, ErrWizardCanaryRefused) {
+			t.Fatalf("accepted wizard-dock on edge-01; error = %v", err)
+		}
+	})
+	// Reviewer adversarial case: the shared/default deployment unit.
+	t.Run("shared/default deployment unit is refused", func(t *testing.T) {
+		input := validWizardCanaryInput()
+		input.Placement.DeploymentUnitKey = domain.DefaultDeploymentUnitKey
+		if _, err := PlanWizardCanary(input); !errors.Is(err, ErrWizardCanaryRefused) {
+			t.Fatalf("accepted shared/default deployment unit; error = %v", err)
+		}
+	})
+	t.Run("another agent's dedicated unit is refused", func(t *testing.T) {
+		input := validWizardCanaryInput()
+		input.Placement.DeploymentUnitKey = soulServiceName("someone-else")
+		if _, err := PlanWizardCanary(input); !errors.Is(err, ErrWizardCanaryRefused) {
+			t.Fatalf("accepted a foreign dedicated unit; error = %v", err)
+		}
+	})
+	t.Run("host comparison is exact but case-insensitive", func(t *testing.T) {
+		input := validWizardCanaryInput()
+		input.Runtime.AdoptedRuntime.HostAlias = "MAX"
+		if _, err := PlanWizardCanary(input); err != nil {
+			t.Fatalf("case-insensitive max host should be accepted: %v", err)
 		}
 	})
 }

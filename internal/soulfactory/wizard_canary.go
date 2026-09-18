@@ -22,6 +22,9 @@ const (
 	WizardCanaryPubkey = "e8351e63a713eef5a0167df23b9ce0cb677aeb4b0be9810dfaf2b32e571b798d"
 	// WizardCanaryRuntimeSource is the exact runtime that must be adopted.
 	WizardCanaryRuntimeSource = "wizard-dock"
+	// WizardCanaryHost is the reviewed placement host. The canary adopts the
+	// runtime exactly where it runs; any other host is refused.
+	WizardCanaryHost = "max"
 
 	WizardCanaryInputSchemaV1 = "soulfactory-wizard-canary-input/v1"
 	WizardCanaryPlanSchemaV1  = "soulfactory-wizard-canary-plan/v1"
@@ -76,6 +79,7 @@ type WizardCanaryPlan struct {
 	PreservedCustodyRef     string   `json:"preserved_custody_ref,omitempty"`
 	PreservedVolumes        []string `json:"preserved_volumes,omitempty"`
 	AdoptedRuntimeSource    string   `json:"adopted_runtime_source"`
+	AdoptedHost             string   `json:"adopted_host"`
 	AdoptedImageDigest      string   `json:"adopted_image_digest"`
 
 	ServiceScopedSecretRefs []WizardScopedSecretRef `json:"service_scoped_secret_refs,omitempty"`
@@ -175,9 +179,22 @@ func PlanWizardCanary(input WizardCanaryInput) (WizardCanaryPlan, error) {
 		return WizardCanaryPlan{}, fmt.Errorf("%w: operator-reviewed placement with ref and environment is required",
 			ErrWizardCanaryRefused)
 	}
-	if strings.TrimSpace(input.Placement.DeploymentUnitKey) == "" {
-		return WizardCanaryPlan{}, fmt.Errorf("%w: a dedicated deployment unit key is required; the canary must not share a default unit",
-			ErrWizardCanaryRefused)
+	// The adopted runtime must actually run on the reviewed max host; a
+	// wizard-dock on any other host is not the Wizard canary.
+	if !strings.EqualFold(strings.TrimSpace(adopted.HostAlias), WizardCanaryHost) {
+		return WizardCanaryPlan{}, fmt.Errorf("%w: adopted runtime host %q is not the reviewed %q placement",
+			ErrWizardCanaryRefused, adopted.HostAlias, WizardCanaryHost)
+	}
+	// The unit must be the dedicated Wizard identity — the canonical per-agent
+	// deployment-unit key — never the shared/default unit or another agent's.
+	unitKey := strings.TrimSpace(input.Placement.DeploymentUnitKey)
+	if unitKey == "" || unitKey == domain.DefaultDeploymentUnitKey {
+		return WizardCanaryPlan{}, fmt.Errorf("%w: a dedicated deployment unit is required; the shared/default unit %q is refused",
+			ErrWizardCanaryRefused, unitKey)
+	}
+	if unitKey != WizardCanaryDeploymentUnitKey() {
+		return WizardCanaryPlan{}, fmt.Errorf("%w: deployment unit %q is not the dedicated Wizard unit %q",
+			ErrWizardCanaryRefused, unitKey, WizardCanaryDeploymentUnitKey())
 	}
 
 	// 6. Secret references must be service-scoped, never global.
@@ -206,6 +223,7 @@ func PlanWizardCanary(input WizardCanaryInput) (WizardCanaryPlan, error) {
 		PreservedCustodyRef:     firstNonEmpty(soul.CustodyRef, runtime.CustodyRef),
 		PreservedVolumes:        append([]string(nil), adopted.Volumes...),
 		AdoptedRuntimeSource:    WizardCanaryRuntimeSource,
+		AdoptedHost:             WizardCanaryHost,
 		AdoptedImageDigest:      strings.TrimSpace(adopted.ImageDigest),
 		ServiceScopedSecretRefs: scoped,
 		RollbackBaseline:        input.RollbackBaseline,
@@ -292,4 +310,11 @@ func wizardLiveAcceptanceChecks() []string {
 		"readiness probe passes",
 		"rollback to the registered baseline is proven",
 	}
+}
+
+// WizardCanaryDeploymentUnitKey is the dedicated Wizard deployment-unit
+// identity: the canonical per-agent unit key the governed provisioner itself
+// uses (soulServiceName), so the canary and provisioning never disagree.
+func WizardCanaryDeploymentUnitKey() string {
+	return soulServiceName(WizardCanaryAgentID)
 }
