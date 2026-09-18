@@ -10,9 +10,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -496,7 +498,30 @@ func (r *Remediator) rollbackAttributable(ctx context.Context, serviceID, envID 
 }
 
 // executeRollback performs the actual rollback deployment and state update.
-func (r *Remediator) executeRollback(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service, st *domain.EnvironmentServiceState, intent *domain.DeploymentIntent, priorArtifact *domain.Artifact, key string) error {
+//
+// The span continues the release-spine trace of the release being rolled back
+// (stamped onto the promotion intent's metadata at promotion time), carries
+// that release's manifest digest under the same `oci.manifest.digest` key
+// loom-worker uses on its build span, and records the known-good digest it
+// restores. That makes a rollback visible as the terminal hop of the very trace
+// whose build produced the regressing artifact.
+func (r *Remediator) executeRollback(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service, st *domain.EnvironmentServiceState, intent *domain.DeploymentIntent, priorArtifact *domain.Artifact, key string) (retErr error) {
+	ctx = telemetry.ExtractTraceContextFromMetadata(ctx, intent.Metadata)
+	rolledBackDigest, _ := intent.Metadata["image_digest"].(string)
+	digestAttrs := []attribute.KeyValue{
+		telemetry.OCIManifestDigest(rolledBackDigest),
+		telemetry.OCIManifestDigestRestored(intent.PriorArtifactDigest),
+	}
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.rollback", digestAttrs...)
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		}
+		telemetry.RecordReleaseOutcome(ctx, "rollback", outcome)
+		telemetry.EndOperation(ctx, span, "bahia.release.rollback", outcome, retErr, digestAttrs...)
+	}()
+
 	image := artifactImage(priorArtifact)
 	if image == "" {
 		return fmt.Errorf("prior artifact %s has no deployable image", priorArtifact.ID)

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -95,6 +96,12 @@ func RecordDispatch(ctx context.Context, kind int, outcome string) {
 }
 
 // RecordReleaseOutcome records a promotion or rollback outcome.
+//
+// Labels stay bounded to (operation, outcome). The OCI manifest digest is
+// deliberately excluded: it is unique per build, so as a metric label it would
+// create an unbounded time series per artifact. The digest is carried on the
+// promotion/rollback span and its lifecycle log record instead, which is where
+// the artifact↔trace join is performed.
 func RecordReleaseOutcome(ctx context.Context, operation, outcome string) {
 	operation = boundedOperation(operation)
 	outcome = boundedOutcome(outcome, nil)
@@ -105,6 +112,40 @@ func RecordReleaseOutcome(ctx context.Context, operation, outcome string) {
 	if metrics := activeMetrics.Load(); metrics != nil {
 		metrics.RecordReleaseOutcome(operation, outcome)
 	}
+}
+
+// OCIManifestDigestAttribute is the span attribute key that carries the OCI
+// image manifest digest of a release artifact.
+//
+// The value is deliberately identical to loom-worker's
+// OCI_MANIFEST_DIGEST_ATTRIBUTE (src/telemetry/job-lifecycle.ts), which
+// loom-worker stamps on its `loom.oci.build` span. Keeping the key byte-for-byte
+// identical is what lets a trace backend join loom's build span to Bahia's
+// promotion span on the same artifact. Do not rename one side without the other.
+const OCIManifestDigestAttribute = "oci.manifest.digest"
+
+// OCIManifestDigestRestoredAttribute carries the digest a rollback restores.
+// A rollback span continues the trace of the release being rolled back, so
+// OCIManifestDigestAttribute names the failing release and this key names the
+// known-good artifact that replaced it.
+const OCIManifestDigestRestoredAttribute = "oci.manifest.digest.restored"
+
+// traceCarrierKeys are the W3C trace-context fields propagated across hops.
+var traceCarrierKeys = [...]string{"traceparent", "tracestate"}
+
+// OCIManifestDigest returns the manifest-digest span attribute.
+//
+// Digests are unbounded cardinality, so this belongs on spans and log records
+// only. It is deliberately NOT added to the release-outcome metric labels (see
+// RecordReleaseOutcome) — one label value per build would blow up the metric's
+// time-series count in VictoriaMetrics.
+func OCIManifestDigest(digest string) attribute.KeyValue {
+	return attribute.String(OCIManifestDigestAttribute, strings.TrimSpace(digest))
+}
+
+// OCIManifestDigestRestored returns the restored-digest span attribute.
+func OCIManifestDigestRestored(digest string) attribute.KeyValue {
+	return attribute.String(OCIManifestDigestRestoredAttribute, strings.TrimSpace(digest))
 }
 
 // InjectTraceContext stamps the current W3C trace context on an outbound Nostr event.
@@ -143,6 +184,71 @@ func ExtractTraceContext(ctx context.Context, tags nostr.Tags) context.Context {
 		}
 	}
 	return propagation.TraceContext{}.Extract(ctx, carrier)
+}
+
+// ExtractTraceContextFromSignedEvent continues the W3C trace context carried by
+// a stored signed Nostr event, given as the raw JSON Bahia persisted at ingest
+// (for example domain.HiveCIAcceptedRelease.SignedEvent, the terminal 5402).
+//
+// Using the persisted event rather than the live subscription makes the
+// continuation durable: a promotion that happens after a restart, a replay, or
+// an orphan sweep still joins the original build trace. Absent, malformed, or
+// invalid context is ignored and ctx is returned unchanged.
+func ExtractTraceContextFromSignedEvent(ctx context.Context, rawEvent string) context.Context {
+	raw := strings.TrimSpace(rawEvent)
+	if raw == "" {
+		return ctx
+	}
+	var decoded struct {
+		Tags [][]string `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return ctx
+	}
+	tags := make(nostr.Tags, 0, len(decoded.Tags))
+	for _, tag := range decoded.Tags {
+		tags = append(tags, nostr.Tag(tag))
+	}
+	return ExtractTraceContext(ctx, tags)
+}
+
+// TraceContextMetadata returns the active W3C trace context as plain metadata
+// fields, for embedding in a durable record (such as a promotion deployment
+// intent) so that a much later causal hop — a rollback — can rejoin the trace.
+// It returns nil when no context is recording.
+func TraceContextMetadata(ctx context.Context) map[string]string {
+	carrier := propagation.MapCarrier{}
+	propagation.TraceContext{}.Inject(ctx, carrier)
+	out := map[string]string{}
+	for _, key := range traceCarrierKeys {
+		if value := strings.TrimSpace(carrier.Get(key)); value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 || out["traceparent"] == "" {
+		return nil
+	}
+	return out
+}
+
+// ExtractTraceContextFromMetadata continues the trace context stamped into a
+// durable metadata map by TraceContextMetadata. Non-string and absent values are
+// ignored by the W3C propagator.
+func ExtractTraceContextFromMetadata(ctx context.Context, metadata map[string]any) context.Context {
+	if len(metadata) == 0 {
+		return ctx
+	}
+	tags := make(nostr.Tags, 0, len(traceCarrierKeys))
+	for _, key := range traceCarrierKeys {
+		value, _ := metadata[key].(string)
+		if value = strings.TrimSpace(value); value != "" {
+			tags = append(tags, nostr.Tag{key, value})
+		}
+	}
+	if len(tags) == 0 {
+		return ctx
+	}
+	return ExtractTraceContext(ctx, tags)
 }
 
 // EmitLifecycle sends a key lifecycle record through the configured OTel log

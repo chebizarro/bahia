@@ -13,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -300,6 +301,11 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		}
 		return
 	}
+
+	// Continue the release-spine trace carried by the inbound 5401/5402 so
+	// ingest, evidence resolution, and the downstream promotion all land in the
+	// trace that started at the git push. Invalid or absent context is ignored.
+	ctx = telemetry.ExtractTraceContext(ctx, ev.Tags)
 
 	switch int(ev.Kind) {
 	case kinds.HiveCIWorkflowRun:
