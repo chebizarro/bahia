@@ -359,7 +359,11 @@ func (p *productionProvisioningPort) Observe(ctx context.Context, spec Provision
 	if !stage.Complete {
 		return nil, nil
 	}
-	if err := p.inspectRealStep(ctx, state, step); err != nil {
+	// Live verification: the ledger's recorded resources are returned ONLY after
+	// the live service/unit/release-binding/intent have been re-inspected and
+	// their ownership, correlation, and governed spec metadata agree with this
+	// replay. Any disagreement is an ownership/spec conflict, never an adoption.
+	if err := p.inspectRealStep(ctx, spec, state, step); err != nil {
 		return nil, err
 	}
 	return append([]ObservedResource(nil), stage.Resources...), nil
@@ -963,39 +967,138 @@ func (p *productionProvisioningPort) ensureReadiness(ctx context.Context, spec P
 	return p.engine.states.save(ctx, state)
 }
 
-func (p *productionProvisioningPort) inspectRealStep(ctx context.Context, state *productionProvisioningState, step OrderedStep) error {
+// governedConflict is a non-retryable ownership/spec conflict. The detail is
+// carried in the wrapped message for logs and tests; the saga engine matches
+// the SafeError code through errors.As.
+func governedConflict(detail string) error {
+	return fmt.Errorf("governed replay conflict: %s: %w", detail, &saga.SafeError{Code: "ownership_conflict", Retryable: false})
+}
+
+// ledgerResource returns the ledger's recorded resource of a kind for a step.
+func ledgerResource(state *productionProvisioningState, step OrderedStep, kind string) (ObservedResource, bool) {
+	for _, r := range state.Steps[step].Resources {
+		if r.Kind == kind {
+			return r, true
+		}
+	}
+	return ObservedResource{}, false
+}
+
+// verifyGovernedMetadata compares a live resource's governed markers with the
+// replay spec. Markers that are present must match exactly. When the ledger
+// says THIS run created the resource, the spec marker must also be present:
+// a created resource whose marker vanished was rewritten externally. Adopted
+// or pre-existing resources may legitimately lack markers, but a present
+// marker belonging to a different spec or agent is still a conflict.
+func verifyGovernedMetadata(what string, meta map[string]any, spec ProvisioningSpec, ledger ObservedResource, requireRunMarkers bool) error {
+	createdByThisRun := ledger.Ownership == saga.OwnershipCreated && ledger.OwnerRunID == spec.RunID
+	get := func(key string) (string, bool) {
+		if meta == nil {
+			return "", false
+		}
+		v, ok := meta[key]
+		if !ok || v == nil {
+			return "", false
+		}
+		return strings.TrimSpace(fmt.Sprint(v)), true
+	}
+	if agent, ok := get("agent_id"); ok && agent != spec.AgentID {
+		return governedConflict(fmt.Sprintf("%s is bound to agent %q, replay is %q", what, agent, spec.AgentID))
+	}
+	specHash, hasSpec := get(governedMetadataSpec)
+	if hasSpec && specHash != spec.SpecHash {
+		return governedConflict(fmt.Sprintf("%s live %s %q differs from replay %q", what, governedMetadataSpec, specHash, spec.SpecHash))
+	}
+	if createdByThisRun && !hasSpec {
+		return governedConflict(fmt.Sprintf("%s was created by this run but no longer carries %s", what, governedMetadataSpec))
+	}
+	if requireRunMarkers && createdByThisRun {
+		if reqID, ok := get(governedMetadataRequest); !ok || reqID != spec.RequestID {
+			return governedConflict(fmt.Sprintf("%s %s does not match replay request %s", what, governedMetadataRequest, spec.RequestID))
+		}
+		if runID, ok := get(governedMetadataRun); !ok || runID != spec.RunID {
+			return governedConflict(fmt.Sprintf("%s %s does not match replay run %s", what, governedMetadataRun, spec.RunID))
+		}
+	} else {
+		if reqID, ok := get(governedMetadataRequest); ok && createdByThisRun && reqID != spec.RequestID {
+			return governedConflict(fmt.Sprintf("%s %s %q differs from replay %s", what, governedMetadataRequest, reqID, spec.RequestID))
+		}
+	}
+	return nil
+}
+
+// inspectRealStep re-inspects the LIVE resources behind a completed step and
+// fails closed on any ownership, correlation, or governed-spec disagreement
+// with the replay. It never trusts the private adapter ledger alone.
+func (p *productionProvisioningPort) inspectRealStep(ctx context.Context, spec ProvisioningSpec, state *productionProvisioningState, step OrderedStep) error {
 	registry := p.engine.full.bahiaIntegration.registry
+	orgID := p.engine.full.bahiaIntegration.OrganizationID()
 	switch step {
 	case StepRegisterServiceUnit:
 		if p.engine.units == nil {
 			return fmt.Errorf("deployment-unit repository is unavailable")
 		}
 		serviceRecord, err := registry.GetService(ctx, state.ServiceID)
-		if err != nil || serviceRecord == nil || serviceRecord.Name != soulServiceName(state.AgentID) {
-			return fmt.Errorf("registered service no longer matches governed state")
+		if err != nil || serviceRecord == nil {
+			return fmt.Errorf("registered service no longer exists")
+		}
+		if serviceRecord.Name != soulServiceName(spec.AgentID) || serviceRecord.ArtifactRepo != soulServiceArtifactRepo(spec.AgentID) {
+			return governedConflict(fmt.Sprintf("live service %s identity (%q, %q) does not match agent %q", serviceRecord.ID, serviceRecord.Name, serviceRecord.ArtifactRepo, spec.AgentID))
+		}
+		if orgID != uuid.Nil && serviceRecord.OrgID != orgID {
+			return governedConflict(fmt.Sprintf("live service %s belongs to organization %s, want %s", serviceRecord.ID, serviceRecord.OrgID, orgID))
 		}
 		unit, err := p.engine.units.GetByID(ctx, state.DeploymentUnitID)
-		if err != nil || unit == nil || unit.EnvironmentID != state.EnvironmentID {
-			return fmt.Errorf("registered deployment unit no longer matches governed state")
+		if err != nil || unit == nil {
+			return fmt.Errorf("registered deployment unit no longer exists")
+		}
+		if unit.EnvironmentID != state.EnvironmentID || unit.Key != soulServiceName(spec.AgentID) {
+			return governedConflict(fmt.Sprintf("live deployment unit %s identity (env %s, key %q) does not match governed state", unit.ID, unit.EnvironmentID, unit.Key))
+		}
+		unitLedger, _ := ledgerResource(state, step, "deployment_unit")
+		if err := verifyGovernedMetadata("deployment unit "+unit.ID.String(), unit.RuntimeConfig, spec, unitLedger, false); err != nil {
+			return err
 		}
 	case StepSelectRuntimeRelease:
 		if p.engine.releases == nil {
 			return fmt.Errorf("runtime release service is unavailable")
 		}
-		if state.Release == nil {
+		if state.Release == nil || state.ReleaseBinding == nil {
 			return fmt.Errorf("selected runtime release state is missing")
 		}
-		bound, err := p.engine.releases.GetServiceRelease(ctx, p.engine.full.bahiaIntegration.OrganizationID(), state.ServiceID, state.Release.ID)
-		if err != nil || bound == nil || bound.Binding.AgentID != state.AgentID {
-			return fmt.Errorf("runtime release binding no longer matches governed state")
+		bound, err := p.engine.releases.GetServiceRelease(ctx, orgID, state.ServiceID, state.Release.ID)
+		if err != nil || bound == nil {
+			return fmt.Errorf("runtime release binding no longer exists")
+		}
+		b := bound.Binding
+		if b.AgentID != spec.AgentID || b.ServiceID != state.ServiceID || b.ReleaseID != state.Release.ID {
+			return governedConflict(fmt.Sprintf("live release binding %s (agent %q, service %s, release %s) does not match governed state", b.ID, b.AgentID, b.ServiceID, b.ReleaseID))
+		}
+		if b.SourceEventID != spec.RequestID {
+			return governedConflict(fmt.Sprintf("live release binding %s correlation %q is not this replay's request %s", b.ID, b.SourceEventID, spec.RequestID))
+		}
+		if state.ReleaseBinding.ReleaseChannel != "" && b.ReleaseChannel != state.ReleaseBinding.ReleaseChannel {
+			return governedConflict(fmt.Sprintf("live release binding %s channel %q differs from governed %q", b.ID, b.ReleaseChannel, state.ReleaseBinding.ReleaseChannel))
 		}
 	case StepDeployViaBahia:
 		if state.Release == nil {
 			return fmt.Errorf("deployment release state is missing")
 		}
-		deployed, err := registry.GetDeploymentIntentForRuntimeRelease(ctx, p.engine.full.bahiaIntegration.OrganizationID(), state.ServiceID, state.Release.ID)
-		if err != nil || deployed == nil || deployed.Intent.ID != state.DeploymentIntentID {
-			return fmt.Errorf("release-backed deployment intent no longer matches governed state")
+		deployed, err := registry.GetDeploymentIntentForRuntimeRelease(ctx, orgID, state.ServiceID, state.Release.ID)
+		if err != nil || deployed == nil {
+			return fmt.Errorf("release-backed deployment intent no longer exists")
+		}
+		intent := deployed.Intent
+		if intent.ID != state.DeploymentIntentID {
+			return governedConflict(fmt.Sprintf("live deployment intent %s is not the governed intent %s", intent.ID, state.DeploymentIntentID))
+		}
+		if intent.ServiceID != state.ServiceID || intent.EnvironmentID != state.EnvironmentID ||
+			intent.DeploymentUnitID == nil || *intent.DeploymentUnitID != state.DeploymentUnitID || deployed.Release.ID != state.Release.ID {
+			return governedConflict(fmt.Sprintf("live deployment intent %s targets do not match governed state", intent.ID))
+		}
+		intentLedger, _ := ledgerResource(state, step, "bahia_deployment")
+		if err := verifyGovernedMetadata("deployment intent "+intent.ID.String(), intent.Metadata, spec, intentLedger, true); err != nil {
+			return err
 		}
 	case StepVerifyIdentity:
 		if !validHexPublicKey(state.Soul.NostrPubkey) || state.RuntimeResult == nil || state.RuntimeResult.Status != "success" {
