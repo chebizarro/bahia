@@ -143,13 +143,19 @@ type SoulIdentitySpec struct {
 
 // SoulRuntimeSpec captures runtime targeting and observed binding metadata.
 type SoulRuntimeSpec struct {
-	Target         RuntimeTarget `json:"target,omitempty"`
-	RuntimePubkey  string        `json:"runtime_pubkey,omitempty"`
-	CapabilityRef  string        `json:"capability_ref,omitempty"`
-	RuntimeBinding string        `json:"runtime_binding,omitempty"`
-	State          string        `json:"state,omitempty"`
-	Provider       string        `json:"provider,omitempty"`
-	Model          string        `json:"model,omitempty"`
+	Target        RuntimeTarget `json:"target,omitempty"`
+	RuntimePubkey string        `json:"runtime_pubkey,omitempty"`
+	CapabilityRef string        `json:"capability_ref,omitempty"`
+	// RuntimeReleaseID selects the immutable, verified Bahia runtime release
+	// that must be bound before a provisioning deployment intent is created.
+	// It is deliberately distinct from CapabilityRef: a runtime capability is
+	// relay-advertised execution authority, while a runtime release is durable
+	// OCI provenance.
+	RuntimeReleaseID string `json:"runtime_release_id,omitempty"`
+	RuntimeBinding   string `json:"runtime_binding,omitempty"`
+	State            string `json:"state,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
 }
 
 // SoulReadinessEvidence contains only public correlation evidence from the

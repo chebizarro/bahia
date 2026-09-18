@@ -124,6 +124,43 @@ func (s *AgentRuntimeReleaseService) BindRelease(ctx context.Context, binding *d
 	return s.releases.BindRelease(ctx, binding)
 }
 
+// GetRelease returns one tenant-scoped immutable verified release. Production
+// provisioning uses this read before BindRelease so an arbitrary UUID can
+// never become deployment authority.
+func (s *AgentRuntimeReleaseService) GetRelease(ctx context.Context, orgID, releaseID uuid.UUID) (*domain.AgentRuntimeRelease, error) {
+	if s == nil || s.releases == nil {
+		return nil, fmt.Errorf("agent runtime release repository is not configured")
+	}
+	if orgID == uuid.Nil || releaseID == uuid.Nil {
+		return nil, fmt.Errorf("runtime release lookup requires tenant and release")
+	}
+	return s.releases.GetRelease(ctx, orgID, releaseID)
+}
+
+// GetSource resolves the release channel and repository provenance paired with
+// a verified release.
+func (s *AgentRuntimeReleaseService) GetSource(ctx context.Context, orgID, sourceID uuid.UUID) (*domain.AgentRuntimeSource, error) {
+	if s == nil || s.releases == nil {
+		return nil, fmt.Errorf("agent runtime release repository is not configured")
+	}
+	if orgID == uuid.Nil || sourceID == uuid.Nil {
+		return nil, fmt.Errorf("runtime source lookup requires tenant and source")
+	}
+	return s.releases.GetSource(ctx, orgID, sourceID)
+}
+
+// GetServiceRelease resolves an exact durable service binding without
+// manufacturing service-scoped artifact identity.
+func (s *AgentRuntimeReleaseService) GetServiceRelease(ctx context.Context, orgID, serviceID, releaseID uuid.UUID) (*domain.AgentServiceRuntimeRelease, error) {
+	if s == nil || s.releases == nil {
+		return nil, fmt.Errorf("agent runtime release repository is not configured")
+	}
+	if orgID == uuid.Nil || serviceID == uuid.Nil || releaseID == uuid.Nil {
+		return nil, fmt.Errorf("service runtime release lookup requires tenant, service, and release")
+	}
+	return s.releases.GetServiceRelease(ctx, orgID, serviceID, releaseID)
+}
+
 func (s *AgentRuntimeReleaseService) ListServiceReleases(ctx context.Context, orgID, serviceID uuid.UUID) ([]domain.AgentServiceRuntimeRelease, error) {
 	if s == nil || s.releases == nil {
 		return nil, fmt.Errorf("agent runtime release repository is not configured")

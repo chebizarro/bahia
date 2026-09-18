@@ -152,6 +152,30 @@ func (s *resolvedProvisioningSpec) applyInlineOverrides(req *domain.Provisioning
 	if req.DraftEventID != "" {
 		s.DraftEventID = req.DraftEventID
 	}
+	if req.Runtime.Target != "" {
+		s.Runtime.Target = req.Runtime.Target
+	}
+	if req.Runtime.RuntimePubkey != "" {
+		s.Runtime.RuntimePubkey = req.Runtime.RuntimePubkey
+	}
+	if req.Runtime.CapabilityRef != "" {
+		s.Runtime.CapabilityRef = req.Runtime.CapabilityRef
+	}
+	if req.Runtime.RuntimeReleaseID != "" {
+		s.Runtime.RuntimeReleaseID = req.Runtime.RuntimeReleaseID
+	}
+	if req.Runtime.RuntimeBinding != "" {
+		s.Runtime.RuntimeBinding = req.Runtime.RuntimeBinding
+	}
+	if req.Runtime.State != "" {
+		s.Runtime.State = req.Runtime.State
+	}
+	if req.Runtime.Provider != "" {
+		s.Runtime.Provider = req.Runtime.Provider
+	}
+	if req.Runtime.Model != "" {
+		s.Runtime.Model = req.Runtime.Model
+	}
 }
 
 func (s *resolvedProvisioningSpec) validate(req *domain.ProvisioningRequest) error {

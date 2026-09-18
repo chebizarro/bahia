@@ -385,6 +385,7 @@ func configureValidSoulFactory(t *testing.T, cfg *config.Config, controllerPubke
 		LLMModel:          "soul-model",
 		LLMAPIKey:         "test-api-key",
 		LLMTimeout:        30 * time.Second,
+		ProvisioningStateDir: t.TempDir(),
 	}
 }
 
