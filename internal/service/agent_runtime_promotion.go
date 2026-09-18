@@ -228,7 +228,12 @@ func (s *AgentRuntimePromotionService) PromoteSubscribedSouls(
 	ctx context.Context,
 	req RuntimePromotionRequest,
 ) (report RuntimePromotionReport, retErr error) {
-	ctx, span := telemetry.StartOperation(ctx, "bahia.release.promotion")
+	// Continue the release-spine trace carried by the ingested 5402 result, so
+	// the promotion span lands in the same trace as loom-worker's build span,
+	// and join the two on the manifest digest loom already stamps.
+	ctx = telemetry.ExtractTraceContextFromSignedEvent(ctx, req.Release.SignedEvent)
+	digestAttr := telemetry.OCIManifestDigest(req.Release.Result.Manifest.Digest)
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.promotion", digestAttr)
 	defer func() {
 		outcome := "success"
 		if retErr != nil {
@@ -238,6 +243,7 @@ func (s *AgentRuntimePromotionService) PromoteSubscribedSouls(
 		}
 		telemetry.RecordReleaseOutcome(ctx, "promotion", outcome)
 		telemetry.EndOperation(ctx, span, "bahia.release.promotion", outcome, retErr,
+			digestAttr,
 			attribute.Int("promotions.accepted", len(report.Promoted)),
 			attribute.Int("promotions.skipped", len(report.Skipped)))
 	}()
@@ -280,7 +286,7 @@ func (s *AgentRuntimePromotionService) PromoteSubscribedSouls(
 		if err := s.releases.BindRelease(ctx, binding); err != nil {
 			return report, fmt.Errorf("record promotion binding for agent %s: %w", sub.AgentID, err)
 		}
-		intent, err := s.buildPromotionIntent(req.Release, *req.Source, sub, *release, *binding)
+		intent, err := s.buildPromotionIntent(ctx, req.Release, *req.Source, sub, *release, *binding)
 		if err != nil {
 			return report, err
 		}
@@ -339,6 +345,7 @@ func (s *AgentRuntimePromotionService) validateSecondaryTrigger(accepted domain.
 }
 
 func (s *AgentRuntimePromotionService) buildPromotionIntent(
+	ctx context.Context,
 	accepted domain.HiveCIAcceptedRelease,
 	source domain.AgentRuntimeSource,
 	sub RuntimePromotionSubscription,
@@ -378,6 +385,13 @@ func (s *AgentRuntimePromotionService) buildPromotionIntent(
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+	// Carry the release-spine trace context on the durable intent. A rollback
+	// can happen long after the promotion span has ended and has no access to
+	// the 5402, so this is the only way its span can rejoin the build trace.
+	// These are plain metadata fields; no gate, hash, or identity reads them.
+	for key, value := range telemetry.TraceContextMetadata(ctx) {
+		intent.Metadata[key] = value
 	}
 	if sub.Protected {
 		intent.ApprovalStatus = domain.ApprovalStatusPending
