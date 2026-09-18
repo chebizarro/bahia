@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	otellog "go.opentelemetry.io/otel/log"
 	"go.uber.org/zap"
 )
 
@@ -83,8 +84,8 @@ func TestSetup_OTLPHTTPExportsAndShutdown(t *testing.T) {
 	if err := provider.Err(); err != nil {
 		t.Fatalf("Setup error: %v", err)
 	}
-	if provider.TracerProvider() == nil || provider.MeterProvider() == nil {
-		t.Fatal("expected configured trace and metric providers")
+	if provider.TracerProvider() == nil || provider.MeterProvider() == nil || provider.LoggerProvider() == nil {
+		t.Fatal("expected configured trace, metric, and log providers")
 	}
 
 	_, span := provider.TracerProvider().Tracer("telemetry-test").Start(context.Background(), "exported-span")
@@ -94,6 +95,10 @@ func TestSetup_OTLPHTTPExportsAndShutdown(t *testing.T) {
 		t.Fatalf("create counter: %v", err)
 	}
 	counter.Add(context.Background(), 1)
+	var record otellog.Record
+	record.SetTimestamp(time.Now())
+	record.SetBody(otellog.StringValue("test lifecycle log"))
+	provider.LoggerProvider().Logger("telemetry-test").Emit(context.Background(), record)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -111,6 +116,9 @@ func TestSetup_OTLPHTTPExportsAndShutdown(t *testing.T) {
 	}
 	if requests["/v1/metrics"] == 0 {
 		t.Fatalf("metric export requests = %#v, want /v1/metrics", requests)
+	}
+	if requests["/v1/logs"] == 0 {
+		t.Fatalf("log export requests = %#v, want /v1/logs", requests)
 	}
 }
 

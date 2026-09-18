@@ -13,9 +13,11 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var (
@@ -225,8 +227,20 @@ func (s *AgentRuntimePromotionService) EvaluatePromotionGate(
 func (s *AgentRuntimePromotionService) PromoteSubscribedSouls(
 	ctx context.Context,
 	req RuntimePromotionRequest,
-) (RuntimePromotionReport, error) {
-	var report RuntimePromotionReport
+) (report RuntimePromotionReport, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.promotion")
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = "failure"
+		} else if len(report.Promoted) == 0 && len(report.Skipped) > 0 {
+			outcome = "skipped"
+		}
+		telemetry.RecordReleaseOutcome(ctx, "promotion", outcome)
+		telemetry.EndOperation(ctx, span, "bahia.release.promotion", outcome, retErr,
+			attribute.Int("promotions.accepted", len(report.Promoted)),
+			attribute.Int("promotions.skipped", len(report.Skipped)))
+	}()
 	if s == nil || s.releases == nil || s.subscriptions == nil || s.intents == nil {
 		return report, fmt.Errorf("agent runtime promotion service is not configured")
 	}
