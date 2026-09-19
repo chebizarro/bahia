@@ -228,7 +228,8 @@ def sanitize_backup_tree(
         temporary = path.with_name(path.name + ".admission-tmp")
         if temporary.exists():
             raise AdmissionError(f"temporary target already exists: {temporary}")
-        mode = path.stat().st_mode & 0o777
+        stat = path.stat()
+        mode = stat.st_mode & 0o777
         raw_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
         safe_sha = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
         planned.append({
@@ -238,6 +239,8 @@ def sanitize_backup_tree(
             "original": original,
             "rendered": rendered,
             "mode": mode,
+            "uid": stat.st_uid,
+            "gid": stat.st_gid,
             "record": {
                 "path": str(relative),
                 "raw_sha256": raw_sha,
@@ -266,6 +269,7 @@ def sanitize_backup_tree(
             completed.append(item)
             temporary.write_text(item["rendered"], encoding="utf-8")
             os.chmod(temporary, item["mode"])
+            os.chown(temporary, item["uid"], item["gid"])
             os.replace(temporary, path)
             os.chmod(raw, 0)
     except BaseException:
