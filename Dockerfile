@@ -55,6 +55,15 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
 # Runtime stage
 FROM alpine:3.21
 
+ARG GIT_COMMIT=dev
+ARG BUILD_DATE=unknown
+ARG RELAY_FLOOD_GUARD=2026-09-15-v1
+
+LABEL org.opencontainers.image.source="https://github.com/openagentsinc/bahia" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      io.cascadia.bahia.relay-flood-guard="${RELAY_FLOOD_GUARD}"
+
 ARG VERSION_BASE=0.1.0
 ARG GIT_COMMIT=dev
 ARG VERSION=0.1.0-dev
