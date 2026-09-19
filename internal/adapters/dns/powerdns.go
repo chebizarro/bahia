@@ -63,7 +63,7 @@ type powerDNSPatchRequest struct {
 
 // NewPowerDNSBackend creates a PowerDNS HTTP API backend.
 func NewPowerDNSBackend(cfg PowerDNSConfig) (*PowerDNSBackend, error) {
-	return newPowerDNSBackend(cfg, httpclient.New(httpclient.DefaultTimeout))
+	return newPowerDNSBackend(cfg, httpclient.Harden(nil, httpclient.DefaultTimeout))
 }
 
 func newPowerDNSBackend(cfg PowerDNSConfig, client powerDNSHTTP) (*PowerDNSBackend, error) {

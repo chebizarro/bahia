@@ -33,11 +33,6 @@ func Harden(client *http.Client, timeout time.Duration) *http.Client {
 	return &clone
 }
 
-// New returns a bounded, TLS-safe HTTP client.
-func New(timeout time.Duration) *http.Client {
-	return Harden(nil, timeout)
-}
-
 func hardenTransport(roundTripper http.RoundTripper) http.RoundTripper {
 	var transport *http.Transport
 	switch typed := roundTripper.(type) {
