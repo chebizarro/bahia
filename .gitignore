@@ -55,3 +55,6 @@ test/integration/.env.integration
 /bahia-dns-agent
 __pycache__/
 *.py[cod]
+
+# Local Claude Code session permissions
+.claude/settings.local.json
