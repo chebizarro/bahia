@@ -53,3 +53,5 @@ test/integration/.env.integration
 !web/vendor/wheelhouse/dist/
 !web/vendor/wheelhouse/dist/**
 /bahia-dns-agent
+__pycache__/
+*.py[cod]

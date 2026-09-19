@@ -1,0 +1,23 @@
+{
+  "feature_id": "POST_FLOOD_IMAGE_ADMISSION",
+  "title": "Reject Bahia edge images that predate the relay-flood fixes",
+  "observed_failure": "The edge rollback path restored sha256:0860217692710fe58b4e0060ee0b1be16dc1f2dd3465346e2cba2dc914098638, whose source predates the accepted material-change and projector dedupe fixes.",
+  "required_ancestors": [
+    "03425c54679bcf39d7f5d62a7b54cf403d9e4d80",
+    "1637b55e367e00e10c08b50b5ada8d651af1826d"
+  ],
+  "invariants": [
+    "Production deployment is manually dispatched with an exact 40-character release revision.",
+    "The release revision descends from both required flood-fix commits.",
+    "The built image has an immutable sha256 ID and matching OCI source revision.",
+    "The image carries the required relay-flood safety epoch.",
+    "Rollback restores an independently admitted post-fix Bahia image, never the raw pre-deploy Bahia image.",
+    "The Bahia updater never changes the independently managed relay image.",
+    "Only the one previously live-accepted unlabeled post-fix digest may use the legacy compatibility path."
+  ],
+  "out_of_scope": [
+    "Relay rate-limit increases",
+    "Signer, key, ACL, grant, binding, or custody changes",
+    "Deploying Hive-CI changes before their worker rollout dependencies"
+  ]
+}

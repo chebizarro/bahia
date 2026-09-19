@@ -1,8 +1,12 @@
 name: Deploy Bahia Edge
 
 on:
-  push:
-    branches: [master]
+  workflow_dispatch:
+    inputs:
+      release_revision:
+        description: Full Bahia commit to build and deploy
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,6 +25,8 @@ jobs:
       EDGE_HEALTH_HOST: 172.17.0.1
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
       PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
+      RELEASE_REVISION: ${{ inputs.release_revision }}
+      SAFE_ROLLBACK_BAHIA_IMAGE: sha256:824e4ffa0954d2135b87169233f1a9edd04fc5148125904ba0c7b95b61e6b16a
     steps:
       - name: Checkout repository
         env:
@@ -29,7 +35,7 @@ jobs:
           set -euo pipefail
 
           : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-          : "${GITHUB_SHA:?GITHUB_SHA is required}"
+          : "${RELEASE_REVISION:?release_revision is required}"
           : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
           : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 
@@ -39,9 +45,13 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          [[ "$RELEASE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --depth=1 origin "$GITHUB_SHA"
-          git checkout --force --detach FETCH_HEAD
+            fetch --no-tags --filter=blob:none origin master
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --filter=blob:none origin "$RELEASE_REVISION"
+          git checkout --force --detach "$RELEASE_REVISION"
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_REVISION" ]]
 
       - name: Prepare Soul gallery rollout gate runtime
         run: |
@@ -71,9 +81,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          : "${GITHUB_SHA:?GITHUB_SHA is required}"
-          [[ "$GITHUB_REF" == "refs/heads/master" ]]
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${RELEASE_REVISION:?RELEASE_REVISION is required}"
+          [[ "$RELEASE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMPOSE_FILE" == "$CONTROLPLANE_ROOT/docker-compose.yml" ]]
           [[ "$RELEASE_ROOT" == "$CONTROLPLANE_ROOT/releases" ]]
 
@@ -91,6 +100,8 @@ jobs:
           test -f web/Dockerfile
           test -d docs
           test -f scripts/deploy_edge_compose_update.py
+          test -f scripts/edge_image_admission.py
+          test -f deploy/edge/image-admission-policy.json
           test -f scripts/relay_policy_rollout_gate.py
           test -f scripts/soul_gallery_rollout_gate.mjs
           test -f "$COMPOSE_FILE"
@@ -98,36 +109,46 @@ jobs:
           mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
           test -w "$RELEASE_ROOT"
           test -w "$CONTROLPLANE_ROOT/backups"
+          python3 scripts/edge_image_admission.py verify-revision \
+            --repo . \
+            --revision "$RELEASE_REVISION"
 
       - name: Build local Bahia image
         run: |
           set -euo pipefail
 
-          tag="github-${GITHUB_SHA::7}"
+          tag="github-${RELEASE_REVISION::7}"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           docker build \
             --build-arg VERSION_BASE=0.1.0 \
-            --build-arg GIT_COMMIT="$GITHUB_SHA" \
-            --build-arg VERSION="0.1.0-$GITHUB_SHA" \
+            --build-arg GIT_COMMIT="$RELEASE_REVISION" \
+            --build-arg BUILD_DATE="$build_date" \
+            --build-arg RELAY_FLOOD_GUARD=2026-09-15-v1 \
+            --build-arg VERSION="0.1.0-$RELEASE_REVISION" \
             -t "local/bahia-controlplane-bahia:$tag" .
+          python3 scripts/edge_image_admission.py verify-image \
+            --repo . \
+            --image "local/bahia-controlplane-bahia:$tag" \
+            --expected-revision "$RELEASE_REVISION"
 
       - name: Build local Bahia web image
         run: |
           set -euo pipefail
 
-          tag="github-${GITHUB_SHA::7}"
+          tag="github-${RELEASE_REVISION::7}"
           docker build \
             -f web/Dockerfile \
             --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="$PUBLIC_BAHIA_BOOTSTRAP_RELAYS" \
             --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="$PUBLIC_BAHIA_SERVICE_PUBKEYS" \
-            --build-arg PUBLIC_BAHIA_GIT_COMMIT="$GITHUB_SHA" \
-            --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$GITHUB_SHA" \
+            --build-arg PUBLIC_BAHIA_GIT_COMMIT="$RELEASE_REVISION" \
+            --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$RELEASE_REVISION" \
             -t "local/bahia-controlplane-web:$tag" web
 
       - name: Stage release tree
         run: |
           set -euo pipefail
 
-          tag="github-${GITHUB_SHA::7}"
+          tag="github-${RELEASE_REVISION::7}"
           release_dir="$RELEASE_ROOT/$tag"
           mkdir -p "$release_dir"
           rsync -a --delete --exclude .git ./ "$release_dir/"
@@ -136,10 +157,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          tag="github-${GITHUB_SHA::7}"
+          tag="github-${RELEASE_REVISION::7}"
           release_dir="$RELEASE_ROOT/$tag"
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
           backup="$CONTROLPLANE_ROOT/backups/compose-${tag}-${timestamp}.yml"
+          rollback="$CONTROLPLANE_ROOT/backups/compose-${tag}-${timestamp}.rollback-safe.yml"
           baseline="$CONTROLPLANE_ROOT/backups/relay-policy-${tag}-${timestamp}.json"
           ready_url="http://${EDGE_HEALTH_HOST}:8080/ready"
 
@@ -147,6 +169,11 @@ jobs:
           # A fresh Nostr installation with no matching event remains deployable.
           python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
           cp "$COMPOSE_FILE" "$backup"
+          python3 scripts/edge_image_admission.py sanitize-rollback \
+            --repo . \
+            --source "$backup" \
+            --output "$rollback" \
+            --safe-bahia-image "$SAFE_ROLLBACK_BAHIA_IMAGE"
 
           backend_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-bahia:$tag")"
           web_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-web:$tag")"
@@ -160,9 +187,9 @@ jobs:
             status=$?
             if [[ "$rollback_armed" == "1" ]]; then
               echo "Rollout health gate failed; restoring previous digest-pinned Compose state" >&2
-              cp "$backup" "$COMPOSE_FILE"
+              cp "$rollback" "$COMPOSE_FILE"
               docker compose -f "$COMPOSE_FILE" config --quiet
-              docker compose -f "$COMPOSE_FILE" up -d bahia relay web
+              docker compose -f "$COMPOSE_FILE" up -d bahia web
               curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null || true
               python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline" || true
               curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS \
@@ -181,7 +208,7 @@ jobs:
             --backend-image "$backend_image" \
             --web-image "$web_image"
           docker compose -f "$COMPOSE_FILE" config --quiet
-          docker compose -f "$COMPOSE_FILE" up -d bahia relay web
+          docker compose -f "$COMPOSE_FILE" up -d bahia web
 
           # Tier-0 migration/bootstrap may take several minutes. If a relay-policy
           # head existed before rollout, reject its loss, regression, or hash change.

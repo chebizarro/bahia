@@ -1,0 +1,12 @@
+{
+  "feature_id": "POST_FLOOD_IMAGE_ADMISSION",
+  "tests": [
+    {"criterion": "PFIA-AC-01", "test": "test_rejects_short_dev_and_pre_floor_revisions"},
+    {"criterion": "PFIA-AC-02", "test": "test_modern_image_requires_guard_and_revision; test_image_revision_must_equal_selected_release; test_rejects_missing_dev_or_wrong_guard"},
+    {"criterion": "PFIA-AC-03", "test": "test_only_exact_legacy_digest_is_accepted; test_policy_rejects_invalid_legacy_mapping"},
+    {"criterion": "PFIA-AC-04", "test": "test_rollback_replaces_only_bahia_image"},
+    {"criterion": "PFIA-AC-05", "test": "workflow static validation plus deploy_edge_compose_update suite"},
+    {"criterion": "PFIA-AC-06", "test": "test_backup_tree_quarantines_raw_and_preserves_non_bahia_services"},
+    {"criterion": "PFIA-AC-07", "test": "guarded live rollout and sustained telemetry evidence"}
+  ]
+}
