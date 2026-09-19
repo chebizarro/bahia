@@ -5,7 +5,7 @@
     {"id": "PFIA-AC-02", "statement": "A modern image fails unless its immutable metadata contains the exact selected revision and required safety epoch."},
     {"id": "PFIA-AC-03", "statement": "An unlabeled legacy image fails unless its exact image ID is listed with a post-floor revision."},
     {"id": "PFIA-AC-04", "statement": "Rollback generation preserves unrelated services but replaces Bahia with an admitted post-fix image."},
-    {"id": "PFIA-AC-05", "statement": "The edge workflow is manual, digest-pinned, and uses only the sanitized rollback Compose file."},
+    {"id": "PFIA-AC-05", "statement": "The edge workflow is manual, digest-pinned, uses only the sanitized rollback Compose file, and never rewrites the dedicated relay image."},
     {"id": "PFIA-AC-06", "statement": "Live Bahia uses a post-floor image while public health, readiness, and relay rejection telemetry remain healthy."}
   ]
 }
