@@ -54,6 +54,16 @@ func (s *WebhookSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		return fmt.Errorf("creating webhook request: %w", err)
 	}
 
+	// Channel-supplied headers are applied first so they cannot overwrite the
+	// envelope headers below, which describe the body this sender actually sent.
+	if headers, ok := ch.Config["headers"].(map[string]any); ok {
+		for k, v := range headers {
+			if sv, ok := v.(string); ok {
+				req.Header.Set(k, sv)
+			}
+		}
+	}
+
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Bahia-Event", eventType)
 
@@ -63,15 +73,6 @@ func (s *WebhookSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		mac.Write(bodyBytes)
 		sig := hex.EncodeToString(mac.Sum(nil))
 		req.Header.Set("X-Bahia-Signature", "sha256="+sig)
-	}
-
-	// Apply custom headers.
-	if headers, ok := ch.Config["headers"].(map[string]any); ok {
-		for k, v := range headers {
-			if sv, ok := v.(string); ok {
-				req.Header.Set(k, sv)
-			}
-		}
 	}
 
 	resp, err := s.client.Do(req)

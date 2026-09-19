@@ -497,6 +497,60 @@ func TestWebhookSender_WithSignature(t *testing.T) {
 	}
 }
 
+// Channel-supplied headers are operator configuration, not a licence to
+// restate what this sender sent: a custom X-Bahia-Signature must not replace
+// the HMAC computed over the real body.
+func TestWebhookSender_CustomHeadersCannotOverwriteSignature(t *testing.T) {
+	secret := "my-webhook-secret"
+	var receivedSig, receivedEvent, receivedContentType, receivedCustom string
+	var receivedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedSig = r.Header.Get("X-Bahia-Signature")
+		receivedEvent = r.Header.Get("X-Bahia-Event")
+		receivedContentType = r.Header.Get("Content-Type")
+		receivedCustom = r.Header.Get("X-Tenant")
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := NewWebhookSender()
+	ch := &domain.NotificationChannel{
+		Name: "signed-hook",
+		Config: map[string]any{
+			"url":    server.URL,
+			"secret": secret,
+			"headers": map[string]any{
+				"X-Bahia-Signature": "sha256=forged",
+				"X-Bahia-Event":     "forged.event",
+				"Content-Type":      "text/plain",
+				"X-Tenant":          "acme",
+			},
+		},
+	}
+
+	if err := sender.Send(context.Background(), ch, "build.registered", map[string]any{}); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(receivedBody)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if receivedSig != expected {
+		t.Errorf("signature was overwritten by channel headers: got %s, want %s", receivedSig, expected)
+	}
+	if receivedEvent != "build.registered" {
+		t.Errorf("event header was overwritten: got %s", receivedEvent)
+	}
+	if receivedContentType != "application/json" {
+		t.Errorf("content type was overwritten: got %s", receivedContentType)
+	}
+	if receivedCustom != "acme" {
+		t.Errorf("non-reserved custom header was dropped: got %s", receivedCustom)
+	}
+}
+
 func TestWebhookSender_NonOKStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
