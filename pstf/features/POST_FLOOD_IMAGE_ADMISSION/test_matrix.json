@@ -7,6 +7,7 @@
     {"criterion": "PFIA-AC-04", "test": "test_rollback_replaces_only_bahia_image"},
     {"criterion": "PFIA-AC-05", "test": "workflow static validation plus deploy_edge_compose_update suite"},
     {"criterion": "PFIA-AC-06", "test": "test_backup_tree_quarantines_raw_and_preserves_non_bahia_services"},
-    {"criterion": "PFIA-AC-07", "test": "guarded live rollout and sustained telemetry evidence"}
+    {"criterion": "PFIA-AC-07", "test": "test_image_store_audit_classifies_and_maps_stopped_container; test_purge_rejects_active_container_before_deletion; live audit/purge receipt"},
+    {"criterion": "PFIA-AC-08", "test": "guarded live rollout and sustained telemetry evidence"}
   ]
 }

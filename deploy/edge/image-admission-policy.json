@@ -7,5 +7,12 @@
   ],
   "approved_legacy_images": {
     "sha256:824e4ffa0954d2135b87169233f1a9edd04fc5148125904ba0c7b95b61e6b16a": "781e26f0dbf4be572511d62e6b44d5dd33632f26"
-  }
+  },
+  "protected_repositories": [
+    "bahia",
+    "bahia-recovery",
+    "harbor.sharegap.net/cascadia/bahia",
+    "local/bahia",
+    "local/bahia-controlplane-bahia"
+  ]
 }
