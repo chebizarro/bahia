@@ -442,29 +442,17 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 
 var buildDependencyNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// validatedBuildDependencyTags renders the legacy non-spec `dep` tags. New
+// Hive-CI dispatch passes dependencies as loom-ci `--dep` args instead (see
+// HiveCIJobArgs); this remains for non-CI jobs that still carry them.
 func validatedBuildDependencyTags(dependencies []BuildDependency) (nostr.Tags, error) {
-	ordered := append([]BuildDependency(nil), dependencies...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
+	ordered, err := validatedBuildDependencies(dependencies)
+	if err != nil {
+		return nil, err
+	}
 	tags := make(nostr.Tags, 0, len(ordered))
-	seen := make(map[string]struct{}, len(ordered))
-	for index, dependency := range ordered {
-		name := strings.TrimSpace(dependency.Name)
-		if !buildDependencyNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("Loom job build dependency %d has an invalid name", index)
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return nil, fmt.Errorf("Loom job build dependency %d duplicates a name", index)
-		}
-		seen[name] = struct{}{}
-		cloneURL := strings.TrimSpace(dependency.CloneURL)
-		if !isCredentialFreeHTTPSCloneURL(cloneURL) {
-			return nil, fmt.Errorf("Loom job build dependency %d URL must be credential-free absolute HTTPS", index)
-		}
-		sha := strings.TrimSpace(dependency.CommitSHA)
-		if !isLowerFullCommitSHA(sha) {
-			return nil, fmt.Errorf("Loom job build dependency %d must use an immutable 40-hex commit SHA", index)
-		}
-		tags = append(tags, nostr.Tag{"dep", name, cloneURL, sha})
+	for _, dependency := range ordered {
+		tags = append(tags, nostr.Tag{"dep", dependency.Name, dependency.CloneURL, dependency.CommitSHA})
 	}
 	return tags, nil
 }

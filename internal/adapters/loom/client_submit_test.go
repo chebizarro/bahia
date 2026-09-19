@@ -364,19 +364,17 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 	if err != nil {
 		t.Fatalf("derive capable pubkey: %v", err)
 	}
+	// Capability is evidenced by the advertised loom-ci executable (kind-10100
+	// S tag), not by administrative workload/feature labels.
 	software := []domain.WorkerSoftware{{Name: "git"}, {Name: "act"}, {Name: "docker"}}
 	workers := &submitWorkerRepo{workers: []domain.Worker{
 		{
 			PubKey: uncapablePubkey, Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive,
 			MaxConcurrentJobs: 1, Software: software,
-			Capabilities: domain.WorkerCapabilities{WorkloadKinds: []string{"ci/workflow-run"}},
 		},
 		{
 			PubKey: capablePubkey, Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive,
-			MaxConcurrentJobs: 1, Software: software,
-			Capabilities: domain.WorkerCapabilities{
-				WorkloadKinds: []string{"ci/workflow-run"}, Features: []string{"hive_ci_profile"},
-			},
+			MaxConcurrentJobs: 1, Software: append(append([]domain.WorkerSoftware(nil), software...), domain.WorkerSoftware{Name: LoomCICommand}),
 		},
 	}}
 	client := &Client{
@@ -388,18 +386,20 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 		"HIVE_CI_GIT_USERNAME": "bahia-mirror-reader",
 		"HIVE_CI_GIT_PASSWORD": "private-clone-credential",
 	}
+	args, err := HiveCIJobArgs(HiveCIJobSpec{
+		Repository: "https://git.fleet.internal/fleet/repository.git", Ref: "main",
+		Workflow: ".github/workflows/build.yml", Event: "push", RunEventID: runEventID,
+	})
+	if err != nil {
+		t.Fatalf("HiveCIJobArgs() error = %v", err)
+	}
 	_, err = client.SubmitJob(context.Background(), JobRequest{
 		ReferencedEventID:    runEventID,
 		Secrets:              plaintextSecrets,
-		RequiredSoftware:     []string{"git", "act", "docker"},
-		RequiredWorkloads:    []string{"ci/workflow-run"},
-		RequiredFeatures:     []string{"hive_ci_profile"},
+		Cmd:                  LoomCICommand,
+		Args:                 args,
+		RequiredSoftware:     []string{"git", "act", "docker", LoomCICommand},
 		AllowedWorkerPubkeys: []string{uncapablePubkey, capablePubkey},
-		Params: map[string]string{
-			"method": "ci/workflow-run", "run": runEventID,
-			"repo": "https://git.fleet.internal/fleet/repository.git",
-			"ref":  "main", "workflow": ".github/workflows/build.yml",
-		},
 	})
 	if err != nil {
 		t.Fatalf("SubmitJob() error = %v", err)
@@ -409,8 +409,13 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 	}
 	event := pool.published[0]
 	if int(event.Kind) != KindJobRequest || getTagValue(event.Tags, tagJobPubkey) != capablePubkey ||
-		getTagValue(event.Tags, "method") != "ci/workflow-run" || getTagValue(event.Tags, tagJobEvent) != runEventID {
+		getTagValue(event.Tags, "cmd") != LoomCICommand || getTagValue(event.Tags, tagJobEvent) != runEventID {
 		t.Fatalf("unexpected Hive-CI 5100 shape: kind=%d tags=%v", event.Kind, event.Tags)
+	}
+	for _, nonSpec := range []string{"method", "repo", "ref", "run", "workflow", "dep"} {
+		if got := getTagValue(event.Tags, nonSpec); got != "" {
+			t.Fatalf("loom-protocol 5100 carried non-spec %s tag %q: %v", nonSpec, got, event.Tags)
+		}
 	}
 	if getTagValue(event.Tags, "payment") != "" {
 		t.Fatalf("fleet-internal Hive-CI request carried a payment tag: %v", event.Tags)

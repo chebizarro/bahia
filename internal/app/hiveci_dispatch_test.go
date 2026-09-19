@@ -47,7 +47,7 @@ func astilleroDispatchPolicy() config.HiveCIPolicyConfig {
 
 func astilleroWorkflowDispatch() hiveciAdapter.WorkflowRunDispatch {
 	return hiveciAdapter.WorkflowRunDispatch{
-		RunEventID: "5401-event-id", RepoCoordinate: "30617:owner:astillero",
+		RunEventID: strings.Repeat("54", 32), RepoCoordinate: "30617:owner:astillero",
 		Repository: "https://git.sharegap.net/cascadia/astillero.git", Ref: strings.Repeat("c", 40),
 		Workflow: ".gitea/workflows/release.yml", CommitSHA: strings.Repeat("c", 40), Release: true,
 	}
@@ -65,16 +65,25 @@ func TestHiveCIRunDispatcherSubmitsOnlyFleetAuthorizedImmutableDependencies(t *t
 		t.Fatalf("submitted jobs = %d, want 1", len(submitter.jobs))
 	}
 	job := submitter.jobs[0]
-	if len(pinner.specs) != 2 || len(job.BuildDependencies) != 2 {
-		t.Fatalf("resolved specs=%#v job deps=%#v", pinner.specs, job.BuildDependencies)
+	if len(pinner.specs) != 2 {
+		t.Fatalf("resolved specs=%#v", pinner.specs)
 	}
-	for _, dependency := range job.BuildDependencies {
-		if len(dependency.CommitSHA) != 40 {
-			t.Fatalf("dependency is not immutable: %#v", dependency)
+	// Spec-shaped loom-protocol job: dependencies travel as loom-ci --dep argv,
+	// not as non-spec dep tags.
+	var deps []string
+	for index := 1; index+1 < len(job.Args); index += 2 {
+		if job.Args[index] == "--dep" {
+			deps = append(deps, job.Args[index+1])
 		}
 	}
-	if job.ID != "5401-event-id" || job.PaymentToken != "" || fmt.Sprint(job.RequiredSoftware) != "[git act docker]" {
-		t.Fatalf("existing dispatch invariants changed: %#v", job)
+	if len(job.BuildDependencies) != 0 || len(deps) != 2 ||
+		deps[0] != "cascadia-go=https://git.sharegap.net/cascadia/cascadia-go.git@"+strings.Repeat("a", 40) ||
+		deps[1] != "drydock=https://git.sharegap.net/cascadia/drydock.git@"+strings.Repeat("b", 40) {
+		t.Fatalf("dependency argv = %q (dep tags %#v)", deps, job.BuildDependencies)
+	}
+	if job.ID != strings.Repeat("54", 32) || job.PaymentToken != "" || job.Cmd != "loom-ci" || job.Args[0] != "run" ||
+		len(job.Params) != 0 || fmt.Sprint(job.RequiredSoftware) != "[git act docker loom-ci]" {
+		t.Fatalf("dispatch is not spec-shaped: %#v", job)
 	}
 }
 

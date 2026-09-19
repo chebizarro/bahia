@@ -120,19 +120,25 @@ func (d *hiveCIRunDispatcher) Dispatch(ctx context.Context, run hiveciAdapter.Wo
 	for _, pin := range pins {
 		dependencies = append(dependencies, loom.BuildDependency{Name: pin.Name, CloneURL: pin.CloneURL, CommitSHA: pin.CommitSHA})
 	}
+	// Spec-shaped loom-protocol job: cmd=loom-ci plus argv. This path reacts to
+	// a kind-5401 that Bahia did not author, so it holds no publisher key; the
+	// worker signs the kind-5402 with its own identity and the subscriber
+	// accepts it only from hiveci.trusted_loom_worker_pubkeys.
+	args, err := loom.HiveCIJobArgs(loom.HiveCIJobSpec{
+		Repository: run.Repository, Ref: run.Ref, Workflow: run.Workflow, Event: "push",
+		RunEventID: run.RunEventID, Dependencies: dependencies,
+	})
+	if err != nil {
+		d.logger.Error("release workflow run cannot be rendered as a loom-ci job; refusing Loom dispatch",
+			zap.String("reason", "loom_ci_args_invalid"), zap.String("run_event_id", run.RunEventID), zap.Error(err))
+		return
+	}
 	jobID, err := d.submitter.SubmitJob(ctx, loom.JobRequest{
-		ID:                run.RunEventID,
-		Type:              "build",
-		RequiredSoftware:  []string{"git", "act", "docker"},
-		BuildDependencies: dependencies,
-		Params: map[string]string{
-			"method":   "ci/workflow-run",
-			"run":      run.RunEventID,
-			"repo":     run.Repository,
-			"ref":      run.Ref,
-			"workflow": run.Workflow,
-			"event":    "push",
-		},
+		ID:               run.RunEventID,
+		Type:             "build",
+		Cmd:              loom.LoomCICommand,
+		Args:             args,
+		RequiredSoftware: []string{"git", "act", "docker", loom.LoomCICommand},
 	})
 	if err != nil {
 		d.logger.Error("failed to dispatch release workflow to Loom",

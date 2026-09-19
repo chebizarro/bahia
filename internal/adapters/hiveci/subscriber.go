@@ -76,7 +76,7 @@ type Subscriber struct {
 func (s *Subscriber) SetRunConsumer(consumer RunConsumer) { s.onRun = consumer }
 
 // SetTrustedResultPubkeys admits worker-signed 5402 results produced by
-// Bahia-dispatched ci/workflow-run jobs. The original ephemeral-publisher
+// Bahia-dispatched loom-ci jobs that carried no publisher key. The ephemeral-publisher
 // correlation remains accepted for grasp-gitea-dispatched jobs.
 func (s *Subscriber) SetTrustedResultPubkeys(pubkeys []string) {
 	s.trustedResults = make(map[string]struct{}, len(pubkeys))

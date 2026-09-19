@@ -441,9 +441,11 @@ hiveci:
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
 
-  # Loom workers permitted to sign ordinary 5402 results for Bahia-dispatched
-  # ci/workflow-run jobs. Grasp-dispatched ephemeral publisher keys remain
-  # correlated through the trusted 5401 publisher tag.
+  # Loom workers Bahia may dispatch loom-ci jobs to. Their advertised
+  # software must include loom-ci. Bahia-authored 5401s carry a per-run
+  # ephemeral publisher that signs the 5402; these worker keys are accepted
+  # as 5402 signers only for runs Bahia did not author (observed release=true
+  # 5401s dispatched without a publisher key).
   trusted_loom_worker_pubkeys:
     - <loom-worker-pubkey>
 

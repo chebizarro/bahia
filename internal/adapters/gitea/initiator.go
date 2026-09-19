@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
@@ -372,17 +373,17 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return nil, scrubSecrets(err, token, mirrorReadPassword)
 	}
 
-	runRequestID, runEventID, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
+	runRequestID, runEventID, publisherNsec, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("publish canonical ci/workflow-run request: %w", err), token, mirrorReadPassword)
+		return nil, scrubSecrets(fmt.Errorf("publish Hive-CI workflow run: %w", err), token, mirrorReadPassword)
 	}
 
 	result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: runEventID}
 	loomJobID := ""
 	if i.loom != nil {
-		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, mirrorReadUsername, mirrorReadPassword, pinnedDependencies)
+		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, publisherNsec, mirrorReadUsername, mirrorReadPassword, pinnedDependencies)
 		if err != nil {
-			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token, mirrorReadPassword)
+			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token, mirrorReadPassword, publisherNsec)
 		}
 	}
 
@@ -445,7 +446,10 @@ func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, 
 	return source, nil
 }
 
-func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, mirrorReadUsername, mirrorReadPassword string, pinnedDependencies []PinnedBuildDependency) (string, error) {
+// submitLoomWorkflowJob publishes the spec-shaped loom-protocol kind-5100 job:
+// cmd=loom-ci with argv, plus NIP-44 secret tags for the mirror credential and
+// the per-run kind-5401 publisher key. No non-spec selector tags are used.
+func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, publisherNsec, mirrorReadUsername, mirrorReadPassword string, pinnedDependencies []PinnedBuildDependency) (string, error) {
 	if len(i.cfg.TrustedLoomWorkerPubkeys) == 0 {
 		return "", fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
 	}
@@ -459,33 +463,34 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 	if err := validateFleetMirrorCloneURL(repository, i.cfg.GiteaBaseURL, i.cfg.MirrorOwner, name); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(publisherNsec) == "" {
+		return "", fmt.Errorf("Hive-CI workflow run publisher key is required for Loom dispatch")
+	}
 	dependencies := make([]loomAdapter.BuildDependency, 0, len(pinnedDependencies))
 	for _, dependency := range pinnedDependencies {
 		dependencies = append(dependencies, loomAdapter.BuildDependency{
 			Name: dependency.Name, CloneURL: dependency.CloneURL, CommitSHA: dependency.CommitSHA,
 		})
 	}
+	args, err := loomAdapter.HiveCIJobArgs(loomAdapter.HiveCIJobSpec{
+		Repository: repository, Ref: ref, Workflow: i.cfg.WorkflowPath, Event: "push",
+		Actor: req.RequesterPubkey, RunEventID: runEventID, Dependencies: dependencies,
+	})
+	if err != nil {
+		return "", err
+	}
 	return i.loom.SubmitJob(ctx, loomAdapter.JobRequest{
 		ID:                   runEventID,
 		ReferencedEventID:    runEventID,
 		Type:                 "build",
-		RequiredSoftware:     []string{"git", "act", "docker"},
-		RequiredWorkloads:    []string{"ci/workflow-run"},
-		RequiredFeatures:     []string{"hive_ci_profile"},
+		Cmd:                  loomAdapter.LoomCICommand,
+		Args:                 args,
+		RequiredSoftware:     []string{"git", "act", "docker", loomAdapter.LoomCICommand},
 		AllowedWorkerPubkeys: append([]string(nil), i.cfg.TrustedLoomWorkerPubkeys...),
-		BuildDependencies:    dependencies,
 		Secrets: map[string]string{
-			hiveCIGitUsernameSecretKey: mirrorReadUsername,
-			hiveCIGitPasswordSecretKey: mirrorReadPassword,
-		},
-		Params: map[string]string{
-			"method":   "ci/workflow-run",
-			"run":      runEventID,
-			"repo":     repository,
-			"ref":      ref,
-			"workflow": i.cfg.WorkflowPath,
-			"actor":    req.RequesterPubkey,
-			"event":    "push",
+			hiveCIGitUsernameSecretKey:           mirrorReadUsername,
+			hiveCIGitPasswordSecretKey:           mirrorReadPassword,
+			loomAdapter.HiveCIPublisherSecretKey: publisherNsec,
 		},
 	})
 }
@@ -594,15 +599,21 @@ func (i *Initiator) resolveRefWithRetry(ctx context.Context, name, ref string) (
 // run consumed by Hive-CI and by Bahia's own subscriber. It intentionally uses
 // the tag-only producer contract established by grasp-gitea; the inbound
 // ContextVM build/request command remains the mutation boundary.
-func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name, sha, branch string) (string, string, error) {
+// It returns the run request id, the 5401 event id, and the nsec of the
+// per-run ephemeral publisher key that must be delivered to the worker as
+// HIVE_CI_NSEC so the worker signs the 5402 with it (hive-ci-protocol).
+func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name, sha, branch string) (string, string, string, error) {
 	issuer, err := i.signer.GetPublicKey(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve Hive-CI workflow run publisher: %w", err)
+		return "", "", "", fmt.Errorf("resolve Hive-CI workflow run issuer: %w", err)
 	}
 	issuerHex := issuer.Hex()
 	if issuerHex == strings.Repeat("0", 64) {
-		return "", "", fmt.Errorf("resolve Hive-CI workflow run publisher: signer returned an empty pubkey")
+		return "", "", "", fmt.Errorf("resolve Hive-CI workflow run issuer: signer returned an empty pubkey")
 	}
+	ephemeral := nostr.Generate()
+	publisherHex := ephemeral.Public().Hex()
+	publisherNsec := nip19.EncodeNsec(ephemeral)
 	triggeredBy := strings.TrimSpace(req.RequesterPubkey)
 	if triggeredBy == "" {
 		triggeredBy = issuerHex
@@ -614,7 +625,7 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		TriggeredBy: triggeredBy,
 	}
 	if err := payload.Validate(); err != nil {
-		return "", "", fmt.Errorf("validate Hive-CI workflow run payload: %w", err)
+		return "", "", "", fmt.Errorf("validate Hive-CI workflow run payload: %w", err)
 	}
 	requestID := "bahia:" + req.BuildID.String() + ":" + sha
 	if !containsPubkey(i.cfg.TrustedCIPubkeys, issuerHex) {
@@ -631,7 +642,7 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		{"trigger", "push"},
 		{"triggered-by", payload.TriggeredBy},
 		{"workflow", payload.Workflow},
-		{"publisher", issuerHex},
+		{"publisher", publisherHex},
 		{"t", "hive-ci"},
 		{"repo", i.cfg.MirrorOwner + "/" + name},
 		{"build", req.BuildID.String()},
@@ -650,9 +661,9 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 	}
 	eventID, err := i.signAndPublish(ctx, ev)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return requestID, eventID, nil
+	return requestID, eventID, publisherNsec, nil
 }
 
 func validateRepoAnnouncementAddr(raw string) error {

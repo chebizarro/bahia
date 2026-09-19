@@ -86,7 +86,7 @@ func NewBridge(
 }
 
 // SetTrustedResultPubkeys admits worker-signed 5402 results produced by
-// Bahia-dispatched ci/workflow-run jobs.
+// Bahia-dispatched loom-ci (Hive-CI) jobs.
 func (b *Bridge) SetTrustedResultPubkeys(pubkeys []string) {
 	b.trustedResults = make(map[string]struct{}, len(pubkeys))
 	for _, pubkey := range pubkeys {

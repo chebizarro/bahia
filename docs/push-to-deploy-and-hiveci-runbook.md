@@ -183,7 +183,7 @@ RELEASE registration.
 
 ### Hive Workflow Contract
 
-The Loom `ci/workflow-run` profile does not read `.hiveci-result.json`. The
+The Loom `loom-ci` executable (Hive-CI profile) does not read `.hiveci-result.json`. The
 Hive-executed workflow must:
 
 1. Build backend and web images.

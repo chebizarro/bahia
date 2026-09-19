@@ -10,8 +10,8 @@
 - Self-dispatched 5401 events pass Bahia's trusted subscriber and release lineage kind/id boundary; exact replay remains single-run and single-dispatch.
 - Missing operator trust for the Bahia service pubkey emits `self_issued_run_untrusted` without modifying `trusted_ci_pubkeys`.
 - Non-empty build arguments fail before credential resolution or external side effects because the interoperable tag-only 5401 contract has no build-argument field.
-- Every accepted self-issued 5401 now submits a kind-5100 job through the existing Loom client on the same control-plane relay pool and signer, with `p`, `method=ci/workflow-run`, `e`/`run` correlation, and mirror/ref/workflow parameters.
-- Placement requires the configured trusted worker allowlist plus signed kind-10100 workload `ci/workflow-run` and feature `hive_ci_profile`; generic capability JSON is now retained by Bahia's worker projection.
+- Every accepted self-issued 5401 (whose `publisher` is a per-run ephemeral key, per hive-ci-protocol) submits a loom-protocol-shaped kind-5100 job through the existing Loom client on the same control-plane relay pool and signer: `p`, `cmd=loom-ci`, `args=[run --repo … --ref … --workflow … --event push --actor … --run <ci_run_id> --dep …]`, `e` correlation, and NIP-44 secret tags `HIVE_CI_GIT_USERNAME`, `HIVE_CI_GIT_PASSWORD`, `HIVE_CI_NSEC`. No non-spec `method`/`repo`/`ref`/`run`/`workflow`/`dep` tags are emitted (2026-09-19 conformance change, fleet-planning fp-tmet).
+- Placement requires the configured trusted worker allowlist plus signed kind-10100 `S` software `loom-ci` (with `git`, `act`, `docker`); administrative workload/feature labels are no longer capability evidence.
 - Fleet-internal CI jobs omit payment because Bahia cannot mint Cashu tokens. Bahia deliberately keeps its service-key 5401 publisher and trusted worker-signed 5402 acceptance model; it does not deliver `HIVE_CI_NSEC`.
 - Loom secret tags remain NIP-44 ciphertext addressed to the selected worker and are never projected into plaintext event content, tags, or argv.
 
@@ -38,7 +38,7 @@
 - MUTATION FAIL/PASS: disabling the initiation-store replay guard fails the same test with `replay duplicated Loom dispatch, got 2 submissions`; restoring it passes.
 - MUTATION FAIL/PASS: removing the kind-5100 `e` correlation fails `TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment` with the emitted tag list missing `e`; restoring it passes.
 - MUTATION FAIL/PASS: removing `p` and `method` projection fails the same job-shape test with both tags absent; restoring them passes.
-- MUTATION FAIL/PASS: bypassing the `hive_ci_profile` selector fails `TestSelectWorker_FailClosedOnCriteria` and selects the deliberately uncapable first worker in the full job-shape test; restoring it passes.
+- MUTATION FAIL/PASS: bypassing the `loom-ci` software requirement selects the deliberately uncapable first worker in `TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment`; restoring it passes. `TestHiveCIJobArgsFailsClosedOnUnsafeInputs` and the conformance test prove the argv is credential-free, immutable, and bound to the 5401 publisher key.
 - MUTATION FAIL/PASS: forcing a payment tag fails the job-shape test with `fleet-internal Hive-CI request carried a payment tag`; restoring absent payment passes.
 - MUTATION FAIL/PASS: replacing NIP-44 ciphertext with plaintext fails the job-shape test with `plaintext secret leaked into kind-5100 event`; restoring encryption passes.
 - MUTATION FAIL/PASS: dropping generic capabilities during kind-10100 ingestion fails `TestProcessorWorkerAdvertisementParsesGenericCapabilities`; restoring capability persistence passes.

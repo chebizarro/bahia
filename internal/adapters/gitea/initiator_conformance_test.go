@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/google/uuid"
 	loomAdapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -325,13 +326,17 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 		"trigger":      "push",
 		"triggered-by": req.RequesterPubkey,
 		"workflow":     ".hive/workflows/arcana-build.yml",
-		"publisher":    pubkey.Hex(),
 		"t":            "hive-ci",
 	}
 	for key, want := range wantTags {
 		if got := tags[key]; got != want {
 			t.Fatalf("workflow run tag %q = %q, want %q", key, got, want)
 		}
+	}
+	// hive-ci-protocol: publisher is the ephemeral key that will sign the 5402,
+	// never the service identity that signed the 5401.
+	if _, err := nostr.PubKeyFromHex(tags["publisher"]); err != nil || tags["publisher"] == pubkey.Hex() {
+		t.Fatalf("workflow run publisher = %q, want a fresh ephemeral pubkey distinct from issuer %s", tags["publisher"], pubkey.Hex())
 	}
 	if int(evidence.Kind) != kinds.CASControlState {
 		t.Fatalf("evidence must be addressed kind %d, got %d", kinds.CASControlState, evidence.Kind)
@@ -360,31 +365,51 @@ func TestConformancePrivateMirrorBuildInitiation(t *testing.T) {
 		t.Fatalf("Loom submissions = %d, want 1", len(loomSubmitter.jobs))
 	}
 	job := loomSubmitter.jobs[0]
-	if job.ReferencedEventID != result.CIRunID || job.Params["run"] != result.CIRunID {
-		t.Fatalf("Loom correlation = e:%q run:%q, want 5401 %q", job.ReferencedEventID, job.Params["run"], result.CIRunID)
+	// loom-protocol shape: cmd=loom-ci + argv; no method/repo/ref/run/workflow/dep tags.
+	argv := map[string]string{}
+	var deps []string
+	for index := 1; index+1 < len(job.Args); index += 2 {
+		if job.Args[index] == "--dep" {
+			deps = append(deps, job.Args[index+1])
+			continue
+		}
+		argv[job.Args[index]] = job.Args[index+1]
 	}
-	if job.Params["method"] != "ci/workflow-run" || job.Params["repo"] != "https://git.fleet.internal/fleet/living-library-forge.git" ||
-		job.Params["ref"] != "main" || job.Params["workflow"] != ".hive/workflows/arcana-build.yml" {
-		t.Fatalf("unexpected Hive-CI Loom params: %#v", job.Params)
+	if job.Cmd != loomAdapter.LoomCICommand || len(job.Args) == 0 || job.Args[0] != "run" || len(job.Params) != 0 {
+		t.Fatalf("Loom job is not a spec-shaped loom-ci invocation: %#v", job)
 	}
-	if len(job.Secrets) != 2 || job.Secrets[hiveCIGitUsernameSecretKey] != testMirrorReadUsername ||
+	if job.ReferencedEventID != result.CIRunID || argv["--run"] != result.CIRunID {
+		t.Fatalf("Loom correlation = e:%q run:%q, want 5401 %q", job.ReferencedEventID, argv["--run"], result.CIRunID)
+	}
+	if argv["--repo"] != "https://git.fleet.internal/fleet/living-library-forge.git" || argv["--ref"] != "main" ||
+		argv["--workflow"] != ".hive/workflows/arcana-build.yml" || argv["--event"] != "push" || argv["--actor"] != req.RequesterPubkey {
+		t.Fatalf("unexpected loom-ci argv: %q", job.Args)
+	}
+	if len(job.Secrets) != 3 || job.Secrets[hiveCIGitUsernameSecretKey] != testMirrorReadUsername ||
 		job.Secrets[hiveCIGitPasswordSecretKey] != testMirrorReadCredential {
-		t.Fatalf("Hive-CI clone secrets = %#v, want exactly username/password contract", job.Secrets)
+		t.Fatalf("Hive-CI secrets = %#v, want username/password/HIVE_CI_NSEC contract", job.Secrets)
 	}
-	cloneURL, err := url.Parse(job.Params["repo"])
-	if err != nil || cloneURL.User != nil || strings.Contains(job.Params["repo"], testMirrorReadCredential) || strings.Contains(job.Params["repo"], testMirrorReadUsername) {
-		t.Fatalf("Loom clone URL is not credential-free: %q", job.Params["repo"])
+	// The delivered HIVE_CI_NSEC must be the key behind the 5401 publisher tag.
+	publisherNsec := job.Secrets[loomAdapter.HiveCIPublisherSecretKey]
+	prefix, decoded, err := nip19.Decode(publisherNsec)
+	if err != nil || prefix != "nsec" {
+		t.Fatalf("HIVE_CI_NSEC = %q, want an nsec", publisherNsec)
 	}
-	if len(job.RequiredWorkloads) != 1 || job.RequiredWorkloads[0] != "ci/workflow-run" ||
-		len(job.RequiredFeatures) != 1 || job.RequiredFeatures[0] != "hive_ci_profile" {
-		t.Fatalf("Hive-CI capability requirements = workloads:%v features:%v", job.RequiredWorkloads, job.RequiredFeatures)
+	if secret, ok := decoded.(nostr.SecretKey); !ok || secret.Public().Hex() != tags["publisher"] {
+		t.Fatalf("HIVE_CI_NSEC does not correspond to the 5401 publisher %s", tags["publisher"])
+	}
+	cloneURL, err := url.Parse(argv["--repo"])
+	if err != nil || cloneURL.User != nil || strings.Contains(argv["--repo"], testMirrorReadCredential) || strings.Contains(argv["--repo"], testMirrorReadUsername) {
+		t.Fatalf("Loom clone URL is not credential-free: %q", argv["--repo"])
+	}
+	if len(job.RequiredWorkloads) != 0 || len(job.RequiredFeatures) != 0 || fmt.Sprint(job.RequiredSoftware) != "[git act docker loom-ci]" {
+		t.Fatalf("Hive-CI capability requirements = software:%v workloads:%v features:%v", job.RequiredSoftware, job.RequiredWorkloads, job.RequiredFeatures)
 	}
 	if job.PaymentToken != "" {
 		t.Fatalf("fleet-internal Hive-CI job carried payment token")
 	}
-	if len(job.BuildDependencies) != 2 || job.BuildDependencies[0].CommitSHA != strings.Repeat("a", 40) ||
-		job.BuildDependencies[1].CommitSHA != strings.Repeat("b", 40) {
-		t.Fatalf("authorized immutable build dependencies = %#v", job.BuildDependencies)
+	if len(job.BuildDependencies) != 0 || len(deps) != 2 || !strings.HasSuffix(deps[0], "@"+strings.Repeat("a", 40)) || !strings.HasSuffix(deps[1], "@"+strings.Repeat("b", 40)) {
+		t.Fatalf("authorized immutable build dependencies argv = %q (dep tags %#v)", deps, job.BuildDependencies)
 	}
 
 	// Secret hygiene: the credential must never appear in any published

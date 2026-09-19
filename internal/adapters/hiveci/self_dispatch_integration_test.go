@@ -123,10 +123,20 @@ func TestBahiaSelfDispatchRoundTripsThroughSubscriberAndLineageReference(t *test
 		if len(repo.runs) != 1 || dispatches != 1 {
 			t.Fatalf("subscriber replay duplicated run lineage: runs=%d dispatches=%d", len(repo.runs), dispatches)
 		}
+		// hive-ci-protocol: publisher is the per-run ephemeral key that signs
+		// the 5402, so it must be carried through verbatim and must differ
+		// from the service key that signed the 5401.
+		publisherTag := ""
+		for _, tag := range run.Tags {
+			if len(tag) >= 2 && tag[0] == "publisher" {
+				publisherTag = tag[1]
+			}
+		}
 		if stored.RunEventID != started.CIRunID || stored.RepoCoordinate != "30617:"+pubkey.Hex()+":repository" ||
 			stored.CommitSHA != strings.Repeat("1", 40) || stored.Branch != "main" ||
-			stored.WorkflowPath != ".hive/workflows/build.yml" || stored.PublisherPubkey != pubkey.Hex() {
-			t.Fatalf("parsed self-dispatch does not match published lineage: %+v", stored)
+			stored.WorkflowPath != ".hive/workflows/build.yml" || stored.PublisherPubkey != publisherTag ||
+			publisherTag == "" || publisherTag == pubkey.Hex() {
+			t.Fatalf("parsed self-dispatch does not match published lineage (publisher tag %q): %+v", publisherTag, stored)
 		}
 	})
 
