@@ -423,22 +423,25 @@ def purge_rejected_images(
             )
             inspected = inspect_image(image_id)
             actual_tags = sorted((inspected.get("RepoTags") or []))
-            if actual_tags != expected_tags:
+            actual_digests = sorted((inspected.get("RepoDigests") or []))
+            actual_references = sorted(set(actual_tags + actual_digests))
+            foreign = []
+            for reference in actual_references:
+                repository = reference.split("@", 1)[0]
+                if "@" not in reference:
+                    repository = reference.rsplit(":", 1)[0]
+                if repository not in policy["protected_repositories"]:
+                    foreign.append(reference)
+            if foreign:
                 raise AdmissionError(
-                    f"image {image_id} tag set changed or includes an unprotected reference"
+                    f"image {image_id} includes unprotected references: {', '.join(foreign)}"
                 )
-            for reference in expected_tags:
+            for reference in sorted(set(expected_tags + actual_references)):
                 command(["docker", "image", "rm", reference])
-            probe = subprocess.run(
-                ["docker", "image", "inspect", image_id],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if probe.returncode == 0:
+                if not image_exists(image_id):
+                    break
+            if image_exists(image_id):
                 command(["docker", "image", "rm", image_id])
-            elif "No such image" not in probe.stderr:
-                raise AdmissionError(f"cannot reconcile removed image {image_id}: {probe.stderr.strip()}")
             removed_images.append(image_id)
     finally:
         result = {
@@ -448,6 +451,20 @@ def purge_rejected_images(
         }
         write_json_atomic(receipt, result)
     return result
+
+
+def image_exists(image_id: str) -> bool:
+    probe = subprocess.run(
+        ["docker", "image", "inspect", image_id],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return True
+    if "No such image" in probe.stderr:
+        return False
+    raise AdmissionError(f"cannot inspect image {image_id}: {probe.stderr.strip()}")
 
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
