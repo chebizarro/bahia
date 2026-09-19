@@ -117,6 +117,61 @@ class EdgeImageAdmissionTests(unittest.TestCase):
             with self.assertRaises(edge.AdmissionError):
                 edge.load_policy(path)
 
+    @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
+    def test_backup_tree_quarantines_raw_and_preserves_non_bahia_services(self, _verify):
+        unsafe = """services:\n  bahia:\n    image: sha256:unsafe\n  relay:\n    image: sha256:relay\n"""
+        unrelated = """services:\n  relay:\n    image: sha256:relay\n"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "backups"
+            root.mkdir()
+            compose = root / "compose-old.yml"
+            compose.write_text(unsafe, encoding="utf-8")
+            other = root / "relay-only.yml"
+            other.write_text(unrelated, encoding="utf-8")
+            quarantine = root / "quarantine"
+            manifest = root / "manifest.json"
+            records = edge.sanitize_backup_tree(
+                Path("."), root, quarantine, LEGACY_ID, manifest, policy()
+            )
+            self.assertEqual(1, len(records))
+            self.assertIn(f"  bahia:\n    image: {LEGACY_ID}", compose.read_text())
+            self.assertIn("  relay:\n    image: sha256:relay", compose.read_text())
+            self.assertEqual(unrelated, other.read_text())
+            raw = quarantine / "compose-old.yml.raw"
+            self.assertTrue(raw.exists())
+            self.assertEqual(0, raw.stat().st_mode & 0o777)
+            payload = json.loads(manifest.read_text())
+            self.assertEqual("compose-old.yml", payload["files"][0]["path"])
+
+    @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
+    def test_backup_tree_dry_run_is_non_mutating(self, _verify):
+        unsafe = """services:\n  bahia:\n    image: sha256:unsafe\n"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "backups"
+            root.mkdir()
+            compose = root / "compose-old.yml"
+            compose.write_text(unsafe, encoding="utf-8")
+            quarantine = root / "quarantine"
+            manifest = root / "manifest.json"
+            records = edge.sanitize_backup_tree(
+                Path("."), root, quarantine, LEGACY_ID, manifest, policy(), dry_run=True
+            )
+            self.assertEqual(["compose-old.yml"], [record["path"] for record in records])
+            self.assertEqual(unsafe, compose.read_text())
+            self.assertFalse(quarantine.exists())
+            self.assertFalse(manifest.exists())
+
+    @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
+    def test_backup_tree_rejects_quarantine_outside_root(self, _verify):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "backups"
+            root.mkdir()
+            with self.assertRaisesRegex(edge.AdmissionError, "must be a child"):
+                edge.sanitize_backup_tree(
+                    Path("."), root, Path(tmp) / "elsewhere", LEGACY_ID,
+                    root / "manifest.json", policy(), dry_run=True
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

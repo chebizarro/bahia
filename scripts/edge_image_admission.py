@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -176,6 +179,130 @@ def sanitize_rollback(
     output.write_text(rendered, encoding="utf-8")
 
 
+def sanitize_backup_tree(
+    repo: Path,
+    root: Path,
+    quarantine: Path,
+    safe_bahia_image: str,
+    manifest: Path,
+    policy: dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> list[dict[str, str]]:
+    safe_id, _ = verify_image(repo, safe_bahia_image, policy)
+    resolved_root = root.resolve()
+    resolved_quarantine = quarantine.resolve()
+    if resolved_root == resolved_quarantine or resolved_root not in resolved_quarantine.parents:
+        raise AdmissionError("quarantine must be a child of the backup root")
+    if not resolved_root.is_dir():
+        raise AdmissionError(f"backup root is not a directory: {root}")
+    if quarantine.is_symlink():
+        raise AdmissionError("quarantine must not be a symbolic link")
+    planned: list[dict[str, Any]] = []
+    candidates = sorted(
+        path for path in root.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and resolved_root in path.resolve().parents
+        and resolved_quarantine not in path.resolve().parents
+        and ".raw-evidence." not in path.name
+        and (path.suffix in {".yml", ".yaml"} or "compose" in path.name)
+    )
+    for path in candidates:
+        try:
+            original = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            rendered = replace_service_image(original, "bahia", safe_id)
+        except AdmissionError as exc:
+            if "found 0" in str(exc):
+                continue
+            raise
+        if rendered == original:
+            continue
+        relative = path.relative_to(root)
+        raw = quarantine / relative.parent / (relative.name + ".raw")
+        if raw.exists():
+            raise AdmissionError(f"quarantine target already exists: {raw}")
+        temporary = path.with_name(path.name + ".admission-tmp")
+        if temporary.exists():
+            raise AdmissionError(f"temporary target already exists: {temporary}")
+        mode = path.stat().st_mode & 0o777
+        raw_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
+        safe_sha = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        planned.append({
+            "path_object": path,
+            "raw_object": raw,
+            "temporary_object": temporary,
+            "original": original,
+            "rendered": rendered,
+            "mode": mode,
+            "record": {
+                "path": str(relative),
+                "raw_sha256": raw_sha,
+                "safe_sha256": safe_sha,
+                "safe_bahia_image": safe_id,
+            },
+        })
+
+    records = [dict(item["record"]) for item in planned]
+    if dry_run:
+        return records
+
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    temporary_manifest = manifest.with_name(manifest.name + ".admission-tmp")
+    if temporary_manifest.exists():
+        raise AdmissionError(f"temporary manifest already exists: {temporary_manifest}")
+
+    completed: list[dict[str, Any]] = []
+    try:
+        for item in planned:
+            path = item["path_object"]
+            raw = item["raw_object"]
+            temporary = item["temporary_object"]
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(raw))
+            completed.append(item)
+            temporary.write_text(item["rendered"], encoding="utf-8")
+            os.chmod(temporary, item["mode"])
+            os.replace(temporary, path)
+            os.chmod(raw, 0)
+    except BaseException:
+        for item in reversed(completed):
+            path = item["path_object"]
+            raw = item["raw_object"]
+            temporary = item["temporary_object"]
+            if temporary.exists():
+                temporary.unlink()
+            if path.exists():
+                path.unlink()
+            if raw.exists():
+                os.chmod(raw, item["mode"])
+                shutil.move(str(raw), str(path))
+        raise
+
+    try:
+        temporary_manifest.write_text(
+            json.dumps({"files": records}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_manifest, manifest)
+    except BaseException:
+        if temporary_manifest.exists():
+            temporary_manifest.unlink()
+        for item in reversed(completed):
+            path = item["path_object"]
+            raw = item["raw_object"]
+            if path.exists():
+                path.unlink()
+            if raw.exists():
+                os.chmod(raw, item["mode"])
+                shutil.move(str(raw), str(path))
+        raise
+    return records
+
+
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
@@ -192,6 +319,13 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     rollback.add_argument("--source", required=True, type=Path)
     rollback.add_argument("--output", required=True, type=Path)
     rollback.add_argument("--safe-bahia-image", required=True)
+    tree = sub.add_parser("sanitize-backup-tree")
+    tree.add_argument("--repo", required=True, type=Path)
+    tree.add_argument("--root", required=True, type=Path)
+    tree.add_argument("--quarantine", required=True, type=Path)
+    tree.add_argument("--safe-bahia-image", required=True)
+    tree.add_argument("--manifest", required=True, type=Path)
+    tree.add_argument("--dry-run", action="store_true")
     return parser.parse_args(list(argv))
 
 
@@ -208,6 +342,21 @@ def main(argv: Iterable[str] = sys.argv[1:]) -> int:
             print(json.dumps({"image_id": image_id, "revision": revision}, sort_keys=True))
         elif args.action == "sanitize-rollback":
             sanitize_rollback(args.repo, args.source, args.output, args.safe_bahia_image, policy)
+        elif args.action == "sanitize-backup-tree":
+            records = sanitize_backup_tree(
+                args.repo,
+                args.root,
+                args.quarantine,
+                args.safe_bahia_image,
+                args.manifest,
+                policy,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps({
+                "dry_run": args.dry_run,
+                "files": [record["path"] for record in records],
+                "sanitized_files": len(records),
+            }, sort_keys=True))
         else:  # pragma: no cover
             raise AdmissionError(f"unsupported action {args.action}")
     except (AdmissionError, OSError) as exc:

@@ -6,6 +6,7 @@
     {"id": "PFIA-AC-03", "statement": "An unlabeled legacy image fails unless its exact image ID is listed with a post-floor revision."},
     {"id": "PFIA-AC-04", "statement": "Rollback generation preserves unrelated services but replaces Bahia with an admitted post-fix image."},
     {"id": "PFIA-AC-05", "statement": "The edge workflow is manual, digest-pinned, uses only the sanitized rollback Compose file, and never rewrites the dedicated relay image."},
-    {"id": "PFIA-AC-06", "statement": "Live Bahia uses a post-floor image while public health, readiness, and relay rejection telemetry remain healthy."}
+    {"id": "PFIA-AC-06", "statement": "Historical Compose backups are rewritten to the admitted rollback image while originals are retained only as mode-000 checksummed evidence."},
+    {"id": "PFIA-AC-07", "statement": "Live Bahia uses a post-floor image while public health, readiness, and relay rejection telemetry remain healthy."}
   ]
 }
