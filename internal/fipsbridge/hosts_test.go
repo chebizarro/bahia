@@ -1,6 +1,7 @@
 package fipsbridge
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestHostsWriterPreservesManualEntriesAndFormatsManagedSection(t *testing.T)
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
 
 	writer := NewHostsWriter(path, DefaultManagedSectionMarker)
-	require.NoError(t, writer.Write(map[string]string{
+	require.NoError(t, writer.Write(context.Background(), map[string]string{
 		"embeddings":     "npub1embeddings",
 		"drydock-review": "npub1drydock",
 	}))
@@ -48,7 +49,7 @@ func TestHostsWriterPreservesManualEntriesAndFormatsManagedSection(t *testing.T)
 func TestHostsWriterCreatesFileAtomicallyWhenMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "hosts")
 	writer := NewHostsWriter(path, "# test-managed")
-	require.NoError(t, writer.Write(map[string]string{"api": "npub1api"}))
+	require.NoError(t, writer.Write(context.Background(), map[string]string{"api": "npub1api"}))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -61,8 +62,8 @@ func TestHostsWriterCreatesFileAtomicallyWhenMissing(t *testing.T) {
 func TestHostsWriterReplacesExistingManagedSectionOnSubsequentWrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hosts")
 	writer := NewHostsWriter(path, DefaultManagedSectionMarker)
-	require.NoError(t, writer.Write(map[string]string{"api": "npub1api"}))
-	require.NoError(t, writer.Write(map[string]string{"worker": "npub1worker"}))
+	require.NoError(t, writer.Write(context.Background(), map[string]string{"api": "npub1api"}))
+	require.NoError(t, writer.Write(context.Background(), map[string]string{"worker": "npub1worker"}))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)

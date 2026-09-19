@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/dnsagent/protocol"
@@ -220,7 +221,7 @@ func (a *Agent) SyncHandler(ctx context.Context, request controlplane.ContextVMR
 	next.ZoneSerials[zoneName] = params.Serial
 	next.LastApplySerial = params.Serial
 	next.LastApplyAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := writeStateAtomic(a.stateFilePath, next); err != nil {
+	if err := writeStateAtomic(ctx, a.stateFilePath, next); err != nil {
 		// Preserve the monotonic guard for this process even if durable storage
 		// fails after dnsmasq was successfully updated.
 		a.state = next
@@ -319,7 +320,7 @@ func loadState(path string) (persistentState, error) {
 	return state, nil
 }
 
-func writeStateAtomic(path string, state persistentState) error {
+func writeStateAtomic(ctx context.Context, path string, state persistentState) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create DNS agent state directory %q: %w", dir, err)
@@ -329,36 +330,9 @@ func writeStateAtomic(path string, state persistentState) error {
 		return fmt.Errorf("encode DNS agent state: %w", err)
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(dir, ".dns-agent-state-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create DNS agent state temp file: %w", err)
+	if err := atomicfile.WriteFile(ctx, path, ".dns-agent-state-*.tmp", data, 0o600); err != nil {
+		return fmt.Errorf("write DNS agent state file %q: %w", path, err)
 	}
-	tmpName := tmp.Name()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod DNS agent state temp file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write DNS agent state temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync DNS agent state temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close DNS agent state temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace DNS agent state file %q: %w", path, err)
-	}
-	committed = true
 	return nil
 }
 

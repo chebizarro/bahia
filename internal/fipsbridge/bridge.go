@@ -347,7 +347,7 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 	b.seen[eventID] = struct{}{}
 	b.latest[coordinate] = ev.CreatedAt
 	if changed {
-		if err := b.writer.Write(b.entries); err != nil {
+		if err := b.writer.Write(ctx, b.entries); err != nil {
 			return err
 		}
 	}

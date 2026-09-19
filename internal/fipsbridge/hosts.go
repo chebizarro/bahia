@@ -1,11 +1,14 @@
 package fipsbridge
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/openagentsinc/bahia/internal/atomicfile"
 )
 
 const defaultHostsFileMode os.FileMode = 0o644
@@ -34,7 +37,7 @@ func NewHostsWriter(path, marker string) HostsWriter {
 }
 
 // Write replaces only the managed section and preserves manual entries outside it.
-func (w HostsWriter) Write(entries map[string]string) error {
+func (w HostsWriter) Write(ctx context.Context, entries map[string]string) error {
 	path := strings.TrimSpace(w.Path)
 	if path == "" {
 		path = DefaultHostsPath
@@ -64,37 +67,9 @@ func (w HostsWriter) Write(entries map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create hosts directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".bahia-hosts-*")
-	if err != nil {
-		return fmt.Errorf("create hosts temp file: %w", err)
+	if err := atomicfile.WriteFile(ctx, path, ".bahia-hosts-*", []byte(updated), mode); err != nil {
+		return fmt.Errorf("write hosts file: %w", err)
 	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := tmp.WriteString(updated); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write hosts temp file: %w", err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod hosts temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync hosts temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close hosts temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename hosts temp file: %w", err)
-	}
-	cleanup = false
 	return nil
 }
 

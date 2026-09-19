@@ -12,12 +12,15 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+
+	"github.com/openagentsinc/bahia/internal/atomicfile"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
-	configListKind         = nostr.Kind(30000)
-	configPolicyKind       = nostr.Kind(30078)
-	configStatusKind       = nostr.Kind(30900)
+	configListKind         = nostr.Kind(kinds.ConfigACLList)
+	configPolicyKind       = nostr.Kind(kinds.ConfigPolicy)
+	configStatusKind       = nostr.Kind(kinds.CASControlState)
 	configStatusSchema     = "cascadia.config.status.v1"
 	configMembershipSchema = "cascadia.config.membership.v1"
 	configRelaySchema      = "cascadia.config.relay-sidecar.v1"
@@ -158,7 +161,7 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	next.Accepted = cloneCoordinates(c.state.Accepted)
 	next.Accepted[coordinate] = appliedCoordinate{Author: projection.Author, EventID: projection.EventID, Version: projection.Version}
 	next.Last = persistedProjection(projection)
-	if err := c.persist(next); err != nil {
+	if err := c.persist(ctx, next); err != nil {
 		c.mu.Unlock()
 		return c.publishStatus(ctx, projection, event, "rejected", "persist desired projection: "+err.Error())
 	}
@@ -333,7 +336,7 @@ func stringSlicePolicy(policy map[string]any, key string) ([]string, error) {
 	return out, nil
 }
 
-func (c *ConfigConsumer) persist(state configProjectionState) error {
+func (c *ConfigConsumer) persist(ctx context.Context, state configProjectionState) error {
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
 		return err
 	}
@@ -342,28 +345,7 @@ func (c *ConfigConsumer) persist(state configProjectionState) error {
 		return err
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(c.path), ".config-fabric-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, c.path); err != nil {
+	if err := atomicfile.WriteFile(ctx, c.path, ".config-fabric-*.tmp", data, 0o600); err != nil {
 		return err
 	}
 	directory, err := os.Open(filepath.Dir(c.path))
