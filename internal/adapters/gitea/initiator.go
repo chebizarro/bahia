@@ -167,6 +167,7 @@ type Initiator struct {
 	publisher EventPublisher
 	signer    nostr.Signer
 	store     InitiationStore
+	runLookup WorkflowRunLookup
 	cfg       InitiatorConfig
 	logger    *zap.Logger
 	loom      LoomJobSubmitter
@@ -194,6 +195,20 @@ type InitiatorOption func(*Initiator)
 
 // WithLoomJobSubmitter enables kind-5100 submission after the signed kind-5401
 // publication. Tests and disabled deployments may omit it.
+// WorkflowRunLookup resolves an already-ingested trusted kind-5401 for the
+// hive-ci-protocol identity tuple (repository coordinate, commit, workflow).
+// Grasp publishes exactly one such run per accepted push; Bahia must reuse it
+// rather than publish a competing run and a second Loom job.
+type WorkflowRunLookup interface {
+	FindWorkflowRun(ctx context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error)
+}
+
+// WithWorkflowRunLookup enables build de-duplication against runs ingested
+// from trusted CI producers (grasp-gitea, or Bahia's own earlier dispatch).
+func WithWorkflowRunLookup(lookup WorkflowRunLookup) InitiatorOption {
+	return func(i *Initiator) { i.runLookup = lookup }
+}
+
 func WithLoomJobSubmitter(submitter LoomJobSubmitter) InitiatorOption {
 	return func(i *Initiator) { i.loom = submitter }
 }
@@ -371,6 +386,36 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	pinnedDependencies, err := i.resolveAuthorizedBuildDependencies(ctx, req.ServiceID)
 	if err != nil {
 		return nil, scrubSecrets(err, token, mirrorReadPassword)
+	}
+
+	// hive-ci-protocol identity: one (a, commit, workflow) tuple is one build.
+	// If a trusted producer (grasp-gitea on push, or an earlier Bahia request)
+	// already published the run, adopt it instead of racing it with a second
+	// 5401 and a second Loom job.
+	if existing, reuseErr := i.existingWorkflowRun(ctx, sha); reuseErr != nil {
+		return nil, scrubSecrets(reuseErr, token, mirrorReadPassword)
+	} else if existing != nil {
+		result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: existing.RunEventID}
+		runRequestID := "bahia:" + req.BuildID.String() + ":" + sha
+		evidenceEventID, evidenceErr := i.publishQueuedEvidence(ctx, req, name, result, runRequestID, "")
+		if evidenceErr != nil {
+			return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", evidenceErr), token, mirrorReadPassword)
+		}
+		if err := i.store.Put(ctx, InitiationRecord{
+			SourceEventID: idempotencyKey, Result: result,
+			RunRequestID: runRequestID, EvidenceEventID: evidenceEventID,
+			CreatedAt: i.now(),
+		}); err != nil {
+			return nil, scrubSecrets(fmt.Errorf("record build initiation: %w", err), token, mirrorReadPassword)
+		}
+		i.logger.Info("adopted existing Hive-CI workflow run for commit; no competing 5401 or Loom job published",
+			zap.String("reason", "workflow_run_reused"),
+			zap.String("ci_run_id", existing.RunEventID),
+			zap.String("run_publisher", existing.PublisherPubkey),
+			zap.String("git_sha", sha),
+			zap.String("workflow", i.cfg.WorkflowPath),
+		)
+		return &result, nil
 	}
 
 	runRequestID, runEventID, publisherNsec, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
@@ -664,6 +709,24 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		return "", "", "", err
 	}
 	return requestID, eventID, publisherNsec, nil
+}
+
+// existingWorkflowRun returns an already-ingested trusted run for this
+// initiator's repository coordinate, the resolved commit, and its workflow
+// path. It never treats a lookup failure as "absent": a broken lookup must
+// not silently allow a duplicate build.
+func (i *Initiator) existingWorkflowRun(ctx context.Context, sha string) (*domain.HiveCIWorkflowRun, error) {
+	if i.runLookup == nil {
+		return nil, nil
+	}
+	run, err := i.runLookup.FindWorkflowRun(ctx, strings.TrimSpace(i.cfg.RepoAnnouncementAddr), sha, strings.TrimSpace(i.cfg.WorkflowPath))
+	if err != nil {
+		return nil, fmt.Errorf("check for an existing Hive-CI workflow run: %w", err)
+	}
+	if run == nil || strings.TrimSpace(run.RunEventID) == "" {
+		return nil, nil
+	}
+	return run, nil
 }
 
 func validateRepoAnnouncementAddr(raw string) error {

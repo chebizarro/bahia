@@ -390,15 +390,35 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 			return
 		}
 	}
+	// hive-ci-protocol identity: one (a, commit, workflow) tuple is one build.
+	// A second signed run for the same tuple (for example Bahia's own
+	// build/request racing grasp-gitea's push trigger) is persisted as
+	// evidence but must never fan out into another Loom job.
+	var duplicateOf *domain.HiveCIWorkflowRun
+	if existing == nil {
+		prior, lookupErr := s.repo.FindWorkflowRun(ctx, repoCoordinate, commit, workflow)
+		if lookupErr != nil {
+			s.logger.Warn("failed to check hiveci workflow run identity tuple", zap.String("event_id", eventID), zap.Error(lookupErr))
+			return
+		}
+		if prior != nil && prior.RunEventID != eventID {
+			duplicateOf = prior
+		}
+	}
 	if err := s.repo.UpsertWorkflowRun(ctx, run); err != nil {
 		s.logger.Warn("failed to persist hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		return
+	}
+	if duplicateOf != nil {
+		s.warnDecision("duplicate Hive-CI workflow run for an already-ingested commit/workflow; not dispatching", "duplicate_workflow_run",
+			zap.String("run_event_id", eventID), zap.String("existing_run_event_id", duplicateOf.RunEventID),
+			zap.String("repo_coordinate", repoCoordinate), zap.String("commit", commit), zap.String("workflow", workflow))
 	}
 	// A merged relay subscription can deliver the same signed event once per
 	// relay. Persisting is idempotent, and dispatch must be as well: otherwise
 	// one workflow event can fan out into multiple Loom jobs and competing 5402
 	// results for the same run.
-	if existing == nil && s.onRun != nil {
+	if existing == nil && duplicateOf == nil && s.onRun != nil {
 		s.onRun(ctx, WorkflowRunDispatch{
 			RunEventID:     eventID,
 			RepoCoordinate: repoCoordinate,

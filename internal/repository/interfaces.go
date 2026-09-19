@@ -485,6 +485,11 @@ type HiveCIRepository interface {
 	UpsertWorkflowRun(ctx context.Context, run domain.HiveCIWorkflowRun) error
 	UpsertWorkflowResult(ctx context.Context, result domain.HiveCIWorkflowResult) error
 	GetRunByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowRun, error)
+	// FindWorkflowRun returns the newest ingested run for the hive-ci-protocol
+	// identity tuple (repository coordinate, commit, workflow path), or nil.
+	// One tuple must map to one build: producers consult it before publishing
+	// a competing kind-5401.
+	FindWorkflowRun(ctx context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error)
 	GetResultByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowResult, error)
 	GetLatestResultByRunEventID(ctx context.Context, runEventID string) (*domain.HiveCIWorkflowResult, error)
 	ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error)

@@ -104,6 +104,9 @@ func (m *mockHiveRepo) GetLatestResultByRunEventID(_ context.Context, runEventID
 func (m *mockHiveRepo) ListPendingResults(_ context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }
+func (m *mockHiveRepo) FindWorkflowRun(_ context.Context, _, _, _ string) (*domain.HiveCIWorkflowRun, error) {
+	return nil, nil
+}
 func (m *mockHiveRepo) ListOrphanedResultsByRun(_ context.Context, _ string) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }

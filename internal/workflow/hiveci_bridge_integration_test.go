@@ -40,6 +40,9 @@ func (r *hiveCIBridgeRepo) GetLatestResultByRunEventID(context.Context, string) 
 func (r *hiveCIBridgeRepo) ListPendingResults(context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }
+func (r *hiveCIBridgeRepo) FindWorkflowRun(context.Context, string, string, string) (*domain.HiveCIWorkflowRun, error) {
+	return nil, nil
+}
 func (r *hiveCIBridgeRepo) ListOrphanedResultsByRun(context.Context, string) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }

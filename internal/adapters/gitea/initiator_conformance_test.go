@@ -191,7 +191,7 @@ func newTestSigner(t *testing.T) nostr.Signer {
 	return signer
 }
 
-func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator, *capturingPublisher, *fakeSecretResolver, uuid.UUID, *observer.ObservedLogs) {
+func newConformanceInitiator(t *testing.T, server *httptest.Server, extra ...InitiatorOption) (*Initiator, *capturingPublisher, *fakeSecretResolver, uuid.UUID, *observer.ObservedLogs) {
 	t.Helper()
 	credentialRef := uuid.New()
 	resolver := &fakeSecretResolver{known: map[string]string{
@@ -227,9 +227,89 @@ func newConformanceInitiator(t *testing.T, server *httptest.Server) (*Initiator,
 			RefResolveDelay:          1,
 		},
 		zap.New(core),
-		WithLoomJobSubmitter(loomSubmitter),
+		append([]InitiatorOption{WithLoomJobSubmitter(loomSubmitter)}, extra...)...,
 	)
 	return initiator, publisher, resolver, credentialRef, logs
+}
+
+type fakeRunLookup struct {
+	run     *domain.HiveCIWorkflowRun
+	err     error
+	queries [][3]string
+}
+
+func (f *fakeRunLookup) FindWorkflowRun(_ context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error) {
+	f.queries = append(f.queries, [3]string{repoCoordinate, commitSHA, workflowPath})
+	return f.run, f.err
+}
+
+// hive-ci-protocol identity: one (a, commit, workflow) is one build. When
+// grasp-gitea already published the run for this commit, build/request must
+// adopt it and publish neither a competing 5401 nor a second Loom job.
+func TestConformanceAdoptsExistingTrustedRunInsteadOfCompeting(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+	existing := &domain.HiveCIWorkflowRun{
+		RunEventID: strings.Repeat("9c", 32), CommitSHA: testCommitSHA,
+		WorkflowPath: ".hive/workflows/arcana-build.yml", PublisherPubkey: strings.Repeat("e", 64),
+	}
+	lookup := &fakeRunLookup{run: existing}
+	initiator, publisher, _, credentialRef, logs := newConformanceInitiator(t, server, WithWorkflowRunLookup(lookup))
+	req := arcanaStartRequest(credentialRef)
+
+	result, err := initiator.StartHiveCIBuild(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StartHiveCIBuild: %v", err)
+	}
+	if result.CIRunID != existing.RunEventID || result.GitSHA != testCommitSHA {
+		t.Fatalf("result = %+v, want adopted run %s", result, existing.RunEventID)
+	}
+	pubkey, _ := initiator.signer.GetPublicKey(context.Background())
+	if len(lookup.queries) != 1 || lookup.queries[0] != [3]string{"30617:" + pubkey.Hex() + ":living-library-forge", testCommitSHA, ".hive/workflows/arcana-build.yml"} {
+		t.Fatalf("lookup queried with %v, want the (a, commit, workflow) tuple", lookup.queries)
+	}
+	for _, ev := range publisher.events {
+		if int(ev.Kind) == kinds.HiveCIWorkflowRun {
+			t.Fatalf("a competing kind-5401 was published: %v", ev.Tags)
+		}
+	}
+	if len(publisher.events) != 1 || int(publisher.events[0].Kind) != kinds.CASControlState {
+		t.Fatalf("expected only queued evidence, got %d events", len(publisher.events))
+	}
+	if jobs := initiator.loom.(*capturingLoomSubmitter).jobs; len(jobs) != 0 {
+		t.Fatalf("a second Loom job was submitted: %d", len(jobs))
+	}
+	reused := false
+	for _, entry := range logs.All() {
+		if fmt.Sprint(entry.ContextMap()["reason"]) == "workflow_run_reused" {
+			reused = true
+		}
+	}
+	if !reused {
+		t.Fatalf("adoption was not logged")
+	}
+	// Replay stays idempotent on the adopted run.
+	replayed, err := initiator.StartHiveCIBuild(context.Background(), req)
+	if err != nil || replayed.CIRunID != existing.RunEventID || len(publisher.events) != 1 {
+		t.Fatalf("replay = (%+v, %v) events=%d", replayed, err, len(publisher.events))
+	}
+}
+
+// A broken lookup must fail closed rather than silently allow a duplicate.
+func TestConformanceRunLookupFailureBlocksPublication(t *testing.T) {
+	gitea := &fakeGitea{}
+	server := httptest.NewServer(gitea.handler(t))
+	defer server.Close()
+	lookup := &fakeRunLookup{err: fmt.Errorf("hiveci repository unavailable")}
+	initiator, publisher, _, credentialRef, _ := newConformanceInitiator(t, server, WithWorkflowRunLookup(lookup))
+	_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+	if err == nil || !strings.Contains(err.Error(), "existing Hive-CI workflow run") {
+		t.Fatalf("error = %v, want lookup failure", err)
+	}
+	if len(publisher.events) != 0 || len(initiator.loom.(*capturingLoomSubmitter).jobs) != 0 {
+		t.Fatalf("lookup failure published events=%d jobs=%d", len(publisher.events), len(initiator.loom.(*capturingLoomSubmitter).jobs))
+	}
 }
 
 func arcanaStartRequest(credentialRef uuid.UUID) controlplane.HiveCIBuildStartRequest {

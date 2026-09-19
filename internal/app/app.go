@@ -992,8 +992,12 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Hive-CI wiring.
 	var buildResultRegistrar controlplane.BuildResultArtifactRegistrar
+	// The initiator consults ingested runs so a build/request adopts an existing
+	// trusted 5401 for the same (a, commit, workflow) instead of competing.
+	var hiveRunLookup giteaAdapter.WorkflowRunLookup
 	if shouldRegisterHiveCIRunners(cfg.HiveCI) {
 		hiveRepo := repository.NewPgHiveCIRepository(pool)
+		hiveRunLookup = hiveRepo
 		bridge := pipeline.NewBridge(
 			hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
 			ociRepo, pipelineRegistryInspector, registry,
@@ -1582,6 +1586,7 @@ func New(cfg *config.Config) (*App, error) {
 				},
 				logger,
 				giteaAdapter.WithLoomJobSubmitter(hiveCIJobClient),
+				giteaAdapter.WithWorkflowRunLookup(hiveRunLookup),
 			)
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,6 +151,45 @@ func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting hiveci workflow run: %w", err)
+	}
+	run.ProcessingState = domain.HiveCIProcessingState(state)
+	run.ProcessingError = nullStringValue(processingError)
+	return &run, nil
+}
+
+func (r *PgHiveCIRepository) FindWorkflowRun(ctx context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT run_event_id, repo_coordinate, commit_sha, branch, workflow_path, trigger_type,
+		triggered_by, publisher_pubkey, processing_state, processing_error,
+		event_created_at, created_at, updated_at
+		FROM hiveci_workflow_runs
+		WHERE repo_coordinate = $1 AND lower(commit_sha) = lower($2) AND workflow_path = $3
+		ORDER BY event_created_at DESC, created_at DESC
+		LIMIT 1
+	`, strings.TrimSpace(repoCoordinate), strings.TrimSpace(commitSHA), strings.TrimSpace(workflowPath))
+
+	var run domain.HiveCIWorkflowRun
+	var state string
+	var processingError sql.NullString
+	if err := row.Scan(
+		&run.RunEventID,
+		&run.RepoCoordinate,
+		&run.CommitSHA,
+		&run.Branch,
+		&run.WorkflowPath,
+		&run.TriggerType,
+		&run.TriggeredBy,
+		&run.PublisherPubkey,
+		&state,
+		&processingError,
+		&run.EventCreatedAt,
+		&run.CreatedAt,
+		&run.UpdatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("finding hiveci workflow run by identity tuple: %w", err)
 	}
 	run.ProcessingState = domain.HiveCIProcessingState(state)
 	run.ProcessingError = nullStringValue(processingError)

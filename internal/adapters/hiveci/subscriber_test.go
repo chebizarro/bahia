@@ -117,6 +117,20 @@ func (r *testHiveRepo) GetLatestResultByRunEventID(_ context.Context, runEventID
 func (r *testHiveRepo) ListPendingResults(_ context.Context) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }
+func (r *testHiveRepo) FindWorkflowRun(_ context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error) {
+	var newest *domain.HiveCIWorkflowRun
+	for id := range r.runs {
+		run := r.runs[id]
+		if run.RepoCoordinate != repoCoordinate || !strings.EqualFold(run.CommitSHA, commitSHA) || run.WorkflowPath != workflowPath {
+			continue
+		}
+		if newest == nil || run.EventCreatedAt.After(newest.EventCreatedAt) {
+			copied := run
+			newest = &copied
+		}
+	}
+	return newest, nil
+}
 func (r *testHiveRepo) ListOrphanedResultsByRun(_ context.Context, _ string) ([]domain.HiveCIWorkflowResult, error) {
 	return nil, nil
 }
@@ -253,6 +267,50 @@ func TestReleaseWorkflowRunDispatchPreservesRepositoryAndRef(t *testing.T) {
 	require.Equal(t, "refs/tags/v0.2.0-rc.1", dispatched.Ref)
 	require.Equal(t, ".github/workflows/release.yml", dispatched.Workflow)
 	require.True(t, dispatched.Release)
+}
+
+// hive-ci-protocol identity: one (a, commit, workflow) is one build. A second
+// signed run for the same tuple (a different producer racing the first) is
+// persisted as evidence but must not fan out into another Loom job.
+func TestDuplicateWorkflowRunForSameCommitAndWorkflowIsNotDispatched(t *testing.T) {
+	repo := newTestHiveRepo()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	publisher := hiveCITestPubkey(t)
+	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
+	s.now = func() time.Time { return now }
+	dispatches := 0
+	s.SetRunConsumer(func(context.Context, WorkflowRunDispatch) { dispatches++ })
+
+	first := signedHiveCIEvent(t, kindWorkflowRun, now, nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "abc"}, {"branch", "main"},
+		{"ref", "abc"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/release.yml"}, {"triggered-by", "grasp-push"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+	second := signedHiveCIEvent(t, kindWorkflowRun, now.Add(time.Second), nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "ABC"}, {"branch", "main"},
+		{"ref", "abc"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/release.yml"}, {"triggered-by", "operator-build-request"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+	require.NotEqual(t, nostrutil.EventIDHex(first), nostrutil.EventIDHex(second))
+
+	s.handleEvent(context.Background(), first)
+	s.handleEvent(context.Background(), second)
+
+	require.Equal(t, 1, dispatches, "second run for the same (a, commit, workflow) must not dispatch")
+	require.Contains(t, repo.runs, nostrutil.EventIDHex(first))
+	require.Contains(t, repo.runs, nostrutil.EventIDHex(second), "duplicate is still persisted as evidence")
+
+	// A different workflow for the same commit is a distinct build.
+	other := signedHiveCIEvent(t, kindWorkflowRun, now.Add(2*time.Second), nostr.Tags{
+		{"a", "30617:pk:bahia"}, {"commit", "abc"}, {"branch", "main"},
+		{"ref", "abc"}, {"repo", "https://git.example/bahia.git"},
+		{"workflow", ".github/workflows/docs.yml"}, {"triggered-by", "grasp-push"},
+		{"publisher", publisher}, {"release", "true"},
+	})
+	s.handleEvent(context.Background(), other)
+	require.Equal(t, 2, dispatches)
 }
 
 func TestReleaseWorkflowRunReplayDispatchesOnlyOnce(t *testing.T) {
