@@ -157,6 +157,42 @@ class EdgeImageAdmissionTests(unittest.TestCase):
                     Path("."), inventory, Path(tmp) / "receipt.json", policy()
                 )
 
+    @mock.patch.object(edge.subprocess, "run")
+    @mock.patch.object(edge, "inspect_image")
+    @mock.patch.object(edge, "command")
+    @mock.patch.object(edge, "image_store_audit")
+    def test_purge_removes_each_protected_tag_without_force(
+        self, audit, command, inspect, run
+    ):
+        payload = {
+            "schema": "cascadia.bahia.image-store-audit.v1",
+            "admitted": [],
+            "rejected": [{
+                "image_id": IMAGE_ID,
+                "references": [
+                    "local/bahia-controlplane-bahia:old-a",
+                    "local/bahia-controlplane-bahia:old-b",
+                ],
+                "rejection_reason": "missing guard",
+                "containers": [],
+            }],
+        }
+        audit.return_value = payload
+        inspect.return_value = {"RepoTags": payload["rejected"][0]["references"]}
+        run.return_value = subprocess.CompletedProcess([], 1, "", "No such image")
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = Path(tmp) / "inventory.json"
+            inventory.write_text(json.dumps(payload), encoding="utf-8")
+            result = edge.purge_rejected_images(
+                Path("."), inventory, Path(tmp) / "receipt.json", policy()
+            )
+        self.assertEqual([IMAGE_ID], result["removed_images"])
+        command.assert_has_calls([
+            mock.call(["docker", "image", "rm", "local/bahia-controlplane-bahia:old-a"]),
+            mock.call(["docker", "image", "rm", "local/bahia-controlplane-bahia:old-b"]),
+        ])
+        self.assertNotIn(mock.call(["docker", "image", "rm", "--force", IMAGE_ID]), command.mock_calls)
+
     @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
     def test_backup_tree_quarantines_raw_and_preserves_non_bahia_services(self, _verify):
         unsafe = """services:\n  bahia:\n    image: sha256:unsafe\n  relay:\n    image: sha256:relay\n"""

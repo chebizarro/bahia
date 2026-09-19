@@ -415,8 +415,30 @@ def purge_rejected_images(
         for container_id in container_ids:
             command(["docker", "container", "rm", container_id])
             removed_containers.append(container_id)
-        for image_id in image_ids:
-            command(["docker", "image", "rm", image_id])
+        for image in rejected:
+            image_id = image["image_id"]
+            expected_tags = sorted(
+                reference for reference in image["references"]
+                if not reference.endswith(":<none>")
+            )
+            inspected = inspect_image(image_id)
+            actual_tags = sorted((inspected.get("RepoTags") or []))
+            if actual_tags != expected_tags:
+                raise AdmissionError(
+                    f"image {image_id} tag set changed or includes an unprotected reference"
+                )
+            for reference in expected_tags:
+                command(["docker", "image", "rm", reference])
+            probe = subprocess.run(
+                ["docker", "image", "inspect", image_id],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if probe.returncode == 0:
+                command(["docker", "image", "rm", image_id])
+            elif "No such image" not in probe.stderr:
+                raise AdmissionError(f"cannot reconcile removed image {image_id}: {probe.stderr.strip()}")
             removed_images.append(image_id)
     finally:
         result = {
