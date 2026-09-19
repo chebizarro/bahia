@@ -59,7 +59,10 @@ func (w HostsWriter) Write(ctx context.Context, entries map[string]string) error
 		return fmt.Errorf("stat hosts file: %w", statErr)
 	}
 
-	manual := stripManagedSection(string(current), marker)
+	manual, err := stripManagedSection(string(current), marker)
+	if err != nil {
+		return fmt.Errorf("read hosts file managed section: %w", err)
+	}
 	managed := renderManagedSection(entries, marker)
 	updated := joinSections(manual, managed)
 
@@ -73,23 +76,33 @@ func (w HostsWriter) Write(ctx context.Context, entries map[string]string) error
 	return nil
 }
 
-func stripManagedSection(content, marker string) string {
+// stripManagedSection returns everything outside the managed block. An opening
+// marker with no closing marker is an error rather than an instruction to drop
+// the rest of the file: this result replaces the hosts file, so treating a
+// truncated or hand-edited managed block as "everything after it is ours"
+// silently deletes unrelated manual entries.
+func stripManagedSection(content, marker string) (string, error) {
 	if strings.TrimSpace(content) == "" {
-		return ""
+		return "", nil
 	}
 	startMarker := marker
 	endMarker := marker + " end"
 	lines := strings.Split(content, "\n")
 	kept := make([]string, 0, len(lines))
 	inManaged := false
+	closed := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case trimmed == startMarker:
-			inManaged = true
-			continue
-		case inManaged && trimmed == endMarker:
+		case trimmed == endMarker && inManaged:
 			inManaged = false
+			closed++
+			continue
+		case trimmed == startMarker:
+			if inManaged {
+				return "", fmt.Errorf("managed section marker %q opened twice without an end marker", marker)
+			}
+			inManaged = true
 			continue
 		case inManaged:
 			continue
@@ -97,7 +110,13 @@ func stripManagedSection(content, marker string) string {
 			kept = append(kept, line)
 		}
 	}
-	return strings.TrimRight(strings.Join(kept, "\n"), "\n")
+	if inManaged {
+		return "", fmt.Errorf("managed section marker %q is not closed by %q", marker, endMarker)
+	}
+	if closed > 1 {
+		return "", fmt.Errorf("managed section marker %q appears %d times", marker, closed)
+	}
+	return strings.TrimRight(strings.Join(kept, "\n"), "\n"), nil
 }
 
 func renderManagedSection(entries map[string]string, marker string) string {

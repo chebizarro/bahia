@@ -73,3 +73,28 @@ func TestHostsWriterReplacesExistingManagedSectionOnSubsequentWrites(t *testing.
 	require.Equal(t, 1, strings.Count(content, DefaultManagedSectionMarker+"\n"))
 	require.Equal(t, 1, strings.Count(content, DefaultManagedSectionMarker+" end\n"))
 }
+
+// A hosts file whose managed block lost its end marker (hand edit, or a crash
+// of an older non-atomic writer) must not be rewritten: the previous parse
+// treated every following line as managed and deleted it.
+func TestHostsWriterRefusesToWriteWhenManagedSectionIsUnclosed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts")
+	initial := strings.Join([]string{
+		"manual.fips  npub1manual",
+		DefaultManagedSectionMarker,
+		"old.fips  npub1old",
+		"survivor.fips  npub1survivor",
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+
+	writer := NewHostsWriter(path, DefaultManagedSectionMarker)
+	err := writer.Write(context.Background(), map[string]string{"embeddings": "npub1embeddings"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not closed")
+
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	require.Equal(t, initial, string(data), "hosts file must be left untouched")
+}
