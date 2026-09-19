@@ -1,0 +1,11 @@
+{
+  "schema": "cascadia.bahia.edge-image-admission.v1",
+  "guard": "2026-09-15-v1",
+  "required_ancestors": [
+    "03425c54679bcf39d7f5d62a7b54cf403d9e4d80",
+    "1637b55e367e00e10c08b50b5ada8d651af1826d"
+  ],
+  "approved_legacy_images": {
+    "sha256:824e4ffa0954d2135b87169233f1a9edd04fc5148125904ba0c7b95b61e6b16a": "781e26f0dbf4be572511d62e6b44d5dd33632f26"
+  }
+}
