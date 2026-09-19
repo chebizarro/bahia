@@ -54,18 +54,30 @@ class DeployEdgeComposeUpdateTests(unittest.TestCase):
 
         self.assertIn(f"image: {BACKEND_IMAGE}", updated)
         self.assertIn(f"image: {WEB_IMAGE}", updated)
+        self.assertIn("  relay:\n    image: local/bahia-controlplane-bahia:github-0000000", updated)
         self.assertIn(f"- {VALID_RELEASE_DIR}/docs:/docs:ro", updated)
         self.assertIn("image: postgres:16", updated)
         self.assertIn("POSTGRES_DB: bahia", updated)
         self.assertIn("name: bahia-controlplane", updated)
         self.assertTrue(updated.endswith("\n"))
 
-    def test_missing_service_fails_without_writing(self):
+    def test_missing_bahia_service_fails_without_writing(self):
         compose = BASE_COMPOSE.replace(
-            "  relay:\n    image: local/bahia-controlplane-bahia:github-0000000\n    ports:\n      - \"3334:3334\"\n",
+            "  bahia:\n    image: local/bahia-controlplane-bahia:github-0000000\n    environment:\n      BAHIA_CONFIG: /config/config.yaml\n    volumes:\n      - /srv/data/bahia-controlplane/releases/github-0000000/docs:/docs:ro\n      - /srv/data/bahia-controlplane/config.yaml:/config/config.yaml:ro\n",
             "",
         )
-        self.assert_helper_fails_without_writing(compose, "missing expected services: relay")
+        self.assert_helper_fails_without_writing(compose, "missing expected services: bahia")
+
+    def test_relay_image_is_never_rewritten(self):
+        dedicated_relay = "registry.example/relay@sha256:" + "c" * 64
+        compose = BASE_COMPOSE.replace(
+            "  relay:\n    image: local/bahia-controlplane-bahia:github-0000000",
+            f"  relay:\n    image: {dedicated_relay}",
+        )
+        updated = deploy_edge_compose_update.update_compose_text(
+            compose, VALID_TAG, VALID_RELEASE_DIR, BACKEND_IMAGE, WEB_IMAGE
+        )
+        self.assertIn(f"  relay:\n    image: {dedicated_relay}", updated)
 
     def test_missing_docs_mount_fails_without_writing(self):
         compose = BASE_COMPOSE.replace(

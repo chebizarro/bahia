@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-TARGET_BACKEND_SERVICES = {"bahia", "relay"}
+TARGET_BACKEND_SERVICES = {"bahia"}
 TARGET_WEB_SERVICE = "web"
 TARGET_SERVICES = TARGET_BACKEND_SERVICES | {TARGET_WEB_SERVICE}
 BACKEND_IMAGE = "local/bahia-controlplane-bahia"

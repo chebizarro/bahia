@@ -12,6 +12,7 @@
     "The built image has an immutable sha256 ID and matching OCI source revision.",
     "The image carries the required relay-flood safety epoch.",
     "Rollback restores an independently admitted post-fix Bahia image, never the raw pre-deploy Bahia image.",
+    "The Bahia updater never changes the independently managed relay image.",
     "Only the one previously live-accepted unlabeled post-fix digest may use the legacy compatibility path."
   ],
   "out_of_scope": [
