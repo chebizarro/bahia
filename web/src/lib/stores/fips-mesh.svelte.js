@@ -1,4 +1,6 @@
 import { loadSystemInfo } from './system.svelte.js';
+import { toWebSocketUrl } from '../nostr/pool-utils.js';
+import { resolveBrowserRelays } from './controlplane/connection.svelte.js';
 import {
   nostr,
   BAHIA_STATE_SCHEMAS,
@@ -54,22 +56,6 @@ let lastConnected = false;
 function replaceArray(target, values) {
   target.length = 0;
   target.push(...values);
-}
-
-function normalizeRelayUrl(url) {
-  if (!url || typeof url !== 'string') return '';
-  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
-  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
-  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
-  return url;
-}
-
-export function resolveFipsMeshRelays(systemInfo) {
-  const nostrInfo = systemInfo?.nostr || {};
-  const relays = [];
-  if (Array.isArray(nostrInfo.browser_relays)) relays.push(...nostrInfo.browser_relays);
-  if (nostrInfo.sidecar_url) relays.push(nostrInfo.sidecar_url);
-  return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
 }
 
 function authorFilter() {
@@ -440,7 +426,7 @@ export async function bootstrapFipsMesh({ relays = null, servicePubkey = null, s
     try {
       fipsMeshState.status = 'discovering';
       const info = systemInfo || await loadSystemInfo();
-      const resolvedRelays = Array.isArray(relays) && relays.length > 0 ? relays.map(normalizeRelayUrl).filter(Boolean) : resolveFipsMeshRelays(info);
+      const resolvedRelays = Array.isArray(relays) && relays.length > 0 ? relays.map(toWebSocketUrl).filter(Boolean) : resolveBrowserRelays(info);
       const resolvedServicePubkey = servicePubkey || info?.nostr?.service_pubkey || '';
       fipsMeshState.relays = resolvedRelays;
       fipsMeshState.servicePubkey = resolvedServicePubkey;

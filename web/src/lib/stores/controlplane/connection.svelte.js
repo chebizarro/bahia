@@ -1,3 +1,5 @@
+import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
+
 const BOOTSTRAP_RETRY_INTERVAL_MS = 30_000;
 let lastBootstrapFailedAt = null;
 let bootstrapControlplaneForRetry = null;
@@ -58,14 +60,6 @@ export function resetConnectionState() {
   controlplaneConnection.reconnects = 0;
 }
 
-export function normalizeRelayUrl(url) {
-  if (!url || typeof url !== 'string') return '';
-  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
-  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
-  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
-  return url;
-}
-
 export function resolveBrowserRelays(systemInfo) {
   const nostrInfo = systemInfo?.nostr || {};
   const relays = [];
@@ -73,7 +67,7 @@ export function resolveBrowserRelays(systemInfo) {
   if (Array.isArray(nostrInfo.browser_relays)) relays.push(...nostrInfo.browser_relays);
   if (nostrInfo.sidecar_url) relays.push(nostrInfo.sidecar_url);
 
-  return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
+  return Array.from(new Set(relays.map(toWebSocketUrl).filter(Boolean)));
 }
 
 export function connectedRelaysFromSummary(summary) {

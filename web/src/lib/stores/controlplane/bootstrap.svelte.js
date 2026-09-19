@@ -4,7 +4,8 @@ import { getBootstrapSeed } from '../discovery.svelte.js';
 import { loadSystemInfo } from '../system.svelte.js';
 import { hydrateCachedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, readModelFilters, resetEventRouting } from './events.svelte.js';
-import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, normalizeRelayUrl, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
+import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
+import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 
 let bootstrapPromise = null;
 let liveUnsubscribe = null;
@@ -68,10 +69,10 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
 
   bootstrapExpectedRelays = [...expectedRelays];
   const generation = ++bootstrapSubscriptionGeneration;
-  const pendingEoseRelays = new Set(expectedRelays.map(normalizeRelayUrl));
+  const pendingEoseRelays = new Set(expectedRelays.map(toWebSocketUrl));
   const markRelayEose = (relay) => {
     if (generation !== bootstrapSubscriptionGeneration) return;
-    pendingEoseRelays.delete(normalizeRelayUrl(relay));
+    pendingEoseRelays.delete(toWebSocketUrl(relay));
     if (pendingEoseRelays.size === 0) {
       completeBootstrapIfCurrent(generation);
       settleEose(resolveEose, true);
@@ -88,7 +89,7 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
       if (['syncing', 'live', 'reconnecting'].includes(controlplaneConnection.status)) {
         controlplaneConnection.status = meta.disconnected ? 'disconnected' : 'reconnecting';
       }
-      if (meta.terminal && generation === bootstrapSubscriptionGeneration && pendingEoseRelays.has(normalizeRelayUrl(relay))) {
+      if (meta.terminal && generation === bootstrapSubscriptionGeneration && pendingEoseRelays.has(toWebSocketUrl(relay))) {
         settleEose(rejectEose, new Error(message));
       }
     }
@@ -133,7 +134,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
 
     try {
       const seed = getBootstrapSeed();
-      const relays = Array.from(new Set((seed?.relay_urls || []).map(normalizeRelayUrl).filter(Boolean)));
+      const relays = Array.from(new Set((seed?.relay_urls || []).map(toWebSocketUrl).filter(Boolean)));
       controlplaneConnection.relays = relays;
       controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
 

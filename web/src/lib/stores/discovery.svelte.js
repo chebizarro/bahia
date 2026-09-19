@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
 import { PoolBackedClient } from '../nostr/pool-client.js';
-import { createReadModelMetadataTracker } from '../nostr/pool-utils.js';
+import { createReadModelMetadataTracker, toWebSocketUrl } from '../nostr/pool-utils.js';
 
 export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
@@ -77,14 +77,6 @@ export function getBootstrapSeed() {
   };
 }
 
-function normalizeRelayUrl(url) {
-  if (!url || typeof url !== 'string') return '';
-  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
-  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
-  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
-  return url;
-}
-
 function latestByReplaceableKey(events) {
   const byKey = new Map();
   for (const event of events) {
@@ -117,12 +109,12 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
   const relaySets = {};
   for (const event of filtered.filter((item) => item.kind === KINDS.NIP51_RELAY_SET)) {
     const d = getDTag(event);
-    relaySets[d] = getTagValues(event, 'relay').map(normalizeRelayUrl).filter(Boolean);
+    relaySets[d] = getTagValues(event, 'relay').map(toWebSocketUrl).filter(Boolean);
   }
 
   const browserRelays = relaySets[BROWSER_RELAY_SET_DTAG] || [];
   const nip34Relays = Array.isArray(payload.nostr?.nip34_relays)
-    ? Array.from(new Set(payload.nostr.nip34_relays.map(normalizeRelayUrl).filter(Boolean)))
+    ? Array.from(new Set(payload.nostr.nip34_relays.map(toWebSocketUrl).filter(Boolean)))
     : [];
 
   const advertisedContextVMRelays = relaySets[CONTEXTVM_RELAY_SET_DTAG] || [];
@@ -250,7 +242,7 @@ export async function discoverSystemInfo({ force = false } = {}) {
         return cached.normalized;
       }
 
-      const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));
+      const relays = Array.from(new Set(seed.relay_urls.map(toWebSocketUrl).filter(Boolean)));
       if (discoveryUnsubscribe) discoveryUnsubscribe();
       discoveryUnsubscribe = null;
       if (bootstrapClient) bootstrapClient.disconnect();
@@ -308,7 +300,7 @@ export async function discoverSystemInfo({ force = false } = {}) {
           }
         ], {
           onEvent: (event, relay) => {
-            tracker.markEvent(event, normalizeRelayUrl(relay));
+            tracker.markEvent(event, toWebSocketUrl(relay));
             collectedEvents.push(event);
             if (settled) {
               try {
@@ -319,14 +311,14 @@ export async function discoverSystemInfo({ force = false } = {}) {
             }
           },
           onEose: (relay) => {
-            const normalizedRelay = normalizeRelayUrl(relay);
+            const normalizedRelay = toWebSocketUrl(relay);
             eoseRelays.add(normalizedRelay);
             tracker.markEose(normalizedRelay);
             settle();
           },
           onClosed: (reason = '', relay = '', meta = {}) => {
             lastCloseReason = String(reason || lastCloseReason);
-            tracker.markClosed(reason, normalizeRelayUrl(relay), meta);
+            tracker.markClosed(reason, toWebSocketUrl(relay), meta);
             settle();
           }
         });

@@ -5,6 +5,8 @@
  * Safe to call multiple times - subsequent calls resolve immediately if already connected.
  */
 
+import { toWebSocketUrl } from './pool-utils.js';
+
 // Browser detection that works in both SvelteKit and test environments
 const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
 
@@ -24,14 +26,6 @@ async function getNostrModule() {
     _nostrModule = await import('$lib/nostr/client.js');
   }
   return _nostrModule;
-}
-
-function normalizeRelayUrl(url) {
-  if (!url || typeof url !== 'string') return '';
-  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
-  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
-  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
-  return url;
 }
 
 /**
@@ -55,7 +49,7 @@ export async function ensureRelayConnection({ silent = false } = {}) {
     const discoveryModule = await getDiscoveryModule();
     const nostrModule = await getNostrModule();
     const seed = discoveryModule.getBootstrapSeed();
-    const relays = Array.from(new Set((seed?.relay_urls || []).map(normalizeRelayUrl).filter(Boolean)));
+    const relays = Array.from(new Set((seed?.relay_urls || []).map(toWebSocketUrl).filter(Boolean)));
 
     if (relays.length === 0) {
       throw new Error('No browser relays configured by the deployment bootstrap');

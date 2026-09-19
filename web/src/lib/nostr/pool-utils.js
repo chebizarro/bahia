@@ -178,6 +178,18 @@ export function normalizeRelayUrl(url) {
   }
 }
 
+// toWebSocketUrl coerces a configured relay URL to its ws(s) scheme without
+// otherwise rewriting it, preserving the exact string used as a relay key by
+// configuration, NIP-66 d-tags and read-model state. normalizeRelayUrl above is
+// the stricter pool-identity form and is not interchangeable with it.
+export function toWebSocketUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
+  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
+  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
+  return url;
+}
+
 export function uniqueRelays(relays = []) {
   const seen = new Set();
   const out = [];

@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { loadSystemInfo } from './system.svelte.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 import {
@@ -199,18 +200,9 @@ function markCollectionLoaded(schema) {
   dnsState.lastLoadedAt.drift = now;
 }
 
-function normalizeRelayUrl(url) {
-  if (!url || typeof url !== 'string') return '';
-  const trimmed = url.trim();
-  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
-  if (trimmed.startsWith('https://')) return `wss://${trimmed.slice('https://'.length)}`;
-  if (trimmed.startsWith('http://')) return `ws://${trimmed.slice('http://'.length)}`;
-  return trimmed;
-}
-
 function normalizeRelayList(value) {
   const values = Array.isArray(value) ? value : String(value || '').split(',');
-  return Array.from(new Set(values.map(normalizeRelayUrl).filter(Boolean)));
+  return Array.from(new Set(values.map(toWebSocketUrl).filter(Boolean)));
 }
 
 function relayMetadataUrl(relayUrl) {
@@ -675,7 +667,7 @@ export function applyRelayMonitorEvent(event) {
     return true;
   }
 
-  const relay = normalizeRelayUrl(getDTag(event));
+  const relay = toWebSocketUrl(getDTag(event));
   const configuredRelays = new Set(normalizeRelayList(dnsState.connection.relays));
   if (!relay || !configuredRelays.has(relay)) return false;
 
