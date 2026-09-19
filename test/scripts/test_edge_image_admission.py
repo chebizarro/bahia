@@ -27,6 +27,7 @@ def policy():
         "guard": "2026-09-15-v1",
         "required_ancestors": [FLOOR_A, FLOOR_B],
         "approved_legacy_images": {LEGACY_ID: REVISION},
+        "protected_repositories": ["local/bahia-controlplane-bahia"],
     }
 
 
@@ -116,6 +117,45 @@ class EdgeImageAdmissionTests(unittest.TestCase):
             path.write_text(json.dumps(broken), encoding="utf-8")
             with self.assertRaises(edge.AdmissionError):
                 edge.load_policy(path)
+
+    @mock.patch.object(edge, "verify_image")
+    @mock.patch.object(edge, "command")
+    def test_image_store_audit_classifies_and_maps_stopped_container(self, command, verify):
+        image_rows = "\n".join([
+            json.dumps({"ID": IMAGE_ID, "Repository": "local/bahia-controlplane-bahia", "Tag": "old"}),
+            json.dumps({"ID": LEGACY_ID, "Repository": "local/bahia-controlplane-bahia", "Tag": "safe"}),
+        ])
+        command.side_effect = [
+            image_rows,
+            "container-1",
+            json.dumps([{"Id": "container-1", "Image": IMAGE_ID, "Name": "/old", "State": {"Status": "exited"}}]),
+        ]
+        verify.side_effect = [edge.AdmissionError("missing guard"), (LEGACY_ID, REVISION)]
+        result = edge.image_store_audit(Path("."), policy())
+        self.assertEqual([IMAGE_ID], [item["image_id"] for item in result["rejected"]])
+        self.assertEqual("exited", result["rejected"][0]["containers"][0]["state"])
+        self.assertEqual([LEGACY_ID], [item["image_id"] for item in result["admitted"]])
+
+    @mock.patch.object(edge, "image_store_audit")
+    def test_purge_rejects_active_container_before_deletion(self, audit):
+        payload = {
+            "schema": "cascadia.bahia.image-store-audit.v1",
+            "admitted": [],
+            "rejected": [{
+                "image_id": IMAGE_ID,
+                "references": ["local/bahia-controlplane-bahia:old"],
+                "rejection_reason": "missing guard",
+                "containers": [{"container_id": "container-1", "name": "old", "state": "running"}],
+            }],
+        }
+        audit.return_value = payload
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = Path(tmp) / "inventory.json"
+            inventory.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(edge.AdmissionError, "active containers"):
+                edge.purge_rejected_images(
+                    Path("."), inventory, Path(tmp) / "receipt.json", policy()
+                )
 
     @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
     def test_backup_tree_quarantines_raw_and_preserves_non_bahia_services(self, _verify):
