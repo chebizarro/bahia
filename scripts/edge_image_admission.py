@@ -426,17 +426,23 @@ def purge_rejected_images(
             actual_tags = sorted((inspected.get("RepoTags") or []))
             actual_digests = sorted((inspected.get("RepoDigests") or []))
             actual_references = sorted(set(actual_tags + actual_digests))
-            protected_actual = []
+            removable_actual: list[str] = []
             foreign = []
             for reference in actual_references:
                 repository = reference.split("@", 1)[0]
                 if "@" not in reference:
                     repository = reference.rsplit(":", 1)[0]
                 if repository in policy["protected_repositories"]:
-                    protected_actual.append(reference)
+                    continue
                 else:
                     foreign.append(reference)
-            for reference in sorted(set(expected_tags + protected_actual)):
+            for reference in actual_tags:
+                repository = reference.split("@", 1)[0]
+                if "@" not in reference:
+                    repository = reference.rsplit(":", 1)[0]
+                if repository in policy["protected_repositories"]:
+                    removable_actual.append(reference)
+            for reference in sorted(set(expected_tags + removable_actual)):
                 command(["docker", "image", "rm", reference])
                 if not image_exists(image_id):
                     break
