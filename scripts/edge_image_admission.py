@@ -411,6 +411,7 @@ def purge_rejected_images(
     image_ids = [image["image_id"] for image in rejected]
     removed_containers: list[str] = []
     removed_images: list[str] = []
+    detached_images: list[dict[str, Any]] = []
     try:
         for container_id in container_ids:
             command(["docker", "container", "rm", container_id])
@@ -425,27 +426,37 @@ def purge_rejected_images(
             actual_tags = sorted((inspected.get("RepoTags") or []))
             actual_digests = sorted((inspected.get("RepoDigests") or []))
             actual_references = sorted(set(actual_tags + actual_digests))
+            protected_actual = []
             foreign = []
             for reference in actual_references:
                 repository = reference.split("@", 1)[0]
                 if "@" not in reference:
                     repository = reference.rsplit(":", 1)[0]
-                if repository not in policy["protected_repositories"]:
+                if repository in policy["protected_repositories"]:
+                    protected_actual.append(reference)
+                else:
                     foreign.append(reference)
-            if foreign:
-                raise AdmissionError(
-                    f"image {image_id} includes unprotected references: {', '.join(foreign)}"
-                )
-            for reference in sorted(set(expected_tags + actual_references)):
+            for reference in sorted(set(expected_tags + protected_actual)):
                 command(["docker", "image", "rm", reference])
                 if not image_exists(image_id):
                     break
-            if image_exists(image_id):
+            if foreign:
+                if not image_exists(image_id):
+                    raise AdmissionError(
+                        f"image {image_id} disappeared while retaining foreign references"
+                    )
+                detached_images.append({
+                    "image_id": image_id,
+                    "retained_references": foreign,
+                })
+            elif image_exists(image_id):
                 command(["docker", "image", "rm", image_id])
-            removed_images.append(image_id)
+            if not foreign:
+                removed_images.append(image_id)
     finally:
         result = {
             "removed_containers": removed_containers,
+            "detached_images": detached_images,
             "removed_images": removed_images,
             "schema": "cascadia.bahia.image-store-purge.v1",
         }
@@ -541,6 +552,7 @@ def main(argv: Iterable[str] = sys.argv[1:]) -> int:
             )
             print(json.dumps({
                 "removed_containers": len(result["removed_containers"]),
+                "detached_images": len(result["detached_images"]),
                 "removed_images": len(result["removed_images"]),
             }, sort_keys=True))
         else:  # pragma: no cover
