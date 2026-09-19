@@ -157,12 +157,12 @@ class EdgeImageAdmissionTests(unittest.TestCase):
                     Path("."), inventory, Path(tmp) / "receipt.json", policy()
                 )
 
-    @mock.patch.object(edge.subprocess, "run")
+    @mock.patch.object(edge, "image_exists", side_effect=[True, False, False])
     @mock.patch.object(edge, "inspect_image")
     @mock.patch.object(edge, "command")
     @mock.patch.object(edge, "image_store_audit")
     def test_purge_removes_each_protected_tag_without_force(
-        self, audit, command, inspect, run
+        self, audit, command, inspect, _exists
     ):
         payload = {
             "schema": "cascadia.bahia.image-store-audit.v1",
@@ -178,8 +178,10 @@ class EdgeImageAdmissionTests(unittest.TestCase):
             }],
         }
         audit.return_value = payload
-        inspect.return_value = {"RepoTags": payload["rejected"][0]["references"]}
-        run.return_value = subprocess.CompletedProcess([], 1, "", "No such image")
+        inspect.return_value = {
+            "RepoTags": payload["rejected"][0]["references"],
+            "RepoDigests": [],
+        }
         with tempfile.TemporaryDirectory() as tmp:
             inventory = Path(tmp) / "inventory.json"
             inventory.write_text(json.dumps(payload), encoding="utf-8")
@@ -192,6 +194,37 @@ class EdgeImageAdmissionTests(unittest.TestCase):
             mock.call(["docker", "image", "rm", "local/bahia-controlplane-bahia:old-b"]),
         ])
         self.assertNotIn(mock.call(["docker", "image", "rm", "--force", IMAGE_ID]), command.mock_calls)
+
+    @mock.patch.object(edge, "image_exists", side_effect=[True, False])
+    @mock.patch.object(edge, "inspect_image")
+    @mock.patch.object(edge, "command")
+    @mock.patch.object(edge, "image_store_audit")
+    def test_purge_accepts_protected_digest_reference(
+        self, audit, command, inspect, _exists
+    ):
+        digest_reference = f"local/bahia-controlplane-bahia@{IMAGE_ID}"
+        payload = {
+            "schema": "cascadia.bahia.image-store-audit.v1",
+            "admitted": [],
+            "rejected": [{
+                "image_id": IMAGE_ID,
+                "references": ["local/bahia-controlplane-bahia:<none>"],
+                "rejection_reason": "missing guard",
+                "containers": [],
+            }],
+        }
+        audit.return_value = payload
+        inspect.return_value = {
+            "RepoTags": [digest_reference],
+            "RepoDigests": [digest_reference],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = Path(tmp) / "inventory.json"
+            inventory.write_text(json.dumps(payload), encoding="utf-8")
+            edge.purge_rejected_images(
+                Path("."), inventory, Path(tmp) / "receipt.json", policy()
+            )
+        command.assert_called_once_with(["docker", "image", "rm", digest_reference])
 
     @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
     def test_backup_tree_quarantines_raw_and_preserves_non_bahia_services(self, _verify):
