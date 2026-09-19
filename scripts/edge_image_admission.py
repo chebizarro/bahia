@@ -43,6 +43,7 @@ def load_policy(path: Path) -> dict[str, Any]:
     guard = policy.get("guard")
     ancestors = policy.get("required_ancestors")
     legacy = policy.get("approved_legacy_images")
+    repositories = policy.get("protected_repositories")
     if not isinstance(guard, str) or not guard:
         raise AdmissionError("policy guard must be a non-empty string")
     if not isinstance(ancestors, list) or not ancestors:
@@ -54,6 +55,10 @@ def load_policy(path: Path) -> dict[str, Any]:
     for image_id, revision in legacy.items():
         if not IMAGE_ID_PATTERN.fullmatch(image_id) or not SHA_PATTERN.fullmatch(str(revision)):
             raise AdmissionError("policy contains an invalid legacy image mapping")
+    if not isinstance(repositories, list) or not repositories:
+        raise AdmissionError("policy protected_repositories must be non-empty")
+    if not all(isinstance(item, str) and item and ":" not in item for item in repositories):
+        raise AdmissionError("policy contains an invalid protected repository")
     return policy
 
 
@@ -307,6 +312,122 @@ def sanitize_backup_tree(
     return records
 
 
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".admission-tmp")
+    if temporary.exists():
+        raise AdmissionError(f"temporary output already exists: {temporary}")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
+def image_store_audit(repo: Path, policy: dict[str, Any]) -> dict[str, Any]:
+    references: dict[str, set[str]] = {}
+    for line in command([
+        "docker", "image", "ls", "--no-trunc", "--format", "{{json .}}",
+    ]).splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise AdmissionError("docker returned invalid image-list metadata") from exc
+        if row.get("Repository") not in policy["protected_repositories"]:
+            continue
+        image_id = str(row.get("ID", ""))
+        if not IMAGE_ID_PATTERN.fullmatch(image_id):
+            raise AdmissionError(f"protected image has invalid ID: {image_id}")
+        references.setdefault(image_id, set()).add(f"{row['Repository']}:{row['Tag']}")
+
+    containers: dict[str, list[dict[str, str]]] = {}
+    container_ids = command(["docker", "container", "ls", "-aq", "--no-trunc"]).splitlines()
+    if container_ids:
+        try:
+            inspected = json.loads(command(["docker", "container", "inspect", *container_ids]))
+        except json.JSONDecodeError as exc:
+            raise AdmissionError("docker returned invalid container metadata") from exc
+        for record in inspected:
+            image_id = str(record.get("Image", ""))
+            if image_id not in references:
+                continue
+            state = record.get("State") or {}
+            containers.setdefault(image_id, []).append({
+                "container_id": str(record.get("Id", "")),
+                "name": str(record.get("Name", "")).lstrip("/"),
+                "state": str(state.get("Status", "unknown")),
+            })
+
+    admitted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for image_id in sorted(references):
+        item: dict[str, Any] = {
+            "containers": sorted(containers.get(image_id, []), key=lambda value: value["container_id"]),
+            "image_id": image_id,
+            "references": sorted(references[image_id]),
+        }
+        try:
+            _, revision = verify_image(repo, image_id, policy)
+            item["revision"] = revision
+            admitted.append(item)
+        except AdmissionError as exc:
+            item["rejection_reason"] = str(exc)
+            rejected.append(item)
+    return {
+        "admitted": admitted,
+        "rejected": rejected,
+        "schema": "cascadia.bahia.image-store-audit.v1",
+    }
+
+
+def purge_rejected_images(
+    repo: Path,
+    inventory: Path,
+    receipt: Path,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        expected = json.loads(inventory.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AdmissionError(f"cannot load image inventory {inventory}: {exc}") from exc
+    fresh = image_store_audit(repo, policy)
+    if expected != fresh:
+        raise AdmissionError("image store changed since inventory; refusing purge")
+    stopped = {"created", "dead", "exited"}
+    rejected = fresh["rejected"]
+    running = [
+        container for image in rejected for container in image["containers"]
+        if container["state"] not in stopped
+    ]
+    if running:
+        names = ", ".join(f"{item['name']}({item['state']})" for item in running)
+        raise AdmissionError(f"rejected images still have active containers: {names}")
+
+    container_ids = sorted({
+        container["container_id"] for image in rejected for container in image["containers"]
+    })
+    image_ids = [image["image_id"] for image in rejected]
+    removed_containers: list[str] = []
+    removed_images: list[str] = []
+    try:
+        for container_id in container_ids:
+            command(["docker", "container", "rm", container_id])
+            removed_containers.append(container_id)
+        for image_id in image_ids:
+            command(["docker", "image", "rm", image_id])
+            removed_images.append(image_id)
+    finally:
+        result = {
+            "removed_containers": removed_containers,
+            "removed_images": removed_images,
+            "schema": "cascadia.bahia.image-store-purge.v1",
+        }
+        write_json_atomic(receipt, result)
+    return result
+
+
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
@@ -330,6 +451,13 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     tree.add_argument("--safe-bahia-image", required=True)
     tree.add_argument("--manifest", required=True, type=Path)
     tree.add_argument("--dry-run", action="store_true")
+    audit = sub.add_parser("audit-image-store")
+    audit.add_argument("--repo", required=True, type=Path)
+    audit.add_argument("--output", required=True, type=Path)
+    purge = sub.add_parser("purge-image-store")
+    purge.add_argument("--repo", required=True, type=Path)
+    purge.add_argument("--inventory", required=True, type=Path)
+    purge.add_argument("--receipt", required=True, type=Path)
     return parser.parse_args(list(argv))
 
 
@@ -360,6 +488,21 @@ def main(argv: Iterable[str] = sys.argv[1:]) -> int:
                 "dry_run": args.dry_run,
                 "files": [record["path"] for record in records],
                 "sanitized_files": len(records),
+            }, sort_keys=True))
+        elif args.action == "audit-image-store":
+            audit = image_store_audit(args.repo, policy)
+            write_json_atomic(args.output, audit)
+            print(json.dumps({
+                "admitted_images": len(audit["admitted"]),
+                "rejected_images": len(audit["rejected"]),
+            }, sort_keys=True))
+        elif args.action == "purge-image-store":
+            result = purge_rejected_images(
+                args.repo, args.inventory, args.receipt, policy
+            )
+            print(json.dumps({
+                "removed_containers": len(result["removed_containers"]),
+                "removed_images": len(result["removed_images"]),
             }, sort_keys=True))
         else:  # pragma: no cover
             raise AdmissionError(f"unsupported action {args.action}")
