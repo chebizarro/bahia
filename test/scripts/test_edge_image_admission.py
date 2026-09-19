@@ -27,7 +27,7 @@ def policy():
         "guard": "2026-09-15-v1",
         "required_ancestors": [FLOOR_A, FLOOR_B],
         "approved_legacy_images": {LEGACY_ID: REVISION},
-        "protected_repositories": ["local/bahia-controlplane-bahia"],
+        "protected_repositories": ["bahia-recovery", "local/bahia-controlplane-bahia"],
     }
 
 
@@ -225,6 +225,40 @@ class EdgeImageAdmissionTests(unittest.TestCase):
                 Path("."), inventory, Path(tmp) / "receipt.json", policy()
             )
         command.assert_called_once_with(["docker", "image", "rm", digest_reference])
+
+    @mock.patch.object(edge, "image_exists", side_effect=[True, True])
+    @mock.patch.object(edge, "inspect_image")
+    @mock.patch.object(edge, "command")
+    @mock.patch.object(edge, "image_store_audit")
+    def test_purge_detaches_bahia_tag_but_preserves_foreign_reference(
+        self, audit, command, inspect, _exists
+    ):
+        protected = "bahia-recovery:old"
+        retained = "bahia-relay:rollback"
+        payload = {
+            "schema": "cascadia.bahia.image-store-audit.v1",
+            "admitted": [],
+            "rejected": [{
+                "image_id": IMAGE_ID,
+                "references": [protected],
+                "rejection_reason": "missing guard",
+                "containers": [],
+            }],
+        }
+        audit.return_value = payload
+        inspect.return_value = {"RepoTags": [protected, retained], "RepoDigests": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = Path(tmp) / "inventory.json"
+            inventory.write_text(json.dumps(payload), encoding="utf-8")
+            result = edge.purge_rejected_images(
+                Path("."), inventory, Path(tmp) / "receipt.json", policy()
+            )
+        command.assert_called_once_with(["docker", "image", "rm", protected])
+        self.assertEqual([], result["removed_images"])
+        self.assertEqual([{
+            "image_id": IMAGE_ID,
+            "retained_references": [retained],
+        }], result["detached_images"])
 
     @mock.patch.object(edge, "verify_image", return_value=(LEGACY_ID, REVISION))
     def test_backup_tree_quarantines_raw_and_preserves_non_bahia_services(self, _verify):
