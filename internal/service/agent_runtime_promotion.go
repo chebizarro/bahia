@@ -134,7 +134,7 @@ func NewAgentRuntimePromotionService(
 }
 
 // RegisterSharedRuntimeRelease registers the runtime source and the one shared
-// verified release for an accepted Hive-CI RELEASE result. Provenance is mapped
+// verified release for an accepted kind-4903 release attestation. Provenance is mapped
 // from the signed release; the deterministic VerifiedAt makes replay idempotent.
 func (s *AgentRuntimePromotionService) RegisterSharedRuntimeRelease(
 	ctx context.Context,

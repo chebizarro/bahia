@@ -34,8 +34,8 @@ const (
 )
 
 var (
-	ErrNotRelease                 = errors.New("not a Hive-CI RELEASE result")
-	ErrInvalidRelease             = errors.New("invalid Hive-CI RELEASE result")
+	ErrNotRelease                 = errors.New("not a release attestation")
+	ErrInvalidRelease             = errors.New("invalid release attestation")
 	ErrUntrustedReleaseAttestor   = errors.New("untrusted Hive-CI release attestor")
 	ErrReleaseEvidenceUnavailable = errors.New("Hive-CI release evidence unavailable")
 	ErrReleaseLineagePending      = errors.New("Hive-CI release is waiting for signed workflow lineage")
@@ -93,9 +93,12 @@ func NewReleaseIngestor(evidence ReleaseEvidence, store ReleaseStore, trustedAtt
 	}
 }
 
-// Ingest accepts only the bridge/Signet-signed terminal RELEASE 5402. The
-// earlier worker-signed 5402 and all ordinary Hive-CI results return
-// ErrNotRelease and never reach durable release state.
+// Ingest accepts only a trusted-attestor-signed terminal release attestation:
+// kind 4903 with domain=release, type=attestation, and schema
+// bahia.audit.release.v1 (cascadia-nips release_attestation). Hive-CI kind
+// 5402 has exactly one semantic (the Workflow Result) and is never a release;
+// every other event returns ErrNotRelease and never reaches durable release
+// state.
 func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domain.HiveCIReleaseCommitResult, error) {
 	if i == nil || i.evidence == nil || i.store == nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: release ingestor dependencies are not configured", ErrReleaseEvidenceUnavailable)
@@ -104,18 +107,14 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	if err := nostradapter.ValidateInboundEvent(event, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signature boundary: %v", ErrInvalidRelease, err)
 	}
-	if int(event.Kind) != kinds.HiveCIWorkflowResult {
+	if int(event.Kind) != kinds.CASAudit {
 		return domain.HiveCIReleaseCommitResult{}, ErrNotRelease
 	}
-
-	tagResult, tagPresent, tagErr := uniqueTag(event, "result", false)
-	contentType := releaseContentType(event.Content)
-	if !tagPresent && contentType != domain.HiveCIReleaseResultType {
+	if !IsReleaseCandidate(event) {
 		return domain.HiveCIReleaseCommitResult{}, ErrNotRelease
 	}
-	if tagErr != nil || !tagPresent || tagResult != domain.HiveCIReleaseResultType ||
-		contentType != domain.HiveCIReleaseResultType {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: tag and content must both identify RELEASE", ErrInvalidRelease)
+	if schema, present, tagErr := uniqueTag(event, "schema", true); tagErr != nil || !present || schema != domain.ReleaseAttestationSchema {
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: schema tag must be %s", ErrInvalidRelease, domain.ReleaseAttestationSchema)
 	}
 
 	attestor := event.PubKey.Hex()
@@ -123,8 +122,12 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: %s", ErrUntrustedReleaseAttestor, attestor)
 	}
 
-	result, err := decodeReleaseContent(event.Content)
+	envelope, err := decodeReleaseAttestation(event.Content)
 	if err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
+	}
+	result := envelope.Meta.HiveCIRelease
+	if err := validateAttestationPayload(envelope, result); err != nil {
 		return domain.HiveCIReleaseCommitResult{}, err
 	}
 	if err := validateReleaseEnvelope(event, result); err != nil {
@@ -238,13 +241,16 @@ func validateWorkflowRunReference(run *nostr.Event, workflowRunEventID string) e
 	return nil
 }
 
+// IsReleaseCandidate reports whether the event claims to be a terminal
+// release attestation: kind 4903 tagged domain=release and type=attestation.
 func IsReleaseCandidate(event *nostr.Event) bool {
-	if event == nil || int(event.Kind) != kinds.HiveCIWorkflowResult {
+	if event == nil || int(event.Kind) != kinds.CASAudit {
 		return false
 	}
-	tag, present, _ := uniqueTag(event, "result", false)
-	return (present && tag == domain.HiveCIReleaseResultType) ||
-		releaseContentType(event.Content) == domain.HiveCIReleaseResultType
+	auditDomain, domainPresent, _ := uniqueTag(event, "domain", false)
+	auditType, typePresent, _ := uniqueTag(event, "type", false)
+	return domainPresent && typePresent &&
+		auditDomain == domain.ReleaseAttestationDomain && auditType == domain.ReleaseAttestationAuditType
 }
 
 func pubkeySet(values []string) map[string]struct{} {
@@ -258,27 +264,55 @@ func pubkeySet(values []string) map[string]struct{} {
 	return set
 }
 
-func releaseContentType(content string) string {
-	var marker struct {
-		ResultType string `json:"result_type"`
-	}
-	if json.Unmarshal([]byte(content), &marker) != nil {
-		return ""
-	}
-	return marker.ResultType
-}
-
-func decodeReleaseContent(content string) (domain.HiveCIReleaseResult, error) {
-	var result domain.HiveCIReleaseResult
+func decodeReleaseAttestation(content string) (domain.ReleaseAttestationEnvelope, error) {
+	var envelope domain.ReleaseAttestationEnvelope
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
-		return result, fmt.Errorf("%w: decode release content: %v", ErrInvalidRelease, err)
+	if err := decoder.Decode(&envelope); err != nil {
+		return envelope, fmt.Errorf("%w: decode release attestation content: %v", ErrInvalidRelease, err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return result, fmt.Errorf("%w: release content has trailing JSON", ErrInvalidRelease)
+		return envelope, fmt.Errorf("%w: release attestation content has trailing JSON", ErrInvalidRelease)
 	}
-	return result, nil
+	if envelope.V != 1 || envelope.Type != domain.ReleaseAttestationEnvelopeType {
+		return envelope, fmt.Errorf("%w: content must be v1 %s", ErrInvalidRelease, domain.ReleaseAttestationEnvelopeType)
+	}
+	return envelope, nil
+}
+
+// validateAttestationPayload binds the canonical bahia.audit.release.v1
+// payload to the full provenance document it summarises. A payload that
+// disagrees with meta.hiveci_release is a forged or corrupted attestation.
+func validateAttestationPayload(envelope domain.ReleaseAttestationEnvelope, result domain.HiveCIReleaseResult) error {
+	payload := envelope.Payload
+	expected := map[string][2]string{
+		"release_id":      {payload.ReleaseID, result.ReleaseIdentity},
+		"workflow_run_id": {payload.WorkflowRunID, result.Lineage.WorkflowRunEventID},
+		"source_commit":   {payload.SourceCommit, result.Lineage.Commit},
+		"artifact":        {payload.Artifact, releaseArtifactReference(result.Manifest)},
+		"digest":          {payload.Digest, result.Manifest.Digest},
+		"sbom_ref":        {payload.SBOMRef, result.SBOM.Digest},
+		"provenance_ref":  {payload.ProvenanceRef, result.Provenance.Digest},
+	}
+	for field, pair := range expected {
+		if strings.TrimSpace(pair[0]) == "" || pair[0] != pair[1] {
+			return fmt.Errorf("%w: payload %s does not match provenance document", ErrInvalidRelease, field)
+		}
+	}
+	if payload.SourceRepo != "" && payload.SourceRepo != result.Lineage.RepoAddress {
+		return fmt.Errorf("%w: payload source_repo does not match provenance document", ErrInvalidRelease)
+	}
+	if payload.ResultID != "" && !hex64Pattern.MatchString(payload.ResultID) {
+		return fmt.Errorf("%w: payload result_id must reference a kind-5402 event id", ErrInvalidRelease)
+	}
+	if _, err := time.Parse(time.RFC3339, payload.AttestedAt); err != nil {
+		return fmt.Errorf("%w: payload attested_at must be RFC 3339", ErrInvalidRelease)
+	}
+	return nil
+}
+
+func releaseArtifactReference(artifact domain.HiveCIReleaseArtifact) string {
+	return artifact.Repository + "@" + artifact.Digest
 }
 
 func validateReleaseEnvelope(event *nostr.Event, result domain.HiveCIReleaseResult) error {
@@ -330,8 +364,10 @@ func validateReleaseEnvelope(event *nostr.Event, result domain.HiveCIReleaseResu
 	}
 
 	expectedTags := map[string]string{
-		"e": result.Lineage.WorkflowRunEventID, "status": "success", "result": domain.HiveCIReleaseResultType,
-		"release": result.ReleaseIdentity, "trigger-envelope": result.Lineage.TriggerIdentity,
+		"domain": domain.ReleaseAttestationDomain, "type": domain.ReleaseAttestationAuditType,
+		"schema": domain.ReleaseAttestationSchema, "run": result.Lineage.WorkflowRunEventID,
+		"artifact": releaseArtifactReference(result.Manifest),
+		"release":  result.ReleaseIdentity, "trigger-envelope": result.Lineage.TriggerIdentity,
 		"trigger-source": result.Lineage.TriggerSource, "trigger-id": result.Lineage.TriggerID,
 		"pr": result.Lineage.PREventID, "review": result.Lineage.ReviewEventID,
 		"audit": result.Lineage.AuditEventID, "a": result.Lineage.RepoAddress,
@@ -341,8 +377,7 @@ func validateReleaseEnvelope(event *nostr.Event, result domain.HiveCIReleaseResu
 		"workflow-digest": result.Lineage.WorkflowDigest,
 		"worker":          execution.WorkerIdentity, "worker-capability": execution.WorkerCapability,
 		"build-image": execution.BuildEnvironmentImageDigest,
-		"exit_code":   "0", "duration": execution.BahiaDuration,
-		"log_url": execution.DurableLogReference, "image_repo": result.Manifest.Repository,
+		"log_url":     execution.DurableLogReference, "image_repo": result.Manifest.Repository,
 		"image_digest": result.Manifest.Digest, "sbom_digest": result.SBOM.Digest,
 		"provenance_digest": result.Provenance.Digest,
 	}

@@ -1050,6 +1050,7 @@ func New(cfg *config.Config) (*App, error) {
 			bridge.SetReleaseRegistrationAuditor(releaseAudit)
 			hiveSub.SetReleaseAuditor(releaseAudit)
 			hiveSub.SetReleaseEvidenceRecorder(nostrEventRepo)
+			hiveSub.SetReleaseAttestors(cfg.HiveCI.TrustedReleaseAttestors)
 			hiveSub.SetReleaseIngestor(releaseIngestor, func(ctx context.Context, commit domain.HiveCIReleaseCommitResult) {
 				if _, err := bridge.RegisterAcceptedRelease(ctx, commit.Release); err != nil {
 					logger.Error("register accepted Hive-CI release artifact failed",

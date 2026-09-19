@@ -28,9 +28,14 @@ registration, and a separate staged canary authorization path for
   checked before intent creation.
 - Health/readiness contracts must include a non-empty `type` and positive
   `timeout_seconds`; Bahia forwards their canonical JSON to the Loom canary.
-- `cascadia-go` v1.2.1 does not yet generate a release-provenance binding for
-  the producer-specific terminal RELEASE 5402 tags/content. Bahia uses the
-  centralized mirrored adapter and generated generic kind/method constants.
+- 2026-09-19: release evidence moved off Hive-CI kind 5402 (hive-ci-protocol
+  defines a single 5402 semantic) onto the cascadia-nips `release_attestation`
+  contract: kind 4903 `domain=release`/`type=attestation`/`schema=bahia.audit.release.v1`
+  with `run=<5401 id>`, canonical envelope, and the full
+  `hiveci.release-provenance.v1` document under `meta.hiveci_release`.
+  `TestReleaseIngestorAcceptsOnlyKind4903ReleaseAttestations` proves a 5402
+  (ordinary or `result=RELEASE`) is never accepted. The `cascadia-go` generated
+  bindings do not yet carry the envelope type; Bahia defines it in `domain`.
 
 ## Verification evidence
 

@@ -188,7 +188,7 @@ func ExtractTraceContext(ctx context.Context, tags nostr.Tags) context.Context {
 
 // ExtractTraceContextFromSignedEvent continues the W3C trace context carried by
 // a stored signed Nostr event, given as the raw JSON Bahia persisted at ingest
-// (for example domain.HiveCIAcceptedRelease.SignedEvent, the terminal 5402).
+// (for example domain.HiveCIAcceptedRelease.SignedEvent, the kind-4903 release attestation).
 //
 // Using the persisted event rather than the live subscription makes the
 // continuation durable: a promotion that happens after a restart, a replay, or

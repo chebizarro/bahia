@@ -159,27 +159,35 @@ git push
   -> workflow builds/pushes image and prints a BAHIA_ARTIFACT marker
   -> loom-worker publishes an ordinary kind 5402 workflow result with immutable image metadata
   -> Bahia correlates the trusted 5401/5402 and registers the verified artifact
-  -> optional release-provenance bridge publishes a second terminal RELEASE 5402
+  -> optional trusted attestor publishes a terminal release attestation (kind 4903, domain=release)
   -> Bahia verifies its complete supply-chain envelope and registers a digest-only artifact
   -> an operator separately signs an authorized ContextVM promotion intent
   -> Bahia/Loom executes a staged canary from the registered digest
 ```
 
-### Required terminal RELEASE 5402 contract
+### Required terminal release attestation contract
 
-Artifact registration consumes the canonical **second** kind `5402` emitted by
-the grasp-gitea release-provenance path. Both the signed tags and JSON content
-must identify `RELEASE`, and the result must be terminal and successful. The
-content mirrors producer schema `hiveci.release-provenance.v1` with
-`release_identity`, full `lineage`, `execution.worker_identity`, immutable
-`manifest`, `sbom`, and `provenance` descriptors, plus the Signet artifact
-attestation. Bahia joins the trusted signed kind `5401`, worker admission, and
-repository policy evidence before accepting it.
+hive-ci-protocol defines exactly one kind-`5402` semantic (the Workflow
+Result), so release evidence never rides `5402`. Release registration consumes
+the fleet-native **release attestation** registered in cascadia-nips
+(`release_attestation`, NIP-CAS-0005): a kind `4903` event signed by a key in
+`hiveci.trusted_release_attestors` with tags `domain=release`,
+`type=attestation`, `schema=bahia.audit.release.v1`, `run=<5401 event id>`,
+and `artifact=<repository@sha256:digest>`. Its content is the canonical
+envelope `{"v":1,"type":"release.attestation","payload":{release_id,
+workflow_run_id, source_commit, source_repo, artifact, digest, sbom_ref,
+provenance_ref, signet_evidence, attested_at},"meta":{"hiveci_release":
+<hiveci.release-provenance.v1 document>}}`. The payload must agree with the
+provenance document, which carries `release_identity`, full `lineage`,
+`execution.worker_identity`, immutable `manifest`, `sbom`, and `provenance`
+descriptors, plus the Signet artifact attestation. Bahia joins the trusted
+signed kind `5401`, worker admission, and repository policy evidence before
+accepting it.
 
 The producer's optional `image_tag` is evidence only. It is never an artifact
-identity, lookup, copy, or deployment input. The older `.hiveci-result.json`
-shape used for an ordinary build-result `5402` does **not** qualify as a terminal
-RELEASE registration.
+identity, lookup, copy, or deployment input. A `5402` — ordinary, or carrying
+the retired `result=RELEASE` overload — never qualifies as a release
+attestation.
 
 ### Hive Workflow Contract
 
@@ -260,16 +268,16 @@ Bahia needs:
 - relay list including the relay where `5401` and `5402` are published;
 - a `hiveci_pipeline_policies` row matching the repo coordinate and workflow path;
 - registry inspection configured for the target registry;
-- a trusted release-attestor key and OCI/Blossom evidence resolver for RELEASE results.
+- a trusted release-attestor key and OCI/Blossom evidence resolver for kind-4903 release attestations.
 
 The bridge handles ordinary successful build-result `5402` events as the live
 Loom integration path. The result must be signed either by the ephemeral
 `publisher` declared by the trusted 5401 or by a key in
 `hiveci.trusted_loom_worker_pubkeys`. It must include `image_repo`, `image_tag`,
 and a full lowercase `sha256:<64 hex>` manifest digest. This path is separate
-from terminal RELEASE acceptance.
+from terminal release-attestation acceptance.
 
-A terminal RELEASE result is registered only after manifest, SBOM, and in-toto
+A release attestation is registered only after manifest, SBOM, and in-toto
 provenance bytes match every signed descriptor and lineage binding. The
 artifact identity is `repository@sha256:digest`; any signed image tag is stored
 only as evidence. CI success does not promote production. The legacy `auto_deploy_staging` policy
@@ -359,7 +367,7 @@ Registration is not promotion. A registered artifact is digest-pinned and
 inert until a separately authorized Bahia deployment promotes it.
 
 Do not add `trusted_release_attestors` for the ordinary Loom result path. That
-key enables the stricter second RELEASE-5402 verifier and additionally requires
+key enables the kind-4903 release-attestation verifier and additionally requires
 Bahia's OCI evidence service, full lineage/SBOM/provenance descriptors, worker
 admission evidence, and the metadata constraints shown below.
 

@@ -342,14 +342,28 @@ func ingestPromotionFlowRelease(
 			Subjects: []domain.HiveCIReleaseArtifact{manifest, sbom, provenance},
 		},
 	}
-	content, err := json.Marshal(result)
+	// Terminal release attestation: kind 4903 domain=release with the
+	// canonical bahia.audit.release.v1 envelope (never a 5402 subtype).
+	content, err := json.Marshal(domain.ReleaseAttestationEnvelope{
+		V: 1, Type: domain.ReleaseAttestationEnvelopeType,
+		Payload: domain.ReleaseAttestationPayload{
+			ReleaseID: releaseIdentity, WorkflowRunID: lineage.WorkflowRunEventID,
+			SourceCommit: lineage.Commit, SourceRepo: lineage.RepoAddress,
+			Artifact: manifest.Repository + "@" + manifest.Digest, Digest: manifest.Digest,
+			SBOMRef: sbom.Digest, ProvenanceRef: provenance.Digest,
+			AttestedAt: now.UTC().Format(time.RFC3339),
+		},
+		Meta: domain.ReleaseAttestationMeta{HiveCIRelease: result},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	releaseEvent := &nostr.Event{
-		Kind: kinds.HiveCIWorkflowResult, CreatedAt: nostr.Timestamp(now.Unix()), Content: string(content),
+		Kind: kinds.CASAudit, CreatedAt: nostr.Timestamp(now.Unix()), Content: string(content),
 		Tags: nostr.Tags{
-			{"e", lineage.WorkflowRunEventID}, {"status", "success"}, {"result", domain.HiveCIReleaseResultType},
+			{"domain", domain.ReleaseAttestationDomain}, {"type", domain.ReleaseAttestationAuditType},
+			{"schema", domain.ReleaseAttestationSchema}, {"run", lineage.WorkflowRunEventID},
+			{"artifact", manifest.Repository + "@" + manifest.Digest},
 			{"release", releaseIdentity}, {"trigger-envelope", lineage.TriggerIdentity},
 			{"trigger-source", lineage.TriggerSource}, {"trigger-id", lineage.TriggerID},
 			{"pr", lineage.PREventID}, {"review", lineage.ReviewEventID}, {"audit", lineage.AuditEventID},
@@ -357,7 +371,7 @@ func ingestPromotionFlowRelease(
 			{"source-provenance", lineage.SourceProvenanceRef}, {"commit", lineage.Commit}, {"tree", lineage.Tree},
 			{"workflow-digest", lineage.WorkflowDigest}, {"worker", execution.WorkerIdentity},
 			{"worker-capability", execution.WorkerCapability}, {"build-image", execution.BuildEnvironmentImageDigest},
-			{"exit_code", "0"}, {"duration", execution.BahiaDuration}, {"log_url", execution.DurableLogReference},
+			{"log_url", execution.DurableLogReference},
 			{"image_repo", manifest.Repository}, {"image_digest", manifest.Digest}, {"sbom_digest", sbom.Digest},
 			{"provenance_digest", provenance.Digest}, {"image_tag", result.ImageTag},
 		},

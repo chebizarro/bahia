@@ -3,7 +3,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "statement": "A valid signed RELEASE result registers exactly one immutable digest-only artifact with complete lineage, while exact replay converges and conflicting replay fails closed.",
+      "statement": "A valid trusted-attestor-signed kind-4903 release attestation (domain=release, type=attestation, schema bahia.audit.release.v1, run=<5401 id>, canonical envelope whose payload agrees with the hiveci.release-provenance.v1 document in meta) registers exactly one immutable digest-only artifact with complete lineage, while exact replay converges and conflicting replay fails closed; any kind-5402, including the retired result=RELEASE overload, is never a release.",
       "tests": ["go test ./internal/adapters/hiveci ./internal/pipeline ./internal/service"]
     },
     {

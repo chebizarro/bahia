@@ -198,17 +198,36 @@ func releaseArtifactDescriptor(repository, mediaType string, content []byte) dom
 	}
 }
 
+// releaseAttestationEnvelope wraps a provenance document in the canonical
+// bahia.audit.release.v1 envelope (cascadia-nips release_attestation).
+func releaseAttestationEnvelope(result domain.HiveCIReleaseResult, at time.Time) domain.ReleaseAttestationEnvelope {
+	return domain.ReleaseAttestationEnvelope{
+		V: 1, Type: domain.ReleaseAttestationEnvelopeType,
+		Payload: domain.ReleaseAttestationPayload{
+			ReleaseID: result.ReleaseIdentity, WorkflowRunID: result.Lineage.WorkflowRunEventID,
+			SourceCommit: result.Lineage.Commit, SourceRepo: result.Lineage.RepoAddress,
+			Artifact: result.Manifest.Repository + "@" + result.Manifest.Digest, Digest: result.Manifest.Digest,
+			SBOMRef: result.SBOM.Digest, ProvenanceRef: result.Provenance.Digest,
+			SignetEvidence: map[string]any{"type": result.ArtifactAttestation.Type, "signer_pubkey": result.ArtifactAttestation.SignerPubkey},
+			AttestedAt:     at.UTC().Format(time.RFC3339),
+		},
+		Meta: domain.ReleaseAttestationMeta{HiveCIRelease: result},
+	}
+}
+
 func releaseEventFromResult(t *testing.T, result domain.HiveCIReleaseResult, signer nostr.SecretKey, at time.Time) *nostr.Event {
 	t.Helper()
-	content, err := json.Marshal(result)
+	content, err := json.Marshal(releaseAttestationEnvelope(result, at))
 	if err != nil {
 		t.Fatal(err)
 	}
 	event := &nostr.Event{
-		Kind: kinds.HiveCIWorkflowResult, CreatedAt: nostr.Timestamp(at.Unix()),
+		Kind: kinds.CASAudit, CreatedAt: nostr.Timestamp(at.Unix()),
 		Content: string(content),
 		Tags: nostr.Tags{
-			{"e", result.Lineage.WorkflowRunEventID}, {"status", "success"}, {"result", domain.HiveCIReleaseResultType},
+			{"domain", domain.ReleaseAttestationDomain}, {"type", domain.ReleaseAttestationAuditType},
+			{"schema", domain.ReleaseAttestationSchema}, {"run", result.Lineage.WorkflowRunEventID},
+			{"artifact", result.Manifest.Repository + "@" + result.Manifest.Digest},
 			{"release", result.ReleaseIdentity}, {"trigger-envelope", result.Lineage.TriggerIdentity},
 			{"trigger-source", result.Lineage.TriggerSource}, {"trigger-id", result.Lineage.TriggerID},
 			{"pr", result.Lineage.PREventID}, {"review", result.Lineage.ReviewEventID},
@@ -218,7 +237,6 @@ func releaseEventFromResult(t *testing.T, result domain.HiveCIReleaseResult, sig
 			{"workflow-digest", result.Lineage.WorkflowDigest}, {"worker", result.Execution.WorkerIdentity},
 			{"worker-capability", result.Execution.WorkerCapability},
 			{"build-image", result.Execution.BuildEnvironmentImageDigest},
-			{"exit_code", "0"}, {"duration", result.Execution.BahiaDuration},
 			{"log_url", result.Execution.DurableLogReference}, {"image_repo", result.Manifest.Repository},
 			{"image_digest", result.Manifest.Digest}, {"sbom_digest", result.SBOM.Digest},
 			{"provenance_digest", result.Provenance.Digest}, {"image_tag", result.ImageTag},
@@ -475,8 +493,8 @@ func TestSubscriberDispatchesAcceptedReleaseAndExactReplay(t *testing.T) {
 				t.Fatalf("subscriber changed accepted digest: %+v", commit.Release)
 			}
 		}}
-	subscriber.handleWorkflowResult(context.Background(), f.event)
-	subscriber.handleWorkflowResult(context.Background(), f.event)
+	subscriber.handleReleaseAttestation(context.Background(), f.event)
+	subscriber.handleReleaseAttestation(context.Background(), f.event)
 	if calls != 2 || f.store.commits != 1 {
 		t.Fatalf("release callback calls=%d durable commits=%d, want two decisions and one commit", calls, f.store.commits)
 	}
@@ -513,12 +531,15 @@ func TestSubscriberDurablyReprocessesReleaseDeliveredBeforeWorkflowRun(t *testin
 	}
 }
 
-func TestReleaseIngestorRequiresTagAndContentReleaseMarkers(t *testing.T) {
-	t.Run("ordinary result is not consumed", func(t *testing.T) {
+// hive-ci-protocol defines exactly one kind-5402 semantic. A 5402 carrying
+// the old result=RELEASE overload, or any ordinary result, is never a
+// release; only a kind-4903 domain=release attestation with the canonical
+// envelope is.
+func TestReleaseIngestorAcceptsOnlyKind4903ReleaseAttestations(t *testing.T) {
+	t.Run("ordinary 5402 is not consumed", func(t *testing.T) {
 		f := newReleaseFixture(t)
 		ordinary := &nostr.Event{Kind: kinds.HiveCIWorkflowResult,
-			CreatedAt: nostr.Timestamp(f.now.Unix()), Tags: nostr.Tags{{"status", "success"}},
-			Content: `{"status":"success"}`}
+			CreatedAt: nostr.Timestamp(f.now.Unix()), Tags: nostr.Tags{{"status", "success"}}}
 		mustSignReleaseEvent(t, ordinary, f.attestor)
 		if IsReleaseCandidate(ordinary) {
 			t.Fatal("ordinary result classified as release")
@@ -527,24 +548,60 @@ func TestReleaseIngestorRequiresTagAndContentReleaseMarkers(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
-	t.Run("tag only fails closed", func(t *testing.T) {
+	t.Run("legacy result=RELEASE 5402 overload is rejected", func(t *testing.T) {
 		f := newReleaseFixture(t)
-		f.event.Content = `{"result_type":"BUILD"}`
+		legacy := &nostr.Event{Kind: kinds.HiveCIWorkflowResult, CreatedAt: nostr.Timestamp(f.now.Unix()),
+			Content: f.event.Content, Tags: append(nostr.Tags{{"e", f.result.Lineage.WorkflowRunEventID}, {"status", "success"}, {"result", "RELEASE"}}, f.event.Tags...)}
+		mustSignReleaseEvent(t, legacy, f.attestor)
+		if IsReleaseCandidate(legacy) {
+			t.Fatal("5402 with result=RELEASE classified as release")
+		}
+		if _, err := f.ingestor.Ingest(context.Background(), legacy); !errors.Is(err, ErrNotRelease) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("4903 without release domain/type is not a candidate", func(t *testing.T) {
+		f := newReleaseFixture(t)
+		replaceReleaseTag(t, f.event, "domain", "deployment", f.attestor)
+		if IsReleaseCandidate(f.event) {
+			t.Fatal("deployment audit classified as release")
+		}
+		if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, ErrNotRelease) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("wrong schema fails closed", func(t *testing.T) {
+		f := newReleaseFixture(t)
+		replaceReleaseTag(t, f.event, "schema", "bahia.audit.build.v1", f.attestor)
+		if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, ErrInvalidRelease) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("non-canonical content fails closed", func(t *testing.T) {
+		f := newReleaseFixture(t)
+		f.event.Content = `{"v":1,"type":"build.change-record","payload":{}}`
 		mustSignReleaseEvent(t, f.event, f.attestor)
 		if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, ErrInvalidRelease) {
 			t.Fatalf("error = %v", err)
 		}
 	})
-	t.Run("content only fails closed", func(t *testing.T) {
+	t.Run("payload disagreeing with provenance document fails closed", func(t *testing.T) {
 		f := newReleaseFixture(t)
-		filtered := make(nostr.Tags, 0, len(f.event.Tags))
-		for _, tag := range f.event.Tags {
-			if tag[0] != "result" {
-				filtered = append(filtered, tag)
-			}
+		envelope := releaseAttestationEnvelope(f.result, f.now)
+		envelope.Payload.Digest = "sha256:" + strings.Repeat("f", 64)
+		content, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
 		}
-		f.event.Tags = filtered
+		f.event.Content = string(content)
 		mustSignReleaseEvent(t, f.event, f.attestor)
+		if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, ErrInvalidRelease) || !strings.Contains(err.Error(), "digest") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("run tag must reference the 5401", func(t *testing.T) {
+		f := newReleaseFixture(t)
+		replaceReleaseTag(t, f.event, "run", strings.Repeat("0", 64), f.attestor)
 		if _, err := f.ingestor.Ingest(context.Background(), f.event); !errors.Is(err, ErrInvalidRelease) {
 			t.Fatalf("error = %v", err)
 		}

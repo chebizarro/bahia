@@ -43,7 +43,7 @@ type WorkflowRunDispatch struct {
 
 type RunConsumer func(ctx context.Context, run WorkflowRunDispatch)
 
-// AcceptedReleaseConsumer is invoked once after a new RELEASE result crosses
+// AcceptedReleaseConsumer is invoked once after a new kind-4903 release attestation crosses
 // validation and durable replay protection. Exact relay replays do not invoke it.
 type AcceptedReleaseConsumer func(ctx context.Context, commit domain.HiveCIReleaseCommitResult)
 
@@ -68,6 +68,7 @@ type Subscriber struct {
 	onRun          RunConsumer
 	releases       *ReleaseIngestor
 	onRelease      AcceptedReleaseConsumer
+	attestors      map[string]struct{}
 	releaseAuditor ReleaseIngestAuditor
 	evidenceEvents repository.NostrEventRepository
 	now            func() time.Time
@@ -91,6 +92,18 @@ func (s *Subscriber) SetTrustedResultPubkeys(pubkeys []string) {
 func (s *Subscriber) SetReleaseIngestor(ingestor *ReleaseIngestor, consumer AcceptedReleaseConsumer) {
 	s.releases = ingestor
 	s.onRelease = consumer
+}
+
+// SetReleaseAttestors scopes the kind-4903 release-attestation subscription
+// to the configured trusted attestor pubkeys.
+func (s *Subscriber) SetReleaseAttestors(pubkeys []string) {
+	s.attestors = make(map[string]struct{}, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+		if pubkey != "" {
+			s.attestors[pubkey] = struct{}{}
+		}
+	}
 }
 
 func (s *Subscriber) SetReleaseAuditor(auditor ReleaseIngestAuditor) { s.releaseAuditor = auditor }
@@ -175,10 +188,25 @@ func (s *Subscriber) subscriptionFilters() []nostr.Filter {
 	// 5401 authors are statically known. 5402 authors cannot be fully scoped:
 	// grasp-gitea uses a per-run ephemeral publisher, while Bahia-dispatched
 	// jobs use configured Loom worker keys. Correlation is enforced after load.
-	return []nostr.Filter{
+	filters := []nostr.Filter{
 		{Kinds: []nostr.Kind{kinds.HiveCIWorkflowRun}, Authors: authors},
 		{Kinds: []nostr.Kind{kinds.HiveCIWorkflowResult}},
 	}
+	// Terminal release attestations are kind 4903 (domain=release) signed by
+	// the configured trusted attestors; hive-ci-protocol 5402 is never one.
+	if len(s.attestors) > 0 {
+		attestors := make([]nostr.PubKey, 0, len(s.attestors))
+		for raw := range s.attestors {
+			if author, err := nostr.PubKeyFromHex(raw); err == nil {
+				attestors = append(attestors, author)
+			}
+		}
+		filters = append(filters, nostr.Filter{
+			Kinds: []nostr.Kind{kinds.CASAudit}, Authors: attestors,
+			Tags: nostr.TagMap{"domain": []string{domain.ReleaseAttestationDomain}},
+		})
+	}
+	return filters
 }
 
 func (s *Subscriber) warnDecision(message, reason string, fields ...zap.Field) {
@@ -308,6 +336,10 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	ctx = telemetry.ExtractTraceContext(ctx, ev.Tags)
 
 	switch int(ev.Kind) {
+	case kinds.CASAudit:
+		if IsReleaseCandidate(ev) {
+			s.handleReleaseAttestation(ctx, ev)
+		}
 	case kinds.HiveCIWorkflowRun:
 		s.handleWorkflowRun(ctx, ev)
 	case kinds.HiveCIWorkflowResult:
@@ -503,10 +535,10 @@ func (s *Subscriber) processOrphanedReleases(ctx context.Context, runEventID str
 		return
 	}
 	records, err := s.evidenceEvents.FindByTag(
-		ctx, "e", runEventID, []int{kinds.HiveCIWorkflowResult}, 1000,
+		ctx, "run", runEventID, []int{kinds.CASAudit}, 1000,
 	)
 	if err != nil {
-		s.logger.Warn("failed to list orphaned Hive-CI RELEASE candidates",
+		s.logger.Warn("failed to list orphaned release attestations",
 			zap.String("run_event_id", runEventID), zap.Error(err))
 		return
 	}
@@ -517,22 +549,26 @@ func (s *Subscriber) processOrphanedReleases(ctx context.Context, runEventID str
 		}
 		event, decodeErr := signedEventFromRecord(record)
 		if decodeErr != nil {
-			s.logger.Warn("failed to decode orphaned Hive-CI RELEASE candidate",
+			s.logger.Warn("failed to decode orphaned release attestation",
 				zap.String("event_id", record.ID), zap.Error(decodeErr))
 			continue
 		}
 		if !IsReleaseCandidate(event) {
 			continue
 		}
-		s.handleWorkflowResult(ctx, event)
+		s.handleReleaseAttestation(ctx, event)
 	}
 }
 
-func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) {
+// handleReleaseAttestation ingests a kind-4903 domain=release attestation
+// (cascadia-nips release_attestation). It is durably retained before any
+// decision so an attestation that arrives ahead of its 5401 lineage can be
+// reprocessed deterministically.
+func (s *Subscriber) handleReleaseAttestation(ctx context.Context, ev *nostr.Event) {
 	eventID := nostrutil.EventIDHex(ev)
-	if IsReleaseCandidate(ev) {
+	{
 		if err := s.recordReleaseCandidate(ctx, ev); err != nil {
-			s.logger.Warn("failed to durably retain Hive-CI RELEASE candidate", zap.String("event_id", eventID), zap.Error(err))
+			s.logger.Warn("failed to durably retain release attestation", zap.String("event_id", eventID), zap.Error(err))
 			if s.releaseAuditor != nil {
 				_ = s.releaseAuditor.AuditReleaseRejection(ctx, ev, err)
 			}
@@ -540,7 +576,7 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		}
 		if s.releases == nil {
 			err := fmt.Errorf("release ingestor is not configured")
-			s.warnDecision("dropping Hive-CI RELEASE result", "release_ingestor_disabled",
+			s.warnDecision("dropping release attestation", "release_ingestor_disabled",
 				zap.String("event_id", eventID), zap.String("pubkey", ev.PubKey.Hex()), zap.Error(err))
 			if s.releaseAuditor != nil {
 				_ = s.releaseAuditor.AuditReleaseRejection(ctx, ev, err)
@@ -549,12 +585,12 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		}
 		commit, err := s.releases.Ingest(ctx, ev)
 		if errors.Is(err, ErrReleaseLineagePending) {
-			s.logger.Info("retaining orphaned Hive-CI RELEASE until signed workflow lineage arrives",
+			s.logger.Info("retaining orphaned release attestation until signed workflow lineage arrives",
 				zap.String("event_id", eventID), zap.Error(err))
 			return
 		}
 		if err != nil {
-			s.warnDecision("rejecting Hive-CI RELEASE result", releaseRejectionReason(err),
+			s.warnDecision("rejecting release attestation", releaseRejectionReason(err),
 				zap.String("event_id", eventID), zap.String("pubkey", ev.PubKey.Hex()), zap.Error(err))
 			if s.releaseAuditor != nil {
 				if auditErr := s.releaseAuditor.AuditReleaseRejection(ctx, ev, err); auditErr != nil {
@@ -566,9 +602,15 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		if s.onRelease != nil {
 			s.onRelease(ctx, commit)
 		}
-		s.logger.Info("Hive-CI RELEASE result accepted", zap.String("event_id", eventID), zap.Bool("replay", commit.Replay))
-		return
+		s.logger.Info("release attestation accepted", zap.String("event_id", eventID), zap.Bool("replay", commit.Replay))
 	}
+}
+
+// handleWorkflowResult ingests an ordinary hive-ci-protocol kind-5402
+// Workflow Result. It is never a release: release evidence is the kind-4903
+// attestation handled above.
+func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) {
+	eventID := nostrutil.EventIDHex(ev)
 	existing, err := s.repo.GetResultByEventID(ctx, eventID)
 	if err != nil {
 		s.logger.Warn("failed to load existing hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
