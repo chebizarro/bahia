@@ -618,7 +618,7 @@ func desiredFromRecord(record repository.NostrEventRecord) (desiredConfig, error
 	request := ConfigPublishRequest{Kind: record.Kind, ServiceID: service, PolicyName: policyName, Scope: scope, Version: content.Version, Schema: schema, Policy: content.Policy, SecretRefs: content.SecretRefs}
 	if record.Kind == ConfigFabricListKind {
 		for _, tag := range tags {
-			if len(tag) == 2 && (tag[0] == "p" || tag[0] == "a" || tag[0] == "r") {
+			if len(tag) >= 2 && (tag[0] == "p" || tag[0] == "a" || tag[0] == "r") {
 				request.Items = append(request.Items, ConfigListItem{Tag: tag[0], Value: tag[1]})
 			}
 		}
@@ -716,7 +716,7 @@ func publishRequestFromRecord(record repository.NostrEventRecord) (ConfigPublish
 	if record.Kind == ConfigFabricListKind {
 		tags, _ := decodeTags(record.Tags)
 		for _, tag := range tags {
-			if len(tag) == 2 && (tag[0] == "p" || tag[0] == "a" || tag[0] == "r") {
+			if len(tag) >= 2 && (tag[0] == "p" || tag[0] == "a" || tag[0] == "r") {
 				request.Items = append(request.Items, ConfigListItem{Tag: tag[0], Value: tag[1]})
 			}
 		}

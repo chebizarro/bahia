@@ -320,7 +320,7 @@ func (s *OpenClawSidecar) HandleControllerTrustList(ctx context.Context, event *
 	}
 	controllers := make([]string, 0)
 	for _, tag := range event.Tags {
-		if len(tag) == 2 && tag[0] == "p" {
+		if len(tag) >= 2 && tag[0] == "p" {
 			controllers = append(controllers, tag[1])
 		}
 	}

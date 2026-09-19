@@ -256,7 +256,7 @@ func (c *ConfigConsumer) validate(event nostr.Event) (ConfigProjection, error) {
 	}
 	if event.Kind == configListKind {
 		for _, tag := range event.Tags {
-			if len(tag) == 2 && tag[0] == "p" {
+			if len(tag) >= 2 && tag[0] == "p" {
 				projection.AllowedPubkeys = append(projection.AllowedPubkeys, tag[1])
 			}
 		}
