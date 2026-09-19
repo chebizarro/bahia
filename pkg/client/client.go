@@ -19,6 +19,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 // Client is an HTTP client for the Bahia API.
@@ -97,7 +98,7 @@ func (p *NIP98SignerProvider) AuthorizationHeaderWithPayload(ctx context.Context
 		return "", fmt.Errorf("generate NIP-98 nonce: %w", err)
 	}
 	event := nostr.Event{
-		Kind:      27235,
+		Kind:      kinds.HTTPAuth,
 		CreatedAt: createdAt,
 		Tags: nostr.Tags{
 			{"u", absoluteURL},
@@ -157,7 +158,7 @@ func (p *NIP98PrivateKeyProvider) AuthorizationHeaderWithPayload(ctx context.Con
 	}
 
 	event := nostr.Event{
-		Kind:      27235,
+		Kind:      kinds.HTTPAuth,
 		CreatedAt: createdAt,
 		Tags: nostr.Tags{
 			{"u", absoluteURL},

@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // NIP98 event kind for HTTP Auth (RFC 7235 reference).
-const kindHTTPAuth = 27235
+const kindHTTPAuth = kinds.HTTPAuth
 
 // NIP98Config holds configuration for NIP-98 HTTP Auth validation.
 type NIP98Config struct {

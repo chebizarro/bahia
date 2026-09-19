@@ -20,11 +20,12 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip86"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
 	nip86ContentType = "application/nostr+json+rpc"
-	nip98Kind        = nostr.Kind(27235)
+	nip98Kind        = nostr.Kind(kinds.HTTPAuth)
 	nip98Window      = 60 * time.Second
 )
 
@@ -564,7 +565,7 @@ func validateNIP98Authorization(header, canonicalURL string, body []byte, now ti
 		return nostr.Event{}, fmt.Errorf("decode NIP-98 event: %w", err)
 	}
 	if event.Kind != nip98Kind {
-		return nostr.Event{}, fmt.Errorf("NIP-98 event kind must be 27235")
+		return nostr.Event{}, fmt.Errorf("NIP-98 event kind must be %d", nip98Kind)
 	}
 	if !event.CheckID() {
 		return nostr.Event{}, fmt.Errorf("NIP-98 event id is invalid")

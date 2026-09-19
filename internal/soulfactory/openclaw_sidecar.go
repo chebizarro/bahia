@@ -20,6 +20,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
@@ -356,7 +357,7 @@ func validControllerConfigScope(scope string) bool {
 }
 
 func (s *OpenClawSidecar) HandleControllerPolicyIntent(ctx context.Context, event *nostr.Event) error {
-	if event == nil || event.Kind != nostr.Kind(25910) || !validSignedEvent(event) {
+	if event == nil || event.Kind != nostr.Kind(kinds.ContextVMMessage) || !validSignedEvent(event) {
 		return fmt.Errorf("invalid signed controller policy intent")
 	}
 	if tagValue(event.Tags, tagPubkey) != s.runtimePubkey {
@@ -393,7 +394,7 @@ func (s *OpenClawSidecar) HandleControllerPolicyIntent(ctx context.Context, even
 		return err
 	}
 	reply := nostr.Event{
-		Kind:      nostr.Kind(25910),
+		Kind:      nostr.Kind(kinds.ContextVMMessage),
 		CreatedAt: nostr.Timestamp(s.now().Unix()),
 		Tags: nostr.Tags{
 			{tagPubkey, event.PubKey.Hex()},
@@ -441,7 +442,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			},
 		},
 		{
-			Kinds: []nostr.Kind{nostr.Kind(25910)},
+			Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMMessage)},
 			Tags: nostr.TagMap{
 				tagPubkey: []string{s.runtimePubkey},
 				tagMethod: []string{
@@ -475,7 +476,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			var err error
 			if event.Kind == OpenClawControllerListKind {
 				err = s.HandleControllerTrustList(ctx, event)
-			} else if event.Kind == nostr.Kind(25910) {
+			} else if event.Kind == nostr.Kind(kinds.ContextVMMessage) {
 				err = s.HandleControllerPolicyIntent(ctx, event)
 			} else {
 				_, err = s.HandleControlEvent(ctx, event)

@@ -21,6 +21,7 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -1038,7 +1039,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 // SignNIP98 creates a NIP-98 auth header for HTTP requests.
 func (c *Client) SignNIP98(ctx context.Context, url, method string, payloadHash string) (string, error) {
 	event := &nostr.Event{
-		Kind:      27235, // NIP-98
+		Kind:      kinds.HTTPAuth,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"u", url},

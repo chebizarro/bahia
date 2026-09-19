@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -287,7 +288,7 @@ func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) 
 		return "", fmt.Errorf("decoding relay administrator pubkey: %w", err)
 	}
 	event := &nostr.Event{
-		Kind:      nostr.Kind(27235),
+		Kind:      nostr.Kind(kinds.HTTPAuth),
 		PubKey:    pubkey,
 		CreatedAt: nostr.Timestamp(c.now().Unix()),
 		Tags: nostr.Tags{
