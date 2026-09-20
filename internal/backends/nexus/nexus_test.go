@@ -119,6 +119,39 @@ func TestNexusObserveArtifactUsesBackendChecksum(t *testing.T) {
 	}
 }
 
+func TestNexusListArtifactsPagination(t *testing.T) {
+	t.Run("assembles pages", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("continuationToken") == "" {
+				io.WriteString(w, `{"items":[{"path":"a.tgz","checksum":{"sha256":"aa"}}],"continuationToken":"next"}`)
+				return
+			}
+			io.WriteString(w, `{"items":[{"path":"b.tgz","checksum":{"sha256":"bb"}}],"continuationToken":null}`)
+		}))
+		defer server.Close()
+		backend, _ := New(Config{BaseURL: server.URL})
+		items, err := backend.ListArtifacts(context.Background(), testRepo())
+		if err != nil {
+			t.Fatalf("ListArtifacts: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("ListArtifacts returned %d artifacts, want 2", len(items))
+		}
+	})
+
+	t.Run("rejects repeated cursor", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"items":[],"continuationToken":"stuck"}`)
+		}))
+		defer server.Close()
+		backend, _ := New(Config{BaseURL: server.URL})
+		_, err := backend.ListArtifacts(context.Background(), testRepo())
+		if err == nil || !strings.Contains(err.Error(), "repeated page cursor") {
+			t.Fatalf("ListArtifacts error = %v, want repeated page cursor", err)
+		}
+	})
+}
+
 func TestNexusUploadAndYankUseRawRepositoryPaths(t *testing.T) {
 	var uploadedPath, deletedPath, uploadedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

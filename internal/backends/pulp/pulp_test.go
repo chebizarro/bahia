@@ -164,6 +164,68 @@ func TestPulpObserveArtifactDoesNotReuseExpectedChecksumAsObserved(t *testing.T)
 	}
 }
 
+func TestPulpArtifactNotFoundUsesTypedSentinel(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	backend, _ := New(Config{BaseURL: server.URL})
+	artifact := domain.PackageArtifact{BackendPath: "missing.tgz"}
+	_, err := backend.GetArtifact(context.Background(), testRepo(), artifact)
+	if !errors.Is(err, packagebackend.ErrArtifactNotFound) {
+		t.Fatalf("GetArtifact error = %v, want ErrArtifactNotFound", err)
+	}
+	obs, err := backend.ObserveArtifact(context.Background(), testRepo(), artifact)
+	if err != nil || obs.Exists {
+		t.Fatalf("ObserveArtifact = %#v, %v; want absent without error", obs, err)
+	}
+}
+
+func TestPulpListArtifactsPagination(t *testing.T) {
+	t.Run("assembles pages", func(t *testing.T) {
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "2" {
+				io.WriteString(w, `{"next":null,"results":[{"relative_path":"b.whl","sha256":"bb","size":2}]}`)
+				return
+			}
+			io.WriteString(w, `{"next":"`+server.URL+`/pulp/api/v3/repositories/file/file/file-npm/artifacts/?page=2","results":[{"relative_path":"a.whl","sha256":"aa","size":1}]}`)
+		}))
+		defer server.Close()
+		backend, _ := New(Config{BaseURL: server.URL, EnableCustomMutationAPI: true})
+		items, err := backend.ListArtifacts(context.Background(), testRepo())
+		if err != nil {
+			t.Fatalf("ListArtifacts: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("ListArtifacts returned %d artifacts, want 2", len(items))
+		}
+	})
+
+	t.Run("rejects repeated cursor", func(t *testing.T) {
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"next":"`+server.URL+`/pulp/api/v3/repositories/file/file/file-npm/artifacts/?cursor=stuck","results":[]}`)
+		}))
+		defer server.Close()
+		backend, _ := New(Config{BaseURL: server.URL, EnableCustomMutationAPI: true})
+		_, err := backend.ListArtifacts(context.Background(), testRepo())
+		if err == nil || !strings.Contains(err.Error(), "repeated page cursor") {
+			t.Fatalf("ListArtifacts error = %v, want repeated page cursor", err)
+		}
+	})
+
+	t.Run("rejects cross-origin next", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"next":"https://evil.example/page","results":[]}`)
+		}))
+		defer server.Close()
+		backend, _ := New(Config{BaseURL: server.URL, EnableCustomMutationAPI: true})
+		_, err := backend.ListArtifacts(context.Background(), testRepo())
+		if err == nil || !strings.Contains(err.Error(), "not same-origin") {
+			t.Fatalf("ListArtifacts error = %v, want same-origin rejection", err)
+		}
+	})
+}
+
 func TestPulpStoreAndYankArtifactUseVerifiedCustomAdapterEndpoints(t *testing.T) {
 	var putPath, deletePath, putBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

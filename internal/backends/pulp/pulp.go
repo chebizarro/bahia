@@ -37,11 +37,8 @@ type Config struct {
 
 // Backend implements packagebackend.Backend for Pulp file repositories.
 type Backend struct {
-	baseURL             string
+	*packagebackend.Requester
 	publicBaseURL       string
-	httpClient          *http.Client
-	auth                packagebackend.AuthConfig
-	secrets             map[string]string
 	taskInterval        time.Duration
 	confirmationTimeout time.Duration
 	customMutationAPI   bool
@@ -76,7 +73,7 @@ func New(cfg Config) (*Backend, error) {
 			return nil, err
 		}
 	}
-	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client, auth: cfg.Auth, secrets: cfg.Secrets, taskInterval: interval, confirmationTimeout: confirmationTimeout, customMutationAPI: cfg.EnableCustomMutationAPI}, nil
+	return &Backend{Requester: packagebackend.NewRequester(base, client, cfg.Auth, cfg.Secrets), publicBaseURL: publicBase, taskInterval: interval, confirmationTimeout: confirmationTimeout, customMutationAPI: cfg.EnableCustomMutationAPI}, nil
 }
 
 func (b *Backend) Type() domain.PackageBackendType { return domain.PackageBackendPulp }
@@ -99,7 +96,7 @@ func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepos
 	if !b.customMutationAPI {
 		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
 	}
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	if name == "" {
 		return packagebackend.RepositoryObservation{}, fmt.Errorf("external repository name is required")
 	}
@@ -134,7 +131,7 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 	if !b.customMutationAPI {
 		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
 	}
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	if !force {
 		items, err := b.ListArtifacts(ctx, repo)
 		if err != nil {
@@ -144,7 +141,7 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 			return packagebackend.RepositoryObservation{}, fmt.Errorf("pulp repository %q is not empty", name)
 		}
 	}
-	resp, err := b.do(ctx, http.MethodDelete, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/", nil, "")
+	resp, err := b.Do(ctx, http.MethodDelete, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/", nil, "")
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
@@ -159,7 +156,7 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 }
 
 func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	exists, href, err := b.findRepository(ctx, name)
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
@@ -174,12 +171,12 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 	if req.Reader == nil {
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("artifact reader is required")
 	}
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	relPath, err := packagebackend.ArtifactPath(req.Namespace, req.PackageName, req.Version, req.Filename)
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	resp, err := b.do(ctx, http.MethodPut, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/"+escapePath(relPath), req.Reader, req.ContentType)
+	resp, err := b.Do(ctx, http.MethodPut, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/"+packagebackend.EscapePath(relPath), req.Reader, req.ContentType)
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
@@ -190,7 +187,7 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 }
 
 func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactStream, error) {
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
 	var err error
 	if relPath == "" {
@@ -199,16 +196,16 @@ func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository
 			return packagebackend.ArtifactStream{}, err
 		}
 	}
-	resp, err := b.do(ctx, http.MethodGet, "/pulp/content/"+url.PathEscape(name)+"/"+escapePath(relPath), nil, "")
+	resp, err := b.Do(ctx, http.MethodGet, "/pulp/content/"+url.PathEscape(name)+"/"+packagebackend.EscapePath(relPath), nil, "")
 	if err != nil {
 		return packagebackend.ArtifactStream{}, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		_ = resp.Body.Close()
-		return packagebackend.ArtifactStream{}, fmt.Errorf("pulp artifact not found")
+		return packagebackend.ArtifactStream{}, fmt.Errorf("pulp artifact: %w", packagebackend.ErrArtifactNotFound)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := responseError(resp, "get pulp artifact")
+		err := packagebackend.ResponseError(resp, "get pulp artifact")
 		_ = resp.Body.Close()
 		return packagebackend.ArtifactStream{}, err
 	}
@@ -219,45 +216,38 @@ func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageReposito
 	if !b.customMutationAPI {
 		return nil, ErrCustomMutationAPIUnavailable
 	}
-	name := backendRepoName(repo)
-	resp, err := b.do(ctx, http.MethodGet, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/", nil, "")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, responseError(resp, "list pulp artifacts")
-	}
-	var payload struct {
-		Results []struct {
-			RelativePath string `json:"relative_path"`
-			Path         string `json:"path"`
-			Digest       string `json:"sha256"`
-			Size         int64  `json:"size"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode pulp artifacts: %w", err)
-	}
-	out := make([]packagebackend.ArtifactObservation, 0, len(payload.Results))
-	for _, item := range payload.Results {
-		p := item.RelativePath
-		if p == "" {
-			p = item.Path
+	name := packagebackend.BackendRepoName(repo)
+	out := []packagebackend.ArtifactObservation{}
+	err := b.GetPages(ctx, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/", "list pulp artifacts", func(body io.Reader) (string, error) {
+		var payload struct {
+			Next    string `json:"next"`
+			Results []struct {
+				RelativePath string `json:"relative_path"`
+				Path         string `json:"path"`
+				Digest       string `json:"sha256"`
+				Size         int64  `json:"size"`
+			} `json:"results"`
 		}
-		out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, p), BackendPath: p, SHA256: item.Digest, SizeBytes: item.Size})
-	}
-	return out, nil
+		if err := json.NewDecoder(body).Decode(&payload); err != nil {
+			return "", fmt.Errorf("decode pulp artifacts: %w", err)
+		}
+		for _, item := range payload.Results {
+			p := item.RelativePath
+			if p == "" {
+				p = item.Path
+			}
+			out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, p), BackendPath: p, SHA256: item.Digest, SizeBytes: item.Size})
+		}
+		return payload.Next, nil
+	})
+	return out, err
 }
 
 func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (packagebackend.ArtifactObservation, error) {
 	if !b.customMutationAPI {
 		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
 	}
-	name := backendRepoName(targetRepo)
+	name := packagebackend.BackendRepoName(targetRepo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
 	var err error
 	if relPath == "" {
@@ -266,7 +256,7 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 			return packagebackend.ArtifactObservation{}, err
 		}
 	}
-	payload := map[string]any{"source_repository": backendRepoName(sourceRepo), "target_repository": name, "path": relPath, "environment": req.Environment, "channel": req.Channel}
+	payload := map[string]any{"source_repository": packagebackend.BackendRepoName(sourceRepo), "target_repository": name, "path": relPath, "environment": req.Environment, "channel": req.Channel}
 	resp, err := b.postJSON(ctx, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/promote/", payload)
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
@@ -281,7 +271,7 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 	if !b.customMutationAPI {
 		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
 	}
-	name := backendRepoName(repo)
+	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
 	var err error
 	if relPath == "" {
@@ -290,7 +280,7 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 			return packagebackend.ArtifactObservation{}, err
 		}
 	}
-	resp, err := b.do(ctx, http.MethodDelete, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/"+escapePath(relPath), strings.NewReader(reason), "text/plain")
+	resp, err := b.Do(ctx, http.MethodDelete, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/"+packagebackend.EscapePath(relPath), strings.NewReader(reason), "text/plain")
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
@@ -307,7 +297,7 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactObservation, error) {
 	stream, err := b.GetArtifact(ctx, repo, artifact)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, packagebackend.ErrArtifactNotFound) {
 			return packagebackend.ArtifactObservation{Exists: false, DownloadURL: artifact.DownloadURL, BackendPath: artifact.BackendPath}, nil
 		}
 		return packagebackend.ArtifactObservation{}, err
@@ -320,7 +310,7 @@ func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageReposi
 }
 
 func (b *Backend) findRepository(ctx context.Context, name string) (bool, string, error) {
-	resp, err := b.do(ctx, http.MethodGet, "/pulp/api/v3/repositories/file/file/?name="+url.QueryEscape(name), nil, "")
+	resp, err := b.Do(ctx, http.MethodGet, "/pulp/api/v3/repositories/file/file/?name="+url.QueryEscape(name), nil, "")
 	if err != nil {
 		return false, "", err
 	}
@@ -329,7 +319,7 @@ func (b *Backend) findRepository(ctx context.Context, name string) (bool, string
 		return false, "", nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, "", responseError(resp, "find pulp repository")
+		return false, "", packagebackend.ResponseError(resp, "find pulp repository")
 	}
 	var payload struct {
 		Count   *int `json:"count"`
@@ -401,7 +391,7 @@ func (b *Backend) ensureDistribution(ctx context.Context, name, repoHref string)
 		return err
 	}
 	if resp.StatusCode == http.StatusConflict {
-		err := responseError(resp, "ensure pulp distribution (existing distribution was not verified)")
+		err := packagebackend.ResponseError(resp, "ensure pulp distribution (existing distribution was not verified)")
 		_ = resp.Body.Close()
 		return err
 	}
@@ -413,13 +403,13 @@ func (b *Backend) postJSON(ctx context.Context, path string, payload any) (*http
 	if err != nil {
 		return nil, err
 	}
-	return b.do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
+	return b.Do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
 }
 
 func (b *Backend) acceptTask(ctx context.Context, resp *http.Response, action string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return responseError(resp, action)
+		return packagebackend.ResponseError(resp, action)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8193))
 	if err != nil {
@@ -453,11 +443,8 @@ func (b *Backend) acceptTask(ctx context.Context, resp *http.Response, action st
 }
 
 func (b *Backend) waitTask(ctx context.Context, taskHref string) error {
-	if strings.HasPrefix(taskHref, b.baseURL) {
-		taskHref = strings.TrimPrefix(taskHref, b.baseURL)
-	}
 	for {
-		resp, err := b.do(ctx, http.MethodGet, taskHref, nil, "")
+		resp, err := b.Do(ctx, http.MethodGet, taskHref, nil, "")
 		if err != nil {
 			return err
 		}
@@ -520,63 +507,10 @@ func validUUID(value string) bool {
 	return err == nil
 }
 
-func (b *Backend) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	req, err := http.NewRequestWithContext(ctx, method, b.baseURL+path, body)
-	if err != nil {
-		return nil, err
-	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	b.applyAuth(req)
-	return b.httpClient.Do(req)
-}
-
-func (b *Backend) applyAuth(req *http.Request) {
-	if strings.TrimSpace(b.auth.BearerToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(b.auth.BearerToken))
-		return
-	}
-	if b.auth.Username != "" || b.auth.Password != "" {
-		req.SetBasicAuth(b.auth.Username, b.auth.Password)
-	}
-}
-
-func (b *Backend) Secret(name string) (string, bool) {
-	if b.secrets == nil {
-		return "", false
-	}
-	value, ok := b.secrets[name]
-	return value, ok
-}
-
-func responseError(resp *http.Response, action string) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("%s failed: status=%d body=%s", action, resp.StatusCode, strings.TrimSpace(string(body)))
-}
-
-func backendRepoName(repo domain.PackageRepository) string {
-	if name := strings.TrimSpace(repo.ExternalRepositoryName); name != "" {
-		return name
-	}
-	return strings.TrimSpace(repo.Name)
-}
-
 func (b *Backend) repositoryURL(name string) string {
 	return b.publicBaseURL + "/" + url.PathEscape(name)
 }
 
 func (b *Backend) artifactURL(name, relPath string) string {
-	return b.repositoryURL(name) + "/" + escapePath(relPath)
-}
-
-func escapePath(p string) string {
-	parts := strings.Split(p, "/")
-	for i := range parts {
-		parts[i] = url.PathEscape(parts[i])
-	}
-	return strings.Join(parts, "/")
+	return b.repositoryURL(name) + "/" + packagebackend.EscapePath(relPath)
 }
