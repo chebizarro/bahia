@@ -58,6 +58,11 @@ test/integration/.env.integration
 /bahia-server
 /bahia-relay
 /bahia-event-archive
+/openclaw-soulfactory-sidecar
+/openclaw-soulfactory-control
+/metiq-signet-enrollment
+/soulfactory-runtime-validate
+/bahia-test-relay
 __pycache__/
 *.py[cod]
 
