@@ -861,14 +861,20 @@ func TestShutdown_WaitsForGoroutines(t *testing.T) {
 	coord := NewCoordinator(nil, nil, &events.NoopPublisher{}, logger)
 
 	var goroutineFinished atomic.Bool
+	started := make(chan struct{})
+	released := make(chan struct{})
 
-	// Simulate a tracked goroutine.
+	// Simulate a tracked goroutine that blocks until released.
 	coord.wg.Add(1)
 	go func() {
 		defer coord.wg.Done()
-		time.Sleep(50 * time.Millisecond)
+		close(started)
+		<-released
 		goroutineFinished.Store(true)
 	}()
+
+	<-started
+	close(released)
 
 	coord.Shutdown(2 * time.Second)
 
@@ -2356,10 +2362,12 @@ func TestConcurrentShutdownAndPoll(t *testing.T) {
 	coord := NewCoordinator(nil, nil, &events.NoopPublisher{}, logger)
 
 	const numGoroutines = 10
+	started := make(chan struct{}, numGoroutines)
 	for i := 0; i < numGoroutines; i++ {
 		coord.wg.Add(1)
 		go func() {
 			defer coord.wg.Done()
+			started <- struct{}{}
 			select {
 			case <-coord.ctx.Done():
 			case <-time.After(5 * time.Second):
@@ -2367,8 +2375,10 @@ func TestConcurrentShutdownAndPoll(t *testing.T) {
 		}()
 	}
 
-	// Small delay to let goroutines start.
-	time.Sleep(10 * time.Millisecond)
+	// Wait for all goroutines to start before triggering shutdown.
+	for i := 0; i < numGoroutines; i++ {
+		<-started
+	}
 
 	// Shutdown should cancel all goroutines and return.
 	coord.Shutdown(2 * time.Second)

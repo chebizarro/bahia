@@ -292,15 +292,33 @@ func TestDNSReconcilerDebouncesRapidTriggers(t *testing.T) {
 	reconciler.debounce = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Replace the poll-based waitForListCalls with event-driven notification.
+	listCalls := make(chan int, 8)
+	backend.listNotify = listCalls
+
 	done := make(chan error, 1)
 	go func() { done <- reconciler.Run(ctx) }()
 
-	waitForListCalls(t, backend, 1)
+	// Wait for initial reconciliation list call.
+	<-listCalls
+
+	// Rapid triggers should coalesce.
 	for i := 0; i < 5; i++ {
 		reconciler.TriggerReconcile()
 	}
-	waitForListCalls(t, backend, 2)
-	time.Sleep(30 * time.Millisecond)
+
+	// Second reconciliation fired after debounce.
+	<-listCalls
+
+	// Any third call must not arrive before a controlled timer fires.
+	debounceGuard := 50 * time.Millisecond
+	select {
+	case <-listCalls:
+		t.Fatal("debounce failed: third reconciliation fired before timer")
+	case <-time.After(debounceGuard):
+	}
+
 	if got := backend.listCallCount(); got != 2 {
 		t.Fatalf("list calls after rapid triggers = %d, want 2", got)
 	}
@@ -444,18 +462,22 @@ func (b *fakeAuthorityBackend) ListZoneState(context.Context, domain.DNSZone) ([
 }
 
 type fakeDNSBackend struct {
-	mu        sync.Mutex
-	records   []domain.DNSRecord
-	synced    []domain.DNSRecord
-	syncErr   error
-	syncCalls int
-	listCalls int
+	mu         sync.Mutex
+	records    []domain.DNSRecord
+	synced     []domain.DNSRecord
+	syncErr    error
+	syncCalls  int
+	listCalls  int
+	listNotify chan int
 }
 
 func (b *fakeDNSBackend) ListRecords(context.Context, domain.DNSZone) ([]domain.DNSRecord, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.listCalls++
+	if b.listNotify != nil {
+		b.listNotify <- b.listCalls
+	}
 	return append([]domain.DNSRecord(nil), b.records...), nil
 }
 
@@ -571,14 +593,3 @@ func assertRecordChange(t *testing.T, events []events.Event, operation, fqdn, ol
 	t.Fatalf("missing record change operation=%s fqdn=%s in %#v", operation, fqdn, events)
 }
 
-func waitForListCalls(t *testing.T, backend *fakeDNSBackend, want int) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if backend.listCallCount() >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("list calls = %d, want at least %d", backend.listCallCount(), want)
-}

@@ -35,16 +35,13 @@ func TestRuntimeApplyLock_SameEnvironmentSerializes(t *testing.T) {
 	envID := uuid.New()
 	ctx := context.Background()
 
-	// order records which goroutine entered the critical section first.
 	var mu sync.Mutex
 	var order []int
 
-	// firstAcquired signals that goroutine 1 has acquired the lock.
 	firstAcquired := make(chan struct{})
-	// firstDone signals that goroutine 1 has released the lock.
 	firstDone := make(chan struct{})
+	secondAttempting := make(chan struct{})
 
-	// Goroutine 1: acquire lock, signal, wait for test to allow release.
 	go func() {
 		unlock, err := lock.Lock(ctx, envID)
 		require.NoError(t, err)
@@ -54,17 +51,15 @@ func TestRuntimeApplyLock_SameEnvironmentSerializes(t *testing.T) {
 		mu.Unlock()
 
 		close(firstAcquired)
-		// Hold lock until signalled.
 		<-firstDone
 		unlock()
 	}()
 
-	// Wait until goroutine 1 holds the lock.
 	<-firstAcquired
 
-	// Goroutine 2: try to acquire the same lock — should block until goroutine 1 releases.
 	secondAcquired := make(chan struct{})
 	go func() {
+		close(secondAttempting)
 		unlock, err := lock.Lock(ctx, envID)
 		require.NoError(t, err)
 
@@ -76,17 +71,21 @@ func TestRuntimeApplyLock_SameEnvironmentSerializes(t *testing.T) {
 		unlock()
 	}()
 
-	// Give goroutine 2 a moment to attempt acquisition (it should block).
-	// We verify it hasn't acquired by checking the order slice is still length 1.
-	time.Sleep(50 * time.Millisecond)
+	<-secondAttempting
+
+	// Non-blocking select: second goroutine signalled intent but must still be blocked.
+	select {
+	case <-secondAcquired:
+		t.Fatal("second goroutine acquired lock before first released")
+	default:
+	}
+
 	mu.Lock()
 	require.Equal(t, []int{1}, order, "second goroutine should be blocked")
 	mu.Unlock()
 
-	// Release goroutine 1's lock.
 	close(firstDone)
 
-	// Wait for goroutine 2 to acquire.
 	<-secondAcquired
 
 	mu.Lock()

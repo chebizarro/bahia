@@ -53,6 +53,11 @@ test/integration/.env.integration
 !web/vendor/wheelhouse/dist/
 !web/vendor/wheelhouse/dist/**
 /bahia-dns-agent
+# Stray binaries built into the repo root by tooling; real builds go to bin/
+/fips-bahia-bridge
+/bahia-server
+/bahia-relay
+/bahia-event-archive
 __pycache__/
 *.py[cod]
 

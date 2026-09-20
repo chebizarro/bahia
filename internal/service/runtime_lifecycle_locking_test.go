@@ -275,7 +275,8 @@ func TestLocking_ReleasedAfterHeldDeploy(t *testing.T) {
 	stateRepo := registry.state.(*mockStateRepo)
 
 	holdCh := make(chan struct{})
-	rt := &holdingMockRuntime{holdCh: holdCh}
+	entered := make(chan struct{})
+	rt := &holdingMockRuntime{holdCh: holdCh, entered: entered}
 	lock := newInMemoryApplyLock()
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo,
@@ -292,8 +293,8 @@ func TestLocking_ReleasedAfterHeldDeploy(t *testing.T) {
 		deploy1Done <- err
 	}()
 
-	// Give deploy 1 time to acquire the lock.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for deploy 1 to enter Deploy (proves lock was acquired).
+	<-entered
 
 	// Release deploy 1.
 	close(holdCh)
@@ -889,10 +890,14 @@ func (m *parallelMockRuntime) Deploy(_ context.Context, serviceName, image strin
 // holdingMockRuntime blocks Deploy on holdCh.
 type holdingMockRuntime struct {
 	lifecycleMockRuntime
-	holdCh chan struct{}
+	holdCh  chan struct{}
+	entered chan struct{}
 }
 
 func (m *holdingMockRuntime) Deploy(_ context.Context, serviceName, image string, opts runtime.DeployOptions) error {
+	if m.entered != nil {
+		close(m.entered)
+	}
 	<-m.holdCh
 	return nil
 }
