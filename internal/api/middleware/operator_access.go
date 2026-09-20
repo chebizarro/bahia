@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/auth"
+	"go.uber.org/zap"
 )
 
 // OperatorAccessConfig configures system-operator authorization for privileged routes.
@@ -88,5 +89,7 @@ func setFrom(values []string, lower bool) map[string]struct{} {
 func writeMiddlewareError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		zap.L().Error("failed to encode middleware error response", zap.Error(err))
+	}
 }

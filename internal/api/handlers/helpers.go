@@ -12,12 +12,15 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/middleware"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		zap.L().Error("failed to encode JSON response", zap.Error(err))
+	}
 }
 
 func writeData(w http.ResponseWriter, status int, data any) {

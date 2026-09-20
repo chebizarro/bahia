@@ -58,6 +58,16 @@ func (p *ModePolicy) RunnerEnabled(runnerTier Tier) bool {
 	return p.AllowsTier(runnerTier)
 }
 
+// RouteErrorBody returns the response body for a tier-gated route error.
+func (p *ModePolicy) RouteErrorBody(requiredTier int) map[string]any {
+	return map[string]any{
+		"error":         "route unavailable in current mode",
+		"mode":          string(p.RequestedMode),
+		"active_tier":   int(p.ActiveTier),
+		"required_tier": requiredTier,
+	}
+}
+
 // SetActiveTier records the tier established by bootstrap dependency checks.
 func (p *ModePolicy) SetActiveTier(t Tier) {
 	p.ActiveTier = t

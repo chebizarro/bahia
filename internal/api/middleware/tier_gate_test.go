@@ -16,6 +16,15 @@ func (p *tierGatePolicy) RouteEnabled(requiredTier int) bool {
 	return requiredTier <= p.ActiveTier
 }
 
+func (p *tierGatePolicy) RouteErrorBody(requiredTier int) map[string]any {
+	return map[string]any{
+		"error":         "route unavailable in current mode",
+		"mode":          p.RequestedMode,
+		"active_tier":   p.ActiveTier,
+		"required_tier": requiredTier,
+	}
+}
+
 func TestTierGateAllowsEnabledRoute(t *testing.T) {
 	policy := &tierGatePolicy{RequestedMode: "degraded", ActiveTier: 2}
 	handler := TierGate(policy, 2)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

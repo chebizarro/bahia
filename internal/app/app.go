@@ -125,6 +125,7 @@ func New(cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating logger: %w", err)
 	}
+	zap.ReplaceGlobals(logger)
 
 	ctx := context.Background()
 	policy := NewModePolicy(configuredMode(cfg.Mode))

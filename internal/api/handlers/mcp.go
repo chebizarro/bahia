@@ -53,7 +53,7 @@ type CallToolResponse struct {
 // CallTool executes an MCP tool.
 func (h *MCPHandler) CallTool(w http.ResponseWriter, r *http.Request) {
 	var req CallToolRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -99,7 +99,7 @@ type mcpToolResult struct {
 // HandleJSONRPC exposes the native MCP HTTP JSON-RPC transport backed by the same tool registry.
 func (h *MCPHandler) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	var req jsonRPCRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", Error: &jsonRPCError{Code: -32700, Message: "parse error"}})
 		return
 	}
@@ -236,9 +236,7 @@ func stringFromMap(values map[string]interface{}, key string) (string, bool) {
 }
 
 func writeJSONRPC(w http.ResponseWriter, resp jsonRPCResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ListResources returns all available MCP resources.

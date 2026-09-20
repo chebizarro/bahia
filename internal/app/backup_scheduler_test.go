@@ -87,17 +87,20 @@ func TestBackupSchedulerRunnerProcessesDueSchedulesOnStartup(t *testing.T) {
 
 func TestBackupSchedulerRunnerPeriodicProcessing(t *testing.T) {
 	var callCount int32
+	stopAfter := make(chan struct{})
 	mock := &mockScheduler{
 		processFunc: func(ctx context.Context) (*service.BackupScheduleProcessResult, error) {
-			atomic.AddInt32(&callCount, 1)
+			if n := atomic.AddInt32(&callCount, 1); n >= 4 {
+				close(stopAfter)
+			}
 			return &service.BackupScheduleProcessResult{Checked: 1}, nil
 		},
 	}
-	r := NewBackupSchedulerRunner(mock, 10*time.Millisecond, zap.NewNop())
+	r := NewBackupSchedulerRunner(mock, time.Millisecond, zap.NewNop())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		<-stopAfter
 		cancel()
 	}()
 
@@ -105,32 +108,38 @@ func TestBackupSchedulerRunnerPeriodicProcessing(t *testing.T) {
 		t.Errorf("Run() = %v, want nil", err)
 	}
 	count := atomic.LoadInt32(&callCount)
-	if count < 2 {
-		t.Errorf("ProcessDueSchedules called %d times, want at least 2 (initial + periodic)", count)
+	if count < 4 {
+		t.Errorf("ProcessDueSchedules called %d times, want at least 4 (initial + 3 periodic)", count)
 	}
 }
 
 func TestBackupSchedulerRunnerIdempotentRestart(t *testing.T) {
 	var callCount int32
+	var tickTrigger atomic.Int32
 	mock := &mockScheduler{
 		processFunc: func(ctx context.Context) (*service.BackupScheduleProcessResult, error) {
 			atomic.AddInt32(&callCount, 1)
+			tickTrigger.Add(1)
 			return &service.BackupScheduleProcessResult{Checked: 1, Dispatched: 0}, nil
 		},
 	}
-	r := NewBackupSchedulerRunner(mock, 10*time.Millisecond, zap.NewNop())
+	r := NewBackupSchedulerRunner(mock, time.Millisecond, zap.NewNop())
 
 	for i := 0; i < 3; i++ {
+		tickTrigger.Store(0)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			time.Sleep(30 * time.Millisecond)
+			for tickTrigger.Load() < 3 {
+				time.Sleep(time.Millisecond)
+			}
 			cancel()
 		}()
 		if err := r.Run(ctx); err != nil {
 			t.Errorf("Run iteration %d: %v", i, err)
 		}
 	}
-	if atomic.LoadInt32(&callCount) < 3 {
-		t.Errorf("ProcessDueSchedules called %d times across 3 restarts, want at least 3", atomic.LoadInt32(&callCount))
+	// Each restart: 1 initial + at least 2 periodic = at least 3 per iteration, 9 total.
+	if atomic.LoadInt32(&callCount) < 9 {
+		t.Errorf("ProcessDueSchedules called %d times across 3 restarts, want at least 9", atomic.LoadInt32(&callCount))
 	}
 }

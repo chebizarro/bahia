@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -35,7 +34,7 @@ func (h *LegacyAgentReconciliationHandler) Preview(w http.ResponseWriter, r *htt
 		return
 	}
 	var request soulfactory.LegacyAgentReconciliationRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSON(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid reconciliation request")
 		return
 	}
@@ -57,7 +56,7 @@ func (h *LegacyAgentReconciliationHandler) Apply(w http.ResponseWriter, r *http.
 		soulfactory.LegacyAgentReconcileApplyRequest
 		ApprovalRef string `json:"approval_ref"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid reconciliation apply request")
 		return
 	}

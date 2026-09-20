@@ -3,7 +3,6 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -385,7 +384,5 @@ func parseUploadRangeStart(contentRange string) (*int64, error) {
 }
 
 func writeOCIError(w http.ResponseWriter, status int, code, message string, detail any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ociErrorEnvelope{Errors: []ociError{{Code: code, Message: message, Detail: detail}}})
+	writeJSON(w, status, ociErrorEnvelope{Errors: []ociError{{Code: code, Message: message, Detail: detail}}})
 }
