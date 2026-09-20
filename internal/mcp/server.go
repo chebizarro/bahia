@@ -41,7 +41,6 @@ type Server struct {
 	toolApprovalCommands ToolApprovalCommandPublisher
 	workerCommands       WorkerCommandPublisher
 	backupCommands       BackupCommandPublisher
-	dnsCommands          DNSCommandPublisher
 	packageProjection    repository.PackageControlPlaneRepository
 	workerReadModels     *service.WorkerReadModelService
 	backupReadModels     BackupReadModelRepository
@@ -95,7 +94,6 @@ type ServerDeps struct {
 	ToolApprovalCommandPublisher ToolApprovalCommandPublisher
 	WorkerCommandPublisher       WorkerCommandPublisher
 	BackupCommandPublisher       BackupCommandPublisher
-	DNSCommandPublisher          DNSCommandPublisher
 	PackageProjection            repository.PackageControlPlaneRepository
 	WorkerReadModels             *service.WorkerReadModelService
 	BackupReadModels             BackupReadModelRepository
@@ -196,7 +194,6 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		toolApprovalCommands: deps.ToolApprovalCommandPublisher,
 		workerCommands:       deps.WorkerCommandPublisher,
 		backupCommands:       deps.BackupCommandPublisher,
-		dnsCommands:          deps.DNSCommandPublisher,
 		packageProjection:    deps.PackageProjection,
 		workerReadModels:     deps.WorkerReadModels,
 		backupReadModels:     deps.BackupReadModels,
@@ -1803,7 +1800,6 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, mlToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
 	tools = append(tools, dnsToolDefinitions()...)
-	tools = append(tools, dnsAssistantToolDefinitions()...)
 	tools = append(tools, fipsToolDefinitions()...)
 	tools = append(tools, workerToolDefinitions()...)
 	tools = append(tools, packageToolDefinitions()...)
@@ -1978,8 +1974,7 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleFIPSListMeshNodes(ctx, arguments)
 	case "bahia_fips_mesh_status":
 		return s.handleFIPSMeshStatus(ctx, arguments)
-	case "bahia_assistant_dns_zone_create", "bahia_assistant_dns_policy_apply", "bahia_assistant_dns_record_override", "bahia_assistant_dns_drift_remediate":
-		return s.handleDNSAssistantAsyncTool(ctx, name, arguments)
+
 	case "bahia_ml_list_state":
 		return s.handleMLListState(ctx, arguments)
 	case "bahia_ml_get_state":
@@ -4193,18 +4188,6 @@ func decodeToolArgs(args map[string]interface{}, out interface{}) error {
 	return json.Unmarshal(data, out)
 }
 
-func parseUUIDArg(args map[string]interface{}, key string) (uuid.UUID, error) {
-	raw, _ := args[key].(string)
-	if raw == "" {
-		return uuid.Nil, fmt.Errorf("%s is required", key)
-	}
-	id, err := uuid.Parse(raw)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("invalid %s: %v", key, err)
-	}
-	return id, nil
-}
-
 func limitOffsetArgs(args map[string]interface{}, defaultLimit int) (int, int) {
 	limit := defaultLimit
 	offset := 0
@@ -5627,36 +5610,6 @@ func isSensitiveNotificationConfigKey(key string) bool {
 		}
 	}
 	return false
-}
-
-func parseRequiredUUIDArg(args map[string]interface{}, name string) (uuid.UUID, error) {
-	value, _ := args[name].(string)
-	if value == "" {
-		return uuid.Nil, fmt.Errorf("%s is required", name)
-	}
-	id, err := uuid.Parse(value)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("invalid %s: %v", name, err)
-	}
-	return id, nil
-}
-
-func optionalIntArg(args map[string]interface{}, name string, defaultValue int) int {
-	switch v := args[name].(type) {
-	case float64:
-		return int(v)
-	case float32:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case json.Number:
-		if parsed, err := v.Int64(); err == nil {
-			return int(parsed)
-		}
-	}
-	return defaultValue
 }
 
 func sbomDataArg(args map[string]interface{}) ([]byte, error) {

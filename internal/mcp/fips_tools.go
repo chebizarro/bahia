@@ -14,11 +14,11 @@ import (
 
 func fipsToolDefinitions() []Tool {
 	return []Tool{
-		{Name: "bahia_fips_list_mesh_nodes", Description: "List FIPS mesh nodes from Bahia worker and DNS projection state", InputSchema: dnsObjectSchema(map[string]interface{}{
+		{Name: "bahia_fips_list_mesh_nodes", Description: "List FIPS mesh nodes from Bahia worker and DNS projection state", InputSchema: objectSchema(map[string]interface{}{
 			"limit":  map[string]interface{}{"type": "integer"},
 			"offset": map[string]interface{}{"type": "integer"},
 		})},
-		{Name: "bahia_fips_mesh_status", Description: "Summarize current FIPS mesh health and DNS projection status", InputSchema: dnsObjectSchema(map[string]interface{}{})},
+		{Name: "bahia_fips_mesh_status", Description: "Summarize current FIPS mesh health and DNS projection status", InputSchema: objectSchema(map[string]interface{}{})},
 	}
 }
 

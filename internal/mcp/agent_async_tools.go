@@ -11,23 +11,15 @@ import (
 const assistantAgentID = "bahia-operator-assistant"
 
 func assistantAsyncToolDefinitions() []Tool {
-	obj := func(props map[string]interface{}, required ...string) map[string]interface{} {
-		s := map[string]interface{}{"type": "object", "properties": props}
-		if len(required) > 0 {
-			s["required"] = required
-		}
-		return s
-	}
-	id := map[string]interface{}{"type": "string"}
 	return []Tool{
-		{Name: "bahia_assistant_service_deploy", Description: "Assistant-safe async service deploy command (ContextVM service/deploy intent)", InputSchema: obj(map[string]interface{}{"service_id": id, "environment_id": id, "artifact_id": id, "idempotency_key": id}, "service_id", "environment_id", "artifact_id", "idempotency_key")},
-		{Name: "bahia_assistant_service_rollback", Description: "Assistant-safe async service rollback command (ContextVM service/rollback intent)", InputSchema: obj(map[string]interface{}{"service_id": id, "environment_id": id, "idempotency_key": id}, "service_id", "environment_id", "idempotency_key")},
-		{Name: "bahia_assistant_llm_deploy", Description: "Assistant-safe async LLM deploy command (ContextVM tools/call intent)", InputSchema: obj(map[string]interface{}{"route_id": id, "environment_id": id, "release_id": id, "requested_by": id, "idempotency_key": id}, "route_id", "environment_id", "release_id", "idempotency_key")},
-		{Name: "bahia_assistant_llm_approve_deployment", Description: "Assistant-safe async LLM approval command (ContextVM approval/approve intent)", InputSchema: obj(map[string]interface{}{"intent_id": id, "decision": id, "idempotency_key": id}, "intent_id", "decision", "idempotency_key")},
-		{Name: "bahia_assistant_llm_rollback", Description: "Assistant-safe async LLM rollback command (ContextVM tools/call intent)", InputSchema: obj(map[string]interface{}{"route_id": id, "environment_id": id, "requested_by": id, "idempotency_key": id}, "route_id", "environment_id", "idempotency_key")},
-		{Name: "bahia_assistant_ml_deploy", Description: "Assistant-safe async ML deploy command (ContextVM tools/call intent)", InputSchema: obj(map[string]interface{}{"endpoint": id, "endpoint_id": id, "model_version": id, "model_version_id": id, "runtime_preference": id, "runtime": id, "placement": map[string]interface{}{"type": "object"}, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": id}, "idempotency_key")},
-		{Name: "bahia_assistant_ml_approve_deployment", Description: "Assistant-safe async ML approval command (ContextVM approval/approve intent)", InputSchema: obj(map[string]interface{}{"intent_id": id, "decision": id, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": id}, "intent_id", "decision", "idempotency_key")},
-		{Name: "bahia_assistant_ml_rollback", Description: "Assistant-safe async ML rollback command (ContextVM tools/call intent)", InputSchema: obj(map[string]interface{}{"endpoint": id, "endpoint_id": id, "requested_by": id, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": id}, "idempotency_key")},
+		{Name: "bahia_assistant_service_deploy", Description: "Assistant-safe async service deploy command (ContextVM service/deploy intent)", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "artifact_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "artifact_id", "idempotency_key")},
+		{Name: "bahia_assistant_service_rollback", Description: "Assistant-safe async service rollback command (ContextVM service/rollback intent)", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "idempotency_key")},
+		{Name: "bahia_assistant_llm_deploy", Description: "Assistant-safe async LLM deploy command (ContextVM tools/call intent)", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "release_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "release_id", "idempotency_key")},
+		{Name: "bahia_assistant_llm_approve_deployment", Description: "Assistant-safe async LLM approval command (ContextVM approval/approve intent)", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "decision": stringProp, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
+		{Name: "bahia_assistant_llm_rollback", Description: "Assistant-safe async LLM rollback command (ContextVM tools/call intent)", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "idempotency_key")},
+		{Name: "bahia_assistant_ml_deploy", Description: "Assistant-safe async ML deploy command (ContextVM tools/call intent)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "model_version": stringProp, "model_version_id": stringProp, "runtime_preference": stringProp, "runtime": stringProp, "placement": map[string]interface{}{"type": "object"}, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
+		{Name: "bahia_assistant_ml_approve_deployment", Description: "Assistant-safe async ML approval command (ContextVM approval/approve intent)", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "decision": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
+		{Name: "bahia_assistant_ml_rollback", Description: "Assistant-safe async ML rollback command (ContextVM tools/call intent)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "requested_by": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
 	}
 }
 

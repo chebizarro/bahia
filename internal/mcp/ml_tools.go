@@ -9,15 +9,8 @@ import (
 )
 
 func mlToolDefinitions() []Tool {
-	object := func(props map[string]interface{}, required ...string) map[string]interface{} {
-		schema := map[string]interface{}{"type": "object", "properties": props}
-		if len(required) > 0 {
-			schema["required"] = required
-		}
-		return schema
-	}
 	return []Tool{
-		{Name: "bahia_ml_import_model", Description: "Publish a generic ML model/model-version import request and return Nostr correlation metadata", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_import_model", Description: "Publish a generic ML model/model-version import request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
 			"model":           map[string]interface{}{"type": "string", "description": "Model coordinate such as model:<slug>"},
 			"model_version":   map[string]interface{}{"type": "string", "description": "Model version coordinate such as model-version:<slug>:<version>"},
@@ -29,7 +22,7 @@ func mlToolDefinitions() []Tool {
 			"artifact":        map[string]interface{}{"type": "string"},
 			"tags":            map[string]interface{}{"type": "object"},
 		})},
-		{Name: "bahia_ml_run_recipe", Description: "Publish a generic ML recipe run request and return Nostr correlation metadata", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_run_recipe", Description: "Publish a generic ML recipe run request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
 			"recipe":          map[string]interface{}{"type": "string", "description": "Recipe coordinate such as recipe:<name>:<version>"},
 			"inputs":          map[string]interface{}{"type": "object"},
@@ -38,7 +31,7 @@ func mlToolDefinitions() []Tool {
 			"task":            map[string]interface{}{"type": "string"},
 			"tags":            map[string]interface{}{"type": "object"},
 		}, "recipe")},
-		{Name: "bahia_ml_deploy", Description: "Publish a generic ML inference deployment request and return Nostr correlation metadata", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_deploy", Description: "Publish a generic ML inference deployment request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key":    map[string]interface{}{"type": "string"},
 			"endpoint":           map[string]interface{}{"type": "string", "description": "Endpoint coordinate endpoint:<name>:<environment>"},
 			"endpoint_id":        map[string]interface{}{"type": "string"},
@@ -49,19 +42,19 @@ func mlToolDefinitions() []Tool {
 			"placement":          map[string]interface{}{"type": "object"},
 			"tags":               map[string]interface{}{"type": "object"},
 		})},
-		{Name: "bahia_ml_rollback", Description: "Publish a generic ML inference rollback request and return Nostr correlation metadata", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_rollback", Description: "Publish a generic ML inference rollback request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
 			"endpoint":        map[string]interface{}{"type": "string"},
 			"endpoint_id":     map[string]interface{}{"type": "string"},
 			"requested_by":    map[string]interface{}{"type": "string"},
 			"tags":            map[string]interface{}{"type": "object"},
 		})},
-		{Name: "bahia_ml_list_state", Description: "List generic ML inference endpoint state read models", InputSchema: object(map[string]interface{}{})},
-		{Name: "bahia_ml_get_state", Description: "Get generic ML inference state for an endpoint/environment", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_list_state", Description: "List generic ML inference endpoint state read models", InputSchema: objectSchema(map[string]interface{}{})},
+		{Name: "bahia_ml_get_state", Description: "Get generic ML inference state for an endpoint/environment", InputSchema: objectSchema(map[string]interface{}{
 			"endpoint_id":    map[string]interface{}{"type": "string"},
 			"environment_id": map[string]interface{}{"type": "string"},
 		}, "endpoint_id", "environment_id")},
-		{Name: "bahia_ml_get_provenance", Description: "Get ML artifact provenance edges for an artifact ref", InputSchema: object(map[string]interface{}{
+		{Name: "bahia_ml_get_provenance", Description: "Get ML artifact provenance edges for an artifact ref", InputSchema: objectSchema(map[string]interface{}{
 			"artifact_id": map[string]interface{}{"type": "string"},
 		}, "artifact_id")},
 	}

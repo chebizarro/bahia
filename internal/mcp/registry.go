@@ -249,14 +249,10 @@ func assistantToolDescriptorMetadata() map[string]assistantToolMetadata {
 		"bahia_assistant_service_rollback": asyncMutation(domain.AssistantToolRiskHigh, true, []string{"service", "environment", "deployment"}, []string{"service_id", "environment_id"}),
 
 		// DNS tools.
-		"bahia_dns_list_endpoints":            syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_zone"}, nil),
-		"bahia_dns_list_drift":                syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_drift"}, nil),
-		"bahia_assistant_dns_list_endpoints":  syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_zone"}, nil),
-		"bahia_assistant_dns_list_drift":      syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_drift"}, nil),
-		"bahia_assistant_dns_zone_create":     asyncMutation(domain.AssistantToolRiskMedium, true, []string{"dns_zone"}, []string{"name", "zone"}),
-		"bahia_assistant_dns_policy_apply":    asyncMutation(domain.AssistantToolRiskHigh, true, []string{"dns_policy", "dns_zone", "environment"}, []string{"policy_id", "zone_id", "environment_id"}),
-		"bahia_assistant_dns_record_override": asyncMutation(domain.AssistantToolRiskHigh, true, []string{"dns_record", "dns_zone"}, []string{"override_id", "zone_name", "record_name", "record_type"}),
-		"bahia_assistant_dns_drift_remediate": asyncMutation(domain.AssistantToolRiskMedium, true, []string{"dns_drift", "dns_zone"}, []string{"zone", "zone_name"}),
+		"bahia_dns_list_endpoints":           syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_zone"}, nil),
+		"bahia_dns_list_drift":               syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_drift"}, nil),
+		"bahia_assistant_dns_list_endpoints": syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_zone"}, nil),
+		"bahia_assistant_dns_list_drift":     syncRead(domain.AssistantToolRiskLow, true, []string{"dns_endpoint", "dns_drift"}, nil),
 
 		// LLM route/release tools.
 		"bahia_llm_list_routes":                  syncRead(domain.AssistantToolRiskLow, true, []string{"llm_route"}, nil),

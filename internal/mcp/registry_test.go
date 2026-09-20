@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -13,7 +14,6 @@ func TestAssistantToolRegistryIncludesAssistantToolDescriptors(t *testing.T) {
 	registry := server.AssistantToolRegistry()
 
 	assistantTools := append([]Tool{}, assistantAsyncToolDefinitions()...)
-	assistantTools = append(assistantTools, dnsAssistantToolDefinitions()...)
 	for _, tool := range assistantTools {
 		descriptor, ok := registry.GetAgentTool(tool.Name)
 		if !ok {
@@ -60,14 +60,6 @@ func TestAssistantToolRegistryMetadataCorrectness(t *testing.T) {
 			risk:          domain.AssistantToolRiskLow,
 			agentSafe:     true,
 			resourceTypes: []string{"dns_endpoint", "dns_zone"},
-		},
-		{
-			name:          "bahia_assistant_dns_policy_apply",
-			mode:          domain.AssistantToolExecutionModeAsync,
-			effect:        domain.AssistantToolEffectMutation,
-			risk:          domain.AssistantToolRiskHigh,
-			agentSafe:     true,
-			resourceTypes: []string{"dns_policy", "dns_zone", "environment"},
 		},
 		{
 			name:          "bahia_llm_update_route",
@@ -253,4 +245,30 @@ func hasString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// assistantToolDescriptorMetadata is permission policy keyed by tool name. An
+// entry whose tool no longer exists is dead policy: it advertises risk, effect
+// and resource types for something nothing can call, and it silently survives
+// the deletion of the tool it describes. The existing tests only check the
+// forward direction (every tool has metadata), which is why four orphaned DNS
+// entries outlived their handlers.
+func TestAssistantToolMetadataHasNoEntriesWithoutTools(t *testing.T) {
+	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+
+	defined := map[string]bool{}
+	for _, tool := range server.GetTools() {
+		defined[tool.Name] = true
+	}
+
+	var orphans []string
+	for name := range assistantToolDescriptorMetadata() {
+		if !defined[name] {
+			orphans = append(orphans, name)
+		}
+	}
+	sort.Strings(orphans)
+	if len(orphans) > 0 {
+		t.Fatalf("assistant tool metadata describes %d tools that no longer exist: %v", len(orphans), orphans)
+	}
 }

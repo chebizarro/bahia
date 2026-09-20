@@ -254,9 +254,6 @@ func backupToolDescription(name string) string {
 }
 
 func backupToolSchema(name string) map[string]interface{} {
-	stringProp := map[string]interface{}{"type": "string"}
-	objectProp := map[string]interface{}{"type": "object"}
-	boolProp := map[string]interface{}{"type": "boolean"}
 	arrayString := map[string]interface{}{"type": "array", "items": stringProp}
 	props := map[string]interface{}{
 		"idempotency_key": stringProp,
@@ -1070,23 +1067,11 @@ func firstUUIDArg(args map[string]interface{}, names ...string) uuid.UUID {
 	return uuid.Nil
 }
 
-func optionalUUIDArgStrict(args map[string]interface{}, name string) (uuid.UUID, error) {
-	value := strings.TrimSpace(stringArg(args, name))
-	if value == "" {
-		return uuid.Nil, nil
-	}
-	id, err := uuid.Parse(value)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("invalid %s: %v", name, err)
-	}
-	return id, nil
-}
-
 func parseBackupRunIDArg(args map[string]interface{}) (uuid.UUID, error) {
 	if value := strings.TrimSpace(stringArg(args, "backup_run_id")); value != "" {
 		id, err := uuid.Parse(value)
 		if err != nil {
-			return uuid.Nil, fmt.Errorf("invalid backup_run_id: %v", err)
+			return uuid.Nil, fmt.Errorf("invalid backup_run_id: %w", err)
 		}
 		return id, nil
 	}

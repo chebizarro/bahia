@@ -214,11 +214,11 @@ func (s *Server) environmentForWorkerPreview(ctx context.Context, args map[strin
 		}
 		envID, err := uuid.Parse(envIDRaw)
 		if err != nil {
-			return nil, fmt.Errorf("invalid environment_id: %v", err)
+			return nil, fmt.Errorf("invalid environment_id: %w", err)
 		}
 		env, err := s.registry.GetEnvironment(ctx, envID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get environment: %v", err)
+			return nil, fmt.Errorf("failed to get environment: %w", err)
 		}
 		if env == nil {
 			return nil, fmt.Errorf("environment not found")
@@ -264,51 +264,4 @@ func mlArtifactFormatsFromArg(raw interface{}) []domain.MLArtifactFormat {
 		formats = append(formats, domain.MLArtifactFormat(value))
 	}
 	return formats
-}
-
-func anyMapFromArg(raw interface{}) map[string]any {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := raw.(map[string]any); ok {
-		return value
-	}
-	return nil
-}
-
-func stringMapFromArg(raw interface{}) map[string]string {
-	if raw == nil {
-		return nil
-	}
-	out := map[string]string{}
-	switch value := raw.(type) {
-	case map[string]string:
-		for k, v := range value {
-			out[k] = v
-		}
-	case map[string]any:
-		for k, v := range value {
-			out[k] = fmt.Sprint(v)
-		}
-	default:
-		return nil
-	}
-	return out
-}
-
-func stringSliceFromArg(raw interface{}) []string {
-	switch value := raw.(type) {
-	case []string:
-		return value
-	case []any:
-		out := make([]string, 0, len(value))
-		for _, item := range value {
-			if s := strings.TrimSpace(fmt.Sprint(item)); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
