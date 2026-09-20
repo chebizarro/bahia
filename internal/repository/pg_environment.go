@@ -24,6 +24,8 @@ func newPgEnvironmentRepositoryWithDB(db pgQueryer) *PgEnvironmentRepository {
 	return &PgEnvironmentRepository{pool: db}
 }
 
+const environmentColumns = `id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at`
+
 func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {
 	if env.ID == uuid.Nil {
 		env.ID = uuid.New()
@@ -56,7 +58,7 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 	return nil
 }
 
-func (r *PgEnvironmentRepository) scanEnv(row pgx.Row) (*domain.Environment, error) {
+func (r *PgEnvironmentRepository) scanEnv(row scanner) (*domain.Environment, error) {
 	env := &domain.Environment{}
 	var selectorJSON, configJSON, targetingJSON []byte
 	err := row.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &targetingJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt)
@@ -64,14 +66,14 @@ func (r *PgEnvironmentRepository) scanEnv(row pgx.Row) (*domain.Environment, err
 		return nil, err
 	}
 	if err := unmarshalJSON(selectorJSON, &env.LoomWorkerSelector, "loom worker selector"); err != nil {
-		return nil, err
+		return env, err
 	}
 	if err := unmarshalJSON(configJSON, &env.RuntimeConfig, "runtime config"); err != nil {
-		return nil, err
+		return env, err
 	}
 	if len(targetingJSON) > 0 && string(targetingJSON) != "null" {
 		if err := unmarshalJSON(targetingJSON, &env.Targeting, "environment targeting"); err != nil {
-			return nil, err
+			return env, err
 		}
 	}
 	domain.NormalizeEnvironmentTargeting(env)
@@ -94,7 +96,7 @@ func (r *PgEnvironmentRepository) getByID(ctx context.Context, id uuid.UUID, for
 		lockClause = " FOR UPDATE"
 	}
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
+		SELECT `+environmentColumns+`
 		FROM environments WHERE id = $1`+lockClause, id)
 	env, err := r.scanEnv(row)
 	if err != nil {
@@ -108,7 +110,7 @@ func (r *PgEnvironmentRepository) getByID(ctx context.Context, id uuid.UUID, for
 
 func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*domain.Environment, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
+		SELECT `+environmentColumns+`
 		FROM environments WHERE name = $1
 	`, name)
 	env, err := r.scanEnv(row)
@@ -123,7 +125,7 @@ func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*
 
 func (r *PgEnvironmentRepository) List(ctx context.Context) ([]domain.Environment, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
+		SELECT `+environmentColumns+`
 		FROM environments ORDER BY name
 	`)
 	if err != nil {
@@ -133,31 +135,21 @@ func (r *PgEnvironmentRepository) List(ctx context.Context) ([]domain.Environmen
 
 	var envs []domain.Environment
 	for rows.Next() {
-		var selectorJSON, configJSON, targetingJSON []byte
-		var env domain.Environment
-		if err := rows.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &targetingJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scanning environment: %w", err)
-		}
-		if err := unmarshalJSON(selectorJSON, &env.LoomWorkerSelector, "loom worker selector"); err != nil {
-			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
-		}
-		if err := unmarshalJSON(configJSON, &env.RuntimeConfig, "runtime config"); err != nil {
-			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
-		}
-		if len(targetingJSON) > 0 && string(targetingJSON) != "null" {
-			if err := unmarshalJSON(targetingJSON, &env.Targeting, "environment targeting"); err != nil {
+		env, err := r.scanEnv(rows)
+		if err != nil {
+			if env != nil {
 				return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
 			}
+			return nil, fmt.Errorf("scanning environment: %w", err)
 		}
-		domain.NormalizeEnvironmentTargeting(&env)
-		envs = append(envs, env)
+		envs = append(envs, *env)
 	}
 	return envs, rows.Err()
 }
 
 func (r *PgEnvironmentRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
+		SELECT `+environmentColumns+`
 		FROM environments WHERE org_id = $1 ORDER BY name
 	`, orgID)
 	if err != nil {
@@ -167,24 +159,14 @@ func (r *PgEnvironmentRepository) ListByOrg(ctx context.Context, orgID uuid.UUID
 
 	var envs []domain.Environment
 	for rows.Next() {
-		var selectorJSON, configJSON, targetingJSON []byte
-		var env domain.Environment
-		if err := rows.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &targetingJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scanning environment: %w", err)
-		}
-		if err := unmarshalJSON(selectorJSON, &env.LoomWorkerSelector, "loom worker selector"); err != nil {
-			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
-		}
-		if err := unmarshalJSON(configJSON, &env.RuntimeConfig, "runtime config"); err != nil {
-			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
-		}
-		if len(targetingJSON) > 0 && string(targetingJSON) != "null" {
-			if err := unmarshalJSON(targetingJSON, &env.Targeting, "environment targeting"); err != nil {
+		env, err := r.scanEnv(rows)
+		if err != nil {
+			if env != nil {
 				return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
 			}
+			return nil, fmt.Errorf("scanning environment: %w", err)
 		}
-		domain.NormalizeEnvironmentTargeting(&env)
-		envs = append(envs, env)
+		envs = append(envs, *env)
 	}
 	return envs, rows.Err()
 }

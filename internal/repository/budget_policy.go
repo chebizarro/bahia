@@ -23,7 +23,7 @@ type BudgetPolicyRepository interface {
 }
 
 type PgBudgetPolicyRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 func NewPgBudgetPolicyRepository(pool *pgxpool.Pool) *PgBudgetPolicyRepository {
@@ -180,7 +180,7 @@ func (r *PgBudgetPolicyRepository) Delete(ctx context.Context, id uuid.UUID) err
 	return nil
 }
 
-func scanBudgetPolicy(row pgx.Row) (*domain.BudgetPolicy, error) {
+func scanBudgetPolicy(row scanner) (*domain.BudgetPolicy, error) {
 	var p domain.BudgetPolicy
 	var scope string
 	var limitsJSON []byte
@@ -204,21 +204,11 @@ func scanBudgetPolicy(row pgx.Row) (*domain.BudgetPolicy, error) {
 func scanBudgetPolicies(rows pgx.Rows) ([]domain.BudgetPolicy, error) {
 	var policies []domain.BudgetPolicy
 	for rows.Next() {
-		var p domain.BudgetPolicy
-		var scope string
-		var limitsJSON []byte
-		err := rows.Scan(
-			&p.ID, &p.Version, &p.Name, &p.AgentPubkey, &p.TaskID,
-			&scope, &limitsJSON, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-		)
+		p, err := scanBudgetPolicy(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scanning budget policy row: %w", err)
+			return nil, err
 		}
-		p.Scope = domain.BudgetPolicyScope(scope)
-		if err := json.Unmarshal(limitsJSON, &p.Limits); err != nil {
-			return nil, fmt.Errorf("unmarshaling budget policy limits row: %w", err)
-		}
-		policies = append(policies, p)
+		policies = append(policies, *p)
 	}
 	return policies, rows.Err()
 }

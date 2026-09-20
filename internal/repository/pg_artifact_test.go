@@ -36,3 +36,30 @@ func TestPgArtifactRepository_GetByImageRepoDigest(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestPgArtifactRepositorySharedScannerServesGetAndList(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	now := time.Now().UTC()
+	id, buildID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	sizeBytes := int64(42)
+	columns := []string{"id", "build_id", "service_id", "image_repo", "image_tag", "image_digest", "manifest_media_type", "size_bytes", "sbom_url", "signature_ref", "scan_status", "metadata", "created_at"}
+	row := func() *pgxmock.Rows {
+		return pgxmock.NewRows(columns).AddRow(id, buildID, serviceID, "ghcr.io/acme/app", "main", "sha256:abc", nil, &sizeBytes, nil, nil, nil, []byte(`{"source":"hive-ci"}`), now)
+	}
+
+	mock.ExpectQuery("FROM artifacts WHERE id = \\$1").WithArgs(id).WillReturnRows(row())
+	mock.ExpectQuery("FROM artifacts WHERE build_id = \\$1").WithArgs(buildID).WillReturnRows(row())
+	repo := newPgArtifactRepositoryWithDB(mock)
+
+	artifact, err := repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	artifacts, err := repo.ListByBuild(context.Background(), buildID)
+	require.NoError(t, err)
+	require.Len(t, artifacts, 1)
+	require.Equal(t, *artifact, artifacts[0])
+	require.Equal(t, "unknown", string(artifacts[0].ScanStatus))
+	require.NoError(t, mock.ExpectationsWereMet())
+}

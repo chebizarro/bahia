@@ -123,3 +123,69 @@ func TestPgOrgInviteRepository_GetByIDScopesOrganization(t *testing.T) {
 	require.Nil(t, invite)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestTenantRepositoriesSharedScannersServeGetAndList(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	t.Run("organizations", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+		id := uuid.New()
+		columns := []string{"id", "name", "display_name", "owner_pubkey", "created_at", "updated_at"}
+		row := func() *pgxmock.Rows {
+			return pgxmock.NewRows(columns).AddRow(id, "acme", "ACME", "owner", now, now)
+		}
+		mock.ExpectQuery("FROM organizations WHERE id = \\$1").WithArgs(id).WillReturnRows(row())
+		mock.ExpectQuery("FROM organizations ORDER BY name").WillReturnRows(row())
+		repo := newPgOrganizationRepositoryWithDB(mock)
+		org, err := repo.GetByID(ctx, id)
+		require.NoError(t, err)
+		orgs, err := repo.List(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []domain.Organization{*org}, orgs)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("memberships", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+		orgID := uuid.New()
+		columns := []string{"org_id", "pubkey", "role", "nip05", "joined_at", "updated_at"}
+		row := func() *pgxmock.Rows {
+			return pgxmock.NewRows(columns).AddRow(orgID, "member", "admin", "member@example.com", now, now)
+		}
+		mock.ExpectQuery("FROM org_members WHERE org_id = \\$1 AND pubkey = \\$2").WithArgs(orgID, "member").WillReturnRows(row())
+		mock.ExpectQuery("FROM org_members WHERE org_id = \\$1 ORDER BY joined_at").WithArgs(orgID).WillReturnRows(row())
+		repo := newPgOrgMemberRepositoryWithDB(mock)
+		member, err := repo.GetMember(ctx, orgID, "member")
+		require.NoError(t, err)
+		members, err := repo.ListByOrg(ctx, orgID)
+		require.NoError(t, err)
+		require.Equal(t, []domain.OrgMember{*member}, members)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("invitations", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+		orgID, inviteID := uuid.New(), uuid.New()
+		expiresAt := now.Add(time.Hour)
+		columns := []string{"id", "org_id", "pubkey", "role", "invited_by", "expires_at", "created_at"}
+		row := func() *pgxmock.Rows {
+			return pgxmock.NewRows(columns).AddRow(inviteID, orgID, "invitee", "viewer", "owner", expiresAt, now)
+		}
+		mock.ExpectQuery("FROM org_invites WHERE org_id = \\$1 AND id = \\$2").WithArgs(orgID, inviteID).WillReturnRows(row())
+		mock.ExpectQuery("FROM org_invites WHERE org_id = \\$1 AND expires_at > NOW\\(\\) ORDER BY created_at").WithArgs(orgID).WillReturnRows(row())
+		repo := newPgOrgInviteRepositoryWithDB(mock)
+		invite, err := repo.GetByID(ctx, orgID, inviteID)
+		require.NoError(t, err)
+		invites, err := repo.ListByOrg(ctx, orgID)
+		require.NoError(t, err)
+		require.Equal(t, []domain.OrgInvite{*invite}, invites)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}

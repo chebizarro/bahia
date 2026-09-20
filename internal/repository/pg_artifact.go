@@ -53,7 +53,7 @@ func (r *PgArtifactRepository) Create(ctx context.Context, a *domain.Artifact) e
 	return nil
 }
 
-func (r *PgArtifactRepository) scanArtifact(row pgx.Row) (*domain.Artifact, error) {
+func (r *PgArtifactRepository) scanArtifact(row scanner) (*domain.Artifact, error) {
 	a := &domain.Artifact{}
 	var metaJSON []byte
 	var manifestMediaType sql.NullString
@@ -69,7 +69,7 @@ func (r *PgArtifactRepository) scanArtifact(row pgx.Row) (*domain.Artifact, erro
 	a.SignatureRef = nullStringValue(signatureRef)
 	a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
 	if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
-		return nil, err
+		return a, err
 	}
 	return a, nil
 }
@@ -113,23 +113,14 @@ func (r *PgArtifactRepository) ListByService(ctx context.Context, serviceID uuid
 
 	var artifacts []domain.Artifact
 	for rows.Next() {
-		var a domain.Artifact
-		var metaJSON []byte
-		var manifestMediaType sql.NullString
-		var sbomURL sql.NullString
-		var signatureRef sql.NullString
-		var scanStatus sql.NullString
-		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &manifestMediaType, &a.SizeBytes, &sbomURL, &signatureRef, &scanStatus, &metaJSON, &a.CreatedAt); err != nil {
+		a, err := r.scanArtifact(rows)
+		if err != nil {
+			if a != nil {
+				return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
+			}
 			return nil, fmt.Errorf("scanning artifact: %w", err)
 		}
-		a.ManifestMediaType = nullStringValue(manifestMediaType)
-		a.SBOMURL = nullStringValue(sbomURL)
-		a.SignatureRef = nullStringValue(signatureRef)
-		a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
-		if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
-			return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
-		}
-		artifacts = append(artifacts, a)
+		artifacts = append(artifacts, *a)
 	}
 	return artifacts, rows.Err()
 }
@@ -143,23 +134,14 @@ func (r *PgArtifactRepository) ListByBuild(ctx context.Context, buildID uuid.UUI
 
 	var artifacts []domain.Artifact
 	for rows.Next() {
-		var a domain.Artifact
-		var metaJSON []byte
-		var manifestMediaType sql.NullString
-		var sbomURL sql.NullString
-		var signatureRef sql.NullString
-		var scanStatus sql.NullString
-		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &manifestMediaType, &a.SizeBytes, &sbomURL, &signatureRef, &scanStatus, &metaJSON, &a.CreatedAt); err != nil {
+		a, err := r.scanArtifact(rows)
+		if err != nil {
+			if a != nil {
+				return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
+			}
 			return nil, fmt.Errorf("scanning artifact: %w", err)
 		}
-		a.ManifestMediaType = nullStringValue(manifestMediaType)
-		a.SBOMURL = nullStringValue(sbomURL)
-		a.SignatureRef = nullStringValue(signatureRef)
-		a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
-		if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
-			return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
-		}
-		artifacts = append(artifacts, a)
+		artifacts = append(artifacts, *a)
 	}
 	return artifacts, rows.Err()
 }

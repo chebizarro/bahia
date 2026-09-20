@@ -814,95 +814,50 @@ func (r *PgBackupControlPlaneRepository) GetBackupVerificationByRunID(ctx contex
 	return r.scanBackupVerification(r.pool.QueryRow(ctx, `SELECT `+backupVerificationColumns+` FROM backup_verifications WHERE backup_run_id = $1`, runID))
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupRecipe(row pgx.Row) (*domain.BackupRecipe, error) {
-	recipe, err := scanBackupRecipe(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup recipe: %w", err)
-	}
-	return recipe, nil
+func (r *PgBackupControlPlaneRepository) scanBackupRecipe(row scanner) (*domain.BackupRecipe, error) {
+	return scanOptionalBackup(row, scanBackupRecipe, "backup recipe")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupPolicy(row pgx.Row) (*domain.BackupPolicy, error) {
-	policy, err := scanBackupPolicy(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup policy: %w", err)
-	}
-	return policy, nil
+func (r *PgBackupControlPlaneRepository) scanBackupPolicy(row scanner) (*domain.BackupPolicy, error) {
+	return scanOptionalBackup(row, scanBackupPolicy, "backup policy")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupRepository(row pgx.Row) (*domain.BackupRepository, error) {
-	repo, err := scanBackupRepository(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup repository: %w", err)
-	}
-	return repo, nil
+func (r *PgBackupControlPlaneRepository) scanBackupRepository(row scanner) (*domain.BackupRepository, error) {
+	return scanOptionalBackup(row, scanBackupRepository, "backup repository")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupDefinition(row pgx.Row) (*domain.BackupDefinition, error) {
-	definition, err := scanBackupDefinition(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup definition: %w", err)
-	}
-	return definition, nil
+func (r *PgBackupControlPlaneRepository) scanBackupDefinition(row scanner) (*domain.BackupDefinition, error) {
+	return scanOptionalBackup(row, scanBackupDefinition, "backup definition")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {
-	run, err := scanBackupRun(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup run: %w", err)
-	}
-	return run, nil
+func (r *PgBackupControlPlaneRepository) scanBackupRun(row scanner) (*domain.BackupRun, error) {
+	return scanOptionalBackup(row, scanBackupRun, "backup run")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupRestore(row pgx.Row) (*domain.BackupRestoreRun, error) {
-	restore, err := scanBackupRestore(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup restore: %w", err)
-	}
-	return restore, nil
+func (r *PgBackupControlPlaneRepository) scanBackupRestore(row scanner) (*domain.BackupRestoreRun, error) {
+	return scanOptionalBackup(row, scanBackupRestore, "backup restore")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupRetentionRun(row pgx.Row) (*domain.BackupRetentionRun, error) {
-	run, err := scanBackupRetentionRun(row)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning backup retention run: %w", err)
-	}
-	return run, nil
+func (r *PgBackupControlPlaneRepository) scanBackupRetentionRun(row scanner) (*domain.BackupRetentionRun, error) {
+	return scanOptionalBackup(row, scanBackupRetentionRun, "backup retention run")
 }
 
-func (r *PgBackupControlPlaneRepository) scanBackupVerification(row pgx.Row) (*domain.BackupVerificationRecord, error) {
-	record, err := scanBackupVerification(row)
+func (r *PgBackupControlPlaneRepository) scanBackupVerification(row scanner) (*domain.BackupVerificationRecord, error) {
+	return scanOptionalBackup(row, scanBackupVerification, "backup verification")
+}
+
+func scanOptionalBackup[T any](row scanner, scan func(scanner) (*T, error), entity string) (*T, error) {
+	record, err := scan(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("scanning backup verification: %w", err)
+		return nil, fmt.Errorf("scanning %s: %w", entity, err)
 	}
 	return record, nil
 }
 
-func scanBackupRecipe(row pgx.Row) (*domain.BackupRecipe, error) {
+func scanBackupRecipe(row scanner) (*domain.BackupRecipe, error) {
 	recipe := &domain.BackupRecipe{}
 	var policyID pgtype.UUID
 	var includeJSON, excludeJSON, metadataJSON []byte
@@ -934,7 +889,7 @@ func scanBackupRecipeRows(rows pgx.Rows) ([]domain.BackupRecipe, error) {
 	return out, rows.Err()
 }
 
-func scanBackupPolicy(row pgx.Row) (*domain.BackupPolicy, error) {
+func scanBackupPolicy(row scanner) (*domain.BackupPolicy, error) {
 	policy := &domain.BackupPolicy{}
 	var metadataJSON []byte
 	if err := row.Scan(&policy.ID, &policy.Name, &policy.RequireVerification, &policy.VerificationMode, &metadataJSON, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
@@ -958,7 +913,7 @@ func scanBackupPolicyRows(rows pgx.Rows) ([]domain.BackupPolicy, error) {
 	return out, rows.Err()
 }
 
-func scanBackupRepository(row pgx.Row) (*domain.BackupRepository, error) {
+func scanBackupRepository(row scanner) (*domain.BackupRepository, error) {
 	repo := &domain.BackupRepository{}
 	var metadataJSON []byte
 	if err := row.Scan(&repo.ID, &repo.Name, &repo.Backend, &repo.RepositoryURI, &repo.CredentialProfile, &metadataJSON, &repo.CreatedAt, &repo.UpdatedAt); err != nil {
@@ -982,7 +937,7 @@ func scanBackupRepositoryRows(rows pgx.Rows) ([]domain.BackupRepository, error) 
 	return out, rows.Err()
 }
 
-func scanBackupDefinition(row pgx.Row) (*domain.BackupDefinition, error) {
+func scanBackupDefinition(row scanner) (*domain.BackupDefinition, error) {
 	definition := &domain.BackupDefinition{}
 	var tenantID, environmentID pgtype.UUID
 	var restoreTargetRulesJSON, executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, metadataJSON []byte
@@ -1025,7 +980,7 @@ func scanBackupDefinitionRows(rows pgx.Rows) ([]domain.BackupDefinition, error) 
 	return out, rows.Err()
 }
 
-func scanBackupScheduleState(row pgx.Row) (*domain.BackupScheduleState, error) {
+func scanBackupScheduleState(row scanner) (*domain.BackupScheduleState, error) {
 	state := &domain.BackupScheduleState{}
 	var nextScheduledRun, lastScheduledDispatch, lastScheduledRunDueAt, pausedAt, disabledAt pgtype.Timestamptz
 	if err := row.Scan(&state.DefinitionID, &nextScheduledRun, &lastScheduledDispatch, &lastScheduledRunDueAt,
@@ -1049,7 +1004,7 @@ func timePtrFromPG(value pgtype.Timestamptz) *time.Time {
 	return &t
 }
 
-func scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {
+func scanBackupRun(row scanner) (*domain.BackupRun, error) {
 	run := &domain.BackupRun{}
 	var policyID pgtype.UUID
 	var publishJSON, metadataJSON []byte
@@ -1081,7 +1036,7 @@ func scanBackupRunRows(rows pgx.Rows) ([]domain.BackupRun, error) {
 	return out, rows.Err()
 }
 
-func scanBackupRestore(row pgx.Row) (*domain.BackupRestoreRun, error) {
+func scanBackupRestore(row scanner) (*domain.BackupRestoreRun, error) {
 	restore := &domain.BackupRestoreRun{}
 	var policyID pgtype.UUID
 	var evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON []byte
@@ -1121,7 +1076,7 @@ func scanBackupRestoreRows(rows pgx.Rows) ([]domain.BackupRestoreRun, error) {
 	return out, rows.Err()
 }
 
-func scanBackupRetentionRun(row pgx.Row) (*domain.BackupRetentionRun, error) {
+func scanBackupRetentionRun(row scanner) (*domain.BackupRetentionRun, error) {
 	run := &domain.BackupRetentionRun{}
 	var policyID pgtype.UUID
 	var evidenceJSON, publishJSON, metadataJSON []byte
@@ -1155,7 +1110,7 @@ func scanBackupRetentionRunRows(rows pgx.Rows) ([]domain.BackupRetentionRun, err
 	return out, rows.Err()
 }
 
-func scanBackupVerification(row pgx.Row) (*domain.BackupVerificationRecord, error) {
+func scanBackupVerification(row scanner) (*domain.BackupVerificationRecord, error) {
 	record := &domain.BackupVerificationRecord{}
 	var evidenceJSON, evidenceDetailsJSON, publishJSON []byte
 	if err := row.Scan(&record.ID, &record.BackupRunID, &record.Mode, &record.Status, &record.Verified, &evidenceJSON, &evidenceDetailsJSON, &record.Error, &publishJSON, &record.VerifiedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {

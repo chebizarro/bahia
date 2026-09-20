@@ -36,3 +36,29 @@ func TestPgEnvironmentRepositoryGetByIDForUpdateLocksRow(t *testing.T) {
 	require.True(t, env.UpdatedAt.Equal(now))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestPgEnvironmentRepositorySharedScannerServesGetAndList(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	envID := uuid.New()
+	now := time.Now().UTC()
+	columns := []string{"id", "org_id", "name", "loom_worker_selector", "runtime_config", "targeting", "deploy_strategy", "protected", "created_at", "updated_at"}
+	row := func() *pgxmock.Rows {
+		return pgxmock.NewRows(columns).AddRow(envID, uuid.Nil, "prod", []byte(`{"region":"us"}`), []byte(`{"cpu":2}`), []byte(`{"default_unit_key":"max"}`), "replace", false, now, now)
+	}
+
+	mock.ExpectQuery("FROM environments WHERE id = \\$1").WithArgs(envID).WillReturnRows(row())
+	mock.ExpectQuery("FROM environments ORDER BY name").WillReturnRows(row())
+	repo := newPgEnvironmentRepositoryWithDB(mock)
+
+	env, err := repo.GetByID(context.Background(), envID)
+	require.NoError(t, err)
+	envs, err := repo.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, envs, 1)
+	require.Equal(t, *env, envs[0])
+	require.Equal(t, "max", envs[0].Targeting.DefaultUnitKey)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

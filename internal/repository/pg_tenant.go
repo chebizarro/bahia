@@ -67,6 +67,19 @@ func normalizeTenantPubkey(pubkey string) string {
 	return strings.ToLower(strings.TrimSpace(pubkey))
 }
 
+const organizationColumns = `id, name, display_name, owner_pubkey, created_at, updated_at`
+
+func scanOrganization(row scanner) (*domain.Organization, error) {
+	var org domain.Organization
+	if err := row.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.CreatedAt, &org.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &org, nil
+}
+
 func (r *PgOrganizationRepository) Create(ctx context.Context, org *domain.Organization) error {
 	if org.ID == uuid.Nil {
 		org.ID = uuid.New()
@@ -86,41 +99,25 @@ func (r *PgOrganizationRepository) Create(ctx context.Context, org *domain.Organ
 
 func (r *PgOrganizationRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Organization, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, display_name, owner_pubkey, created_at, updated_at
+		SELECT `+organizationColumns+`
 		FROM organizations WHERE id = $1
 	`, id)
 
-	var org domain.Organization
-	err := row.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.CreatedAt, &org.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &org, nil
+	return scanOrganization(row)
 }
 
 func (r *PgOrganizationRepository) GetByName(ctx context.Context, name string) (*domain.Organization, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, display_name, owner_pubkey, created_at, updated_at
+		SELECT `+organizationColumns+`
 		FROM organizations WHERE name = $1
 	`, name)
 
-	var org domain.Organization
-	err := row.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.CreatedAt, &org.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &org, nil
+	return scanOrganization(row)
 }
 
 func (r *PgOrganizationRepository) List(ctx context.Context) ([]domain.Organization, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, display_name, owner_pubkey, created_at, updated_at
+		SELECT `+organizationColumns+`
 		FROM organizations ORDER BY name
 	`)
 	if err != nil {
@@ -130,11 +127,11 @@ func (r *PgOrganizationRepository) List(ctx context.Context) ([]domain.Organizat
 
 	var orgs []domain.Organization
 	for rows.Next() {
-		var org domain.Organization
-		if err := rows.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.CreatedAt, &org.UpdatedAt); err != nil {
+		org, err := scanOrganization(rows)
+		if err != nil {
 			return nil, err
 		}
-		orgs = append(orgs, org)
+		orgs = append(orgs, *org)
 	}
 	return orgs, rows.Err()
 }
@@ -180,6 +177,19 @@ func newPgOrgMemberRepositoryWithDB(db tenantDB) *PgOrgMemberRepository {
 	return &PgOrgMemberRepository{pool: db}
 }
 
+const orgMemberColumns = `org_id, pubkey, role, nip05, joined_at, updated_at`
+
+func scanOrgMember(row scanner) (*domain.OrgMember, error) {
+	var member domain.OrgMember
+	if err := row.Scan(&member.OrgID, &member.Pubkey, &member.Role, &member.NIP05, &member.JoinedAt, &member.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &member, nil
+}
+
 func (r *PgOrgMemberRepository) Add(ctx context.Context, member *domain.OrgMember) error {
 	now := time.Now().UTC()
 	member.Pubkey = normalizeTenantPubkey(member.Pubkey)
@@ -196,24 +206,16 @@ func (r *PgOrgMemberRepository) Add(ctx context.Context, member *domain.OrgMembe
 
 func (r *PgOrgMemberRepository) GetMember(ctx context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT org_id, pubkey, role, nip05, joined_at, updated_at
+		SELECT `+orgMemberColumns+`
 		FROM org_members WHERE org_id = $1 AND pubkey = $2
 	`, orgID, pubkey)
 
-	var m domain.OrgMember
-	err := row.Scan(&m.OrgID, &m.Pubkey, &m.Role, &m.NIP05, &m.JoinedAt, &m.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &m, nil
+	return scanOrgMember(row)
 }
 
 func (r *PgOrgMemberRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.OrgMember, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT org_id, pubkey, role, nip05, joined_at, updated_at
+		SELECT `+orgMemberColumns+`
 		FROM org_members WHERE org_id = $1 ORDER BY joined_at
 	`, orgID)
 	if err != nil {
@@ -223,18 +225,18 @@ func (r *PgOrgMemberRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) 
 
 	var members []domain.OrgMember
 	for rows.Next() {
-		var m domain.OrgMember
-		if err := rows.Scan(&m.OrgID, &m.Pubkey, &m.Role, &m.NIP05, &m.JoinedAt, &m.UpdatedAt); err != nil {
+		member, err := scanOrgMember(rows)
+		if err != nil {
 			return nil, err
 		}
-		members = append(members, m)
+		members = append(members, *member)
 	}
 	return members, rows.Err()
 }
 
 func (r *PgOrgMemberRepository) ListByPubkey(ctx context.Context, pubkey string) ([]domain.OrgMember, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT org_id, pubkey, role, nip05, joined_at, updated_at
+		SELECT `+orgMemberColumns+`
 		FROM org_members WHERE pubkey = $1 ORDER BY joined_at
 	`, pubkey)
 	if err != nil {
@@ -244,11 +246,11 @@ func (r *PgOrgMemberRepository) ListByPubkey(ctx context.Context, pubkey string)
 
 	var members []domain.OrgMember
 	for rows.Next() {
-		var m domain.OrgMember
-		if err := rows.Scan(&m.OrgID, &m.Pubkey, &m.Role, &m.NIP05, &m.JoinedAt, &m.UpdatedAt); err != nil {
+		member, err := scanOrgMember(rows)
+		if err != nil {
 			return nil, err
 		}
-		members = append(members, m)
+		members = append(members, *member)
 	}
 	return members, rows.Err()
 }
@@ -294,6 +296,19 @@ func newPgOrgInviteRepositoryWithDB(db tenantDB) *PgOrgInviteRepository {
 	return &PgOrgInviteRepository{pool: db}
 }
 
+const orgInviteColumns = `id, org_id, pubkey, role, invited_by, expires_at, created_at`
+
+func scanOrgInvite(row scanner) (*domain.OrgInvite, error) {
+	var invite domain.OrgInvite
+	if err := row.Scan(&invite.ID, &invite.OrgID, &invite.Pubkey, &invite.Role, &invite.InvitedBy, &invite.ExpiresAt, &invite.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &invite, nil
+}
+
 func (r *PgOrgInviteRepository) Create(ctx context.Context, invite *domain.OrgInvite) error {
 	if invite.ID == uuid.Nil {
 		invite.ID = uuid.New()
@@ -311,24 +326,16 @@ func (r *PgOrgInviteRepository) Create(ctx context.Context, invite *domain.OrgIn
 
 func (r *PgOrgInviteRepository) GetByID(ctx context.Context, orgID, id uuid.UUID) (*domain.OrgInvite, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, org_id, pubkey, role, invited_by, expires_at, created_at
+		SELECT `+orgInviteColumns+`
 		FROM org_invites WHERE org_id = $1 AND id = $2
 	`, orgID, id)
 
-	var inv domain.OrgInvite
-	err := row.Scan(&inv.ID, &inv.OrgID, &inv.Pubkey, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &inv, nil
+	return scanOrgInvite(row)
 }
 
 func (r *PgOrgInviteRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.OrgInvite, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, org_id, pubkey, role, invited_by, expires_at, created_at
+		SELECT `+orgInviteColumns+`
 		FROM org_invites WHERE org_id = $1 AND expires_at > NOW() ORDER BY created_at
 	`, orgID)
 	if err != nil {
@@ -338,18 +345,18 @@ func (r *PgOrgInviteRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) 
 
 	var invites []domain.OrgInvite
 	for rows.Next() {
-		var inv domain.OrgInvite
-		if err := rows.Scan(&inv.ID, &inv.OrgID, &inv.Pubkey, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
+		invite, err := scanOrgInvite(rows)
+		if err != nil {
 			return nil, err
 		}
-		invites = append(invites, inv)
+		invites = append(invites, *invite)
 	}
 	return invites, rows.Err()
 }
 
 func (r *PgOrgInviteRepository) ListByPubkey(ctx context.Context, pubkey string) ([]domain.OrgInvite, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, org_id, pubkey, role, invited_by, expires_at, created_at
+		SELECT `+orgInviteColumns+`
 		FROM org_invites WHERE pubkey = $1 AND expires_at > NOW() ORDER BY created_at
 	`, pubkey)
 	if err != nil {
@@ -359,11 +366,11 @@ func (r *PgOrgInviteRepository) ListByPubkey(ctx context.Context, pubkey string)
 
 	var invites []domain.OrgInvite
 	for rows.Next() {
-		var inv domain.OrgInvite
-		if err := rows.Scan(&inv.ID, &inv.OrgID, &inv.Pubkey, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
+		invite, err := scanOrgInvite(rows)
+		if err != nil {
 			return nil, err
 		}
-		invites = append(invites, inv)
+		invites = append(invites, *invite)
 	}
 	return invites, rows.Err()
 }
