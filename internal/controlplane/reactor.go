@@ -209,6 +209,21 @@ type Reactor struct {
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
+
+	mlWorkCh chan mlWork
+}
+
+type mlWorkKind int
+
+const (
+	mlWorkRecipeRun mlWorkKind = iota
+	mlWorkDeploymentIntent
+)
+
+type mlWork struct {
+	kind     mlWorkKind
+	runID    uuid.UUID
+	intentID uuid.UUID
 }
 
 // DeploymentRun tracks an in-progress deployment initiated via Nostr.
@@ -426,6 +441,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		eventBus:        &events.NoopPublisher{},
 		lastSeenByGroup: make(map[string]nostr.Timestamp),
 		runs:            make(map[string]*DeploymentRun),
+		mlWorkCh:        make(chan mlWork, 32),
 	}
 	r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	for _, opt := range opts {
@@ -449,6 +465,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 	// Start periodic cleanup of completed runs
 	go r.cleanupRuns(ctx)
+
+	r.startMLWorkers(ctx)
 
 	// Subscribe to control plane request events from the newest persisted or
 	// in-process replay cursor, with nostr.Now as the no-history fallback.
@@ -3223,5 +3241,38 @@ func appendDesiredStateMeta(spec *domain.DesiredServiceSpec, payload map[string]
 	if spec.StableServiceKey != "" {
 		payload["target"] = spec.StableServiceKey
 		*tags = append(*tags, nostr.Tag{"target", spec.StableServiceKey})
+	}
+}
+
+func (r *Reactor) startMLWorkers(ctx context.Context) {
+	bgCtx := context.WithoutCancel(ctx)
+	for i := 0; i < 4; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case work, ok := <-r.mlWorkCh:
+					if !ok {
+						return
+					}
+					switch work.kind {
+					case mlWorkRecipeRun:
+						_ = r.mlRecipeExecutor.ProcessRecipeRun(bgCtx, work.runID)
+					case mlWorkDeploymentIntent:
+						_ = r.mlExecutor.ProcessDeploymentIntent(bgCtx, work.intentID)
+					}
+				}
+			}
+		}()
+	}
+}
+
+func (r *Reactor) submitMLWork(work mlWork) bool {
+	select {
+	case r.mlWorkCh <- work:
+		return true
+	default:
+		return false
 	}
 }

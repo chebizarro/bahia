@@ -56,6 +56,10 @@ func validPolicyRequest(version int) ConfigPublishRequest {
 type configStatusRepoPublisher struct {
 	repo   repository.NostrEventRepository
 	events []nostr.Event
+	// published signals each recorded status event. The consumer publishes
+	// status from its activation worker, so tests must wait for it rather than
+	// reading events straight after Handle returns.
+	published chan struct{}
 }
 
 func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Event) (int, error) {
@@ -66,6 +70,14 @@ func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Eve
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if p.published != nil {
+			select {
+			case p.published <- struct{}{}:
+			default:
+			}
+		}
+	}()
 	_, err = p.repo.Record(ctx, &repository.NostrEventRecord{
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
 		Content: event.Content, Tags: tags, Sig: hex.EncodeToString(event.Sig[:]),
@@ -107,8 +119,11 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 		t.Fatalf("drift before apply = %#v err=%v", drift, err)
 	}
 
-	statusPublisher := &configStatusRepoPublisher{repo: repo}
-	applied := relaysidecar.ConfigProjection{}
+	statusPublisher := &configStatusRepoPublisher{repo: repo, published: make(chan struct{}, 4)}
+	// Handle now records the desired coordinate and hands activation to the
+	// consumer's serial worker, so the projection arrives asynchronously and
+	// must be read off a channel rather than a shared variable.
+	appliedCh := make(chan relaysidecar.ConfigProjection, 1)
 	consumer, err := relaysidecar.NewConfigConsumer(relaysidecar.ConfigConsumerConfig{
 		ServiceID:      "bahia-relay-sidecar",
 		Scope:          "prod",
@@ -118,21 +133,50 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 		Publisher:      statusPublisher,
 		Now:            func() time.Time { return time.Unix(1787625661, 0) },
 		Apply: func(projection relaysidecar.ConfigProjection) error {
-			applied = projection
+			appliedCh <- projection
 			return nil
 		},
 	})
 	if err != nil {
 		t.Fatalf("configure consumer: %v", err)
 	}
+	consumer.Start(t.Context())
 	if err := consumer.Handle(t.Context(), desiredPublisher.events[0]); err != nil {
 		t.Fatalf("consumer apply desired config: %v", err)
+	}
+	var applied relaysidecar.ConfigProjection
+	select {
+	case applied = <-appliedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("desired config was never activated")
 	}
 	if applied.EventID != receipt.EventID || len(applied.AllowedPubkeys) != 1 || applied.AllowedPubkeys[0] != managedPubkey {
 		t.Fatalf("applied projection = %#v", applied)
 	}
-	if len(statusPublisher.events) != 1 {
-		t.Fatalf("status events = %d, want 1", len(statusPublisher.events))
+	// The consumer is now two-phase: Handle publishes "accepted" when it records
+	// the desired coordinate, and the activation worker publishes "applied" once
+	// the config is live. The console keys drift on "applied", so wait for that
+	// one specifically rather than for the first status to arrive.
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := console.ListDrift(t.Context()); err != nil {
+			t.Fatalf("console drift poll: %v", err)
+		}
+		drift, err := console.ListDrift(t.Context())
+		if err != nil {
+			t.Fatalf("console drift poll: %v", err)
+		}
+		if len(drift) == 1 && drift[0].AppliedEventID != "" {
+			break
+		}
+		select {
+		case <-statusPublisher.published:
+		case <-deadline:
+			t.Fatalf("applied status never reached the console; drift = %#v", drift)
+		}
+	}
+	if len(statusPublisher.events) != 2 {
+		t.Fatalf("status events = %d, want 2 (accepted then applied)", len(statusPublisher.events))
 	}
 	drift, err = console.ListDrift(t.Context())
 	if err != nil {

@@ -872,3 +872,47 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 		})
 	}
 }
+
+func TestSidecarBroadcastQueueSaturationDoesNotBlockEvents(t *testing.T) {
+	cfg := sidecarTestConfig(t)
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	cfg.Sidecar.DataDir = t.TempDir()
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	defer server.Close()
+
+	done := make(chan struct{})
+	for i := 0; i < 256; i++ {
+		server.broadcastCh <- nostr.Event{Content: "saturator"}
+	}
+
+	sk := nostr.Generate()
+	event := nostr.Event{
+		CreatedAt: nostr.Now(),
+		Kind:      10100,
+		Content:   `{}`,
+	}
+	if err := event.Sign(sk); err != nil {
+		t.Fatalf("sign event: %v", err)
+	}
+
+	addDone := make(chan error, 1)
+	go func() {
+		_, err := server.Relay().AddEvent(context.Background(), event)
+		addDone <- err
+	}()
+
+	select {
+	case err := <-addDone:
+		if err != nil {
+			t.Fatalf("AddEvent blocked or failed on saturated broadcast queue: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AddEvent blocked when broadcast queue was full")
+	}
+	close(done)
+}

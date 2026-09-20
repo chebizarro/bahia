@@ -61,10 +61,9 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_run_error", err.Error(), nil, nil, nostr.Tag{"recipe", firstNonEmpty(req.Recipe, recipe.Name)})
 		return
 	}
-	go func() {
-		// Once the durable run exists, the coordinator/responder owns terminal result publication.
-		_ = r.mlRecipeExecutor.ProcessRecipeRun(ctx, run.ID)
-	}()
+	if !r.submitMLWork(mlWork{kind: mlWorkRecipeRun, runID: run.ID}) {
+		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_run_error", "ML processing queue is full, try again later", nil, nil, nostr.Tag{"recipe", firstNonEmpty(req.Recipe, recipe.Name)})
+	}
 }
 
 func (r *Reactor) handleMLModelImportRequest(ctx context.Context, event *nostr.Event) {
@@ -121,11 +120,9 @@ func (r *Reactor) handleMLInferenceDeployRequest(ctx context.Context, event *nos
 		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "intent_error", err.Error(), endpoint, version)
 		return
 	}
-	go func() {
-		if err := r.mlExecutor.ProcessDeploymentIntent(ctx, intent.ID); err != nil {
-			r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "executor_error", err.Error(), endpoint, version, nostr.Tag{"intent", intent.ID.String()})
-		}
-	}()
+	if !r.submitMLWork(mlWork{kind: mlWorkDeploymentIntent, intentID: intent.ID}) {
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "executor_error", "ML processing queue is full, try again later", endpoint, version, nostr.Tag{"intent", intent.ID.String()})
+	}
 }
 
 func (r *Reactor) handleMLInferenceDeploymentApproval(ctx context.Context, event *nostr.Event) {
@@ -221,11 +218,9 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "rollback_error", err.Error(), endpoint, nil)
 		return
 	}
-	go func() {
-		if err := r.mlExecutor.ProcessDeploymentIntent(ctx, intent.ID); err != nil {
-			r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "executor_error", err.Error(), endpoint, nil, nostr.Tag{"intent", intent.ID.String()})
-		}
-	}()
+	if !r.submitMLWork(mlWork{kind: mlWorkDeploymentIntent, intentID: intent.ID}) {
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "executor_error", "ML processing queue is full, try again later", endpoint, nil, nostr.Tag{"intent", intent.ID.String()})
+	}
 }
 
 type mlRecipeRunRequest struct {

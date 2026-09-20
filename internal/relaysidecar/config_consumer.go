@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -50,9 +51,20 @@ type ConfigProjection struct {
 }
 
 type configProjectionState struct {
-	Version  int                          `json:"version"`
-	Accepted map[string]appliedCoordinate `json:"accepted"`
-	Last     *persistedConfigProjection   `json:"last,omitempty"`
+	Version int                          `json:"version"`
+	Desired map[string]desiredCoordinate `json:"desired"`
+	Applied map[string]appliedCoordinate `json:"applied"`
+	Pending []pendingActivation          `json:"pending"`
+	Last    *persistedConfigProjection   `json:"last,omitempty"`
+}
+
+type desiredCoordinate struct {
+	appliedCoordinate
+}
+
+type pendingActivation struct {
+	Coordinate string                     `json:"coordinate"`
+	Projection *persistedConfigProjection `json:"projection"`
 }
 
 type persistedConfigProjection struct {
@@ -82,16 +94,17 @@ type ConfigConsumerConfig struct {
 }
 
 type ConfigConsumer struct {
-	mu        sync.Mutex
-	serviceID string
-	scope     string
-	path      string
-	trusted   map[string]struct{}
-	signer    ConfigEventSigner
-	publisher ConfigStatusPublisher
-	now       func() time.Time
-	apply     func(ConfigProjection) error
-	state     configProjectionState
+	mu         sync.Mutex
+	serviceID  string
+	scope      string
+	path       string
+	trusted    map[string]struct{}
+	signer     ConfigEventSigner
+	publisher  ConfigStatusPublisher
+	now        func() time.Time
+	apply      func(ConfigProjection) error
+	state      configProjectionState
+	activateCh chan struct{}
 }
 
 func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
@@ -109,15 +122,16 @@ func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
 		return nil, fmt.Errorf("config consumer requires at least one valid trusted author")
 	}
 	consumer := &ConfigConsumer{
-		serviceID: cfg.ServiceID,
-		scope:     cfg.Scope,
-		path:      cfg.ProjectionPath,
-		trusted:   make(map[string]struct{}, len(trusted)),
-		signer:    cfg.Signer,
-		publisher: cfg.Publisher,
-		now:       cfg.Now,
-		apply:     cfg.Apply,
-		state:     configProjectionState{Version: 1, Accepted: map[string]appliedCoordinate{}},
+		serviceID:  cfg.ServiceID,
+		scope:      cfg.Scope,
+		path:       cfg.ProjectionPath,
+		trusted:    make(map[string]struct{}, len(trusted)),
+		signer:     cfg.Signer,
+		publisher:  cfg.Publisher,
+		now:        cfg.Now,
+		apply:      cfg.Apply,
+		state:      configProjectionState{Version: 2, Desired: map[string]desiredCoordinate{}, Applied: map[string]appliedCoordinate{}, Pending: nil},
+		activateCh: make(chan struct{}, 1),
 	}
 	if consumer.now == nil {
 		consumer.now = time.Now
@@ -130,12 +144,47 @@ func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
 		if err := json.Unmarshal(data, &consumer.state); err != nil {
 			return nil, fmt.Errorf("parse config-fabric projection %s: %w", consumer.path, err)
 		}
-		if consumer.state.Version != 1 {
+		if consumer.state.Version == 1 {
+			var legacy struct {
+				Version  int                          `json:"version"`
+				Accepted map[string]appliedCoordinate `json:"accepted"`
+				Last     *persistedConfigProjection   `json:"last,omitempty"`
+			}
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				return nil, fmt.Errorf("migrate config-fabric projection %s: %w", consumer.path, err)
+			}
+			// v1 wrote "accepted" BEFORE activation ran, so an accepted version
+			// is not evidence that it was ever applied - that is the defect this
+			// schema change exists to fix. Migrate it to Desired only and leave
+			// Applied empty so startup replays it. Apply is idempotent (it
+			// assigns relay allowlists and metadata from the projection), so the
+			// cost of replaying an already-live config is one redundant apply;
+			// the cost of assuming it applied is silently running stale config.
+			consumer.state.Version = 2
+			consumer.state.Desired = make(map[string]desiredCoordinate, len(legacy.Accepted))
+			consumer.state.Applied = map[string]appliedCoordinate{}
+			consumer.state.Pending = nil
+			for coord, entry := range legacy.Accepted {
+				consumer.state.Desired[coord] = desiredCoordinate{appliedCoordinate: entry}
+			}
+			if legacy.Last != nil {
+				consumer.state.Pending = []pendingActivation{{
+					Coordinate: legacy.Last.Author + "\x00" + legacy.Last.ServiceID + "\x00" + legacy.Last.Scope + "\x00" + legacy.Last.PolicyName,
+					Projection: legacy.Last,
+				}}
+			}
+			consumer.state.Last = nil
+		}
+		if consumer.state.Version != 2 {
 			return nil, fmt.Errorf("unsupported config-fabric projection version %d", consumer.state.Version)
 		}
-		if consumer.state.Accepted == nil {
-			consumer.state.Accepted = map[string]appliedCoordinate{}
+		if consumer.state.Desired == nil {
+			consumer.state.Desired = map[string]desiredCoordinate{}
 		}
+		if consumer.state.Pending == nil {
+			consumer.state.Pending = nil
+		}
+		consumer.state.Last = nil
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read config-fabric projection %s: %w", consumer.path, err)
 	}
@@ -148,29 +197,136 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	}
 	projection, err := c.validate(event)
 	if err != nil {
-		return c.publishStatus(ctx, projection, event, "rejected", err.Error())
+		return c.publishStatus(ctx, projection, event.ID.Hex(), "rejected", err.Error())
 	}
 	c.mu.Lock()
 	coordinate := projection.Author + "\x00" + projection.ServiceID + "\x00" + projection.Scope + "\x00" + projection.PolicyName
-	accepted := c.state.Accepted[coordinate]
-	if projection.Version <= accepted.Version {
+	desired := c.state.Desired[coordinate]
+	if projection.Version <= desired.Version {
 		c.mu.Unlock()
-		return c.publishStatus(ctx, projection, event, "rejected", fmt.Sprintf("version %d does not advance accepted version %d", projection.Version, accepted.Version))
+		return c.publishStatus(ctx, projection, event.ID.Hex(), "rejected", fmt.Sprintf("version %d does not advance desired version %d", projection.Version, desired.Version))
 	}
 	next := c.state
-	next.Accepted = cloneCoordinates(c.state.Accepted)
-	next.Accepted[coordinate] = appliedCoordinate{Author: projection.Author, EventID: projection.EventID, Version: projection.Version}
-	next.Last = persistedProjection(projection)
+	next.Desired = cloneDesired(c.state.Desired)
+	next.Desired[coordinate] = desiredCoordinate{
+		appliedCoordinate: appliedCoordinate{Author: projection.Author, EventID: projection.EventID, Version: projection.Version},
+	}
+	next.Pending = append(append([]pendingActivation(nil), c.state.Pending...), pendingActivation{
+		Coordinate: coordinate,
+		Projection: persistedProjection(projection),
+	})
 	if err := c.persist(ctx, next); err != nil {
 		c.mu.Unlock()
-		return c.publishStatus(ctx, projection, event, "rejected", "persist desired projection: "+err.Error())
+		return c.publishStatus(ctx, projection, event.ID.Hex(), "rejected", "persist desired projection: "+err.Error())
 	}
 	c.state = next
 	c.mu.Unlock()
-	if err := c.apply(projection); err != nil {
-		return c.publishStatus(ctx, projection, event, "rejected", "activate persisted projection: "+err.Error())
+	select {
+	case c.activateCh <- struct{}{}:
+	default:
 	}
-	return c.publishStatus(ctx, projection, event, "applied", "")
+	return c.publishStatus(ctx, projection, event.ID.Hex(), "accepted", "")
+}
+
+func cloneDesired(in map[string]desiredCoordinate) map[string]desiredCoordinate {
+	out := make(map[string]desiredCoordinate, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func (c *ConfigConsumer) Start(ctx context.Context) {
+	go c.activateLoop(ctx)
+}
+
+func (c *ConfigConsumer) activateLoop(ctx context.Context) {
+	select {
+	case <-c.activateCh:
+	case <-ctx.Done():
+		return
+	}
+	c.processPending(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.activateCh:
+			c.processPending(ctx)
+		}
+	}
+}
+
+func (c *ConfigConsumer) processPending(ctx context.Context) {
+	for {
+		c.mu.Lock()
+		if len(c.state.Pending) == 0 {
+			c.mu.Unlock()
+			return
+		}
+		next := c.state.Pending[0]
+		c.mu.Unlock()
+
+		projection := ConfigProjection{
+			ServiceID:        next.Projection.ServiceID,
+			PolicyName:       next.Projection.PolicyName,
+			Scope:            next.Projection.Scope,
+			Version:          next.Projection.Version,
+			Schema:           next.Projection.Schema,
+			EventID:          next.Projection.EventID,
+			Author:           next.Projection.Author,
+			AllowedPubkeys:   append([]string(nil), next.Projection.AllowedPubkeys...),
+			BannedPubkeys:    append([]string(nil), next.Projection.BannedPubkeys...),
+			RelayName:        next.Projection.RelayName,
+			RelayDescription: next.Projection.RelayDescription,
+			RelayIcon:        next.Projection.RelayIcon,
+		}
+		if err := c.apply(projection); err != nil {
+			return
+		}
+		c.mu.Lock()
+		c.state.Pending = c.state.Pending[1:]
+		if nd := c.state.Desired[next.Coordinate]; nd.Version < next.Projection.Version {
+			nd = desiredCoordinate{appliedCoordinate: appliedCoordinate{
+				Author: next.Projection.Author, EventID: next.Projection.EventID, Version: next.Projection.Version,
+			}}
+			c.state.Desired = cloneDesired(c.state.Desired)
+			c.state.Desired[next.Coordinate] = nd
+		}
+		c.state.Applied = cloneCoordinates(c.state.Applied)
+		applied := c.state.Applied[next.Coordinate]
+		if next.Projection.Version > applied.Version {
+			c.state.Applied[next.Coordinate] = appliedCoordinate{
+				Author: next.Projection.Author, EventID: next.Projection.EventID, Version: next.Projection.Version,
+			}
+		}
+		persistErr := c.persist(ctx, c.state)
+		c.mu.Unlock()
+		if persistErr != nil {
+			// Activation succeeded; the applied coordinate did not reach disk.
+			// Surface it - a silent failure here is what lets a restart replay
+			// a version that is already live.
+			c.logActivation("persist applied coordinate", projection, persistErr)
+		}
+		// The config-fabric console keys drift on an "applied" status event
+		// (internal/service/config_fabric.go treats status == "applied" as the
+		// effective version). Without this every activated config reads as
+		// permanently drifted.
+		if err := c.publishStatus(ctx, projection, next.Projection.EventID, "applied", ""); err != nil {
+			c.logActivation("publish applied status", projection, err)
+		}
+	}
+}
+
+// logActivation reports an activation-path failure. The consumer has no logger
+// dependency, so this stays a single choke point to change if one is added.
+func (c *ConfigConsumer) logActivation(stage string, projection ConfigProjection, err error) {
+	zap.L().Warn("relay sidecar config activation",
+		zap.String("stage", stage),
+		zap.String("service_id", projection.ServiceID),
+		zap.String("policy", projection.PolicyName),
+		zap.Int("version", projection.Version),
+		zap.Error(err))
 }
 
 func persistedProjection(projection ConfigProjection) *persistedConfigProjection {
@@ -356,7 +512,7 @@ func (c *ConfigConsumer) persist(ctx context.Context, state configProjectionStat
 	return directory.Sync()
 }
 
-func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigProjection, desired nostr.Event, status, reason string) error {
+func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigProjection, desiredEventID string, status, reason string) error {
 	if projection.ServiceID == "" || projection.Scope == "" || projection.PolicyName == "" || projection.Version < 1 {
 		return fmt.Errorf("reject desired config: %s", reason)
 	}
@@ -365,12 +521,12 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 		"scope":           projection.Scope,
 		"version":         projection.Version,
 		"policy_schema":   projection.Schema,
-		"config_event_id": desired.ID.Hex(),
+		"config_event_id": desiredEventID,
 		"status":          status,
 	}
 	if status == "applied" {
 		content["effective_version"] = projection.Version
-		content["last_applied_event_id"] = desired.ID.Hex()
+		content["last_applied_event_id"] = desiredEventID
 	} else {
 		content["reason"] = strings.TrimSpace(reason)
 	}
@@ -389,7 +545,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 			{"service", projection.ServiceID},
 			{"scope", projection.Scope},
 			{"version", strconv.Itoa(projection.Version)},
-			{"e", desired.ID.Hex()},
+			{"e", desiredEventID},
 		},
 		Content: string(raw),
 	}

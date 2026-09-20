@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -36,13 +37,16 @@ func (p relayConfigPublisher) Publish(ctx context.Context, event nostr.Event) (i
 }
 
 type Server struct {
-	cfg        config.RelaySidecarConfig
-	relay      *khatru.Relay
-	store      *sqliteStore
-	policy     *adminPolicy
-	httpServer *http.Server
-	logger     *zap.Logger
-	consumer   *ConfigConsumer
+	cfg         config.RelaySidecarConfig
+	relay       *khatru.Relay
+	store       *sqliteStore
+	policy      *adminPolicy
+	httpServer  *http.Server
+	logger      *zap.Logger
+	consumer    *ConfigConsumer
+	broadcastCh chan nostr.Event
+	configCh    chan nostr.Event
+	wg          sync.WaitGroup
 }
 
 // New creates a Khatru sidecar relay backed by durable storage.
@@ -135,28 +139,40 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 			return nil, err
 		}
 	}
+	broadcastCh := make(chan nostr.Event, 256)
+	configCh := make(chan nostr.Event, 64)
 	relay.OnEventSaved = func(ctx context.Context, event nostr.Event) {
 		logger.Debug("sidecar event accepted", zap.String("event_id", event.ID.Hex()), zap.Uint16("kind", uint16(event.Kind)))
-		go relay.ForceBroadcastEvent(event)
+		select {
+		case broadcastCh <- event:
+		default:
+			logger.Warn("relay-sidecar broadcast queue full, dropping broadcast", zap.String("event_id", event.ID.Hex()))
+		}
 		if consumer != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
-			go func() {
-				if err := consumer.Handle(context.Background(), event); err != nil {
-					logger.Warn("relay-sidecar desired config rejected", zap.String("event_id", event.ID.Hex()), zap.Error(err))
-				}
-			}()
+			select {
+			case configCh <- event:
+			default:
+				logger.Warn("relay-sidecar config queue full, dropping config event", zap.String("event_id", event.ID.Hex()))
+			}
 		}
 	}
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
-		go relay.ForceBroadcastEvent(event)
+		select {
+		case broadcastCh <- event:
+		default:
+			logger.Warn("relay-sidecar broadcast queue full, dropping ephemeral broadcast", zap.String("event_id", event.ID.Hex()))
+		}
 	}
 
 	return &Server{
-		cfg:      nostrCfg.Sidecar,
-		relay:    relay,
-		store:    store,
-		policy:   admin,
-		logger:   logger,
-		consumer: consumer,
+		cfg:         nostrCfg.Sidecar,
+		relay:       relay,
+		store:       store,
+		policy:      admin,
+		logger:      logger,
+		consumer:    consumer,
+		broadcastCh: broadcastCh,
+		configCh:    configCh,
 	}, nil
 }
 
@@ -240,6 +256,15 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+
+	s.startBroadcastWorkers(workerCtx)
+	s.startConfigWorker(workerCtx)
+	if s.consumer != nil {
+		s.consumer.Start(workerCtx)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		s.logger.Info("relay sidecar starting", zap.String("addr", addr), zap.String("public_url", s.cfg.PublicURL))
@@ -268,11 +293,57 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("relay sidecar shutdown: %w", err)
 	}
+	stopWorkers()
+	s.wg.Wait()
 	if runErr != nil {
 		return runErr
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil
+}
+
+func (s *Server) startBroadcastWorkers(ctx context.Context) {
+	for i := 0; i < 4; i++ {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case event, ok := <-s.broadcastCh:
+					if !ok {
+						return
+					}
+					s.relay.ForceBroadcastEvent(event)
+				}
+			}
+		}()
+	}
+}
+
+func (s *Server) startConfigWorker(ctx context.Context) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-s.configCh:
+				if !ok {
+					return
+				}
+				if s.consumer == nil {
+					continue
+				}
+				bgCtx := context.WithoutCancel(ctx)
+				if err := s.consumer.Handle(bgCtx, event); err != nil {
+					s.logger.Warn("relay-sidecar desired config rejected", zap.String("event_id", event.ID.Hex()), zap.Error(err))
+				}
+			}
+		}
+	}()
 }
 
 func (s *Server) runRetentionSweeps(ctx context.Context) {
