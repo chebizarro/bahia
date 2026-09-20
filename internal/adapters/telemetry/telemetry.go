@@ -1190,11 +1190,15 @@ func renderNostrFleetHealthMetrics(w http.ResponseWriter, snapshot NostrFleetHea
 	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_errors_total Distinct rejected or over-limit observable events; redeliveries of the same event are counted once")
 	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_errors_total counter")
 	fmt.Fprintf(w, "bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_nostr_entities Observed fleet entities by domain and health status, projected from Nostr state")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_nostr_entities gauge")
 	for _, domain := range nostrFleetHealthDomains {
 		for _, status := range fleetHealthStatuses {
 			fmt.Fprintf(w, "bahia_fleet_health_nostr_entities{domain=%q,status=%q} %d\n", domain, status, snapshot.Entities[domain+":"+status])
 		}
 	}
+	fmt.Fprintln(w, "# HELP bahia_fleet_health_nostr_heartbeat_lag_seconds Seconds since the last observed heartbeat for each fleet entity")
+	fmt.Fprintln(w, "# TYPE bahia_fleet_health_nostr_heartbeat_lag_seconds gauge")
 	for _, entity := range sortedFloatKeys(snapshot.HeartbeatLagSeconds) {
 		fmt.Fprintf(w, "bahia_fleet_health_nostr_heartbeat_lag_seconds{entity=%q} %.0f\n", entity, snapshot.HeartbeatLagSeconds[entity])
 	}

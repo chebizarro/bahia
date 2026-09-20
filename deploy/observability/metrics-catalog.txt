@@ -1,20 +1,89 @@
 # Bahia /metrics (internal/adapters/telemetry)
-bahia_fleet_health_services
-bahia_fleet_health_drift_stuck
+#
+# GENERATED from the `# HELP` declarations in internal/adapters/telemetry.
+# Do not hand-edit the bahia_ section; run:
+#   go test ./internal/adapters/telemetry/ -run TestMetricsCatalogIsCurrent -update
+#
+# Two tests keep this file load-bearing rather than decorative:
+#   TestMetricsCatalogIsCurrent            - catalog matches what the code declares
+#   TestAlertRulesOnlyReferenceKnownMetrics - every metric named in
+#     deploy/observability/bahia-alerts.yml still exists. An alert on a metric
+#     that no longer exists never fires, which is worse than a noisy one.
+#
+bahia_adoption_candidates_total
+bahia_adoption_import_duration_seconds
+bahia_adoption_import_failure_total
+bahia_adoption_import_success_total
+bahia_adoption_imports_total
+bahia_adoption_redacted_keys_total
+bahia_adoption_scan_duration_seconds
+bahia_adoption_scans_total
+bahia_adoption_targets_scanned_total
+bahia_audit_4903_anomalies_total
+bahia_authorization_rejections_total
+bahia_cashu_payments_sats_total
+bahia_cashu_payments_total
+bahia_cashu_wallet_balance_sats
+bahia_controlplane_dispatch_total
+bahia_deployments_total
+bahia_drift_detected_total
 bahia_fleet_health_drift_age_seconds_max
-bahia_worker_capacity_class_workers
-bahia_worker_pressure_recommendations
-bahia_nostr_relays_healthy_total
-bahia_nostr_relays_degraded_total
-bahia_nostr_relays_unhealthy_total
+bahia_fleet_health_drift_states
+bahia_fleet_health_drift_stuck
+bahia_fleet_health_entities
+bahia_fleet_health_nostr_entities
+bahia_fleet_health_nostr_heartbeat_lag_seconds
+bahia_fleet_health_projector_caught_up
+bahia_fleet_health_projector_errors_total
+bahia_fleet_health_projector_last_event_timestamp_seconds
+bahia_fleet_health_projector_last_ingested_timestamp_seconds
+bahia_fleet_health_projector_relay_closed_total
+bahia_fleet_health_projector_subscription_active
+bahia_fleet_health_services
+bahia_http_request_duration_seconds
+bahia_http_requests_total
+bahia_hygiene_actions_total
+bahia_hygiene_candidates_total
+bahia_hygiene_pressure_breaches_total
+bahia_hygiene_scans_total
 bahia_loom_jobs_inflight
 bahia_loom_jobs_total
-bahia_cashu_payments_sats_total
-bahia_adoption_scans_total
-bahia_adoption_imports_total
-bahia_runtime_actions_total
+bahia_nostr_archive_batches
+bahia_nostr_backoff_seconds
+bahia_nostr_eose_latency_seconds
+bahia_nostr_event_store_bytes
+bahia_nostr_event_store_oldest_hot_timestamp_seconds
+bahia_nostr_event_store_rows
+bahia_nostr_events_published_total
+bahia_nostr_events_received_total
+bahia_nostr_outbox_depth
+bahia_nostr_publish_failed_total
+bahia_nostr_publish_latency_seconds
+bahia_nostr_publish_ok_total
+bahia_nostr_reconnects_total
+bahia_nostr_relay_closed_total
+bahia_nostr_relay_degraded
+bahia_nostr_relay_healthy
+bahia_nostr_relay_reconnect_attempts_total
+bahia_nostr_relay_rereq_attempts_total
+bahia_nostr_relay_success_rate
+bahia_nostr_relays_degraded_total
+bahia_nostr_relays_healthy_total
+bahia_nostr_relays_unhealthy_total
+bahia_reconcile_duration_seconds
 bahia_reconcile_states_checked
+bahia_reconcile_total
+bahia_release_outcomes_total
+bahia_runtime_action_duration_seconds
+bahia_runtime_actions_total
+bahia_tier_rejections_total
+bahia_worker_capacity_class_workers
+bahia_worker_heartbeat_lag_seconds
+bahia_worker_pressure_recommendations
+bahia_worker_telemetry_freshness_workers
+bahia_workers_active
+bahia_workers_total
 
-# fleet-routstr-gateway /metrics (src/metrics.ts)
+# fleet-routstr-gateway /metrics (src/metrics.ts) - different repo, maintained by hand.
 fleet_routstr_sats_spent_total
 fleet_routstr_wallet_balance_sats

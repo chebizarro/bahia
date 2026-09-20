@@ -1,0 +1,77 @@
+version: 2
+
+# Actions are pinned to commit SHAs with the release tag kept in a trailing
+# comment (`uses: actions/checkout@<sha> # v5`). Dependabot understands that
+# format and bumps both the SHA and the comment, so pinning does not strand the
+# repo on stale actions - which is the usual reason hand-pinning rots.
+#
+# Re-pin after adding a new action with:
+#   go run github.com/suzuki-shunsuke/pinact/v3/cmd/pinact@latest run
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      # One PR for routine action bumps; a compromised-action advisory should
+      # not be queued behind four unrelated patch bumps.
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Major Go module bumps land by hand: this module pins cascadia-go and
+      # fiatjaf.com/nostr, where a major bump changes event and kind semantics
+      # rather than just an API surface.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps(web)
+    versioning-strategy: increase
+    groups:
+      web-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+  - package-ecosystem: docker
+    directory: "/web"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(web)
