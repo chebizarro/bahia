@@ -518,6 +518,16 @@ type PackageBackendConfig struct {
 	AuthSecretRef      string            `koanf:"auth_secret_ref" secret:"true"`
 	TLSSecretRef       string            `koanf:"tls_secret_ref" secret:"true"`
 	SecretRefs         map[string]string `koanf:"secret_refs" secret:"true"`
+
+	// Nexus-specific settings forwarded to the Nexus raw-repository adapter.
+	NexusBlobStoreName                      string `koanf:"nexus_blob_store_name" yaml:"nexus_blob_store_name"`
+	NexusDisableStrictContentTypeValidation bool   `koanf:"nexus_disable_strict_content_type_validation" yaml:"nexus_disable_strict_content_type_validation"`
+	NexusWritePolicy                        string `koanf:"nexus_write_policy" yaml:"nexus_write_policy"`
+
+	// Pulp-specific settings forwarded to the Pulp file-plugin adapter.
+	PulpEnableCustomMutationAPI bool          `koanf:"pulp_enable_custom_mutation_api" yaml:"pulp_enable_custom_mutation_api"`
+	PulpTaskInterval            time.Duration `koanf:"pulp_task_interval" yaml:"pulp_task_interval"`
+	PulpConfirmationTimeout     time.Duration `koanf:"pulp_confirmation_timeout" yaml:"pulp_confirmation_timeout"`
 }
 
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.

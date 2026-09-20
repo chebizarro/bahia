@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/backends/filesystem_mock"
 	"github.com/openagentsinc/bahia/internal/backends/nexus"
@@ -187,6 +188,96 @@ func TestBuildBackendWithSecretsReturnsClearErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFactoryForwardsNexusConfig(t *testing.T) {
+	t.Run("zero config preserves disabled behaviour", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		defer server.Close()
+
+		backend, err := BuildBackend(config.PackageBackendConfig{Type: "nexus", BaseURL: server.URL})
+		if err != nil {
+			t.Fatalf("BuildBackend: %v", err)
+		}
+		caps := backend.Capabilities()
+		if caps.CanCreateRepository {
+			t.Fatal("CanCreateRepository must be false when BlobStoreName is not configured")
+		}
+		if !caps.CanObserveDrift {
+			t.Fatal("CanObserveDrift must be true regardless of BlobStoreName")
+		}
+	})
+
+	t.Run("configured values are forwarded", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		defer server.Close()
+
+		backend, err := BuildBackend(config.PackageBackendConfig{
+			Type:                                  "nexus",
+			BaseURL:                               server.URL,
+			NexusBlobStoreName:                    "packages",
+			NexusDisableStrictContentTypeValidation: true,
+			NexusWritePolicy:                      "ALLOW",
+		})
+		if err != nil {
+			t.Fatalf("BuildBackend: %v", err)
+		}
+		caps := backend.Capabilities()
+		if !caps.CanCreateRepository {
+			t.Fatal("CanCreateRepository must be true when BlobStoreName is configured")
+		}
+	})
+}
+
+func TestFactoryForwardsPulpConfig(t *testing.T) {
+	t.Run("zero config preserves disabled behaviour", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		defer server.Close()
+
+		backend, err := BuildBackend(config.PackageBackendConfig{Type: "pulp", BaseURL: server.URL})
+		if err != nil {
+			t.Fatalf("BuildBackend: %v", err)
+		}
+		caps := backend.Capabilities()
+		if caps.CanCreateRepository || caps.CanDeleteRepository || caps.CanStoreArtifact || caps.CanListArtifacts || caps.CanPromoteArtifact || caps.CanYankArtifact {
+			t.Fatalf("all mutation capabilities must be false when custom mutation is not enabled: %#v", caps)
+		}
+		if !caps.CanGetArtifact {
+			t.Fatal("CanGetArtifact must remain true for read operations")
+		}
+
+		_, err = backend.EnsureRepository(context.Background(), testRepo("repo"))
+		if !errors.Is(err, pulp.ErrCustomMutationAPIUnavailable) {
+			t.Fatalf("EnsureRepository error = %v, want ErrCustomMutationAPIUnavailable", err)
+		}
+	})
+
+	t.Run("configured custom mutation enables capabilities", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "not implemented in test stub", http.StatusTeapot)
+		}))
+		defer server.Close()
+
+		backend, err := BuildBackend(config.PackageBackendConfig{
+			Type:                      "pulp",
+			BaseURL:                   server.URL,
+			PulpEnableCustomMutationAPI: true,
+			PulpTaskInterval:          50 * time.Millisecond,
+			PulpConfirmationTimeout:   10 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("BuildBackend: %v", err)
+		}
+		caps := backend.Capabilities()
+		if !caps.CanCreateRepository || !caps.CanDeleteRepository || !caps.CanStoreArtifact || !caps.CanListArtifacts || !caps.CanPromoteArtifact || !caps.CanYankArtifact {
+			t.Fatalf("all mutation capabilities must be true when custom mutation is enabled: %#v", caps)
+		}
+
+		_, err = backend.EnsureRepository(context.Background(), testRepo("repo"))
+		if errors.Is(err, pulp.ErrCustomMutationAPIUnavailable) {
+			t.Fatal("EnsureRepository must not return ErrCustomMutationAPIUnavailable when custom mutation is enabled")
+		}
+	})
 }
 
 func serverCACertPEM(t *testing.T, server *httptest.Server) string {

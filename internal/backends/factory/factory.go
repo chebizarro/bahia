@@ -78,9 +78,9 @@ func BuildBackendWithSecrets(ctx context.Context, cfg config.PackageBackendConfi
 	case domain.PackageBackendFilesystemMock:
 		return nil, filesystem_mock.ErrProductionSelection
 	case domain.PackageBackendNexus:
-		return nexus.New(nexus.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic})
+		return nexus.New(nexus.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic, BlobStoreName: cfg.NexusBlobStoreName, DisableStrictContentTypeValidation: cfg.NexusDisableStrictContentTypeValidation, WritePolicy: cfg.NexusWritePolicy})
 	case domain.PackageBackendPulp:
-		return pulp.New(pulp.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic})
+		return pulp.New(pulp.Config{BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client, Auth: secrets.Auth, Secrets: secrets.Generic, TaskInterval: cfg.PulpTaskInterval, ConfirmationTimeout: cfg.PulpConfirmationTimeout, EnableCustomMutationAPI: cfg.PulpEnableCustomMutationAPI})
 	case domain.PackageBackendAthens, domain.PackageBackendVerdaccio:
 		return registryproxy.New(registryproxy.Config{Type: domain.PackageBackendType(strings.TrimSpace(cfg.Type)), BaseURL: cfg.BaseURL, PublicBaseURL: cfg.PublicBaseURL, HTTPClient: client})
 	default:
