@@ -272,7 +272,7 @@ jobs:
           docker image rm "$rollback_ref" >/dev/null
 
       - name: Upload sanitized image digest record
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openclaw-soulfactory-sidecar-${{ steps.release.outputs.sha }}
           path: ${{ steps.deploy.outputs.artifact_file }}
