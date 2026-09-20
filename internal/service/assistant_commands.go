@@ -83,9 +83,20 @@ func (lib *AssistantCommandLibrary) Expand(prompt string) (AssistantCommandExpan
 	return AssistantCommandExpansion{
 		Command:      spec,
 		Prompt:       expandAssistantCommandTemplate(spec.Template, args),
-		AllowedTools: append([]string(nil), spec.AllowedTools...),
+		AllowedTools: cloneAssistantAllowedTools(spec.AllowedTools),
 		Model:        spec.Model,
 	}, true
+}
+
+// cloneAssistantAllowedTools copies a command's tool scope while preserving the
+// difference between nil (unrestricted) and empty (no tool permitted). The
+// idiomatic append([]string(nil), src...) returns nil for an empty source and
+// would silently widen an empty scope to unrestricted.
+func cloneAssistantAllowedTools(src []string) []string {
+	if src == nil {
+		return nil
+	}
+	return append([]string{}, src...)
 }
 
 // LoadAssistantCommands parses every *.md command template under the configured
@@ -139,6 +150,12 @@ func ParseAssistantCommand(content, name, sourcePath string) (AssistantCommandSp
 		}
 		spec.Description = strings.TrimSpace(fm.Description)
 		spec.AllowedTools = assistantNormalizeStringList(fm.AllowedTools)
+		if fm.AllowedTools != nil && spec.AllowedTools == nil {
+			// An explicitly empty allowed-tools list means "no tools", which is
+			// not the same as omitting the key. The shared list normalizer
+			// collapses both to nil, and nil means unrestricted.
+			spec.AllowedTools = []string{}
+		}
 		spec.Model = strings.TrimSpace(fm.Model)
 		spec.ArgumentHint = strings.TrimSpace(fm.ArgumentHint)
 	}

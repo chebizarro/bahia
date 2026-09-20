@@ -40,7 +40,14 @@ type AssistantAgentLoopMetadata struct {
 	MaxConsecutiveToolFailures int                     `json:"max_consecutive_tool_failures,omitempty"`
 	LastObservationID          string                  `json:"last_observation_id,omitempty"`
 	TranscriptCursor           string                  `json:"transcript_cursor,omitempty"`
-	UpdatedAt                  time.Time               `json:"updated_at,omitempty"`
+	// AllowedTools carries a command's tool scope across suspension so a resumed
+	// turn cannot regain capabilities its command withheld. It deliberately has
+	// no omitempty: nil means unrestricted, but an empty non-nil list means "no
+	// tools at all", and omitempty would erase that distinction on the way to
+	// storage. A session persisted before this field existed decodes as nil and
+	// therefore keeps the previous unrestricted behaviour.
+	AllowedTools []string  `json:"allowed_tools"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
 
 // AssistantAgentMessageRole is provider-neutral; model adapters translate these

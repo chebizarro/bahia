@@ -227,7 +227,7 @@ func (l *AssistantAgentLoop) StartTurn(ctx context.Context, req AssistantAgentTu
 	if req.OperatorPubkey != "" {
 		req.Session.OperatorPubkey = strings.TrimSpace(req.OperatorPubkey)
 	}
-	metadata := domain.AssistantAgentLoopMetadata{RunID: runID, Iteration: 0, State: domain.AssistantAgentLoopStateRunning, MaxIterations: l.maxIterations(), MaxConsecutiveToolFailures: l.maxConsecutiveToolFailures(), UpdatedAt: l.now().UTC()}
+	metadata := domain.AssistantAgentLoopMetadata{RunID: runID, Iteration: 0, State: domain.AssistantAgentLoopStateRunning, MaxIterations: l.maxIterations(), MaxConsecutiveToolFailures: l.maxConsecutiveToolFailures(), AllowedTools: runAllowedTools, UpdatedAt: l.now().UTC()}
 	setAssistantAgentLoopMetadata(req.Session, metadata)
 	req.Session.State = domain.AssistantSessionStatePlanning
 	if err := l.persistSession(ctx, req.Session); err != nil {
@@ -306,7 +306,7 @@ func (l *AssistantAgentLoop) ResumeAfterAsyncObservation(ctx context.Context, re
 		guarded.Observations = append(guarded.Observations, obs)
 		return guarded, nil
 	}
-	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: metadata.RunID, turnID: req.Session.CurrentTurnID, routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, observations: []*domain.AssistantToolObservation{obs}})
+	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: metadata.RunID, turnID: req.Session.CurrentTurnID, routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, observations: []*domain.AssistantToolObservation{obs}, allowedTools: metadata.AllowedTools})
 }
 
 // ResumeAfterActionDecision resumes an approval-suspended turn. Approvals execute
@@ -372,7 +372,7 @@ func (l *AssistantAgentLoop) ResumeAfterActionDecision(ctx context.Context, req 
 		guarded.Observations = append(guarded.Observations, obs)
 		return guarded, nil
 	}
-	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: firstNonEmptyString(action.RunID, metadata.RunID), turnID: firstNonEmptyString(action.TurnID, req.Session.CurrentTurnID), routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, observations: []*domain.AssistantToolObservation{obs}})
+	return l.continueLoop(ctx, assistantAgentLoopRun{session: req.Session, runID: firstNonEmptyString(action.RunID, metadata.RunID), turnID: firstNonEmptyString(action.TurnID, req.Session.CurrentTurnID), routeContext: req.RouteContext, selectedRefs: req.SelectedRefs, messages: messages, nextSequence: seq + 1, observations: []*domain.AssistantToolObservation{obs}, allowedTools: metadata.AllowedTools})
 }
 
 type assistantAgentLoopRun struct {
@@ -388,8 +388,9 @@ type assistantAgentLoopRun struct {
 	cancelScope  string
 	// depth is 0 for the operator turn and >0 inside a delegated subagent run.
 	depth int
-	// allowedTools, when non-nil, restricts the tool schemas exposed to the model
-	// for this run (e.g. a command's allowed-tools scope). nil means no restriction.
+	// allowedTools, when non-nil, is this run's command scope: it restricts both
+	// the schemas advertised to the model and the calls dispatchToolCall will
+	// execute. nil means no restriction; empty means no tool is permitted.
 	allowedTools []string
 }
 
@@ -414,6 +415,7 @@ func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgen
 		metadata.State = domain.AssistantAgentLoopStateRunning
 		metadata.MaxIterations = l.maxIterations()
 		metadata.MaxConsecutiveToolFailures = l.maxConsecutiveToolFailures()
+		metadata.AllowedTools = run.allowedTools
 		metadata.UpdatedAt = l.now().UTC()
 		setAssistantAgentLoopMetadata(run.session, metadata)
 		run.session.State = domain.AssistantSessionStateExecuting
@@ -482,17 +484,27 @@ func (l *AssistantAgentLoop) continueLoop(ctx context.Context, run assistantAgen
 func (l *AssistantAgentLoop) assembleToolSchemas(base []llm.AgentToolSchema, run assistantAgentLoopRun) []llm.AgentToolSchema {
 	tools := append([]llm.AgentToolSchema(nil), base...)
 	tools = append(tools, l.internalToolSchemas()...)
-	if len(run.allowedTools) == 0 {
+	if run.allowedTools == nil {
 		return tools
 	}
-	allowed := assistantStringSet(run.allowedTools)
 	out := make([]llm.AgentToolSchema, 0, len(tools))
 	for _, schema := range tools {
-		if allowed[schema.Name] {
+		if toolAllowedForRun(run, schema.Name) {
 			out = append(out, schema)
 		}
 	}
 	return out
+}
+
+// toolAllowedForRun reports whether this run's command scope permits a tool.
+// A nil allowlist is unrestricted; a non-nil one is exhaustive, including when
+// it is empty. It governs execution as well as advertisement, because a model
+// can name a tool that was never offered to it.
+func toolAllowedForRun(run assistantAgentLoopRun, name string) bool {
+	if run.allowedTools == nil {
+		return true
+	}
+	return assistantStringSet(run.allowedTools)[name]
 }
 
 // dispatchToolCall routes a model tool call to the internal-tool handler or the
@@ -500,10 +512,16 @@ func (l *AssistantAgentLoop) assembleToolSchemas(base []llm.AgentToolSchema, run
 // hard-deny -> PreToolUse hooks -> re-evaluate -> execute ordering; hooks can
 // tighten a decision but never upgrade a deny to an allow.
 func (l *AssistantAgentLoop) dispatchToolCall(ctx context.Context, run assistantAgentLoopRun, iteration int, toolCall domain.AssistantAgentToolCall) (*domain.AssistantToolObservation, error) {
+	baseReq := AssistantToolRuntimeRequest{Session: run.session, RunID: run.runID, TurnID: run.turnID, Iteration: iteration, ToolCall: toolCall, PlanHash: run.planHash, CancelScope: run.cancelScope}
+	if !toolAllowedForRun(run, toolCall.Name) {
+		return l.toolRuntime.deniedObservation(baseReq, toolCall, domain.AssistantPermissionResult{
+			Decision: domain.AssistantPermissionDecisionDeny,
+			Reason:   "assistant tool is outside the command's allowed-tools scope",
+		}), nil
+	}
 	if tool, ok := l.internalTools[toolCall.Name]; ok {
 		return tool.handler(ctx, run, toolCall)
 	}
-	baseReq := AssistantToolRuntimeRequest{Session: run.session, RunID: run.runID, TurnID: run.turnID, Iteration: iteration, ToolCall: toolCall, PlanHash: run.planHash, CancelScope: run.cancelScope}
 	if l.hooks == nil {
 		return l.toolRuntime.Execute(ctx, baseReq)
 	}
