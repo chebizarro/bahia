@@ -136,7 +136,12 @@ func (r *Reactor) handleMLInferenceDeploymentApproval(ctx context.Context, event
 		IntentID string `json:"intent_id,omitempty"`
 		Decision string `json:"decision,omitempty"`
 	}
-	_ = json.Unmarshal([]byte(event.Content), &req)
+	if strings.TrimSpace(event.Content) != "" {
+		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+			_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "parse_error", err.Error(), nil, nil)
+			return
+		}
+	}
 	if req.IntentID == "" {
 		req.IntentID = tagValueNostr(event.Tags, "intent")
 	}
@@ -188,7 +193,15 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		Endpoint    string `json:"endpoint,omitempty"`
 		RequestedBy string `json:"requested_by,omitempty"`
 	}
-	_ = json.Unmarshal([]byte(event.Content), &req)
+	if strings.TrimSpace(event.Content) != "" {
+		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+			_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "parse_error", err.Error(), nil, nil)
+			return
+		}
+	}
+	if req.Endpoint == "" {
+		req.Endpoint = tagValueNostr(event.Tags, "endpoint")
+	}
 	endpoint, err := r.resolveMLEndpoint(ctx, req.EndpointID, req.Endpoint)
 	if err != nil {
 		_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)

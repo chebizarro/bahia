@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -79,7 +80,11 @@ func (r *Reactor) handlePackageRepositoryDelete(ctx context.Context, event *nost
 	if err != nil {
 		intent, ok := r.beginPackageIntent(ctx, event, domain.PackageOperationRepositoryDelete, packageIntentFields{RepositoryID: cmd.RepositoryID, RepositoryName: cmd.RepositoryName}, cmd)
 		if ok {
-			r.finishPackageIntent(ctx, event, intent, "repository_delete", map[string]any{"operation": "repository_delete", "status": "succeeded", "already_deleted": true}, nil)
+			if errors.Is(err, repository.ErrNotFound) {
+				r.finishPackageIntent(ctx, event, intent, "repository_delete", map[string]any{"operation": "repository_delete", "status": "succeeded", "already_deleted": true}, nil)
+			} else {
+				r.finishPackageIntent(ctx, event, intent, "repository_delete", nil, err)
+			}
 		}
 		return
 	}
@@ -301,7 +306,11 @@ func (r *Reactor) decodePackageRequest(ctx context.Context, event *nostr.Event, 
 }
 
 func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, operation domain.PackageOperation, fields packageIntentFields, payload any) (*domain.PackageIntent, bool) {
-	existing, _ := r.packageProjection.GetIntentByRequestEventID(ctx, event.ID.Hex())
+	existing, err := r.packageProjection.GetIntentByRequestEventID(ctx, event.ID.Hex())
+	if err != nil {
+		r.publishPackageError(ctx, event, operation, "projection_error", err.Error())
+		return nil, false
+	}
 	if existing != nil && existing.Status.Terminal() {
 		_ = r.publishPackageResult(ctx, event, existing, string(operation), existing.ResultPayload, existing.ErrorMessage)
 		return existing, false
@@ -326,7 +335,10 @@ func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, op
 	_ = r.publishPackageStatus(ctx, event, intent, "accepted", "accepted", "package request accepted")
 	intent.Status = domain.PackageIntentStatusExecuting
 	intent.UpdatedAt = time.Now().UTC()
-	_ = r.packageProjection.UpsertIntent(ctx, intent)
+	if err := r.packageProjection.UpsertIntent(ctx, intent); err != nil {
+		r.finishPackageIntent(ctx, event, intent, string(operation), nil, err)
+		return nil, false
+	}
 	_ = r.publishPackageStatus(ctx, event, intent, "executing", "running", "package request executing")
 	return intent, true
 }
@@ -351,14 +363,19 @@ func (r *Reactor) finishPackageIntent(ctx context.Context, event *nostr.Event, i
 	intent.ResultPayload = result
 	intent.UpdatedAt = now
 	intent.CompletedAt = &now
-	_ = r.packageProjection.UpsertIntent(ctx, intent)
+	if persistErr := r.packageProjection.UpsertIntent(ctx, intent); persistErr != nil {
+		result["status"] = "failed"
+		result["error"] = persistErr.Error()
+		intent.Status = domain.PackageIntentStatusFailed
+		intent.ErrorMessage = persistErr.Error()
+	}
 	_ = r.publishPackageResult(ctx, event, intent, operation, result, intent.ErrorMessage)
 }
 
 func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, name string) (*domain.PackageRepository, error) {
 	if id != uuid.Nil {
 		repo, err := r.packageProjection.GetRepository(ctx, id)
-		if err != nil {
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
 			return nil, err
 		}
 		if repo != nil {
@@ -367,14 +384,14 @@ func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, nam
 	}
 	if strings.TrimSpace(name) != "" {
 		repo, err := r.packageProjection.GetRepositoryByName(ctx, strings.TrimSpace(name))
-		if err != nil {
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
 			return nil, err
 		}
 		if repo != nil {
 			return repo, nil
 		}
 	}
-	return nil, fmt.Errorf("package repository not found")
+	return nil, fmt.Errorf("package repository not found: %w", repository.ErrNotFound)
 }
 
 func (r *Reactor) publishPackageStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, step, status, message string) error {

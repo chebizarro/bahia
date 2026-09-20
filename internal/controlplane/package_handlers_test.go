@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 
@@ -80,6 +81,62 @@ func TestPackageRepositoryApplyDuplicateTerminalReplaysResultOnly(t *testing.T) 
 	assertPublishedKind(t, capture.events, KindPackageResult)
 }
 
+func TestPackageIntentProjectionFailuresStopOrFailTransitions(t *testing.T) {
+	ctx := context.Background()
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
+	event := &nostr.Event{ID: testNostrID("package-intent-projection-failure"), PubKey: testNostrPubKeyFromPrivateKey(t, nostr.Generate().Hex())}
+
+	t.Run("lookup", func(t *testing.T) {
+		projection := newMemoryPackageProjection()
+		projection.getIntentErr = errors.New("intent lookup failed")
+		reactor := NewReactor(Config{}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(&captureNostrPublisher{published: 1}), WithPackageProjectionRepository(projection))
+		if _, ok := reactor.beginPackageIntent(ctx, event, domain.PackageOperationRepositoryApply, packageIntentFields{}, struct{}{}); ok {
+			t.Fatal("beginPackageIntent ok = true, want false on intent lookup failure")
+		}
+	})
+
+	t.Run("executing persistence", func(t *testing.T) {
+		projection := newMemoryPackageProjection()
+		projection.upsertIntentErrStatus, projection.upsertIntentErr = domain.PackageIntentStatusExecuting, errors.New("executing persistence failed")
+		reactor := NewReactor(Config{}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(&captureNostrPublisher{published: 1}), WithPackageProjectionRepository(projection))
+		if _, ok := reactor.beginPackageIntent(ctx, event, domain.PackageOperationRepositoryApply, packageIntentFields{}, struct{}{}); ok {
+			t.Fatal("beginPackageIntent ok = true, want false on executing persistence failure")
+		}
+	})
+
+	t.Run("terminal persistence", func(t *testing.T) {
+		projection := newMemoryPackageProjection()
+		projection.upsertIntentErrStatus, projection.upsertIntentErr = domain.PackageIntentStatusSucceeded, errors.New("terminal persistence failed")
+		reactor := NewReactor(Config{}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(&captureNostrPublisher{published: 1}), WithPackageProjectionRepository(projection))
+		intent := &domain.PackageIntent{ID: uuid.New(), Operation: domain.PackageOperationRepositoryApply}
+		reactor.finishPackageIntent(ctx, event, intent, "repository_apply", nil, nil)
+		if intent.Status != domain.PackageIntentStatusFailed {
+			t.Fatalf("intent status = %s, want failed after terminal persistence failure", intent.Status)
+		}
+	})
+}
+
+func TestPackageRepositoryDeleteFailsWhenProjectionLookupFails(t *testing.T) {
+	ctx := context.Background()
+	privateKey := nostr.Generate().Hex()
+	signer, _ := NewPrivateKeySigner(privateKey)
+	pubkey := testNostrPubKeyHexFromPrivateKey(t, privateKey)
+	projection := newMemoryPackageProjection()
+	projection.getRepositoryByNameErr = errors.New("repository projection unavailable")
+	backend, _ := filesystem_mock.New(filesystem_mock.Config{RootDir: t.TempDir()})
+	pkgSvc, _ := service.NewPackageRegistryService(config.PackageControlplaneConfig{}, packagebackend.Registry{"mock": backend}, projection, nil, zap.NewNop())
+	capture := &captureNostrPublisher{published: 1}
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{pubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithPackageRegistryService(pkgSvc), WithPackageProjectionRepository(projection))
+	event := &nostr.Event{ID: testNostrID("package-repo-delete-projection-failure"), PubKey: testNostrPubKeyFromPrivateKey(t, privateKey), Content: mustJSON(PackageRepositoryDeleteCommand{RepositoryName: "libs"})}
+
+	reactor.handlePackageRepositoryDelete(ctx, event)
+
+	got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "status")
+	if got != "failed" {
+		t.Fatalf("delete result status = %q, want failed for projection error", got)
+	}
+}
+
 func assertPublishedKind(t *testing.T, events []nostr.Event, kind int) {
 	t.Helper()
 	legacyKind := strconv.Itoa(kind)
@@ -120,12 +177,16 @@ func isLegacyRuntimeObservableKind(kind int) bool {
 }
 
 type memoryPackageProjection struct {
-	reposByID    map[uuid.UUID]*domain.PackageRepository
-	reposByName  map[string]*domain.PackageRepository
-	artifacts    map[string]*domain.PackageArtifact
-	publications map[uuid.UUID]*domain.PackagePublication
-	intentsByID  map[uuid.UUID]*domain.PackageIntent
-	intentsByReq map[string]*domain.PackageIntent
+	reposByID              map[uuid.UUID]*domain.PackageRepository
+	reposByName            map[string]*domain.PackageRepository
+	artifacts              map[string]*domain.PackageArtifact
+	publications           map[uuid.UUID]*domain.PackagePublication
+	intentsByID            map[uuid.UUID]*domain.PackageIntent
+	intentsByReq           map[string]*domain.PackageIntent
+	getRepositoryByNameErr error
+	getIntentErr           error
+	upsertIntentErrStatus  domain.PackageIntentStatus
+	upsertIntentErr        error
 }
 
 func newMemoryPackageProjection() *memoryPackageProjection {
@@ -142,6 +203,9 @@ func (m *memoryPackageProjection) GetRepository(_ context.Context, id uuid.UUID)
 	return m.reposByID[id], nil
 }
 func (m *memoryPackageProjection) GetRepositoryByName(_ context.Context, name string) (*domain.PackageRepository, error) {
+	if m.getRepositoryByNameErr != nil {
+		return nil, m.getRepositoryByNameErr
+	}
 	return m.reposByName[name], nil
 }
 func (m *memoryPackageProjection) ListRepositories(_ context.Context, includeDeleted bool) ([]domain.PackageRepository, error) {
@@ -197,6 +261,9 @@ func (m *memoryPackageProjection) ListPublicationsByRepository(_ context.Context
 	return out, nil
 }
 func (m *memoryPackageProjection) UpsertIntent(_ context.Context, intent *domain.PackageIntent) error {
+	if intent.Status == m.upsertIntentErrStatus && m.upsertIntentErr != nil {
+		return m.upsertIntentErr
+	}
 	cp := *intent
 	m.intentsByID[cp.ID] = &cp
 	m.intentsByReq[cp.RequestEventID] = &cp
@@ -206,6 +273,9 @@ func (m *memoryPackageProjection) GetIntent(_ context.Context, id uuid.UUID) (*d
 	return m.intentsByID[id], nil
 }
 func (m *memoryPackageProjection) GetIntentByRequestEventID(_ context.Context, requestEventID string) (*domain.PackageIntent, error) {
+	if m.getIntentErr != nil {
+		return nil, m.getIntentErr
+	}
 	return m.intentsByReq[requestEventID], nil
 }
 func (m *memoryPackageProjection) ListNonTerminalIntents(_ context.Context, _ int) ([]domain.PackageIntent, error) {

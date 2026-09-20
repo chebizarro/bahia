@@ -5,8 +5,43 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
+
+type mlParseTestExecutor struct{}
+
+func (mlParseTestExecutor) ProcessDeploymentIntent(context.Context, uuid.UUID) error { return nil }
+
+func TestMLApprovalAndRollbackRejectMalformedJSONBeforeTagFallback(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
+	tests := []struct {
+		name    string
+		kind    int
+		handler func(*Reactor, *nostr.Event)
+	}{
+		{"approval", KindMLInferenceDeploymentApproval, func(r *Reactor, ev *nostr.Event) { r.handleMLInferenceDeploymentApproval(ctx, ev) }},
+		{"rollback", KindMLInferenceRollbackRequest, func(r *Reactor, ev *nostr.Event) { r.handleMLInferenceRollbackRequest(ctx, ev) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &captureNostrPublisher{published: 1}
+			signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithMLRegistry(service.NewMLRegistryService(nil, nil, zap.NewNop())), WithMLInferenceExecutor(mlParseTestExecutor{}))
+			request := signedLLMRequest(t, requestKey, tt.kind, `{`, nostr.Tags{{"d", "malformed-" + tt.name}, {"intent", "not-a-uuid"}, {"endpoint", "endpoint:demo:prod"}})
+
+			tt.handler(reactor, request)
+
+			got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "result")
+			if got != "parse_error" {
+				t.Fatalf("%s result code = %q, want parse_error", tt.name, got)
+			}
+		})
+	}
+}
 
 func TestHandleMLPhase1RequestsPublishCorrelatedTerminalResults(t *testing.T) {
 	ctx := context.Background()
