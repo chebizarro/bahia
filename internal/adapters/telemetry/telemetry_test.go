@@ -220,6 +220,19 @@ func TestMetrics_RecordDeployment(t *testing.T) {
 	}
 }
 
+func TestMetricsHandler_HTTPDurationCountIsLifetime(t *testing.T) {
+	p := Setup(Config{}, zap.NewNop())
+	for i := 0; i < 1001; i++ {
+		p.GetMetrics().RecordHTTPRequest("GET", "/test", http.StatusOK, time.Millisecond)
+	}
+
+	w := httptest.NewRecorder()
+	p.MetricsHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(w.Body.String(), "bahia_http_request_duration_seconds_count 1001\n") {
+		t.Fatalf("HTTP duration count is not lifetime:\n%s", w.Body.String())
+	}
+}
+
 func TestMetrics_RecordAdoptionAndRuntimeOperations(t *testing.T) {
 	m := NewMetrics()
 

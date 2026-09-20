@@ -67,16 +67,14 @@ func (m *ArtifactManager) Export(ctx context.Context, id uuid.UUID) (*repository
 		return nil, fmt.Errorf("creating Nostr archive directory: %w", err)
 	}
 	finalPath := filepath.Join(m.dir, id.String()+".jsonl.gz")
-	tmp, err := os.OpenFile(finalPath+".tmp", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	tmp, err := os.CreateTemp(m.dir, "."+id.String()+"-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("creating Nostr archive artifact: %w", err)
 	}
-	ok := false
+	tmpName := tmp.Name()
 	defer func() {
 		_ = tmp.Close()
-		if !ok {
-			_ = os.Remove(finalPath + ".tmp")
-		}
+		_ = os.Remove(tmpName)
 	}()
 
 	hash := sha256.New()
@@ -101,7 +99,7 @@ func (m *ArtifactManager) Export(ctx context.Context, id uuid.UUID) (*repository
 	if err := tmp.Close(); err != nil {
 		return nil, fmt.Errorf("closing Nostr archive artifact: %w", err)
 	}
-	if err := os.Rename(finalPath+".tmp", finalPath); err != nil {
+	if err := os.Rename(tmpName, finalPath); err != nil {
 		return nil, fmt.Errorf("publishing Nostr archive artifact: %w", err)
 	}
 	if err := syncDirectory(m.dir); err != nil {
@@ -111,7 +109,6 @@ func (m *ArtifactManager) Export(ctx context.Context, id uuid.UUID) (*repository
 	if err := m.store.MarkArchiveExported(ctx, id, finalPath, digest, counter.count); err != nil {
 		return nil, err
 	}
-	ok = true
 	return m.store.GetArchiveBatch(ctx, id)
 }
 

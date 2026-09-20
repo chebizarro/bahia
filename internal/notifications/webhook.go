@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -82,7 +83,18 @@ func (s *WebhookSender) Send(ctx context.Context, ch *domain.NotificationChannel
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if err != nil {
+			return fmt.Errorf("reading webhook error response: %w", err)
+		}
+		if detail := string(bytes.TrimSpace(body)); detail != "" {
+			return fmt.Errorf("webhook returned %d: %s", resp.StatusCode, detail)
+		}
 		return fmt.Errorf("webhook returned %d", resp.StatusCode)
+	}
+
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("draining webhook response: %w", err)
 	}
 
 	return nil

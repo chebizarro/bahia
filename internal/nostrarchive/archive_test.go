@@ -88,6 +88,25 @@ func TestExporterWritesAtomicDigestVerifiedArtifact(t *testing.T) {
 	require.True(t, store.protected)
 }
 
+func TestExportIgnoresCrashOrphanedTempFile(t *testing.T) {
+	id := uuid.New()
+	store := &memoryArchiveStore{
+		batch:    repository.NostrEventArchiveBatch{ID: id, Status: repository.NostrArchiveStatusClaimed, RowCount: 1},
+		rows:     []string{`{"id":"a"}`},
+		restored: make(map[string]struct{}),
+	}
+	dir := t.TempDir()
+	orphan := filepath.Join(dir, id.String()+".jsonl.gz.tmp")
+	require.NoError(t, os.WriteFile(orphan, []byte("partial export"), 0o600))
+	manager, err := NewArtifactManager(store, dir)
+	require.NoError(t, err)
+
+	batch, err := manager.Export(context.Background(), id)
+	require.NoError(t, err)
+	require.FileExists(t, batch.ExportedPath)
+	require.FileExists(t, orphan)
+}
+
 func TestRestoreRejectsDigestMismatchAndIsIdempotent(t *testing.T) {
 	id := uuid.New()
 	store := &memoryArchiveStore{

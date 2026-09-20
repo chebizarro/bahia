@@ -569,6 +569,25 @@ func TestWebhookSender_NonOKStatus(t *testing.T) {
 	}
 }
 
+func TestWebhookSender_NonOKStatusIncludesBoundedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, "upstream unavailable"+strings.Repeat("x", 64<<10)+"must be truncated")
+	}))
+	defer server.Close()
+
+	sender := NewWebhookSender()
+	ch := &domain.NotificationChannel{Name: "error-hook", Config: map[string]any{"url": server.URL}}
+
+	err := sender.Send(context.Background(), ch, "test", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "upstream unavailable") {
+		t.Fatalf("Send error = %v, want bounded response body", err)
+	}
+	if strings.Contains(err.Error(), "must be truncated") {
+		t.Fatalf("Send error contains response body beyond limit")
+	}
+}
+
 func TestWebhookSender_MissingURL(t *testing.T) {
 	sender := NewWebhookSender()
 	ch := &domain.NotificationChannel{

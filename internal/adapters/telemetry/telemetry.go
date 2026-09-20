@@ -65,9 +65,10 @@ type Metrics struct {
 	mu sync.RWMutex
 
 	// HTTP metrics
-	HTTPRequestsTotal      map[string]int64 // key: method:path:status
-	HTTPRequestDurations   []float64        // in seconds
-	HTTPRequestDurationSum float64          // sum for average calculation
+	HTTPRequestsTotal        map[string]int64 // key: method:path:status
+	HTTPRequestDurations     []float64        // in seconds
+	HTTPRequestDurationSum   float64          // sum for average calculation
+	HTTPRequestDurationCount int64
 
 	// Deployment metrics
 	DeploymentsTotal   map[string]int64 // key: service:env:status
@@ -410,6 +411,7 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	durSec := duration.Seconds()
 	m.HTTPRequestDurations = append(m.HTTPRequestDurations, durSec)
 	m.HTTPRequestDurationSum += durSec
+	m.HTTPRequestDurationCount++
 
 	// Keep only last 1000 samples for memory efficiency
 	if len(m.HTTPRequestDurations) > 1000 {
@@ -801,12 +803,11 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintln(w, "# HELP bahia_http_request_duration_seconds HTTP request duration in seconds")
 			fmt.Fprintln(w, "# TYPE bahia_http_request_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.HTTPRequestDurations)
-			total := int64(len(m.HTTPRequestDurations))
 			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
 			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
 			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
 			fmt.Fprintf(w, "bahia_http_request_duration_seconds_sum %.6f\n", m.HTTPRequestDurationSum)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds_count %d\n", total)
+			fmt.Fprintf(w, "bahia_http_request_duration_seconds_count %d\n", m.HTTPRequestDurationCount)
 		}
 
 		// Deployment metrics
