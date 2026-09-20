@@ -2,10 +2,15 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	dockerclient "github.com/docker/docker/client"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -155,27 +160,28 @@ func TestComposeRuntimeObserveResolvesImageDigestFromRunningContainer(t *testing
 	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
 `)
-	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
-case "$*" in
-	"container inspect running-id")
-	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}]'
-	;;
-	"image inspect sha256:runningimage")
-	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}]'
-	;;
-	"image inspect registry.example/app:v2")
-	echo "tag inspect fallback should not be used" >&2
-	exit 1
-	;;
-	*)
-  echo "unexpected docker args: $*" >&2
-  exit 1
-	;;
-esac
-`)
-	t.Setenv("PATH", filepath.Dir(dockerBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop()}
+	t.Setenv("PATH", filepath.Dir(composeBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dockerMock := newMockDockerAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/_ping":
+			w.Header().Set("API-Version", "1.44")
+			w.Header().Set("OSType", "linux")
+		case "/v1.44/containers/running-id/json":
+			fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
+		case "/v1.44/images/sha256:runningimage/json":
+			fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.WithHost(dockerMock.URL), dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	t.Cleanup(func() { cli.Close() })
+	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop(), dockerClient: cli}
 	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
 	if err != nil {
 		t.Fatalf("Observe() error = %v", err)
@@ -192,23 +198,28 @@ func TestComposeRuntimeObservePrefersConfiguredRepoDigestWhenImageIDHasMultipleR
 	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
 `)
-	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
-case "$*" in
-	"container inspect running-id")
-	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}]'
-	;;
-	"image inspect sha256:runningimage")
-	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}]'
-	;;
-	*)
-  echo "unexpected docker args: $*" >&2
-  exit 1
-	;;
-esac
-`)
-	t.Setenv("PATH", filepath.Dir(dockerBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop()}
+	t.Setenv("PATH", filepath.Dir(composeBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dockerMock := newMockDockerAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/_ping":
+			w.Header().Set("API-Version", "1.44")
+			w.Header().Set("OSType", "linux")
+		case "/v1.44/containers/running-id/json":
+			fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
+		case "/v1.44/images/sha256:runningimage/json":
+			fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.WithHost(dockerMock.URL), dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	t.Cleanup(func() { cli.Close() })
+	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop(), dockerClient: cli}
 	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
 	if err != nil {
 		t.Fatalf("Observe() error = %v", err)
@@ -306,6 +317,13 @@ printf '%s' 'not-json'
 func writeFakeComposeBinary(t *testing.T, content string) string {
 	t.Helper()
 	return writeFakeNamedBinary(t, "fake-compose", content)
+}
+
+func newMockDockerAPI(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func writeFakeNamedBinary(t *testing.T, name, content string) string {

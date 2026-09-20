@@ -75,6 +75,35 @@ func (e *SDKComposeExecutor) service() (api.Compose, error) {
 	return svc, nil
 }
 
+// sdkClientTLSConfig returns the TLS options for a runtime's endpoint.
+// This is the single source of truth for TLS policy — used by the embedded
+// Compose SDK path (via sdkClientOptions) and the Engine API inspection path
+// (via getDockerClient).
+func sdkClientTLSConfig(rt *ComposeRuntime) *tlsconfig.Options {
+	if rt == nil || !dockerEndpointUsesTLS(rt.endpoint) {
+		return nil
+	}
+	return &tlsconfig.Options{
+		CAFile:             strings.TrimSpace(rt.endpoint.CACertFile),
+		CertFile:           strings.TrimSpace(rt.endpoint.ClientCertFile),
+		KeyFile:            strings.TrimSpace(rt.endpoint.ClientKeyFile),
+		InsecureSkipVerify: rt.endpoint.InsecureSkipVerify,
+	}
+}
+
+// newDockerCommandCli creates and initialises a Docker CLI from the runtime's
+// endpoint configuration.
+func newDockerCommandCli(rt *ComposeRuntime) (command.Cli, error) {
+	dockerCli, err := command.NewDockerCli(command.WithCombinedStreams(io.Discard))
+	if err != nil {
+		return nil, fmt.Errorf("new docker cli: %w", err)
+	}
+	if err := dockerCli.Initialize(sdkClientOptions(rt)); err != nil {
+		return nil, fmt.Errorf("initialize docker cli: %w", err)
+	}
+	return dockerCli, nil
+}
+
 // buildService wires a docker CLI client from the runtime's endpoint
 // configuration (host + TLS material) and constructs the SDK service.
 // Progress output is discarded; failures surface as Go errors.
@@ -82,12 +111,9 @@ func (e *SDKComposeExecutor) buildService() (api.Compose, error) {
 	if e.runtime == nil {
 		return nil, fmt.Errorf("compose sdk executor runtime is nil")
 	}
-	dockerCli, err := command.NewDockerCli(command.WithCombinedStreams(io.Discard))
+	dockerCli, err := newDockerCommandCli(e.runtime)
 	if err != nil {
-		return nil, fmt.Errorf("compose sdk: new docker cli: %w", err)
-	}
-	if err := dockerCli.Initialize(sdkClientOptions(e.runtime)); err != nil {
-		return nil, fmt.Errorf("compose sdk: initialize docker cli: %w", err)
+		return nil, fmt.Errorf("compose sdk: %w", err)
 	}
 	svc, err := compose.NewComposeService(dockerCli)
 	if err != nil {
@@ -113,15 +139,11 @@ func sdkClientOptions(rt *ComposeRuntime) *flags.ClientOptions {
 		opts.Hosts = []string{host}
 	}
 	endpoint := rt.endpoint
-	if dockerEndpointUsesTLS(endpoint) {
+	tlsOpts := sdkClientTLSConfig(rt)
+	if tlsOpts != nil {
 		opts.TLS = true
 		opts.TLSVerify = !endpoint.InsecureSkipVerify
-		opts.TLSOptions = &tlsconfig.Options{
-			CAFile:             strings.TrimSpace(endpoint.CACertFile),
-			CertFile:           strings.TrimSpace(endpoint.ClientCertFile),
-			KeyFile:            strings.TrimSpace(endpoint.ClientKeyFile),
-			InsecureSkipVerify: endpoint.InsecureSkipVerify,
-		}
+		opts.TLSOptions = tlsOpts
 	}
 	return opts
 }

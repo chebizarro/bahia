@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/go-connections/tlsconfig"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -31,6 +35,9 @@ type ComposeRuntime struct {
 	binary          string               // "docker-compose" or "docker compose"
 	executionMode   RuntimeExecutionMode // cli (default) or sdk
 	logger          *zap.Logger
+
+	mu           sync.Mutex
+	dockerClient *dockerclient.Client
 }
 
 // ExecutionMode reports how this runtime executes mutating Compose
@@ -109,6 +116,56 @@ func validateEndpointTLSMaterial(endpoint config.RuntimeEndpointConfig) error {
 		}
 	}
 	return nil
+}
+
+// getDockerClient lazily creates a Docker Engine API client from the
+// runtime's endpoint configuration. TLS policy mirrors sdkClientTLSConfig
+// — the single source of truth for the SDK executor path.
+func (r *ComposeRuntime) getDockerClient() (*dockerclient.Client, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dockerClient != nil {
+		return r.dockerClient, nil
+	}
+	opts := []dockerclient.Opt{dockerclient.WithAPIVersionNegotiation()}
+	if host := strings.TrimSpace(r.dockerHost); host != "" {
+		opts = append(opts, dockerclient.WithHost(host))
+	} else {
+		opts = append(opts, dockerclient.FromEnv)
+	}
+	if tlsOpts := sdkClientTLSConfig(r); tlsOpts != nil {
+		if tlsOpts.InsecureSkipVerify {
+			tlsCfg, tlsErr := tlsconfig.Client(*tlsOpts)
+			if tlsErr != nil {
+				return nil, tlsErr
+			}
+			opts = append(opts, dockerclient.WithHTTPClient(&http.Client{
+				Transport: &http.Transport{TLSClientConfig: tlsCfg},
+			}))
+		} else {
+			opts = append(opts, dockerclient.WithTLSClientConfig(
+				tlsOpts.CAFile, tlsOpts.CertFile, tlsOpts.KeyFile,
+			))
+		}
+	}
+	c, err := dockerclient.NewClientWithOpts(opts...)
+	if err != nil {
+		return nil, err
+	}
+	r.dockerClient = c
+	return c, nil
+}
+
+// Close releases the cached Docker Engine API client, if any.
+func (r *ComposeRuntime) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dockerClient == nil {
+		return nil
+	}
+	err := r.dockerClient.Close()
+	r.dockerClient = nil
+	return err
 }
 
 // detectComposeBinary checks if "docker compose" (v2) or "docker-compose" (v1) is available.
@@ -488,21 +545,25 @@ func (r *ComposeRuntime) resolveObservedComposeImage(ctx context.Context, contai
 }
 
 func (r *ComposeRuntime) inspectComposeContainerImage(ctx context.Context, logger *zap.Logger, containerID string) (string, string, string, bool) {
-	stdout, stderr, err := r.runDockerStdout(ctx, "container", "inspect", containerID)
+	dockerCli, err := r.getDockerClient()
 	if err != nil {
-		logger.Debug("failed to inspect compose container for image digest", zap.String("container_id", containerID), zap.String("stderr", strings.TrimSpace(stderr)), zap.Error(err))
+		logger.Debug("docker client not available for container inspect", zap.String("container_id", containerID), zap.Error(err))
 		return "", "", "", false
 	}
-	var inspected []composeContainerInspect
-	if err := json.Unmarshal([]byte(stdout), &inspected); err != nil || len(inspected) == 0 {
-		var single composeContainerInspect
-		if singleErr := json.Unmarshal([]byte(stdout), &single); singleErr != nil {
-			logger.Debug("failed to parse compose container inspect output", zap.String("container_id", containerID), zap.Error(err))
-			return "", "", "", false
-		}
-		inspected = []composeContainerInspect{single}
+	inspected, err := dockerCli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		logger.Debug("failed to inspect compose container for image digest", zap.String("container_id", containerID), zap.Error(err))
+		return "", "", "", false
 	}
-	return strings.TrimSpace(inspected[0].Image), strings.TrimSpace(inspected[0].Config.Image), strings.TrimSpace(inspected[0].Config.Labels["bahia.desired_hash"]), strings.TrimSpace(inspected[0].Image) != ""
+	configuredImage := ""
+	desiredHash := ""
+	if inspected.Config != nil {
+		configuredImage = strings.TrimSpace(inspected.Config.Image)
+		if inspected.Config.Labels != nil {
+			desiredHash = strings.TrimSpace(inspected.Config.Labels["bahia.desired_hash"])
+		}
+	}
+	return strings.TrimSpace(inspected.Image), configuredImage, desiredHash, strings.TrimSpace(inspected.Image) != ""
 }
 
 func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Logger, inspectRef, fallbackRepo string) (string, string) {
@@ -515,48 +576,23 @@ func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Log
 	if inspectRef == "" {
 		return fallbackRepo, digestFromReference(fallbackRepo)
 	}
-	stdout, stderr, err := r.runDockerStdout(ctx, "image", "inspect", inspectRef)
+	dockerCli, err := r.getDockerClient()
 	if err != nil {
-		logger.Debug("failed to inspect compose image for digest", zap.String("image", inspectRef), zap.String("stderr", strings.TrimSpace(stderr)), zap.Error(err))
+		logger.Debug("docker client not available for image inspect", zap.String("image", inspectRef), zap.Error(err))
 		return fallbackRepo, digestFromReference(inspectRef)
 	}
-	var inspected []dockerImageInspect
-	if err := json.Unmarshal([]byte(stdout), &inspected); err != nil || len(inspected) == 0 {
-		var single dockerImageInspect
-		if singleErr := json.Unmarshal([]byte(stdout), &single); singleErr != nil {
-			logger.Debug("failed to parse compose image inspect output", zap.String("image", inspectRef), zap.Error(err))
-			return fallbackRepo, digestFromReference(inspectRef)
-		}
-		inspected = []dockerImageInspect{single}
+	inspected, _, err := dockerCli.ImageInspectWithRaw(ctx, inspectRef)
+	if err != nil {
+		logger.Debug("failed to inspect compose image for digest", zap.String("image", inspectRef), zap.Error(err))
+		return fallbackRepo, digestFromReference(inspectRef)
 	}
-	for _, candidate := range inspected {
-		if repo, digest := bestRepoDigest(preferredRepo, candidate.RepoDigests); digest != "" {
-			return repo, digest
-		}
-		if digest := digestFromReference(candidate.ID); digest != "" {
-			return fallbackRepo, digest
-		}
+	if repo, digest := bestRepoDigest(preferredRepo, inspected.RepoDigests); digest != "" {
+		return repo, digest
+	}
+	if digest := digestFromReference(inspected.ID); digest != "" {
+		return fallbackRepo, digest
 	}
 	return fallbackRepo, ""
-}
-
-func (r *ComposeRuntime) runDockerStdout(ctx context.Context, args ...string) (string, string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Env = r.commandEnv(nil)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
-}
-
-type composeContainerInspect struct {
-	Image  string `json:"Image"`
-	Config struct {
-		Image  string            `json:"Image"`
-		Labels map[string]string `json:"Labels"`
-	} `json:"Config"`
 }
 
 func digestFromReference(ref string) string {
