@@ -414,22 +414,25 @@ describe('Auth Store', () => {
       expect(state.capabilities).toEqual(capabilities);
     });
 
-    it('hydrates relay lists and profile metadata from bootstrap relays', async () => {
+    it('hydrates relay lists and profile metadata from runtime and signer relays', async () => {
       const pubkey = 'a'.repeat(64);
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
-      nip07Module.getRelays.mockResolvedValue({});
+      nip07Module.getRelays.mockResolvedValue({
+        'wss://signer.example': { read: true, write: true }
+      });
 
       await authModule.login();
 
       expect(poolClientMock.connect).toHaveBeenCalled();
       expect(poolClientMock.connect.mock.calls[0][0]).toEqual(
-        expect.arrayContaining(['wss://nos.lol', 'wss://relay.primal.net'])
+        expect.arrayContaining(['wss://signer.example/'])
       );
       expect(authModule.authState.profile).toMatchObject({
         name: 'Test User',
         picture: 'https://example.com/avatar.png'
       });
       expect(authModule.authState.relays).toEqual({
+        'wss://signer.example/': { read: true, write: true },
         'wss://user-both.example/': { read: true, write: true },
         'wss://user-relay.example/': { read: true, write: false },
         'wss://user-write.example/': { read: false, write: true }
@@ -444,14 +447,16 @@ describe('Auth Store', () => {
       const pubkey = 'a'.repeat(64);
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
       nip07Module.getRelays.mockResolvedValue({
+        'wss://signer.example': { read: true, write: true },
         'wss://bahia.sharegap.net/relay': { read: true, write: true }
       });
 
       await authModule.login();
 
       const requestedRelays = poolClientMock.connect.mock.calls[0][0];
-      expect(requestedRelays).toEqual(expect.arrayContaining(['wss://nos.lol', 'wss://relay.primal.net']));
+      expect(requestedRelays).toEqual(expect.arrayContaining(['wss://signer.example/']));
       expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay');
+      expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay/');
     });
 
     it('does not resurrect an existing session after an explicit login failure', async () => {
@@ -492,12 +497,12 @@ describe('Auth Store', () => {
       
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
       nip07Module.getRelays.mockRejectedValue(new Error('Relays failed'));
+      systemStoreMock.info = { nostr: { browser_relays: ['wss://runtime.example'] } };
       
       await authModule.login();
       
       const state = authModule.authState;
       
-      // Should still authenticate with empty relays
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(pubkey);
       expect(state.relays).toEqual({});
@@ -823,6 +828,30 @@ describe('Auth Store', () => {
       expect(decoded.kind).toBe(27235);
       expect(decoded.tags).toContainEqual(['u', 'http://localhost:3000/api/v1/services']);
       expect(decoded.tags).toContainEqual(['method', 'POST']);
+    });
+  });
+
+  describe('relay sources', () => {
+    it('queries auth metadata only on runtime and signer-provided relays', async () => {
+      systemStoreMock.info = { nostr: { browser_relays: ['wss://runtime-approved.example'] } };
+      nip07Module.getRelays.mockResolvedValue({
+        'wss://signer-approved.example': { read: true, write: true }
+      });
+
+      await authModule.login();
+
+      for (const call of poolClientMock.connect.mock.calls) {
+        expect(call[0]).toEqual(['wss://runtime-approved.example', 'wss://signer-approved.example/']);
+      }
+    });
+
+    it('fails clearly when runtime system info and the signer provide no relays', async () => {
+      systemStoreMock.info = null;
+      nip07Module.getRelays.mockResolvedValue({});
+
+      await expect(authModule.login()).rejects.toThrow(
+        'No approved relays available from runtime system info or signer configuration'
+      );
     });
   });
 

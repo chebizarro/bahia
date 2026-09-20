@@ -25,9 +25,9 @@ import { PoolBackedClient } from '$lib/nostr/pool-client.js';
 import { normalizeRelayUrl, uniqueRelays } from '$lib/nostr/pool-utils.js';
 import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { resolveBrowserRelays } from './controlplane/connection.svelte.js';
 
 const SESSION_KEY = 'bahia_auth_session';
-const AUTH_BOOTSTRAP_RELAYS = ['wss://nos.lol', 'wss://relay.primal.net'];
 const AUTH_QUERY_TIMEOUT_MS = 5000;
 const LEGACY_BAHIA_RELAY = normalizeRelayUrl('wss://bahia.sharegap.net/relay');
 
@@ -296,10 +296,17 @@ function sameRelayMap(left = {}, right = {}) {
 }
 
 function collectBootstrapRelayCandidates(userRelays = {}) {
-  return uniqueRelays([
-    ...AUTH_BOOTSTRAP_RELAYS,
-    ...normalizeRelayUrls(userRelays)
-  ]).filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY).slice(0, 10);
+  const runtimeRelays = resolveBrowserRelays(currentSystemInfo());
+  const signerRelays = normalizeRelayUrls(userRelays);
+  const allRelays = uniqueRelays([...runtimeRelays, ...signerRelays]);
+
+  if (allRelays.length === 0) {
+    throw new Error('No approved relays available from runtime system info or signer configuration');
+  }
+
+  return allRelays
+    .filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY)
+    .slice(0, 10);
 }
 
 function cleanupAuthMetadataClient() {
@@ -362,15 +369,7 @@ async function queryAuthEventsOnRelays(pubkey, relays = [], kinds = [], limit = 
 
 async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
   const relayCandidates = collectBootstrapRelayCandidates(userRelays);
-  const bootstrapRelays = relayCandidates.filter((relay) => AUTH_BOOTSTRAP_RELAYS.includes(relay));
-  const fallbackRelays = relayCandidates.filter((relay) => !AUTH_BOOTSTRAP_RELAYS.includes(relay));
-
-  const bootstrapEvents = await queryAuthEventsOnRelays(pubkey, bootstrapRelays, kinds, limit);
-  if (bootstrapEvents.length > 0 || fallbackRelays.length === 0) {
-    return bootstrapEvents;
-  }
-
-  return queryAuthEventsOnRelays(pubkey, fallbackRelays, kinds, limit);
+  return queryAuthEventsOnRelays(pubkey, relayCandidates, kinds, limit);
 }
 
 function latestAuthEvent(events, kind, pubkey) {
@@ -420,7 +419,7 @@ async function hydrateAuthMetadata({ pubkey, relays = {}, authMethod = 'nip07', 
     updateAuthState({ relays: mergedRelays });
   }
 
-  const profile = await fetchProfile(pubkey, mergedRelays);
+  const profile = await fetchProfile(pubkey, relays);
   if (profile) {
     updateAuthState({ profile });
   }

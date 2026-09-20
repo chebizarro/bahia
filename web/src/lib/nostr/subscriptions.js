@@ -3,11 +3,6 @@ import { KINDS, isLifecycleResultKind } from './kinds.js';
 import { validateInboundNostrEvent } from './validation.js';
 
 
-// Default relays - can be overridden via localStorage or connect() parameter
-const DEFAULT_RELAYS = [
-  'wss://relay.sharegap.net'
-];
-
 // Storage key for the explicitly local, noncanonical emergency override.
 const RELAY_CONFIG_KEY = 'bahia_nostr_relays';
 export const RELAY_OVERRIDE_STORAGE_SCHEMA = 'bahia.browser-relay-override.v2';
@@ -65,7 +60,7 @@ function parseRelayOverride(raw) {
  * changing their safe relay values.
  */
 export function getConfiguredRelays() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return [...DEFAULT_RELAYS];
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return [];
 
   try {
     const stored = localStorage.getItem(RELAY_CONFIG_KEY);
@@ -90,7 +85,7 @@ export function getConfiguredRelays() {
     }
   }
 
-  return [...DEFAULT_RELAYS];
+  return [];
 }
 
 export function hasSavedRelayConfig() {
@@ -122,7 +117,7 @@ export function saveRelayConfig(relays) {
  * Get the default relay list
  */
 export function getDefaultRelays() {
-  return [...DEFAULT_RELAYS];
+  return [];
 }
 
 export function createNostrPoolClient(options = {}) {

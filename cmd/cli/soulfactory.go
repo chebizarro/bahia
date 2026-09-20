@@ -42,10 +42,6 @@ type Template struct {
 	Tags        []string `json:"tags,omitempty"`
 }
 
-var defaultRelays = []string{
-	"wss://relay.sharegap.net",
-}
-
 type cliSoulFactoryClient interface {
 	Close()
 	ListSouls(context.Context, int, string) ([]domain.AgentSoul, error)
