@@ -7,6 +7,16 @@ on:
         description: Full Bahia commit to build and deploy
         required: true
         type: string
+      release_retention_count:
+        description: How many release trees and compose backups to keep on the edge host
+        required: false
+        default: "5"
+        type: string
+      image_retention_days:
+        description: Prune bahia-* images older than this many days
+        required: false
+        default: "30"
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +37,11 @@ jobs:
       PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
       RELEASE_REVISION: ${{ inputs.release_revision }}
       SAFE_ROLLBACK_BAHIA_IMAGE: sha256:824e4ffa0954d2135b87169233f1a9edd04fc5148125904ba0c7b95b61e6b16a
+      # Retention. Edge hosts kept every release tree, compose backup and tagged
+      # image forever. Override per-run via workflow inputs, or set repository
+      # variables RELEASE_RETENTION_COUNT / IMAGE_RETENTION_DAYS.
+      RELEASE_RETENTION_COUNT: ${{ inputs.release_retention_count || vars.RELEASE_RETENTION_COUNT || 5 }}
+      IMAGE_RETENTION_DAYS: ${{ inputs.image_retention_days || vars.IMAGE_RETENTION_DAYS || 30 }}
     steps:
       - name: Checkout repository
         env:
@@ -224,3 +239,60 @@ jobs:
 
           rollback_armed=0
           trap - EXIT
+
+      - name: Prune old releases, backups and images
+        # Runs only after the rollout gates above have passed, so a failed deploy
+        # never prunes the tree it may need to roll back to. Retention is bounded
+        # by count for releases/backups (newest N kept) and by age for images.
+        if: success()
+        run: |
+          set -euo pipefail
+          : "${CONTROLPLANE_ROOT:?}"
+          : "${RELEASE_ROOT:?}"
+          keep="${RELEASE_RETENTION_COUNT}"
+          days="${IMAGE_RETENTION_DAYS}"
+          if ! [[ "$keep" =~ ^[0-9]+$ ]] || (( keep < 1 )); then
+            echo "RELEASE_RETENTION_COUNT must be a positive integer, got '$keep'" >&2
+            exit 1
+          fi
+          if ! [[ "$days" =~ ^[0-9]+$ ]] || (( days < 1 )); then
+            echo "IMAGE_RETENTION_DAYS must be a positive integer, got '$days'" >&2
+            exit 1
+          fi
+
+          prune_dir() {
+            local dir="$1" label="$2"
+            [ -d "$dir" ] || return 0
+            # Never prune the release currently referenced by the live compose file.
+            local live=""
+            if [ -f "$COMPOSE_FILE" ]; then
+              live="$(grep -oE "${RELEASE_ROOT}/[0-9a-f]{40}" "$COMPOSE_FILE" | head -1 || true)"
+            fi
+            local n=0
+            while IFS= read -r entry; do
+              n=$((n + 1))
+              if (( n <= keep )); then continue; fi
+              if [ -n "$live" ] && [ "$entry" = "$live" ]; then
+                echo "keeping $label $entry (referenced by live compose file)"
+                continue
+              fi
+              echo "pruning $label $entry"
+              rm -rf -- "$entry"
+            done < <(find "$dir" -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+          }
+
+          prune_dir "$RELEASE_ROOT" release
+          prune_dir "$CONTROLPLANE_ROOT/backups" backup
+
+          # Only images this deploy path tags; never a bare `docker image prune -a`,
+          # which would evict images other services on the host still depend on.
+          cutoff="$(date -u -d "${days} days ago" +%s)"
+          docker images --filter 'reference=bahia-*' --format '{{.ID}} {{.CreatedAt}} {{.Repository}}:{{.Tag}}' |
+            while read -r id created_date created_time _tz ref; do
+              created_epoch="$(date -u -d "${created_date} ${created_time}" +%s 2>/dev/null || echo 0)"
+              if (( created_epoch != 0 && created_epoch < cutoff )); then
+                if [ "$ref" = "${SAFE_ROLLBACK_BAHIA_IMAGE:-}" ]; then continue; fi
+                echo "pruning image $ref ($id)"
+                docker image rm "$id" >/dev/null 2>&1 || true
+              fi
+            done
