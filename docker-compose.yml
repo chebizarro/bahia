@@ -27,6 +27,12 @@ services:
     ports:
       - "8080:8080"
     command: ["--config", "/etc/bahia/config.yaml"]
+    # Must be the HOST's docker socket GID, as a number. "docker" by name would
+    # resolve against this container's /etc/group (gid 101) and the non-root
+    # user would get EACCES on the socket. Find it with:
+    #   stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "${DOCKER_SOCKET_GID:?set DOCKER_SOCKET_GID to the host docker socket group id, e.g. stat -c %g /var/run/docker.sock}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.compose.yaml:/etc/bahia/config.yaml:ro

@@ -1,5 +1,6 @@
 # Build stage
-FROM node:20-alpine AS builder
+# node:22-alpine
+FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS builder
 
 ARG PUBLIC_BAHIA_BOOTSTRAP_RELAYS=""
 ARG PUBLIC_BAHIA_SERVICE_PUBKEYS=""
@@ -14,11 +15,12 @@ ENV PUBLIC_BAHIA_WEB_VERSION=${PUBLIC_BAHIA_WEB_VERSION}
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json* ./
+# Copy package files and vendor
+COPY package.json pnpm-lock.yaml ./
+COPY vendor ./vendor
 
 # Install dependencies
-RUN npm install -g npm@11 && npm install
+RUN corepack enable && corepack prepare pnpm@10 --activate && pnpm install --frozen-lockfile
 
 # Copy source files
 COPY . .
@@ -27,7 +29,8 @@ COPY . .
 RUN npm run build
 
 # Runtime stage
-FROM nginx:alpine
+# nginx:alpine
+FROM nginx:alpine@sha256:62ff2089abf5a9ed33bd232895bef5e22f7bb4b200675cec49a5ebc48e3d4ac8
 
 ARG PUBLIC_BAHIA_GIT_COMMIT="dev"
 ARG PUBLIC_BAHIA_WEB_VERSION=""
