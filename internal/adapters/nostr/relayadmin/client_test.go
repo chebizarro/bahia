@@ -27,6 +27,73 @@ func TestDisabledClientFailsClosed(t *testing.T) {
 	}
 }
 
+func TestClientErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
+	tests := []struct {
+		name     string
+		sentinel error
+		run      func() error
+	}{
+		{
+			name:     "auth header",
+			sentinel: ErrAuthHeader,
+			run: func() error {
+				client := &Client{
+					enabled:    true,
+					privateKey: nostr.Generate().Hex(),
+					pubkey:     strings.Repeat("a", 63) + "z",
+					targets: map[string]Target{
+						"owned": {Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: "https://relay.example.com"},
+					},
+					httpClient: http.DefaultClient,
+					now:        time.Now,
+				}
+				_, err := client.Call(context.Background(), "owned", MethodSupportedMethods, nil)
+				return err
+			},
+		},
+		{
+			name:     "relay URL",
+			sentinel: ErrUnauthorizedTarget,
+			run: func() error {
+				_, err := normalizeTarget(Target{Ref: "owned", RelayURL: "https://relay.example.com"})
+				return err
+			},
+		},
+		{
+			name:     "HTTP URL",
+			sentinel: ErrUnauthorizedTarget,
+			run: func() error {
+				_, err := normalizeTarget(Target{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: "ftp://relay.example.com"})
+				return err
+			},
+		},
+		{
+			name:     "administrator pubkeys",
+			sentinel: ErrUnauthorizedTarget,
+			run: func() error {
+				_, err := normalizeTarget(Target{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: "https://relay.example.com", AdministratorPubkeys: []string{"short"}})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if !errors.Is(err, tt.sentinel) {
+				t.Fatalf("errors.Is(error, sentinel) = false; error = %v", err)
+			}
+			multi, ok := err.(interface{ Unwrap() []error })
+			if !ok || len(multi.Unwrap()) != 2 {
+				t.Fatalf("underlying cause is not exposed by multiple unwrap; error = %v", err)
+			}
+			cause := multi.Unwrap()[1]
+			if !errors.Is(err, cause) {
+				t.Fatalf("errors.Is(error, underlying cause) = false; error = %v", err)
+			}
+		})
+	}
+}
+
 func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
 	secret := nostr.Generate()
 	privateKey := secret.Hex()

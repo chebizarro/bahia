@@ -332,7 +332,7 @@ func parseVeleroPhase(stdout string) (string, map[string]any, error) {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		return "", nil, fmt.Errorf("%w: parsing Velero JSON output: %v", service.ErrBackupBackendExecution, err)
+		return "", nil, fmt.Errorf("%w: parsing Velero JSON output: %w", service.ErrBackupBackendExecution, err)
 	}
 	status, _ := payload["status"].(map[string]any)
 	phase, _ := status["phase"].(string)

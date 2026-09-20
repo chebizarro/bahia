@@ -213,7 +213,7 @@ func (c *Client) Call(ctx context.Context, targetRef, method string, params []an
 	req.Header.Set("Content-Type", ContentType)
 	authHeader, err := c.createAuthHeader(target.RelayURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAuthHeader, err)
+		return nil, fmt.Errorf("%w: %w", ErrAuthHeader, err)
 	}
 	req.Header.Set("Authorization", authHeader)
 
@@ -322,18 +322,18 @@ func normalizeTarget(target Target) (Target, error) {
 	}
 	target.RelayURL = strings.TrimSpace(target.RelayURL)
 	if err := validateRelayURL(target.RelayURL); err != nil {
-		return Target{}, fmt.Errorf("%w: target %q relay_url: %v", ErrUnauthorizedTarget, target.Ref, err)
+		return Target{}, fmt.Errorf("%w: target %q relay_url: %w", ErrUnauthorizedTarget, target.Ref, err)
 	}
 	target.HTTPURL = strings.TrimSpace(target.HTTPURL)
 	if target.HTTPURL == "" {
 		target.HTTPURL = relayHTTPURL(target.RelayURL)
 	}
 	if err := validateHTTPURL(target.HTTPURL); err != nil {
-		return Target{}, fmt.Errorf("%w: target %q http_url: %v", ErrUnauthorizedTarget, target.Ref, err)
+		return Target{}, fmt.Errorf("%w: target %q http_url: %w", ErrUnauthorizedTarget, target.Ref, err)
 	}
 	pubkeys, err := normalizePubkeys(target.AdministratorPubkeys)
 	if err != nil {
-		return Target{}, fmt.Errorf("%w: target %q administrator_pubkeys: %v", ErrUnauthorizedTarget, target.Ref, err)
+		return Target{}, fmt.Errorf("%w: target %q administrator_pubkeys: %w", ErrUnauthorizedTarget, target.Ref, err)
 	}
 	if len(pubkeys) == 0 {
 		return Target{}, fmt.Errorf("%w: target %q requires administrator_pubkeys", ErrUnauthorizedTarget, target.Ref)

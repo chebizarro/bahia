@@ -167,7 +167,7 @@ func (c *Client) applyAuthHeader(ctx context.Context, req *http.Request, method,
 	}
 	authHeader, err := c.createAuthHeader(ctx, req.URL.String(), method, payloadHash)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrAuthHeader, err)
+		return fmt.Errorf("%w: %w", ErrAuthHeader, err)
 	}
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)

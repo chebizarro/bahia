@@ -104,7 +104,7 @@ func (b *PgBackend) Health(ctx context.Context, repo *domain.BackupRepository) e
 	versionArgs := []string{"--version"}
 	stdout, _, err := b.run(ctx, b.config.PgDumpBinary, versionArgs, nil)
 	if err != nil {
-		return fmt.Errorf("%w: pg_dump health check failed: %v", service.ErrBackupBackendExecution, err)
+		return fmt.Errorf("%w: pg_dump health check failed: %w", service.ErrBackupBackendExecution, err)
 	}
 	if !strings.HasPrefix(strings.TrimSpace(stdout), "pg_dump") {
 		return fmt.Errorf("%w: pg_dump binary returned unexpected output: %s", service.ErrBackupBackendExecution, strings.TrimSpace(stdout))
@@ -135,7 +135,7 @@ func (b *PgBackend) CreateSnapshot(ctx context.Context, req service.BackupSnapsh
 	stdout, stderr, err := b.run(ctx, b.config.PgDumpBinary, args, pgEnv(req.Repository))
 	if err != nil {
 		os.Remove(tmpFile)
-		return nil, fmt.Errorf("%w: pg_dump failed: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: pg_dump failed: %w", service.ErrBackupBackendExecution, err)
 	}
 	if err := os.Rename(tmpFile, dumpFile); err != nil {
 		os.Remove(tmpFile)
@@ -182,7 +182,7 @@ func (b *PgBackend) VerifySnapshot(ctx context.Context, req service.BackupVerify
 	captureStdStream(evidence, "list_stdout", stdout)
 	captureStdStream(evidence, "list_stderr", stderr)
 	if err != nil {
-		return &service.BackupVerifyResult{Verified: false, Status: domain.BackupVerificationFailed, Evidence: evidence, Error: err.Error()}, fmt.Errorf("%w: pg_restore --list failed: %v", service.ErrBackupBackendExecution, err)
+		return &service.BackupVerifyResult{Verified: false, Status: domain.BackupVerificationFailed, Evidence: evidence, Error: err.Error()}, fmt.Errorf("%w: pg_restore --list failed: %w", service.ErrBackupBackendExecution, err)
 	}
 	if strings.TrimSpace(stdout) == "" {
 		return &service.BackupVerifyResult{Verified: false, Status: domain.BackupVerificationFailed, Evidence: evidence, Error: "pg_restore --list returned empty output"}, fmt.Errorf("%w: pg_restore --list returned empty output for dump file %q", service.ErrBackupBackendExecution, dumpFile)
@@ -241,7 +241,7 @@ func (b *PgBackend) Restore(ctx context.Context, req service.BackupRestoreReques
 	if err != nil {
 		result.Error = err.Error()
 		result.VerificationStatus = domain.BackupVerificationFailed
-		return result, fmt.Errorf("%w: pg_restore failed: %v", service.ErrBackupBackendExecution, err)
+		return result, fmt.Errorf("%w: pg_restore failed: %w", service.ErrBackupBackendExecution, err)
 	}
 	if strings.TrimSpace(req.Run.RestoreTargetRef) != "" && strings.HasPrefix(req.Run.RestoreTargetRef, "verify:") {
 		listArgs := []string{"--list", dumpFile}
@@ -442,5 +442,3 @@ var _ service.BackupBackend = (*PgBackend)(nil)
 var _ service.BackupSnapshotCreateBackend = (*PgBackend)(nil)
 var _ service.BackupSnapshotVerifyBackend = (*PgBackend)(nil)
 var _ service.BackupRestoreBackend = (*PgBackend)(nil)
-
-

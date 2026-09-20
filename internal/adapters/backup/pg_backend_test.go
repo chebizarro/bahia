@@ -3,9 +3,9 @@ package backup
 import (
 	"context"
 	"errors"
-	"strings"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,6 +24,73 @@ func TestPgBackendReportsLifecycleCapabilities(t *testing.T) {
 		Retention:      false,
 		Probe:          true,
 	}, capabilities)
+}
+
+func TestBackupBackendsPreserveSentinelAndUnderlyingCause(t *testing.T) {
+	cause := errors.New("backup adapter cause")
+	tests := []struct {
+		name  string
+		cause error
+		run   func() error
+	}{
+		{
+			name:  "pg health",
+			cause: context.Canceled,
+			run: func() error {
+				backend := NewPgBackend(withPgCommandRunner(&recordingPgRunner{err: context.Canceled}))
+				return backend.Health(context.Background(), pgRepositoryFixture())
+			},
+		},
+		{
+			name:  "qdrant create snapshot",
+			cause: cause,
+			run: func() error {
+				repo := qdrantRepositoryFixture()
+				recipe := qdrantRecipeFixture(repo.ID)
+				backend := NewQdrantBackend(withQdrantAPI(&recordingQdrantAPI{createErr: cause}))
+				_, err := backend.CreateSnapshot(context.Background(), service.BackupSnapshotRequest{
+					Run: qdrantRunFixture(recipe), Recipe: recipe, Repository: repo,
+				})
+				return err
+			},
+		},
+		{
+			name: "Kopia snapshot create JSON",
+			run: func() error {
+				_, _, err := parseKopiaSnapshotCreate("{")
+				return err
+			},
+		},
+		{
+			name: "Kopia snapshot verify JSON",
+			run: func() error {
+				_, err := parseKopiaSnapshotVerify("{")
+				return err
+			},
+		},
+		{
+			name: "Velero JSON",
+			run: func() error {
+				_, _, err := parseVeleroPhase("{")
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			require.ErrorIs(t, err, service.ErrBackupBackendExecution)
+			underlying := tt.cause
+			if underlying == nil {
+				multi, ok := err.(interface{ Unwrap() []error })
+				if !ok || len(multi.Unwrap()) != 2 {
+					t.Fatalf("underlying cause is not exposed by multiple unwrap; error = %v", err)
+				}
+				underlying = multi.Unwrap()[1]
+			}
+			require.ErrorIs(t, err, underlying)
+		})
+	}
 }
 
 func TestPgBackendHealthRunsPgDumpVersionCheck(t *testing.T) {

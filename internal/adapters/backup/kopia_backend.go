@@ -523,7 +523,7 @@ func parseKopiaSnapshotCreate(stdout string) (string, map[string]any, error) {
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		return "", nil, fmt.Errorf("%w: parsing Kopia snapshot create JSON: %v", service.ErrBackupBackendExecution, err)
+		return "", nil, fmt.Errorf("%w: parsing Kopia snapshot create JSON: %w", service.ErrBackupBackendExecution, err)
 	}
 	snapshotID := topLevelSnapshotID(payload)
 	if snapshotID == "" {
@@ -567,7 +567,7 @@ func parseKopiaSnapshotVerify(stdout string) (map[string]any, error) {
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		return nil, fmt.Errorf("%w: parsing Kopia snapshot verify JSON: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: parsing Kopia snapshot verify JSON: %w", service.ErrBackupBackendExecution, err)
 	}
 	status, ok := explicitVerifyStatus(payload)
 	if !ok {

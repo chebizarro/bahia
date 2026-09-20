@@ -36,6 +36,44 @@ func TestComputeSHA256(t *testing.T) {
 	}
 }
 
+func TestAuthErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Client) error
+	}{
+		{
+			name: "request auth header",
+			run: func(client *Client) error {
+				req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, "https://blossom.example/upload", nil)
+				if err != nil {
+					return err
+				}
+				return client.applyAuthHeader(context.Background(), req, http.MethodPut, strings.Repeat("0", 64))
+			},
+		},
+		{
+			name: "list auth header",
+			run: func(client *Client) error {
+				_, err := client.doList(context.Background(), "https://blossom.example/list/"+strings.Repeat("a", 64))
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(Config{PrivateKeyHex: "z", MaxRetries: 1}, testLogger())
+			err := tt.run(client)
+			if !errors.Is(err, ErrAuthHeader) {
+				t.Fatalf("errors.Is(error, ErrAuthHeader) = false; error = %v", err)
+			}
+			cause := hex.InvalidByteError('z')
+			if !errors.Is(err, cause) {
+				t.Fatalf("errors.Is(error, %v) = false; error = %v", cause, err)
+			}
+		})
+	}
+}
+
 func TestVerifySHA256(t *testing.T) {
 	data := []byte("hello world")
 	validHash := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"

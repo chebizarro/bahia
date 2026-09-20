@@ -123,12 +123,12 @@ func (b *QdrantBackend) CreateSnapshot(ctx context.Context, req service.BackupSn
 	api := b.resolveAPI(req.Repository)
 	snapshot, err := api.createSnapshot(ctx, collection)
 	if err != nil {
-		return nil, fmt.Errorf("%w: qdrant create snapshot: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: qdrant create snapshot: %w", service.ErrBackupBackendExecution, err)
 	}
 	pollCtx, cancel := context.WithTimeout(ctx, b.config.PollTimeout)
 	defer cancel()
 	if err := api.pollSnapshotExists(pollCtx, collection, snapshot.Name); err != nil {
-		return nil, fmt.Errorf("%w: qdrant snapshot %q did not become available: %v", service.ErrBackupBackendExecution, snapshot.Name, err)
+		return nil, fmt.Errorf("%w: qdrant snapshot %q did not become available: %w", service.ErrBackupBackendExecution, snapshot.Name, err)
 	}
 	stagingDir := b.stagingDir(req.Repository)
 	if err := os.MkdirAll(stagingDir, 0700); err != nil {
@@ -137,7 +137,7 @@ func (b *QdrantBackend) CreateSnapshot(ctx context.Context, req service.BackupSn
 	snapshotFile := filepath.Join(stagingDir, req.Run.ID.String()+".snapshot")
 	checksum, err := api.downloadSnapshot(ctx, collection, snapshot.Name, snapshotFile)
 	if err != nil {
-		return nil, fmt.Errorf("%w: qdrant download snapshot: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: qdrant download snapshot: %w", service.ErrBackupBackendExecution, err)
 	}
 	info, err := os.Stat(snapshotFile)
 	if err != nil {
@@ -234,10 +234,10 @@ func (b *QdrantBackend) Restore(ctx context.Context, req service.BackupRestoreRe
 		defer os.Remove(symlinkName)
 	}
 	if err := api.uploadSnapshot(ctx, targetCollection, snapshotFile); err != nil {
-		return nil, fmt.Errorf("%w: qdrant upload snapshot: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: qdrant upload snapshot: %w", service.ErrBackupBackendExecution, err)
 	}
 	if err := api.recoverFromSnapshot(ctx, targetCollection, filepath.Base(snapshotFile)); err != nil {
-		return nil, fmt.Errorf("%w: qdrant recover from snapshot: %v", service.ErrBackupBackendExecution, err)
+		return nil, fmt.Errorf("%w: qdrant recover from snapshot: %w", service.ErrBackupBackendExecution, err)
 	}
 	evidence := map[string]any{
 		"qdrant_restore": map[string]any{

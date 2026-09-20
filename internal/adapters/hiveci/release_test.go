@@ -19,31 +19,65 @@ import (
 )
 
 type releaseEvidenceFake struct {
-	run         *nostr.Event
-	policies    []domain.HiveCIPipelinePolicy
-	admitted    bool
-	objects     map[string]ResolvedReleaseArtifact
-	unavailable string
+	run             *nostr.Event
+	policies        []domain.HiveCIPipelinePolicy
+	admitted        bool
+	objects         map[string]ResolvedReleaseArtifact
+	unavailable     string
+	getRunErr       error
+	listPoliciesErr error
+	admitErr        error
+	resolveErr      error
 }
 
 func (f *releaseEvidenceFake) GetWorkflowRunEvent(context.Context, string) (*nostr.Event, error) {
-	return f.run, nil
+	return f.run, f.getRunErr
 }
 func (f *releaseEvidenceFake) ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error) {
-	return f.policies, nil
+	return f.policies, f.listPoliciesErr
 }
 func (f *releaseEvidenceFake) AdmitWorker(_ context.Context, pubkey, capability, workerAdEventID string) (WorkerAdmissionEvidence, bool, error) {
 	return WorkerAdmissionEvidence{
 		WorkerIdentity: pubkey, WorkerCapability: capability, WorkerAdEventID: workerAdEventID,
 		WorkerAdvertisedAt: time.Unix(1_799_999_900, 0).UTC(), DecisionCode: "eligible",
 		CapacityClass: string(domain.WorkerCapacityOpen), PressureLevel: string(domain.WorkerPressureNominal),
-	}, f.admitted, nil
+	}, f.admitted, f.admitErr
 }
 func (f *releaseEvidenceFake) ResolveArtifact(_ context.Context, artifact domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error) {
+	if f.resolveErr != nil {
+		return ResolvedReleaseArtifact{}, f.resolveErr
+	}
 	if artifact.Digest == f.unavailable {
 		return ResolvedReleaseArtifact{}, nil
 	}
 	return f.objects[artifact.Digest], nil
+}
+
+func TestReleaseIngestorPreservesSentinelAndUnderlyingCause(t *testing.T) {
+	cause := errors.New("release evidence cause")
+	tests := []struct {
+		name  string
+		setup func(*releaseEvidenceFake)
+	}{
+		{name: "workflow run lookup", setup: func(f *releaseEvidenceFake) { f.getRunErr = cause }},
+		{name: "policy lookup", setup: func(f *releaseEvidenceFake) { f.listPoliciesErr = cause }},
+		{name: "worker admission", setup: func(f *releaseEvidenceFake) { f.admitErr = cause }},
+		{name: "artifact lookup", setup: func(f *releaseEvidenceFake) { f.resolveErr = cause }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newReleaseFixture(t)
+			tt.setup(fixture.evidence)
+
+			_, err := fixture.ingestor.Ingest(context.Background(), fixture.event)
+			if !errors.Is(err, ErrReleaseEvidenceUnavailable) {
+				t.Fatalf("errors.Is(error, ErrReleaseEvidenceUnavailable) = false; error = %v", err)
+			}
+			if !errors.Is(err, cause) {
+				t.Fatalf("errors.Is(error, cause) = false; error = %v", err)
+			}
+		})
+	}
 }
 
 type releaseStoreFake struct {

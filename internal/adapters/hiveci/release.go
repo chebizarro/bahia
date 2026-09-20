@@ -105,7 +105,7 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	}
 	now := i.now()
 	if err := nostradapter.ValidateInboundEvent(event, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signature boundary: %v", ErrInvalidRelease, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signature boundary: %w", ErrInvalidRelease, err)
 	}
 	if int(event.Kind) != kinds.CASAudit {
 		return domain.HiveCIReleaseCommitResult{}, ErrNotRelease
@@ -136,13 +136,13 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 
 	run, err := i.evidence.GetWorkflowRunEvent(ctx, result.Lineage.WorkflowRunEventID)
 	if err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: load signed 5401: %v", ErrReleaseEvidenceUnavailable, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: load signed 5401: %w", ErrReleaseEvidenceUnavailable, err)
 	}
 	if run == nil {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: signed 5401 %s is missing", ErrReleaseLineagePending, result.Lineage.WorkflowRunEventID)
 	}
 	if err := nostradapter.ValidateInboundEvent(run, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: stored 5401 signature boundary: %v", ErrInvalidRelease, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: stored 5401 signature boundary: %w", ErrInvalidRelease, err)
 	}
 	if err := validateWorkflowRunReference(run, result.Lineage.WorkflowRunEventID); err != nil {
 		return domain.HiveCIReleaseCommitResult{}, err
@@ -167,7 +167,7 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 		ctx, result.Execution.WorkerIdentity, result.Execution.WorkerCapability, runEvidence.workerAd,
 	)
 	if err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: worker admission lookup: %v", ErrReleaseEvidenceUnavailable, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: worker admission lookup: %w", ErrReleaseEvidenceUnavailable, err)
 	}
 	if !admitted {
 		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: %s", ErrReleaseWorkerNotAdmitted, result.Execution.WorkerIdentity)
@@ -183,7 +183,7 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 	} {
 		object, lookupErr := i.evidence.ResolveArtifact(ctx, candidate.artifact)
 		if lookupErr != nil {
-			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: resolve %s by digest: %v", ErrReleaseEvidenceUnavailable, candidate.name, lookupErr)
+			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: resolve %s by digest: %w", ErrReleaseEvidenceUnavailable, candidate.name, lookupErr)
 		}
 		if err := verifyResolvedArtifact(candidate.name, candidate.artifact, object); err != nil {
 			return domain.HiveCIReleaseCommitResult{}, err
@@ -202,11 +202,11 @@ func (i *ReleaseIngestor) Ingest(ctx context.Context, event *nostr.Event) (domai
 
 	runJSON, err := json.Marshal(run)
 	if err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed workflow event: %v", ErrInvalidRelease, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed workflow event: %w", ErrInvalidRelease, err)
 	}
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
-		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed event: %v", ErrInvalidRelease, err)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: encode signed event: %w", ErrInvalidRelease, err)
 	}
 	contentHash := sha256.Sum256([]byte(event.Content))
 	accepted := domain.HiveCIAcceptedRelease{
@@ -269,7 +269,7 @@ func decodeReleaseAttestation(content string) (domain.ReleaseAttestationEnvelope
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
-		return envelope, fmt.Errorf("%w: decode release attestation content: %v", ErrInvalidRelease, err)
+		return envelope, fmt.Errorf("%w: decode release attestation content: %w", ErrInvalidRelease, err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return envelope, fmt.Errorf("%w: release attestation content has trailing JSON", ErrInvalidRelease)
@@ -448,7 +448,7 @@ func validateWorkflowRun(run *nostr.Event, result domain.HiveCIReleaseResult) (w
 func (i *ReleaseIngestor) authorizePolicy(ctx context.Context, run workflowRunEvidence, result domain.HiveCIReleaseResult, attestor string) (domain.HiveCIPipelinePolicy, error) {
 	policies, err := i.evidence.ListPipelinePolicies(ctx)
 	if err != nil {
-		return domain.HiveCIPipelinePolicy{}, fmt.Errorf("%w: load repository policy: %v", ErrReleaseEvidenceUnavailable, err)
+		return domain.HiveCIPipelinePolicy{}, fmt.Errorf("%w: load repository policy: %w", ErrReleaseEvidenceUnavailable, err)
 	}
 	for _, policy := range policies {
 		if !policy.Enabled || policy.RepoCoordinate != run.repo || policy.WorkflowPath != run.workflow ||
