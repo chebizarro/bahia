@@ -47,7 +47,7 @@ type packageStatusEvent struct {
 	Tags    map[string][]string `json:"tags,omitempty"`
 }
 
-var newCLIPackageClient = func(relays []string, privateKey string) (cliPackageClient, error) {
+var newCLIPackageClient = func(ctx context.Context, relays []string, privateKey string) (cliPackageClient, error) {
 	normalized, err := client.NormalizeNostrPrivateKey(privateKey)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ var newCLIPackageClient = func(relays []string, privateKey string) (cliPackageCl
 		return nil, err
 	}
 	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), nostrpool.WithPrivateKey(normalized))
-	pool.Connect(context.Background())
+	pool.Connect(ctx)
 	return &packageCLIClient{pool: pool, publisher: controlplane.NewPackageCommandPublisher(pool, signer)}, nil
 }
 
@@ -387,7 +387,7 @@ func buildCLIPackageClient(cmd *cobra.Command) (cliPackageClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newCLIPackageClient(relays, key)
+	return newCLIPackageClient(cmd.Context(), relays, key)
 }
 
 func addPackageArtifactFlags(cmd *cobra.Command, repositoryID, repositoryName, namespace, packageName, version, filename *string) {

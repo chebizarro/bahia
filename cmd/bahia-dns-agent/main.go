@@ -20,14 +20,14 @@ import (
 
 	"fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	bahiaconfig "github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	dnsagent "github.com/openagentsinc/bahia/internal/dnsagent/agent"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
+	"github.com/openagentsinc/bahia/internal/strutil"
 	pkgclient "github.com/openagentsinc/bahia/pkg/client"
 	"go.uber.org/zap"
 )
-
-const maxPrivateKeyFileBytes = 4096
 
 type config struct {
 	ConfigFile        string   `json:"-"`
@@ -56,7 +56,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	privateKey, err := loadPrivateKey(cfg.PrivateKeyFile)
+	privateKey, err := bahiaconfig.LoadPrivateKey(cfg.PrivateKeyFile, "BAHIA_DNS_AGENT_PRIVATE_KEY")
 	if err != nil {
 		return fmt.Errorf("load private key: %w", err)
 	}
@@ -192,8 +192,8 @@ func loadConfig(args []string) (config, error) {
 	if err := flags.Parse(args); err != nil {
 		return cfg, err
 	}
-	cfg.RelayURLs = splitCSV(relays)
-	cfg.AllowedZones = splitCSV(zones)
+	cfg.RelayURLs = strutil.SplitCSV(relays)
+	cfg.AllowedZones = strutil.SplitCSV(zones)
 	return validateConfig(cfg)
 }
 
@@ -287,33 +287,6 @@ func validateConfig(cfg config) (config, error) {
 	return cfg, nil
 }
 
-func loadPrivateKey(path string) (string, error) {
-	if strings.TrimSpace(os.Getenv("BAHIA_DNS_AGENT_PRIVATE_KEY")) != "" {
-		return "", fmt.Errorf("BAHIA_DNS_AGENT_PRIVATE_KEY is not accepted; mount the secret and set BAHIA_DNS_AGENT_PRIVATE_KEY_FILE")
-	}
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "", fmt.Errorf("private key file is required")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close() //nolint:errcheck
-	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeyFileBytes+1))
-	if err != nil {
-		return "", err
-	}
-	if len(data) > maxPrivateKeyFileBytes {
-		return "", fmt.Errorf("private key file exceeds %d bytes", maxPrivateKeyFileBytes)
-	}
-	key := strings.TrimSpace(string(data))
-	if key == "" {
-		return "", fmt.Errorf("private key file is empty")
-	}
-	return key, nil
-}
-
 func setStringEnv(name string, target *string) {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		*target = value
@@ -322,16 +295,6 @@ func setStringEnv(name string, target *string) {
 
 func setStringSliceEnv(name string, target *[]string) {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		*target = splitCSV(value)
+		*target = strutil.SplitCSV(value)
 	}
-}
-
-func splitCSV(value string) []string {
-	var values []string
-	for _, part := range strings.Split(value, ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			values = append(values, trimmed)
-		}
-	}
-	return values
 }

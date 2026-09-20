@@ -12,17 +12,18 @@ import (
 	"syscall"
 
 	"github.com/openagentsinc/bahia/internal/fipsbridge"
+	"github.com/openagentsinc/bahia/internal/strutil"
 )
 
 func main() {
-	configPath := flag.String("config", env("FIPS_BAHIA_BRIDGE_CONFIG", ""), "YAML config path containing bridge settings")
-	bahiaPubkey := flag.String("bahia-pubkey", env("FIPS_BAHIA_BAHIA_PUBKEY", ""), "Bahia service pubkey as hex or npub")
-	relays := flag.String("relays", env("FIPS_BAHIA_RELAYS", ""), "comma-separated Nostr relay URLs")
-	hostsPath := flag.String("hosts-path", env("FIPS_BAHIA_HOSTS_PATH", ""), "FIPS hosts file path")
-	marker := flag.String("managed-section-marker", env("FIPS_BAHIA_MANAGED_SECTION_MARKER", ""), "managed section marker")
+	configPath := flag.String("config", strutil.Env("FIPS_BAHIA_BRIDGE_CONFIG", ""), "YAML config path containing bridge settings")
+	bahiaPubkey := flag.String("bahia-pubkey", strutil.Env("FIPS_BAHIA_BAHIA_PUBKEY", ""), "Bahia service pubkey as hex or npub")
+	relays := flag.String("relays", strutil.Env("FIPS_BAHIA_RELAYS", ""), "comma-separated Nostr relay URLs")
+	hostsPath := flag.String("hosts-path", strutil.Env("FIPS_BAHIA_HOSTS_PATH", ""), "FIPS hosts file path")
+	marker := flag.String("managed-section-marker", strutil.Env("FIPS_BAHIA_MANAGED_SECTION_MARKER", ""), "managed section marker")
 	healthFilter := flag.Bool("health-filter", envBool("FIPS_BAHIA_HEALTH_FILTER", true), "only write healthy endpoints")
-	capabilities := flag.String("capability-filter", env("FIPS_BAHIA_CAPABILITY_FILTER", ""), "comma-separated required endpoint capabilities")
-	environments := flag.String("environment-filter", env("FIPS_BAHIA_ENVIRONMENT_FILTER", ""), "comma-separated endpoint environments")
+	capabilities := flag.String("capability-filter", strutil.Env("FIPS_BAHIA_CAPABILITY_FILTER", ""), "comma-separated required endpoint capabilities")
+	environments := flag.String("environment-filter", strutil.Env("FIPS_BAHIA_ENVIRONMENT_FILTER", ""), "comma-separated endpoint environments")
 	flag.Parse()
 	visited := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { visited[f.Name] = true })
@@ -31,18 +32,20 @@ func main() {
 	if strings.TrimSpace(*configPath) != "" {
 		data, err := os.ReadFile(*configPath)
 		if err != nil {
-			fatalf("read config: %v", err)
+			fmt.Fprintf(os.Stderr, "read config: %v\n", err)
+			os.Exit(1)
 		}
 		loaded, err := fipsbridge.LoadConfig(data)
 		if err != nil {
-			fatalf("load config: %v", err)
+			fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+			os.Exit(1)
 		}
 		cfg = loaded
 	}
 	if strings.TrimSpace(*bahiaPubkey) != "" {
 		cfg.BahiaPubkey = *bahiaPubkey
 	}
-	if relayList := splitCSV(*relays); len(relayList) > 0 {
+	if relayList := strutil.SplitCSV(*relays); len(relayList) > 0 {
 		cfg.RelayURLs = relayList
 	}
 	if strings.TrimSpace(*hostsPath) != "" {
@@ -54,30 +57,25 @@ func main() {
 	if visited["health-filter"] || strings.TrimSpace(os.Getenv("FIPS_BAHIA_HEALTH_FILTER")) != "" {
 		cfg.HealthFilter = *healthFilter
 	}
-	if capabilityList := splitCSV(*capabilities); len(capabilityList) > 0 {
+	if capabilityList := strutil.SplitCSV(*capabilities); len(capabilityList) > 0 {
 		cfg.CapabilityFilter = capabilityList
 	}
-	if environmentList := splitCSV(*environments); len(environmentList) > 0 {
+	if environmentList := strutil.SplitCSV(*environments); len(environmentList) > 0 {
 		cfg.EnvironmentFilter = environmentList
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	bridge, err := fipsbridge.NewBridge(cfg, logger)
 	if err != nil {
-		fatalf("configure bridge: %v", err)
+		fmt.Fprintf(os.Stderr, "configure bridge: %v\n", err)
+		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := bridge.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		fatalf("bridge stopped: %v", err)
+		fmt.Fprintf(os.Stderr, "bridge stopped: %v\n", err)
+		os.Exit(1)
 	}
-}
-
-func env(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func envBool(key string, fallback bool) bool {
@@ -90,21 +88,4 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
-}
-
-func splitCSV(value string) []string {
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func fatalf(format string, args ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
 }

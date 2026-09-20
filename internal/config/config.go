@@ -4,8 +4,10 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -3569,4 +3571,36 @@ func (c *Config) Validate() error {
 // ServerAddress returns the host:port string for the HTTP server.
 func (c *Config) ServerAddress() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}
+
+const maxPrivateKeyFileBytes = 4096
+
+// LoadPrivateKey reads a Nostr private key from the file at path, enforces a
+// 4 KiB size limit, and refuses to proceed when the environment variable named
+// by envDenyKey is set (the key must only come from a mounted file).
+func LoadPrivateKey(path, envDenyKey string) (string, error) {
+	if strings.TrimSpace(os.Getenv(envDenyKey)) != "" {
+		return "", fmt.Errorf("%s is not accepted; mount the secret and set a file path instead", envDenyKey)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("private key file is required")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeyFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxPrivateKeyFileBytes {
+		return "", fmt.Errorf("private key file exceeds %d bytes", maxPrivateKeyFileBytes)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return "", fmt.Errorf("private key file is empty")
+	}
+	return key, nil
 }

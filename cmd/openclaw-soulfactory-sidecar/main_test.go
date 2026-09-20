@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 )
 
@@ -23,7 +24,7 @@ func TestLoadPrivateKeyUsesFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("  file-secret\n"), 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
-	if got, err := loadPrivateKey(path); err != nil || got != "file-secret" {
+	if got, err := config.LoadPrivateKey(path, "OPENCLAW_SOULFACTORY_PRIVATE_KEY"); err != nil || got != "file-secret" {
 		t.Fatalf("file key = %q, err = %v", got, err)
 	}
 }
@@ -57,7 +58,7 @@ func TestLoadPrivateKeyRejectsLegacyEnvironmentSource(t *testing.T) {
 	if err := os.WriteFile(path, []byte("file-secret"), 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
-	if _, err := loadPrivateKey(path); err == nil {
+	if _, err := config.LoadPrivateKey(path, "OPENCLAW_SOULFACTORY_PRIVATE_KEY"); err == nil {
 		t.Fatal("expected deprecated private-key environment source error")
 	}
 }

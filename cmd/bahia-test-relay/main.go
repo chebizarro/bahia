@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
 	"fiatjaf.com/nostr/nip44"
-	cascadia "git.sharegap.net/cascadia/cascadia-go"
+
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/strutil"
 )
 
 const serviceSecretHex = "1111111111111111111111111111111111111111111111111111111111111111"
@@ -22,27 +23,27 @@ const workerSecretHex = "2222222222222222222222222222222222222222222222222222222
 const operatorSecretHex = "3333333333333333333333333333333333333333333333333333333333333333"
 
 const (
-	kindAudit                   = cascadia.CAS_AUDIT
-	kindNIP59GiftWrap           = cascadia.NIP59_GIFT_WRAP
-	kindContextVMMessage        = cascadia.CAS_INTENT
-	kindNIP38Status             = 30315
-	kindControlplaneState       = cascadia.CAS_CP_STATE
-	kindContextVMServer         = cascadia.CTXVM_SERVER_ANNOUNCEMENT
-	kindContextVMTools          = cascadia.CTXVM_TOOLS_ANNOUNCEMENT
-	kindContextVMResources      = cascadia.CTXVM_RESOURCES_ANNOUNCEMENT
-	kindContextVMTemplates      = cascadia.CTXVM_RESOURCE_TEMPLATES_ANNOUNCEMENT
-	kindContextVMPrompts        = cascadia.CTXVM_PROMPTS_ANNOUNCEMENT
-	kindRelaySet                = 30002
-	kindNIP65RelayList          = 10002
-	kindNIP51DMRelayList        = 10050
-	kindSBOMAttestation         = 30078
-	kindLongFormContent         = 30023
-	kindLoomWorkerAdvertisement = cascadia.CAS_WORKER_AD
-	kindSoulAction              = cascadia.CAS_INTENT
-	kindSoulTemplate            = cascadia.CAS_CP_STATE
-	kindAgentSoul               = cascadia.CAS_CP_STATE
-	kindSoulDraft               = cascadia.CAS_CP_STATE
-	kindRuntimeCapability       = 30317
+	kindAudit                   = kinds.CASAudit
+	kindNIP59GiftWrap           = kinds.ContextVMGiftWrap
+	kindContextVMMessage        = kinds.ContextVMMessage
+	kindNIP38Status             = kinds.NIP38Status
+	kindControlplaneState       = kinds.CASControlState
+	kindContextVMServer         = kinds.ContextVMServerAnnouncement
+	kindContextVMTools          = kinds.ContextVMToolsList
+	kindContextVMResources      = kinds.ContextVMResourcesList
+	kindContextVMTemplates      = kinds.ContextVMResourceTemplatesList
+	kindContextVMPrompts        = kinds.ContextVMPromptsList
+	kindRelaySet                = kinds.RelaySetDiscovery
+	kindNIP65RelayList          = kinds.NIP65RelayList
+	kindNIP51DMRelayList        = kinds.NIP51DMRelayList
+	kindSBOMAttestation         = kinds.SBOMAttestation
+	kindLongFormContent         = kinds.LongFormContent
+	kindLoomWorkerAdvertisement = kinds.LoomWorkerAdvertisement
+	kindSoulAction              = kinds.ContextVMMessage
+	kindSoulTemplate            = kinds.CASControlState
+	kindAgentSoul               = kinds.CASControlState
+	kindSoulDraft               = kinds.CASControlState
+	kindRuntimeCapability       = kinds.SoulFactoryRuntimeCapability
 )
 
 type eventSpec struct {
@@ -53,7 +54,7 @@ type eventSpec struct {
 }
 
 func main() {
-	addr := flag.String("addr", envOr("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:48629"), "HTTP/WebSocket listen address")
+	addr := flag.String("addr", strutil.Env("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:48629"), "HTTP/WebSocket listen address")
 	flag.Parse()
 
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)
@@ -105,13 +106,6 @@ func main() {
 	if err := http.ListenAndServe(*addr, relay); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func seedCorpus(relayURL string) ([]nostr.Event, error) {

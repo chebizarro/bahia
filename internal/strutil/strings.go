@@ -1,6 +1,11 @@
 // Package strutil provides shared string validation and comparison helpers.
 package strutil
 
+import (
+	"os"
+	"strings"
+)
+
 // LevenshteinDistance returns the rune-wise edit distance between a and b.
 func LevenshteinDistance(a, b string) int {
 	ra := []rune(a)
@@ -41,4 +46,26 @@ func ValidEnvironmentKey(key string) bool {
 		return false
 	}
 	return key != ""
+}
+
+// Env returns the trimmed value of an environment variable,
+// or fallback when it is unset or empty.
+func Env(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// SplitCSV splits a value on commas and returns non-empty trimmed elements.
+func SplitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
