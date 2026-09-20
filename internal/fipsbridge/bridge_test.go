@@ -123,6 +123,15 @@ func TestServiceLabelFromFQDNStripsZoneSuffix(t *testing.T) {
 	require.Equal(t, "embeddings", ServiceLabelFromFQDN("embeddings.mesh.cascadia", ""))
 }
 
+func signedEventWithCreatedAt(t *testing.T, pubkey, content string, tags nostr.Tags, createdAt nostr.Timestamp) *nostr.Event {
+	t.Helper()
+	pubkeyValue, err := nostrutil.PubKeyFromHex(pubkey)
+	require.NoError(t, err)
+	ev := &nostr.Event{PubKey: pubkeyValue, CreatedAt: createdAt, Kind: KindDNSEndpointState, Tags: tags, Content: content}
+	require.NoError(t, nostrutil.SignEventWithHexKey(ev, testPrivateKey))
+	return ev
+}
+
 func signedEndpointEvent(t *testing.T, pubkey, content string, tags nostr.Tags) *nostr.Event {
 	t.Helper()
 	pubkeyValue, err := nostrutil.PubKeyFromHex(pubkey)
@@ -139,4 +148,90 @@ func testIdentity(t *testing.T) (string, string) {
 	npub, err := nostrutil.EncodeNpubFromHex(pubkey)
 	require.NoError(t, err)
 	return pubkey, npub
+}
+
+func TestBridgeSuppressesRedeliveredDuplicate(t *testing.T) {
+	pubkey, npub := testIdentity(t)
+	bridge := newBridgeWithPool(Config{
+		BahiaPubkey:          pubkey,
+		RelayURLs:            []string{"wss://relay.example.test"},
+		HostsPath:            filepath.Join(t.TempDir(), "hosts"),
+		ManagedSectionMarker: DefaultManagedSectionMarker,
+		HealthFilter:         false,
+	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	ev := signedEndpointEvent(t, pubkey, `{"service":"drydock","env":"prod","health":"healthy"}`, nostr.Tags{
+		{"d", "drydock.prod"},
+		{"dns", "drydock.prod.cascadia"},
+		{"npub", npub},
+	})
+	require.NoError(t, bridge.HandleEvent(context.Background(), ev))
+	require.Equal(t, npub, bridge.entries["drydock"])
+	require.Len(t, bridge.latest, 1)
+
+	require.NoError(t, bridge.HandleEvent(context.Background(), ev))
+	require.Len(t, bridge.latest, 1, "re-delivery must not grow latest")
+	require.Equal(t, npub, bridge.entries["drydock"])
+}
+
+func TestBridgeTieBreakSameCreatedAtHigherEventIDWins(t *testing.T) {
+	pubkey, npub := testIdentity(t)
+	bridge := newBridgeWithPool(Config{
+		BahiaPubkey:          pubkey,
+		RelayURLs:            []string{"wss://relay.example.test"},
+		HostsPath:            filepath.Join(t.TempDir(), "hosts"),
+		ManagedSectionMarker: DefaultManagedSectionMarker,
+		HealthFilter:         false,
+	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	ts := nostr.Now()
+	evA := signedEventWithCreatedAt(t, pubkey, `{"service":"drydock","env":"prod","health":"healthy"}`, nostr.Tags{
+		{"d", "drydock.prod"},
+		{"dns", "drydock.prod.cascadia"},
+		{"npub", npub},
+	}, ts)
+	evB := signedEventWithCreatedAt(t, pubkey, `{"service":"drydock","env":"prod","health":"unhealthy"}`, nostr.Tags{
+		{"d", "drydock.prod"},
+		{"dns", "drydock.prod.cascadia"},
+		{"npub", npub},
+	}, ts)
+
+	idA := nostrutil.EventIDHex(evA)
+	idB := nostrutil.EventIDHex(evB)
+	first, second := evA, evB
+	if idA > idB {
+		first, second = evB, evA
+	}
+	winner := second
+
+	require.NoError(t, bridge.HandleEvent(context.Background(), first))
+	require.NoError(t, bridge.HandleEvent(context.Background(), second))
+	require.Len(t, bridge.latest, 1)
+
+	require.Equal(t, nostrutil.EventIDHex(winner), bridge.latest["31976:"+pubkey+":drydock.prod"].EventID, "higher event ID must win")
+
+	require.NoError(t, bridge.HandleEvent(context.Background(), first))
+	require.Equal(t, nostrutil.EventIDHex(winner), bridge.latest["31976:"+pubkey+":drydock.prod"].EventID, "loser must not displace winner")
+}
+
+func TestBridgeLatestDoesNotGrowWithRedeliveriesOfSameCoordinate(t *testing.T) {
+	pubkey, npub := testIdentity(t)
+	bridge := newBridgeWithPool(Config{
+		BahiaPubkey:          pubkey,
+		RelayURLs:            []string{"wss://relay.example.test"},
+		HostsPath:            filepath.Join(t.TempDir(), "hosts"),
+		ManagedSectionMarker: DefaultManagedSectionMarker,
+		HealthFilter:         false,
+	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	for i := 0; i < 10; i++ {
+		ev := signedEndpointEvent(t, pubkey, `{"service":"drydock","route":"default","env":"prod","health":"healthy"}`, nostr.Tags{
+			{"d", "drydock-default.prod"},
+			{"dns", "drydock-default.prod.cascadia"},
+			{"npub", npub},
+		})
+		require.NoError(t, bridge.HandleEvent(context.Background(), ev))
+		require.Equal(t, npub, bridge.entries["drydock-default"])
+	}
+	require.Len(t, bridge.latest, 1, "latest must not grow across redeliveries")
 }

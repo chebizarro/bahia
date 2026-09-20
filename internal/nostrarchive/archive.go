@@ -26,7 +26,7 @@ type Store interface {
 	ListArchiveBatchJSON(context.Context, uuid.UUID) ([]string, error)
 	MarkArchiveExported(context.Context, uuid.UUID, string, string, int64) error
 	MarkArchiveProtected(context.Context, uuid.UUID, string, string, string) error
-	RestoreArchiveJSON(context.Context, string) (bool, error)
+	RestoreArchiveBatchJSON(context.Context, []string) (int64, error)
 }
 
 type ArtifactManager struct {
@@ -127,9 +127,7 @@ func (m *ArtifactManager) ConfirmProtected(ctx context.Context, id uuid.UUID, ob
 	return m.store.MarkArchiveProtected(ctx, id, objectURI, objectVersion, digest)
 }
 
-// Restore validates the compressed artifact digest before inserting each row.
-// Inserts are idempotent by Nostr event ID.
-func (m *ArtifactManager) Restore(ctx context.Context, id uuid.UUID) (inserted int64, err error) {
+func (m *ArtifactManager) Restore(ctx context.Context, id uuid.UUID) (int64, error) {
 	batch, err := m.store.GetArchiveBatch(ctx, id)
 	if err != nil {
 		return 0, err
@@ -156,24 +154,17 @@ func (m *ArtifactManager) Restore(ctx context.Context, id uuid.UUID) (inserted i
 	defer zr.Close()
 	scanner := bufio.NewScanner(zr)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	var rows int64
+	rows := make([]string, 0, batch.RowCount)
 	for scanner.Scan() {
-		rows++
-		added, err := m.store.RestoreArchiveJSON(ctx, scanner.Text())
-		if err != nil {
-			return inserted, fmt.Errorf("restoring Nostr archive row %d: %w", rows, err)
-		}
-		if added {
-			inserted++
-		}
+		rows = append(rows, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		return inserted, fmt.Errorf("reading Nostr archive artifact: %w", err)
+		return 0, fmt.Errorf("reading Nostr archive artifact: %w", err)
 	}
-	if rows != batch.RowCount {
-		return inserted, fmt.Errorf("Nostr archive artifact row count mismatch: manifest=%d artifact=%d", batch.RowCount, rows)
+	if int64(len(rows)) != batch.RowCount {
+		return 0, fmt.Errorf("Nostr archive artifact row count mismatch: manifest=%d artifact=%d", batch.RowCount, len(rows))
 	}
-	return inserted, nil
+	return m.store.RestoreArchiveBatchJSON(ctx, rows)
 }
 
 type countingWriter struct {

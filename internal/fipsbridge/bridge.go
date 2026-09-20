@@ -130,8 +130,12 @@ type Bridge struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	entries map[string]string
-	seen    map[string]struct{}
-	latest  map[string]nostr.Timestamp
+	latest  map[string]replaceableCursor
+}
+
+type replaceableCursor struct {
+	CreatedAt nostr.Timestamp
+	EventID   string
 }
 
 type relayPool interface {
@@ -166,8 +170,7 @@ func newBridgeWithPool(cfg Config, pool relayPool, logger *slog.Logger) *Bridge 
 		logger:  logger.With("component", "fips-bahia-bridge"),
 		now:     func() time.Time { return time.Now().UTC() },
 		entries: make(map[string]string),
-		seen:    make(map[string]struct{}),
-		latest:  make(map[string]nostr.Timestamp),
+		latest:  make(map[string]replaceableCursor),
 	}
 }
 
@@ -314,13 +317,14 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 		return fmt.Errorf("unexpected author %s", pubkey)
 	}
 	eventID := nostrutil.EventIDHex(ev)
-	if _, ok := b.seen[eventID]; ok {
-		return nil
-	}
 	coordinate := replaceableCoordinate(ev)
-	if last, ok := b.latest[coordinate]; ok && ev.CreatedAt < last {
-		b.seen[eventID] = struct{}{}
-		return nil
+	if cursor, ok := b.latest[coordinate]; ok {
+		if ev.CreatedAt < cursor.CreatedAt {
+			return nil
+		}
+		if ev.CreatedAt == cursor.CreatedAt && eventID <= cursor.EventID {
+			return nil
+		}
 	}
 
 	endpoint, err := ParseEndpointEvent(ev)
@@ -347,8 +351,7 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 		}
 	}
 
-	b.seen[eventID] = struct{}{}
-	b.latest[coordinate] = ev.CreatedAt
+	b.latest[coordinate] = replaceableCursor{CreatedAt: ev.CreatedAt, EventID: eventID}
 	if changed {
 		if err := b.writer.Write(ctx, b.entries); err != nil {
 			return err

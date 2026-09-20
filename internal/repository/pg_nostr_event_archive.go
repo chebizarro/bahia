@@ -304,17 +304,37 @@ func (r *PgNostrEventArchiveRepository) PruneArchiveBatch(ctx context.Context, i
 	return deleted, done, nil
 }
 
-func (r *PgNostrEventArchiveRepository) RestoreArchiveJSON(ctx context.Context, rowJSON string) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `
-		INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at)
-		SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at
-		FROM jsonb_populate_record(NULL::nostr_events, $1::jsonb)
-		ON CONFLICT (id) DO NOTHING
-	`, rowJSON)
-	if err != nil {
-		return false, fmt.Errorf("restoring Nostr archive row: %w", err)
+func (r *PgNostrEventArchiveRepository) RestoreArchiveBatchJSON(ctx context.Context, rows []string) (int64, error) {
+	if r == nil || r.pool == nil {
+		return 0, errors.New("nostr archive repository is not configured")
 	}
-	return tag.RowsAffected() == 1, nil
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("beginning restore transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var inserted int64
+	for i, row := range rows {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at)
+			SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at
+			FROM jsonb_populate_record(NULL::nostr_events, $1::jsonb)
+			ON CONFLICT (id) DO NOTHING
+		`, row)
+		if err != nil {
+			return 0, fmt.Errorf("restoring archive row %d: %w", i, err)
+		}
+		if tag.RowsAffected() == 1 {
+			inserted++
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("committing restore transaction: %w", err)
+	}
+	return inserted, nil
 }
 
 func (r *PgNostrEventArchiveRepository) StorageStats(ctx context.Context) (NostrEventStorageStats, error) {
