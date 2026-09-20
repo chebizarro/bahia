@@ -26,7 +26,7 @@ func TestDNSContextVMZoneCreateRejectsUnknownBackendBeforePersistence(t *testing
 	if len(operator.reconciled) != 0 {
 		t.Fatalf("reconciled zones = %#v, want none", operator.reconciled)
 	}
-	assertContextVMDNSField(t, result, "status", "error")
+	assertContextVMDNSField(t, result, "status", "failed")
 	assertContextVMDNSField(t, result, "step", "unknown_backend")
 }
 
@@ -47,7 +47,7 @@ func TestDNSContextVMZoneCreatePersistsKnownBackend(t *testing.T) {
 	if len(operator.reconciled) != 1 || operator.reconciled[0] != "new.example" {
 		t.Fatalf("reconciled zones = %#v", operator.reconciled)
 	}
-	assertContextVMDNSField(t, result, "status", "success")
+	assertContextVMDNSField(t, result, "status", "succeeded")
 }
 
 func TestDNSContextVMPolicyApplyPersistsAndReconciles(t *testing.T) {
@@ -69,7 +69,7 @@ func TestDNSContextVMPolicyApplyPersistsAndReconciles(t *testing.T) {
 	if operator.reconcileAll != 1 {
 		t.Fatalf("reconcile calls = %d, want 1", operator.reconcileAll)
 	}
-	assertContextVMDNSStatus(t, result, "success")
+	assertContextVMDNSStatus(t, result, "succeeded")
 }
 
 func TestDNSContextVMRecordSetPersistsAndReconciles(t *testing.T) {
@@ -91,7 +91,7 @@ func TestDNSContextVMRecordSetPersistsAndReconciles(t *testing.T) {
 	if len(operator.reconciled) != 1 || operator.reconciled[0] != "prod.example" {
 		t.Fatalf("reconciled zones = %#v", operator.reconciled)
 	}
-	assertContextVMDNSStatus(t, result, "success")
+	assertContextVMDNSStatus(t, result, "succeeded")
 }
 
 func assertContextVMDNSStatus(t *testing.T, result any, want string) {

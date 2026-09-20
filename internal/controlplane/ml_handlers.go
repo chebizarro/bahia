@@ -14,15 +14,15 @@ import (
 
 func (r *Reactor) authorizeMLRequest(ctx context.Context, event *nostr.Event, resultKind int, step string) bool {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		_ = r.publishMLResult(ctx, event, resultKind, "rejected", step, "requester not in authorized list", nil, nil)
+		r.publishMLResult(ctx, event, resultKind, "rejected", step, "requester not in authorized list", nil, nil)
 		return false
 	}
 	if tagValueNostr(event.Tags, "d") == "" {
-		_ = r.publishMLResult(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable ML command events", nil, nil)
+		r.publishMLResult(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable ML command events", nil, nil)
 		return false
 	}
 	if r.mlRegistry == nil {
-		_ = r.publishMLResult(ctx, event, resultKind, "failed", step+"_unavailable", "ML registry is not configured", nil, nil)
+		r.publishMLResult(ctx, event, resultKind, "failed", step+"_unavailable", "ML registry is not configured", nil, nil)
 		return false
 	}
 	return true
@@ -33,17 +33,17 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 		return
 	}
 	if r.mlRecipeExecutor == nil {
-		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "ml_recipe_coordinator_unavailable", "ML recipe coordinator is not configured", nil, nil)
+		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "ml_recipe_coordinator_unavailable", "ML recipe coordinator is not configured", nil, nil)
 		return
 	}
 	req, err := parseMLRecipeRunRequest(event)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "parse_error", err.Error(), nil, nil)
+		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "parse_error", err.Error(), nil, nil)
 		return
 	}
 	recipe, err := r.resolveMLRecipe(ctx, req.RecipeID, req.Recipe)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_resolution_error", err.Error(), nil, nil)
+		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_resolution_error", err.Error(), nil, nil)
 		return
 	}
 	run := &domain.MLRecipeRun{
@@ -58,7 +58,7 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 		}),
 	}
 	if err := r.mlRegistry.CreateOrUpdateRecipeRun(ctx, run); err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_run_error", err.Error(), nil, nil, nostr.Tag{"recipe", firstNonEmpty(req.Recipe, recipe.Name)})
+		r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_run_error", err.Error(), nil, nil, nostr.Tag{"recipe", firstNonEmpty(req.Recipe, recipe.Name)})
 		return
 	}
 	go func() {
@@ -69,14 +69,14 @@ func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Eve
 
 func (r *Reactor) handleMLModelImportRequest(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "rejected", "unauthorized", "requester not in authorized list", nil, nil)
+		r.publishMLResult(ctx, event, KindMLModelImportResult, "rejected", "unauthorized", "requester not in authorized list", nil, nil)
 		return
 	}
 	if tagValueNostr(event.Tags, "d") == "" {
-		_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "validation_error", "d tag is required for addressable ML command events", nil, nil)
+		r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "validation_error", "d tag is required for addressable ML command events", nil, nil)
 		return
 	}
-	_ = r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "model_import_not_enabled", "ML model import orchestration is not enabled in D1", nil, nil)
+	r.publishMLResult(ctx, event, KindMLModelImportResult, "failed", "model_import_not_enabled", "ML model import orchestration is not enabled in D1", nil, nil)
 }
 
 func (r *Reactor) handleMLInferenceDeployRequest(ctx context.Context, event *nostr.Event) {
@@ -84,22 +84,22 @@ func (r *Reactor) handleMLInferenceDeployRequest(ctx context.Context, event *nos
 		return
 	}
 	if r.mlExecutor == nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "ml_inference_provisioning_unavailable", "ML inference provisioning executor is not configured", nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "ml_inference_provisioning_unavailable", "ML inference provisioning executor is not configured", nil, nil)
 		return
 	}
 	req, err := parseMLDeployRequest(event)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "parse_error", err.Error(), nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "parse_error", err.Error(), nil, nil)
 		return
 	}
 	endpoint, err := r.resolveMLEndpoint(ctx, req.EndpointID, req.Endpoint)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)
 		return
 	}
 	version, err := r.resolveMLModelVersion(ctx, req.ModelVersionID, req.ModelVersion)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "model_version_resolution_error", err.Error(), endpoint, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "model_version_resolution_error", err.Error(), endpoint, nil)
 		return
 	}
 	metadata := mlNostrMetadata(event, map[string]any{
@@ -118,12 +118,12 @@ func (r *Reactor) handleMLInferenceDeployRequest(ctx context.Context, event *nos
 		Metadata:          metadata,
 	}
 	if err := r.mlRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "intent_error", err.Error(), endpoint, version)
+		r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "intent_error", err.Error(), endpoint, version)
 		return
 	}
 	go func() {
 		if err := r.mlExecutor.ProcessDeploymentIntent(ctx, intent.ID); err != nil {
-			_ = r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "executor_error", err.Error(), endpoint, version, nostr.Tag{"intent", intent.ID.String()})
+			r.publishMLResult(ctx, event, KindMLInferenceDeployResult, "failed", "executor_error", err.Error(), endpoint, version, nostr.Tag{"intent", intent.ID.String()})
 		}
 	}()
 }
@@ -138,7 +138,7 @@ func (r *Reactor) handleMLInferenceDeploymentApproval(ctx context.Context, event
 	}
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-			_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "parse_error", err.Error(), nil, nil)
+			r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "parse_error", err.Error(), nil, nil)
 			return
 		}
 	}
@@ -150,11 +150,11 @@ func (r *Reactor) handleMLInferenceDeploymentApproval(ctx context.Context, event
 	}
 	intentID, err := uuid.Parse(req.IntentID)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "validation_error", fmt.Sprintf("invalid intent_id: %v", err), nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "validation_error", fmt.Sprintf("invalid intent_id: %v", err), nil, nil)
 		return
 	}
 	if req.Decision != "approve" && req.Decision != "reject" {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "validation_error", "decision must be 'approve' or 'reject'", nil, nil, nostr.Tag{"intent", intentID.String()})
+		r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "validation_error", "decision must be 'approve' or 'reject'", nil, nil, nostr.Tag{"intent", intentID.String()})
 		return
 	}
 	if req.Decision == "approve" {
@@ -170,14 +170,14 @@ func (r *Reactor) handleMLInferenceDeploymentApproval(ctx context.Context, event
 		version, _ = r.mlRegistry.GetModelVersion(ctx, intent.ModelVersionID)
 	}
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "approval_error", err.Error(), endpoint, version, nostr.Tag{"intent", intentID.String()})
+		r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, "failed", "approval_error", err.Error(), endpoint, version, nostr.Tag{"intent", intentID.String()})
 		return
 	}
 	status := "succeeded"
 	if req.Decision == "reject" {
 		status = "rejected"
 	}
-	_ = r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, status, req.Decision, "ML inference deployment approval decision recorded", endpoint, version, nostr.Tag{"intent", intentID.String()})
+	r.publishMLResult(ctx, event, KindMLInferenceApprovalResult, status, req.Decision, "ML inference deployment approval decision recorded", endpoint, version, nostr.Tag{"intent", intentID.String()})
 }
 
 func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *nostr.Event) {
@@ -185,7 +185,7 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		return
 	}
 	if r.mlExecutor == nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "ml_inference_provisioning_unavailable", "ML inference provisioning executor is not configured", nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "ml_inference_provisioning_unavailable", "ML inference provisioning executor is not configured", nil, nil)
 		return
 	}
 	var req struct {
@@ -195,7 +195,7 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 	}
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-			_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "parse_error", err.Error(), nil, nil)
+			r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "parse_error", err.Error(), nil, nil)
 			return
 		}
 	}
@@ -204,7 +204,7 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 	}
 	endpoint, err := r.resolveMLEndpoint(ctx, req.EndpointID, req.Endpoint)
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)
 		return
 	}
 	requestedBy := req.RequestedBy
@@ -218,12 +218,12 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		"nostr_environment_coord": firstNonEmpty(tagValueNostr(event.Tags, "environment"), mlEnvironmentFromEndpointCoord(endpointCoord)),
 	}))
 	if err != nil {
-		_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "rollback_error", err.Error(), endpoint, nil)
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "rollback_error", err.Error(), endpoint, nil)
 		return
 	}
 	go func() {
 		if err := r.mlExecutor.ProcessDeploymentIntent(ctx, intent.ID); err != nil {
-			_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "executor_error", err.Error(), endpoint, nil, nostr.Tag{"intent", intent.ID.String()})
+			r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "executor_error", err.Error(), endpoint, nil, nostr.Tag{"intent", intent.ID.String()})
 		}
 	}()
 }
@@ -422,7 +422,7 @@ func mlNostrMetadata(event *nostr.Event, extra map[string]any) map[string]any {
 	return metadata
 }
 
-func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event, _ int, status, code, message string, endpoint *domain.MLInferenceEndpoint, version *domain.MLModelVersion, extraTags ...nostr.Tag) error {
+func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event, _ int, status, code, message string, endpoint *domain.MLInferenceEndpoint, version *domain.MLModelVersion, extraTags ...nostr.Tag) {
 	endpointCoord := mlRequestString(requestEvent, "endpoint")
 	modelVersionCoord := mlRequestString(requestEvent, "model_version")
 	environmentCoord := firstNonEmpty(tagValueNostr(requestEvent.Tags, "environment"), mlEnvironmentFromEndpointCoord(endpointCoord))
@@ -431,10 +431,8 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 		"status":           status,
 		"message":          message,
 	}
-	var rpcErr *JSONRPCError
 	if status == "failed" || status == "rejected" {
 		content["error"] = map[string]any{"code": code, "message": message}
-		rpcErr = &JSONRPCError{Code: -32000, Message: message}
 	}
 	if endpoint != nil {
 		content["endpoint_id"] = endpoint.ID.String()
@@ -480,10 +478,7 @@ func (r *Reactor) publishMLResult(ctx context.Context, requestEvent *nostr.Event
 	}
 	tags = appendMLRequestTags(tags, requestEvent)
 	tags = append(tags, extraTags...)
-	if code != "" {
-		tags = append(tags, nostr.Tag{"result", code})
-	}
-	return r.publishContextVMResult(ctx, requestEvent, content, tags, rpcErr)
+	r.publishDomainResult(ctx, requestEvent, "ml", "bahia.result.ml.v1", status, code, message, content, tags)
 }
 
 func appendMLRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {

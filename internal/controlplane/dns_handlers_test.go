@@ -110,7 +110,7 @@ func TestDNSDriftRemediateHandlerTriggersReconcile(t *testing.T) {
 	}
 	assertDNSPublishedKind(t, capture.events, KindDNSOperationStatus)
 	result := assertDNSPublishedKind(t, capture.events, KindDNSDriftRemediateResult)
-	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStatus(t, result, "succeeded")
 }
 
 func TestDNSZoneCreateExistingZoneReturnsSuccess(t *testing.T) {
@@ -123,7 +123,7 @@ func TestDNSZoneCreateExistingZoneReturnsSuccess(t *testing.T) {
 		t.Fatalf("expected zone reconcile for existing zone, got %#v", operator.reconciled)
 	}
 	result := assertDNSPublishedKind(t, capture.events, KindDNSZoneCreateResult)
-	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStatus(t, result, "succeeded")
 }
 
 func TestDNSZoneCreateUnknownZoneReturnsUnsupported(t *testing.T) {
@@ -157,7 +157,7 @@ func TestDNSZoneCreatePersistsZoneWhenRepositoryAvailable(t *testing.T) {
 		t.Fatalf("expected reconcile for edge.example, got %#v", operator.reconciled)
 	}
 	result := assertDNSPublishedKind(t, capture.events, KindDNSZoneCreateResult)
-	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStatus(t, result, "succeeded")
 	assertDNSResultField(t, result, "zone", "edge.example")
 }
 
@@ -184,7 +184,7 @@ func TestDNSRecordOverridePersistsWithOperatorPubkey(t *testing.T) {
 		t.Fatalf("expected reconcile for prod.example, got %#v", operator.reconciled)
 	}
 	result := assertDNSPublishedKind(t, capture.events, KindDNSRecordOverrideResult)
-	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStatus(t, result, "succeeded")
 	assertDNSResultField(t, result, "zone", "prod.example")
 	assertDNSResultField(t, result, "override_id", created.ID.String())
 }
@@ -212,7 +212,7 @@ func TestDNSDurableHandlersInvalidPayloadsReturnErrors(t *testing.T) {
 				t.Fatalf("expected no persistence or reconcile; zones=%#v overrides=%#v reconciled=%#v", operator.zonesCreated, operator.overridesCreated, operator.reconciled)
 			}
 			result := assertDNSPublishedKind(t, capture.events, tc.resultKind)
-			assertDNSResultStatus(t, result, "error")
+			assertDNSResultStatus(t, result, "failed")
 			assertDNSResultStep(t, result, "validation_error")
 		})
 	}
@@ -250,7 +250,7 @@ func TestDNSPolicyApplyValidPayloadPersistsPolicyAndTriggersReconcile(t *testing
 	}
 	assertDNSPublishedKind(t, capture.events, KindDNSOperationStatus)
 	result := assertDNSPublishedKind(t, capture.events, KindDNSPolicyApplyResult)
-	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStatus(t, result, "succeeded")
 	assertDNSResultStep(t, result, "completed")
 	assertDNSResultField(t, result, "policy", "latency-aware")
 	assertDNSResultField(t, result, "rule_count", float64(1))
@@ -267,7 +267,7 @@ func TestDNSPolicyApplyInvalidPayloadReturnsValidationError(t *testing.T) {
 		t.Fatalf("expected no reconcile for invalid policy, got %d", operator.reconcileAll)
 	}
 	result := assertDNSPublishedKind(t, capture.events, KindDNSPolicyApplyResult)
-	assertDNSResultStatus(t, result, "error")
+	assertDNSResultStatus(t, result, "failed")
 	assertDNSResultStep(t, result, "validation_error")
 }
 

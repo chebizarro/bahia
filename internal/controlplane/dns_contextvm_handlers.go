@@ -50,33 +50,33 @@ func (h dnsContextVMHandlers) zoneCreate(ctx context.Context, request ContextVMR
 			return nil, fmt.Errorf("invalid DNS zone JSON content: %w", err)
 		}
 		if err := domain.ValidateDNSZone(&zone); err != nil {
-			return dnsResult(dnsActionZoneCreate, "error", "validation_error", err.Error(), map[string]any{"zone": zone.Name}), nil
+			return dnsResult(dnsActionZoneCreate, "failed", "validation_error", err.Error(), map[string]any{"zone": zone.Name}), nil
 		}
 		if err := validateDNSZoneBackend(h.operator, zone); err != nil {
-			return dnsResult(dnsActionZoneCreate, "error", "unknown_backend", err.Error(), map[string]any{"zone": zone.Name, "backend_ref": zone.BackendRef}), nil
+			return dnsResult(dnsActionZoneCreate, "failed", "unknown_backend", err.Error(), map[string]any{"zone": zone.Name, "backend_ref": zone.BackendRef}), nil
 		}
 		if err := persistence.CreateZone(ctx, zone); err != nil {
-			return dnsResult(dnsActionZoneCreate, "error", "persist_failed", err.Error(), map[string]any{"zone": zone.Name}), nil
+			return dnsResult(dnsActionZoneCreate, "failed", "persist_failed", err.Error(), map[string]any{"zone": zone.Name}), nil
 		}
 		if err := h.operator.ReconcileZone(ctx, zone.Name); err != nil {
-			return dnsResult(dnsActionZoneCreate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zone.Name}), nil
+			return dnsResult(dnsActionZoneCreate, "failed", "reconcile_failed", err.Error(), map[string]any{"zone": zone.Name}), nil
 		}
-		return dnsResult(dnsActionZoneCreate, "success", "completed", "DNS zone persisted; reconcile completed", map[string]any{"zone": zone.Name}), nil
+		return dnsResult(dnsActionZoneCreate, "succeeded", "completed", "DNS zone persisted; reconcile completed", map[string]any{"zone": zone.Name}), nil
 	}
 	zoneName, err := dnsZoneFromParams(request.RPC.Params)
 	if err != nil {
-		return dnsResult(dnsActionZoneCreate, "error", "parse_error", err.Error(), nil), nil
+		return dnsResult(dnsActionZoneCreate, "failed", "parse_error", err.Error(), nil), nil
 	}
 	if zoneName == "" {
-		return dnsResult(dnsActionZoneCreate, "error", "validation_error", "zone selector is required", nil), nil
+		return dnsResult(dnsActionZoneCreate, "failed", "validation_error", "zone selector is required", nil), nil
 	}
 	if !h.operator.HasZone(zoneName) {
 		return dnsResult(dnsActionZoneCreate, "failed", "unsupported", dnsUnsupportedDynamicZoneCreation, map[string]any{"zone": zoneName}), nil
 	}
 	if err := h.operator.ReconcileZone(ctx, zoneName); err != nil {
-		return dnsResult(dnsActionZoneCreate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName}), nil
+		return dnsResult(dnsActionZoneCreate, "failed", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName}), nil
 	}
-	return dnsResult(dnsActionZoneCreate, "success", "completed", "Configured DNS zone exists; reconcile completed", map[string]any{"zone": zoneName}), nil
+	return dnsResult(dnsActionZoneCreate, "succeeded", "completed", "Configured DNS zone exists; reconcile completed", map[string]any{"zone": zoneName}), nil
 }
 
 func (h dnsContextVMHandlers) policyApply(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -87,7 +87,7 @@ func (h dnsContextVMHandlers) policyApply(ctx context.Context, request ContextVM
 	}
 	var policy domain.DNSPolicy
 	if err := decodeContextVMParams(request.RPC.Params, &policy); err != nil {
-		return dnsResult(dnsActionPolicyApply, "error", "parse_error", fmt.Sprintf("invalid DNS policy JSON content: %v", err), nil), nil
+		return dnsResult(dnsActionPolicyApply, "failed", "parse_error", fmt.Sprintf("invalid DNS policy JSON content: %v", err), nil), nil
 	}
 	if policy.ID == uuid.Nil {
 		policy.ID = uuid.New()
@@ -100,15 +100,15 @@ func (h dnsContextVMHandlers) policyApply(ctx context.Context, request ContextVM
 		policy.UpdatedAt = now
 	}
 	if err := domain.ValidateDNSPolicy(&policy); err != nil {
-		return dnsResult(dnsActionPolicyApply, "error", "validation_error", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String()}), nil
+		return dnsResult(dnsActionPolicyApply, "failed", "validation_error", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String()}), nil
 	}
 	if err := provider.DNSPolicyRepository().Create(ctx, &policy); err != nil {
-		return dnsResult(dnsActionPolicyApply, "error", "persist_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
+		return dnsResult(dnsActionPolicyApply, "failed", "persist_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
 	}
 	if err := h.operator.ReconcileAll(ctx); err != nil {
-		return dnsResult(dnsActionPolicyApply, "error", "reconcile_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
+		return dnsResult(dnsActionPolicyApply, "failed", "reconcile_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
 	}
-	return dnsResult(dnsActionPolicyApply, "success", "completed", fmt.Sprintf("DNS policy %s accepted with %d rule(s); reconcile completed", policy.Name, len(policy.Rules)), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
+	return dnsResult(dnsActionPolicyApply, "succeeded", "completed", fmt.Sprintf("DNS policy %s accepted with %d rule(s); reconcile completed", policy.Name, len(policy.Rules)), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)}), nil
 }
 
 func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -119,7 +119,7 @@ func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRe
 	}
 	var override domain.DNSRecordOverride
 	if err := decodeContextVMParams(request.RPC.Params, &override); err != nil {
-		return dnsResult(dnsActionRecordOverride, "error", "parse_error", fmt.Sprintf("invalid DNS record override JSON content: %v", err), nil), nil
+		return dnsResult(dnsActionRecordOverride, "failed", "parse_error", fmt.Sprintf("invalid DNS record override JSON content: %v", err), nil), nil
 	}
 	if override.ID == uuid.Nil {
 		override.ID = uuid.New()
@@ -131,15 +131,15 @@ func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRe
 		override.OperatorPubkey = request.Event.PubKey.Hex()
 	}
 	if err := domain.ValidateDNSRecordOverride(&override); err != nil {
-		return dnsResult(dnsActionRecordOverride, "error", "validation_error", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
+		return dnsResult(dnsActionRecordOverride, "failed", "validation_error", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
 	}
 	if err := persistence.CreateOverride(ctx, override); err != nil {
-		return dnsResult(dnsActionRecordOverride, "error", "persist_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
+		return dnsResult(dnsActionRecordOverride, "failed", "persist_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
 	}
 	if err := h.operator.ReconcileZone(ctx, override.ZoneName); err != nil {
-		return dnsResult(dnsActionRecordOverride, "error", "reconcile_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
+		return dnsResult(dnsActionRecordOverride, "failed", "reconcile_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
 	}
-	return dnsResult(dnsActionRecordOverride, "success", "completed", "DNS record override persisted; reconcile completed", map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
+	return dnsResult(dnsActionRecordOverride, "succeeded", "completed", "DNS record override persisted; reconcile completed", map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()}), nil
 }
 
 func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request ContextVMRequest) (any, error) {
@@ -152,30 +152,30 @@ func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request Contex
 		Reason     string `json:"reason"`
 	}
 	if err := decodeContextVMParams(request.RPC.Params, &params); err != nil {
-		return dnsResult(dnsActionOverrideRetire, "error", "parse_error", fmt.Sprintf("invalid DNS override retire JSON content: %v", err), nil), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "parse_error", fmt.Sprintf("invalid DNS override retire JSON content: %v", err), nil), nil
 	}
 	params.Reason = strings.TrimSpace(params.Reason)
 	params.OverrideID = strings.TrimSpace(params.OverrideID)
 	if params.OverrideID == "" {
-		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", "override_id is required", nil), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "validation_error", "override_id is required", nil), nil
 	}
 	if params.Reason == "" {
-		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", "reason is required", nil), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "validation_error", "reason is required", nil), nil
 	}
 	overrideID, err := uuid.Parse(params.OverrideID)
 	if err != nil {
-		return dnsResult(dnsActionOverrideRetire, "error", "validation_error", fmt.Sprintf("invalid override_id: %v", err), nil), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "validation_error", fmt.Sprintf("invalid override_id: %v", err), nil), nil
 	}
 	retirement, err := retireDNSOverride(ctx, retirer, overrideID, time.Now().UTC(), params.Reason)
 	if errors.Is(err, errDNSOverrideNotFound) {
-		return dnsResult(dnsActionOverrideRetire, "error", "not_found", fmt.Sprintf("DNS record override %s not found", params.OverrideID), map[string]any{"override_id": params.OverrideID}), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "not_found", fmt.Sprintf("DNS record override %s not found", params.OverrideID), map[string]any{"override_id": params.OverrideID}), nil
 	}
 	if err != nil {
 		details := map[string]any{"override_id": params.OverrideID}
 		if retirement.Override != nil {
 			details["zone"] = retirement.Override.ZoneName
 		}
-		return dnsResult(dnsActionOverrideRetire, "error", "persist_failed", err.Error(), details), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "persist_failed", err.Error(), details), nil
 	}
 	existing := retirement.Override
 	alreadyInactive := retirement.AlreadyInactive
@@ -185,18 +185,18 @@ func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request Contex
 		operatorPubkey = request.Event.PubKey.Hex()
 	}
 	if err := h.operator.ReconcileZone(ctx, existing.ZoneName); err != nil {
-		return dnsResult(dnsActionOverrideRetire, "error", "reconcile_failed", err.Error(), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName}), nil
+		return dnsResult(dnsActionOverrideRetire, "failed", "reconcile_failed", err.Error(), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName}), nil
 	}
 	if alreadyInactive {
-		return dnsResult(dnsActionOverrideRetire, "success", "already_inactive", fmt.Sprintf("DNS record override %s was already inactive", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
+		return dnsResult(dnsActionOverrideRetire, "succeeded", "already_inactive", fmt.Sprintf("DNS record override %s was already inactive", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
 	}
-	return dnsResult(dnsActionOverrideRetire, "success", "completed", fmt.Sprintf("DNS record override %s retired; reconcile completed", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
+	return dnsResult(dnsActionOverrideRetire, "succeeded", "completed", fmt.Sprintf("DNS record override %s retired; reconcile completed", params.OverrideID), map[string]any{"override_id": params.OverrideID, "zone": existing.ZoneName, "retired_at": now.Format(time.RFC3339), "reason": params.Reason, "operator_pubkey": operatorPubkey}), nil
 }
 
 func (h dnsContextVMHandlers) driftRemediate(ctx context.Context, request ContextVMRequest) (any, error) {
 	zoneName, err := dnsZoneFromParams(request.RPC.Params)
 	if err != nil {
-		return dnsResult(dnsActionDriftRemediate, "error", "parse_error", err.Error(), nil), nil
+		return dnsResult(dnsActionDriftRemediate, "failed", "parse_error", err.Error(), nil), nil
 	}
 	if zoneName != "" {
 		err = h.operator.ReconcileZone(ctx, zoneName)
@@ -204,13 +204,13 @@ func (h dnsContextVMHandlers) driftRemediate(ctx context.Context, request Contex
 		err = h.operator.ReconcileAll(ctx)
 	}
 	if err != nil {
-		return dnsResult(dnsActionDriftRemediate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName}), nil
+		return dnsResult(dnsActionDriftRemediate, "failed", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName}), nil
 	}
 	message := "DNS reconcile completed"
 	if zoneName != "" {
 		message = fmt.Sprintf("DNS reconcile completed for zone %s", zoneName)
 	}
-	return dnsResult(dnsActionDriftRemediate, "success", "completed", message, map[string]any{"zone": zoneName}), nil
+	return dnsResult(dnsActionDriftRemediate, "succeeded", "completed", message, map[string]any{"zone": zoneName}), nil
 }
 
 func dnsZoneFromParams(params json.RawMessage) (string, error) {

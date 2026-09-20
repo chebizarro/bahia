@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 type backupRunRegistry interface {
@@ -33,17 +34,17 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		return
 	}
 	if r.backupExecutor == nil {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "backup_coordinator_unavailable", "backup run coordinator is not configured")
+		r.publishBackupRequestFailure(ctx, event, "failed", "backup_coordinator_unavailable", "backup run coordinator is not configured")
 		return
 	}
 	req, err := parseBackupRunRequest(event)
 	if err != nil {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "parse_error", err.Error())
+		r.publishBackupRequestFailure(ctx, event, "failed", "parse_error", err.Error())
 		return
 	}
 	recipe, err := r.resolveBackupRecipe(ctx, req.RecipeID, req.Recipe)
 	if err != nil {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "recipe_resolution_error", err.Error())
+		r.publishBackupRequestFailure(ctx, event, "failed", "recipe_resolution_error", err.Error())
 		return
 	}
 	repositoryRecord, err := r.backupRegistry.GetRepository(ctx, recipe.RepositoryID)
@@ -51,7 +52,7 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		if err == nil {
 			err = fmt.Errorf("backup repository %s not found", recipe.RepositoryID)
 		}
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "repository_resolution_error", err.Error())
+		r.publishBackupRequestFailure(ctx, event, "failed", "repository_resolution_error", err.Error())
 		return
 	}
 	var policy *domain.BackupPolicy
@@ -61,7 +62,7 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 			if err == nil {
 				err = fmt.Errorf("backup policy %s not found", *recipe.PolicyID)
 			}
-			_ = r.publishBackupRequestFailure(ctx, event, "failed", "policy_resolution_error", err.Error())
+			r.publishBackupRequestFailure(ctx, event, "failed", "policy_resolution_error", err.Error())
 			return
 		}
 	}
@@ -94,7 +95,7 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 	}
 	createdRun, created, err := r.backupRegistry.CreateBackupRunIfAbsent(ctx, run)
 	if err != nil {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "run_create_error", err.Error())
+		r.publishBackupRequestFailure(ctx, event, "failed", "run_create_error", err.Error())
 		return
 	}
 	if r.backupResponder != nil {
@@ -126,31 +127,31 @@ func (r *Reactor) authorizeBackupRequest(ctx context.Context, event *nostr.Event
 
 func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
+		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
 		return false
 	}
 	if tagValueNostr(event.Tags, "d") == "" {
-		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable backup command events")
+		r.publishBackupCommandFailure(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable backup command events")
 		return false
 	}
 	authority, delegated, err := backupRequestAuthorityFromEvent(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
+		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
 		return false
 	}
 	if delegated {
 		if r.signer == nil {
-			_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer is not configured")
+			r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer is not configured")
 			return false
 		}
 		issuer, err := r.signer.GetPublicKey(ctx)
 		if err != nil || normalizeEncryptedPubkey(issuer.Hex()) != authority.ServicePubkey {
-			_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer does not match the configured service signer")
+			r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer does not match the configured service signer")
 			return false
 		}
 	}
 	if r.backupRegistry == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
 		return false
 	}
 	return true
@@ -378,11 +379,11 @@ func backupRunTerminal(run *domain.BackupRun) bool {
 	return run != nil && (run.Status == domain.RunStatusSucceeded || run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusCancelled || run.Status == domain.RunStatusTimeout)
 }
 
-func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent *nostr.Event, status, code, message string) error {
-	return r.publishBackupCommandFailure(ctx, requestEvent, KindBackupRunResult, status, code, message)
+func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent *nostr.Event, status, code, message string) {
+	r.publishBackupCommandFailure(ctx, requestEvent, KindBackupRunResult, status, code, message)
 }
 
-func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) error {
+func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) {
 	requestEventID := requestEvent.ID.Hex()
 	requestPubkey := requestEvent.PubKey.Hex()
 	content := map[string]any{"request_event_id": requestEventID, "status": status, "message": message}
@@ -394,10 +395,12 @@ func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent 
 	tags = appendBackupRequestTags(tags, requestEvent)
 	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign backup result: %w", err)
+		r.zapLog.Warn("sign backup command result failed", zap.Error(err))
+		return
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	if _, err := r.publishEvent(ctx, event); err != nil {
+		r.zapLog.Warn("publish backup command result failed", zap.Error(err))
+	}
 }
 
 func appendBackupRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {

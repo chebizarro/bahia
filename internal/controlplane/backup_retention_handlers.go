@@ -32,26 +32,26 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 	}
 	registry, ok := r.backupRegistry.(backupRetentionRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_unavailable", "backup retention registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_unavailable", "backup retention registry is not configured")
 		return
 	}
 	if r.backupRetentionExecutor == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_coordinator_unavailable", "backup retention coordinator is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_coordinator_unavailable", "backup retention coordinator is not configured")
 		return
 	}
 	req, err := parseBackupRetentionRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "parse_error", err.Error())
 		return
 	}
 	repositoryID, err := uuid.Parse(req.RepositoryID)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "repository_id must be a UUID")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "repository_id must be a UUID")
 		return
 	}
 	policyID, err := uuid.Parse(req.PolicyID)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "policy_id must be a UUID")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "policy_id must be a UUID")
 		return
 	}
 	run := &domain.BackupRetentionRun{
@@ -73,7 +73,7 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 	}
 	createdRun, created, err := registry.CreateBackupRetentionRunIfAbsent(ctx, run)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "retention_create_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "retention_create_error", err.Error())
 		return
 	}
 	if r.backupRetentionResponder != nil {

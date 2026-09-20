@@ -47,21 +47,21 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 	}
 	registry, ok := r.backupRegistry.(backupRestoreRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_unavailable", "backup restore registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_unavailable", "backup restore registry is not configured")
 		return
 	}
 	if r.backupRestoreExecutor == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_coordinator_unavailable", "backup restore coordinator is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_coordinator_unavailable", "backup restore coordinator is not configured")
 		return
 	}
 	req, err := parseBackupRestoreRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "parse_error", err.Error())
 		return
 	}
 	backupRunID, err := uuid.Parse(req.BackupRunID)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "validation_error", "backup_run_id must be a UUID")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "validation_error", "backup_run_id must be a UUID")
 		return
 	}
 	restore := &domain.BackupRestoreRun{
@@ -81,7 +81,7 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 	}
 	createdRestore, created, err := registry.CreateBackupRestoreIfAbsent(ctx, restore)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "restore_create_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "restore_create_error", err.Error())
 		return
 	}
 	if r.backupRestoreResponder != nil {
@@ -119,26 +119,26 @@ func (r *Reactor) handleBackupRestoreApproval(ctx context.Context, event *nostr.
 	}
 	registry, ok := r.backupRegistry.(backupRestoreRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "backup_restore_unavailable", "backup restore registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "backup_restore_unavailable", "backup restore registry is not configured")
 		return
 	}
 	if r.backupRestoreExecutor == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "backup_restore_coordinator_unavailable", "backup restore coordinator is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "backup_restore_coordinator_unavailable", "backup restore coordinator is not configured")
 		return
 	}
 	req, err := parseBackupRestoreApprovalRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "parse_error", err.Error())
 		return
 	}
 	restoreID, err := uuid.Parse(req.RestoreID)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "validation_error", "restore_id must be a UUID")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "validation_error", "restore_id must be a UUID")
 		return
 	}
 	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID.Hex(), backupRequestActor(event), req.Message, req.ReasonCode, req.Reason)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "restore_approval_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "restore_approval_error", err.Error())
 		return
 	}
 	if approvalResponder, ok := r.backupRestoreResponder.(backupRestoreApprovalResponder); ok {

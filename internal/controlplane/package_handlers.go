@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
 )
 
 func (r *Reactor) recoverPackageIntents(ctx context.Context) {
@@ -58,7 +59,7 @@ func (r *Reactor) handlePackageRepositoryApply(ctx context.Context, event *nostr
 			existing = byID
 		}
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "repository policy accepted")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "repository policy accepted")
 	out, err := r.packageService.EnsureRepository(ctx, repo, existing)
 	if err != nil {
 		r.finishPackageIntent(ctx, event, intent, "repository_apply", nil, err)
@@ -92,7 +93,7 @@ func (r *Reactor) handlePackageRepositoryDelete(ctx context.Context, event *nost
 	if !ok {
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "repository delete policy accepted")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "repository delete policy accepted")
 	out, err := r.packageService.DeleteRepository(ctx, repo, cmd.Force)
 	if err != nil {
 		r.finishPackageIntent(ctx, event, intent, "repository_delete", nil, err)
@@ -119,18 +120,18 @@ func (r *Reactor) handlePackagePublishIntent(ctx context.Context, event *nostr.E
 		return
 	}
 	if repo.Policy.PublishRequiresApproval && strings.TrimSpace(cmd.ApprovedBy) == "" {
-		_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "rejected", "publication requires approval")
+		r.publishPackageStatus(ctx, event, intent, "policy_check", "rejected", "publication requires approval")
 		r.finishPackageIntent(ctx, event, intent, "artifact_publish", nil, fmt.Errorf("publication requires approval: %w", service.ErrPackageApprovalRequired))
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking publication policy")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking publication policy")
 	existing, _ := r.packageProjection.GetArtifact(ctx, repo.ID, strings.Trim(cmd.Namespace, "/"), cmd.PackageName, cmd.Version, cmd.Filename)
 	artifact, err := r.packageService.PublishPackage(ctx, repo, existing, service.PackagePublishRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, SourceURL: cmd.SourceURL, SHA256: cmd.SHA256, SizeBytes: cmd.SizeBytes, ContentType: cmd.ContentType, Metadata: cmd.Metadata})
 	if err != nil {
 		r.finishPackageIntent(ctx, event, intent, "artifact_publish", nil, err)
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "publication policy accepted")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "publication policy accepted")
 	if pubErr := r.publishPackageArtifactRegistry(ctx, artifact); pubErr != nil {
 		r.logger.Warn("publish package artifact registry failed", "error", pubErr)
 	}
@@ -166,7 +167,7 @@ func (r *Reactor) handlePackagePromotionRequest(ctx context.Context, event *nost
 		r.finishPackageIntent(ctx, event, intent, "promote", nil, fmt.Errorf("source package artifact not found"))
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking promotion policy")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking promotion policy")
 	existingTarget, _ := r.packageProjection.GetArtifact(ctx, targetRepo.ID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 	target, publication, err := r.packageService.PromotePackage(ctx, sourceRepo, targetRepo, artifact, existingTarget, service.PackagePromotionRequest{Environment: cmd.Environment, Channel: cmd.Channel, ApprovedBy: cmd.ApprovedBy, PolicyRef: cmd.PolicyRef, Metadata: cmd.Metadata})
 	if err != nil {
@@ -174,11 +175,11 @@ func (r *Reactor) handlePackagePromotionRequest(ctx context.Context, event *nost
 		if errors.Is(err, service.ErrPackageApprovalRequired) || errors.Is(err, service.ErrPackagePolicyDenied) {
 			status = "rejected"
 		}
-		_ = r.publishPackageStatus(ctx, event, intent, "policy_check", status, err.Error())
+		r.publishPackageStatus(ctx, event, intent, "policy_check", status, err.Error())
 		r.finishPackageIntent(ctx, event, intent, "promote", nil, err)
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "promotion policy accepted")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "promotion policy accepted")
 	publication.Status = domain.PackagePublicationStatusSucceeded
 	if pubErr := r.publishPackageArtifactRegistry(ctx, target); pubErr != nil {
 		r.logger.Warn("publish promoted package artifact registry failed", "error", pubErr)
@@ -207,7 +208,7 @@ func (r *Reactor) handlePackageYankRequest(ctx context.Context, event *nostr.Eve
 	if !ok {
 		return
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "yank policy accepted")
+	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "yank policy accepted")
 	existing, _ := r.packageProjection.GetArtifact(ctx, repo.ID, strings.Trim(cmd.Namespace, "/"), cmd.PackageName, cmd.Version, cmd.Filename)
 	artifact, err := r.packageService.YankPackage(ctx, repo, existing, service.PackageYankRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, Reason: cmd.Reason, Metadata: cmd.Metadata})
 	if err != nil {
@@ -276,7 +277,7 @@ func (r *Reactor) handlePackageDriftDetect(ctx context.Context, event *nostr.Eve
 			break
 		}
 	}
-	_ = r.publishPackageDriftEvent(ctx, event, repo, observations, drifted)
+	r.publishPackageDriftEvent(ctx, event, repo, observations, drifted)
 	r.finishPackageIntent(ctx, event, intent, "drift_detect", map[string]any{"operation": "drift_detect", "status": "succeeded", "drifted": drifted, "observations": observations, "repository_last_event_id": repo.LastEventID}, nil)
 }
 
@@ -312,11 +313,11 @@ func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, op
 		return nil, false
 	}
 	if existing != nil && existing.Status.Terminal() {
-		_ = r.publishPackageResult(ctx, event, existing, string(operation), existing.ResultPayload, existing.ErrorMessage)
+		r.publishPackageResult(ctx, event, existing, string(operation), existing.ResultPayload, existing.ErrorMessage)
 		return existing, false
 	}
 	if existing != nil && !existing.Status.Terminal() {
-		_ = r.publishPackageStatus(ctx, event, existing, "idempotency", "already_processing", "request is already being processed")
+		r.publishPackageStatus(ctx, event, existing, "idempotency", "already_processing", "request is already being processed")
 		return existing, false
 	}
 	requestPayload := map[string]any{}
@@ -332,14 +333,14 @@ func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, op
 		r.publishPackageError(ctx, event, operation, "projection_error", err.Error())
 		return nil, false
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "accepted", "accepted", "package request accepted")
+	r.publishPackageStatus(ctx, event, intent, "accepted", "accepted", "package request accepted")
 	intent.Status = domain.PackageIntentStatusExecuting
 	intent.UpdatedAt = time.Now().UTC()
 	if err := r.packageProjection.UpsertIntent(ctx, intent); err != nil {
 		r.finishPackageIntent(ctx, event, intent, string(operation), nil, err)
 		return nil, false
 	}
-	_ = r.publishPackageStatus(ctx, event, intent, "executing", "running", "package request executing")
+	r.publishPackageStatus(ctx, event, intent, "executing", "running", "package request executing")
 	return intent, true
 }
 
@@ -369,7 +370,7 @@ func (r *Reactor) finishPackageIntent(ctx context.Context, event *nostr.Event, i
 		intent.Status = domain.PackageIntentStatusFailed
 		intent.ErrorMessage = persistErr.Error()
 	}
-	_ = r.publishPackageResult(ctx, event, intent, operation, result, intent.ErrorMessage)
+	r.publishPackageResult(ctx, event, intent, operation, result, intent.ErrorMessage)
 }
 
 func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, name string) (*domain.PackageRepository, error) {
@@ -394,17 +395,16 @@ func (r *Reactor) lookupPackageRepository(ctx context.Context, id uuid.UUID, nam
 	return nil, fmt.Errorf("package repository not found: %w", repository.ErrNotFound)
 }
 
-func (r *Reactor) publishPackageStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, step, status, message string) error {
+func (r *Reactor) publishPackageStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, step, status, message string) {
 	content := map[string]any{"intent_id": intent.ID.String(), "request_event_id": requestEvent.ID.Hex(), "operation": string(intent.Operation), "step": step, "status": status, "message": message}
 	tags := packageReplyTags(requestEvent, intent, step, status)
 	tags = append(tags, nostr.Tag{"domain", "package"}, nostr.Tag{"schema", "bahia.status.package.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageStatus)})
 	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, content); err != nil {
-		return err
+		r.zapLog.Warn("publish package status failed", zap.Error(err))
 	}
-	return nil
 }
 
-func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, operation string, result map[string]any, errorMessage string) error {
+func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.PackageIntent, operation string, result map[string]any, errorMessage string) {
 	if result == nil {
 		result = map[string]any{}
 	}
@@ -419,23 +419,17 @@ func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.
 	if errorMessage != "" {
 		tags = append(tags, nostr.Tag{"error", errorMessage})
 	}
-	tags = append(tags, nostr.Tag{"domain", "package"}, nostr.Tag{"schema", "bahia.result.package.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageResult)})
-	var rpcErr *JSONRPCError
-	if errorMessage != "" || status == "failed" || status == "rejected" {
-		rpcErr = &JSONRPCError{Code: -32000, Message: errorMessage}
-		if rpcErr.Message == "" {
-			rpcErr.Message = status
-		}
+	tags = append(tags, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPackageResult)})
+	msg := errorMessage
+	if msg == "" {
+		msg = status
 	}
-	if err := r.publishContextVMResult(ctx, requestEvent, result, tags, rpcErr); err != nil {
-		return err
-	}
-	return nil
+	r.publishDomainResult(ctx, requestEvent, "package", "bahia.result.package.v1", status, "", msg, result, tags)
 }
 
-func (r *Reactor) publishPackageError(ctx context.Context, requestEvent *nostr.Event, operation domain.PackageOperation, step, message string) error {
+func (r *Reactor) publishPackageError(ctx context.Context, requestEvent *nostr.Event, operation domain.PackageOperation, step, message string) {
 	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: requestEvent.ID.Hex(), Operation: operation, RequesterPubkey: requestEvent.PubKey.Hex(), Status: domain.PackageIntentStatusFailed, ErrorMessage: message}
-	return r.publishPackageResult(ctx, requestEvent, intent, string(operation), map[string]any{"status": "failed", "step": step, "error": message}, message)
+	r.publishPackageResult(ctx, requestEvent, intent, string(operation), map[string]any{"status": "failed", "step": step, "error": message}, message)
 }
 
 func packageReplyTags(requestEvent *nostr.Event, intent *domain.PackageIntent, step, status string) nostr.Tags {
@@ -501,14 +495,16 @@ func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publicati
 	return r.packageProjection.UpsertPublication(ctx, publication)
 }
 
-func (r *Reactor) publishPackageDriftEvent(ctx context.Context, requestEvent *nostr.Event, repo *domain.PackageRepository, observations []service.PackageDriftObservation, drifted bool) error {
+func (r *Reactor) publishPackageDriftEvent(ctx context.Context, requestEvent *nostr.Event, repo *domain.PackageRepository, observations []service.PackageDriftObservation, drifted bool) {
 	status := "ok"
 	if drifted {
 		status = "drifted"
 	}
 	content := map[string]any{"repository_id": repo.ID.String(), "repository_name": repo.Name, "status": status, "drifted": drifted, "observations": observations, "repository_last_event_id": repo.LastEventID}
 	tags := nostr.Tags{{"domain", "package"}, {"schema", "bahia.result.package-drift.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageDriftEvent)}, {"repository", repo.ID.String()}, {"repository_name", repo.Name}, {"status", status}}
-	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
+	if err := r.publishContextVMResult(ctx, requestEvent, content, tags, nil); err != nil {
+		r.zapLog.Warn("publish package drift event failed", zap.Error(err))
+	}
 }
 
 func mustJSON(v any) string {

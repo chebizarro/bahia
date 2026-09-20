@@ -2701,6 +2701,27 @@ func (r *Reactor) publishContextVMResult(ctx context.Context, requestEvent *nost
 	return err
 }
 
+// publishDomainResult publishes a ContextVM result event for a control-plane domain.
+// Handlers assemble the domain-specific content and tags; the builder attaches the
+// domain/schema envelope, derives a JSON-RPC error for terminal statuses, and logs
+// internally on publish failure.
+func (r *Reactor) publishDomainResult(ctx context.Context, requestEvent *nostr.Event, domain, schema, status, code, message string, content any, tags nostr.Tags) {
+	tags = append(tags, nostr.Tag{"domain", domain}, nostr.Tag{"schema", schema})
+	if code != "" {
+		tags = append(tags, nostr.Tag{"result", code})
+	}
+	var rpcErr *JSONRPCError
+	if status == "failed" || status == "rejected" {
+		rpcErr = &JSONRPCError{Code: -32000, Message: message}
+	}
+	if err := r.publishContextVMResult(ctx, requestEvent, content, tags, rpcErr); err != nil {
+		r.zapLog.Warn("control-plane domain result publish failed",
+			zap.String("domain", domain),
+			zap.String("status", status),
+			zap.Error(err))
+	}
+}
+
 func contextVMReplyID(requestEvent *nostr.Event) json.RawMessage {
 	if requestEvent != nil && strings.TrimSpace(requestEvent.Content) != "" {
 		var rpc ContextVMJSONRPCRequest

@@ -145,7 +145,7 @@ func TestDNSContextVMHandlersDispatchWebMethods(t *testing.T) {
 				t.Fatalf("action = %#v, want %s payload=%#v", payload["action"], tc.action, payload)
 			}
 			if tc.method == ContextVMMethodDNSZoneCreate || tc.method == ContextVMMethodDNSDriftRemediate {
-				if payload["status"] != "success" || len(operator.reconciledZones) != 1 {
+				if payload["status"] != "succeeded" || len(operator.reconciledZones) != 1 {
 					t.Fatalf("expected successful zone reconcile, payload=%#v reconciled=%v", payload, operator.reconciledZones)
 				}
 			}

@@ -10,6 +10,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 type backupRegistryMutationRegistry interface {
@@ -57,16 +58,16 @@ func (r *Reactor) handleBackupRepositoryRegisterRequest(ctx context.Context, eve
 	}
 	registry, ok := r.backupRegistry.(backupRegistryMutationRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "backup_repository_register_unavailable", "backup repository registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "backup_repository_register_unavailable", "backup repository registry is not configured")
 		return
 	}
 	repo, err := parseBackupRepositoryRegisterRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "parse_error", err.Error())
 		return
 	}
 	if existing, err := registry.GetRepositoryByName(ctx, repo.Name); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "repository_lookup_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "repository_lookup_error", err.Error())
 		return
 	} else if existing != nil && repo.ID == uuid.Nil {
 		repo.ID = existing.ID
@@ -79,14 +80,14 @@ func (r *Reactor) handleBackupRepositoryRegisterRequest(ctx context.Context, eve
 	}
 	mergeMetadata(repo.Metadata, backupNostrMetadata(event, repo.Metadata, map[string]any{"nostr_request_command": "backup_repository_register"}))
 	if err := domain.ValidateBackupRepository(repo); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "validation_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "validation_error", err.Error())
 		return
 	}
 	if err := registry.CreateOrUpdateRepository(ctx, repo); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "repository_apply_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryRegisterResult, "failed", "repository_apply_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupRepositoryRegisterResult, "backup_repository_register", "success", "backup repository registered", map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend), "repository_uri": repo.RepositoryURI}, nostr.Tags{{"repository", repo.Name}, {"repository_id", repo.ID.String()}, {"backend", string(repo.Backend)}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupRepositoryRegisterResult, "backup_repository_register", "success", "backup repository registered", map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend), "repository_uri": repo.RepositoryURI}, nostr.Tags{{"repository", repo.Name}, {"repository_id", repo.ID.String()}, {"backend", string(repo.Backend)}})
 }
 
 func (r *Reactor) handleBackupPolicyApplyRequest(ctx context.Context, event *nostr.Event) {
@@ -95,16 +96,16 @@ func (r *Reactor) handleBackupPolicyApplyRequest(ctx context.Context, event *nos
 	}
 	registry, ok := r.backupRegistry.(backupRegistryMutationRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "backup_policy_apply_unavailable", "backup policy registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "backup_policy_apply_unavailable", "backup policy registry is not configured")
 		return
 	}
 	policy, err := parseBackupPolicyApplyRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "parse_error", err.Error())
 		return
 	}
 	if existing, err := registry.GetPolicyByName(ctx, policy.Name); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "policy_lookup_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "policy_lookup_error", err.Error())
 		return
 	} else if existing != nil && policy.ID == uuid.Nil {
 		policy.ID = existing.ID
@@ -117,14 +118,14 @@ func (r *Reactor) handleBackupPolicyApplyRequest(ctx context.Context, event *nos
 	}
 	mergeMetadata(policy.Metadata, backupNostrMetadata(event, policy.Metadata, map[string]any{"nostr_request_command": "backup_policy_apply"}))
 	if err := domain.ValidateBackupPolicy(policy); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "validation_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "validation_error", err.Error())
 		return
 	}
 	if err := registry.CreateOrUpdatePolicy(ctx, policy); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "policy_apply_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupPolicyApplyResult, "failed", "policy_apply_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupPolicyApplyResult, "backup_policy_apply", "success", "backup policy applied", map[string]any{"policy_id": policy.ID.String(), "name": policy.Name, "require_verification": policy.RequireVerification, "verification_mode": string(policy.VerificationMode)}, nostr.Tags{{"policy", policy.Name}, {"policy_id", policy.ID.String()}, {"verification", string(policy.VerificationMode)}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupPolicyApplyResult, "backup_policy_apply", "success", "backup policy applied", map[string]any{"policy_id": policy.ID.String(), "name": policy.Name, "require_verification": policy.RequireVerification, "verification_mode": string(policy.VerificationMode)}, nostr.Tags{{"policy", policy.Name}, {"policy_id", policy.ID.String()}, {"verification", string(policy.VerificationMode)}})
 }
 
 func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nostr.Event) {
@@ -133,12 +134,12 @@ func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nos
 	}
 	registry, ok := r.backupRegistry.(backupRegistryMutationRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "backup_recipe_apply_unavailable", "backup recipe registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "backup_recipe_apply_unavailable", "backup recipe registry is not configured")
 		return
 	}
 	recipe, err := parseBackupRecipeApplyRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "parse_error", err.Error())
 		return
 	}
 	if recipe.ID == uuid.Nil {
@@ -154,7 +155,7 @@ func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nos
 	}
 	mergeMetadata(recipe.Metadata, backupNostrMetadata(event, recipe.Metadata, map[string]any{"nostr_request_command": "backup_recipe_apply", "nostr_recipe_coord": backupRecipeCoordinate(recipe)}))
 	if err := domain.ValidateBackupRecipe(recipe); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "validation_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "validation_error", err.Error())
 		return
 	}
 	repo, err := r.backupRegistry.GetRepository(ctx, recipe.RepositoryID)
@@ -162,7 +163,7 @@ func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nos
 		if err == nil {
 			err = fmt.Errorf("backup repository %s not found", recipe.RepositoryID)
 		}
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "repository_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "repository_resolution_error", err.Error())
 		return
 	}
 	if recipe.PolicyID != nil {
@@ -171,15 +172,15 @@ func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nos
 			if err == nil {
 				err = fmt.Errorf("backup policy %s not found", *recipe.PolicyID)
 			}
-			_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "policy_resolution_error", err.Error())
+			r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "policy_resolution_error", err.Error())
 			return
 		}
 	}
 	if err := registry.CreateOrUpdateRecipe(ctx, recipe); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "recipe_apply_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRecipeApplyResult, "failed", "recipe_apply_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupRecipeApplyResult, "backup_recipe_apply", "success", "backup recipe applied", map[string]any{"recipe_id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version, "repository_id": recipe.RepositoryID.String(), "backend": string(recipe.Backend), "target_ref": recipe.TargetRef}, nostr.Tags{{"recipe", backupRecipeCoordinate(recipe)}, {"recipe_id", recipe.ID.String()}, {"repository_id", recipe.RepositoryID.String()}, {"backend", string(recipe.Backend)}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupRecipeApplyResult, "backup_recipe_apply", "success", "backup recipe applied", map[string]any{"recipe_id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version, "repository_id": recipe.RepositoryID.String(), "backend": string(recipe.Backend), "target_ref": recipe.TargetRef}, nostr.Tags{{"recipe", backupRecipeCoordinate(recipe)}, {"recipe_id", recipe.ID.String()}, {"repository_id", recipe.RepositoryID.String()}, {"backend", string(recipe.Backend)}})
 }
 
 func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event *nostr.Event) {
@@ -193,18 +194,18 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		}
 	}
 	if registry == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "backup_definition_apply_unavailable", "backup definition registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "backup_definition_apply_unavailable", "backup definition registry is not configured")
 		return
 	}
 	definition, err := parseBackupDefinitionApplyRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "parse_error", err.Error())
 		return
 	}
 	if definition.ID == uuid.Nil {
 		existing, err := registry.GetBackupDefinitionByName(ctx, definition.Name)
 		if err != nil {
-			_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "definition_lookup_error", err.Error())
+			r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "definition_lookup_error", err.Error())
 			return
 		}
 		if existing != nil {
@@ -222,7 +223,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		if err == nil {
 			err = fmt.Errorf("backup repository %s not found", definition.RepositoryID)
 		}
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "repository_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "repository_resolution_error", err.Error())
 		return
 	}
 	policy, err := r.backupRegistry.GetPolicy(ctx, definition.PolicyID)
@@ -230,7 +231,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		if err == nil {
 			err = fmt.Errorf("backup policy %s not found", definition.PolicyID)
 		}
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "policy_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "policy_resolution_error", err.Error())
 		return
 	}
 	recipe, err := r.backupRegistry.GetRecipe(ctx, definition.RecipeID)
@@ -238,7 +239,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		if err == nil {
 			err = fmt.Errorf("backup recipe %s not found", definition.RecipeID)
 		}
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "recipe_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "recipe_resolution_error", err.Error())
 		return
 	}
 	definition.RepositoryName = repo.Name
@@ -250,14 +251,14 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 	}
 	mergeMetadata(definition.Metadata, backupNostrMetadata(event, definition.Metadata, map[string]any{"nostr_request_command": "backup_definition_apply"}))
 	if err := domain.ValidateBackupDefinition(definition); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "validation_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "validation_error", err.Error())
 		return
 	}
 	if err := registry.UpsertBackupDefinition(ctx, definition); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "definition_apply_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupDefinitionApplyResult, "failed", "definition_apply_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupDefinitionApplyResult, "backup_definition_apply", "success", "backup definition applied", map[string]any{"definition_id": definition.ID.String(), "name": definition.Name, "repository_id": definition.RepositoryID.String(), "policy_id": definition.PolicyID.String(), "recipe_id": definition.RecipeID.String(), "schedule_enabled": definition.ScheduleEnabled}, nostr.Tags{{"definition", definition.Name}, {"definition_id", definition.ID.String()}, {"repository_id", definition.RepositoryID.String()}, {"policy_id", definition.PolicyID.String()}, {"recipe_id", definition.RecipeID.String()}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupDefinitionApplyResult, "backup_definition_apply", "success", "backup definition applied", map[string]any{"definition_id": definition.ID.String(), "name": definition.Name, "repository_id": definition.RepositoryID.String(), "policy_id": definition.PolicyID.String(), "recipe_id": definition.RecipeID.String(), "schedule_enabled": definition.ScheduleEnabled}, nostr.Tags{{"definition", definition.Name}, {"definition_id", definition.ID.String()}, {"repository_id", definition.RepositoryID.String()}, {"policy_id", definition.PolicyID.String()}, {"recipe_id", definition.RecipeID.String()}})
 }
 
 func (r *Reactor) handleBackupRepositoryProbeRequest(ctx context.Context, event *nostr.Event) {
@@ -265,20 +266,20 @@ func (r *Reactor) handleBackupRepositoryProbeRequest(ctx context.Context, event 
 		return
 	}
 	if r.backupRepositoryProbeExecutor == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "backup_repository_probe_unavailable", "backup repository probe executor is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "backup_repository_probe_unavailable", "backup repository probe executor is not configured")
 		return
 	}
 	req, err := parseBackupRepositoryProbeRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "parse_error", err.Error())
 		return
 	}
 	repo, err := r.resolveBackupRepository(ctx, req.RepositoryID, req.Repository)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "repository_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupRepositoryProbeResult, "failed", "repository_resolution_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupRepositoryProbeResult, "backup_repository_probe", "queued", "backup repository probe queued", map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend)}, nostr.Tags{{"repository", repo.Name}, {"repository_id", repo.ID.String()}, {"backend", string(repo.Backend)}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupRepositoryProbeResult, "backup_repository_probe", "queued", "backup repository probe queued", map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend)}, nostr.Tags{{"repository", repo.Name}, {"repository_id", repo.ID.String()}, {"backend", string(repo.Backend)}})
 	go func(repositoryID uuid.UUID, requestEventID string) {
 		if err := r.backupRepositoryProbeExecutor.ProcessBackupRepositoryProbe(ctx, repositoryID, requestEventID); err != nil {
 			r.logger.Warn("backup repository probe executor failed", "repository_id", repositoryID.String(), "error", err)
@@ -292,21 +293,21 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 	}
 	registry, ok := r.backupRegistry.(backupVerificationRegistry)
 	if !ok {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_verification_unavailable", "backup verification registry is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_verification_unavailable", "backup verification registry is not configured")
 		return
 	}
 	if r.backupVerificationExecutor == nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_verification_executor_unavailable", "backup verification executor is not configured")
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_verification_executor_unavailable", "backup verification executor is not configured")
 		return
 	}
 	req, err := parseBackupVerificationRequest(event)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "parse_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "parse_error", err.Error())
 		return
 	}
 	runID, err := uuid.Parse(req.BackupRunID)
 	if err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "backup_run_id must be a UUID")
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "backup_run_id must be a UUID")
 		return
 	}
 	run, err := registry.GetBackupRun(ctx, runID)
@@ -314,11 +315,11 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 		if err == nil {
 			err = fmt.Errorf("backup run %s not found", runID)
 		}
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_run_resolution_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "backup_run_resolution_error", err.Error())
 		return
 	}
 	if !run.SnapshotCreated || strings.TrimSpace(run.SnapshotID) == "" {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "backup run must have a snapshot before verification can be requested")
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "backup run must have a snapshot before verification can be requested")
 		return
 	}
 	mode := req.Mode
@@ -326,11 +327,11 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 		mode = run.VerificationMode
 	}
 	if mode == "" || mode == domain.BackupVerificationNone || !mode.IsValid() {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "verification mode must be a supported non-none mode")
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "validation_error", "verification mode must be a supported non-none mode")
 		return
 	}
 	if existing, err := registry.GetBackupVerificationByRunID(ctx, runID); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "verification_lookup_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "verification_lookup_error", err.Error())
 		return
 	} else if existing != nil {
 		status := "duplicate"
@@ -338,15 +339,15 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 		if existing.Status == domain.BackupVerificationPending {
 			message = "backup verification is already pending"
 		}
-		_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", status, message, map[string]any{"verification_id": existing.ID.String(), "backup_run_id": run.ID.String(), "mode": string(existing.Mode), "verification_status": string(existing.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", existing.ID.String()}, {"verification_status", string(existing.Status)}})
+		r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", status, message, map[string]any{"verification_id": existing.ID.String(), "backup_run_id": run.ID.String(), "mode": string(existing.Mode), "verification_status": string(existing.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", existing.ID.String()}, {"verification_status", string(existing.Status)}})
 		return
 	}
 	record := &domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: run.ID, Mode: mode, Status: domain.BackupVerificationPending, Verified: false, Evidence: backupNostrMetadata(event, req.Metadata, map[string]any{"nostr_request_command": "backup_verification", "nostr_backup_run_id": run.ID.String(), "nostr_snapshot_id": run.SnapshotID})}
 	if err := registry.RecordBackupVerification(ctx, record); err != nil {
-		_ = r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "verification_record_error", err.Error())
+		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "verification_record_error", err.Error())
 		return
 	}
-	_ = r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", "queued", "backup verification queued", map[string]any{"verification_id": record.ID.String(), "backup_run_id": run.ID.String(), "mode": string(record.Mode), "verification_status": string(record.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", record.ID.String()}, {"verification_status", string(record.Status)}})
+	r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", "queued", "backup verification queued", map[string]any{"verification_id": record.ID.String(), "backup_run_id": run.ID.String(), "mode": string(record.Mode), "verification_status": string(record.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", record.ID.String()}, {"verification_status", string(record.Status)}})
 	go func(verificationID uuid.UUID) {
 		if err := r.backupVerificationExecutor.ProcessBackupVerification(ctx, verificationID); err != nil {
 			r.logger.Warn("backup verification executor failed", "verification_id", verificationID.String(), "error", err)
@@ -527,7 +528,7 @@ func (r *Reactor) resolveBackupRepository(ctx context.Context, repositoryID, nam
 	return repo, nil
 }
 
-func (r *Reactor) publishBackupRegistryMutationResult(ctx context.Context, requestEvent *nostr.Event, resultKind int, action, status, message string, payload map[string]any, extraTags nostr.Tags) error {
+func (r *Reactor) publishBackupRegistryMutationResult(ctx context.Context, requestEvent *nostr.Event, resultKind int, action, status, message string, payload map[string]any, extraTags nostr.Tags) {
 	requestEventID := requestEvent.ID.Hex()
 	requestPubkey := requestEvent.PubKey.Hex()
 	content := map[string]any{"request_event_id": requestEventID, "action": action, "status": status, "message": message, "created_at": time.Now().UTC().Format(time.RFC3339)}
@@ -542,10 +543,12 @@ func (r *Reactor) publishBackupRegistryMutationResult(ctx context.Context, reque
 	tags = appendBackupRequestTags(tags, requestEvent)
 	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign backup registry result: %w", err)
+		r.zapLog.Warn("sign backup registry result failed", zap.Error(err))
+		return
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	if _, err := r.publishEvent(ctx, event); err != nil {
+		r.zapLog.Warn("publish backup registry result failed", zap.Error(err))
+	}
 }
 
 func parseOptionalUUID(raw string) (uuid.UUID, error) {

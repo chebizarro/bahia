@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
 )
 
 type workerCommandRequest struct {
@@ -64,27 +65,27 @@ func (r *Reactor) handleWorkerSchedulingRequest(ctx context.Context, event *nost
 	if !ok {
 		return
 	}
-	_ = r.publishWorkerStatus(ctx, event, req, command, "running", "updating", "worker scheduling state update started")
+	r.publishWorkerStatus(ctx, event, req, command, "running", "updating", "worker scheduling state update started")
 	worker, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey)
 	if err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, command, "failed", "lookup_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, command, "failed", "lookup_error", err.Error(), nil)
 		return
 	}
 	if worker == nil {
-		_ = r.publishWorkerResult(ctx, event, req, command, "failed", "not_found", "worker not found", nil)
+		r.publishWorkerResult(ctx, event, req, command, "failed", "not_found", "worker not found", nil)
 		return
 	}
 	if err := validateWorkerSchedulingTransition(command, worker.SchedulingState, targetState); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, command, "failed", "invalid_transition", err.Error(), worker)
+		r.publishWorkerResult(ctx, event, req, command, "failed", "invalid_transition", err.Error(), worker)
 		return
 	}
 	updater, ok := r.workerRepo.(workerSchedulingStateUpdater)
 	if !ok {
-		_ = r.publishWorkerResult(ctx, event, req, command, "failed", "worker_repository_unavailable", "worker repository cannot update worker scheduling state", worker)
+		r.publishWorkerResult(ctx, event, req, command, "failed", "worker_repository_unavailable", "worker repository cannot update worker scheduling state", worker)
 		return
 	}
 	if err := updater.UpdateSchedulingState(ctx, req.WorkerPubKey, targetState, strings.TrimSpace(req.Reason)); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, command, "failed", "update_error", err.Error(), worker)
+		r.publishWorkerResult(ctx, event, req, command, "failed", "update_error", err.Error(), worker)
 		return
 	}
 	if refreshed, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey); err == nil && refreshed != nil {
@@ -96,7 +97,7 @@ func (r *Reactor) handleWorkerSchedulingRequest(ctx context.Context, event *nost
 	if err := r.publishWorkerState(ctx, worker); err != nil {
 		r.logger.Warn("publish worker state read model failed", "worker", req.WorkerPubKey, "error", err)
 	}
-	_ = r.publishWorkerResult(ctx, event, req, command, "succeeded", string(targetState), "worker scheduling state updated", worker)
+	r.publishWorkerResult(ctx, event, req, command, "succeeded", string(targetState), "worker scheduling state updated", worker)
 }
 
 func (r *Reactor) handleWorkerLabelsUpdateRequest(ctx context.Context, event *nostr.Event) {
@@ -104,24 +105,24 @@ func (r *Reactor) handleWorkerLabelsUpdateRequest(ctx context.Context, event *no
 	if !ok {
 		return
 	}
-	_ = r.publishWorkerStatus(ctx, event, req, WorkerCommandLabelsUpdate, "running", "updating", "worker labels update started")
+	r.publishWorkerStatus(ctx, event, req, WorkerCommandLabelsUpdate, "running", "updating", "worker labels update started")
 	worker, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey)
 	if err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "lookup_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "lookup_error", err.Error(), nil)
 		return
 	}
 	if worker == nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "not_found", "worker not found", nil)
+		r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "not_found", "worker not found", nil)
 		return
 	}
 	labels := sanitizeWorkerLabels(req.Labels)
 	updater, ok := r.workerRepo.(workerLabelsUpdater)
 	if !ok {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "worker_repository_unavailable", "worker repository cannot update worker labels", worker)
+		r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "worker_repository_unavailable", "worker repository cannot update worker labels", worker)
 		return
 	}
 	if err := updater.UpdateLabels(ctx, req.WorkerPubKey, labels); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "update_error", err.Error(), worker)
+		r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "failed", "update_error", err.Error(), worker)
 		return
 	}
 	if refreshed, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey); err == nil && refreshed != nil {
@@ -132,7 +133,7 @@ func (r *Reactor) handleWorkerLabelsUpdateRequest(ctx context.Context, event *no
 	if err := r.publishWorkerState(ctx, worker); err != nil {
 		r.logger.Warn("publish worker state read model failed", "worker", req.WorkerPubKey, "error", err)
 	}
-	_ = r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "succeeded", "labels_updated", "worker labels updated", worker)
+	r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "succeeded", "labels_updated", "worker labels updated", worker)
 }
 
 func (r *Reactor) handleWorkerPolicyApplyRequest(ctx context.Context, event *nostr.Event) {
@@ -140,17 +141,17 @@ func (r *Reactor) handleWorkerPolicyApplyRequest(ctx context.Context, event *nos
 	if !ok {
 		return
 	}
-	_ = r.publishWorkerStatus(ctx, event, req, WorkerPolicyApplyRequest, "running", "updating", "worker placement policy update started")
+	r.publishWorkerStatus(ctx, event, req, WorkerPolicyApplyRequest, "running", "updating", "worker placement policy update started")
 	if err := r.validatePinnedWorkerExists(ctx, req); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "failed", "validation_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "failed", "validation_error", err.Error(), nil)
 		return
 	}
 	policy := sanitizeWorkerPolicy(req.Policy)
 	if err := r.applyEnvironmentWorkerPolicy(ctx, req.EnvironmentID, policy); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "failed", "update_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "failed", "update_error", err.Error(), nil)
 		return
 	}
-	_ = r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "succeeded", "policy_applied", "worker placement policy applied", nil)
+	r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "succeeded", "policy_applied", "worker placement policy applied", nil)
 }
 
 func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.Event) {
@@ -158,18 +159,18 @@ func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.E
 	if !ok {
 		return
 	}
-	_ = r.publishWorkerStatus(ctx, event, req, WorkerCommandCleanupRequest, "running", "dispatching", "worker cleanup dispatch started")
+	r.publishWorkerStatus(ctx, event, req, WorkerCommandCleanupRequest, "running", "dispatching", "worker cleanup dispatch started")
 	if r.workerCleanupOrchestrator == nil {
-		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "cleanup_orchestrator_unavailable", "worker cleanup orchestrator is not configured", nil, nil)
+		r.publishWorkerCleanupResult(ctx, event, req, "failed", "cleanup_orchestrator_unavailable", "worker cleanup orchestrator is not configured", nil, nil)
 		return
 	}
 	worker, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey)
 	if err != nil {
-		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "lookup_error", err.Error(), nil, nil)
+		r.publishWorkerCleanupResult(ctx, event, req, "failed", "lookup_error", err.Error(), nil, nil)
 		return
 	}
 	if worker == nil {
-		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "not_found", "worker not found", nil, nil)
+		r.publishWorkerCleanupResult(ctx, event, req, "failed", "not_found", "worker not found", nil, nil)
 		return
 	}
 	mode := strings.TrimSpace(req.CleanupMode)
@@ -201,10 +202,10 @@ func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.E
 			code = "cleanup_payment_required"
 			status = "rejected"
 		}
-		_ = r.publishWorkerCleanupResult(ctx, event, req, status, code, err.Error(), worker, exec)
+		r.publishWorkerCleanupResult(ctx, event, req, status, code, err.Error(), worker, exec)
 		return
 	}
-	_ = r.publishWorkerCleanupResult(ctx, event, req, "succeeded", "cleanup_dispatched", "worker cleanup dispatched", worker, exec)
+	r.publishWorkerCleanupResult(ctx, event, req, "succeeded", "cleanup_dispatched", "worker cleanup dispatched", worker, exec)
 }
 
 func (r *Reactor) handleWorkloadPinRequest(ctx context.Context, event *nostr.Event) {
@@ -212,38 +213,38 @@ func (r *Reactor) handleWorkloadPinRequest(ctx context.Context, event *nostr.Eve
 	if !ok {
 		return
 	}
-	_ = r.publishWorkerStatus(ctx, event, req, WorkloadPinRequest, "running", "updating", "workload pin update started")
+	r.publishWorkerStatus(ctx, event, req, WorkloadPinRequest, "running", "updating", "workload pin update started")
 	if err := r.validatePinnedWorkerExists(ctx, req); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "validation_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "validation_error", err.Error(), nil)
 		return
 	}
 	kind := strings.ToLower(strings.TrimSpace(req.WorkloadKind))
 	if kind == "ml_inference" || kind == "inference_endpoint" {
 		if err := r.applyMLInferencePin(ctx, req); err != nil {
-			_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "update_error", err.Error(), nil)
+			r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "update_error", err.Error(), nil)
 			return
 		}
-		_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "succeeded", "workload_pinned", "ML inference workload pin applied", nil)
+		r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "succeeded", "workload_pinned", "ML inference workload pin applied", nil)
 		return
 	}
 	if strings.TrimSpace(req.EnvironmentID) == "" {
-		_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "validation_error", "environment_id is required when workload_kind is not ml_inference", nil)
+		r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "validation_error", "environment_id is required when workload_kind is not ml_inference", nil)
 		return
 	}
 	if err := r.applyEnvironmentWorkerPolicy(ctx, req.EnvironmentID, map[string]any{"pinned_worker": req.WorkerPubKey}); err != nil {
-		_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "update_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "failed", "update_error", err.Error(), nil)
 		return
 	}
-	_ = r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "succeeded", "workload_pinned", "environment workload pin applied", nil)
+	r.publishWorkerResult(ctx, event, req, WorkloadPinRequest, "succeeded", "workload_pinned", "environment workload pin applied", nil)
 }
 
 func (r *Reactor) decodeWorkerRequest(ctx context.Context, event *nostr.Event, command string, requireLabels bool) (*workerCommandRequest, bool) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
+		r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
 		return nil, false
 	}
 	if r.workerRepo == nil {
-		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "worker_repository_unavailable", "worker repository is not configured", nil)
+		r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "worker_repository_unavailable", "worker repository is not configured", nil)
 		return nil, false
 	}
 	tagWorkerPubKey := workerPubKeyFromEvent(event)
@@ -251,18 +252,18 @@ func (r *Reactor) decodeWorkerRequest(ctx context.Context, event *nostr.Event, c
 	var req workerCommandRequest
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-			_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "parse_error", err.Error(), nil)
+			r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "parse_error", err.Error(), nil)
 			return nil, false
 		}
 	}
 	contentWorkerPubKey := strings.TrimSpace(req.WorkerPubKey)
 	contentIdempotencyKey := strings.TrimSpace(req.IdempotencyKey)
 	if tagWorkerPubKey != "" && contentWorkerPubKey != "" && tagWorkerPubKey != contentWorkerPubKey {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker tag and worker_pubkey content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker tag and worker_pubkey content must match", nil)
 		return nil, false
 	}
 	if tagIdempotencyKey != "" && contentIdempotencyKey != "" && tagIdempotencyKey != contentIdempotencyKey {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "d tag and idempotency_key content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "d tag and idempotency_key content must match", nil)
 		return nil, false
 	}
 	if req.WorkerPubKey == "" {
@@ -274,32 +275,32 @@ func (r *Reactor) decodeWorkerRequest(ctx context.Context, event *nostr.Event, c
 	}
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.WorkerPubKey == "" {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey is required", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey is required", nil)
 		return nil, false
 	}
 	if !isHexNostrPubKey(req.WorkerPubKey) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey must be a 32-byte lowercase hex Nostr public key", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey must be a 32-byte lowercase hex Nostr public key", nil)
 		return nil, false
 	}
 	if req.IdempotencyKey == "" {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "idempotency key is required via d tag or idempotency_key content", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "idempotency key is required via d tag or idempotency_key content", nil)
 		return nil, false
 	}
 	if requireLabels && req.Labels == nil {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "labels are required", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "labels are required", nil)
 		return nil, false
 	}
-	_ = r.publishWorkerStatus(ctx, event, &req, command, "accepted", "accepted", "worker command accepted")
+	r.publishWorkerStatus(ctx, event, &req, command, "accepted", "accepted", "worker command accepted")
 	return &req, true
 }
 
 func (r *Reactor) decodePlacementPolicyRequest(ctx context.Context, event *nostr.Event, command string, requirePolicy bool, requireWorker bool) (*workerCommandRequest, bool) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), EnvironmentID: environmentIDFromEvent(event), WorkloadID: workloadIDFromEvent(event), WorkloadKind: workloadKindFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
+		r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), EnvironmentID: environmentIDFromEvent(event), WorkloadID: workloadIDFromEvent(event), WorkloadKind: workloadKindFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "rejected", "unauthorized", "requester not in authorized list", nil)
 		return nil, false
 	}
 	if r.registry == nil && command == WorkerPolicyApplyRequest {
-		_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), EnvironmentID: environmentIDFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "registry_unavailable", "registry service is not configured", nil)
+		r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: workerPubKeyFromEvent(event), EnvironmentID: environmentIDFromEvent(event), IdempotencyKey: workerIdempotencyKey(event)}, command, "failed", "registry_unavailable", "registry service is not configured", nil)
 		return nil, false
 	}
 	tagWorkerPubKey := workerPubKeyFromEvent(event)
@@ -310,28 +311,28 @@ func (r *Reactor) decodePlacementPolicyRequest(ctx context.Context, event *nostr
 	var req workerCommandRequest
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-			_ = r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: tagWorkerPubKey, EnvironmentID: tagEnvironmentID, WorkloadID: tagWorkloadID, WorkloadKind: tagWorkloadKind, IdempotencyKey: tagIdempotencyKey}, command, "failed", "parse_error", err.Error(), nil)
+			r.publishWorkerResult(ctx, event, &workerCommandRequest{WorkerPubKey: tagWorkerPubKey, EnvironmentID: tagEnvironmentID, WorkloadID: tagWorkloadID, WorkloadKind: tagWorkloadKind, IdempotencyKey: tagIdempotencyKey}, command, "failed", "parse_error", err.Error(), nil)
 			return nil, false
 		}
 	}
 	if !consistentOptionalTag(tagWorkerPubKey, req.WorkerPubKey) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker tag and worker_pubkey content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker tag and worker_pubkey content must match", nil)
 		return nil, false
 	}
 	if !consistentOptionalTag(tagEnvironmentID, req.EnvironmentID) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment tag and environment_id content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment tag and environment_id content must match", nil)
 		return nil, false
 	}
 	if !consistentOptionalTag(tagWorkloadID, req.WorkloadID) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "workload tag and workload_id content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "workload tag and workload_id content must match", nil)
 		return nil, false
 	}
 	if !consistentOptionalTag(tagWorkloadKind, req.WorkloadKind) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "workload_kind tag and workload_kind content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "workload_kind tag and workload_kind content must match", nil)
 		return nil, false
 	}
 	if !consistentOptionalTag(tagIdempotencyKey, req.IdempotencyKey) {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "d tag and idempotency_key content must match", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "d tag and idempotency_key content must match", nil)
 		return nil, false
 	}
 	if req.WorkerPubKey == "" {
@@ -355,38 +356,38 @@ func (r *Reactor) decodePlacementPolicyRequest(ctx context.Context, event *nostr
 	req.WorkloadKind = strings.TrimSpace(req.WorkloadKind)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.IdempotencyKey == "" {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "idempotency key is required via d tag or idempotency_key content", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "idempotency key is required via d tag or idempotency_key content", nil)
 		return nil, false
 	}
 	if requireWorker {
 		if req.WorkerPubKey == "" {
-			_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey is required", nil)
+			r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey is required", nil)
 			return nil, false
 		}
 		if !isHexNostrPubKey(req.WorkerPubKey) {
-			_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey must be a 32-byte lowercase hex Nostr public key", nil)
+			r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "worker_pubkey must be a 32-byte lowercase hex Nostr public key", nil)
 			return nil, false
 		}
 	}
 	if req.EnvironmentID != "" {
 		if _, err := uuid.Parse(req.EnvironmentID); err != nil {
-			_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", fmt.Sprintf("invalid environment_id: %v", err), nil)
+			r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", fmt.Sprintf("invalid environment_id: %v", err), nil)
 			return nil, false
 		}
 	}
 	if requirePolicy && len(req.Policy) == 0 {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "policy is required", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "policy is required", nil)
 		return nil, false
 	}
 	if requirePolicy && req.EnvironmentID == "" {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment_id is required", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment_id is required", nil)
 		return nil, false
 	}
 	if requireWorker && req.EnvironmentID == "" && req.WorkloadID == "" {
-		_ = r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment_id or workload_id is required", nil)
+		r.publishWorkerResult(ctx, event, &req, command, "failed", "validation_error", "environment_id or workload_id is required", nil)
 		return nil, false
 	}
-	_ = r.publishWorkerStatus(ctx, event, &req, command, "accepted", "accepted", "placement policy command accepted")
+	r.publishWorkerStatus(ctx, event, &req, command, "accepted", "accepted", "placement policy command accepted")
 	return &req, true
 }
 
@@ -662,7 +663,7 @@ func sanitizeRolloutPolicy(raw any) map[string]any {
 	return out
 }
 
-func (r *Reactor) publishWorkerStatus(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, command, status, step, message string) error {
+func (r *Reactor) publishWorkerStatus(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, command, status, step, message string) {
 	content := map[string]any{
 		"request_event_id": requestEvent.ID,
 		"command":          command,
@@ -677,10 +678,12 @@ func (r *Reactor) publishWorkerStatus(ctx context.Context, requestEvent *nostr.E
 	}
 	tags := workerReplyTags(requestEvent, req, command, status, step)
 	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.status.worker.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerStatus)})
-	return r.publishCanonicalStatus(ctx, requestEvent, tags, content)
+	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, content); err != nil {
+		r.zapLog.Warn("publish worker status failed", zap.String("command", command), zap.Error(err))
+	}
 }
 
-func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, status, code, message string, worker *domain.Worker, exec *service.CleanupExecution) error {
+func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, status, code, message string, worker *domain.Worker, exec *service.CleanupExecution) {
 	if req == nil {
 		req = &workerCommandRequest{}
 	}
@@ -718,24 +721,17 @@ func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *
 		content["error"] = map[string]any{"code": code, "message": message}
 	}
 	tags := workerReplyTags(requestEvent, req, WorkerCommandCleanupRequest, status, "result")
-	if code != "" {
-		tags = append(tags, nostr.Tag{"result", code})
-	}
 	if exec != nil && exec.LoomJobID != "" {
 		tags = append(tags, nostr.Tag{"loom_job", exec.LoomJobID})
 	}
 	if mode := strings.TrimSpace(fmt.Sprint(content["cleanup_mode"])); mode != "" {
 		tags = append(tags, nostr.Tag{"cleanup_mode", mode})
 	}
-	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.result.worker-cleanup.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
-	var rpcErr *JSONRPCError
-	if status == "failed" || status == "rejected" {
-		rpcErr = &JSONRPCError{Code: -32000, Message: message}
-	}
-	return r.publishContextVMResult(ctx, requestEvent, content, dedupeTags(tags), rpcErr)
+	tags = append(tags, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
+	r.publishDomainResult(ctx, requestEvent, "worker", "bahia.result.worker-cleanup.v1", status, code, message, content, dedupeTags(tags))
 }
 
-func (r *Reactor) publishWorkerResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, command, status, code, message string, worker *domain.Worker) error {
+func (r *Reactor) publishWorkerResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, command, status, code, message string, worker *domain.Worker) {
 	if req == nil {
 		req = &workerCommandRequest{}
 	}
@@ -772,15 +768,8 @@ func (r *Reactor) publishWorkerResult(ctx context.Context, requestEvent *nostr.E
 		content["error"] = map[string]any{"code": code, "message": message}
 	}
 	tags := workerReplyTags(requestEvent, req, command, status, "result")
-	if code != "" {
-		tags = append(tags, nostr.Tag{"result", code})
-	}
-	tags = append(tags, nostr.Tag{"domain", "worker"}, nostr.Tag{"schema", "bahia.result.worker.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
-	var rpcErr *JSONRPCError
-	if status == "failed" || status == "rejected" {
-		rpcErr = &JSONRPCError{Code: -32000, Message: message}
-	}
-	return r.publishContextVMResult(ctx, requestEvent, content, dedupeTags(tags), rpcErr)
+	tags = append(tags, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindWorkerResult)})
+	r.publishDomainResult(ctx, requestEvent, "worker", "bahia.result.worker.v1", status, code, message, content, dedupeTags(tags))
 }
 
 func workerReplyTags(requestEvent *nostr.Event, req *workerCommandRequest, command, status, step string) nostr.Tags {
