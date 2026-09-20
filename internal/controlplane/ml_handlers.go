@@ -186,15 +186,20 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		return
 	}
 	var req struct {
-		EndpointID  string `json:"endpoint_id,omitempty"`
-		Endpoint    string `json:"endpoint,omitempty"`
-		RequestedBy string `json:"requested_by,omitempty"`
+		EndpointID   string `json:"endpoint_id,omitempty"`
+		Endpoint     string `json:"endpoint,omitempty"`
+		ClaimedHuman string `json:"requested_by,omitempty"`
 	}
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
 			r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "parse_error", err.Error(), nil, nil)
 			return
 		}
+	}
+	delegation, err := authorizeIntentDelegation(event, req.ClaimedHuman, intentDelegationVersionML, intentDelegationCapabilityMLRollback, r.isAuthorized(event.PubKey.Hex()))
+	if err != nil {
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "rejected", "delegation_unauthorized", err.Error(), nil, nil)
+		return
 	}
 	if req.Endpoint == "" {
 		req.Endpoint = tagValueNostr(event.Tags, "endpoint")
@@ -204,16 +209,19 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "endpoint_resolution_error", err.Error(), nil, nil)
 		return
 	}
-	requestedBy := req.RequestedBy
-	if requestedBy == "" {
-		requestedBy = event.PubKey.Hex()
+	if delegation != nil {
+		delegation.TenantID = r.delegationTenantID(ctx, endpoint.EnvironmentID)
 	}
 	endpointCoord := firstNonEmpty(req.Endpoint, tagValueNostr(event.Tags, "endpoint"))
-	intent, err := r.mlRegistry.RollbackWithMetadata(ctx, endpoint.ID, endpoint.EnvironmentID, requestedBy, mlNostrMetadata(event, map[string]any{
+	metadata := mlNostrMetadata(event, map[string]any{
 		"nostr_request_command":   "ml_inference_rollback",
 		"nostr_endpoint_coord":    endpointCoord,
 		"nostr_environment_coord": firstNonEmpty(tagValueNostr(event.Tags, "environment"), mlEnvironmentFromEndpointCoord(endpointCoord)),
-	}))
+	})
+	if delegation != nil {
+		metadata["request_authority"] = delegation
+	}
+	intent, err := r.mlRegistry.RollbackWithMetadata(ctx, endpoint.ID, endpoint.EnvironmentID, event.PubKey.Hex(), metadata)
 	if err != nil {
 		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "rollback_error", err.Error(), endpoint, nil)
 		return

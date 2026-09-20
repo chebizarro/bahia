@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,8 +171,15 @@ func TestHandleLLMRollbackRequestCreatesRollbackIntent(t *testing.T) {
 	if rollbackIntent.SourceKind != domain.SourceKindRollback {
 		t.Fatalf("expected rollback source kind, got %s", rollbackIntent.SourceKind)
 	}
-	if rollbackIntent.RequestedBy != "operator" {
-		t.Fatalf("expected requested_by operator, got %q", rollbackIntent.RequestedBy)
+	if rollbackIntent.RequestedBy != authorizedPubkey {
+		t.Fatalf("requested_by = %q, want signer %q", rollbackIntent.RequestedBy, authorizedPubkey)
+	}
+	delegation, ok := rollbackIntent.Metadata["request_authority"].(*intentDelegationRecord)
+	if !ok || delegation == nil {
+		t.Fatalf("missing delegation record in rollback metadata: %#v", rollbackIntent.Metadata)
+	}
+	if delegation.RequesterPubkey != "operator" || delegation.ServicePubkey != authorizedPubkey || delegation.Version != intentDelegationVersionLLM || delegation.Capability != intentDelegationCapabilityLLMRollback {
+		t.Fatalf("delegation record mismatch: %+v", delegation)
 	}
 	if rollbackIntent.Metadata["nostr_event_id"] != testNostrID("rollback-request").Hex() || rollbackIntent.Metadata["nostr_request_pubkey"] != authorizedPubkey {
 		t.Fatalf("missing Nostr correlation metadata: %#v", rollbackIntent.Metadata)
@@ -181,6 +189,33 @@ func TestHandleLLMRollbackRequestCreatesRollbackIntent(t *testing.T) {
 	}
 	if stateRepo.state.DesiredIntentID == nil || *stateRepo.state.DesiredIntentID != rollbackIntent.ID {
 		t.Fatalf("expected desired intent to point at rollback, got %#v", stateRepo.state.DesiredIntentID)
+	}
+}
+
+func TestHandleLLMRollbackRequestRejectsSelfDelegation(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 1}
+	routeID := uuid.New()
+	envID := uuid.New()
+	intentRepo := &reactorLLMIntentRepo{intents: map[uuid.UUID]*domain.LLMDeploymentIntent{}, order: []uuid.UUID{}}
+	llmRegistry := service.NewLLMRegistryService(nil, nil, nil, intentRepo, nil, nil, &reactorLLMStateRepo{}, nil, zap.NewNop())
+
+	requestKey := nostr.Generate().Hex()
+	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
+	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
+	request := signedLLMRequest(t, requestKey, KindLLMRollbackRequest, `{"route_id":"`+routeID.String()+`","environment_id":"`+envID.String()+`","requested_by":"`+requestPubkey+`"}`, nostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}})
+
+	reactor.handleLLMRollbackRequest(ctx, request)
+
+	if len(intentRepo.order) != 0 {
+		t.Fatalf("self-delegation created %d rollback intents, want 0", len(intentRepo.order))
+	}
+	if len(capture.events) == 0 {
+		t.Fatal("self-delegation did not publish a result event")
+	}
+	result := capture.events[len(capture.events)-1]
+	if !strings.Contains(result.Content, "cannot supply requester authority") {
+		t.Fatalf("self-delegation result content = %q, want self-delegation refusal", result.Content)
 	}
 }
 

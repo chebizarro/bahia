@@ -1477,7 +1477,7 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 		RouteID       string         `json:"route_id"`
 		EnvironmentID string         `json:"environment_id"`
 		ReleaseID     string         `json:"release_id"`
-		RequestedBy   string         `json:"requested_by,omitempty"`
+		ClaimedHuman  string         `json:"requested_by,omitempty"`
 		Metadata      map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
@@ -1508,8 +1508,13 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid release_id: %v", err))
 		return
 	}
-	if req.RequestedBy == "" {
-		req.RequestedBy = event.PubKey.Hex()
+	delegation, err := authorizeIntentDelegation(event, req.ClaimedHuman, intentDelegationVersionLLM, intentDelegationCapabilityLLMDeploy, r.isAuthorized(event.PubKey.Hex()))
+	if err != nil {
+		r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error())
+		return
+	}
+	if delegation != nil {
+		delegation.TenantID = r.delegationTenantID(ctx, envID)
 	}
 	metadata := req.Metadata
 	if metadata == nil {
@@ -1517,7 +1522,10 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 	}
 	metadata["nostr_event_id"] = event.ID.Hex()
 	metadata["nostr_request_pubkey"] = event.PubKey.Hex()
-	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: req.RequestedBy, SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
+	if delegation != nil {
+		metadata["request_authority"] = delegation
+	}
+	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: event.PubKey.Hex(), SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
 	if err := r.llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		logger.Error("failed to create LLM deployment intent", "error", err)
 		r.publishLLMError(ctx, event, "intent_error", err.Error())
@@ -1579,7 +1587,7 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 	var req struct {
 		RouteID       string `json:"route_id,omitempty"`
 		EnvironmentID string `json:"environment_id,omitempty"`
-		RequestedBy   string `json:"requested_by,omitempty"`
+		ClaimedHuman  string `json:"requested_by,omitempty"`
 	}
 	_ = json.Unmarshal([]byte(event.Content), &req)
 	if req.RouteID == "" {
@@ -1598,18 +1606,24 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
 		return
 	}
-	if req.RequestedBy == "" {
-		req.RequestedBy = event.PubKey.Hex()
+	delegation, err := authorizeIntentDelegation(event, req.ClaimedHuman, intentDelegationVersionLLM, intentDelegationCapabilityLLMRollback, r.isAuthorized(event.PubKey.Hex()))
+	if err != nil {
+		r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error())
+		return
 	}
-
+	if delegation != nil {
+		delegation.TenantID = r.delegationTenantID(ctx, envID)
+	}
 	metadata := map[string]any{
-		"nostr_event_id":         event.ID.Hex(),
-		"nostr_request_pubkey":   event.PubKey.Hex(),
-		"nostr_request_kind":     int(event.Kind),
-		"nostr_request_command":  "llm_rollback",
-		"nostr_requested_by_raw": req.RequestedBy,
+		"nostr_event_id":        event.ID.Hex(),
+		"nostr_request_pubkey":  event.PubKey.Hex(),
+		"nostr_request_kind":    int(event.Kind),
+		"nostr_request_command": "llm_rollback",
 	}
-	intent, err := r.llmRegistry.RollbackWithMetadata(ctx, routeID, envID, req.RequestedBy, metadata)
+	if delegation != nil {
+		metadata["request_authority"] = delegation
+	}
+	intent, err := r.llmRegistry.RollbackWithMetadata(ctx, routeID, envID, event.PubKey.Hex(), metadata)
 	if err != nil {
 		logger.Error("failed to initiate LLM rollback", "error", err)
 		r.publishLLMError(ctx, event, "rollback_error", err.Error())
