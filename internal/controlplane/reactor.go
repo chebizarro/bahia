@@ -1912,7 +1912,9 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 		return
 	}
 	tags := nostr.Tags{{"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
-	_ = r.publishContextVMResult(ctx, event, evaluation, tags, nil)
+	if err := r.publishContextVMResult(ctx, event, evaluation, tags, nil); err != nil {
+		r.zapLog.Warn("control-plane evaluation result publish failed", zap.Error(err))
+	}
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
@@ -2411,18 +2413,23 @@ func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags
 }
 
 // publishStatus publishes canonical deployment progress for retained direct handler paths.
-func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
+func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) {
 	tags := nostr.Tags{
 		{"status", "processing"},
 		{"step", step},
 		{"category", "deployment"},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
 		"status":  "processing",
 		"step":    step,
 		"message": message,
-	})
+	}); err != nil {
+		r.zapLog.Warn("control-plane status publish failed",
+			zap.String("category", "deployment"),
+			zap.String("step", step),
+			zap.Error(err))
+	}
 }
 
 // publishDeploymentResult publishes a ContextVM deployment result for retained direct handler paths.

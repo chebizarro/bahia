@@ -12,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
 )
 
 // AdoptionOperatorService is the narrow service surface required by the
@@ -137,7 +138,7 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 		return
 	}
 
-	_ = r.publishActionStatus(ctx, event, req.Action, "executing", "Direct runtime action started")
+	r.publishActionStatus(ctx, event, req.Action, "executing", "Direct runtime action started")
 	var obs *domain.RuntimeObservation
 	var err error
 	switch req.Action {
@@ -163,13 +164,13 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 // progression through the direct handler status path used by legacy tests.
 func (r *Reactor) deployStatusCallbackFor(ctx context.Context, event *nostr.Event, action string) service.DeployStatusCallback {
 	return func(cbCtx context.Context, step service.DeployStep, message string) {
-		_ = r.publishActionStatus(cbCtx, event, action, string(step), message)
+		r.publishActionStatus(cbCtx, event, action, string(step), message)
 	}
 }
 
 func (r *Reactor) deploymentStatusCallbackFor(ctx context.Context, event *nostr.Event) service.DeployStatusCallback {
 	return func(cbCtx context.Context, step service.DeployStep, message string) {
-		_ = r.publishStatus(cbCtx, event, string(step), message)
+		r.publishStatus(cbCtx, event, string(step), message)
 	}
 }
 
@@ -196,7 +197,7 @@ func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Ev
 		return
 	}
 
-	_ = r.publishAdoptionStatus(ctx, event, "scan", targets, "Adoption scan started")
+	r.publishAdoptionStatus(ctx, event, "scan", targets, "Adoption scan started")
 	previews, err := r.adoption.Scan(ctx, service.AdoptionScanRequest{Targets: targets})
 	if err != nil {
 		logger.Error("adoption scan failed", "error", err)
@@ -241,7 +242,7 @@ func (r *Reactor) handleAdoptionImportRequest(ctx context.Context, event *nostr.
 		return
 	}
 
-	_ = r.publishAdoptionStatus(ctx, event, "import", targets, "Adoption import started")
+	r.publishAdoptionStatus(ctx, event, "import", targets, "Adoption import started")
 	results, err := r.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: req.ImportAll})
 	if err != nil {
 		logger.Error("adoption import failed", "error", err)
@@ -351,7 +352,7 @@ func adoptionImportStatus(results []service.AdoptionImportResult) string {
 	return "success"
 }
 
-func (r *Reactor) publishActionStatus(ctx context.Context, requestEvent *nostr.Event, action, step, message string) error {
+func (r *Reactor) publishActionStatus(ctx context.Context, requestEvent *nostr.Event, action, step, message string) {
 	tags := nostr.Tags{
 		{"status", "processing"},
 		{"action", action},
@@ -359,12 +360,17 @@ func (r *Reactor) publishActionStatus(ctx context.Context, requestEvent *nostr.E
 		{"category", "runtime_action"},
 	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
 		"status":  "processing",
 		"action":  action,
 		"step":    step,
 		"message": message,
-	})
+	}); err != nil {
+		r.zapLog.Warn("control-plane action status publish failed",
+			zap.String("action", action),
+			zap.String("step", step),
+			zap.Error(err))
+	}
 }
 
 func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *nostr.Event, action string, serviceID, environmentID uuid.UUID, obs *domain.RuntimeObservation) error {
@@ -391,18 +397,22 @@ func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *
 	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
-func (r *Reactor) publishAdoptionStatus(ctx context.Context, requestEvent *nostr.Event, operation string, targets []service.AdoptionTarget, message string) error {
+func (r *Reactor) publishAdoptionStatus(ctx context.Context, requestEvent *nostr.Event, operation string, targets []service.AdoptionTarget, message string) {
 	tags := nostr.Tags{
 		{"status", "processing"},
 		{"operation", operation},
 		{"category", "adoption"},
 	}
 	tags = appendAdoptionTargetTags(tags, targets)
-	return r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
+	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
 		"status":    "processing",
 		"operation": operation,
 		"message":   message,
-	})
+	}); err != nil {
+		r.zapLog.Warn("control-plane adoption status publish failed",
+			zap.String("operation", operation),
+			zap.Error(err))
+	}
 }
 
 func (r *Reactor) publishAdoptionScanResult(ctx context.Context, requestEvent *nostr.Event, status string, previews []service.AdoptionPreview) error {
