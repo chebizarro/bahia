@@ -96,9 +96,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.QueryStored = func(ctx context.Context, filter nostr.Filter) iter.Seq[nostr.Event] {
 		return store.Query(ctx, filter, nostrCfg.Sidecar.MaxQueryLimit)
 	}
-	relay.Count = func(ctx context.Context, filter nostr.Filter) (uint32, error) {
-		return store.Count(ctx, filter), nil
-	}
+	relay.Count = store.Count
 	// Khatru broadcasts to matching subscribers synchronously before sending
 	// the publisher's OK. Persist first, acknowledge promptly, and move fanout
 	// off the publisher path so slow subscribers cannot stall unrelated writes.
@@ -226,7 +224,12 @@ func (s *Server) Close() error {
 }
 
 // Run starts the sidecar HTTP server and shuts it down when ctx is cancelled.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Server) Run(ctx context.Context) (runErr error) {
+	defer func() {
+		if err := s.store.Close(); err != nil && runErr == nil {
+			runErr = fmt.Errorf("close relay sidecar store: %w", err)
+		}
+	}()
 	addr := s.cfg.ListenAddr
 	if addr == "" {
 		addr = "0.0.0.0:3334"
@@ -254,21 +257,19 @@ func (s *Server) Run(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
-		stopSweep()
-		<-sweepDone
-		return fmt.Errorf("relay sidecar server: %w", err)
+		runErr = fmt.Errorf("relay sidecar server: %w", err)
 	case <-ctx.Done():
-		stopSweep()
-		<-sweepDone
 	}
+	stopSweep()
+	<-sweepDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("relay sidecar shutdown: %w", err)
 	}
-	if err := s.store.Close(); err != nil {
-		return fmt.Errorf("close relay sidecar store: %w", err)
+	if runErr != nil {
+		return runErr
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil

@@ -15,6 +15,11 @@ import (
 
 const testPrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
 
+func TestLoadConfigRejectsUnknownFields(t *testing.T) {
+	_, err := LoadConfig([]byte("bridge:\n  bahia_pubky: typo\n"))
+	require.ErrorContains(t, err, "field bahia_pubky not found")
+}
+
 func TestParseEndpointEventExtractsFQDNHealthAndNpub(t *testing.T) {
 	pubkey, npub := testIdentity(t)
 	ev := signedEndpointEvent(t, pubkey, `{"service":"drydock","route":"review","env":"prod","health":"healthy","capabilities":["llm"]}`, nostr.Tags{

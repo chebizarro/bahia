@@ -538,6 +538,56 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 	}
 }
 
+func TestSidecarCountReportsStoreFailure(t *testing.T) {
+	server, err := New(sidecarTestConfig(t), zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if err := server.store.readDB.Close(); err != nil {
+		t.Fatalf("close read pool: %v", err)
+	}
+
+	count, err := server.Relay().Count(context.Background(), nostr.Filter{})
+	if err == nil {
+		t.Fatalf("Count() = %d, nil error after store failure", count)
+	}
+}
+
+func TestSidecarCountReportsCorruptStoredEvent(t *testing.T) {
+	server, err := New(sidecarTestConfig(t), zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if _, err := server.store.db.Exec(`
+		INSERT INTO events (id, created_at, kind, pubkey, event_json)
+		VALUES ('corrupt', 1, 1, 'author', '{')`); err != nil {
+		t.Fatalf("insert corrupt event: %v", err)
+	}
+
+	count, err := server.Relay().Count(context.Background(), nostr.Filter{})
+	if err == nil {
+		t.Fatalf("Count() = %d, nil error for malformed stored event", count)
+	}
+}
+
+func TestSidecarRunClosesStoreWhenListenFails(t *testing.T) {
+	cfg := sidecarTestConfig(t)
+	cfg.Sidecar.ListenAddr = "127.0.0.1:-1"
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	if err := server.Run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want listen failure")
+	}
+	if err := server.store.db.Ping(); err == nil {
+		t.Fatal("relay store remained open after ListenAndServe failure")
+	}
+}
+
 func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true

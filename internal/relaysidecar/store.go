@@ -157,14 +157,39 @@ func (s *sqliteStore) SweepRetention(ctx context.Context, now time.Time, eventRe
 	return deleted, nil
 }
 
-func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) uint32 {
+func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) (uint32, error) {
+	if filter.LimitZero {
+		return 0, nil
+	}
+	query, args := relayQuerySQL(filter)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("count relay events: %w", err)
+	}
+	defer rows.Close()
+
 	var count uint32
-	for event := range s.Query(ctx, filter, 0) {
-		if filter.Matches(event) {
-			count++
+	for rows.Next() {
+		var encoded []byte
+		var event nostr.Event
+		if err := rows.Scan(&encoded); err != nil {
+			return 0, fmt.Errorf("scan relay event for count: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &event); err != nil {
+			return 0, fmt.Errorf("decode relay event for count: %w", err)
+		}
+		if !filter.Matches(event) {
+			continue
+		}
+		count++
+		if filter.Limit > 0 && count >= uint32(filter.Limit) {
+			return count, nil
 		}
 	}
-	return count
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("count relay events: %w", err)
+	}
+	return count, nil
 }
 
 func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {

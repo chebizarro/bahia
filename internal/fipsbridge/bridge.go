@@ -1,6 +1,7 @@
 package fipsbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,7 +65,9 @@ func LoadConfig(data []byte) (Config, error) {
 		return cfg, nil
 	}
 	var wrapped configFile
-	if err := yaml.Unmarshal(data, &wrapped); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&wrapped); err != nil {
 		return Config{}, fmt.Errorf("parse bridge config: %w", err)
 	}
 	loaded := wrapped.Bridge
