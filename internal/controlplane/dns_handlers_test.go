@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -383,4 +384,213 @@ func dnsResultPayload(t *testing.T, event nostr.Event) map[string]any {
 		t.Fatalf("DNS result content has no JSON-RPC result payload: %s", event.Content)
 	}
 	return response.Result
+}
+
+func TestDNSLegacyAndContextVMProduceEquivalentDomainOutcomes(t *testing.T) {
+	t.Run("zoneCreate persistence", func(t *testing.T) {
+		params := json.RawMessage(mustMarshal(t, domain.DNSZone{Name: "parity.example", Visibility: domain.ZoneVisibilityInternal, BackendRef: "primary", TTL: 60}))
+
+		legacyOp := &parityRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSZoneCreate(context.Background(), &nostr.Event{ID: testNostrID("parity-zc"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSZoneCreateRequest), Content: string(params)})
+
+		ctxvmOp := &parityRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).zoneCreate(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "zonesCreated", len(legacyOp.zonesCreated), len(ctxvmOp.zonesCreated))
+		assertParityEqual(t, "reconciled", len(legacyOp.reconciled), len(ctxvmOp.reconciled))
+		if len(legacyOp.reconciled) > 0 {
+			assertParityEqualStr(t, "reconciled[0]", legacyOp.reconciled[0], ctxvmOp.reconciled[0])
+		}
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM zoneCreate status=%q", ctxvmMap["status"])
+		}
+	})
+
+	t.Run("zoneCreate non-persistence", func(t *testing.T) {
+		params := json.RawMessage(`{"zone":"prod.example"}`)
+
+		legacyOp := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSZoneCreate(context.Background(), &nostr.Event{ID: testNostrID("parity-zcnp"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSZoneCreateRequest), Content: string(params)})
+
+		ctxvmOp := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).zoneCreate(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "reconciled count", len(legacyOp.reconciled), len(ctxvmOp.reconciled))
+		if len(legacyOp.reconciled) > 0 {
+			assertParityEqualStr(t, "reconciled zone", legacyOp.reconciled[0], ctxvmOp.reconciled[0])
+		}
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM zoneCreate status=%q", ctxvmMap["status"])
+		}
+	})
+
+	t.Run("policyApply", func(t *testing.T) {
+		ttl := 120
+		policy := domain.DNSPolicy{Name: "latency-aware", Enabled: true, Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{TTLOverride: &ttl}}}}
+		params := json.RawMessage(mustMarshal(t, policy))
+
+		legacyOp := &recordingDNSOperator{policyRepo: &recordingDNSPolicyRepository{}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSPolicyApply(context.Background(), &nostr.Event{ID: testNostrID("parity-pa"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSPolicyApplyRequest), Content: string(params)})
+
+		ctxvmOp := &recordingDNSOperator{policyRepo: &recordingDNSPolicyRepository{}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).policyApply(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "reconcileAll calls", legacyOp.reconcileAll, ctxvmOp.reconcileAll)
+		assertParityEqual(t, "policies persisted", len(legacyOp.policyRepo.created), len(ctxvmOp.policyRepo.created))
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM policyApply status=%q", ctxvmMap["status"])
+		}
+	})
+
+	t.Run("recordSet", func(t *testing.T) {
+		override := domain.DNSRecordOverride{ZoneName: "prod.example", RecordName: "api", RecordType: domain.DNSRecordTypeA, Value: "192.0.2.10", TTL: 60, Reason: "maintenance"}
+		params := json.RawMessage(mustMarshal(t, override))
+
+		legacyOp := &parityRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSRecordOverride(context.Background(), &nostr.Event{ID: testNostrID("parity-rs"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSRecordOverrideRequest), Content: string(params)})
+
+		ctxvmOp := &parityRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).recordSet(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromHex(t, pubkey)}, RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "overridesCreated", len(legacyOp.overridesCreated), len(ctxvmOp.overridesCreated))
+		assertParityEqual(t, "reconciled", len(legacyOp.reconciled), len(ctxvmOp.reconciled))
+		if len(legacyOp.overridesCreated) > 0 {
+			if legacyOp.overridesCreated[0].OperatorPubkey == "" {
+				t.Fatal("legacy OperatorPubkey was not set")
+			}
+		}
+		if len(ctxvmOp.overridesCreated) > 0 {
+			if ctxvmOp.overridesCreated[0].OperatorPubkey == "" {
+				t.Fatal("ContextVM OperatorPubkey was not set")
+			}
+		}
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM recordSet status=%q", ctxvmMap["status"])
+		}
+	})
+
+	t.Run("overrideRetire", func(t *testing.T) {
+		overrideID := uuid.New()
+		params := json.RawMessage(mustMarshal(t, struct {
+			OverrideID string `json:"override_id"`
+			Reason     string `json:"reason"`
+		}{OverrideID: overrideID.String(), Reason: "obsolete"}))
+
+		legacyOp := &parityRetirementRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}, storedOverrides: map[uuid.UUID]domain.DNSRecordOverride{overrideID: {ID: overrideID, ZoneName: "prod.example", ExpiresAt: ptrTime(time.Now().UTC().Add(1 * time.Hour))}}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSOverrideRetire(context.Background(), &nostr.Event{ID: testNostrID("parity-or"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSOverrideRetireRequest), Content: string(params)})
+
+		ctxvmOp := &parityRetirementRecorder{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}, storedOverrides: map[uuid.UUID]domain.DNSRecordOverride{overrideID: {ID: overrideID, ZoneName: "prod.example", ExpiresAt: ptrTime(time.Now().UTC().Add(1 * time.Hour))}}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).overrideRetire(context.Background(), ContextVMRequest{Event: &nostr.Event{PubKey: testNostrPubKeyFromHex(t, pubkey)}, RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "reconciled count", len(legacyOp.reconciled), len(ctxvmOp.reconciled))
+		assertParityEqual(t, "expired count", len(legacyOp.expired), len(ctxvmOp.expired))
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM overrideRetire status=%q step=%q", ctxvmMap["status"], ctxvmMap["step"])
+		}
+	})
+
+	t.Run("driftRemediate", func(t *testing.T) {
+		params := json.RawMessage(`{"zone":"prod.example"}`)
+
+		legacyOp := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
+		legacyReactor, _, pubkey := newDNSHandlerTestReactorWithOperator(t, legacyOp)
+		legacyReactor.handleDNSDriftRemediate(context.Background(), &nostr.Event{ID: testNostrID("parity-dr"), PubKey: testNostrPubKeyFromHex(t, pubkey), Kind: nostr.Kind(KindDNSDriftRemediateRequest), Content: string(params)})
+
+		ctxvmOp := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
+		ctxvmResult, _ := (dnsContextVMHandlers{operator: ctxvmOp}).driftRemediate(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+		ctxvmMap, _ := ctxvmResult.(map[string]any)
+
+		assertParityEqual(t, "reconciled count", len(legacyOp.reconciled), len(ctxvmOp.reconciled))
+		if len(legacyOp.reconciled) > 0 {
+			assertParityEqualStr(t, "reconciled zone", legacyOp.reconciled[0], ctxvmOp.reconciled[0])
+		}
+		if ctxvmMap["status"] != "succeeded" {
+			t.Fatalf("ContextVM driftRemediate status=%q", ctxvmMap["status"])
+		}
+	})
+}
+
+func assertParityEqual(t *testing.T, label string, legacy, ctxvm int) {
+	t.Helper()
+	if legacy != ctxvm {
+		t.Fatalf("%s: legacy=%d ctxvm=%d", label, legacy, ctxvm)
+	}
+}
+
+func assertParityEqualStr(t *testing.T, label string, legacy, ctxvm string) {
+	t.Helper()
+	if legacy != ctxvm {
+		t.Fatalf("%s: legacy=%q ctxvm=%q", label, legacy, ctxvm)
+	}
+}
+
+type parityRecorder struct {
+	*recordingDNSOperator
+	zonesCreated     []domain.DNSZone
+	overridesCreated []domain.DNSRecordOverride
+}
+
+var _ DNSControlPlaneOperator = (*parityRecorder)(nil)
+var _ DNSPersistenceOperator = (*parityRecorder)(nil)
+var _ DNSBackendProvider = (*parityRecorder)(nil)
+
+func (o *parityRecorder) CreateZone(_ context.Context, zone domain.DNSZone) error {
+	o.zonesCreated = append(o.zonesCreated, zone)
+	return nil
+}
+func (o *parityRecorder) CreateOverride(_ context.Context, override domain.DNSRecordOverride) error {
+	o.overridesCreated = append(o.overridesCreated, override)
+	return nil
+}
+func (o *parityRecorder) ListOverridesByZone(_ context.Context, zoneName string) ([]domain.DNSRecordOverride, error) {
+	return nil, nil
+}
+
+type parityRetirementRecorder struct {
+	*recordingDNSOperator
+	storedOverrides map[uuid.UUID]domain.DNSRecordOverride
+	expired         []struct {
+		ID     uuid.UUID
+		At     time.Time
+		Reason string
+	}
+}
+
+var _ DNSControlPlaneOperator = (*parityRetirementRecorder)(nil)
+var _ DNSOverrideRetirementOperator = (*parityRetirementRecorder)(nil)
+
+func (o *parityRetirementRecorder) GetOverride(_ context.Context, id uuid.UUID) (*domain.DNSRecordOverride, error) {
+	if ov, ok := o.storedOverrides[id]; ok {
+		return &ov, nil
+	}
+	return nil, nil
+}
+func (o *parityRetirementRecorder) ExpireOverride(_ context.Context, id uuid.UUID, at time.Time, reason string) error {
+	o.expired = append(o.expired, struct {
+		ID     uuid.UUID
+		At     time.Time
+		Reason string
+	}{ID: id, At: at, Reason: reason})
+	return nil
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
