@@ -53,7 +53,14 @@ func TestGrafanaFleetHealthDashboardReferencesCataloguedMetrics(t *testing.T) {
 			}
 		}
 	}
-	if len(seen) != len(catalog) {
-		t.Fatalf("dashboard uses %d catalogued metrics, catalog contains %d", len(seen), len(catalog))
+	// Deliberately one-directional: every metric the dashboard queries must
+	// exist, so no panel can silently render empty. The reverse - requiring the
+	// dashboard to plot every catalogued metric - was assertable while the
+	// catalog was a hand-curated list of the ~15 fleet-health metrics, but the
+	// catalog is now generated from the full exposition (73 and growing).
+	// Requiring a panel per metric would mean every new metric breaks this test
+	// until someone adds a chart for it.
+	if len(seen) == 0 {
+		t.Fatal("dashboard references no catalogued metrics at all")
 	}
 }
