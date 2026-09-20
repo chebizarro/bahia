@@ -141,7 +141,7 @@ func (b *Bridge) RegisterAcceptedRelease(ctx context.Context, release domain.Hiv
 			return
 		}
 		if auditErr := b.releaseAuditor.AuditReleaseRegistration(ctx, release, artifact, "rejected", err); auditErr != nil {
-			err = fmt.Errorf("%v; persist rejection audit: %w", err, auditErr)
+			err = errors.Join(err, fmt.Errorf("persist rejection audit: %w", auditErr))
 		}
 	}()
 	if b == nil || b.registry == nil || b.buildRepo == nil || b.serviceRepo == nil || b.artifactRepo == nil {
@@ -291,7 +291,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	}
 	if result.PublisherPubkey != run.PublisherPubkey {
 		if _, trustedWorker := b.trustedResults[strings.ToLower(strings.TrimSpace(result.PublisherPubkey))]; !trustedWorker {
-			_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
+			if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected); err != nil {
+				return nil, fmt.Errorf("mark result rejected: %w", err)
+			}
 			return nil, fmt.Errorf("HiveCI result publisher does not match run publisher or trusted Loom worker allowlist")
 		}
 	}
@@ -370,7 +372,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 	imageTag := strings.TrimSpace(result.ImageTag)
 	imageDigest := strings.ToLower(strings.TrimSpace(result.ImageDigest))
 	if imageRepo == "" || imageTag == "" || !immutableManifestDigest.MatchString(imageDigest) {
-		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected)
+		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateRejected); err != nil {
+			return nil, fmt.Errorf("mark result rejected: %w", err)
+		}
 		candidateErr := fmt.Errorf("successful build result must include repository, tag, and immutable sha256 manifest digest")
 		if explicit {
 			return nil, candidateErr
@@ -400,7 +404,9 @@ func (b *Bridge) processResult(ctx context.Context, resultEventID string, expect
 		return nil, fmt.Errorf("verify OCI manifest: %w", err)
 	}
 	if verified == nil {
-		_ = b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending)
+		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
+			return nil, fmt.Errorf("mark result artifact pending: %w", err)
+		}
 		if explicit {
 			return nil, fmt.Errorf("immutable OCI manifest could not be verified")
 		}

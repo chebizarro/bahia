@@ -87,7 +87,7 @@ func (e *Executor) CreateAndStart(ctx context.Context, intentID uuid.UUID, strat
 	})
 
 	// Execute steps sequentially.
-	go e.executeSteps(context.Background(), plan, steps, serviceName, image, previousArtifact)
+	go e.executeSteps(context.WithoutCancel(ctx), plan, steps, serviceName, image, previousArtifact)
 
 	return plan, nil
 }
@@ -98,12 +98,26 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 		step := &steps[i]
 
 		plan.CurrentStep = step.StepOrder
-		_ = e.repo.UpdatePlan(ctx, plan)
+		if err := e.repo.UpdatePlan(ctx, plan); err != nil {
+			e.logger.Error("failed to persist current step in plan, aborting rollout",
+				zap.String("plan_id", plan.ID.String()),
+				zap.Int("step", step.StepOrder),
+				zap.Error(err),
+			)
+			return
+		}
 
 		now := time.Now().UTC()
 		step.StartedAt = &now
 		step.Status = domain.StepStatusRunning
-		_ = e.repo.UpdateStep(ctx, step)
+		if err := e.repo.UpdateStep(ctx, step); err != nil {
+			e.logger.Error("failed to persist step running, aborting rollout",
+				zap.String("plan_id", plan.ID.String()),
+				zap.Int("step", step.StepOrder),
+				zap.Error(err),
+			)
+			return
+		}
 
 		e.logger.Info("executing rollout step",
 			zap.String("plan_id", plan.ID.String()),
@@ -118,7 +132,13 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 		if err != nil {
 			step.Status = domain.StepStatusFailed
 			step.HealthResult = map[string]any{"error": err.Error()}
-			_ = e.repo.UpdateStep(ctx, step)
+			if persistErr := e.repo.UpdateStep(ctx, step); persistErr != nil {
+				e.logger.Error("failed to persist step failure, continuing to rollback",
+					zap.String("plan_id", plan.ID.String()),
+					zap.Int("step", step.StepOrder),
+					zap.Error(persistErr),
+				)
+			}
 
 			e.logger.Error("rollout step failed, initiating rollback",
 				zap.String("plan_id", plan.ID.String()),
@@ -136,7 +156,14 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 		}
 
 		step.Status = domain.StepStatusPassed
-		_ = e.repo.UpdateStep(ctx, step)
+		if err := e.repo.UpdateStep(ctx, step); err != nil {
+			e.logger.Error("failed to persist step passed, aborting rollout",
+				zap.String("plan_id", plan.ID.String()),
+				zap.Int("step", step.StepOrder),
+				zap.Error(err),
+			)
+			return
+		}
 
 		e.publisher.Publish(ctx, events.Event{
 			Type:     "rollout.step_completed",
@@ -152,7 +179,13 @@ func (e *Executor) executeSteps(ctx context.Context, plan *domain.RolloutPlan, s
 	completed := time.Now().UTC()
 	plan.Status = domain.RolloutStatusCompleted
 	plan.CompletedAt = &completed
-	_ = e.repo.UpdatePlan(ctx, plan)
+	if err := e.repo.UpdatePlan(ctx, plan); err != nil {
+		e.logger.Error("failed to persist plan completed, aborting rollout",
+			zap.String("plan_id", plan.ID.String()),
+			zap.Error(err),
+		)
+		return
+	}
 
 	e.publisher.Publish(ctx, events.Event{
 		Type:     "rollout.completed",

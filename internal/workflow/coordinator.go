@@ -722,13 +722,13 @@ func (c *Coordinator) applyRouteOnlyRun(ctx context.Context, run *domain.Deploym
 		return routeErr
 	}
 	if routeErr != nil && previous != nil {
-		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		if err := c.registry.RestoreEnvironmentServiceStateToDeployedIntent(restoreCtx, previous); err != nil {
-			routeErr = fmt.Errorf("%w; restore previous deployed state: %v", routeErr, err)
+			routeErr = errors.Join(routeErr, fmt.Errorf("restore previous deployed state: %w", err))
 		}
 		restoreCancel()
 	}
-	completeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	completeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if routeErr != nil {
 		code, message := safeDeploymentFailure(routeErr)
@@ -869,7 +869,7 @@ func (c *Coordinator) applyDirectRuntimeRun(
 	}
 	if deployErr != nil && applicationAttempted && previousDesired != nil {
 		c.recordDirectRunPhase(context.WithoutCancel(ctx), run, "rollback_application", "running")
-		deployErr = c.restorePreviousApplication(intent, unit, previousDesired, deployErr)
+		deployErr = c.restorePreviousApplication(ctx, intent, unit, previousDesired, deployErr)
 	}
 	if deployErr == nil && intent.DesiredState != nil && intent.DesiredState.PublicRoute != nil {
 		c.recordDirectRunPhase(ctx, run, "routing", "running")
@@ -877,12 +877,12 @@ func (c *Coordinator) applyDirectRuntimeRun(
 			deployErr = fmt.Errorf("public route apply failed: %w", routeErr)
 			if previousDesired != nil {
 				c.recordDirectRunPhase(context.WithoutCancel(ctx), run, "rollback_application", "running")
-				deployErr = c.restorePreviousApplication(intent, unit, previousDesired, deployErr)
+				deployErr = c.restorePreviousApplication(ctx, intent, unit, previousDesired, deployErr)
 			}
 		}
 	}
 
-	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer completeCancel()
 	if deployErr != nil {
 		code, message := safeDeploymentFailure(deployErr)
@@ -904,8 +904,8 @@ func (c *Coordinator) applyDirectRuntimeRun(
 	return nil
 }
 
-func (c *Coordinator) restorePreviousApplication(intent *domain.DeploymentIntent, unit *domain.DeploymentUnit, previous *domain.DesiredServiceSpec, cause error) error {
-	rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+func (c *Coordinator) restorePreviousApplication(ctx context.Context, intent *domain.DeploymentIntent, unit *domain.DeploymentUnit, previous *domain.DesiredServiceSpec, cause error) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
 	_, rollbackErr := c.runtimeLifecycle.DeployDeploymentUnitWithStatus(
 		rollbackCtx,
@@ -917,7 +917,7 @@ func (c *Coordinator) restorePreviousApplication(intent *domain.DeploymentIntent
 		nil,
 	)
 	if rollbackErr != nil {
-		return fmt.Errorf("%w; application rollback failed: %v", cause, rollbackErr)
+		return errors.Join(cause, fmt.Errorf("application rollback failed: %w", rollbackErr))
 	}
 	return fmt.Errorf("%w; previous application desired state restored", cause)
 }

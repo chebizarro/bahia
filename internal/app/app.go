@@ -2096,20 +2096,24 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 	// Publish checkpoint and readiness after bootstrap completes.
 	if r.statusProjector != nil {
 		progress := r.bootstrapper.Progress()
-		_ = runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
+		if pubErr := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
 			return r.statusProjector.PublishCheckpoint(publishCtx, service.ReplayCheckpointPayload{
 				CatalogVersion: r.catalogVersion,
 				Phase:          string(progress.Phase),
 			})
-		})
-		_ = runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
+		}); pubErr != nil {
+			err = errors.Join(err, pubErr)
+		}
+		if pubErr := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
 			return r.statusProjector.PublishReadiness(publishCtx, service.ReadinessStatusPayload{
 				Phase:         string(progress.Phase),
 				ActiveTier:    int(r.policy.ActiveTier),
 				RequestedTier: int(r.policy.RequestedTier),
 				Ready:         r.bootstrapper.Ready(),
 			})
-		})
+		}); pubErr != nil {
+			err = errors.Join(err, pubErr)
+		}
 	}
 
 	return err

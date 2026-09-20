@@ -162,3 +162,52 @@ func TestAutoRollbackDoesNotReportSuccessWhenCleanupFails(t *testing.T) {
 		t.Fatalf("rollback failure did not produce a terminal timestamp: %#v", plan.CompletedAt)
 	}
 }
+
+// executorFailingStepRepo fails only the write that records a step FAILURE,
+// letting the step run and fail first. Failing every step write instead would
+// abort before execution, which is correct behaviour and not what this covers.
+type executorFailingStepRepo struct {
+	executorTestRepo
+	planStatuses []domain.RolloutStatus
+}
+
+func (r *executorFailingStepRepo) UpdateStep(_ context.Context, step *domain.RolloutStep) error {
+	if step.Status == domain.StepStatusFailed {
+		return errors.New("step storage unavailable")
+	}
+	return nil
+}
+
+func (r *executorFailingStepRepo) UpdatePlan(_ context.Context, plan *domain.RolloutPlan) error {
+	r.planStatuses = append(r.planStatuses, plan.Status)
+	return nil
+}
+
+// A failed deployment step must still roll back when the write recording that
+// failure also fails. Stopping there would leave the broken deployment live,
+// which is the opposite of what the failure record exists to trigger: forward
+// progress stops on a failed write, compensation does not.
+func TestExecuteStepsRollsBackWhenStepFailurePersistenceFails(t *testing.T) {
+	rt := &executorRestoreRuntime{observation: &domain.RuntimeObservation{
+		HealthStatus: domain.HealthStatusUnhealthy, ObservedImageRepo: "registry.example/api", ObservedImageDigest: "sha256:broken",
+	}}
+	repo := &executorFailingStepRepo{}
+	executor := NewExecutor(repo, rt, rt, &executorTestPublisher{}, zap.NewNop())
+	plan := &domain.RolloutPlan{ID: uuid.New(), Strategy: domain.DeployStrategyReplace, Status: domain.RolloutStatusRunning}
+	// StepActionShiftTraffic against a runtime with no traffic controller fails,
+	// matching TestExecuteStepTrafficActionsFailWhenRuntimeCannotApplyTraffic.
+	steps := []domain.RolloutStep{{
+		StepOrder: 1,
+		Action:    domain.StepActionShiftTraffic,
+		Config:    map[string]any{"weight": float64(50)},
+	}}
+
+	executor.executeSteps(t.Context(), plan, steps, "api", "registry.example/api:new", "registry.example/api@sha256:old")
+
+	if len(rt.deployed) != 1 || rt.deployed[0] != "api:registry.example/api@sha256:old" {
+		t.Fatalf("previous artifact was not restored; deployments = %#v", rt.deployed)
+	}
+	if plan.Status != domain.RolloutStatusRolledBack {
+		t.Fatalf("plan status = %s, want rolled_back after a step failure whose persistence also failed", plan.Status)
+	}
+}
