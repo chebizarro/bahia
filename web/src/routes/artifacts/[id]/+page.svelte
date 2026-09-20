@@ -3,8 +3,9 @@
   import { goto } from '$app/navigation';
   import { onDestroy, tick, untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
-  import OperationalActivity from '../../OperationalActivity.svelte';
-  import Table from '$lib/components/Table.svelte';
+import OperationalActivity from '../../OperationalActivity.svelte';
+import { formatBytes } from '../../instance-health/page-model.js';
+import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -482,12 +483,6 @@
     } finally {
       verifying = false;
     }
-  }
-
-  function formatBytes(bytes) {
-    if (!bytes) return '-';
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(1)} MB`;
   }
 
   function formatDigest(digest) {

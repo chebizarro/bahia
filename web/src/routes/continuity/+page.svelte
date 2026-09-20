@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { subscribeToContinuityDashboard } from '$lib/nostr/continuity';
+import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import SimulationPanel from './SimulationPanel.svelte';
   import TopologyView from './TopologyView.svelte';
 
@@ -63,13 +64,6 @@
 
   function operationLabel(value) {
     return String(value || 'unknown').replaceAll('_', ' ');
-  }
-
-  function shortKey(value) {
-    const text = String(value || '').trim();
-    if (!text) return 'Not assigned';
-    if (text.length <= 18) return text;
-    return `${text.slice(0, 10)}…${text.slice(-6)}`;
   }
 
   function workerRole(status) {
@@ -153,17 +147,17 @@
           <div class="workers">
             <div class="worker-card primary">
               <span class="worker-label">Primary worker</span>
-              <code title={status.primary_worker_pubkey}>{shortKey(status.primary_worker_pubkey)}</code>
+              <code title={status.primary_worker_pubkey}>{shortenPubkey(status.primary_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
             </div>
             <div class="worker-card active">
               <span class="worker-label">Active worker</span>
-              <code title={status.active_worker_pubkey}>{shortKey(status.active_worker_pubkey)}</code>
+              <code title={status.active_worker_pubkey}>{shortenPubkey(status.active_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
               <span class="role-note">{workerRole(status)}</span>
             </div>
             {#if status.standby_worker_pubkey}
               <div class="worker-card standby">
                 <span class="worker-label">Standby worker</span>
-                <code title={status.standby_worker_pubkey}>{shortKey(status.standby_worker_pubkey)}</code>
+                <code title={status.standby_worker_pubkey}>{shortenPubkey(status.standby_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
               </div>
             {/if}
           </div>
@@ -218,7 +212,7 @@
               <span class="status-badge recovering">{request.request_type.toUpperCase()}</span>
             </div>
             {#if request.worker_pubkey}
-              <div class="profile-row"><span>Worker</span><code>{shortKey(request.worker_pubkey)}</code></div>
+              <div class="profile-row"><span>Worker</span><code>{shortenPubkey(request.worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code></div>
             {/if}
             {#if request.reason}<div class="reason"><span>Reason</span><p>{request.reason}</p></div>{/if}
             <footer><span>Requested {changedAtLabel(request.created_at)}</span></footer>

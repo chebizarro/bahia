@@ -18,15 +18,18 @@
   import { PaymentIcon } from '$lib/icons/domain-icons.js';
   import {
     buildPaymentsCsvFilename,
-    escapeHtml,
     filterPayments,
-    formatDateTime,
     formatSats,
     getUniqueValues,
     normalizePayments,
     paymentsToCsv,
-    truncateMiddle
   } from './list-utils.js';
+
+  import {
+    escapeHtml,
+    formatDateTime,
+    truncateMiddle,
+  } from '../notifications/list-utils.js';
 
   let workerFilter = $state('');
   let limit = $state('50');

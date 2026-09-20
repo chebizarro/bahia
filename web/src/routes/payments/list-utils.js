@@ -41,33 +41,10 @@ export function getUniqueValues(payments, key) {
   return Array.from(new Set(normalizePayments(payments).map((payment) => payment?.[key]).filter(Boolean))).sort();
 }
 
-export function formatDateTime(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 19).replace('T', ' ');
-  return date.toLocaleString();
-}
-
 export function formatSats(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return '-';
   return `${amount.toLocaleString()} sats`;
-}
-
-export function truncateMiddle(value, start = 12, end = 6) {
-  if (!value) return '-';
-  const text = String(value);
-  if (text.length <= start + end + 3) return text;
-  return `${text.slice(0, start)}...${text.slice(-end)}`;
-}
-
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 export function csvEscape(value) {

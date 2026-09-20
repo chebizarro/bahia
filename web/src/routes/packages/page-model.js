@@ -1,3 +1,5 @@
+import { PACKAGE_DRIFT_EVENT } from '$lib/nostr/kinds.js';
+
 function eventTime(value) {
   const timestamp = new Date(value || 0).getTime();
   return Number.isNaN(timestamp) ? 0 : timestamp;
@@ -24,11 +26,11 @@ export function packageOperationLabel(operation) {
   const value = operation?.operation
     || operation?.result_event?.tags?.operation
     || operation?.status_event?.tags?.operation
-    || (operation?.result_event_kind === 7992 ? 'drift' : '');
+    || (operation?.result_event_kind === PACKAGE_DRIFT_EVENT ? 'drift' : '');
   return String(value || 'package operation').replace(/^package[/.:-]?/, '').replaceAll('_', ' ');
 }
 
 export function packageDriftOutcome(operations = [], repositoryId = '') {
   return packageOperationsForRepository(operations, repositoryId)
-    .find((operation) => operation?.result_event_kind === 7992 || packageOperationLabel(operation).includes('drift')) || null;
+    .find((operation) => operation?.result_event_kind === PACKAGE_DRIFT_EVENT || packageOperationLabel(operation).includes('drift')) || null;
 }

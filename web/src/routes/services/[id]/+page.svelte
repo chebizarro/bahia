@@ -41,6 +41,7 @@
     isValidEstimatedDurationSecs,
     summarizeDeploymentCostEstimates
   } from '../deploy-cost-estimate.js';
+  import { formatBytes } from '../../instance-health/page-model.js';
   import {
     repositories,
     createManualRepositorySelection,
@@ -341,12 +342,6 @@
       month: 'short',
       day: 'numeric'
     });
-  }
-
-  function formatBytes(bytes) {
-    if (!bytes) return '-';
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(1)} MB`;
   }
 
   function formatDigest(digest) {

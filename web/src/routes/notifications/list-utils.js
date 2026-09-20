@@ -81,11 +81,8 @@ export function eventFilterSummary(eventFilter) {
 export function formatDateTime(value) {
   if (!value) return '-';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat('en', {
-    dateStyle: 'medium',
-    timeStyle: 'short'
-  }).format(date);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 19).replace('T', ' ');
+  return date.toLocaleString();
 }
 
 export function getChannelTypeOptions(channels) {

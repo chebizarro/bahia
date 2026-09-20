@@ -4,9 +4,9 @@ import {
   csvEscape,
   filterPayments,
   normalizePayments,
-  paymentsToCsv,
-  truncateMiddle
+  paymentsToCsv
 } from '../../src/routes/payments/list-utils.js';
+import { truncateMiddle } from '../../src/routes/notifications/list-utils.js';
 
 describe('payments list utils', () => {
   const payments = [

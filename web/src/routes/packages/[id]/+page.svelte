@@ -19,6 +19,7 @@
   } from '$lib/stores';
   import { promotePackage, yankPackage } from '$lib/stores/public-controlplane.svelte.js';
   import { packageDriftOutcome, packageOperationLabel, packageOperationsForRepository } from '../page-model.js';
+import { formatBytes } from '../../instance-health/page-model.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -65,14 +66,6 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '-';
     return date.toLocaleString();
-  }
-
-  function formatBytes(bytes) {
-    const value = Number(bytes || 0);
-    if (!value) return '-';
-    if (value < 1024) return `${value} B`;
-    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function formatDigest(digest) {

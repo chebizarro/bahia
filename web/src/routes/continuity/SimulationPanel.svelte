@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { workers, loadWorkers } from '$lib/stores';
   import { simulateWorkerFailureFromEvents } from '$lib/nostr/continuity';
+import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import type { ContinuityNostrEvent } from '$lib/nostr/continuity';
   import type { ContinuityAssessmentDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
@@ -64,13 +65,6 @@
       }
     }
     return [...keys].sort((left, right) => left.localeCompare(right));
-  }
-
-  function shortKey(value: string | undefined): string {
-    const text = String(value || '').trim();
-    if (!text) return 'unknown';
-    if (text.length <= 18) return text;
-    return `${text.slice(0, 10)}…${text.slice(-6)}`;
   }
 
   function survivabilityLabel(value: string | undefined): string {
@@ -140,7 +134,7 @@
       </label>
       <datalist id="continuity-workers">
         {#each workerOptions as worker}
-          <option value={worker}>{shortKey(worker)}</option>
+          <option value={worker}>{shortenPubkey(worker, { lead: 10, tail: 6 }) || 'unknown'}</option>
         {/each}
       </datalist>
       <button type="button" onclick={runSimulation} disabled={loading}>{loading ? 'Simulating…' : 'Simulate'}</button>
@@ -161,13 +155,13 @@
     </div>
   {:else if simulationRan && simulated.length === 0 && !error}
     <div class="empty-card" role="status">
-      <h3>Local simulation completed for <code>{shortKey(simulatedWorker)}</code></h3>
+      <h3>Local simulation completed for <code>{shortenPubkey(simulatedWorker, { lead: 10, tail: 6 }) || 'unknown'}</code></h3>
       <p>No service assessments could be derived from the current local Nostr continuity data. The simulation needs continuity status, profile/policy, standby, heartbeat, or worker-state events before it can show before/after survivability.</p>
     </div>
   {:else if simulated.length > 0}
     <div class="results" role="status">
       <p class="source-note">Local simulation using {continuityEvents.length} continuity event{continuityEvents.length === 1 ? '' : 's'} and {statuses.length} status read model{statuses.length === 1 ? '' : 's'}.</p>
-      <h3>Local failure result for <code>{shortKey(simulatedWorker)}</code></h3>
+      <h3>Local failure result for <code>{shortenPubkey(simulatedWorker, { lead: 10, tail: 6 }) || 'unknown'}</code></h3>
 
       {#if unsatisfiedRows.length > 0}
         <div class="alert warning" role="status">

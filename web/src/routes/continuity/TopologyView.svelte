@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ContinuityAssessmentDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
+import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
   let {
     assessments = [],
@@ -26,13 +27,7 @@
     return 'unsatisfied';
   }
 
-  function shortKey(value: string | undefined): string {
-    const text = String(value || '').trim();
-    if (!text) return 'Not assigned';
-    if (text.length <= 18) return text;
-    return `${text.slice(0, 10)}…${text.slice(-6)}`;
-  }
-</script>
+  </script>
 
 <section class="topology" aria-label="Continuity topology">
   {#if sortedAssessments.length === 0}
@@ -64,15 +59,15 @@
             <div class="worker-stack">
               <div class="node worker primary">
                 <strong>Primary</strong>
-                <code title={status?.primary_worker_pubkey}>{shortKey(status?.primary_worker_pubkey)}</code>
+                <code title={status?.primary_worker_pubkey}>{shortenPubkey(status?.primary_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
               </div>
               <div class="node worker active">
                 <strong>Active</strong>
-                <code title={status?.active_worker_pubkey}>{shortKey(status?.active_worker_pubkey)}</code>
+                <code title={status?.active_worker_pubkey}>{shortenPubkey(status?.active_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
               </div>
               <div class="node worker standby">
                 <strong>Standby</strong>
-                <code title={status?.standby_worker_pubkey}>{shortKey(status?.standby_worker_pubkey)}</code>
+                <code title={status?.standby_worker_pubkey}>{shortenPubkey(status?.standby_worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code>
               </div>
             </div>
           </div>
