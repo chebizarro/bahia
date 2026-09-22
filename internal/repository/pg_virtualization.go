@@ -62,6 +62,18 @@ func vmTable(kind domain.VirtualizationResourceKind) (string, error) {
 		return "", domain.ErrInvalidValue
 	}
 }
+
+// vmReadDocument adds authoritative fencing columns to read/change snapshots,
+// not the writable desired document. No observation is fabricated by rotation.
+func vmReadDocument(kind domain.VirtualizationResourceKind) string {
+	switch kind {
+	case domain.VirtualizationHostResource, domain.PersistentVMResource, domain.ExecutionPlaneResource:
+		return `(document || jsonb_build_object('observation_cursor', CASE WHEN observation_session IS NULL THEN NULL ELSE jsonb_build_object('session_id', observation_session, 'sequence', observation_sequence) END))`
+	default:
+		return "document"
+	}
+}
+
 func vmMeta(value any) *domain.VirtualizationResourceMeta {
 	switch v := value.(type) {
 	case *domain.VirtualizationHost:
@@ -110,10 +122,13 @@ func vmEmpty[T any](v []T) []T {
 }
 func vmNormalize(value any) {
 	switch v := value.(type) {
+	case *domain.VirtualizationHost:
+		v.ObservationCursor = nil
 	case *domain.VMImage:
 		v.AllowedProfiles = vmEmpty(v.AllowedProfiles)
 		v.Components = vmEmpty(v.Components)
 	case *domain.PersistentVMDeployment:
+		v.ObservationCursor = nil
 		v.Bootstrap = vmEmpty(v.Bootstrap)
 		v.Connections = vmEmpty(v.Connections)
 		v.Access.Protocols = vmEmpty(v.Access.Protocols)
@@ -122,6 +137,7 @@ func vmNormalize(value any) {
 			v.Labels = map[string]string{}
 		}
 	case *domain.ExecutionPlaneDeployment:
+		v.ObservationCursor = nil
 		v.Desired.ExpectedCapabilities = vmEmpty(v.Desired.ExpectedCapabilities)
 		v.Desired.Configuration.SecretBindings = vmEmpty(v.Desired.Configuration.SecretBindings)
 		v.Desired.Configuration.Network.PassthroughDeviceRefs = vmEmpty(v.Desired.Configuration.Network.PassthroughDeviceRefs)
@@ -214,7 +230,7 @@ func vmRead[T any](ctx context.Context, q pgQueryer, kind domain.VirtualizationR
 		suffix = " FOR UPDATE"
 	}
 	var data, obs []byte
-	err = q.QueryRow(ctx, `SELECT document,observation FROM `+table+` WHERE org_id=$1 AND id=$2`+suffix, org, id).Scan(&data, &obs)
+	err = q.QueryRow(ctx, `SELECT `+vmReadDocument(kind)+`,observation FROM `+table+` WHERE org_id=$1 AND id=$2`+suffix, org, id).Scan(&data, &obs)
 	if err != nil {
 		return nil, vmDBError(err)
 	}
@@ -247,7 +263,7 @@ func (r *pgVMResources[T]) List(ctx context.Context, org uuid.UUID, limit, offse
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.parent.pool.Query(ctx, `SELECT document,observation FROM `+table+` WHERE org_id=$1 ORDER BY id LIMIT $2 OFFSET $3`, org, limit, offset)
+	rows, err := r.parent.pool.Query(ctx, `SELECT `+vmReadDocument(r.kind)+`,observation FROM `+table+` WHERE org_id=$1 ORDER BY id LIMIT $2 OFFSET $3`, org, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -798,7 +814,7 @@ func vmJournalWithApproval(ctx context.Context, q pgQueryer, ref VirtualizationR
 	if ref.Kind == domain.ExecutionPlaneResource {
 		classes = `document#>'{desired,lifecycle_classes}'`
 	}
-	_, err = q.Exec(ctx, `INSERT INTO virtualization_resource_changes(org_id,resource_kind,resource_id,generation,lifecycle_classes,change_type,document,observation,approval_id) SELECT org_id,$3,id,generation,`+classes+`,$4,document,observation,$5 FROM `+table+` WHERE org_id=$1 AND id=$2`, ref.OrgID, ref.ID, ref.Kind, change, approval)
+	_, err = q.Exec(ctx, `INSERT INTO virtualization_resource_changes(org_id,resource_kind,resource_id,generation,lifecycle_classes,change_type,document,observation,approval_id) SELECT org_id,$3,id,generation,`+classes+`,$4,`+vmReadDocument(ref.Kind)+`,observation,$5 FROM `+table+` WHERE org_id=$1 AND id=$2`, ref.OrgID, ref.ID, ref.Kind, change, approval)
 	return err
 }
 func (r *PgVirtualizationRepository) acceptObservation(ctx context.Context, ref VirtualizationResourceRef, stamp domain.VMObservationStamp, observation any, validate func(pgx.Tx) error) error {

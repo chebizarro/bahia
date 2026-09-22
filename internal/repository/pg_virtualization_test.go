@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -269,6 +270,67 @@ func TestVMControlPlanePostgresArtifactsAndPlaneProbes(t *testing.T) {
 	probe.ObservedAt = o.ObservedAt
 	probe.Capabilities = []domain.ExecutionPlaneCapability{{LifecycleClass: domain.VMLifecycleLoomQEMU, OS: domain.VMOSWindows, Architecture: "amd64", AgentProtocolVersion: "1"}}
 	require.Error(t, r.AcceptPlaneObservation(ctx, p.OrgID, p.ID, o))
+}
+
+func TestVMControlPlanePostgresObservationSessionCrashRecovery(t *testing.T) {
+	for _, previouslyObserved := range []bool{false, true} {
+		t.Run(fmt.Sprint(previouslyObserved), func(t *testing.T) {
+			pool, r := vmPostgres(t)
+			_, _, v := vmPGFixtures(t, pool, r)
+			ctx := context.Background()
+			ref := VirtualizationResourceRef{v.OrgID, domain.PersistentVMResource, v.ID}
+			previous := uuid.Nil
+			if previouslyObserved {
+				old := vmPGObserve(t, r, v, uuid.New(), domain.VMRuntimeRunning)
+				previous = old.SessionID
+			}
+			interrupted := uuid.New()
+			require.NoError(t, r.RotateObservationSession(ctx, ref, v.Generation, previous, interrupted))
+			// The first observation was never written. A fresh process knows only
+			// the resource reference, not the interrupted process's session UUID.
+			restarted := NewPgVirtualizationRepository(pool)
+			got, err := restarted.Deployments().Get(ctx, v.OrgID, v.ID)
+			require.NoError(t, err)
+			require.Equal(t, &domain.VMObservationCursor{SessionID: interrupted}, got.ObservationCursor)
+			if previouslyObserved {
+				require.Equal(t, previous, got.Observation.SessionID)
+			} else {
+				require.Nil(t, got.Observation)
+			}
+			listed, err := restarted.Deployments().List(ctx, v.OrgID, 10, 0)
+			require.NoError(t, err)
+			require.Equal(t, got.ObservationCursor, listed[0].ObservationCursor)
+			changes, err := restarted.ListChanges(ctx, v.OrgID, 0, 100)
+			require.NoError(t, err)
+			var snapshot domain.PersistentVMDeployment
+			require.NoError(t, domain.DecodeVirtualizationDocument(changes[len(changes)-1].Document, &snapshot))
+			require.Equal(t, got.ObservationCursor, snapshot.ObservationCursor)
+			_, err = restarted.Deployments().Get(ctx, uuid.New(), v.ID)
+			require.ErrorIs(t, err, ErrNotFound)
+			recovered := uuid.New()
+			require.ErrorIs(t, restarted.RotateObservationSession(ctx, ref, v.Generation+1, interrupted, recovered), ErrConflict)
+			require.NoError(t, restarted.RotateObservationSession(ctx, ref, v.Generation, got.ObservationCursor.SessionID, recovered))
+			require.ErrorIs(t, restarted.RotateObservationSession(ctx, ref, v.Generation, interrupted, uuid.New()), ErrConflict)
+			now := time.Now().UTC()
+			state := domain.VMRuntimeAbsent
+			o := domain.VMObservation{VMObservationStamp: domain.VMObservationStamp{SchemaVersion: 1, ObservedGeneration: v.Generation, SessionID: recovered, Sequence: 1, ObservedAt: now}, Identity: v.Identity, LifecycleClass: v.LifecycleClass, Availability: domain.VMObservationAvailable, RuntimeState: &state, RuntimeObservedAt: &now, Drift: domain.VMDriftDrifted, GuestHealth: domain.VMGuestUnknown, Ownership: domain.VMOwnershipUnknown}
+			require.NoError(t, restarted.AcceptVMObservation(ctx, v.OrgID, v.ID, o))
+			o.SessionID = interrupted
+			o.Sequence = 99
+			require.ErrorIs(t, restarted.AcceptVMObservation(ctx, v.OrgID, v.ID, o), ErrConflict)
+			got, err = restarted.Deployments().Get(ctx, v.OrgID, v.ID)
+			require.NoError(t, err)
+			require.Equal(t, &domain.VMObservationCursor{SessionID: recovered, Sequence: 1}, got.ObservationCursor)
+			// A desired update cannot inject a session; fencing comes from columns.
+			got.Observation = nil
+			got.ObservationCursor = &domain.VMObservationCursor{SessionID: uuid.New(), Sequence: 999}
+			got.Generation++
+			require.NoError(t, restarted.Deployments().Update(ctx, got, v.Generation))
+			got, err = restarted.Deployments().Get(ctx, v.OrgID, v.ID)
+			require.NoError(t, err)
+			require.Equal(t, &domain.VMObservationCursor{SessionID: recovered, Sequence: 1}, got.ObservationCursor)
+		})
+	}
 }
 
 func TestVMControlPlanePostgresObservationFencing(t *testing.T) {

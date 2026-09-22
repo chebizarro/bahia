@@ -58,7 +58,8 @@ type VMOperationLimits struct {
 func DefaultVMOperationLimits() VMOperationLimits { return VMOperationLimits{15, 120, 120, 1800} }
 
 type VirtualizationHost struct {
-	PilotPolicy *VMPilotPolicy `json:"pilot_policy,omitempty"`
+	ObservationCursor *VMObservationCursor `json:"observation_cursor,omitempty"`
+	PilotPolicy       *VMPilotPolicy       `json:"pilot_policy,omitempty"`
 	VirtualizationResourceMeta
 	LifecycleClasses  []VMLifecycleClass  `json:"lifecycle_classes"`
 	InstallationID    uuid.UUID           `json:"installation_id"`
@@ -90,6 +91,13 @@ const (
 	VMDriftDrifted VMDrift = "drifted"
 	VMDriftUnknown VMDrift = "unknown"
 )
+
+// VMObservationCursor is read-only repository fencing state. It remains readable
+// after rotation even when no observation has yet been accepted in the session.
+type VMObservationCursor struct {
+	SessionID uuid.UUID `json:"session_id"`
+	Sequence  int64     `json:"sequence"`
+}
 
 // Observation sequence is monotonically increasing within a separately installed
 // session. A new observation cannot install its own session or resurrect an old one.

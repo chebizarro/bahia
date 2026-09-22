@@ -182,6 +182,7 @@ type VMCheckpointPolicy struct {
 	MaxAgeSeconds int64 `json:"max_age_seconds"`
 }
 type PersistentVMDeployment struct {
+	ObservationCursor *VMObservationCursor `json:"observation_cursor,omitempty"`
 	VirtualizationResourceMeta
 	LifecycleClass   VMLifecycleClass     `json:"lifecycle_class"`
 	Purpose          VMPurpose            `json:"purpose"`

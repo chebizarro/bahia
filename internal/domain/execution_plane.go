@@ -65,6 +65,7 @@ type ExecutionPlaneDesired struct {
 	ProbePolicy          ExecutionPlaneProbePolicy   `json:"probe_policy"`
 }
 type ExecutionPlaneDeployment struct {
+	ObservationCursor *VMObservationCursor `json:"observation_cursor,omitempty"`
 	VirtualizationResourceMeta
 	HostID                uuid.UUID                  `json:"host_id"`
 	WorkerPubKey          string                     `json:"worker_pubkey"`
