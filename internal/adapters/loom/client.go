@@ -96,6 +96,8 @@ type JobRequest struct {
 	RequiredFeatures     []string          `json:"required_features,omitempty"`
 	AllowedWorkerPubkeys []string          `json:"allowed_worker_pubkeys,omitempty"`
 	BuildDependencies    []BuildDependency `json:"build_dependencies,omitempty"`
+
+	RequiredExecutionPlane *domain.ExecutionPlaneCapability `json:"required_execution_plane,omitempty"`
 }
 
 // JobStatus represents the current status of a Loom job.
@@ -136,6 +138,8 @@ type Client struct {
 	clientPubkey    string
 	jobSigner       nostr.Signer
 	canonicalSigner CanonicalSigner
+
+	planeCapabilities VerifiedPlaneCapabilitySource
 
 	jobsMu           sync.RWMutex
 	submittedWorkers map[string]string
@@ -186,6 +190,16 @@ type ClientOption func(*Client)
 // WithWorkerRepo enables worker auto-selection from the catalog.
 func WithWorkerRepo(repo repository.WorkerRepository) ClientOption {
 	return func(c *Client) { c.workerRepo = repo }
+}
+
+// VerifiedPlaneCapabilitySource is implemented by the live execution-plane
+// reconciler, not the worker advertisement repository.
+type VerifiedPlaneCapabilitySource interface {
+	VerifiedCapabilities(context.Context, string, time.Time) ([]domain.VerifiedExecutionPlaneCapabilities, error)
+}
+
+func WithVerifiedPlaneCapabilities(source VerifiedPlaneCapabilitySource) ClientOption {
+	return func(c *Client) { c.planeCapabilities = source }
 }
 
 // WithJobSigner uses the supplied control-plane signer for kind-5100 job
@@ -302,6 +316,28 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 		}
 		workerPubkey = selected
 		c.logger.Info("auto-selected worker", zap.String("pubkey", workerPubkey))
+	}
+	if requiresExecutionPlane(job) {
+		if workerPubkey == "" || c.workerRepo == nil {
+			return "", fmt.Errorf("verified execution plane requires a resolved worker catalog entry")
+		}
+		worker, err := c.workerRepo.GetByPubKey(ctx, workerPubkey)
+		if err != nil || worker == nil || worker.PubKey != workerPubkey {
+			return "", fmt.Errorf("execution-plane worker unavailable")
+		}
+		verified, err := c.workerWithVerifiedPlanes(ctx, *worker, job)
+		if err != nil {
+			return "", err
+		}
+		allowed := map[string]struct{}{}
+		for _, key := range job.AllowedWorkerPubkeys {
+			if key = strings.TrimSpace(key); key != "" {
+				allowed[key] = struct{}{}
+			}
+		}
+		if !workerMatchesJob(verified, job, allowed) {
+			return "", fmt.Errorf("worker has no eligible verified execution plane")
+		}
 	}
 	if workerPubkey == "" && (len(job.RequiredSoftware) > 0 || job.RequiredArchitecture != "" || len(job.RequiredWorkloads) > 0 || len(job.RequiredFeatures) > 0 || len(job.AllowedWorkerPubkeys) > 0) {
 		return "", fmt.Errorf("cannot satisfy worker selection requirements without a worker repository or explicit worker pubkey")
@@ -907,6 +943,10 @@ func (c *Client) selectWorker(ctx context.Context, job JobRequest) (string, erro
 		}
 	}
 	for _, worker := range workers {
+		worker, err = c.workerWithVerifiedPlanes(ctx, worker, job)
+		if err != nil {
+			return "", err
+		}
 		if !workerMatchesJob(worker, job, allowed) {
 			continue
 		}
@@ -939,7 +979,17 @@ func workerMatchesJob(worker domain.Worker, job JobRequest, allowed map[string]s
 			return false
 		}
 	}
+	if job.RequiredExecutionPlane != nil && !domain.HasVerifiedExecutionPlaneCapability(worker, *job.RequiredExecutionPlane, time.Now()) {
+		return false
+	}
 	for _, workload := range job.RequiredWorkloads {
+		class := domain.VMLifecycleClass(strings.ToLower(strings.TrimSpace(workload)))
+		if class == domain.VMLifecycleLoomFirecracker || class == domain.VMLifecycleLoomQEMU {
+			if !workerHasVerifiedClass(worker, class) {
+				return false
+			}
+			continue
+		}
 		if !containsCapability(worker.Capabilities.WorkloadKinds, workload) {
 			return false
 		}
@@ -950,6 +1000,47 @@ func workerMatchesJob(worker domain.Worker, job JobRequest, allowed map[string]s
 		}
 	}
 	return true
+}
+
+func requiresExecutionPlane(job JobRequest) bool {
+	if job.RequiredExecutionPlane != nil {
+		return true
+	}
+	for _, value := range job.RequiredWorkloads {
+		class := domain.VMLifecycleClass(strings.ToLower(strings.TrimSpace(value)))
+		if class == domain.VMLifecycleLoomFirecracker || class == domain.VMLifecycleLoomQEMU {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) workerWithVerifiedPlanes(ctx context.Context, worker domain.Worker, job JobRequest) (domain.Worker, error) {
+	if !requiresExecutionPlane(job) {
+		return worker, nil
+	}
+	worker.VerifiedExecutionPlanes = nil
+	if c.planeCapabilities == nil {
+		return worker, fmt.Errorf("verified execution-plane source unavailable")
+	}
+	verified, err := c.planeCapabilities.VerifiedCapabilities(ctx, worker.PubKey, time.Now())
+	if err != nil {
+		return worker, fmt.Errorf("reading verified execution-plane capabilities: %w", err)
+	}
+	worker.VerifiedExecutionPlanes = verified
+	return worker, nil
+}
+
+func workerHasVerifiedClass(worker domain.Worker, class domain.VMLifecycleClass) bool {
+	now := time.Now()
+	for _, verified := range domain.NormalizeVerifiedExecutionPlaneCapabilities(worker, now) {
+		for _, capability := range verified.Capabilities {
+			if capability.LifecycleClass == class && domain.HasVerifiedExecutionPlaneCapability(worker, capability, now) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsCapability(values []string, required string) bool {

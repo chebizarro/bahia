@@ -249,6 +249,10 @@ type Worker struct {
 	Labels              map[string]string         `json:"labels,omitempty"`
 	CreatedAt           time.Time                 `json:"created_at"`
 	UpdatedAt           time.Time                 `json:"updated_at"`
+
+	// VerifiedExecutionPlanes is owned by live plane reconciliation, never by
+	// software advertisements or the generic capabilities projection.
+	VerifiedExecutionPlanes []VerifiedExecutionPlaneCapabilities `json:"verified_execution_planes,omitempty"`
 }
 
 // MarshalJSON emits an active scheduling state when older in-memory callers have not set one.
