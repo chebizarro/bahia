@@ -1,0 +1,121 @@
+{
+  "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "criteria": [
+    {
+      "id": "A-01",
+      "requirement": "Resources require explicit lifecycle classes and stable ownership; validate host/image/provider/OS/firmware compatibility.",
+      "tests": [
+        "TestVMControlPlaneContractsAndSerialization",
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-02",
+      "requirement": "Bootstrap carries SecretRef.ID only; unknown/raw secret fields and unsafe public connections fail; execution requests cannot be serialized.",
+      "tests": [
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlanePublicConnections"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-03",
+      "requirement": "Runtime, availability, drift, health and ownership are independent; unavailable observations preserve the last runtime state/time; stale generations/sessions/sequences fail.",
+      "tests": [
+        "TestVMControlPlaneIndependentObservationAxes",
+        "TestVMControlPlanePostgresObservationFencing"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-04",
+      "requirement": "Resources persist with tenant scope, immutable creation/image identity, generation CAS, normalized collections and transactional revision snapshots.",
+      "tests": [
+        "TestVMControlPlanePostgresResourcesCASAndJournal",
+        "TestVMControlPlanePostgresApprovedRecreateKeepsResourceID"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-05",
+      "requirement": "Host/org admission serializes quota races; reservations require fresh provider capacity, remain for stopped VMs and never double-count plane jobs.",
+      "tests": [
+        "TestVMControlPlanePostgresQuotaRaceAndStoppedRetention"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-06",
+      "requirement": "Idempotency returns the original operation; conflicting content and overlapping mutations fail; unconfirmed retains exclusivity.",
+      "tests": [
+        "TestVMControlPlanePostgresAdmissionReplayApprovalAndCompletion",
+        "TestVMControlPlanePostgresConcurrentDedupAndOperationLock"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-07",
+      "requirement": "Two-person, bounded, request/generation/fingerprint-bound approvals are consumed atomically and once; failures roll back desired state, capacity, approval and journal.",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions",
+        "TestVMControlPlanePostgresAdmissionAtomicRollback",
+        "TestVMControlPlanePostgresApprovalBindingAndAwaiting"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-08",
+      "requirement": "Cold checkpoint manifests contain required disk/kernel/rootfs/NVRAM/swtpm components; committed manifests freeze; exports preserve content hashes/sizes.",
+      "tests": [
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-09",
+      "requirement": "Plane capability requires fresh authenticated current-generation/session probe evidence with exact pins; failed, stale, reordered, altered duplicate and Windows probes cannot grant eligibility.",
+      "tests": [
+        "TestVMControlPlaneCapabilityEvidence",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-10",
+      "requirement": "Pilot profile revision 1 uses explicit byte ranges and 16 vCPU/64 GiB/220 GiB aggregate ceiling, with no implicit Windows allocation.",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-11",
+      "requirement": "Migration 000066 applies up/down without altering legacy deployment-unit rows; rollback refuses inventory/history loss.",
+      "tests": [
+        "TestVMControlPlanePostgresMigrationUpDown"
+      ],
+      "scope": "Item A",
+      "status": "verified"
+    },
+    {
+      "id": "A-12",
+      "requirement": "Build, targeted vet, domain/repository tests and real PostgreSQL integration tests pass.",
+      "tests": [],
+      "scope": "Item A",
+      "status": "verified"
+    }
+  ]
+}

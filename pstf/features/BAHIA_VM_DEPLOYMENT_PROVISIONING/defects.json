@@ -1,0 +1,33 @@
+{
+  "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "open_item_a_defects": [],
+  "resolved_test_defects": [
+    {
+      "observation": "Initial legacy migration fixture omitted required reconcile_mode and ownership_mode.",
+      "resolution": "Fixture now supplies the existing required columns; up/down and untouched-row comparison pass.",
+      "test": "TestVMControlPlanePostgresMigrationUpDown"
+    }
+  ],
+  "integration_work": [
+    {
+      "item": "B",
+      "beads": "bahia-xv6vl",
+      "implements": "PersistentVMProvider, artifact integrity/provenance verification and bounded exact-resource effects"
+    },
+    {
+      "item": "C",
+      "beads": "bahia-kw93u",
+      "implements": "Authentication/RBAC, canonical request hashing/classification, approval authorization, fingerprint revalidation, operation ownership and secret delivery"
+    },
+    {
+      "item": "D",
+      "beads": "bahia-1wh79",
+      "implements": "ExecutionPlaneClient, authenticated observations, probe scheduling/session installation, worker contribution and quota admission"
+    },
+    {
+      "item": "E",
+      "beads": "bahia-8f30n",
+      "implements": "Safe DTOs, journal recovery, canonical projections, metrics, registration"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "unit_tests": "internal/domain/virtualization_test.go",
+  "postgres_tests": [
+    "internal/repository/pg_virtualization_test.go",
+    "internal/repository/pg_vm_operations_test.go"
+  ],
+  "database_gate": {
+    "build_tag": "integration",
+    "environment": "BAHIA_VM_TEST_DATABASE_URL",
+    "missing_database": "fatal, not skip",
+    "isolation": "fresh schema per test, removed on completion",
+    "postgres": "16-alpine"
+  },
+  "mappings": [
+    {
+      "criterion": "A-01",
+      "tests": [
+        "TestVMControlPlaneContractsAndSerialization",
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker"
+      ]
+    },
+    {
+      "criterion": "A-02",
+      "tests": [
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlanePublicConnections"
+      ]
+    },
+    {
+      "criterion": "A-03",
+      "tests": [
+        "TestVMControlPlaneIndependentObservationAxes",
+        "TestVMControlPlanePostgresObservationFencing"
+      ]
+    },
+    {
+      "criterion": "A-04",
+      "tests": [
+        "TestVMControlPlanePostgresResourcesCASAndJournal",
+        "TestVMControlPlanePostgresApprovedRecreateKeepsResourceID"
+      ]
+    },
+    {
+      "criterion": "A-05",
+      "tests": [
+        "TestVMControlPlanePostgresQuotaRaceAndStoppedRetention"
+      ]
+    },
+    {
+      "criterion": "A-06",
+      "tests": [
+        "TestVMControlPlanePostgresAdmissionReplayApprovalAndCompletion",
+        "TestVMControlPlanePostgresConcurrentDedupAndOperationLock"
+      ]
+    },
+    {
+      "criterion": "A-07",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions",
+        "TestVMControlPlanePostgresAdmissionAtomicRollback",
+        "TestVMControlPlanePostgresApprovalBindingAndAwaiting"
+      ]
+    },
+    {
+      "criterion": "A-08",
+      "tests": [
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ]
+    },
+    {
+      "criterion": "A-09",
+      "tests": [
+        "TestVMControlPlaneCapabilityEvidence",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ]
+    },
+    {
+      "criterion": "A-10",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions"
+      ]
+    },
+    {
+      "criterion": "A-11",
+      "tests": [
+        "TestVMControlPlanePostgresMigrationUpDown"
+      ]
+    },
+    {
+      "criterion": "A-12",
+      "tests": []
+    }
+  ],
+  "boundary": "Database and domain proof only; no provider/relay/live-pilot acceptance."
+}
