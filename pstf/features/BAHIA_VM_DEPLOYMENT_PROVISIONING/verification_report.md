@@ -1,3 +1,39 @@
+# Nostr race gate re-verification — 2026-09-22
+
+Task: `bahia-4fz4z`, branch `fu/nostr-race-unblock`, based on `906e19d8`.
+Environment: Go 1.26.3, darwin/arm64, empty `GOFLAGS`.
+
+Before the upgrade, `go test -race ./internal/soulfactory/` exited 1 with
+`fatal error: checkptr: pointer arithmetic result points to invalid allocation`
+in `fiatjaf.com/nostr` `writeJSONString`, `event.go:245`, reached by
+`TestCanonicalProvisioningProjectionForContextVMRequest` while signing an event.
+
+Upgrading `fiatjaf.com/nostr` from `v0.0.0-20260902034142-316ef6591fa2` to
+`v0.0.0-20260916040958-27e395a0f6e7` fixes both `writeJSONString` and
+`appendJSONString`: upstream preserves the string data as an `unsafe.Pointer`
+and uses `unsafe.Add` instead of storing and incrementing a `uintptr`.
+The dependency's module requirements are unchanged. No vendored patch,
+application call-site change, test skip or checkptr exemption is needed.
+
+| Gate | Result |
+|---|---|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./...` | PASS |
+| `go test -race ./...` | PASS, 80 test-bearing packages, no compiler overrides |
+| `make race` | PASS, uncached full-project race run |
+| `go test -race ./internal/soulfactory/` | PASS; previously failing package |
+| `go test -race ./internal/soulfactory/ -run '^TestCanonicalProvisioningProjectionForContextVMRequest$' -count=1` | PASS; baseline crash regression |
+
+`make race` now runs `CGO_ENABLED=1 go test -race ./... -count=1` without
+suppressing checkptr. This resolves the Nostr dependency gate recorded as the
+remaining limitation on closed Item C (`bahia-kw93u`). PostgreSQL-tagged tests,
+lint, live relays/providers, deployment and pilot/soak acceptance were not rerun
+or newly claimed by this dependency-only change. Historical integration
+results below retain their original scope.
+
+---
+
 # Fixer S review remediation — 2026-09-22
 
 Task: `bahia-yrt7g.6`, branch `feat/vm-deployment-provisioning`. All nine Fixer S
@@ -23,7 +59,7 @@ owned by Fixer P and were not edited here. No Oracle or push was performed.
 
 - `go build ./...`: PASS.
 - `go vet` and `go test -count=1` for `./internal/domain ./internal/service ./internal/controlplane ./internal/app/... ./internal/reconcile ./internal/adapters/loom ./internal/repository ./internal/db`: PASS.
-- Same package set with `go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0`: PASS.
+- Same package set with plain `go test -race`: PASS in the full-project `bahia-4fz4z` re-verification above.
 - PostgreSQL integration tests for app/repository/service, selected by `^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres)`, pass; final integration race results: app 10.671s, repository 22.783s, service 10.085s.
 - `git diff --check`: PASS.
 
@@ -31,8 +67,10 @@ PostgreSQL was a disposable loopback-only PostgreSQL 16 Alpine container with
 fresh per-test schemas, not an existing service database. A concurrent in-flight
 Fixer P edit temporarily caused `newColdFileWatch` to be undefined during one
 integration race build; the unmodified provider files subsequently compiled and
-the complete final gate passed. Plain repo-wide race remains blocked by the
-pre-existing `bahia-4fz4z`; only the Nostr dependency's checkptr is disabled.
+the complete final gate passed. The former plain-race blocker `bahia-4fz4z`
+is resolved by the dependency upgrade and full-project re-verification above.
+These PostgreSQL results predate that upgrade; tagged integration tests were
+not rerun for `bahia-4fz4z`.
 
 Counterfactual Go overlays restored pre-fix production implementations without
 changing the working tree. Regressions failed with clone tier `expected: 2,
@@ -64,12 +102,12 @@ Task: `bahia-yrt7g.3`, branch `feat/vm-deployment-provisioning`. This is **code-
 | `make lint` | FAIL: 158 diagnostics in the capped full-repository output; inherited repository/Item B–E findings, tracked in `bahia-ipnlr` and `bahia-yrt7g.4` |
 | `golangci-lint run --new-from-rev=89e3fc50 ./...` | PASS: zero integration-new findings |
 | `golangci-lint run --new-from-rev=042e881b ./...` | FAIL: 31 inherited feature diagnostics (25 errcheck, 2 ineffassign, 4 staticcheck); `bahia-yrt7g.4` |
-| Focused race: app, config, reconcile, readmodel, runtime/vm and both drivers, service, controlplane, telemetry | PASS with dependency-only checkptr workaround |
+| Focused race: app, config, reconcile, readmodel, runtime/vm and both drivers, service, controlplane, telemetry | PASS with plain race in the full-project `bahia-4fz4z` re-verification |
 | PostgreSQL integration race: app, repository, service, selected VM tests | PASS on final rerun: app 9.283s, repository 28.037s, service 4.028s |
 
-Race commands use `-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0`; only the upstream Nostr package's checkptr instrumentation is disabled. Race instrumentation and checkptr for Bahia remain enabled. Plain repo-wide race is the known `bahia-4fz4z` upstream limitation, not fixed or claimed passing here. The same dependency-only workaround is already in `make race`.
+Race commands now use plain `-race`, including `make race`; no dependency checkptr exemption remains. The full-project gate passes with the upgraded Nostr dependency. The PostgreSQL results above are historical, obtained before the upgrade with the then-required dependency exemption; they are not a new tagged-integration pass.
 
-PostgreSQL command: `BAHIA_VM_TEST_DATABASE_URL=... go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 -tags=integration ./internal/app ./internal/repository ./internal/service -run '^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres)' -count=1 -timeout=180s`. It uses a dedicated loopback-only disposable PostgreSQL 16 Alpine container; each test creates and removes its own schema. The projection test signs and records events in the real in-memory Nostr outbox implementation; no live relay acceptance is claimed.
+Current PostgreSQL re-verification command (not rerun for `bahia-4fz4z`): `BAHIA_VM_TEST_DATABASE_URL=... go test -race -tags=integration ./internal/app ./internal/repository ./internal/service -run '^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres)' -count=1 -timeout=180s`. It uses a dedicated loopback-only disposable PostgreSQL 16 Alpine container; each test creates and removes its own schema. The projection test signs and records events in the real in-memory Nostr outbox implementation; no live relay acceptance is claimed.
 
 ## Item defects and review
 

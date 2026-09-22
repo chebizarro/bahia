@@ -69,9 +69,7 @@ test:
 	go test ./... -v -count=1
 
 race:
-	# Exempt only fiatjaf.com/nostr's unsafe JSON serializer; imports such as
-	# keyer still compile that root package. Remove once upstream carries the fix.
-	CGO_ENABLED=1 go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 ./... -count=1
+	CGO_ENABLED=1 go test -race ./... -count=1
 
 test-short:
 	go test ./... -short -count=1

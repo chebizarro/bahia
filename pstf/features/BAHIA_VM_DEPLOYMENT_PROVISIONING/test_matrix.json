@@ -111,12 +111,12 @@
       "make lint": "fail: inherited repository and feature diagnostics; bahia-ipnlr, bahia-yrt7g.4",
       "integration_delta_lint_89e3fc50": "pass: zero new findings",
       "whole_feature_delta_lint_042e881b": "fail: 31 inherited findings; bahia-yrt7g.4",
-      "focused_race": "pass: dependency-only checkptr exemption",
-      "postgres_integration_race": "pass: app, repository, service",
-      "plain_repository_race": "known blocked: bahia-4fz4z; not claimed passing",
+      "focused_race": "pass: plain race in full-project bahia-4fz4z re-verification",
+      "postgres_integration_race": "historical pass: app, repository, service; not rerun for bahia-4fz4z",
+      "plain_repository_race": "pass: go test -race ./...; bahia-4fz4z upstream dependency fix",
       "oracle": "blocked before analysis: provider 1048576-character payload limit even with MAP-only selection; bahia-yrt7g.5; no findings or passing review claimed"
     },
-    "race_flags": "-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0",
+    "race_flags": "-race",
     "external_boundaries": "fake VM provider and plane; real PostgreSQL repository and migrations; signed in-memory Nostr outbox"
   },
   "boundary": "Code-only domain/provider/service/repository/composition verification. No live relay, live host, administrative endpoint deployment, image build, desktop pilot or soak acceptance."

@@ -42,17 +42,13 @@ The package set is:
 - `go test <packages>`: passed, including existing package tests.
 - `go build <packages>` and `go build ./...`: passed.
 - `go vet <packages>`: passed.
-- `go test -race <packages>`: **not a clean pass**. DTO, handlers, telemetry,
-  events and kinds passed. Controlplane, readmodel, router and app aborted in the
-  existing `fiatjaf.com/nostr` dependency's `writeJSONString` (`event.go:245`),
-  `checkptr: pointer arithmetic result points to invalid allocation`.
-  Controlplane reproduces in unchanged
-  `TestBackupContextVMAuthorizedRequesterCarriesAuditableDelegation`.
-- `go test -race -gcflags='fiatjaf.com/nostr=-d=checkptr=0' <packages>`: passed.
-  Race instrumentation remains enabled; only that dependency's checkptr is
-  disabled. No dependency patch, repository test skip or build-flag change was
-  committed. The unmodified race gate remains tracked by existing
-  **`bahia-4fz4z`**, updated with this reproduction.
+- `go test -race <packages>`: passed as part of the full-project plain
+  `go test -race ./...` re-verification for `bahia-4fz4z` on 2026-09-22.
+  Upstream `fiatjaf.com/nostr` `v0.0.0-20260916040958-27e395a0f6e7` fixes the
+  JSON string pointer arithmetic that previously aborted signing tests.
+  No checkptr exemption or test skip is needed. See the dependency-upgrade
+  evidence in `verification_report.md`; PostgreSQL-tagged and live acceptance
+  were not rerun for this change.
 
 An early build hit concurrent Item B's unfinished `timeNow` references; a later
 full build passed after sibling progress. No sibling files were edited to obtain
