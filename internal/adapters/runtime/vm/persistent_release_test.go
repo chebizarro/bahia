@@ -78,6 +78,12 @@ func TestApprovedAdoptionAndRebootRetryAreIdempotent(t *testing.T) {
 	approval := uuid.New()
 	q.Operation.ApprovalID = &approval
 	q.Operation.ProviderFingerprint = driver.resource.Fingerprint
+	measurement, err := p.MeasureAdoption(context.Background(), domain.VMChangeRequest{Desired: q.Deployment, Image: q.Image})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Operation.Adoption = measurement
+	q.Deployment.ConfigDigest = measurement.ConfigDigest
 	result, err := p.Execute(context.Background(), q)
 	if err != nil || !result.Confirmed || result.Observation.Ownership != domain.VMOwned {
 		t.Fatalf("verified adoption: %+v %v", result, err)
@@ -87,6 +93,7 @@ func TestApprovedAdoptionAndRebootRetryAreIdempotent(t *testing.T) {
 		t.Fatalf("adoption retry mutated: %v", err)
 	}
 	driver.resource.State = domain.VMRuntimeRunning
+	q.Operation.Adoption = nil
 	q.Operation.Kind = domain.VMOperationReboot
 	q.Operation.ID = uuid.New()
 	q.Operation.ExpectedGeneration = 1

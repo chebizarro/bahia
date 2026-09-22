@@ -20,11 +20,15 @@ import (
 // PersistentResource is a private, freshly inspected provider definition. Paths
 // never cross the domain/public boundary. Fingerprint excludes ownership metadata.
 type PersistentResource struct {
-	ID          uuid.UUID
-	State       domain.VMRuntimeState
-	Marker      *domain.VMOwnershipMarker
-	Fingerprint string
-	Components  map[domain.VMComponentKind]string
+	AdoptionFiles      []AdoptionFile
+	RevalidateAdoption func(context.Context) error
+	AdoptionBarrier    func(context.Context) error
+	Adoption           *domain.VMAdoptionMeasurement
+	ID                 uuid.UUID
+	State              domain.VMRuntimeState
+	Marker             *domain.VMOwnershipMarker
+	Fingerprint        string
+	Components         map[domain.VMComponentKind]string
 }
 
 // PersistentSpec reuses the legacy image/instance preparation contract without
@@ -69,6 +73,7 @@ type PersistentProvider struct {
 }
 
 type persistentRecord struct {
+	Adoption      *domain.VMAdoptionMeasurement     `json:"adoption,omitempty"`
 	SchemaVersion int                               `json:"schema_version"`
 	Marker        domain.VMOwnershipMarker          `json:"marker"`
 	Deployment    domain.PersistentVMDeployment     `json:"deployment"`
@@ -203,9 +208,19 @@ func (p *PersistentProvider) readRecord(id uuid.UUID) (*persistentRecord, error)
 	if err = json.Unmarshal(data, &r); err != nil {
 		return nil, err
 	}
-	if r.SchemaVersion != 2 {
+	if r.SchemaVersion == 0 || r.SchemaVersion == 1 {
+		var legacy InstanceMetadata
+		if err = json.Unmarshal(data, &legacy); err != nil {
+			return nil, err
+		}
+		if legacy.OwnershipID != uuid.Nil && legacy.OwnershipID != id {
+			return nil, ProviderError(domain.VMErrorForeign, nil)
+		}
 		return nil, nil
 	} // Legacy metadata is never mutation authority.
+	if r.SchemaVersion != 2 {
+		return nil, ProviderError(domain.VMErrorIntegrity, nil)
+	}
 	if domain.ValidateVMOwnershipMarker(r.Marker) != nil || r.Marker.ProviderResourceID != id {
 		return nil, ProviderError(domain.VMErrorIntegrity, nil)
 	}
@@ -223,7 +238,16 @@ func (p *PersistentProvider) writeRecord(ctx context.Context, d domain.Persisten
 		return err
 	}
 	d.Observation = nil
-	data, err := json.Marshal(persistentRecord{SchemaVersion: 2, Marker: *r.Marker, Deployment: d, Fingerprint: r.Fingerprint, Components: r.Components})
+	record := persistentRecord{SchemaVersion: 2, Marker: *r.Marker, Deployment: d, Fingerprint: r.Fingerprint, Components: r.Components}
+	if previous, err := p.readRecord(r.ID); err != nil {
+		return err
+	} else if previous != nil {
+		record.Adoption = previous.Adoption
+	}
+	if r.Adoption != nil {
+		record.Adoption = r.Adoption
+	}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -244,7 +268,7 @@ func (p *PersistentProvider) observation(id domain.VMResourceIdentity, r *Persis
 		o.ObservedGeneration = marker.AppliedGeneration
 		o.AppliedImageDigest = marker.ImageDigest
 		o.AppliedConfigDigest = marker.ConfigDigest
-		if rec != nil && reflect.DeepEqual(rec.Marker, marker) {
+		if rec != nil && reflect.DeepEqual(rec.Marker, marker) && len(rec.Components) > 0 && maps.Equal(rec.Components, r.Components) {
 			o.Ownership = domain.VMOwned
 			o.Drift = domain.VMDriftInSync
 			if rec.Fingerprint != r.Fingerprint {
@@ -417,6 +441,9 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	if err != nil {
 		return result, ProviderError(domain.VMErrorIntegrity, err)
 	}
+	if rec != nil && !SameIdentity(rec.Marker.VMResourceIdentity, d.Identity) {
+		return result, ProviderError(domain.VMErrorForeign, nil)
+	}
 	absent := r.State == domain.VMRuntimeAbsent
 	owned := r.Marker != nil && domain.ValidateVMOwnershipMarker(*r.Marker) == nil && SameIdentity(r.Marker.VMResourceIdentity, d.Identity)
 	if !absent && op.Kind != domain.VMOperationAdopt && (!owned || rec == nil || !reflect.DeepEqual(rec.Marker, *r.Marker)) {
@@ -471,33 +498,33 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 		if absent || r.State != domain.VMRuntimeStopped || !sha256DigestPattern.MatchString(op.ProviderFingerprint) || op.ProviderFingerprint != r.Fingerprint {
 			return result, ProviderError(domain.VMErrorConflict, nil)
 		}
-		// A fingerprint approval proves which resource was inspected, not which
-		// image/configuration it runs. Only recover an independently recorded
-		// applied baseline; unmeasured foreign adoption must fail closed.
-		if !owned || rec == nil || !reflect.DeepEqual(rec.Marker, *r.Marker) || rec.Fingerprint != r.Fingerprint || !maps.Equal(rec.Components, r.Components) || r.Marker.ConfigDigest != d.ConfigDigest || r.Marker.ImageDigest != q.Image.ManifestDigest || rec.Deployment.ImageID != d.ImageID {
+		if op.Adoption == nil {
 			return result, ProviderError(domain.VMErrorIntegrity, nil)
 		}
-		if p.cfg.VerifyImage == nil || p.cfg.ResolveRelease == nil {
-			return result, ProviderError(domain.VMErrorUnsupported, nil)
+		measurement, guard, measureErr := p.measureAdoption(ctx, d, q.Image, r)
+		if guard != nil {
+			defer guard.Close()
 		}
-		if err = p.cfg.VerifyImage(ctx, p.cfg.Host, q.Image); err != nil {
-			return result, ProviderError(domain.VMErrorIntegrity, err)
+		if measureErr != nil {
+			return result, measureErr
 		}
-		release, verifyErr := p.cfg.ResolveRelease(ctx, q.Image)
-		if verifyErr != nil || release == nil || release.ManifestDigest != r.Marker.ImageDigest {
-			return result, ProviderError(domain.VMErrorIntegrity, verifyErr)
+		if !reflect.DeepEqual(measurement, op.Adoption) || measurement.ConfigDigest != d.ConfigDigest {
+			return result, ProviderError(domain.VMErrorConflict, nil)
 		}
-		d = rec.Deployment
-		d.Generation = q.Deployment.Generation
-		if reflectMarker(*r.Marker, marker) {
+		marker.ImageDigest = measurement.ImageDigest
+		if r.Marker != nil && reflectMarker(*r.Marker, marker) && rec != nil && reflect.DeepEqual(rec.Adoption, measurement) && rec.Fingerprint == r.Fingerprint && maps.Equal(rec.Components, r.Components) {
 			result.Observation = p.observation(d.Identity, r, rec)
 			result.Confirmed = true
 			result.RetainedStorageRefs = nil
 			return result, nil
 		}
+		if err = guard.Check(ctx); err != nil {
+			return result, err
+		}
 		if err = p.driver.AdoptPersistent(ctx, r, marker); err != nil {
 			return result, err
 		}
+
 	case domain.VMOperationStart, domain.VMOperationGracefulStop, domain.VMOperationReboot:
 		if absent {
 			return result, ProviderError(domain.VMErrorConflict, nil)
@@ -540,6 +567,12 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	}
 	if after.Marker == nil || !reflectMarker(*after.Marker, marker) {
 		return result, ProviderError(domain.VMErrorUnconfirmed, nil)
+	}
+	if op.Kind == domain.VMOperationAdopt {
+		if after.Fingerprint != r.Fingerprint || !maps.Equal(after.Components, r.Components) {
+			return result, ProviderError(domain.VMErrorUnconfirmed, nil)
+		}
+		after.Adoption = op.Adoption
 	}
 	if err = p.writeRecord(ctx, d, after); err != nil {
 		return result, err

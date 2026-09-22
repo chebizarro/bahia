@@ -228,7 +228,7 @@ func (r *vmMemoryRepo) consume(o *domain.VMOperation) error {
 		return repository.ErrConflict
 	}
 	a, ok := r.approvals[*o.ApprovalID]
-	if !ok || a.ConsumedAt != nil || !a.ExpiresAt.After(vmTestNow) || a.Generation != o.ExpectedGeneration || a.RequestHash != o.RequestHash || a.ResourceID != o.ResourceID || a.OrgID != o.OrgID || a.Requester != o.Actor || a.ProviderFingerprint != o.ProviderFingerprint {
+	if !ok || a.ConsumedAt != nil || !a.ExpiresAt.After(vmTestNow) || a.Generation != o.ExpectedGeneration || a.AdoptionDigest != adoptionDigest(*o) || a.RequestHash != o.RequestHash || a.ResourceID != o.ResourceID || a.OrgID != o.OrgID || a.Requester != o.Actor || a.ProviderFingerprint != o.ProviderFingerprint {
 		return repository.ErrConflict
 	}
 	now := vmTestNow
@@ -418,12 +418,13 @@ func (p *vmPermissionFake) CheckPermission(ctx context.Context, a *auth.Principa
 }
 
 type vmFakeProvider struct {
-	mu           sync.Mutex
-	observations map[uuid.UUID]domain.VMObservation
-	executed     []domain.VMProviderOperation
-	inspected    []domain.VMResourceIdentity
-	execute      func(context.Context, domain.VMProviderOperation) (*domain.VMProviderResult, error)
-	inspectError error
+	mu                sync.Mutex
+	observations      map[uuid.UUID]domain.VMObservation
+	executed          []domain.VMProviderOperation
+	inspected         []domain.VMResourceIdentity
+	execute           func(context.Context, domain.VMProviderOperation) (*domain.VMProviderResult, error)
+	inspectError      error
+	measurementDigest string
 }
 
 func (p *vmFakeProvider) Inspect(ctx context.Context, id domain.VMResourceIdentity) (*domain.VMObservation, error) {
@@ -666,3 +667,18 @@ func TestPersistentVMMissingAuthorizationDependencies(t *testing.T) {
 
 var _ repository.VirtualizationRepository = (*vmMemoryRepo)(nil)
 var _ domain.PersistentVMProvider = (*vmFakeProvider)(nil)
+
+func (p *vmFakeProvider) MeasureAdoption(ctx context.Context, q domain.VMChangeRequest) (*domain.VMAdoptionMeasurement, error) {
+	o, err := p.Inspect(ctx, q.Desired.Identity)
+	if err != nil {
+		return nil, err
+	}
+	m := &domain.VMAdoptionMeasurement{SchemaVersion: 1, Identity: q.Desired.Identity, Generation: q.Desired.Generation, ImageID: q.Image.ID, ImageDigest: q.Image.ManifestDigest, ConfigDigest: domain.VMAdoptionConfigDigest(q.Desired, o.Diagnostic.EvidenceDigest), ProviderFingerprint: o.Diagnostic.EvidenceDigest, StoragePoolRef: q.Desired.StoragePoolRef}
+	digest := p.measurementDigest
+	if digest == "" {
+		digest = vmTestDigest("a")
+	}
+	m.Components = []domain.VMAdoptionComponent{{VMComponent: domain.VMComponent{Kind: domain.VMComponentDisk, StorageRef: uuid.NewSHA1(q.Desired.ID, []byte("disk")), Digest: digest, SizeBytes: 4}, StorageKey: vmTestDigest("b"), SourceDigest: vmTestDigest("c")}}
+	m.Digest = domain.VMAdoptionDigest(*m)
+	return m, nil
+}

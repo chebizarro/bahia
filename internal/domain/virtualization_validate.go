@@ -488,6 +488,9 @@ func ValidateVMOperation(o *VMOperation) error {
 	if o.RequiredTier == VMApprovalDestructive && vmDigest(o.ProviderFingerprint) != nil {
 		return vmInvalid("approved provider fingerprint required")
 	}
+	if o.Adoption != nil && (o.Kind != VMOperationAdopt || ValidateVMAdoptionMeasurement(o.Adoption) != nil || o.Adoption.Identity.OrgID != o.OrgID || o.Adoption.Identity.DeploymentID != o.ResourceID || o.Adoption.Generation != o.ResourceGeneration || o.Adoption.ProviderFingerprint != o.ProviderFingerprint) {
+		return vmInvalid("operation adoption evidence")
+	}
 	if vmOptionalIDs(o.CheckpointID, o.ExportID, o.CloneTargetID) != nil {
 		return vmInvalid("operation artifact references")
 	}
@@ -529,6 +532,9 @@ func ValidateVMOperation(o *VMOperation) error {
 func ValidateVMApproval(a *VMApproval) error {
 	if a == nil || a.SchemaVersion != 1 || vmUUIDs(a.ID, a.OrgID, a.ResourceID) != nil || a.LifecycleClass != VMLifecyclePersistent || a.Generation < 1 || vmDigest(a.RequestHash) != nil || vmDigest(a.ProviderFingerprint) != nil || a.Tier != VMApprovalDestructive || !vmText(a.Requester, 128) || !vmText(a.Approver, 128) || a.Requester == a.Approver || !vmText(a.Reason, 512) || SanitizeEvidence(a.Reason) != a.Reason || a.CreatedAt.IsZero() || !a.ExpiresAt.After(a.CreatedAt) || a.ExpiresAt.Sub(a.CreatedAt) > VMApprovalMaxAge {
 		return vmInvalid("approval")
+	}
+	if a.AdoptionDigest != "" && vmDigest(a.AdoptionDigest) != nil {
+		return vmInvalid("approval adoption evidence")
 	}
 	return nil
 }

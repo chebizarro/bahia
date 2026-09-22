@@ -15,7 +15,7 @@ import (
 type coldTPMLockKey struct{}
 
 func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (vm.ColdCopyGuard, error) {
-	if r.State != domain.VMRuntimeStopped || r.Marker == nil {
+	if r.State != domain.VMRuntimeStopped {
 		return nil, vm.ProviderError(domain.VMErrorConflict, nil)
 	}
 	sub, err := d.cfg.Events.Subscribe(ctx, r.ID, false)

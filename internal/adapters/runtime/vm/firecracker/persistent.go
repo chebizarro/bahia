@@ -169,13 +169,19 @@ func (d *Driver) recheckPersistent(ctx context.Context, r *vm.PersistentResource
 	return vm.CheckPersistentResource(r, after)
 }
 func (d *Driver) AdoptPersistent(ctx context.Context, r *vm.PersistentResource, m domain.VMOwnershipMarker) error {
-	if domain.ValidateVMOwnershipMarker(m) != nil || m.ProviderResourceID != r.ID || r.State == domain.VMRuntimeAbsent {
+	if err := vm.CheckAdoptionMarker(r, m); err != nil {
+		return err
+	}
+	if r.State == domain.VMRuntimeAbsent {
 		return vm.ProviderError(domain.VMErrorInvalid, nil)
 	}
 	if r.Marker == nil && r.State != domain.VMRuntimeStopped {
 		return vm.ProviderError(domain.VMErrorConflict, nil)
 	}
 	if err := d.recheckPersistent(ctx, r); err != nil {
+		return err
+	}
+	if err := vm.CheckAdoptionFiles(ctx, r); err != nil {
 		return err
 	}
 	data, err := json.Marshal(m)

@@ -35,6 +35,14 @@ func (a vmAdmission) MutatePersistentVM(ctx context.Context, actor controlplane.
 	p := vmIntentPrincipal(actor)
 	req := service.VMOperationRequest{OrgID: actor.OrgID, DeploymentID: m.ID, ExpectedGeneration: m.ExpectedGeneration, IdempotencyKey: m.IdempotencyKey, Reason: m.Reason, Kind: m.Operation, CheckpointID: m.CheckpointID, ExportID: m.ExportID, CloneTargetID: m.CloneTargetID, DeleteTarget: m.DeleteTarget, DataDisposition: m.DataDisposition, AllowForceStop: m.AllowForceStop, ApprovalID: m.ApprovalID, Desired: m.VM}
 	switch method {
+	case "persistent-vm/register-adoption":
+		if m.VM == nil || (m.ID != uuid.Nil && m.ID != m.VM.ID) || m.ExpectedGeneration != 0 || m.Operation != "" || m.ApprovalID != nil || m.CheckpointID != nil || m.ExportID != nil || m.CloneTargetID != nil || m.DeleteTarget != "" || m.DataDisposition != "" || m.AllowForceStop || m.Image != nil || m.Plane != nil {
+			return controlplane.VirtualizationAdmission{}, domain.ErrInvalidValue
+		}
+		if err := r.vmService.RegisterAdoption(ctx, p, *m.VM); err != nil {
+			return controlplane.VirtualizationAdmission{}, err
+		}
+		return controlplane.VirtualizationAdmission{ResourceID: m.VM.ID, Generation: 1}, nil
 	case "persistent-vm/create":
 		if m.VM == nil {
 			return controlplane.VirtualizationAdmission{}, domain.ErrInvalidValue

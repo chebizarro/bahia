@@ -313,3 +313,7 @@ func TestPersistentMutabilityMatrix(t *testing.T) {
 		})
 	}
 }
+
+func (f *memoryPersistentDriver) MeasurePersistent(_ context.Context, r *PersistentResource, _ domain.PersistentVMDeployment, _ *Release) (*AdoptionProof, error) {
+	return &AdoptionProof{Sources: r.Components}, nil
+}

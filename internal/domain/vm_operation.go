@@ -164,6 +164,7 @@ func (e *VMProviderError) Error() string { return "VM provider: " + string(e.Cod
 func (e *VMProviderError) Unwrap() error { return e.Cause }
 
 type VMApproval struct {
+	AdoptionDigest      string           `json:"adoption_digest,omitempty"`
 	SchemaVersion       int              `json:"schema_version"`
 	ID                  uuid.UUID        `json:"id"`
 	OrgID               uuid.UUID        `json:"org_id"`
@@ -181,6 +182,7 @@ type VMApproval struct {
 	ConsumedAt          *time.Time       `json:"consumed_at,omitempty"`
 }
 type VMOperation struct {
+	Adoption *VMAdoptionMeasurement `json:"adoption,omitempty"`
 	VirtualizationResourceMeta
 	LifecycleClass        VMLifecycleClass `json:"lifecycle_class"`
 	ResourceID            uuid.UUID        `json:"resource_id"`

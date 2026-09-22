@@ -31,7 +31,7 @@ func (g *coldGuard) Check(ctx context.Context) error {
 // asynchronous fsnotify consumer, this cannot miss an already queued launch or
 // write merely because its Go event-reader goroutine has not been scheduled.
 func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (vm.ColdCopyGuard, error) {
-	if r.State != domain.VMRuntimeStopped || r.Marker == nil {
+	if r.State != domain.VMRuntimeStopped {
 		return nil, vm.ProviderError(domain.VMErrorConflict, nil)
 	}
 	if err := vm.CheckWritableComponents(d.instanceDir(r.ID.String()), r.Components); err != nil {

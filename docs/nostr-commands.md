@@ -7,7 +7,7 @@ mutations. Read methods: `virtualization-host/list|get`, `vm-image/list|get`,
 `persistent-vm/list|get`, `execution-plane/list|get`, `vm-checkpoint/list|get`,
 `vm-export/list|get`, `vm-operation/get`. All require `org_id`; gets require `id`.
 
-Mutation methods: `vm-image/register`, `persistent-vm/create|update|operate`,
+Mutation methods: `vm-image/register`, `persistent-vm/create|register-adoption|update|operate`,
 `execution-plane/create|update|reconcile`, `vm-operation/approve|approve-plan|cancel`.
 `approve-plan` returns `status=approved` and `approval_id` for an exact proposed
 request; it does not admit an operation. The original requester submits the
@@ -18,6 +18,12 @@ adapters. Missing adapters return unavailable. Tenant deployment permissions are
 mandatory; destructive approval and SecretRef resolution remain service-owned.
 Acknowledgments are admission only. Follow 30900/4903 at the returned signer and
 coordinates, with explicit lifecycle class and journal sequence.
+
+`register-adoption` accepts a complete generation-1 `vm` candidate, deriving its
+config digest from provider measurements. Its `status=registered` response has
+zero-UUID operation ID, no operation coordinate, and grants no ownership. Use a separate two-person approved
+`operation=adopt` to enroll; changed configuration, lineage or component bytes
+invalidate the approval before ownership is written.
 
 [Virtualization parameters, examples and safe output](user-guide/features/virtual-machines.md).
 

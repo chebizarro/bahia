@@ -2,6 +2,41 @@
   "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
   "criteria": [
     {
+      "id": "AD-01",
+      "requirement": "Explicit measured enrollment supports unmarked candidates, legacy v1 metadata and pre-inventory records; exact config/image/component baseline is required before ownership or applied-pin writes.",
+      "tests": ["TestMeasuredAdoptionConformance", "TestMeasuredAdoptionRejectsChangesBeforeOwnership", "TestMeasuredAdoptionRejectsDesiredConfiguration", "TestMeasuredStandaloneQCOWSnapshot", "TestMeasuredAdoptionCoordinatedUEFIAndTPM"],
+      "scope": "bahia-yrt7g.8",
+      "status": "verified"
+    },
+    {
+      "id": "AD-02",
+      "requirement": "Foreign owners, unknown controller metadata, missing measurement and mismatched writable/overlay provenance fail closed; neither layout nor names confer authority.",
+      "tests": ["TestMeasuredAdoptionRejectsChangesBeforeOwnership", "TestMeasuredAdoptionRejectsUnknownControllerMetadata", "TestMeasuredAdoptionRejectsForeignOrUnknownRecord", "TestAdoptionDriverRequiresProofBeforeOwnership"],
+      "scope": "bahia-yrt7g.8",
+      "status": "verified"
+    },
+    {
+      "id": "AD-03",
+      "requirement": "Two-person approvals bind the complete measurement and exact revision; changes before admission or execution refuse, including pre-inventory and explicit snapshot enrollment.",
+      "tests": ["TestVMAdoptionMeasurementBindsAllEvidence", "TestVMAdoptionApprovalBindsWritableMeasurement", "TestVMAdoptionPreInventoryRevisionRequiresMeasuredApproval", "TestVMAdoptionExplicitSnapshotRevision", "TestVMAdoptionRecoveryRemeasuresWithoutReplaying"],
+      "scope": "bahia-yrt7g.8",
+      "status": "verified"
+    },
+    {
+      "id": "AD-04",
+      "requirement": "Per-resource storage reservations become registered only after verified applied pins; peers cannot claim writable objects, tenant reads are scoped and rollback locks before refusing evidence loss.",
+      "tests": ["TestVMControlPlaneMeasuredAdoptionInventory", "TestVMControlPlaneMeasuredAdoptionMigrationRoundTrip", "TestMeasuredAdoptionRollbackFencesBeforeCheckingEvidence"],
+      "scope": "bahia-yrt7g.8",
+      "status": "verified"
+    },
+    {
+      "id": "AD-05",
+      "requirement": "Authenticated ContextVM registration is reachable in production, acknowledges no ownership or operation, and separate measured approval/operation enroll through PostgreSQL.",
+      "tests": ["TestVMAdoptionRegistrationAcknowledgesNoOwnership", "TestVirtualizationPostgresMeasuredAdoptionIntent"],
+      "scope": "bahia-yrt7g.8",
+      "status": "verified"
+    },
+    {
       "id": "A-01",
       "requirement": "Resources require explicit lifecycle classes and stable ownership; validate host/image/provider/OS/firmware compatibility.",
       "tests": [
