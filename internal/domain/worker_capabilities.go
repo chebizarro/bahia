@@ -1,6 +1,11 @@
 package domain
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // NormalizeWorkerMLCapabilities returns a de-duplicated, lowercase capability view.
 func NormalizeWorkerMLCapabilities(w Worker) WorkerMLCapabilities {
@@ -26,6 +31,45 @@ func NormalizeWorkerMLCapabilities(w Worker) WorkerMLCapabilities {
 	caps.Toolchains = dedupeStrings(caps.Toolchains)
 	caps.CachedArtifacts = dedupeStrings(caps.CachedArtifacts)
 	return caps
+}
+
+// NormalizeVerifiedExecutionPlaneCapabilities returns only unexpired, structurally
+// valid contributions. This does not authenticate evidence: callers must source
+// these records exclusively from the reconciler's current live sessions.
+func NormalizeVerifiedExecutionPlaneCapabilities(w Worker, now time.Time) []VerifiedExecutionPlaneCapabilities {
+	out := make([]VerifiedExecutionPlaneCapabilities, 0, len(w.VerifiedExecutionPlanes))
+	seen := map[uuid.UUID]bool{}
+	for _, verified := range w.VerifiedExecutionPlanes {
+		if verified.PlaneID == uuid.Nil || verified.SessionID == uuid.Nil || verified.Generation < 1 || verified.ProbeSequence < 1 || !now.Before(verified.ExpiresAt) || seen[verified.PlaneID] {
+			continue
+		}
+		if vmPlaneCapabilities(verified.Capabilities, []VMLifecycleClass{VMLifecycleLoomFirecracker, VMLifecycleLoomQEMU}) != nil {
+			continue
+		}
+		seen[verified.PlaneID] = true
+		verified.Capabilities = append([]ExecutionPlaneCapability(nil), verified.Capabilities...)
+		out = append(out, verified)
+	}
+	return out
+}
+
+// HasVerifiedExecutionPlaneCapability deliberately ignores Software and generic
+// WorkloadKinds/Features, including any Windows or persistent-VM advertisements.
+func HasVerifiedExecutionPlaneCapability(w Worker, required ExecutionPlaneCapability, now time.Time) bool {
+	if vmPlaneCapabilities([]ExecutionPlaneCapability{required}, []VMLifecycleClass{VMLifecycleLoomFirecracker, VMLifecycleLoomQEMU}) != nil ||
+		w.Status != WorkerStatusOnline || w.SchedulingState != WorkerSchedulingActive ||
+		w.MaxConcurrentJobs <= 0 || w.CurrentQueueDepth < 0 || w.CurrentQueueDepth >= w.MaxConcurrentJobs ||
+		(w.Pressure != nil && (w.Pressure.CapacityClass == WorkerCapacityBlocked || w.Pressure.CapacityClass == WorkerCapacityCleanupOnly)) {
+		return false
+	}
+	for _, verified := range NormalizeVerifiedExecutionPlaneCapabilities(w, now) {
+		for _, capability := range verified.Capabilities {
+			if capability == required {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func normalizeCapabilityToken(value string) string {

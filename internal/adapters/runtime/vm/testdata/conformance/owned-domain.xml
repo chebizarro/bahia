@@ -1,0 +1,19 @@
+<domain type="kvm">
+  <name>00000000-0000-0000-0000-000000000005</name>
+  <uuid>00000000-0000-0000-0000-000000000005</uuid>
+  <metadata><ownership xmlns="urn:bahia:persistent-vm:2">{"schema_version":2,"installation_id":"00000000-0000-0000-0000-000000000001","org_id":"00000000-0000-0000-0000-000000000002","host_id":"00000000-0000-0000-0000-000000000003","deployment_id":"00000000-0000-0000-0000-000000000004","provider":"libvirt","provider_resource_id":"00000000-0000-0000-0000-000000000005","lifecycle_class":"persistent_vm","applied_generation":1,"operation_id":"00000000-0000-0000-0000-000000000006","image_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}</ownership></metadata>
+  <memory unit="MiB">2048</memory>
+  <vcpu placement="static">2</vcpu>
+  <os><type arch="x86_64" machine="q35">hvm</type></os>
+  <features><acpi/><apic/></features>
+  <cpu mode="host-passthrough" check="none"/>
+  <clock offset="utc"/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type="file" device="disk"><driver name="qemu" type="qcow2" cache="none" discard="unmap"/><source file="$INSTANCE/disk.qcow2"/><target dev="vda" bus="virtio"/></disk>
+    <serial type="file"><source path="$INSTANCE/console.log" append="on"/><target port="0"/></serial>
+    <console type="file"><source path="$INSTANCE/console.log" append="on"/><target type="serial" port="0"/></console>
+  </devices>
+</domain>

@@ -1,5 +1,39 @@
 # Bahia Nostr Event Specification
 
+## Virtualization v1
+
+| Surface | Kind | Schema / coordinate |
+|---|---|---|
+| Intent/acknowledgment | 25910 | ContextVM registered virtualization methods |
+| State | 30900 | `bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>` |
+| Audit | 4903 | `bahia.audit.virtualization.v1`, `state=<coordinate>`, no `d` |
+
+`vm-operation/approve-plan` adds an approval-only acknowledgment (`status=approved`,
+`approval_id`, no operation coordinate). Deployment-delete intent adds
+`data_disposition=retain|export|delete`, with retain as the default. These use
+existing ContextVM transport; canonical projection schemas and tags are unchanged.
+
+`persistent-vm/register-adoption` adds a registration-only acknowledgment
+(`status=registered`, zero-UUID operation ID, no operation coordinate). Ownership follows only a
+separate, measurement-bound approved `adopt` operation. Measurements and opaque
+host storage identities stay in private persistence, not public projection JSON.
+
+Tags: `domain=virtualization`, explicit `entity`, `schema`, `org`, `generation`,
+`sequence`, repeated `lifecycle_class`; audits add `type` and `protected=true`.
+An operation adds UUID `correlation`; a public-key actor adds `p`. `journal`
+identifies `<org UUID>:<sequence>:state|audit` for durable output deduplication.
+Envelope fields are `schema`, `sequence`, `change_type`, `occurred_at`, optional
+`approval_id`, and `resource`. Resource is the shared explicit public DTO, not
+private persisted JSON. Its `deleted` flag preserves artifact tombstones.
+
+State is complete and coalesced per coordinate; every journal audit fact is
+retained. Unknown public enum data fails closed. No raw evidence, bootstrap,
+console contents, host paths or credential bundle is projected. Nil runtime
+state is unobserved, never inferred absent. Client reducers must enforce journal
+sequence/generation ordering in addition to NIP-01 replaceable semantics.
+See [the full public contract](user-guide/features/virtual-machines.md).
+
+
 ## Overview
 
 Bahia publishes signed Nostr events for control-plane intent, state, status, discovery, relay topology, and audit. The production contract is Nostr-native and ContextVM-first:

@@ -5,7 +5,16 @@ package kinds
 // outside kinds.go because that file is a numeric event-kind catalog audited
 // by the nostrmigration manifest test.
 const (
-	CASControlStateTagD      = "d"
-	CASControlStateTagDomain = "domain"
-	CASControlStateTagSchema = "schema"
+	CASControlStateTagD         = "d"
+	CASControlStateTagDomain    = "domain"
+	CASControlStateTagSchema    = "schema"
+	CASControlStateTagEntity    = "entity"
+	VirtualizationDomain        = "virtualization"
+	VirtualizationStateSchema   = "bahia.state.virtualization.v1"
+	VirtualizationAuditSchema   = "bahia.audit.virtualization.v1"
+	VirtualizationTagOrg        = "org"
+	VirtualizationTagGeneration = "generation"
+	VirtualizationTagSequence   = "sequence"
+	VirtualizationTagClass      = "lifecycle_class"
+	VirtualizationTagJournal    = "journal"
 )

@@ -4,14 +4,16 @@ go 1.26.3
 
 require (
 	cuelang.org/go v0.11.0
-	fiatjaf.com/nostr v0.0.0-20260902034142-316ef6591fa2
+	fiatjaf.com/nostr v0.0.0-20260916040958-27e395a0f6e7
 	git.sharegap.net/cascadia/cascadia-go v1.4.0
 	github.com/anchore/packageurl-go v0.2.0
 	github.com/anchore/syft v1.45.1
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/compose-spec/compose-go/v2 v2.13.0
+	github.com/digitalocean/go-libvirt v0.0.0-20260814190004-1a83157e1858
 	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/compose/v5 v5.3.1
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.7.0
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/google/uuid v1.6.0
@@ -160,7 +162,6 @@ require (
 	github.com/diskfs/go-diskfs v1.9.3 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/buildx v0.35.0 // indirect
-	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.8 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect

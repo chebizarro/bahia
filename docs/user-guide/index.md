@@ -48,6 +48,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Services](features/services.md) | Create and manage deployable applications |
 | [Environments](features/environments.md) | Configure deployment targets (staging, production) |
 | [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
+| [Virtual Machines](features/virtual-machines.md) | Persistent VMs, execution planes, public queries, approvals and observability |
 | [Artifacts](features/artifacts.md) | Container images and build outputs |
 | [Notifications](features/notifications.md) | Organization-scoped webhook and Nostr DM delivery |
 | [Organizations](features/organizations.md) | Team management and access control |

@@ -35,6 +35,7 @@ var Version = version.Semantic()
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
+	Virtualization            repository.VirtualizationRepository
 	Config                    *config.Config
 	AuthMiddleware            auth.MiddlewareConfig
 	Workers                   repository.WorkerRepository
@@ -225,6 +226,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(readLimiter))
+			RegisterVirtualizationRoutes(r, deps, tier2Gate)
 
 			// Tenant orgs (read)
 			if tenantH != nil {

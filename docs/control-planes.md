@@ -1,5 +1,31 @@
 # Bahia Control Planes
 
+## Virtualization control boundary
+
+`virtualization-host`, `vm-image`, `persistent-vm`, `execution-plane`,
+`vm-checkpoint`, `vm-export` and `vm-operation` have tenant-authorized ContextVM
+reads and query-only REST compatibility routes. Mutation methods delegate only
+to injected C/D admission services; absent adapters or durable projection wiring
+return unavailable. Acknowledgments identify resource/generation/operation and
+the canonical signer/coordinates; they do not report provider completion.
+`vm-operation/approve-plan` returns an approval ID without creating an operation;
+the requester separately admits the exact approved mutation. Delete requests carry
+an explicit, approval-bound data disposition, defaulting to retain.
+
+`persistent-vm/register-adoption` records measured candidate desired state only:
+`status=registered`, zero-UUID operation ID, no operation coordinate or provider
+ownership. A separately approved
+`adopt` operation remeasures configuration/image/storage before acquiring ownership.
+Neither names nor legacy metadata bypass enrollment; foreign owners are refused.
+
+Canonical 30900 snapshots and 4903 audit facts carry only explicit public DTOs.
+In-process post-commit signals wake durable journal replay, also run at startup
+and on detected gaps. No database notification producer, polling queue or REST
+mutation implementation is added. Loom retains per-job lifecycle ownership;
+Bahia owns persistent resources and execution-plane desired state/probes.
+See [Virtual machines](user-guide/features/virtual-machines.md).
+
+
 Bahia's supported control-plane contract is now sidecar-first and Nostr-native. Agents implementing Nostr events should use `docs/nostr-event-implementation-guide.md` as the Bahia-specific authority for event-kind selection, event shapes, migration boundaries, and Cascadia fleet interoperability.
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.

@@ -62,7 +62,8 @@ var activeMetrics atomic.Pointer[Metrics]
 
 // Metrics collects application-level counters and gauges.
 type Metrics struct {
-	mu sync.RWMutex
+	mu             sync.RWMutex
+	virtualization map[virtualizationMetricKey]virtualizationMetricValue
 
 	// HTTP metrics
 	HTTPRequestsTotal        map[string]int64 // key: method:path:status
@@ -149,6 +150,7 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
+		virtualization:              make(map[virtualizationMetricKey]virtualizationMetricValue),
 		HTTPRequestsTotal:           make(map[string]int64),
 		DeploymentsTotal:            make(map[string]int64),
 		AdoptionScansTotal:          make(map[string]int64),
@@ -791,6 +793,11 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		defer m.mu.RUnlock()
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+
+		if err := m.renderVirtualization(w); err != nil {
+			// The scrape transport failed; another write cannot repair the partial response.
+			return
+		}
 
 		// HTTP metrics
 		fmt.Fprintln(w, "# HELP bahia_http_requests_total Total HTTP requests by method, path, and status code")

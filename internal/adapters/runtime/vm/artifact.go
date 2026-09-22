@@ -1,10 +1,12 @@
 package vm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"io"
 	"os"
 	"path/filepath"
@@ -146,6 +148,60 @@ func ResolveRelease(imageRoot, repo, digest, wantFormat string) (*Release, error
 		return nil, fmt.Errorf("resolving release for repo %q: %w", repo, err)
 	}
 
+	return resolveReleaseDirectory(context.Background(), releaseDir, repo, digest, wantFormat)
+}
+
+// ResolvePinnedRelease uses the catalog's immutable release UUID, never current.
+// Provenance authorization belongs to PersistentConfig.VerifyImage; this verifies
+// actual manifest/component bytes and storage containment before preparation.
+func ResolvePinnedRelease(ctx context.Context, imageRoot string, image domain.VMImage) (*Release, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if domain.ValidateVMImage(&image) != nil {
+		return nil, ProviderError(domain.VMErrorInvalid, nil)
+	}
+	dir := filepath.Join(imageRoot, image.ReleaseRef.String())
+	if err := CheckContainedPath(imageRoot, dir); err != nil {
+		return nil, err
+	}
+	for _, name := range []string{manifestFileName, diskFileName, uefiVarsFileName, kernelFileName, rootfsFileName} {
+		if err := CheckContainedPath(imageRoot, filepath.Join(dir, name)); err != nil {
+			return nil, err
+		}
+	}
+	release, err := resolveReleaseDirectory(ctx, dir, image.ReleaseRef.String(), image.ManifestDigest, string(image.Format))
+	if err != nil {
+		return nil, err
+	}
+	arch := release.Manifest.Arch
+	if arch == "x86_64" {
+		arch = "amd64"
+	}
+	if arch == "aarch64" {
+		arch = "arm64"
+	}
+	if arch != image.Architecture {
+		return nil, ProviderError(domain.VMErrorIntegrity, nil)
+	}
+	paths := map[domain.VMComponentKind]string{domain.VMComponentDisk: release.DiskPath, domain.VMComponentNVRAM: release.UEFIVarsPath, domain.VMComponentKernel: release.KernelPath, domain.VMComponentRootFS: release.RootFSPath}
+	for _, component := range image.Components {
+		path := paths[component.Kind]
+		if path == "" {
+			return nil, ProviderError(domain.VMErrorIntegrity, nil)
+		}
+		digest, size, err := HashComponent(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		if digest != component.Digest || size != component.SizeBytes {
+			return nil, ProviderError(domain.VMErrorIntegrity, nil)
+		}
+	}
+	return release, ctx.Err()
+}
+
+func resolveReleaseDirectory(ctx context.Context, releaseDir, repo, digest, wantFormat string) (*Release, error) {
 	manifestPath := filepath.Join(releaseDir, manifestFileName)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -183,12 +239,12 @@ func ResolveRelease(imageRoot, repo, digest, wantFormat string) (*Release, error
 			return nil, fmt.Errorf("qcow2 release manifest for repo %q is missing sha256.disk", repo)
 		}
 		release.DiskPath = filepath.Join(releaseDir, diskFileName)
-		if err := verifyFileSHA256(release.DiskPath, diskDigest); err != nil {
+		if err := verifyReleaseFile(ctx, release.DiskPath, diskDigest); err != nil {
 			return nil, fmt.Errorf("verifying qcow2 base disk for repo %q: %w", repo, err)
 		}
 		if varsDigest := strings.TrimSpace(manifest.SHA256["uefi_vars"]); varsDigest != "" {
 			release.UEFIVarsPath = filepath.Join(releaseDir, uefiVarsFileName)
-			if err := verifyFileSHA256(release.UEFIVarsPath, varsDigest); err != nil {
+			if err := verifyReleaseFile(ctx, release.UEFIVarsPath, varsDigest); err != nil {
 				return nil, fmt.Errorf("verifying UEFI vars template for repo %q: %w", repo, err)
 			}
 		}
@@ -202,11 +258,11 @@ func ResolveRelease(imageRoot, repo, digest, wantFormat string) (*Release, error
 			return nil, fmt.Errorf("firecracker-rootfs release manifest for repo %q is missing sha256.rootfs", repo)
 		}
 		release.KernelPath = filepath.Join(releaseDir, kernelFileName)
-		if err := verifyFileSHA256(release.KernelPath, kernelDigest); err != nil {
+		if err := verifyReleaseFile(ctx, release.KernelPath, kernelDigest); err != nil {
 			return nil, fmt.Errorf("verifying kernel image for repo %q: %w", repo, err)
 		}
 		release.RootFSPath = filepath.Join(releaseDir, rootfsFileName)
-		if err := verifyFileSHA256(release.RootFSPath, rootfsDigest); err != nil {
+		if err := verifyReleaseFile(ctx, release.RootFSPath, rootfsDigest); err != nil {
 			return nil, fmt.Errorf("verifying base rootfs for repo %q: %w", repo, err)
 		}
 	}
@@ -245,6 +301,17 @@ func resolveCurrent(channelDir string) (string, error) {
 		return "", fmt.Errorf("current release %q is not a directory", releaseDir)
 	}
 	return releaseDir, nil
+}
+
+func verifyReleaseFile(ctx context.Context, path, expected string) error {
+	digest, _, err := HashComponent(ctx, path)
+	if err != nil {
+		return err
+	}
+	if digest != "sha256:"+strings.ToLower(strings.TrimSpace(expected)) {
+		return fmt.Errorf("sha256 mismatch for release component")
+	}
+	return nil
 }
 
 func verifyFileSHA256(path, expected string) error {

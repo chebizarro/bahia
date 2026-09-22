@@ -2,12 +2,19 @@ package libvirt
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // domainParams collects everything the persistent-domain XML needs.
 type domainParams struct {
+	LegacyID     string
+	NetworkType  string
+	NetworkName  string
+	Marker       *domain.VMOwnershipMarker
+	TPMState     string
 	Name         string
 	MemoryMB     int
 	VCPUs        int
@@ -55,6 +62,16 @@ func domainXML(p domainParams) ([]byte, error) {
 	var doc bytes.Buffer
 	doc.WriteString(xml.Header)
 	fmt.Fprintf(&doc, "<domain type=\"kvm\">\n  <name>%s</name>\n", xmlText(p.Name))
+	if p.LegacyID != "" {
+		fmt.Fprintf(&doc, "  <uuid>%s</uuid>\n  <metadata><ownership xmlns=\"%s\">%s</ownership></metadata>\n", xmlText(p.LegacyID), legacyNamespace, xmlText(p.LegacyID))
+	}
+	if p.Marker != nil {
+		data, err := json.Marshal(p.Marker)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(&doc, "  <uuid>%s</uuid>\n  <metadata><ownership xmlns=\"%s\">%s</ownership></metadata>\n", p.Marker.ProviderResourceID.String(), ownershipNamespace, xmlText(string(data)))
+	}
 	fmt.Fprintf(&doc, "  <memory unit=\"MiB\">%d</memory>\n", p.MemoryMB)
 	fmt.Fprintf(&doc, "  <vcpu placement=\"static\">%d</vcpu>\n", p.VCPUs)
 	doc.WriteString("  <os>\n")
@@ -71,6 +88,15 @@ func domainXML(p domainParams) ([]byte, error) {
 	doc.WriteString("  <on_reboot>restart</on_reboot>\n")
 	doc.WriteString("  <on_crash>destroy</on_crash>\n")
 	doc.WriteString("  <devices>\n")
+	if p.NetworkType != "" {
+		if p.NetworkType != "network" && p.NetworkType != "bridge" {
+			return nil, fmt.Errorf("unsupported interface type")
+		}
+		fmt.Fprintf(&doc, "    <interface type=\"%s\"><source %s=\"%s\"/><model type=\"virtio\"/></interface>\n", p.NetworkType, p.NetworkType, xmlText(p.NetworkName))
+	}
+	if p.TPMState != "" {
+		fmt.Fprintf(&doc, "    <tpm model=\"tpm-crb\"><backend type=\"emulator\" version=\"2.0\" persistent_state=\"yes\"><source type=\"dir\" path=\"%s\"/></backend></tpm>\n", xmlText(p.TPMState))
+	}
 	doc.WriteString("    <disk type=\"file\" device=\"disk\">\n")
 	doc.WriteString("      <driver name=\"qemu\" type=\"qcow2\" cache=\"none\" discard=\"unmap\"/>\n")
 	fmt.Fprintf(&doc, "      <source file=\"%s\"/>\n", xmlText(p.Overlay))

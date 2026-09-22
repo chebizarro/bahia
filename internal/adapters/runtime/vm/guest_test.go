@@ -2,7 +2,9 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"go.uber.org/zap/zaptest/observer"
 	"net"
 	"strings"
 	"testing"
@@ -135,6 +137,54 @@ func TestObserveGuestAgentHealthyWithMetrics(t *testing.T) {
 	}
 }
 
+func TestGuestDiagnosticsNeverLeakToMetadataOrLogs(t *testing.T) {
+	const secret = "password=super-secret-nsec-token"
+	for _, phase := range []string{"hello", "metrics", "dial"} {
+		t.Run(phase, func(t *testing.T) {
+			fx := newGuestFixture(t, 2, 5000)
+			logs, observed := observer.New(zap.DebugLevel)
+			fx.rt.logger = zap.New(logs)
+			fx.hv.vsockDial = func(context.Context, string, uint32) (net.Conn, error) {
+				if phase == "dial" {
+					return nil, fmt.Errorf("%s", secret)
+				}
+				host, guest := net.Pipe()
+				go func() {
+					defer func() {
+						if err := guest.Close(); err != nil {
+							t.Error(err)
+						}
+					}()
+					if phase == "metrics" {
+						fakeGuestAgent(t, guest, "rel-001", nil, secret)
+						return
+					}
+					codec := protocol.NewCodec(guest)
+					if _, err := codec.Receive(); err == nil {
+						_ = codec.Send(protocol.ErrorFrame{Message: secret})
+					}
+				}()
+				return host, nil
+			}
+			deployRunning(t, fx)
+			result, err := fx.rt.Observe(context.Background(), uuid.New(), uuid.New(), "api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(result.Metadata)
+			if strings.Contains(string(data), secret) {
+				t.Fatal("guest secret leaked into observation")
+			}
+			for _, entry := range observed.All() {
+				data, _ := json.Marshal(entry.ContextMap())
+				if strings.Contains(entry.Message+string(data), secret) {
+					t.Fatal("guest secret leaked into logs")
+				}
+			}
+		})
+	}
+}
+
 func TestObserveGuestAgentUnreachableDegrades(t *testing.T) {
 	fx := newGuestFixture(t, 2, 5000)
 	fx.hv.vsockDial = func(context.Context, string, uint32) (net.Conn, error) {
@@ -152,7 +202,7 @@ func TestObserveGuestAgentUnreachableDegrades(t *testing.T) {
 	if obs.Metadata["guest_agent"] != "unreachable" {
 		t.Errorf("expected guest_agent unreachable, got %v", obs.Metadata["guest_agent"])
 	}
-	if msg, _ := obs.Metadata["guest_agent_error"].(string); !strings.Contains(msg, "connection refused") {
+	if msg, _ := obs.Metadata["guest_agent_error"].(string); msg != "guest_probe_failed" {
 		t.Errorf("expected dial error in metadata, got %v", obs.Metadata["guest_agent_error"])
 	}
 	if obs.Metadata["hypervisor_state"] != string(StateRunning) {
@@ -183,7 +233,7 @@ func TestObserveGuestAgentErrorFrameDegrades(t *testing.T) {
 	if obs.HealthStatus != domain.HealthStatusUnhealthy {
 		t.Errorf("expected unhealthy, got %s", obs.HealthStatus)
 	}
-	if msg, _ := obs.Metadata["guest_agent_error"].(string); !strings.Contains(msg, "image id mismatch") {
+	if msg, _ := obs.Metadata["guest_agent_error"].(string); msg != "guest_probe_failed" {
 		t.Errorf("expected guest error surfaced, got %v", obs.Metadata["guest_agent_error"])
 	}
 }
@@ -207,7 +257,7 @@ func TestObserveMetricsFailureStillHealthy(t *testing.T) {
 	if _, ok := obs.Metadata["guest_metrics"]; ok {
 		t.Error("expected no guest_metrics after metrics failure")
 	}
-	if msg, _ := obs.Metadata["guest_metrics_error"].(string); !strings.Contains(msg, "metrics collection failed") {
+	if msg, _ := obs.Metadata["guest_metrics_error"].(string); msg != "guest_metrics_failed" {
 		t.Errorf("expected metrics error in metadata, got %v", obs.Metadata["guest_metrics_error"])
 	}
 }

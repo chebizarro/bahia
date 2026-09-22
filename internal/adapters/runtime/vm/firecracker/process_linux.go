@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,13 @@ func newOSProcessManager() ProcessManager {
 
 type linuxProcessManager struct{}
 
-func (linuxProcessManager) Start(_ context.Context, req StartVMMRequest) (VMMIdentity, error) {
+func (linuxProcessManager) Start(ctx context.Context, req StartVMMRequest) (VMMIdentity, error) {
+	if err := validateExecutable(req.Binary); err != nil {
+		return VMMIdentity{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return VMMIdentity{}, err
+	}
 	logFile, err := os.OpenFile(req.ConsoleLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return VMMIdentity{}, fmt.Errorf("opening console log: %w", err)
@@ -36,6 +43,9 @@ func (linuxProcessManager) Start(_ context.Context, req StartVMMRequest) (VMMIde
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := ctx.Err(); err != nil {
+		return VMMIdentity{}, err
+	}
 	if err := cmd.Start(); err != nil {
 		return VMMIdentity{}, fmt.Errorf("starting firecracker VMM: %w", err)
 	}
@@ -57,12 +67,24 @@ func (linuxProcessManager) Alive(id VMMIdentity, marker string) bool {
 	return processMatches(id, marker)
 }
 
-func (linuxProcessManager) Kill(id VMMIdentity, marker string) error {
-	if !processMatches(id, marker) {
+func (m linuxProcessManager) Kill(id VMMIdentity, marker string) error {
+	fd, err := unix.PidfdOpen(id.PID, 0)
+	if errors.Is(err, unix.ESRCH) {
 		return nil
 	}
-	if err := syscall.Kill(id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("killing VMM process %d: %w", id.PID, err)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	alive, err := m.InspectProcess(context.Background(), id, marker)
+	if err != nil {
+		return err
+	}
+	if !alive {
+		return nil
+	}
+	if err = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		return err
 	}
 	return nil
 }

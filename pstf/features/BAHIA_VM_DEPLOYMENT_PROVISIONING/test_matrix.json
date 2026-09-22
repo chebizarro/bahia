@@ -1,0 +1,139 @@
+{
+  "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "measured_adoption": {
+    "task": "bahia-yrt7g.8",
+    "fixtures": "internal/adapters/runtime/vm/testdata/conformance/",
+    "tests": [
+      "internal/adapters/runtime/vm/adoption_conformance_test.go",
+      "internal/domain/vm_adoption_test.go",
+      "internal/service/vm_adoption_test.go",
+      "internal/repository/pg_vm_adoption_test.go",
+      "internal/controlplane/vm_adoption_test.go",
+      "internal/app/vm_adoption_integration_test.go",
+      "internal/db/migrate_vm_adoption_test.go"
+    ],
+    "acceptance_mapping": "AD-01 through AD-05 in acceptance_criteria.json list exact executable tests",
+    "boundaries": "Concrete provider/core filesystem measurements with fake virsh/qemu-img/process event boundaries; app integration uses a fake provider and real PostgreSQL, services and ContextVM handlers. No live host acceptance.",
+    "race_flags": "-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0"
+  },
+  "unit_tests": "internal/domain/virtualization_test.go",
+  "postgres_tests": [
+    "internal/repository/pg_virtualization_test.go",
+    "internal/repository/pg_vm_operations_test.go"
+  ],
+  "database_gate": {
+    "build_tag": "integration",
+    "environment": "BAHIA_VM_TEST_DATABASE_URL",
+    "missing_database": "fatal, not skip",
+    "isolation": "fresh schema per test, removed on completion",
+    "postgres": "16-alpine"
+  },
+  "mappings": [
+    {
+      "criterion": "A-01",
+      "tests": [
+        "TestVMControlPlaneContractsAndSerialization",
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker"
+      ]
+    },
+    {
+      "criterion": "A-02",
+      "tests": [
+        "TestVMControlPlaneRejectsAmbiguousIdentityAndSecrets",
+        "TestVMControlPlanePublicConnections"
+      ]
+    },
+    {
+      "criterion": "A-03",
+      "tests": [
+        "TestVMControlPlaneIndependentObservationAxes",
+        "TestVMControlPlanePostgresObservationFencing"
+      ]
+    },
+    {
+      "criterion": "A-04",
+      "tests": [
+        "TestVMControlPlanePostgresResourcesCASAndJournal",
+        "TestVMControlPlanePostgresApprovedRecreateKeepsResourceID"
+      ]
+    },
+    {
+      "criterion": "A-05",
+      "tests": [
+        "TestVMControlPlanePostgresQuotaRaceAndStoppedRetention"
+      ]
+    },
+    {
+      "criterion": "A-06",
+      "tests": [
+        "TestVMControlPlanePostgresAdmissionReplayApprovalAndCompletion",
+        "TestVMControlPlanePostgresConcurrentDedupAndOperationLock"
+      ]
+    },
+    {
+      "criterion": "A-07",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions",
+        "TestVMControlPlanePostgresAdmissionAtomicRollback",
+        "TestVMControlPlanePostgresApprovalBindingAndAwaiting"
+      ]
+    },
+    {
+      "criterion": "A-08",
+      "tests": [
+        "TestVMControlPlaneCoordinatedCheckpointAndFirecracker",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ]
+    },
+    {
+      "criterion": "A-09",
+      "tests": [
+        "TestVMControlPlaneCapabilityEvidence",
+        "TestVMControlPlanePostgresArtifactsAndPlaneProbes"
+      ]
+    },
+    {
+      "criterion": "A-10",
+      "tests": [
+        "TestVMControlPlaneGovernanceAndApprovalTransitions"
+      ]
+    },
+    {
+      "criterion": "A-11",
+      "tests": [
+        "TestVMControlPlanePostgresMigrationUpDown"
+      ]
+    },
+    {
+      "criterion": "A-12",
+      "tests": []
+    }
+  ],
+  "integration": {
+    "task": "bahia-yrt7g.3",
+    "tests": [
+      "TestVirtualizationPostgresIntentRecoveryAndPlane",
+      "TestVirtualizationTrustPolicyVerifiesSignedDigestAndHost",
+      "TestVirtualizationConfigurationLoadAndFailClosed",
+      "TestVirtualizationQueueCoalescesWithoutBlockingAdmission",
+      "TestVirtualizationCompositionMissingDependenciesFailClosed"
+    ],
+    "postgres_proof": ["ContextVM intent to real services and PostgreSQL", "operation completion and idempotent replay", "provider event to persisted observation", "plane apply plus live probe to verified capability", "signed journal projection and telemetry", "startup Recover after interrupted provider effect without duplicate calls or operations"],
+    "gates": {
+      "go build ./...": "pass",
+      "go vet ./...": "pass",
+      "go test ./...": "pass",
+      "make lint": "fail: inherited repository and feature diagnostics; bahia-ipnlr, bahia-yrt7g.4",
+      "integration_delta_lint_89e3fc50": "pass: zero new findings",
+      "whole_feature_delta_lint_042e881b": "fail: 31 inherited findings; bahia-yrt7g.4",
+      "focused_race": "pass: plain race in full-project bahia-4fz4z re-verification",
+      "postgres_integration_race": "historical pass: app, repository, service; not rerun for bahia-4fz4z",
+      "plain_repository_race": "pass: go test -race ./...; bahia-4fz4z upstream dependency fix",
+      "oracle": "blocked before analysis: provider 1048576-character payload limit even with MAP-only selection; bahia-yrt7g.5; no findings or passing review claimed"
+    },
+    "race_flags": "-race",
+    "external_boundaries": "fake VM provider and plane; real PostgreSQL repository and migrations; signed in-memory Nostr outbox"
+  },
+  "boundary": "Code-only domain/provider/service/repository/composition verification. No live relay, live host, administrative endpoint deployment, image build, desktop pilot or soak acceptance."
+}

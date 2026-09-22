@@ -275,6 +275,14 @@ In the web UI, open **Settings → Relays** (`/settings/relays`) to inspect pers
 
 See [Troubleshooting](troubleshooting.md) for more solutions.
 
+### Governed virtualization
+
+Persistent VM and Loom execution-plane mutations are opt-in through the
+`virtualization` block in `config.yaml`. Missing dependencies leave mutations
+unavailable. See [VM installation configuration](features/virtual-machines.md#installation-configuration)
+for host/trust bindings, operator identities, immutable images and administrative
+endpoints. Portable verification does not establish live-host readiness.
+
 ### Managed-instance supervision
 
 `supervision.enabled` starts local runtime health checks. Recovery is safe by default: `supervision.observe_only` defaults to `true`. Configure `interval`, `memory_threshold`, and explicit `instances`; Bahia-managed desired deployment units are also discovered from durable environment-service state. Each explicit instance identifies its service, environment, deployment unit, exact runtime target, supervisor type, desired-running intent, probe, restart budget, backoff, and warning interval.

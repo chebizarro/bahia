@@ -1,0 +1,1 @@
+[["qemu-img","info","--backing-chain","--output=json","$INSTANCES/disk.qcow2"],["qemu-img","convert","-f","qcow2","-O","qcow2","$INSTANCES/disk.qcow2","$DEST/flattened.qcow2"]]

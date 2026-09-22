@@ -164,3 +164,21 @@ soul_factory:
   agent_environment_id: ""
   # Durable identity for agent-memory tasks across Bahia process restarts.
   agent_memory_task_id_file: "./data/soulfactory/agent-memory-task-ids.json"
+
+# Opt-in governed VM/plane composition. See docs/user-guide/features/virtual-machines.md.
+# Hosts must already exist in the migrated virtualization repository. UUIDs below
+# are supplied by the operator, never inferred from domain or container names.
+virtualization:
+  operator_pubkeys: []
+  reconcile_pubkey: "" # explicit operator identity; tenant RBAC is rechecked
+  hosts: [] # [{org_id, host_id, trust_policy_ref, trusted_signers, networks, plane_secret_refs}]
+  persistent_vm:
+    enabled: false
+    # host_id: <registered-host-uuid>
+    # storage_pool_ref: <operator-storage-pool-uuid>
+    # state_dir: /var/lib/bahia/persistent-vms
+    # image_root: /var/lib/bahia/vm-images
+    # libvirt_uri: qemu:///system
+    # event_socket: /run/libvirt/libvirt-sock
+    # firecracker_binary: /usr/bin/firecracker
+  plane_endpoints: [] # [{host_id, endpoint_ref, author}] — exact administrative identities

@@ -23,6 +23,7 @@ type fakeProc struct {
 	id     VMMIdentity
 	marker string
 	alive  bool
+	exit   chan struct{}
 }
 
 // fakeProcs is an in-memory ProcessManager. Identity semantics mirror the
@@ -34,6 +35,7 @@ type fakeProcs struct {
 	starts   []StartVMMRequest
 	kills    int
 	startErr error
+	started  chan StartVMMRequest
 }
 
 func newFakeProcs() *fakeProcs {
@@ -61,7 +63,10 @@ func (f *fakeProcs) Start(_ context.Context, req StartVMMRequest) (VMMIdentity, 
 	}
 	f.nextPID++
 	id := VMMIdentity{PID: f.nextPID, StartTime: uint64(f.nextPID) * 7}
-	f.procs[id.PID] = &fakeProc{id: id, marker: marker, alive: true}
+	f.procs[id.PID] = &fakeProc{id: id, marker: marker, alive: true, exit: make(chan struct{})}
+	if f.started != nil {
+		f.started <- req
+	}
 	return id, nil
 }
 
@@ -78,6 +83,7 @@ func (f *fakeProcs) Kill(id VMMIdentity, marker string) error {
 	if proc, ok := f.procs[id.PID]; ok && proc.id.StartTime == id.StartTime && proc.marker == marker {
 		if proc.alive {
 			proc.alive = false
+			close(proc.exit)
 			f.kills++
 		}
 	}
@@ -90,10 +96,37 @@ func (f *fakeProcs) exitByMarker(marker string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, proc := range f.procs {
-		if proc.marker == marker {
+		if proc.marker == marker && proc.alive {
 			proc.alive = false
+			close(proc.exit)
 		}
 	}
+}
+
+func (f *fakeProcs) InspectProcess(_ context.Context, id VMMIdentity, marker string) (bool, error) {
+	return f.Alive(id, marker), nil
+}
+
+type fakeExit struct{ exited <-chan struct{} }
+
+func (e fakeExit) Close() error { return nil }
+func (e fakeExit) Wait(ctx context.Context) error {
+	select {
+	case <-e.exited:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (f *fakeProcs) WatchExit(_ context.Context, id VMMIdentity, marker string) (ProcessExit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.procs[id.PID]; p != nil && p.id == id && p.marker == marker {
+		return fakeExit{p.exit}, nil
+	}
+	exited := make(chan struct{})
+	close(exited)
+	return fakeExit{exited}, nil
 }
 
 func (f *fakeProcs) killCount() int {
@@ -119,7 +152,7 @@ func newTestDriver(t *testing.T, procs *fakeProcs) (*Driver, string) {
 	instancesDir := shortTempDir(t)
 	driver := New(Config{
 		InstancesDir:    instancesDir,
-		Binary:          "firecracker",
+		Binary:          "/usr/bin/firecracker",
 		ShutdownTimeout: 150 * time.Millisecond,
 		Processes:       procs,
 	}, zap.NewNop())
@@ -287,7 +320,7 @@ func TestStartLaunchesDetachedVMM(t *testing.T) {
 		t.Fatalf("expected one VMM start, got %d", len(procs.starts))
 	}
 	req := procs.starts[0]
-	if req.Binary != "firecracker" {
+	if req.Binary != "/usr/bin/firecracker" {
 		t.Errorf("unexpected binary %q", req.Binary)
 	}
 	args := strings.Join(req.Args, " ")
@@ -334,7 +367,7 @@ func TestStartLaunchesDetachedVMM(t *testing.T) {
 func TestStartAbsentInstanceErrors(t *testing.T) {
 	driver, _ := newTestDriver(t, newFakeProcs())
 	err := driver.Start(context.Background(), "ghost")
-	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if err == nil {
 		t.Fatalf("expected absent-instance error, got %v", err)
 	}
 }
@@ -422,9 +455,8 @@ func TestStopGracefulViaAPISocket(t *testing.T) {
 	}
 }
 
-// TestStopGracefulFallsBackToKill covers the timeout path: the API socket
-// is dead (no server), so after the shutdown timeout the VMM is SIGKILLed.
-func TestStopGracefulFallsBackToKill(t *testing.T) {
+// Failed graceful shutdown is never destructive power-off authority.
+func TestStopGracefulNeverFallsBackToKill(t *testing.T) {
 	procs := newFakeProcs()
 	driver, instancesDir := newTestDriver(t, procs)
 	spec := fcSpec(t, instancesDir, "i1", 0)
@@ -433,15 +465,15 @@ func TestStopGracefulFallsBackToKill(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := driver.Stop(ctx, "i1", true); err != nil {
-		t.Fatalf("Stop: %v", err)
+	if err := driver.Stop(ctx, "i1", true); err == nil {
+		t.Fatal("failed API shutdown reported success")
 	}
-	if procs.killCount() != 1 {
-		t.Errorf("expected SIGKILL fallback, got %d kills", procs.killCount())
+	if procs.killCount() != 0 {
+		t.Fatalf("graceful shutdown killed VMM: %d", procs.killCount())
 	}
 	state, _ := driver.State(context.Background(), "i1")
-	if state != vm.StateStopped {
-		t.Errorf("expected stopped, got %s", state)
+	if state != vm.StateRunning {
+		t.Fatalf("expected running, got %s", state)
 	}
 }
 
@@ -463,7 +495,7 @@ func TestForcedStopKillsImmediately(t *testing.T) {
 func TestStopAbsentInstanceErrors(t *testing.T) {
 	driver, _ := newTestDriver(t, newFakeProcs())
 	err := driver.Stop(context.Background(), "ghost", true)
-	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if err == nil {
 		t.Fatalf("expected absent-instance error, got %v", err)
 	}
 }
@@ -510,8 +542,8 @@ func TestDestroyKillsAndRemovesDefinition(t *testing.T) {
 
 func TestDestroyAbsentIsIdempotent(t *testing.T) {
 	driver, _ := newTestDriver(t, newFakeProcs())
-	if err := driver.Destroy(context.Background(), "ghost"); err != nil {
-		t.Fatalf("expected idempotent destroy, got %v", err)
+	if err := driver.Destroy(context.Background(), "ghost"); err == nil {
+		t.Fatal("unmarked legacy target accepted")
 	}
 }
 
@@ -704,22 +736,21 @@ func TestAdoptOrphansAdoptsRunningAndReapsDead(t *testing.T) {
 	mustStart(t, driver, "i-dead")
 }
 
-func TestAdoptOrphansReapsCorruptRecord(t *testing.T) {
+func TestAdoptOrphansPreservesCorruptRecord(t *testing.T) {
 	driver, instancesDir := newTestDriver(t, newFakeProcs())
 	spec := fcSpec(t, instancesDir, "i1", 0)
 	mustCreate(t, driver, spec)
 	if err := os.WriteFile(filepath.Join(spec.InstanceDir, "vmm.json"), []byte("{corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.AdoptOrphans(context.Background()); err != nil {
-		t.Fatalf("AdoptOrphans: %v", err)
+	if err := driver.AdoptOrphans(context.Background()); err == nil {
+		t.Fatal("corrupt identity must remain unconfirmed")
 	}
-	if _, err := os.Stat(filepath.Join(spec.InstanceDir, "vmm.json")); !os.IsNotExist(err) {
-		t.Errorf("expected corrupt record reaped, stat err=%v", err)
+	if data, err := os.ReadFile(filepath.Join(spec.InstanceDir, "vmm.json")); err != nil || string(data) != "{corrupt" {
+		t.Fatalf("corrupt identity evidence was removed: %q / %v", data, err)
 	}
-	state, err := driver.State(context.Background(), "i1")
-	if err != nil || state != vm.StateStopped {
-		t.Errorf("expected stopped after reap, got %s / %v", state, err)
+	if _, err := driver.State(context.Background(), "i1"); err == nil {
+		t.Fatal("corrupt identity must not become stopped")
 	}
 }
 

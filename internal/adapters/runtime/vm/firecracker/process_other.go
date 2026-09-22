@@ -23,4 +23,14 @@ func (unsupportedProcessManager) Start(context.Context, StartVMMRequest) (VMMIde
 
 func (unsupportedProcessManager) Alive(VMMIdentity, string) bool { return false }
 
-func (unsupportedProcessManager) Kill(VMMIdentity, string) error { return nil }
+func (unsupportedProcessManager) Kill(VMMIdentity, string) error {
+	return fmt.Errorf("firecracker process signals require Linux")
+}
+func (unsupportedProcessManager) InspectProcess(context.Context, VMMIdentity, string) (bool, error) {
+	return false, fmt.Errorf("firecracker process inspection requires Linux")
+}
+func (unsupportedProcessManager) WatchExit(context.Context, VMMIdentity, string) (ProcessExit, error) {
+	return nil, fmt.Errorf("firecracker process exit events require Linux")
+}
+
+var _ PersistentProcessManager = unsupportedProcessManager{}

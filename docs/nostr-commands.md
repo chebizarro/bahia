@@ -1,5 +1,33 @@
 # Bahia Nostr Control-Plane Events
 
+## Virtualization ContextVM methods
+
+Use signed kind-25910 JSON-RPC intents (or configured wrapping), never REST
+mutations. Read methods: `virtualization-host/list|get`, `vm-image/list|get`,
+`persistent-vm/list|get`, `execution-plane/list|get`, `vm-checkpoint/list|get`,
+`vm-export/list|get`, `vm-operation/get`. All require `org_id`; gets require `id`.
+
+Mutation methods: `vm-image/register`, `persistent-vm/create|register-adoption|update|operate`,
+`execution-plane/create|update|reconcile`, `vm-operation/approve|approve-plan|cancel`.
+`approve-plan` returns `status=approved` and `approval_id` for an exact proposed
+request; it does not admit an operation. The original requester submits the
+approved mutation separately. Deployment deletion carries an approval-bound
+`data_disposition` (`retain` by default, `export`, or explicit destructive `delete`).
+The E transport passes a verified principal and typed intent to C/D admission
+adapters. Missing adapters return unavailable. Tenant deployment permissions are
+mandatory; destructive approval and SecretRef resolution remain service-owned.
+Acknowledgments are admission only. Follow 30900/4903 at the returned signer and
+coordinates, with explicit lifecycle class and journal sequence.
+
+`register-adoption` accepts a complete generation-1 `vm` candidate, deriving its
+config digest from provider measurements. Its `status=registered` response has
+zero-UUID operation ID, no operation coordinate, and grants no ownership. Use a separate two-person approved
+`operation=adopt` to enroll; changed configuration, lineage or component bytes
+invalidate the approval before ownership is written.
+
+[Virtualization parameters, examples and safe output](user-guide/features/virtual-machines.md).
+
+
 Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). When discovery advertises `encrypted_controlplane.progress_ack` plus `contextvm-jsonrpc-v2`, routed and authorized encrypted requests receive an early no-`id` `notifications/progress` JSON-RPC notification before the terminal response. Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
 
 Maintenance is always standards-conformant NIP-59 in both directions: Bahia never publishes a plaintext or legacy-direct `maintenance/*` writer fallback, and a NIP-59 request receives only a NIP-59 immediate response.

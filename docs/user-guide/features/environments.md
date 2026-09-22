@@ -1,5 +1,16 @@
 # Environments
 
+## Typed VM resources
+
+An environment's legacy `vm-qemu`/`vm-firecracker` service adapter is not an
+execution-plane deployment. Typed persistent VMs may reference environment and
+deployment-unit identities while preserving their own resource UUID, lifecycle
+class, desired generation and operation history. Host/quota governance cannot be
+bypassed through a virtualization REST mutation route: only authorized queries
+are exposed there. See [Virtual machines](virtual-machines.md) for the new public
+surface and the C/D service integration gate.
+
+
 An **Environment** is a deployment target in Bahia — such as development, staging, or production.
 
 ## Overview

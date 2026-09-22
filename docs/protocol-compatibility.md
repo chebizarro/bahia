@@ -1,5 +1,34 @@
 # Bahia Protocol Compatibility Matrix
 
+## Virtualization public surfaces
+
+The additive virtualization v1 family uses existing ContextVM 25910, canonical
+state 30900 and audit 4903 kinds, checked against the Bahia implementation guide
+and Cascadia `registry/event-families.yaml`. No numeric allocation, legacy-kind
+reader, NIP-38 reinterpretation or Loom per-job transport replacement is added.
+The additive `vm-operation/approve-plan` method returns `approval_id` without an
+operation; clients then admit the approved mutation. Deployment-delete requests
+may set `data_disposition`; omitted and explicit `retain` are equivalent, including
+request hashing. Clone approvals bind the target revision and networking.
+
+`persistent-vm/register-adoption` is additive: `status=registered` means candidate
+desired state only, with a zero-UUID operation ID and no operation coordinate.
+Two-person `adopt` approvals now bind
+measured configuration, image lineage and storage. Old fingerprint-only adoption
+approvals cannot enroll; legacy v1/pre-inventory records require explicit measured
+enrollment. Public state/audit schemas and kinds remain unchanged.
+
+Consumers can ignore unknown fields/tags, but must retain explicit lifecycle
+classes, author/tenant scoping and journal sequence/generation ordering. Public
+snapshots omit private configuration rather than copying domain structs. REST
+remains authenticated query-only compatibility. C/D mutations are unavailable
+until admission adapters and post-commit signals are wired; compatible Loom
+administrative endpoints and live-provider acceptance remain separate gates.
+
+See [Virtual machines](user-guide/features/virtual-machines.md) for coordinates,
+acknowledgments, journal recovery, metrics and integration requirements.
+
+
 This document summarizes the protocols and event families Bahia currently uses and how they fit the production product shape.
 
 ## Important scope note

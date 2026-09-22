@@ -25,7 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +39,7 @@ const (
 	// the per-instance writable rootfs copy as the root device.
 	DefaultKernelArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
 	// DefaultShutdownTimeout bounds how long a graceful Stop waits after
-	// SendCtrlAltDel before falling back to SIGKILL.
+	// SendCtrlAltDel; expiry is unconfirmed and never escalates to SIGKILL.
 	DefaultShutdownTimeout = 30 * time.Second
 
 	vmConfigFileName    = "vmconfig.json"
@@ -46,12 +48,11 @@ const (
 	vsockSocketFileName = "vsock.sock"
 	consoleLogFileName  = "console.log"
 	rootfsFileName      = "rootfs.ext4"
-
-	exitPollInterval = 25 * time.Millisecond
 )
 
 // Config configures the firecracker driver.
 type Config struct {
+	ImageRoot string
 	// InstancesDir is the directory holding per-instance state
 	// directories; instance files (vmconfig.json, rootfs copy, vmm.json,
 	// api.socket, vsock.sock, console.log) live under
@@ -94,6 +95,9 @@ func New(cfg Config, logger *zap.Logger) *Driver {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
 	if cfg.Processes == nil {
+		if cfg.Binary == DefaultBinary {
+			cfg.Binary = "/usr/bin/firecracker"
+		}
 		cfg.Processes = newOSProcessManager()
 	}
 	return &Driver{cfg: cfg, logger: logger}
@@ -211,13 +215,29 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 	if err := os.WriteFile(filepath.Join(spec.InstanceDir, vmConfigFileName), data, 0o600); err != nil {
 		return fmt.Errorf("writing firecracker VM config: %w", err)
 	}
-	return nil
+	if spec.OwnershipID == uuid.Nil {
+		spec.OwnershipID = uuid.New()
+	}
+	return vm.WriteLegacyProof(ctx, spec.InstanceDir, vm.LegacyProof{ID: spec.OwnershipID, Name: spec.Name, DefinitionDigest: vm.DigestBytes(data)})
 }
 
 // Start launches the instance's VMM as a detached long-lived process; the
 // config file boots the VM immediately. The process identity is recorded
 // in vmm.json so State/Stop/adoption can find it across bahia restarts.
 func (d *Driver) Start(ctx context.Context, name string) error {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
+	return d.startVMM(ctx, name)
+}
+
+func (d *Driver) startVMM(ctx context.Context, name string) error {
+	if err := validateExecutable(d.cfg.Binary); err != nil {
+		return err
+	}
+	if err := d.confirmProcessAbsent(ctx, name); err != nil {
+		return fmt.Errorf("VMM already running or unconfirmed: %w", err)
+	}
 	dir := d.instanceDir(name)
 	configPath := filepath.Join(dir, vmConfigFileName)
 	if _, err := os.Stat(configPath); err != nil {
@@ -225,13 +245,6 @@ func (d *Driver) Start(ctx context.Context, name string) error {
 			return fmt.Errorf("firecracker instance %q does not exist", name)
 		}
 		return fmt.Errorf("checking firecracker instance %q: %w", name, err)
-	}
-	record, err := d.readRecord(name)
-	if err != nil {
-		return err
-	}
-	if record != nil && d.cfg.Processes.Alive(record.VMMIdentity, record.Marker) {
-		return fmt.Errorf("firecracker instance %q is already running (pid %d)", name, record.PID)
 	}
 	// Clear leftovers from a previous run: firecracker refuses to start
 	// when its API socket path already exists.
@@ -259,9 +272,12 @@ func (d *Driver) Start(ctx context.Context, name string) error {
 
 // Stop shuts an instance down. Graceful stops send Ctrl+Alt+Del through
 // the VMM API socket and wait up to the shutdown timeout (and ctx) for the
-// VMM to exit, then fall back to SIGKILL; forced stops SIGKILL directly.
+// VMM to exit. Failure is unconfirmed; only explicit forced stops SIGKILL.
 // Stopping an already stopped instance is a no-op.
-func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
+func (d *Driver) Stop(ctx context.Context, name string, graceful bool) (retErr error) {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
 	state, err := d.State(ctx, name)
 	if err != nil {
 		return err
@@ -279,46 +295,32 @@ func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
 	if record == nil {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, d.cfg.ShutdownTimeout)
+	defer cancel()
+	manager, ok := d.cfg.Processes.(PersistentProcessManager)
+	if !ok {
+		return vm.ProviderError(domain.VMErrorUnsupported, nil)
+	}
+	watch, err := manager.WatchExit(ctx, record.VMMIdentity, record.Marker)
+	if err != nil {
+		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
+	}
+	defer func() { retErr = vm.JoinCleanupError(retErr, watch.Close()) }()
+	if err = d.VerifyLegacy(ctx, name, uuid.Nil); err != nil {
+		return err
+	}
 	if graceful {
-		if err := sendCtrlAltDel(ctx, d.apiSocketPath(name)); err != nil {
-			d.logger.Warn("graceful shutdown request failed; falling back to SIGKILL",
-				zap.String("instance", name), zap.Error(err))
-		} else {
-			waitCtx, cancel := context.WithTimeout(ctx, d.cfg.ShutdownTimeout)
-			waitErr := d.waitForExit(waitCtx, record)
-			cancel()
-			if waitErr == nil {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return fmt.Errorf("firecracker instance %q shutdown not confirmed: %w", name, ctx.Err())
-			}
-			d.logger.Warn("guest did not shut down within the timeout; sending SIGKILL",
-				zap.String("instance", name), zap.Duration("timeout", d.cfg.ShutdownTimeout))
-		}
+		err = sendCtrlAltDel(ctx, record.Marker)
+	} else {
+		err = manager.Kill(record.VMMIdentity, record.Marker)
 	}
-	if err := d.cfg.Processes.Kill(record.VMMIdentity, record.Marker); err != nil {
-		return fmt.Errorf("killing firecracker instance %q: %w", name, err)
+	if err != nil {
+		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 	}
-	if err := d.waitForExit(ctx, record); err != nil {
-		return fmt.Errorf("firecracker instance %q VMM exit not confirmed: %w", name, err)
+	if err = watch.Wait(ctx); err != nil {
+		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 	}
-	return nil
-}
-
-func (d *Driver) waitForExit(ctx context.Context, record *vmmRecord) error {
-	for {
-		if !d.cfg.Processes.Alive(record.VMMIdentity, record.Marker) {
-			return nil
-		}
-		timer := time.NewTimer(exitPollInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
+	return d.confirmProcessAbsent(ctx, name)
 }
 
 // Destroy force-stops the VMM if needed and removes the instance
@@ -326,6 +328,9 @@ func (d *Driver) waitForExit(ctx context.Context, record *vmmRecord) error {
 // Remaining instance files are removed with the instance directory by the
 // core. Destroying an absent instance returns nil.
 func (d *Driver) Destroy(ctx context.Context, name string) error {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
 	state, err := d.State(ctx, name)
 	if err != nil {
 		return err
@@ -333,14 +338,13 @@ func (d *Driver) Destroy(ctx context.Context, name string) error {
 	if state == vm.StateAbsent {
 		return nil
 	}
-	record, err := d.readRecord(name)
-	if err == nil && record != nil && d.cfg.Processes.Alive(record.VMMIdentity, record.Marker) {
-		if err := d.cfg.Processes.Kill(record.VMMIdentity, record.Marker); err != nil {
-			return fmt.Errorf("killing firecracker instance %q: %w", name, err)
+	if state != vm.StateStopped {
+		if err := d.Stop(ctx, name, false); err != nil {
+			return err
 		}
-		if err := d.waitForExit(ctx, record); err != nil {
-			return fmt.Errorf("firecracker instance %q VMM exit not confirmed: %w", name, err)
-		}
+	}
+	if err := d.confirmProcessAbsent(ctx, name); err != nil {
+		return err
 	}
 	dir := d.instanceDir(name)
 	var errs []error
@@ -360,12 +364,15 @@ func (d *Driver) Destroy(ctx context.Context, name string) error {
 // time + command-line marker all matching) means running; anything else is
 // stopped. A crashed VMM is indistinguishable from a stopped one here —
 // the guest-agent health probe (plan item 7) refines that.
-func (d *Driver) State(_ context.Context, name string) (vm.InstanceState, error) {
+func (d *Driver) State(ctx context.Context, name string) (vm.InstanceState, error) {
 	if strings.TrimSpace(d.cfg.InstancesDir) == "" {
 		return vm.StateUnknown, errors.New("firecracker driver has no instances directory configured")
 	}
 	if _, err := os.Stat(filepath.Join(d.instanceDir(name), vmConfigFileName)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if err := d.confirmProcessAbsent(ctx, name); err != nil {
+				return vm.StateUnknown, err
+			}
 			return vm.StateAbsent, nil
 		}
 		return vm.StateUnknown, fmt.Errorf("checking firecracker instance %q: %w", name, err)
@@ -374,8 +381,21 @@ func (d *Driver) State(_ context.Context, name string) (vm.InstanceState, error)
 	if err != nil {
 		return vm.StateUnknown, err
 	}
-	if record != nil && d.cfg.Processes.Alive(record.VMMIdentity, record.Marker) {
-		return vm.StateRunning, nil
+	if record != nil {
+		if record.PID <= 0 || record.StartTime == 0 || record.Marker != d.apiSocketPath(name) {
+			return vm.StateUnknown, vm.ProviderError(domain.VMErrorIntegrity, nil)
+		}
+		manager, ok := d.cfg.Processes.(PersistentProcessManager)
+		if !ok {
+			return vm.StateUnknown, vm.ProviderError(domain.VMErrorUnsupported, nil)
+		}
+		alive, err := manager.InspectProcess(ctx, record.VMMIdentity, record.Marker)
+		if err != nil {
+			return vm.StateUnknown, err
+		}
+		if alive {
+			return vm.StateRunning, nil
+		}
 	}
 	return vm.StateStopped, nil
 }
@@ -464,8 +484,21 @@ func (d *Driver) AdoptOrphans(ctx context.Context) error {
 			continue
 		}
 		if recordErr != nil {
-			d.logger.Warn("firecracker instance has a corrupt VMM record; reaping",
-				zap.String("instance", name), zap.Error(recordErr))
+			errs = append(errs, fmt.Errorf("unconfirmed VMM identity for %q: %w", name, recordErr))
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, ownershipFile)); err == nil {
+			// Persistent v2 resources are recovered by exact-resource inspection, never
+			// by the legacy name-scanned registry cleanup path.
+			continue
+		}
+		if err := d.VerifyLegacy(ctx, name, uuid.Nil); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := d.confirmProcessAbsent(ctx, name); err != nil {
+			errs = append(errs, err)
+			continue
 		}
 		reaped := false
 		for _, stale := range []string{vmmRecordFileName, apiSocketFileName, vsockSocketFileName} {

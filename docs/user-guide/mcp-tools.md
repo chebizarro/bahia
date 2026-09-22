@@ -1,5 +1,29 @@
 # MCP Tools Reference
 
+## Virtualization ContextVM tools
+
+The virtualization methods are registered in the signed ContextVM transport,
+not as unsigned HTTP MCP mutation aliases. Use `virtualization-host/list|get`,
+`vm-image/list|get|register`, `persistent-vm/list|get|create|register-adoption|update|operate`,
+`execution-plane/list|get|create|update|reconcile`, `vm-checkpoint/list|get`,
+`vm-export/list|get`, and `vm-operation/get|approve|approve-plan|cancel`.
+`vm-operation/approve-plan` lets a second operator approve an exact proposed
+mutation before admission; it returns `approval_id`, not a fabricated operation.
+See the [approval workflow](features/virtual-machines.md#mutation-intents-and-approvals).
+
+`persistent-vm/register-adoption` measures an existing stopped candidate and
+registers desired state only (`status=registered`, zero-UUID operation ID, no
+operation coordinate). Separate
+two-person approval and an `adopt` operation establish ownership and measured
+storage inventory. See [measured enrollment](features/virtual-machines.md#measured-enrollment-of-existing-vms).
+
+Every request includes `org_id` and an authenticated signing principal. Reads
+require `deployments:read`; intents require `deployments:write` plus C/D's action
+approval checks. Unwired mutation adapters report unavailable. Never put resolved
+credentials into arguments; only authorized SecretRefs are valid bootstrap input.
+[Parameters, acknowledgments and query examples](features/virtual-machines.md).
+
+
 Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
 ## Connect and discover

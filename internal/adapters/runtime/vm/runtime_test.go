@@ -63,6 +63,15 @@ func (f *fakeHypervisor) Create(_ context.Context, spec InstanceSpec) error {
 	return nil
 }
 
+func (f *fakeHypervisor) VerifyLegacy(_ context.Context, name string, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == uuid.Nil || f.specs[name].OwnershipID != id {
+		return ProviderError(domain.VMErrorForeign, nil)
+	}
+	return nil
+}
+
 func (f *fakeHypervisor) Start(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -266,7 +275,7 @@ func TestDeployWithoutEnvLabelUsesHashFallback(t *testing.T) {
 	}
 }
 
-func TestDeployReplacesExistingInstance(t *testing.T) {
+func TestDeployRejectsCrossEnvironmentReplacement(t *testing.T) {
 	fx := newCoreFixture(t, domain.RuntimeTypeVMQEMU)
 	ctx := context.Background()
 	envA := uuid.New()
@@ -280,11 +289,11 @@ func TestDeployReplacesExistingInstance(t *testing.T) {
 	envB := uuid.New()
 	if err := fx.rt.Deploy(ctx, "api", "vm/base@"+fx.digest, DeployOptions{
 		Labels: map[string]string{LabelEnvironmentID: envB.String()},
-	}); err != nil {
-		t.Fatalf("second deploy: %v", err)
+	}); err == nil {
+		t.Fatal("cross-environment name match authorized replacement")
 	}
-	if _, ok := fx.hv.instances[oldName]; ok {
-		t.Errorf("old instance %s should have been destroyed", oldName)
+	if _, ok := fx.hv.instances[oldName]; !ok {
+		t.Fatal("original environment instance was destroyed")
 	}
 	if len(fx.hv.instances) != 1 {
 		t.Errorf("expected exactly one instance, got %v", fx.hv.instances)
@@ -295,8 +304,11 @@ func TestDeployReplacesExistingInstance(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Errorf("expected destroy call for %s, calls: %v", oldName, fx.hv.calls)
+	if found {
+		t.Errorf("cross-environment destroy call for %s, calls: %v", oldName, fx.hv.calls)
+	}
+	if err := fx.rt.Deploy(ctx, "api", "vm/base@"+fx.digest, DeployOptions{Labels: map[string]string{LabelEnvironmentID: envA.String()}}); err != nil {
+		t.Fatalf("same-environment legacy replacement: %v", err)
 	}
 }
 

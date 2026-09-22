@@ -1,6 +1,17 @@
 package firecracker
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+)
+
+func validateExecutable(binary string) error {
+	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || filepath.Base(binary) != "firecracker" {
+		return fmt.Errorf("provider binary is not an absolute allowlisted executable")
+	}
+	return nil
+}
 
 // VMMIdentity identifies a supervised firecracker VMM process. PID alone is
 // not enough — PIDs are reused — so the process start time (from
@@ -25,6 +36,18 @@ type StartVMMRequest struct {
 // ProcessManager is the driver's OS boundary for VMM process supervision.
 // The real implementation is Linux-only (/proc-based identity checks);
 // tests substitute a fake so the package runs anywhere.
+// PersistentProcessManager adds fail-closed inspection and kernel exit events.
+// Legacy process-manager implementations remain source compatible.
+type PersistentProcessManager interface {
+	ProcessManager
+	InspectProcess(context.Context, VMMIdentity, string) (bool, error)
+	WatchExit(context.Context, VMMIdentity, string) (ProcessExit, error)
+}
+type ProcessExit interface {
+	Wait(context.Context) error
+	Close() error
+}
+
 type ProcessManager interface {
 	// Start launches the VMM as a detached, session-leader process that
 	// survives the calling process, returning its identity. The context

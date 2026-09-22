@@ -60,6 +60,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/nostrmigration"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
+	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -201,8 +202,10 @@ func New(cfg *config.Config) (*App, error) {
 	var contextVMResponseStore repository.ContextVMResponseStore
 	var managedInstanceHealthRepo repository.ManagedInstanceHealthRepository
 	var agentRuntimeReleaseRepo repository.AgentRuntimeReleaseRepository
+	var virtualizationRepo repository.VirtualizationRepository
 
 	if dbAvailable {
+		virtualizationRepo = repository.NewPgVirtualizationRepository(pool)
 		serviceRepo = repository.NewPgServiceRepository(pool)
 		agentRuntimeReleaseRepo = repository.NewPgAgentRuntimeReleaseRepository(pool)
 		envRepo = repository.NewPgEnvironmentRepository(pool)
@@ -914,6 +917,38 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("nostr read-model projector registered")
 	}
 
+	// Virtualization remains unavailable until persistence, projection and the
+	// explicitly configured provider/plane trust boundaries are all ready.
+	virtualizationStore, _ := nostrEventRepo.(readmodel.VirtualizationProjectionStore)
+	var virtualizationPublisher readmodel.VirtualizationSignedPublisher
+	if cfg.Nostr.PublishEnabled && controlPlaneSigner != nil {
+		virtualizationPublisher = nostrPub
+	}
+	virtualizationDeps := VirtualizationDependencies{
+		Repository: virtualizationRepo, RBAC: tenantRBAC, Bus: publisher,
+		Store: virtualizationStore, Publisher: virtualizationPublisher, Organizations: orgRepo,
+		CanonicalAuthor: servicePubkey,
+	}
+	var vmSecretResolver service.VMAuditedSecretResolver
+	if secretRepo != nil && secretEncryptor != nil {
+		vmSecretResolver = secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+	}
+	if err := configureVirtualization(ctx, cfg.Virtualization, &virtualizationDeps, virtualizationConfigurationDependencies{
+		events: nostrEventRepo, secrets: secretRepo, resolver: vmSecretResolver,
+		services: serviceRepo, environments: envRepo, units: deploymentUnitRepo, workers: workerRepo,
+		pool: controlPlanePool, signer: controlPlaneSigner, logger: logger,
+	}); err != nil {
+		return nil, fmt.Errorf("configure virtualization services: %w", telemetry.SanitizedVirtualizationError(err))
+	}
+	virtualization, err := NewVirtualization(virtualizationDeps)
+	if err != nil {
+		return nil, fmt.Errorf("configure virtualization: %w", err)
+	}
+	loom.WithVerifiedPlaneCapabilities(virtualization.VerifiedPlanes())(loomClient)
+	if virtualization.Projector != nil {
+		bgManager.RegisterWithOptions(virtualization, RunnerTier(Tier2))
+	}
+
 	// Register the reconciler as a background runner (if enabled).
 	if rec != nil {
 		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec}, RunnerTier(Tier2))
@@ -1524,6 +1559,7 @@ func New(cfg *config.Config) (*App, error) {
 			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
 		}
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(contextVMRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
+		virtualization.Handlers.Register(encryptedRequestTransport)
 		fleetOperatorGate := controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys)
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
@@ -1753,6 +1789,7 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
+			Virtualization:            virtualizationRepo,
 			Config:                    cfg,
 			AuthMiddleware:            authMiddleware,
 			Workers:                   workerRepo,

@@ -1,0 +1,188 @@
+{
+  "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "title": "Governed VM deployment and execution-plane provisioning",
+  "schema_version": 1,
+  "status": "item_a_contract_checkpoint_verified",
+  "beads": {
+    "epic": "bahia-yrt7g",
+    "item_a": "bahia-qw3qm"
+  },
+  "source_evidence": [
+    {
+      "path": "prompt-exports/canonical-plan-max-desktop-vm-bahia-2026-09-21.md",
+      "sections": [
+        "Lifecycle classes",
+        "Bahia feature design"
+      ]
+    },
+    {
+      "path": "prompt-exports/plan-vm-deployment-provisioning-2026-09-21.md",
+      "sections": [
+        "A. Phase 0: governed contracts and persistence",
+        "Item A \u2014 exclusive files"
+      ]
+    }
+  ],
+  "in_scope": [
+    "Versioned domain contracts and validation",
+    "PersistentVMProvider and ExecutionPlaneClient contracts",
+    "Tenant-scoped PostgreSQL repositories",
+    "Generation/session/sequence fencing",
+    "Atomic capacity, approval, idempotent operation admission and snapshot change journal",
+    "Additive migration 000066 with guarded rollback",
+    "Pilot policy revision 1"
+  ],
+  "out_of_scope": [
+    "Provider implementation and live image signature verification",
+    "Service authorization, secret resolution and reconciliation",
+    "Loom transport and worker selection",
+    "API/projection/telemetry/app wiring",
+    "Live hosts, image builds, pilots and soak"
+  ],
+  "lifecycle_classes": {
+    "persistent_vm": {
+      "owner": "Bahia",
+      "purposes": [
+        "desktop",
+        "service"
+      ],
+      "providers": [
+        "libvirt",
+        "firecracker"
+      ]
+    },
+    "loom_firecracker_job_microvm": {
+      "owner": "Loom",
+      "os": [
+        "linux"
+      ]
+    },
+    "loom_qemu_job_domain": {
+      "owner": "Loom",
+      "os": [
+        "linux"
+      ]
+    }
+  },
+  "contracts": {
+    "provider": [
+      "domain.PersistentVMProvider",
+      "domain.VMResourceIdentity",
+      "domain.VMOwnershipMarker",
+      "domain.VMProviderOperation",
+      "domain.VMProviderResult",
+      "domain.VMBootstrapDelivery",
+      "domain.VMBootstrapGuest"
+    ],
+    "orchestration": [
+      "domain.VMOperation",
+      "domain.VMOperationPhase",
+      "domain.VMApproval",
+      "domain.VMApprovalTier",
+      "domain.VMChangePlan",
+      "domain.VMFieldChange",
+      "domain.VMDeleteTarget",
+      "domain.VMProviderError"
+    ],
+    "execution_plane": [
+      "domain.ExecutionPlaneClient",
+      "domain.ExecutionPlaneDesired",
+      "domain.ExecutionPlaneObservation",
+      "domain.ExecutionPlaneProbeEvidence",
+      "domain.VerifiedExecutionPlaneCapabilities",
+      "domain.EffectiveExecutionPlaneCapabilities"
+    ],
+    "resources": [
+      "domain.VirtualizationHost",
+      "domain.VMImage",
+      "domain.PersistentVMDeployment",
+      "domain.ExecutionPlaneDeployment",
+      "domain.VMCheckpoint",
+      "domain.VMExport",
+      "domain.VMPublicConnection",
+      "domain.VMResourceUsage"
+    ],
+    "repository": [
+      "repository.VirtualizationRepository",
+      "repository.VirtualizationResources[T]",
+      "repository.NewPgVirtualizationRepository",
+      "repository.VMOperationAdmission",
+      "repository.VMOperationTransition",
+      "repository.VirtualizationResourceChange"
+    ]
+  },
+  "persistence": {
+    "tables": [
+      "virtualization_hosts",
+      "vm_images",
+      "persistent_vm_deployments",
+      "execution_plane_deployments",
+      "vm_checkpoints",
+      "vm_exports",
+      "vm_operations",
+      "vm_operation_approvals",
+      "virtualization_capacity_reservations",
+      "virtualization_resource_changes"
+    ],
+    "schema_version": 1,
+    "initial_generation": 1,
+    "provider_metadata_version": 2,
+    "updates": "value.Generation = expected+1; creation and lifecycle identity immutable; images insert-only; provider identity rebind only in tier-2 approved recreate admission after verified old absence and reservation release",
+    "observations": "Only AcceptHostObservation/AcceptVMObservation/AcceptPlaneObservation after trusted CAS session installation; old observations remain explicitly stamped across desired revisions",
+    "journal": "Atomic immutable resource/observation snapshots, explicit lifecycle classes, approval correlation, per-organization commit-ordered cursor; not a relay inbox or job queue",
+    "rollback": "Refuses while any authoritative inventory or history remains"
+  },
+  "pilot_policy": {
+    "revision": 1,
+    "opt_in": true,
+    "gnome": {
+      "vcpu": 8,
+      "memory_bytes": 25769803776,
+      "disk_bytes": 107374182400
+    },
+    "windows": {
+      "vcpu_min": 6,
+      "vcpu_max": 8,
+      "memory_bytes_min": 17179869184,
+      "memory_bytes_max": 25769803776,
+      "disk_bytes_min": 107374182400,
+      "disk_bytes_max": 128849018880
+    },
+    "aggregate": {
+      "vcpu": 16,
+      "memory_bytes": 68719476736,
+      "disk_bytes": 236223201280
+    }
+  },
+  "dependencies": [
+    {
+      "item": "B",
+      "beads": "bahia-xv6vl",
+      "implements": "PersistentVMProvider, artifact integrity/provenance verification and bounded exact-resource effects"
+    },
+    {
+      "item": "C",
+      "beads": "bahia-kw93u",
+      "implements": "Authentication/RBAC, canonical request hashing/classification, approval authorization, fingerprint revalidation, operation ownership and secret delivery"
+    },
+    {
+      "item": "D",
+      "beads": "bahia-1wh79",
+      "implements": "ExecutionPlaneClient, authenticated observations, probe scheduling/session installation, worker contribution and quota admission"
+    },
+    {
+      "item": "E",
+      "beads": "bahia-8f30n",
+      "implements": "Safe DTOs, journal recovery, canonical projections, metrics, registration"
+    }
+  ],
+  "non_functional_requirements": [
+    "No names/prefixes as identity",
+    "No provider/shell/host fallback",
+    "No resolved secrets in serializable records",
+    "No success from acknowledgment or timeout",
+    "Loom owns per-job lifecycle",
+    "No Windows ephemeral capability",
+    "No new numeric Nostr kinds in Item A"
+  ]
+}
