@@ -33,7 +33,7 @@ func (a vmAdmission) MutatePersistentVM(ctx context.Context, actor controlplane.
 		return controlplane.VirtualizationAdmission{}, readmodel.ErrVirtualizationUnavailable
 	}
 	p := vmIntentPrincipal(actor)
-	req := service.VMOperationRequest{OrgID: actor.OrgID, DeploymentID: m.ID, ExpectedGeneration: m.ExpectedGeneration, IdempotencyKey: m.IdempotencyKey, Reason: m.Reason, Kind: m.Operation, CheckpointID: m.CheckpointID, ExportID: m.ExportID, CloneTargetID: m.CloneTargetID, DeleteTarget: m.DeleteTarget, AllowForceStop: m.AllowForceStop, ApprovalID: m.ApprovalID, Desired: m.VM}
+	req := service.VMOperationRequest{OrgID: actor.OrgID, DeploymentID: m.ID, ExpectedGeneration: m.ExpectedGeneration, IdempotencyKey: m.IdempotencyKey, Reason: m.Reason, Kind: m.Operation, CheckpointID: m.CheckpointID, ExportID: m.ExportID, CloneTargetID: m.CloneTargetID, DeleteTarget: m.DeleteTarget, DataDisposition: m.DataDisposition, AllowForceStop: m.AllowForceStop, ApprovalID: m.ApprovalID, Desired: m.VM}
 	switch method {
 	case "persistent-vm/create":
 		if m.VM == nil {

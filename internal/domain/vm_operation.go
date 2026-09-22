@@ -21,6 +21,32 @@ const (
 	VMOperationDelete       VMOperationKind = "delete"
 )
 
+// VMDataDisposition controls guest data handling when deleting a deployment.
+// The zero value is retain for compatibility with existing requests and records.
+type VMDataDisposition string
+
+const (
+	VMDataRetain VMDataDisposition = "retain"
+	VMDataExport VMDataDisposition = "export"
+	VMDataDelete VMDataDisposition = "delete"
+)
+
+func (d VMDataDisposition) Effective() VMDataDisposition {
+	if d == "" {
+		return VMDataRetain
+	}
+	return d
+}
+
+func (d VMDataDisposition) Valid() bool {
+	switch d.Effective() {
+	case VMDataRetain, VMDataExport, VMDataDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 type VMDeleteTarget string
 
 const (
@@ -172,15 +198,16 @@ type VMOperation struct {
 	ProviderCorrelationID uuid.UUID        `json:"provider_correlation_id"`
 	Deadline              time.Time        `json:"deadline"`
 	// Prepared storage object IDs are durable before side effects. Never store paths.
-	PreparedStorageRefs []uuid.UUID    `json:"prepared_storage_refs"`
-	CheckpointID        *uuid.UUID     `json:"checkpoint_id,omitempty"`
-	ExportID            *uuid.UUID     `json:"export_id,omitempty"`
-	CloneTargetID       *uuid.UUID     `json:"clone_target_id,omitempty"`
-	Plan                *VMChangePlan  `json:"plan,omitempty"`
-	AllowForceStop      bool           `json:"allow_force_stop"`
-	DeleteTarget        VMDeleteTarget `json:"delete_target,omitempty"`
-	Outcome             VMDiagnostic   `json:"outcome"`
-	CompletedAt         *time.Time     `json:"completed_at,omitempty"`
+	PreparedStorageRefs []uuid.UUID       `json:"prepared_storage_refs"`
+	CheckpointID        *uuid.UUID        `json:"checkpoint_id,omitempty"`
+	ExportID            *uuid.UUID        `json:"export_id,omitempty"`
+	CloneTargetID       *uuid.UUID        `json:"clone_target_id,omitempty"`
+	Plan                *VMChangePlan     `json:"plan,omitempty"`
+	AllowForceStop      bool              `json:"allow_force_stop"`
+	DeleteTarget        VMDeleteTarget    `json:"delete_target,omitempty"`
+	DataDisposition     VMDataDisposition `json:"data_disposition,omitempty"`
+	Outcome             VMDiagnostic      `json:"outcome"`
+	CompletedAt         *time.Time        `json:"completed_at,omitempty"`
 }
 
 // PersistentVMProvider is Item B's capability; it does not replace Hypervisor.

@@ -41,6 +41,7 @@ type VirtualizationMutation struct {
 	ExportID           *uuid.UUID                       `json:"export_id,omitempty"`
 	CloneTargetID      *uuid.UUID                       `json:"clone_target_id,omitempty"`
 	DeleteTarget       domain.VMDeleteTarget            `json:"delete_target,omitempty"`
+	DataDisposition    domain.VMDataDisposition         `json:"data_disposition,omitempty"`
 	AllowForceStop     bool                             `json:"allow_force_stop,omitempty"`
 }
 

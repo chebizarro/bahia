@@ -104,7 +104,7 @@ func (r *PgVirtualizationRepository) AdmitOperation(ctx context.Context, input V
 			if e != nil {
 				return e
 			}
-			if existing.RequestHash != o.RequestHash || existing.ResourceID != o.ResourceID || existing.Actor != o.Actor || existing.Kind != o.Kind || existing.ExpectedGeneration != o.ExpectedGeneration || existing.ResourceGeneration != o.ResourceGeneration || existing.AllowForceStop != o.AllowForceStop || existing.DeleteTarget != o.DeleteTarget || !reflect.DeepEqual(existing.CheckpointID, o.CheckpointID) || !reflect.DeepEqual(existing.ExportID, o.ExportID) || !reflect.DeepEqual(existing.CloneTargetID, o.CloneTargetID) {
+			if existing.RequestHash != o.RequestHash || existing.ResourceID != o.ResourceID || existing.Actor != o.Actor || existing.Kind != o.Kind || existing.ExpectedGeneration != o.ExpectedGeneration || existing.ResourceGeneration != o.ResourceGeneration || existing.AllowForceStop != o.AllowForceStop || existing.DeleteTarget != o.DeleteTarget || existing.DataDisposition.Effective() != o.DataDisposition.Effective() || !reflect.DeepEqual(existing.CheckpointID, o.CheckpointID) || !reflect.DeepEqual(existing.ExportID, o.ExportID) || !reflect.DeepEqual(existing.CloneTargetID, o.CloneTargetID) {
 				return ErrConflict
 			}
 			result.Operation = *existing

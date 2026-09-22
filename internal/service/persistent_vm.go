@@ -49,18 +49,19 @@ func NewPersistentVMService(cfg PersistentVMServiceConfig) (*PersistentVMService
 }
 
 type VMOperationRequest struct {
-	OrgID              uuid.UUID              `json:"org_id"`
-	DeploymentID       uuid.UUID              `json:"deployment_id"`
-	ExpectedGeneration int64                  `json:"expected_generation"`
-	IdempotencyKey     string                 `json:"idempotency_key"`
-	Reason             string                 `json:"reason"`
-	Kind               domain.VMOperationKind `json:"kind"`
-	CheckpointID       *uuid.UUID             `json:"checkpoint_id,omitempty"`
-	ExportID           *uuid.UUID             `json:"export_id,omitempty"`
-	CloneTargetID      *uuid.UUID             `json:"clone_target_id,omitempty"`
-	DeleteTarget       domain.VMDeleteTarget  `json:"delete_target,omitempty"`
-	AllowForceStop     bool                   `json:"allow_force_stop"`
-	ApprovalID         *uuid.UUID             `json:"approval_id,omitempty"`
+	OrgID              uuid.UUID                `json:"org_id"`
+	DeploymentID       uuid.UUID                `json:"deployment_id"`
+	ExpectedGeneration int64                    `json:"expected_generation"`
+	IdempotencyKey     string                   `json:"idempotency_key"`
+	Reason             string                   `json:"reason"`
+	Kind               domain.VMOperationKind   `json:"kind"`
+	CheckpointID       *uuid.UUID               `json:"checkpoint_id,omitempty"`
+	ExportID           *uuid.UUID               `json:"export_id,omitempty"`
+	CloneTargetID      *uuid.UUID               `json:"clone_target_id,omitempty"`
+	DeleteTarget       domain.VMDeleteTarget    `json:"delete_target,omitempty"`
+	DataDisposition    domain.VMDataDisposition `json:"data_disposition,omitempty"`
+	AllowForceStop     bool                     `json:"allow_force_stop"`
+	ApprovalID         *uuid.UUID               `json:"approval_id,omitempty"`
 	// Desired is a full, next-generation revision, never a patch to provider XML.
 	Desired *domain.PersistentVMDeployment `json:"desired,omitempty"`
 }
@@ -160,6 +161,9 @@ func vmHash(v any) (string, error) {
 }
 func vmRequestHash(p *auth.Principal, req VMOperationRequest) (string, error) {
 	req.ApprovalID = nil
+	if req.Kind == domain.VMOperationDelete && req.DeleteTarget == domain.VMDeleteDeployment {
+		req.DataDisposition = req.DataDisposition.Effective()
+	}
 	return vmHash(struct {
 		Actor   string
 		Request VMOperationRequest
@@ -488,7 +492,10 @@ func (s *PersistentVMService) operation(p *auth.Principal, req VMOperationReques
 	if tier == domain.VMApprovalDestructive && req.ApprovalID == nil {
 		deadline = deadline.Add(domain.VMApprovalMaxAge)
 	}
-	op := &domain.VMOperation{VirtualizationResourceMeta: domain.VirtualizationResourceMeta{SchemaVersion: 1, ID: uuid.New(), OrgID: req.OrgID, Generation: 1, CreatedBy: vmActor(p)}, LifecycleClass: domain.VMLifecyclePersistent, ResourceID: req.DeploymentID, ResourceGeneration: generation, ExpectedGeneration: req.ExpectedGeneration, IdempotencyKey: req.IdempotencyKey, RequestHash: hash, Actor: vmActor(p), Reason: req.Reason, Kind: req.Kind, Phase: domain.VMOperationAccepted, RequiredTier: tier, ApprovalID: req.ApprovalID, ProviderCorrelationID: uuid.New(), Deadline: deadline, CheckpointID: req.CheckpointID, ExportID: req.ExportID, CloneTargetID: req.CloneTargetID, DeleteTarget: req.DeleteTarget, AllowForceStop: req.AllowForceStop, Plan: plan}
+	op := &domain.VMOperation{VirtualizationResourceMeta: domain.VirtualizationResourceMeta{SchemaVersion: 1, ID: uuid.New(), OrgID: req.OrgID, Generation: 1, CreatedBy: vmActor(p)}, LifecycleClass: domain.VMLifecyclePersistent, ResourceID: req.DeploymentID, ResourceGeneration: generation, ExpectedGeneration: req.ExpectedGeneration, IdempotencyKey: req.IdempotencyKey, RequestHash: hash, Actor: vmActor(p), Reason: req.Reason, Kind: req.Kind, Phase: domain.VMOperationAccepted, RequiredTier: tier, ApprovalID: req.ApprovalID, ProviderCorrelationID: uuid.New(), Deadline: deadline, CheckpointID: req.CheckpointID, ExportID: req.ExportID, CloneTargetID: req.CloneTargetID, DeleteTarget: req.DeleteTarget, DataDisposition: req.DataDisposition, AllowForceStop: req.AllowForceStop, Plan: plan}
+	if req.Kind == domain.VMOperationDelete && req.DeleteTarget == domain.VMDeleteDeployment {
+		op.DataDisposition = req.DataDisposition.Effective()
+	}
 	if obs != nil {
 		op.ProviderFingerprint = obs.Diagnostic.EvidenceDigest
 	}
@@ -499,6 +506,9 @@ func (s *PersistentVMService) operation(p *auth.Principal, req VMOperationReques
 }
 
 func vmOperationTargets(req VMOperationRequest) error {
+	if !req.DataDisposition.Valid() || (req.DataDisposition != "" && (req.Kind != domain.VMOperationDelete || req.DeleteTarget != domain.VMDeleteDeployment)) {
+		return domain.ErrInvalidValue
+	}
 	checkpoint, export, clone := false, false, false
 	switch req.Kind {
 	case domain.VMOperationDefine, domain.VMOperationAdopt, domain.VMOperationStart, domain.VMOperationGracefulStop, domain.VMOperationReboot:

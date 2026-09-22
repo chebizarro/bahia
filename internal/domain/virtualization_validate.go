@@ -501,6 +501,12 @@ func ValidateVMOperation(o *VMOperation) error {
 	} else if o.DeleteTarget != "" {
 		return vmInvalid("delete target on non-delete operation")
 	}
+	if !o.DataDisposition.Valid() || (o.DataDisposition != "" && (o.Kind != VMOperationDelete || o.DeleteTarget != VMDeleteDeployment)) {
+		return vmInvalid("deployment data disposition")
+	}
+	if o.DataDisposition == VMDataDelete && o.RequiredTier != VMApprovalDestructive {
+		return vmInvalid("data deletion requires destructive approval")
+	}
 	if o.AllowForceStop && (o.Kind != VMOperationDelete || o.DeleteTarget != VMDeleteDeployment || o.RequiredTier != VMApprovalDestructive) {
 		return vmInvalid("force stop must be explicit tier-2 delete")
 	}
