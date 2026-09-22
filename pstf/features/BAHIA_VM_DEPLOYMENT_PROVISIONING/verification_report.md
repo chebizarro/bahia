@@ -21,7 +21,7 @@ Task: `bahia-yrt7g.3`, branch `feat/vm-deployment-provisioning`. This is **code-
 | `golangci-lint run --new-from-rev=89e3fc50 ./...` | PASS: zero integration-new findings |
 | `golangci-lint run --new-from-rev=042e881b ./...` | FAIL: 31 inherited feature diagnostics (25 errcheck, 2 ineffassign, 4 staticcheck); `bahia-yrt7g.4` |
 | Focused race: app, config, reconcile, readmodel, runtime/vm and both drivers, service, controlplane, telemetry | PASS with dependency-only checkptr workaround |
-| PostgreSQL integration race: app, repository, service, selected VM tests | PASS: app 8.853s, repository 15.666s, service 4.897s |
+| PostgreSQL integration race: app, repository, service, selected VM tests | PASS on final rerun: app 9.283s, repository 28.037s, service 4.028s |
 
 Race commands use `-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0`; only the upstream Nostr package's checkptr instrumentation is disabled. Race instrumentation and checkptr for Bahia remain enabled. Plain repo-wide race is the known `bahia-4fz4z` upstream limitation, not fixed or claimed passing here. The same dependency-only workaround is already in `make race`.
 
@@ -32,7 +32,7 @@ PostgreSQL command: `BAHIA_VM_TEST_DATABASE_URL=... go test -race -gcflags=fiatj
 - Fixed Item D initial-session handling: a new PostgreSQL execution plane has a nil observation cursor. The reconciler previously rejected it before any apply. It now CAS-rotates from the nil session while retaining generation and restart fences. The first app test failed waiting for apply before this fix.
 - Fixed Item E empty shutdown critical sections: the projector now records closed state while joining in-flight recovery; the test reads its publication count while holding that lock.
 - Early test failures also exposed invalid test setup (an offline worker and reboot of a stopped VM) and an inappropriate concurrent manual `Recover` call. Fixtures now represent an eligible worker, interrupt a start, and repeat recovery only after joined shutdown. Production admission was not weakened.
-- One whole-feature Oracle review is pending the review commit. Findings and disposition will be recorded here after that single review.
+- **Oracle review BLOCKED, not passed:** `ask_oracle(mode:"review")` was attempted against the committed whole-feature `git diff 042e881b..f302eff0`. The provider rejected every request before producing analysis: `Input exceeds the maximum length of 1048576 characters`. Fresh-chat retries with only all production patches, a production-only snapshot and finally a 7,064-token MAP-only selection still failed identically. No Oracle findings were generated, fixed or deferred as findings. Completing the required review after repairing the RepoPrompt payload/routing failure is tracked in `bahia-yrt7g.5`; integration task `bahia-yrt7g.3` remains blocked rather than falsely closed. The complete diff snapshot is `_git_data/repos/bahia-13b4155d/2026-09-22/0051`; production-only snapshot is `.../0058`.
 
 Live administrative compatibility remains `bahia-yrt7g.2`. Installation capacity observations and signed image/package evidence are prerequisites, never synthesized from configuration. Host installation/image construction, pilot and soak remain outside this integration task. No fake production provider/plane implementation or implicit fallback was added. No push is authorized.
 
