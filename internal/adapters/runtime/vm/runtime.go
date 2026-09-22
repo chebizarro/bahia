@@ -178,10 +178,9 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	if err := os.MkdirAll(r.instancesDir(), 0o700); err != nil {
 		return fmt.Errorf("creating vm instances directory: %w", err)
 	}
-	// A leftover directory without live metadata (failed prior deploy) is
-	// removed so instance creation is exclusive.
-	if err := os.RemoveAll(instanceDir); err != nil {
-		return fmt.Errorf("clearing stale vm instance directory: %w", err)
+	// Unmarked leftovers are not ours to erase, even at the expected name.
+	if err := CheckContainedPath(r.instancesDir(), instanceDir); err != nil {
+		return err
 	}
 	if err := os.Mkdir(instanceDir, 0o700); err != nil {
 		return fmt.Errorf("creating vm instance directory: %w", err)
@@ -194,6 +193,7 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	}()
 
 	spec := InstanceSpec{
+		OwnershipID:    uuid.New(),
 		Name:           name,
 		InstanceDir:    instanceDir,
 		Image:          release.ImageSpec(),
@@ -207,6 +207,7 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	specHash := ComputeSpecHash(string(r.cfg.RuntimeType), release.ManifestDigest, spec.VCPUs, spec.MemoryMB, spec.NetworkProfile)
 
 	md := &InstanceMetadata{
+		OwnershipID:          spec.OwnershipID,
 		Name:                 name,
 		ServiceName:          serviceName,
 		RuntimeType:          string(r.cfg.RuntimeType),
@@ -227,13 +228,16 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 		return fmt.Errorf("writing vm instance metadata: %w", err)
 	}
 
+	// Once driver creation begins, partial provider state must be retained unless
+	// exact ownership and successful teardown have both been established.
+	cleanupOnError = false
 	if err := r.hv.Create(ctx, spec); err != nil {
 		return fmt.Errorf("creating vm instance %q: %w", name, err)
 	}
 	if err := r.hv.Start(ctx, name); err != nil {
 		// Best-effort teardown so a failed start does not leave a defined
 		// but never-started instance behind.
-		if destroyErr := r.hv.Destroy(ctx, name); destroyErr != nil {
+		if destroyErr := r.removeInstance(ctx, md); destroyErr != nil {
 			r.logger.Warn("cleanup after failed vm start also failed",
 				zap.String("instance", name), zap.Error(destroyErr))
 		}
@@ -317,6 +321,9 @@ func (r *Runtime) removeInstance(ctx context.Context, md *InstanceMetadata) erro
 	if md.RuntimeType != string(r.cfg.RuntimeType) {
 		return fmt.Errorf("legacy VM target belongs to another runtime")
 	}
+	if err := r.verifyLegacy(ctx, md); err != nil {
+		return err
+	}
 	if err := r.hv.Destroy(ctx, md.Name); err != nil {
 		return fmt.Errorf("destroying vm instance %q: %w", md.Name, err)
 	}
@@ -369,17 +376,17 @@ func (r *Runtime) Observe(ctx context.Context, serviceID, envID uuid.UUID, servi
 		if probeErr != nil {
 			health = domain.HealthStatusUnhealthy
 			metadata["guest_agent"] = "unreachable"
-			metadata["guest_agent_error"] = probeErr.Error()
+			metadata["guest_agent_error"] = "guest_probe_failed"
 			r.logger.Debug("vm guest agent probe failed",
-				zap.String("instance", md.Name), zap.Error(probeErr))
+				zap.String("instance", md.Name), zap.String("code", "guest_probe_failed"))
 		} else {
 			metadata["guest_agent"] = "ok"
 			if probe.Metrics != nil {
 				metadata["guest_metrics"] = metricsMetadata(probe.Metrics)
 			} else if probe.MetricsErr != nil {
-				metadata["guest_metrics_error"] = probe.MetricsErr.Error()
+				metadata["guest_metrics_error"] = "guest_metrics_failed"
 				r.logger.Debug("vm guest metrics collection failed",
-					zap.String("instance", md.Name), zap.Error(probe.MetricsErr))
+					zap.String("instance", md.Name), zap.String("code", "guest_metrics_failed"))
 			}
 		}
 	}
@@ -424,6 +431,11 @@ func (r *Runtime) Restart(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
+	if err := r.verifyLegacy(ctx, md); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	if err := r.hv.Stop(ctx, md.Name, true); err != nil {
 		return fmt.Errorf("stopping vm instance %q for restart: %w", md.Name, err)
 	}
@@ -439,6 +451,11 @@ func (r *Runtime) Stop(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
+	if err := r.verifyLegacy(ctx, md); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	if err := r.hv.Stop(ctx, md.Name, true); err != nil {
 		return fmt.Errorf("stopping vm instance %q: %w", md.Name, err)
 	}

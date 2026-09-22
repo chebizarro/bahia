@@ -51,6 +51,9 @@ func TestCoordinatedCheckpointManifestAndTamperRejection(t *testing.T) {
 	f.resource.Components[domain.VMComponentNVRAM] = nvram
 	f.resource.Components[domain.VMComponentSWTPM] = tpm
 	q.Operation.PreparedStorageRefs = append(q.Operation.PreparedStorageRefs, uuid.New(), uuid.New())
+	if err := p.writeRecord(context.Background(), q.Deployment, f.resource); err != nil {
+		t.Fatal(err)
+	}
 	result, err := p.Execute(context.Background(), q)
 	if err != nil || !result.Confirmed {
 		t.Fatalf("checkpoint: %+v %v", result, err)

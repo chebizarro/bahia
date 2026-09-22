@@ -1,6 +1,17 @@
 package firecracker
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+)
+
+func validateExecutable(binary string) error {
+	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || filepath.Base(binary) != "firecracker" {
+		return fmt.Errorf("provider binary is not an absolute allowlisted executable")
+	}
+	return nil
+}
 
 // VMMIdentity identifies a supervised firecracker VMM process. PID alone is
 // not enough — PIDs are reused — so the process start time (from

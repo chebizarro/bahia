@@ -27,6 +27,8 @@ type nativeSubscription struct {
 	stop   func() bool
 	once   sync.Once
 	id     uuid.UUID
+	wire   *eventConn
+	epoch  uint64
 }
 
 func NewDomainEvents(socket, uri string) DomainEvents { return nativeEvents{socket: socket, uri: uri} }
@@ -46,7 +48,8 @@ func (n nativeEvents) Subscribe(ctx context.Context, id uuid.UUID, reboot bool) 
 		}
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	client := native.New(conn)
+	wire := &eventConn{Conn: conn}
+	client := native.New(wire)
 	fail := func(err error) (DomainSubscription, error) { stop(); conn.Close(); return nil, err }
 	if err = client.ConnectToURI(native.ConnectURI(n.uri)); err != nil {
 		return fail(err)
@@ -67,7 +70,7 @@ func (n nativeEvents) Subscribe(ctx context.Context, id uuid.UUID, reboot bool) 
 		cancel()
 		return fail(err)
 	}
-	return &nativeSubscription{conn: conn, client: client, events: events, cancel: cancel, stop: stop, id: id}, nil
+	return &nativeSubscription{conn: conn, client: client, events: events, cancel: cancel, stop: stop, id: id, wire: wire, epoch: wire.epoch.Load()}, nil
 }
 func (s *nativeSubscription) Close() error {
 	s.once.Do(func() {

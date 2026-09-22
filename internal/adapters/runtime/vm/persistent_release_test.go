@@ -66,9 +66,13 @@ func TestBootstrapRefusedBeforeDefinition(t *testing.T) {
 }
 func TestApprovedAdoptionAndRebootRetryAreIdempotent(t *testing.T) {
 	cfg, q := persistentRequest(t)
-	id := q.Deployment.Identity.ProviderResourceID
-	driver := &memoryPersistentDriver{resource: &PersistentResource{ID: id, State: domain.VMRuntimeStopped, Fingerprint: DigestBytes([]byte("foreign definition"))}}
+	driver := &memoryPersistentDriver{}
 	p, _ := NewPersistentProvider(cfg, driver)
+	if _, err := p.Execute(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	q.Operation.ID = uuid.New()
+	q.Operation.ExpectedGeneration = 1
 	q.Operation.Kind = domain.VMOperationAdopt
 	q.Operation.RequiredTier = domain.VMApprovalDestructive
 	approval := uuid.New()

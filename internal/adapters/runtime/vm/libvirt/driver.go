@@ -41,8 +41,6 @@ const (
 	domainXMLFileName  = "domain.xml"
 	consoleLogFileName = "console.log"
 	vsockFileName      = "vsock.json"
-
-	statePollInterval = 250 * time.Millisecond
 )
 
 // CommandRunner executes a host command and returns its combined output.
@@ -252,8 +250,12 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 		}
 	}
 
+	if spec.OwnershipID == uuid.Nil {
+		spec.OwnershipID = uuid.New()
+	}
 	consoleLog := filepath.Join(spec.InstanceDir, consoleLogFileName)
 	xmlData, err := domainXML(domainParams{
+		LegacyID:     spec.OwnershipID.String(),
 		Name:         spec.Name,
 		MemoryMB:     spec.MemoryMB,
 		VCPUs:        spec.VCPUs,
@@ -283,7 +285,18 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 	if _, err := d.virsh(ctx, "define", xmlPath); err != nil {
 		return fmt.Errorf("defining libvirt domain: %w", err)
 	}
-	return nil
+	actual, err := d.virsh(ctx, "dumpxml", spec.Name, "--inactive")
+	if err != nil {
+		return err
+	}
+	digest, err := normalizedXMLDigest(actual)
+	if err != nil {
+		return err
+	}
+	if err = vm.WriteLegacyProof(ctx, spec.InstanceDir, vm.LegacyProof{ID: spec.OwnershipID, Name: spec.Name, DefinitionDigest: digest}); err != nil {
+		return err
+	}
+	return d.VerifyLegacy(ctx, spec.Name, spec.OwnershipID)
 }
 
 // Start boots a defined domain.
@@ -314,34 +327,43 @@ func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
 	case vm.StateStopped:
 		return nil
 	}
+	command := "destroy"
 	if graceful {
-		if _, err := d.virsh(ctx, "shutdown", name); err != nil {
-			return fmt.Errorf("requesting shutdown of libvirt domain %q: %w", name, err)
-		}
-	} else {
-		if output, err := d.virsh(ctx, "destroy", name); err != nil && !isNotRunningOutput(output, err) {
-			return fmt.Errorf("destroying libvirt domain %q: %w", name, err)
-		}
+		command = "shutdown"
 	}
-	return d.waitForOff(ctx, name)
-}
-
-func (d *Driver) waitForOff(ctx context.Context, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	proof, err := vm.ReadLegacyProof(d.cfg.InstancesDir, name)
+	if err != nil {
+		return err
+	}
+	sub, err := d.cfg.Events.Subscribe(ctx, proof.ID, false)
+	if err != nil {
+		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
+	}
+	defer sub.Close()
+	if err = d.VerifyLegacy(ctx, name, proof.ID); err != nil {
+		return err
+	}
+	if _, err = d.virsh(ctx, command, name); err != nil {
+		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
+	}
 	for {
-		state, err := d.State(ctx, name)
+		event, err := sub.Next(ctx)
 		if err != nil {
+			return vm.ProviderError(domain.VMErrorUnconfirmed, err)
+		}
+		if event.ID != proof.ID || event.State != domain.VMRuntimeStopped {
+			continue
+		}
+		if err = d.VerifyLegacy(ctx, name, proof.ID); err != nil {
 			return err
 		}
-		if state == vm.StateStopped || state == vm.StateAbsent {
-			return nil
+		state, err := d.State(ctx, name)
+		if err != nil || state != vm.StateStopped {
+			return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 		}
-		timer := time.NewTimer(statePollInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("libvirt domain %q shutdown not confirmed: %w", name, ctx.Err())
-		case <-timer.C:
-		}
+		return nil
 	}
 }
 
@@ -359,8 +381,8 @@ func (d *Driver) Destroy(ctx context.Context, name string) error {
 		return err
 	}
 	if state != vm.StateStopped {
-		if output, err := d.virsh(ctx, "destroy", name); err != nil && !isNotRunningOutput(output, err) {
-			return fmt.Errorf("destroying libvirt domain %q: %w", name, err)
+		if err := d.Stop(ctx, name, false); err != nil {
+			return err
 		}
 	}
 	if output, err := d.virsh(ctx, "undefine", name, "--nvram"); err != nil {
@@ -466,14 +488,6 @@ func isAbsentOutput(output []byte, err error) bool {
 	return strings.Contains(text, "failed to get domain") ||
 		strings.Contains(text, "no domain with matching name") ||
 		strings.Contains(text, "domain not found")
-}
-
-// isNotRunningOutput reports whether a virsh destroy error indicates the
-// domain was already off.
-func isNotRunningOutput(output []byte, err error) bool {
-	text := strings.ToLower(string(output) + " " + err.Error())
-	return strings.Contains(text, "domain is not running") ||
-		strings.Contains(text, "domain is not active")
 }
 
 func copyFile(source, destination string, mode os.FileMode) error {

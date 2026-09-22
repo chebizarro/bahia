@@ -7,6 +7,7 @@ package vm
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"net"
 )
 
@@ -59,6 +60,7 @@ type ImageSpec struct {
 
 // InstanceSpec describes a VM instance for Hypervisor.Create.
 type InstanceSpec struct {
+	OwnershipID uuid.UUID
 	// Name is the hypervisor-visible instance name
 	// (bahia-<envID-short>-<serviceName>).
 	Name string

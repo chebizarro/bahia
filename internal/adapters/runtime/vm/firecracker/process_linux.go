@@ -25,6 +25,9 @@ func newOSProcessManager() ProcessManager {
 type linuxProcessManager struct{}
 
 func (linuxProcessManager) Start(ctx context.Context, req StartVMMRequest) (VMMIdentity, error) {
+	if err := validateExecutable(req.Binary); err != nil {
+		return VMMIdentity{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return VMMIdentity{}, err
 	}

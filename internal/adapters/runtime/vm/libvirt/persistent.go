@@ -19,6 +19,7 @@ import (
 )
 
 const ownershipNamespace = "urn:bahia:persistent-vm:2"
+const legacyNamespace = "urn:bahia:legacy-vm:1"
 
 type persistentXML struct {
 	UUID     string `xml:"uuid"`
@@ -269,6 +270,12 @@ func (d *Driver) DefinePersistent(ctx context.Context, s vm.PersistentSpec, curr
 	if domain.ValidateVMOwnershipMarker(s.Marker) != nil || s.Instance.Name != s.Marker.ProviderResourceID.String() || s.Instance.InstanceDir != d.instanceDir(s.Instance.Name) {
 		return vm.ProviderError(domain.VMErrorInvalid, nil)
 	}
+	if err := vm.CheckDefinitionBaseline(current, s.Marker); err != nil {
+		return err
+	}
+	if err := vm.CheckWritableComponents(s.Instance.InstanceDir, s.Components); err != nil {
+		return err
+	}
 	if current.State != domain.VMRuntimeAbsent && current.State != domain.VMRuntimeStopped {
 		return vm.ProviderError(domain.VMErrorConflict, nil)
 	}
@@ -332,7 +339,7 @@ func (d *Driver) DefinePersistent(ctx context.Context, s vm.PersistentSpec, curr
 		if components[kind] == "" {
 			return vm.ProviderError(domain.VMErrorIntegrity, nil)
 		}
-		if err := vm.CheckContainedPath(d.cfg.InstancesDir, components[kind]); err != nil {
+		if err := vm.CheckContainedPath(s.Instance.InstanceDir, components[kind]); err != nil {
 			return err
 		}
 	}
@@ -442,6 +449,17 @@ func (d *Driver) TransitionPersistent(ctx context.Context, r *vm.PersistentResou
 // A name-scanned v1 runtime may still observe an explicitly adopted domain,
 // but cannot mutate it after a v2 ownership marker has been installed.
 func (d *Driver) rejectPersistentLegacyMutation(ctx context.Context, name string) error {
+	return d.VerifyLegacy(ctx, name, uuid.Nil)
+}
+
+func (d *Driver) VerifyLegacy(ctx context.Context, name string, expected uuid.UUID) error {
+	proof, err := vm.ReadLegacyProof(d.cfg.InstancesDir, name)
+	if err != nil {
+		return err
+	}
+	if expected != uuid.Nil && proof.ID != expected {
+		return vm.ProviderError(domain.VMErrorForeign, nil)
+	}
 	data, err := d.virsh(ctx, "dumpxml", name, "--inactive")
 	if err != nil {
 		return err
@@ -450,10 +468,21 @@ func (d *Driver) rejectPersistentLegacyMutation(ctx context.Context, name string
 	if err = xml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
+	if doc.UUID != proof.ID.String() || doc.Name != name {
+		return vm.ProviderError(domain.VMErrorForeign, nil)
+	}
+	found := 0
 	for _, entry := range doc.Metadata.Owners {
 		if entry.XMLName.Space == ownershipNamespace {
 			return vm.ProviderError(domain.VMErrorForeign, nil)
 		}
+		if entry.XMLName.Space == legacyNamespace && entry.XMLName.Local == "ownership" && entry.Value == proof.ID.String() {
+			found++
+		}
+	}
+	digest, err := normalizedXMLDigest(data)
+	if err != nil || found != 1 || digest != proof.DefinitionDigest {
+		return vm.ProviderError(domain.VMErrorForeign, err)
 	}
 	return nil
 }

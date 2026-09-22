@@ -63,6 +63,15 @@ func (f *fakeHypervisor) Create(_ context.Context, spec InstanceSpec) error {
 	return nil
 }
 
+func (f *fakeHypervisor) VerifyLegacy(_ context.Context, name string, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == uuid.Nil || f.specs[name].OwnershipID != id {
+		return ProviderError(domain.VMErrorForeign, nil)
+	}
+	return nil
+}
+
 func (f *fakeHypervisor) Start(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,10 +69,11 @@ type PersistentProvider struct {
 }
 
 type persistentRecord struct {
-	SchemaVersion int                           `json:"schema_version"`
-	Marker        domain.VMOwnershipMarker      `json:"marker"`
-	Deployment    domain.PersistentVMDeployment `json:"deployment"`
-	Fingerprint   string                        `json:"fingerprint"`
+	SchemaVersion int                               `json:"schema_version"`
+	Marker        domain.VMOwnershipMarker          `json:"marker"`
+	Deployment    domain.PersistentVMDeployment     `json:"deployment"`
+	Fingerprint   string                            `json:"fingerprint"`
+	Components    map[domain.VMComponentKind]string `json:"components"`
 }
 
 func NewPersistentProvider(cfg PersistentConfig, driver PersistentDriver) (*PersistentProvider, error) {
@@ -111,8 +114,50 @@ func SameIdentity(a, b domain.VMResourceIdentity) bool { return reflect.DeepEqua
 
 // CheckPersistentResource is used at the last driver boundary before mutation.
 func CheckPersistentResource(expected, actual *PersistentResource) error {
-	if expected == nil || actual == nil || expected.ID != actual.ID || expected.State != actual.State || expected.Fingerprint != actual.Fingerprint || !reflect.DeepEqual(expected.Marker, actual.Marker) {
+	if expected == nil || actual == nil || expected.ID != actual.ID || expected.State != actual.State || expected.Fingerprint != actual.Fingerprint || !reflect.DeepEqual(expected.Marker, actual.Marker) || !maps.Equal(expected.Components, actual.Components) {
 		return ProviderError(domain.VMErrorConflict, nil)
+	}
+	return nil
+}
+
+// CheckDefinitionBaseline prevents redefining an unowned or substituted resource.
+func CheckDefinitionBaseline(current *PersistentResource, marker domain.VMOwnershipMarker) error {
+	if current == nil || current.ID != marker.ProviderResourceID {
+		return ProviderError(domain.VMErrorConflict, nil)
+	}
+	if current.State != domain.VMRuntimeAbsent && (current.Marker == nil || domain.ValidateVMOwnershipMarker(*current.Marker) != nil || !SameIdentity(current.Marker.VMResourceIdentity, marker.VMResourceIdentity)) {
+		return ProviderError(domain.VMErrorForeign, nil)
+	}
+	return nil
+}
+
+// CheckWritableComponents binds storage to this resource, not merely its pool.
+// Exact component paths are also persisted in the core record and compared on
+// every operation; restored sets must live under this resource's private root.
+func CheckWritableComponents(dir string, components map[domain.VMComponentKind]string) error {
+	for kind, path := range components {
+		if kind == domain.VMComponentKernel {
+			continue
+		}
+		if filepath.Clean(path) == filepath.Clean(dir) {
+			return ProviderError(domain.VMErrorIntegrity, nil)
+		}
+		if err := CheckContainedPath(dir, path); err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return ProviderError(domain.VMErrorIntegrity, err)
+		}
+		if kind == domain.VMComponentSWTPM {
+			if !info.IsDir() {
+				return ProviderError(domain.VMErrorIntegrity, nil)
+			}
+		} else if !info.Mode().IsRegular() {
+			return ProviderError(domain.VMErrorIntegrity, nil)
+		} else if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Nlink != 1 {
+			return ProviderError(domain.VMErrorIntegrity, nil)
+		}
 	}
 	return nil
 }
@@ -178,7 +223,7 @@ func (p *PersistentProvider) writeRecord(ctx context.Context, d domain.Persisten
 		return err
 	}
 	d.Observation = nil
-	data, err := json.Marshal(persistentRecord{2, *r.Marker, d, r.Fingerprint})
+	data, err := json.Marshal(persistentRecord{SchemaVersion: 2, Marker: *r.Marker, Deployment: d, Fingerprint: r.Fingerprint, Components: r.Components})
 	if err != nil {
 		return err
 	}
@@ -345,7 +390,11 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	if op.RequiredTier == domain.VMApprovalDestructive && op.ApprovalID == nil {
 		return result, ProviderError(domain.VMErrorApprovalRequired, nil)
 	}
-	ctx, cancel := p.bound(ctx, op.Kind)
+	boundKind := op.Kind
+	if op.Kind == domain.VMOperationDelete && op.DataDisposition.Effective() == domain.VMDataExport {
+		boundKind = domain.VMOperationExport
+	}
+	ctx, cancel := p.bound(ctx, boundKind)
 	defer cancel()
 	ctx, deadlineCancel := context.WithDeadline(ctx, op.Deadline)
 	defer deadlineCancel()
@@ -373,6 +422,14 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	if !absent && op.Kind != domain.VMOperationAdopt && (!owned || rec == nil || !reflect.DeepEqual(rec.Marker, *r.Marker)) {
 		return result, ProviderError(domain.VMErrorForeign, nil)
 	}
+	if !absent && op.Kind != domain.VMOperationAdopt {
+		if err := CheckWritableComponents(filepath.Dir(p.recordPath(r.ID)), r.Components); err != nil {
+			return result, err
+		}
+	}
+	if !absent && op.Kind != domain.VMOperationAdopt && (rec == nil || !maps.Equal(rec.Components, r.Components)) {
+		return result, ProviderError(domain.VMErrorIntegrity, nil)
+	}
 	if owned && r.Marker.AppliedGeneration > op.ResourceGeneration {
 		return result, ProviderError(domain.VMErrorConflict, nil)
 	}
@@ -384,8 +441,8 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	if owned && rec != nil && r.Marker.OperationID == op.ID && r.Marker.AppliedGeneration == op.ResourceGeneration {
 		confirmed := false
 		switch op.Kind {
-		case domain.VMOperationDefine, domain.VMOperationAdopt:
-			confirmed = true
+		case domain.VMOperationDefine:
+			confirmed = rec.Fingerprint == r.Fingerprint
 		case domain.VMOperationStart, domain.VMOperationReboot:
 			confirmed = r.State == domain.VMRuntimeRunning
 		case domain.VMOperationGracefulStop:
@@ -414,8 +471,29 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 		if absent || r.State != domain.VMRuntimeStopped || !sha256DigestPattern.MatchString(op.ProviderFingerprint) || op.ProviderFingerprint != r.Fingerprint {
 			return result, ProviderError(domain.VMErrorConflict, nil)
 		}
-		if domain.ValidateVMOwnershipMarker(marker) != nil {
-			return result, ProviderError(domain.VMErrorInvalid, nil)
+		// A fingerprint approval proves which resource was inspected, not which
+		// image/configuration it runs. Only recover an independently recorded
+		// applied baseline; unmeasured foreign adoption must fail closed.
+		if !owned || rec == nil || !reflect.DeepEqual(rec.Marker, *r.Marker) || rec.Fingerprint != r.Fingerprint || !maps.Equal(rec.Components, r.Components) || r.Marker.ConfigDigest != d.ConfigDigest || r.Marker.ImageDigest != q.Image.ManifestDigest || rec.Deployment.ImageID != d.ImageID {
+			return result, ProviderError(domain.VMErrorIntegrity, nil)
+		}
+		if p.cfg.VerifyImage == nil || p.cfg.ResolveRelease == nil {
+			return result, ProviderError(domain.VMErrorUnsupported, nil)
+		}
+		if err = p.cfg.VerifyImage(ctx, p.cfg.Host, q.Image); err != nil {
+			return result, ProviderError(domain.VMErrorIntegrity, err)
+		}
+		release, verifyErr := p.cfg.ResolveRelease(ctx, q.Image)
+		if verifyErr != nil || release == nil || release.ManifestDigest != r.Marker.ImageDigest {
+			return result, ProviderError(domain.VMErrorIntegrity, verifyErr)
+		}
+		d = rec.Deployment
+		d.Generation = q.Deployment.Generation
+		if reflectMarker(*r.Marker, marker) {
+			result.Observation = p.observation(d.Identity, r, rec)
+			result.Confirmed = true
+			result.RetainedStorageRefs = nil
+			return result, nil
 		}
 		if err = p.driver.AdoptPersistent(ctx, r, marker); err != nil {
 			return result, err
@@ -440,33 +518,7 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 		if op.DeleteTarget != domain.VMDeleteDeployment {
 			return p.deleteArtifact(ctx, q, result)
 		}
-		if !absent {
-			for kind, path := range r.Components {
-				if kind == domain.VMComponentKernel {
-					continue
-				}
-				if CheckContainedPath(filepath.Dir(p.recordPath(r.ID)), path) != nil {
-					return result, ProviderError(domain.VMErrorUnsupported, nil)
-				}
-			}
-			if err = p.driver.TransitionPersistent(ctx, r, op.Kind, op.AllowForceStop); err != nil {
-				return result, err
-			}
-		}
-		after, e := p.driver.InspectPersistent(ctx, r.ID)
-		if e != nil || after.State != domain.VMRuntimeAbsent {
-			return result, ProviderError(domain.VMErrorUnconfirmed, e)
-		}
-		// Definition absence is not enough to authorize arbitrary storage cleanup.
-		if rec != nil && SameIdentity(rec.Marker.VMResourceIdentity, d.Identity) {
-			if err = os.RemoveAll(filepath.Dir(p.recordPath(r.ID))); err != nil {
-				return result, err
-			}
-		}
-		result.Observation = p.observation(d.Identity, after, nil)
-		result.Confirmed = true
-		result.RetainedStorageRefs = nil
-		return result, nil
+		return p.deleteDeployment(ctx, q, r, rec, result)
 	default:
 		return result, ProviderError(domain.VMErrorUnsupported, nil)
 	}

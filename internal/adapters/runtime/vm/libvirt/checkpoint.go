@@ -3,6 +3,7 @@ package libvirt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -10,6 +11,66 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+type coldTPMLockKey struct{}
+
+func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (vm.ColdCopyGuard, error) {
+	if r.State != domain.VMRuntimeStopped || r.Marker == nil {
+		return nil, vm.ProviderError(domain.VMErrorConflict, nil)
+	}
+	sub, err := d.cfg.Events.Subscribe(ctx, r.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	barrier, ok := sub.(interface{ CheckCold(context.Context) error })
+	if !ok {
+		sub.Close()
+		return nil, vm.ProviderError(domain.VMErrorUnsupported, nil)
+	}
+	var lock *os.File
+	if path := r.Components[domain.VMComponentSWTPM]; path != "" {
+		lockPath := filepath.Join(path, ".lock")
+		if err = vm.CheckContainedPath(d.instanceDir(r.ID.String()), lockPath); err == nil {
+			lock, err = os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+		}
+		if err == nil {
+			stateLock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: 0, Start: 0, Len: 0}
+			err = syscall.FcntlFlock(lock.Fd(), syscall.F_SETLK, &stateLock)
+		}
+		if err != nil {
+			if lock != nil {
+				lock.Close()
+			}
+			sub.Close()
+			return nil, vm.ProviderError(domain.VMErrorConflict, err)
+		}
+		ctx = context.WithValue(ctx, coldTPMLockKey{}, path)
+	}
+	guard := vm.NewInvalidatingCopy(ctx, func(ctx context.Context) error {
+		for {
+			event, err := sub.Next(ctx)
+			if err != nil || event.ID == r.ID {
+				return err
+			}
+		}
+	}, func() error {
+		err := sub.Close()
+		if lock != nil {
+			err = errors.Join(err, lock.Close())
+		}
+		return err
+	}, func(ctx context.Context) error {
+		if err := d.recheck(ctx, r); err != nil {
+			return err
+		}
+		return barrier.CheckCold(ctx)
+	})
+	if err = guard.Check(ctx); err != nil {
+		guard.Close()
+		return nil, err
+	}
+	return guard, nil
+}
 
 func (d *Driver) CopyPersistentComponent(ctx context.Context, kind domain.VMComponentKind, source, dest string) error {
 	if err := vm.CheckContainedPath(d.cfg.InstancesDir, source); err != nil {
@@ -51,6 +112,9 @@ func (d *Driver) CopyPersistentComponent(ctx context.Context, kind domain.VMComp
 	case domain.VMComponentNVRAM:
 		return vm.CopyRegularFile(ctx, source, dest)
 	case domain.VMComponentSWTPM:
+		if locked, _ := ctx.Value(coldTPMLockKey{}).(string); locked == source {
+			return vm.PackTPM(ctx, source, dest)
+		}
 		// swtpm owns this lock while its state backend is active. Do not copy even
 		// an apparently stopped domain's state if its emulator still holds the lock.
 		lockPath := filepath.Join(source, ".lock")

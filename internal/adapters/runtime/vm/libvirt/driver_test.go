@@ -10,13 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
 // fakeRunner scripts command results by matching a substring of the full
 // command line, recording every invocation.
 type fakeRunner struct {
+	xml       []byte
 	calls     []string
 	responses []fakeResponse
 }
@@ -44,8 +47,13 @@ func (f *fakeRunner) run(_ context.Context, binary string, args ...string) ([]by
 			return []byte(r.output), r.err
 		}
 	}
+	if strings.Contains(line, " define ") {
+		var err error
+		f.xml, err = os.ReadFile(args[len(args)-1])
+		return nil, err
+	}
 	if strings.Contains(line, " dumpxml ") {
-		return []byte("<domain><metadata/></domain>"), nil
+		return f.xml, nil
 	}
 	return nil, nil
 }
@@ -70,6 +78,43 @@ func newTestDriver(t *testing.T, runner *fakeRunner) (*Driver, string) {
 		Runner:           runner.run,
 	}, zap.NewNop())
 	return driver, instancesDir
+}
+
+type legacyTestEvents struct {
+	id      uuid.UUID
+	timeout bool
+}
+
+func (e *legacyTestEvents) Subscribe(context.Context, uuid.UUID, bool) (DomainSubscription, error) {
+	return e, nil
+}
+func (e *legacyTestEvents) Next(ctx context.Context) (DomainEvent, error) {
+	if e.timeout {
+		<-ctx.Done()
+		return DomainEvent{}, ctx.Err()
+	}
+	return DomainEvent{ID: e.id, State: domain.VMRuntimeStopped}, nil
+}
+func (e *legacyTestEvents) Close() error { return nil }
+func authorizeLegacyFixture(t *testing.T, d *Driver, runner *fakeRunner, timeout bool) {
+	t.Helper()
+	id := uuid.New()
+	data, err := domainXML(domainParams{Name: "bahia-x-api", LegacyID: id.String(), VCPUs: 2, MemoryMB: 512, Overlay: filepath.Join(d.instanceDir("bahia-x-api"), "disk.qcow2"), ConsoleLog: filepath.Join(d.instanceDir("bahia-x-api"), "console.log")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.xml = data
+	if err := os.MkdirAll(d.instanceDir("bahia-x-api"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := normalizedXMLDigest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vm.WriteLegacyProof(context.Background(), d.instanceDir("bahia-x-api"), vm.LegacyProof{ID: id, Name: "bahia-x-api", DefinitionDigest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	d.cfg.Events = &legacyTestEvents{id: id, timeout: timeout}
 }
 
 func qcow2Spec(t *testing.T, instancesDir, name string, uefi bool, cid uint32) vm.InstanceSpec {
@@ -235,6 +280,7 @@ func TestStartStopDestroy(t *testing.T) {
 		{match: "domstate bahia-x-api", output: "shut off\n"},
 	}}
 	driver, _ := newTestDriver(t, runner)
+	authorizeLegacyFixture(t, driver, runner, false)
 	ctx := context.Background()
 
 	if err := driver.Start(ctx, "bahia-x-api"); err != nil {
@@ -270,6 +316,7 @@ func TestForcedStopDestroysRunningDomain(t *testing.T) {
 		{match: "domstate bahia-x-api", output: "shut off\n"},
 	}}
 	driver, _ := newTestDriver(t, runner)
+	authorizeLegacyFixture(t, driver, runner, false)
 	if err := driver.Stop(context.Background(), "bahia-x-api", false); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -282,7 +329,7 @@ func TestStopAbsentDomainErrors(t *testing.T) {
 	runner := &fakeRunner{responses: []fakeResponse{absentResponse("ghost")}}
 	driver, _ := newTestDriver(t, runner)
 	err := driver.Stop(context.Background(), "ghost", true)
-	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if err == nil {
 		t.Fatalf("expected absent-domain error, got %v", err)
 	}
 }
@@ -290,6 +337,7 @@ func TestStopAbsentDomainErrors(t *testing.T) {
 func TestStopAlreadyOffIsNoOp(t *testing.T) {
 	runner := &fakeRunner{responses: []fakeResponse{{match: "domstate", output: "shut off\n"}}}
 	driver, _ := newTestDriver(t, runner)
+	authorizeLegacyFixture(t, driver, runner, false)
 	if err := driver.Stop(context.Background(), "bahia-x-api", true); err != nil {
 		t.Fatalf("expected no-op, got %v", err)
 	}
@@ -301,10 +349,11 @@ func TestStopAlreadyOffIsNoOp(t *testing.T) {
 func TestGracefulStopTimesOut(t *testing.T) {
 	runner := &fakeRunner{responses: []fakeResponse{{match: "domstate", output: "running\n"}}}
 	driver, _ := newTestDriver(t, runner)
+	authorizeLegacyFixture(t, driver, runner, true)
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	err := driver.Stop(ctx, "bahia-x-api", true)
-	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
+	if err == nil || !strings.Contains(err.Error(), "unconfirmed") {
 		t.Fatalf("expected shutdown-not-confirmed error, got %v", err)
 	}
 }

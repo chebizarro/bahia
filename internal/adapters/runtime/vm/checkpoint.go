@@ -376,6 +376,14 @@ func (p *PersistentProvider) transfer(ctx context.Context, q domain.VMProviderOp
 		if q.Operation.Kind == domain.VMOperationClone && dest.State != domain.VMRuntimeAbsent {
 			return result, ProviderError(domain.VMErrorConflict, nil)
 		}
+		if q.Operation.Kind == domain.VMOperationRestore {
+			if err = CheckPersistentResource(r, dest); err != nil {
+				return result, err
+			}
+			// Preserve admission's ownership/config baseline through the driver
+			// recheck; a fresh foreign/stopped resource is not a new authority.
+			dest = r
+		}
 		dir := filepath.Dir(p.recordPath(dest.ID))
 		if err = CheckContainedPath(p.cfg.StateDir, dir); err != nil {
 			return result, err
@@ -500,6 +508,19 @@ func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProvider
 		result.RetainedStorageRefs = nil
 		return result, nil
 	}
+	fenced, ok := p.driver.(ColdCopyDriver)
+	if !ok {
+		return result, ProviderError(domain.VMErrorUnsupported, nil)
+	}
+	guard, err := fenced.BeginColdCopy(ctx, r)
+	if err != nil {
+		return result, err
+	}
+	defer guard.Close()
+	ctx = guard.Context()
+	if err = guard.Check(ctx); err != nil {
+		return result, err
+	}
 	stage, err := p.stage(dir)
 	if err != nil {
 		return result, err
@@ -533,6 +554,9 @@ func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProvider
 		}
 		c.Components = append(c.Components, domain.VMComponent{Kind: kind, StorageRef: ref, Digest: digest, SizeBytes: size})
 	}
+	if err = guard.Check(ctx); err != nil {
+		return result, err
+	}
 	// Recheck stopped identity/configuration after all copies before publication.
 	after, err := p.driver.InspectPersistent(ctx, r.ID)
 	if err != nil {
@@ -547,6 +571,9 @@ func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProvider
 		return result, ProviderError(domain.VMErrorInvalid, err)
 	}
 	if err = writeJSON(ctx, filepath.Join(stage, "manifest.json"), c); err != nil {
+		return result, err
+	}
+	if err = guard.Check(ctx); err != nil {
 		return result, err
 	}
 	if err = commitDirectory(stage, dir); err != nil {

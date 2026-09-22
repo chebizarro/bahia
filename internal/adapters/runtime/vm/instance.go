@@ -38,15 +38,16 @@ func InstancesDir(stateDir string) string {
 // core's source of truth for target-name -> instance resolution and feeds
 // drift (image digest, spec hash) through Observe.
 type InstanceMetadata struct {
-	Name          string `json:"name"`
-	ServiceName   string `json:"service_name"`
-	EnvironmentID string `json:"environment_id,omitempty"`
-	RuntimeType   string `json:"runtime_type"`
-	ImageRepo     string `json:"image_repo"`
-	ImageDigest   string `json:"image_digest"`
-	ImageID       string `json:"image_id"`
-	ReleaseDir    string `json:"release_dir"`
-	SpecHash      string `json:"spec_hash"`
+	OwnershipID   uuid.UUID `json:"ownership_id,omitempty"`
+	Name          string    `json:"name"`
+	ServiceName   string    `json:"service_name"`
+	EnvironmentID string    `json:"environment_id,omitempty"`
+	RuntimeType   string    `json:"runtime_type"`
+	ImageRepo     string    `json:"image_repo"`
+	ImageDigest   string    `json:"image_digest"`
+	ImageID       string    `json:"image_id"`
+	ReleaseDir    string    `json:"release_dir"`
+	SpecHash      string    `json:"spec_hash"`
 	// AgentProtocolVersion is the guest-agent protocol version declared by
 	// the release manifest at deploy time. Zero or 1 means the image ships
 	// no service-mode agent: hypervisor-running is sufficient for healthy.

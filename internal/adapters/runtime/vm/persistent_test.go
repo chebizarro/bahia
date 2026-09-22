@@ -43,9 +43,15 @@ type memoryPersistentDriver struct {
 	mutations      int
 	failTransition bool
 	failCopy       domain.VMComponentKind
+	inspectHook    func()
+	copyHook       func()
+	coldInvalid    bool
 }
 
 func (f *memoryPersistentDriver) InspectPersistent(_ context.Context, id uuid.UUID) (*PersistentResource, error) {
+	if f.inspectHook != nil {
+		f.inspectHook()
+	}
 	if f.resource == nil || f.resource.ID != id {
 		return &PersistentResource{ID: id, State: domain.VMRuntimeAbsent}, nil
 	}
@@ -91,6 +97,9 @@ func (f *memoryPersistentDriver) TransitionPersistent(_ context.Context, r *Pers
 	return nil
 }
 func (f *memoryPersistentDriver) CopyPersistentComponent(ctx context.Context, k domain.VMComponentKind, src, dst string) error {
+	if f.copyHook != nil {
+		f.copyHook()
+	}
 	if f.failCopy == k {
 		return errors.New("missing component")
 	}
@@ -98,6 +107,24 @@ func (f *memoryPersistentDriver) CopyPersistentComponent(ctx context.Context, k 
 		return PackTPM(ctx, src, dst)
 	}
 	return CopyRegularFile(ctx, src, dst)
+}
+
+type memoryColdGuard struct {
+	ctx      context.Context
+	driver   *memoryPersistentDriver
+	baseline *PersistentResource
+}
+
+func (g memoryColdGuard) Context() context.Context { return g.ctx }
+func (g memoryColdGuard) Close() error             { return nil }
+func (g memoryColdGuard) Check(ctx context.Context) error {
+	if g.driver.coldInvalid {
+		return ProviderError(domain.VMErrorConflict, nil)
+	}
+	return CheckPersistentResource(g.baseline, g.driver.resource)
+}
+func (f *memoryPersistentDriver) BeginColdCopy(ctx context.Context, r *PersistentResource) (ColdCopyGuard, error) {
+	return memoryColdGuard{ctx, f, r}, nil
 }
 
 func TestLegacyLookupRejectsAmbiguityAndMismatchedDirectory(t *testing.T) {

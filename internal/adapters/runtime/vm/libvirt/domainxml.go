@@ -10,6 +10,7 @@ import (
 
 // domainParams collects everything the persistent-domain XML needs.
 type domainParams struct {
+	LegacyID     string
 	NetworkType  string
 	NetworkName  string
 	Marker       *domain.VMOwnershipMarker
@@ -61,6 +62,9 @@ func domainXML(p domainParams) ([]byte, error) {
 	var doc bytes.Buffer
 	doc.WriteString(xml.Header)
 	fmt.Fprintf(&doc, "<domain type=\"kvm\">\n  <name>%s</name>\n", xmlText(p.Name))
+	if p.LegacyID != "" {
+		fmt.Fprintf(&doc, "  <uuid>%s</uuid>\n  <metadata><ownership xmlns=\"%s\">%s</ownership></metadata>\n", xmlText(p.LegacyID), legacyNamespace, xmlText(p.LegacyID))
+	}
 	if p.Marker != nil {
 		data, err := json.Marshal(p.Marker)
 		if err != nil {

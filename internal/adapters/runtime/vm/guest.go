@@ -108,10 +108,10 @@ func probeGuestAgent(ctx context.Context, hv Hypervisor, name, imageID string, p
 }
 
 // guestFrameError turns an unexpected frame into a descriptive error,
-// surfacing guest-agent error frames verbatim.
+// retaining only host-defined categories, never guest-supplied diagnostics.
 func guestFrameError(want string, frame protocol.Frame) error {
-	if errFrame, ok := frame.(protocol.ErrorFrame); ok {
-		return fmt.Errorf("guest agent error: %s", errFrame.Message)
+	if _, ok := frame.(protocol.ErrorFrame); ok {
+		return fmt.Errorf("guest agent rejected request")
 	}
 	return fmt.Errorf("expected %s frame, got %s", want, protocol.TypeOf(frame))
 }

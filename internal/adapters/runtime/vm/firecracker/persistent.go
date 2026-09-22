@@ -32,6 +32,9 @@ func (d *Driver) InspectPersistent(ctx context.Context, id uuid.UUID) (*vm.Persi
 	r := &vm.PersistentResource{ID: id, State: domain.VMRuntimeAbsent, Components: map[domain.VMComponentKind]string{}}
 	data, err := os.ReadFile(filepath.Join(dir, vmConfigFileName))
 	if errors.Is(err, os.ErrNotExist) {
+		if err := d.confirmProcessAbsent(ctx, id.String()); err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 	if err != nil {
@@ -102,6 +105,37 @@ func (d *Driver) InspectPersistent(ctx context.Context, id uuid.UUID) (*vm.Persi
 	}
 	return r, nil
 }
+
+// Missing configuration is not evidence that a VMM is gone. A valid recorded
+// process must be confirmed dead; unexplained sockets or malformed records fail
+// closed so deletion cannot remove the only remaining supervision evidence.
+func (d *Driver) confirmProcessAbsent(ctx context.Context, name string) error {
+	record, err := d.readRecord(name)
+	if err != nil {
+		return vm.ProviderError(domain.VMErrorIntegrity, err)
+	}
+	if record != nil {
+		if record.PID <= 0 || record.StartTime == 0 || record.Marker != d.apiSocketPath(name) {
+			return vm.ProviderError(domain.VMErrorIntegrity, nil)
+		}
+		manager, ok := d.cfg.Processes.(PersistentProcessManager)
+		if !ok {
+			return vm.ProviderError(domain.VMErrorUnsupported, nil)
+		}
+		alive, err := manager.InspectProcess(ctx, record.VMMIdentity, record.Marker)
+		if err != nil || alive {
+			return vm.ProviderError(domain.VMErrorUnconfirmed, err)
+		}
+		return nil
+	}
+	for _, file := range []string{apiSocketFileName, vsockSocketFileName} {
+		if _, err := os.Lstat(filepath.Join(d.instanceDir(name), file)); !errors.Is(err, os.ErrNotExist) {
+			return vm.ProviderError(domain.VMErrorIntegrity, err)
+		}
+	}
+	return nil
+}
+
 func (d *Driver) ListPersistent(ctx context.Context) ([]uuid.UUID, error) {
 	entries, err := os.ReadDir(d.cfg.InstancesDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -122,11 +156,8 @@ func (d *Driver) ListPersistent(ctx context.Context) ([]uuid.UUID, error) {
 		if err != nil || id == uuid.Nil {
 			continue
 		}
-		if _, err = os.Stat(filepath.Join(d.instanceDir(e.Name()), vmConfigFileName)); err == nil {
-			ids = append(ids, id)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
+		// Include orphaned process records even when the definition vanished.
+		ids = append(ids, id)
 	}
 	return ids, nil
 }
@@ -160,6 +191,12 @@ func (d *Driver) DefinePersistent(ctx context.Context, s vm.PersistentSpec, curr
 	if s.Deployment.Firmware != domain.VMFirmwareNone || s.Deployment.TPM.Enabled || s.Deployment.Autostart {
 		return vm.ProviderError(domain.VMErrorUnsupported, nil)
 	}
+	if err := vm.CheckDefinitionBaseline(current, s.Marker); err != nil {
+		return err
+	}
+	if err := vm.CheckWritableComponents(s.Instance.InstanceDir, s.Components); err != nil {
+		return err
+	}
 	if current.State != domain.VMRuntimeAbsent && current.State != domain.VMRuntimeStopped {
 		return vm.ProviderError(domain.VMErrorConflict, nil)
 	}
@@ -184,7 +221,7 @@ func (d *Driver) DefinePersistent(ctx context.Context, s vm.PersistentSpec, curr
 	if len(components) != 2 || components[domain.VMComponentKernel] == "" || components[domain.VMComponentRootFS] == "" {
 		return vm.ProviderError(domain.VMErrorIntegrity, nil)
 	}
-	if err := vm.CheckContainedPath(d.cfg.InstancesDir, components[domain.VMComponentRootFS]); err != nil {
+	if err := vm.CheckContainedPath(s.Instance.InstanceDir, components[domain.VMComponentRootFS]); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(components[domain.VMComponentRootFS], os.O_RDWR, 0600)
@@ -243,7 +280,7 @@ func (d *Driver) TransitionPersistent(ctx context.Context, r *vm.PersistentResou
 		if !filepath.IsAbs(d.cfg.Binary) || filepath.Base(d.cfg.Binary) != "firecracker" {
 			return vm.ProviderError(domain.VMErrorInvalid, nil)
 		}
-		if err := d.startVMM(ctx, name); err != nil {
+		if err := d.startPersistentVMM(ctx, name); err != nil {
 			return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 		}
 		after, err := d.InspectPersistent(ctx, r.ID)
@@ -348,7 +385,28 @@ func inspectAPI(ctx context.Context, socket string) (domain.VMRuntimeState, erro
 }
 
 func (d *Driver) rejectPersistentLegacyMutation(name string) error {
+	return d.VerifyLegacy(context.Background(), name, uuid.Nil)
+}
+func (d *Driver) VerifyLegacy(ctx context.Context, name string, expected uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	proof, err := vm.ReadLegacyProof(d.cfg.InstancesDir, name)
+	if err != nil {
+		return err
+	}
+	if expected != uuid.Nil && proof.ID != expected {
+		return vm.ProviderError(domain.VMErrorForeign, nil)
+	}
 	if _, err := os.Lstat(filepath.Join(d.instanceDir(name), ownershipFile)); !errors.Is(err, os.ErrNotExist) {
+		return vm.ProviderError(domain.VMErrorForeign, err)
+	}
+	path := filepath.Join(d.instanceDir(name), vmConfigFileName)
+	if err := vm.CheckContainedPath(d.cfg.InstancesDir, path); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || vm.DigestBytes(data) != proof.DefinitionDigest {
 		return vm.ProviderError(domain.VMErrorForeign, err)
 	}
 	return nil
