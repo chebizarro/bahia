@@ -1,5 +1,21 @@
 # Nostr Integration
 
+## Virtualization subscriptions
+
+VM/plane intents use ContextVM 25910; acknowledgments are admission, not execution
+completion. Follow returned signer/coordinates on 30900 state and 4903 audit with
+`domain=virtualization`. Explicit lifecycle classes distinguish persistent VMs
+from both Loom job classes. Schemas are `bahia.state.virtualization.v1` and
+`bahia.audit.virtualization.v1`; no new numeric kind is introduced.
+
+Subscribe narrowly by author, state `#d` or audit `#state`, and `#org`. Validate
+IDs/signatures/timestamps/content, deduplicate event IDs, reject older journal
+sequences/generations, retain subscriptions after EOSE and handle CLOSED/AUTH
+plus reconnect. Filters are not confidentiality controls: only safe public DTOs
+are emitted, never bootstrap values, raw evidence or console content.
+[Methods, coordinates and examples](features/virtual-machines.md).
+
+
 Bahia is **Nostr-native** — Nostr events are the primary control plane, not just an audit log.
 
 ## Overview

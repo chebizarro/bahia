@@ -1,5 +1,20 @@
 # MCP Tools Reference
 
+## Virtualization ContextVM tools
+
+The virtualization methods are registered in the signed ContextVM transport,
+not as unsigned HTTP MCP mutation aliases. Use `virtualization-host/list|get`,
+`vm-image/list|get|register`, `persistent-vm/list|get|create|update|operate`,
+`execution-plane/list|get|create|update|reconcile`, `vm-checkpoint/list|get`,
+`vm-export/list|get`, and `vm-operation/get|approve|cancel`.
+
+Every request includes `org_id` and an authenticated signing principal. Reads
+require `deployments:read`; intents require `deployments:write` plus C/D's action
+approval checks. Unwired mutation adapters report unavailable. Never put resolved
+credentials into arguments; only authorized SecretRefs are valid bootstrap input.
+[Parameters, acknowledgments and query examples](features/virtual-machines.md).
+
+
 Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
 ## Connect and discover

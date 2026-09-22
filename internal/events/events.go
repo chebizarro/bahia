@@ -12,6 +12,10 @@ import (
 type EventType string
 
 const (
+	EventVirtualizationResourceChanged    EventType = "virtualization.resource_changed"
+	EventVMOperationTransitioned          EventType = "virtualization.operation_transitioned"
+	EventExecutionPlaneProbeChanged       EventType = "virtualization.plane_probe_changed"
+	EventVirtualizationProjectionGap      EventType = "virtualization.projection_gap"
 	EventServiceCreated                   EventType = "service.created"
 	EventServiceUpdated                   EventType = "service.updated"
 	EventServiceDeleted                   EventType = "service.deleted"
@@ -72,6 +76,17 @@ const (
 	EventRollbackNotAttributable          EventType = "rollback.not_attributable"
 	EventRollbackSuppressedDouble         EventType = "rollback.suppressed_double"
 )
+
+// VirtualizationChange is a wakeup, never an authoritative snapshot. C/D publish
+// it after a successful repository transaction. Sequence may be zero when the
+// producer does not know the journal high-water mark; consumers drain ListChanges.
+// A detected delivery gap uses EventVirtualizationProjectionGap with the tenant ID.
+// Payloads deliberately contain no provider evidence or credentials.
+type VirtualizationChange struct {
+	OrgID      string `json:"org_id"`
+	ResourceID string `json:"resource_id,omitempty"`
+	Sequence   int64  `json:"sequence,omitempty"`
+}
 
 // ResourceData carries projection-relevant resource identifiers in internal
 // events. Fields are strings to keep this package decoupled from domain UUID

@@ -1,5 +1,16 @@
 # Deployments
 
+## Persistent VM deployments
+
+Typed persistent VMs use the separate `persistent-vm/*` ContextVM surface and
+`/api/v1/persistent-vms` read-only compatibility route. They do not change existing
+deployment-run handlers or invoke legacy replace-all `Deploy`. C/D admission
+adapters enforce exact identity, generation, idempotency and destructive approval;
+unwired adapters fail unavailable. Admission is not completion: follow the
+returned VM/operation coordinates on canonical state and audit events.
+See [Virtual machines](virtual-machines.md) for safe public connections and scope.
+
+
 **Deployments** in Bahia follow an intent-based workflow: you declare what you want deployed, policies are evaluated, and workers execute the deployment.
 
 ## Deployment Workflow

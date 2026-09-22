@@ -1,5 +1,23 @@
 # VM Runtimes: Operating vm-qemu and vm-firecracker Environments
 
+## Resource-managed VMs versus the legacy service runtime
+
+The configuration/lifecycle descriptions below cover the existing service-runtime
+adapter. The typed persistent resource API is a separate admission path over the
+shared provider machinery, not a call to legacy replacement `Deploy`.
+See [Virtual machines](user-guide/features/virtual-machines.md) for the query,
+ContextVM and public observability contract. Its C/D mutation adapters must be
+wired before those intents become available.
+
+Ownership is verified from resource identity, never `bahia-` names. Persistent
+VMs, Loom Firecracker job microVMs and Loom QEMU job domains are explicit separate
+classes. Persistent observations keep runtime state, availability, drift and guest
+health separate; hypervisor-running alone does not prove a healthy guest agent.
+Connection metadata is public-safe; credentials, bootstrap values, console
+contents and provider evidence are not published. Execution-plane probes do not
+advertise Windows QEMU job capability.
+
+
 Bahia can deploy and monitor long-lived VM instances as environment services with
 the same lifecycle, observation, drift, and log surfaces containers get. Two
 runtime types are available:
@@ -249,4 +267,7 @@ Guest-agent-based structured log streaming is out of scope for v1.
 by the request context, before reporting success; `Undeploy` force-stops,
 removes the hypervisor definition (including per-instance NVRAM), and
 deletes the instance state directory. Redeploying a service replaces its
-existing instance atomically from the freshly resolved release.
+existing instance from the freshly resolved release. This legacy path destroys
+the old instance before replacement; it is not an atomic handover and must not
+be used for typed persistent-resource updates. Typed lifecycle mutations go
+through generation checks, service-owned approvals and exact provider identity.

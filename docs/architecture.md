@@ -1,5 +1,26 @@
 # Bahia Architecture
 
+## Virtualization resource control plane
+
+Typed virtualization resources remain PostgreSQL-authoritative. The public API,
+ContextVM reads and canonical projections share an explicit DTO allowlist; none
+serializes private resource documents directly. C/D admission services are
+injected through `internal/app/virtualization.go`; until wired, mutations return
+unavailable rather than invoking repositories or providers from handlers.
+
+The existing constructor (`internal/app/app.go`) composes queries, startup journal
+recovery, event subscriptions and metrics. REST registration is in
+`internal/api/router/router.go` plus `virtualization.go`; ContextVM methods use
+`EncryptedRequestTransport.RegisterContextVMHandler` in
+`internal/controlplane/encrypted_transport.go`. Committed in-process events wake
+journal replay, with durable author/tenant cursors and the signed-event outbox;
+no PostgreSQL notification producer or polling queue is introduced.
+
+Persistent VM ownership is distinct from both Loom ephemeral lifecycle classes.
+See [Virtual machines and execution planes](user-guide/features/virtual-machines.md)
+for public contracts, approval gates, capability rules and integration status.
+
+
 ## Overview
 
 Bahia is a **deployment and runtime control plane**. Its core responsibilities are still familiar:

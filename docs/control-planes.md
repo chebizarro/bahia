@@ -1,5 +1,22 @@
 # Bahia Control Planes
 
+## Virtualization control boundary
+
+`virtualization-host`, `vm-image`, `persistent-vm`, `execution-plane`,
+`vm-checkpoint`, `vm-export` and `vm-operation` have tenant-authorized ContextVM
+reads and query-only REST compatibility routes. Mutation methods delegate only
+to injected C/D admission services; absent adapters or durable projection wiring
+return unavailable. Acknowledgments identify resource/generation/operation and
+the canonical signer/coordinates; they do not report provider completion.
+
+Canonical 30900 snapshots and 4903 audit facts carry only explicit public DTOs.
+In-process post-commit signals wake durable journal replay, also run at startup
+and on detected gaps. No database notification producer, polling queue or REST
+mutation implementation is added. Loom retains per-job lifecycle ownership;
+Bahia owns persistent resources and execution-plane desired state/probes.
+See [Virtual machines](user-guide/features/virtual-machines.md).
+
+
 Bahia's supported control-plane contract is now sidecar-first and Nostr-native. Agents implementing Nostr events should use `docs/nostr-event-implementation-guide.md` as the Bahia-specific authority for event-kind selection, event shapes, migration boundaries, and Cascadia fleet interoperability.
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.

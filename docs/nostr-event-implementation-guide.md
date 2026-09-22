@@ -1,5 +1,32 @@
 # Bahia Nostr Event Implementation Guide
 
+## Virtualization public projection contract
+
+Virtualization reuses `CASControlState`/30900 and `CASAudit`/4903, consistent with
+Cascadia registry CF-9 state and audit semantics; it allocates no numeric kind and
+adds no legacy production kind. ContextVM intents remain 25910 with configured
+wrapping. It emits no new NIP-38 status family.
+
+Both projections require `domain=virtualization`, explicit `entity`, `schema`,
+`org`, `generation`, journal `sequence` and explicit `lifecycle_class` tags.
+State uses `schema=bahia.state.virtualization.v1` and `d=<resource-prefix>:<uuid>`;
+resource prefixes are `virtualization-host`, `vm-image`, `persistent-vm`,
+`execution-plane`, `vm-checkpoint`, `vm-export`, `vm-operation`. Audit uses
+`schema=bahia.audit.virtualization.v1`, `type=<journal change type>`,
+`state=<coordinate>` and `protected=true`, without `d`. Public actors use `p`;
+operation correlation uses a UUID `correlation` tag. Internal `journal` tags bind
+outbox records to tenant/sequence/output type for crash-safe deduplication.
+
+Content contains a full public-safe `resource`, never private repository JSON;
+bootstrap, storage locations, arbitrary labels, console contents and raw provider
+errors are excluded. Every audit fact is preserved; state coalesces per replay
+page. Persisted signed events precede cursor advancement. Same-coordinate state
+publication is serialized/rate-limited to avoid same-second ties; clients must
+also reject older sequences/generations. The existing bus provides live wakeups,
+and startup/gap recovery drains the journal without DB notifications or polling.
+See the [operator contract](user-guide/features/virtual-machines.md).
+
+
 This guide is the Bahia-specific implementation policy for Nostr event kinds, event shapes, and Cascadia fleet interoperability. It adapts the Cascadia Nostr-native event strategy into rules that agents working in this repository can apply directly.
 
 Use this guide before adding, publishing, subscribing to, decoding, migrating, or documenting any Nostr event.

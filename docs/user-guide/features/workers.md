@@ -1,5 +1,18 @@
 # Workers
 
+## Execution-plane capability evidence
+
+`execution-plane/list|get` exposes public desired/probe metadata for the explicit
+`loom_firecracker_job_microvm` and `loom_qemu_job_domain` classes. Bahia manages
+plane package/config/image pins and capacity; Loom still owns each job VM.
+Expected capabilities and a historical probe-success flag are not scheduling
+grants. D owns fresh authenticated capability contributions, expiry and retraction;
+failed or stale probes remove eligibility. Windows QEMU job capability is never
+advertised, and unavailable plane administration never falls back to host shells.
+[Virtual machines and execution planes](virtual-machines.md) documents the
+queries, metrics and fail-closed mutation integration gate.
+
+
 **Workers** in Bahia execute deployments, run ML inference, and perform operational tasks. They are typically Loom workers with Nostr identities.
 
 ## Overview

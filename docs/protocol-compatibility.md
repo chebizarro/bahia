@@ -1,5 +1,23 @@
 # Bahia Protocol Compatibility Matrix
 
+## Virtualization public surfaces
+
+The additive virtualization v1 family uses existing ContextVM 25910, canonical
+state 30900 and audit 4903 kinds, checked against the Bahia implementation guide
+and Cascadia `registry/event-families.yaml`. No numeric allocation, legacy-kind
+reader, NIP-38 reinterpretation or Loom per-job transport replacement is added.
+
+Consumers can ignore unknown fields/tags, but must retain explicit lifecycle
+classes, author/tenant scoping and journal sequence/generation ordering. Public
+snapshots omit private configuration rather than copying domain structs. REST
+remains authenticated query-only compatibility. C/D mutations are unavailable
+until admission adapters and post-commit signals are wired; compatible Loom
+administrative endpoints and live-provider acceptance remain separate gates.
+
+See [Virtual machines](user-guide/features/virtual-machines.md) for coordinates,
+acknowledgments, journal recovery, metrics and integration requirements.
+
+
 This document summarizes the protocols and event families Bahia currently uses and how they fit the production product shape.
 
 ## Important scope note
