@@ -202,6 +202,12 @@ func (w *VMOperationWorker) processLocked(ctx context.Context, org, id uuid.UUID
 			return w.fail(ctx, op, domain.VMErrorConflict)
 		}
 	}
+	if op.Kind == domain.VMOperationAdopt {
+		measurement, err := s.measureAdoption(ctx, *h, *v, *image)
+		if err != nil || op.Adoption == nil || !reflect.DeepEqual(measurement, op.Adoption) {
+			return w.fail(ctx, op, domain.VMErrorIntegrity)
+		}
+	}
 	refs := vmPreparedStorage(*v, *op)
 	op, err = w.transition(ctx, op, domain.VMOperationExecuting, "", refs)
 	if err != nil {
@@ -247,6 +253,13 @@ func vmSafeCode(code domain.VMErrorCode) domain.VMErrorCode {
 	return domain.VMErrorUnconfirmed
 }
 func vmPreparedStorage(v domain.PersistentVMDeployment, op domain.VMOperation) []uuid.UUID {
+	if op.Kind == domain.VMOperationAdopt && op.Adoption != nil {
+		refs := make([]uuid.UUID, 0, len(op.Adoption.Components))
+		for _, c := range op.Adoption.Components {
+			refs = append(refs, c.StorageRef)
+		}
+		return refs
+	}
 	if op.Kind != domain.VMOperationDefine && op.Kind != domain.VMOperationCheckpoint && op.Kind != domain.VMOperationClone && op.Kind != domain.VMOperationRestore && op.Kind != domain.VMOperationExport {
 		return nil
 	}
@@ -383,6 +396,12 @@ func (w *VMOperationWorker) verify(ctx context.Context, h domain.VirtualizationH
 			}
 			if observation.Drift == domain.VMDriftDrifted || observation.AppliedConfigDigest != v.ConfigDigest || observation.AppliedImageDigest != image.ManifestDigest {
 				return w.unconfirmed(ctx, op)
+			}
+			if op.Kind == domain.VMOperationAdopt {
+				measurement, err := w.service.measureAdoption(ctx, h, v, *image)
+				if err != nil || op.Adoption == nil || !reflect.DeepEqual(measurement, op.Adoption) {
+					return w.unconfirmed(ctx, op)
+				}
 			}
 		}
 	}

@@ -92,7 +92,7 @@ var virtualizationFamilies = map[string]domain.VirtualizationResourceKind{
 
 // VirtualizationMethods is the method catalog for registration and discovery.
 func VirtualizationMethods() []string {
-	methods := []string{"virtualization-host/list", "virtualization-host/get", "vm-image/list", "vm-image/get", "vm-image/register", "persistent-vm/list", "persistent-vm/get", "persistent-vm/create", "persistent-vm/update", "persistent-vm/operate", "execution-plane/list", "execution-plane/get", "execution-plane/create", "execution-plane/update", "execution-plane/reconcile", "vm-checkpoint/list", "vm-checkpoint/get", "vm-export/list", "vm-export/get", "vm-operation/get", "vm-operation/approve", "vm-operation/approve-plan", "vm-operation/cancel"}
+	methods := []string{"virtualization-host/list", "virtualization-host/get", "vm-image/list", "vm-image/get", "vm-image/register", "persistent-vm/list", "persistent-vm/get", "persistent-vm/create", "persistent-vm/register-adoption", "persistent-vm/update", "persistent-vm/operate", "execution-plane/list", "execution-plane/get", "execution-plane/create", "execution-plane/update", "execution-plane/reconcile", "vm-checkpoint/list", "vm-checkpoint/get", "vm-export/list", "vm-export/get", "vm-operation/get", "vm-operation/approve", "vm-operation/approve-plan", "vm-operation/cancel"}
 	return methods
 }
 func (h *VirtualizationHandlers) Register(t *EncryptedRequestTransport) {
@@ -217,10 +217,10 @@ func (h *VirtualizationHandlers) Handle(ctx context.Context, method string, r Co
 	// to the service. Service adapters still perform full admission validation.
 	if mutation.VM != nil {
 		v := mutation.VM
-		if v.OrgID != principal.OrgID || (action == "create" && v.CreatedBy != "" && v.CreatedBy != principal.PubKey) || v.Observation != nil {
+		if v.OrgID != principal.OrgID || ((action == "create" || action == "register-adoption") && v.CreatedBy != "" && v.CreatedBy != principal.PubKey) || v.Observation != nil {
 			return nil, domain.ErrInvalidValue
 		}
-		if action == "create" || action == "register" {
+		if action == "create" || action == "register" || action == "register-adoption" {
 			v.CreatedBy = principal.PubKey
 		}
 	}
@@ -257,7 +257,7 @@ func (h *VirtualizationHandlers) Handle(ctx context.Context, method string, r Co
 	if err != nil {
 		return nil, publicVirtualizationError(err)
 	}
-	if admission.ResourceID == uuid.Nil || admission.Generation < 1 || (admission.OperationID == uuid.Nil && (method != "vm-operation/approve-plan" || admission.ApprovalID == nil || *admission.ApprovalID == uuid.Nil)) {
+	if admission.ResourceID == uuid.Nil || admission.Generation < 1 || (admission.OperationID == uuid.Nil && method != "persistent-vm/register-adoption" && (method != "vm-operation/approve-plan" || admission.ApprovalID == nil || *admission.ApprovalID == uuid.Nil)) {
 		return nil, readmodel.ErrVirtualizationUnavailable
 	}
 	// Operation actions acknowledge the persistent resource plus the operation's
@@ -273,6 +273,9 @@ func (h *VirtualizationHandlers) Handle(ctx context.Context, method string, r Co
 	ack := VirtualizationAcknowledgment{ApprovalID: admission.ApprovalID, Status: "accepted", ResourceID: admission.ResourceID, OperationID: admission.OperationID, Generation: admission.Generation, StateKind: kinds.CASControlState, AuditKind: kinds.CASAudit, StateDTag: coordinate, Author: h.CanonicalAuthor, OrgID: principal.OrgID}
 	if resourceKind == domain.PersistentVMResource && admission.OperationID != uuid.Nil {
 		ack.OperationDTag, _ = dto.VirtualizationCoordinate(domain.VMOperationResource, admission.OperationID)
+	}
+	if method == "persistent-vm/register-adoption" {
+		ack.Status = "registered"
 	}
 	if method == "vm-operation/approve-plan" {
 		ack.Status = "approved"

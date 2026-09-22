@@ -15,6 +15,69 @@ and uses `unsafe.Add` instead of storing and incrementing a `uintptr`.
 The dependency's module requirements are unchanged. No vendored patch,
 application call-site change, test skip or checkptr exemption is needed.
 
+# Measured adoption — 2026-09-22
+
+Task: `bahia-yrt7g.8`, branch `fu/vm-measured-adoption`. Work is confined to the
+`bahia-adoption` worktree. The orchestrator-owned source plans are unchanged.
+Beads status is owned by the integrator; no claim/close, push, merge or Oracle
+review is performed in this task.
+
+## Implemented boundary
+
+- Concrete libvirt and Firecracker measurements bind the complete normalized
+  provider configuration, exact modeled allocation/network/firmware/autostart,
+  trusted image pin, writable component contents and opaque host file identity.
+  Libvirt checks the qcow2 backing graph and compares full guest-visible contents
+  against the trusted snapshot; a backing filename alone is never lineage proof.
+  Firecracker requires matching kernel and private raw-rootfs snapshot bytes.
+- UEFI code, NVRAM and coordinated TPM state are measured where supported.
+  Foreign owners, unrecognized controller metadata/record versions, mismatched
+  legacy identity, unsupported graph/device layouts and lost cold-state watches
+  refuse enrollment. Direct driver calls cannot acquire unmarked ownership
+  without private measurement proof and a cold-state barrier.
+- Two-person, bounded, single-use approvals bind the full measurement separately
+  from the request hash and provider fingerprint. Admission, execution and
+  interrupted-operation verification remeasure; recovery never replays mutation.
+- Approved matching enrollment writes the exact baseline plus local component
+  inventory. Migration 000067 adds transactional storage reservations/registration
+  and measurement-bound approvals. Writable file claims are exclusive per host;
+  registration requires authoritative matching applied pins. The down path locks
+  guarded tables before checking for evidence and refuses evidence loss.
+- The real ContextVM `persistent-vm/register-adoption` path calls the service,
+  deriving the config digest rather than trusting a caller pin. Its registration
+  acknowledgment has a zero-UUID operation ID and no operation coordinate; it
+  neither installs ownership nor fabricates provider completion. A separate
+  approved `adopt` operation is required. Legacy v1/pre-inventory enrollment uses
+  exactly this evidence-producing path, not names or directory authority.
+
+## Regression mapping and test boundaries
+
+`acceptance_criteria.json` AD-01 through AD-05 map to exact test names;
+`test_matrix.json` lists source files and external boundaries. Provider
+conformance reuses `testdata/conformance/owned-domain.xml` and
+`firecracker-config.json`, exercising real files, hashing, release resolution,
+concrete drivers and core records. Virsh/qemu-img/process-event boundaries are
+test doubles, not live host evidence. App integration exercises the actual
+ContextVM handler/admission/service/worker/PostgreSQL path with a fake VM provider.
+Existing trust-policy tests separately exercise signed artifact verification.
+
+Negative tests cover mismatched desired hardware, configuration/image/writable
+bytes, same-path inode substitution, foreign ownership, unknown controller
+metadata/records, unsafe lineage, guest-content differences, external image data,
+missing proof, arbitrary caller pins and cold-watch invalidation before new
+ownership/applied-record writes. Positive tests cover unmarked, v1, pre-inventory,
+standalone snapshot and coordinated UEFI/TPM enrollment, arbitrary display names,
+idempotent replay, explicit new-image revisions and recovery without mutation
+replay. PostgreSQL tests prove approval rollback, exclusive inventory claims,
+tenant isolation, registration only after applied evidence, and guarded migration
+round trips.
+
+## Executed gates
+
+Package set: `./internal/adapters/runtime/vm/... ./internal/domain
+./internal/repository ./internal/service ./internal/db ./internal/controlplane
+./internal/app/...`.
+
 | Gate | Result |
 |---|---|
 | `go build ./...` | PASS |
@@ -31,6 +94,33 @@ remaining limitation on closed Item C (`bahia-kw93u`). PostgreSQL-tagged tests,
 lint, live relays/providers, deployment and pilot/soak acceptance were not rerun
 or newly claimed by this dependency-only change. Historical integration
 results below retain their original scope.
+
+| `go vet` on the package set | PASS |
+| `go test` on the package set, `-count=1` | PASS |
+| Same tests with `-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0` | PASS |
+| PostgreSQL integration: app/repository/service VM suites | PASS |
+| PostgreSQL integration race, packages serialized with `-p 1` | PASS |
+| `git diff --check`, PSTF JSON parsing, unchanged `go.mod`/`go.sum` | PASS |
+
+PostgreSQL command:
+`BAHIA_VM_TEST_DATABASE_URL=... go test -p 1 -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 -tags=integration ./internal/app ./internal/repository ./internal/service -run '^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres|TestVMAdoption)' -count=1 -timeout=240s`.
+Tests use a dedicated loopback-only PostgreSQL 16 Alpine container and fresh
+per-test schemas. An earlier package-parallel race rerun failed during migration
+000001 because concurrent fixtures created `pgcrypto` in disposable schemas
+(`pg_extension_name_index` duplicate key). Serializing integration packages avoids
+that bootstrap collision; unrelated migration/test infrastructure is unchanged.
+Only dependency checkptr is disabled; Bahia race/checkptr instrumentation remains
+enabled. No lint cleanup or module dependency changes are included.
+
+## Explicit limits
+
+Live libvirt/Firecracker host, relay, pilot and soak evidence is not claimed.
+Enrollment does not relocate legacy directories or silently flatten/rebase disks:
+operators must explicitly prepare UUID-contained private storage and a trusted
+current snapshot. Multi-layer/external-data qcow2 graphs, unsupported passthrough
+and ambiguous ownership remain fail-closed. Failed/interrupted inventory claims
+remain for explicit operator review, not automatic reassignment. These are
+documented acceptance boundaries, not inferred ownership or placeholder paths.
 
 ---
 

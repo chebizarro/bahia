@@ -285,7 +285,7 @@ func (s *PersistentVMService) RegisterAdoption(ctx context.Context, p *auth.Prin
 	v.CreatedBy = vmActor(p)
 	v.CreatedAt = time.Time{}
 	v.UpdatedAt = time.Time{}
-	h, _, err := s.references(ctx, p, &v)
+	h, err := s.cfg.Repository.Hosts().Get(ctx, v.OrgID, v.HostID)
 	if err != nil {
 		return err
 	}
@@ -296,6 +296,16 @@ func (s *PersistentVMService) RegisterAdoption(ctx context.Context, p *auth.Prin
 	if o.RuntimeState == nil || *o.RuntimeState == domain.VMRuntimeAbsent || o.Ownership == domain.VMOwned {
 		return repository.ErrConflict
 	}
+	v.ConfigDigest = domain.VMAdoptionConfigDigest(v, o.Diagnostic.EvidenceDigest)
+	h, image, err := s.references(ctx, p, &v)
+	if err != nil {
+		return err
+	}
+	measurement, err := s.measureAdoption(ctx, *h, v, *image)
+	if err != nil {
+		return err
+	}
+	v.ConfigDigest = measurement.ConfigDigest
 	err = s.cfg.Repository.Deployments().Create(ctx, &v)
 	if err == nil {
 		s.changed(ctx, v.OrgID, domain.PersistentVMResource, v.ID)
@@ -437,7 +447,7 @@ func (s *PersistentVMService) prepare(ctx context.Context, p *auth.Principal, re
 	var plan *domain.VMChangePlan
 	target := *v
 	if desired != nil {
-		if req.Kind != domain.VMOperationDefine || desired.ID != v.ID || desired.OrgID != v.OrgID || desired.Generation != v.Generation+1 || desired.Observation != nil || desired.ObservationCursor != nil || !reflect.DeepEqual(desired.Identity, v.Identity) || desired.BootstrapApplied != v.BootstrapApplied || !reflect.DeepEqual(desired.Connections, v.Connections) {
+		if (req.Kind != domain.VMOperationDefine && req.Kind != domain.VMOperationAdopt) || desired.ID != v.ID || desired.OrgID != v.OrgID || desired.Generation != v.Generation+1 || desired.Observation != nil || desired.ObservationCursor != nil || !reflect.DeepEqual(desired.Identity, v.Identity) || desired.BootstrapApplied != v.BootstrapApplied || !reflect.DeepEqual(desired.Connections, v.Connections) {
 			return nil, nil, nil, domain.ErrInvalidValue
 		}
 		target = *desired
@@ -471,7 +481,7 @@ func (s *PersistentVMService) prepare(ctx context.Context, p *auth.Principal, re
 	if req.Kind != domain.VMOperationAdopt && obs.RuntimeState != nil && *obs.RuntimeState != domain.VMRuntimeAbsent && obs.Ownership != domain.VMOwned {
 		return nil, nil, nil, vmError(domain.VMErrorForeign)
 	}
-	if req.Desired != nil {
+	if req.Desired != nil && req.Kind == domain.VMOperationDefine {
 		bound, cancel := context.WithTimeout(ctx, time.Duration(h.OperationLimits.InspectSeconds)*time.Second)
 		plan, err = s.cfg.Provider.PlanChange(bound, domain.VMChangeRequest{Host: *h, Current: *v, Desired: target, Image: *i, Observation: *obs})
 		cancel()
@@ -485,6 +495,26 @@ func (s *PersistentVMService) prepare(ctx context.Context, p *auth.Principal, re
 			plan.RequiredTier = domain.VMApprovalDestructive
 		}
 	}
+	var measurement *domain.VMAdoptionMeasurement
+	if req.Kind == domain.VMOperationAdopt {
+		measurement, err = s.measureAdoption(ctx, *h, target, *i)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if measurement.ProviderFingerprint != obs.Diagnostic.EvidenceDigest {
+			return nil, nil, nil, repository.ErrConflict
+		}
+		if target.ConfigDigest != measurement.ConfigDigest {
+			target.ConfigDigest = measurement.ConfigDigest
+			if desired == nil {
+				target.Generation++
+			}
+			target.Observation, target.ObservationCursor = nil, nil
+			desired = &target
+			measurement.Generation = target.Generation
+			measurement.Digest = domain.VMAdoptionDigest(*measurement)
+		}
+	}
 	op, err := s.operation(p, req, *h, target.Generation, plan, obs)
 	if err != nil {
 		return nil, nil, nil, err
@@ -494,6 +524,7 @@ func (s *PersistentVMService) prepare(ctx context.Context, p *auth.Principal, re
 		return nil, nil, nil, err
 	}
 	op.RequestHash = hash
+	op.Adoption = measurement
 	if cloneTarget != nil {
 		op.CloneTargetGeneration = cloneTarget.Generation
 		if cloneTarget.Network.Mode == domain.VMNetworkBridged || len(cloneTarget.Network.PassthroughDeviceRefs) > 0 {

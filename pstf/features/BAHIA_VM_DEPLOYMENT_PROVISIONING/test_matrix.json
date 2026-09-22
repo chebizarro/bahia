@@ -1,5 +1,21 @@
 {
   "feature_id": "BAHIA_VM_DEPLOYMENT_PROVISIONING",
+  "measured_adoption": {
+    "task": "bahia-yrt7g.8",
+    "fixtures": "internal/adapters/runtime/vm/testdata/conformance/",
+    "tests": [
+      "internal/adapters/runtime/vm/adoption_conformance_test.go",
+      "internal/domain/vm_adoption_test.go",
+      "internal/service/vm_adoption_test.go",
+      "internal/repository/pg_vm_adoption_test.go",
+      "internal/controlplane/vm_adoption_test.go",
+      "internal/app/vm_adoption_integration_test.go",
+      "internal/db/migrate_vm_adoption_test.go"
+    ],
+    "acceptance_mapping": "AD-01 through AD-05 in acceptance_criteria.json list exact executable tests",
+    "boundaries": "Concrete provider/core filesystem measurements with fake virsh/qemu-img/process event boundaries; app integration uses a fake provider and real PostgreSQL, services and ContextVM handlers. No live host acceptance.",
+    "race_flags": "-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0"
+  },
   "unit_tests": "internal/domain/virtualization_test.go",
   "postgres_tests": [
     "internal/repository/pg_virtualization_test.go",

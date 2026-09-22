@@ -102,9 +102,17 @@ func TestVMControlPlanePostgresMigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	var before string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT row_to_json(d)::text FROM deployment_units d WHERE id=$1`, unit).Scan(&before))
+	adoptionDown, err := os.ReadFile("../db/migrations/000067_vm_measured_adoption.down.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(adoptionDown))
+	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err)
+	adoptionUp, err := os.ReadFile("../db/migrations/000067_vm_measured_adoption.up.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(adoptionUp))
 	require.NoError(t, err)
 	var after string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT row_to_json(d)::text FROM deployment_units d WHERE id=$1`, unit).Scan(&after))

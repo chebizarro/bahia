@@ -12,6 +12,13 @@ to obtain `approval_id`, then the original requester admits the exact mutation.
 An approval-only response is not a VM operation. Deployment deletion defaults to
 retaining guest data; explicit `data_disposition=delete` remains two-person approved.
 
+For existing VMs, `persistent-vm/register-adoption` returns `status=registered`
+with a zero-UUID operation ID and no operation coordinate: it is not ownership.
+Follow the separate approved
+`adopt` operation through the usual scoped state/audit subscription. Configuration,
+image lineage and writable storage are remeasured before ownership is installed;
+private measurement details are not broadcast.
+
 Subscribe narrowly by author, state `#d` or audit `#state`, and `#org`. Validate
 IDs/signatures/timestamps/content, deduplicate event IDs, reject older journal
 sequences/generations, retain subscriptions after EOSE and handle CLOSED/AUTH

@@ -25,14 +25,14 @@ func (s *PersistentVMService) ApprovePlan(ctx context.Context, p *auth.Principal
 	if err := s.authorize(ctx, actor, request.OrgID, domain.PermWriteDeployments); err != nil {
 		return nil, err
 	}
-	op, _, _, err := s.prepare(ctx, actor, request)
+	op, desired, _, err := s.prepare(ctx, actor, request)
 	if err != nil {
 		return nil, err
 	}
-	return s.approveValidatedPlan(ctx, p, *op, reason)
+	return s.approveValidatedPlan(ctx, p, *op, reason, desired)
 }
 
-func (s *PersistentVMService) approveValidatedPlan(ctx context.Context, p *auth.Principal, op domain.VMOperation, reason string) (*domain.VMApproval, error) {
+func (s *PersistentVMService) approveValidatedPlan(ctx context.Context, p *auth.Principal, op domain.VMOperation, reason string, desired *domain.PersistentVMDeployment) (*domain.VMApproval, error) {
 	if err := s.authorize(ctx, p, op.OrgID, domain.PermWriteDeployments); err != nil {
 		return nil, err
 	}
@@ -63,8 +63,30 @@ func (s *PersistentVMService) approveValidatedPlan(ctx context.Context, p *auth.
 	if obs.Diagnostic.EvidenceDigest != op.ProviderFingerprint {
 		return nil, repository.ErrConflict
 	}
+	if op.Kind == domain.VMOperationAdopt {
+		if op.Adoption == nil {
+			return nil, vmError(domain.VMErrorIntegrity)
+		}
+		target := *v
+		if desired != nil {
+			target = *desired
+		}
+		image, err := s.cfg.Repository.Images().Get(ctx, op.OrgID, target.ImageID)
+		if err != nil {
+			return nil, err
+		}
+		target.Generation = op.ResourceGeneration
+		target.ConfigDigest = op.Adoption.ConfigDigest
+		measured, err := s.measureAdoption(ctx, *h, target, *image)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(measured, op.Adoption) {
+			return nil, repository.ErrConflict
+		}
+	}
 	now := s.cfg.Now().UTC()
-	a := &domain.VMApproval{SchemaVersion: 1, ID: uuid.New(), OrgID: op.OrgID, ResourceID: op.ResourceID, LifecycleClass: op.LifecycleClass, Generation: op.ExpectedGeneration, RequestHash: op.RequestHash, ProviderFingerprint: op.ProviderFingerprint, Tier: domain.VMApprovalDestructive, Requester: op.Actor, Approver: vmActor(p), Reason: reason, CreatedAt: now, ExpiresAt: now.Add(domain.VMApprovalMaxAge)}
+	a := &domain.VMApproval{AdoptionDigest: adoptionDigest(op), SchemaVersion: 1, ID: uuid.New(), OrgID: op.OrgID, ResourceID: op.ResourceID, LifecycleClass: op.LifecycleClass, Generation: op.ExpectedGeneration, RequestHash: op.RequestHash, ProviderFingerprint: op.ProviderFingerprint, Tier: domain.VMApprovalDestructive, Requester: op.Actor, Approver: vmActor(p), Reason: reason, CreatedAt: now, ExpiresAt: now.Add(domain.VMApprovalMaxAge)}
 	if err = s.cfg.Repository.CreateApproval(ctx, a); err != nil {
 		return nil, err
 	}
@@ -83,7 +105,7 @@ func (s *PersistentVMService) ApproveOperation(ctx context.Context, p *auth.Prin
 	if op.Phase != domain.VMOperationAwaitingApproval {
 		return nil, repository.ErrConflict
 	}
-	a, err := s.approveValidatedPlan(ctx, p, *op, reason)
+	a, err := s.approveValidatedPlan(ctx, p, *op, reason, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +118,7 @@ func (s *PersistentVMService) ApproveOperation(ctx context.Context, p *auth.Prin
 }
 
 func vmApprovalValid(a *domain.VMApproval, op domain.VMOperation, fingerprint string, now time.Time) bool {
-	return a != nil && domain.ValidateVMApproval(a) == nil && a.ConsumedAt != nil && a.OrgID == op.OrgID && a.ResourceID == op.ResourceID && a.Generation == op.ExpectedGeneration && a.RequestHash == op.RequestHash && a.Requester == op.Actor && a.Tier == op.RequiredTier && a.ProviderFingerprint == op.ProviderFingerprint && fingerprint == op.ProviderFingerprint && !a.CreatedAt.After(now) && a.ExpiresAt.After(now)
+	return a != nil && domain.ValidateVMApproval(a) == nil && a.ConsumedAt != nil && a.OrgID == op.OrgID && a.ResourceID == op.ResourceID && a.Generation == op.ExpectedGeneration && a.AdoptionDigest == adoptionDigest(op) && a.RequestHash == op.RequestHash && a.Requester == op.Actor && a.Tier == op.RequiredTier && a.ProviderFingerprint == op.ProviderFingerprint && fingerprint == op.ProviderFingerprint && !a.CreatedAt.After(now) && a.ExpiresAt.After(now)
 }
 
 // Pending approvals can only hold already-reserved resources. Plans requiring

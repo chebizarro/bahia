@@ -190,7 +190,7 @@ func (d *Driver) virsh(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("missing virsh operation")
 	}
 	switch args[0] {
-	case "list", "dumpxml", "metadata", "define", "autostart", "start", "shutdown", "reboot", "destroy", "undefine", "domstate":
+	case "list", "dominfo", "dumpxml", "metadata", "define", "autostart", "start", "shutdown", "reboot", "destroy", "undefine", "domstate":
 	default:
 		return nil, fmt.Errorf("virsh operation is not allowlisted")
 	}
@@ -205,7 +205,7 @@ func (d *Driver) qemuImg(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("missing qemu-img operation")
 	}
 	switch args[0] {
-	case "create", "info", "resize", "convert":
+	case "create", "info", "resize", "convert", "compare":
 	default:
 		return nil, fmt.Errorf("qemu-img operation is not allowlisted")
 	}

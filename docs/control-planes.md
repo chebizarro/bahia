@@ -12,6 +12,12 @@ the canonical signer/coordinates; they do not report provider completion.
 the requester separately admits the exact approved mutation. Delete requests carry
 an explicit, approval-bound data disposition, defaulting to retain.
 
+`persistent-vm/register-adoption` records measured candidate desired state only:
+`status=registered`, zero-UUID operation ID, no operation coordinate or provider
+ownership. A separately approved
+`adopt` operation remeasures configuration/image/storage before acquiring ownership.
+Neither names nor legacy metadata bypass enrollment; foreign owners are refused.
+
 Canonical 30900 snapshots and 4903 audit facts carry only explicit public DTOs.
 In-process post-commit signals wake durable journal replay, also run at startup
 and on detected gaps. No database notification producer, polling queue or REST

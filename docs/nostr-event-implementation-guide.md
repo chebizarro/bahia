@@ -10,6 +10,12 @@ returns an approval-only acknowledgment, not an operation or provider result.
 Deployment-delete intent includes approval-bound `data_disposition` with a retain
 default; this changes no canonical projection kind, schema, or tag.
 
+`persistent-vm/register-adoption` returns `status=registered` without an operation
+coordinate. It registers measured candidate desired state, not ownership or an
+applied baseline. A separately approved `adopt` operation binds private measured
+configuration/image/component evidence. No raw measurement, host paths or storage
+identity is added to public state/audit payloads; kinds and schemas are unchanged.
+
 Both projections require `domain=virtualization`, explicit `entity`, `schema`,
 `org`, `generation`, journal `sequence` and explicit `lifecycle_class` tags.
 State uses `schema=bahia.state.virtualization.v1` and `d=<resource-prefix>:<uuid>`;

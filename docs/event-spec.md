@@ -13,6 +13,11 @@
 `data_disposition=retain|export|delete`, with retain as the default. These use
 existing ContextVM transport; canonical projection schemas and tags are unchanged.
 
+`persistent-vm/register-adoption` adds a registration-only acknowledgment
+(`status=registered`, zero-UUID operation ID, no operation coordinate). Ownership follows only a
+separate, measurement-bound approved `adopt` operation. Measurements and opaque
+host storage identities stay in private persistence, not public projection JSON.
+
 Tags: `domain=virtualization`, explicit `entity`, `schema`, `org`, `generation`,
 `sequence`, repeated `lifecycle_class`; audits add `type` and `protected=true`.
 An operation adds UUID `correlation`; a public-key actor adds `p`. `journal`

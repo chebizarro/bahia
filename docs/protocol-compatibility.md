@@ -11,6 +11,13 @@ operation; clients then admit the approved mutation. Deployment-delete requests
 may set `data_disposition`; omitted and explicit `retain` are equivalent, including
 request hashing. Clone approvals bind the target revision and networking.
 
+`persistent-vm/register-adoption` is additive: `status=registered` means candidate
+desired state only, with a zero-UUID operation ID and no operation coordinate.
+Two-person `adopt` approvals now bind
+measured configuration, image lineage and storage. Old fingerprint-only adoption
+approvals cannot enroll; legacy v1/pre-inventory records require explicit measured
+enrollment. Public state/audit schemas and kinds remain unchanged.
+
 Consumers can ignore unknown fields/tags, but must retain explicit lifecycle
 classes, author/tenant scoping and journal sequence/generation ordering. Public
 snapshots omit private configuration rather than copying domain structs. REST

@@ -102,7 +102,7 @@ separate. Artifact deletion is an explicit tombstone, not missing data.
 ## Mutation intents and approvals
 
 Supported ContextVM intents are `vm-image/register`,
-`persistent-vm/create|update|operate`, `execution-plane/create|update|reconcile`,
+`persistent-vm/create|register-adoption|update|operate`, `execution-plane/create|update|reconcile`,
 and `vm-operation/approve|approve-plan|cancel`. They require organization
 `deployments:write`; C/D additionally authorize the exact action, expected
 generation, idempotency key and approval tier. Host/quota governance is not exposed
@@ -148,6 +148,63 @@ Acknowledgments contain `status=accepted`, `resource_id`, `operation_id`,
 and a VM `operation_d_tag` where applicable. This is durable admission, **not
 provider completion**. Plane and image-registration operation IDs are admission correlation IDs, not
 Loom job IDs or persistent-VM operation coordinates. Subscribe before submitting and follow canonical state/audit truth.
+
+## Measured enrollment of existing VMs
+
+Adoption is a separate, two-person operation, never an inference from a domain
+name, directory, legacy image pin, or matching configuration fingerprint. A VM
+with another tenant/installation/lifecycle owner is not adoptable. Unknown
+libvirt controller metadata is refused rather than silently reassigned.
+
+1. Stop the candidate and keep it stopped. Explicitly prepare its writable
+   disk/rootfs, NVRAM and TPM state beneath
+   `state_dir/instances/<provider_resource_id>/`, with no symlinks or hardlinks.
+   Enrollment does not move legacy named directories or rewrite provider config.
+   That layout is containment, **not ownership evidence**.
+2. Register a signed, trusted immutable catalog image matching the candidate's
+   current contents. Libvirt accepts a standalone qcow2 snapshot or one private
+   overlay directly over that standalone catalog image. It checks the entire
+   backing graph and compares guest-visible disk contents, not just backing
+   filenames. Changed guest data requires an explicitly published current
+   snapshot; flatten an old overlay offline into a standalone private disk if its
+   parent is not the selected catalog image. Unsafe rebase is not lineage proof.
+   Firecracker requires a private
+   raw rootfs copy and kernel matching the trusted snapshot byte-for-byte.
+3. For an unregistered resource, submit `persistent-vm/register-adoption` with
+   `org_id` and the complete desired `vm` document (generation 1, exact identity,
+   host/image/storage UUIDs and hardware). Omit observations and bootstrap;
+   `config_digest` may be omitted because the service derives it from measured
+   configuration. The `status=registered` acknowledgment has a zero-UUID
+   `operation_id`, no operation coordinate, and confers no provider ownership or
+   applied baseline. No operation row is created by registration.
+4. A different authorized operator submits `vm-operation/approve-plan` for the
+   exact intended `operation=adopt` request. The requester then submits that same
+   request to `persistent-vm/operate`, adding the returned `approval_id`.
+   The bounded, single-use approval binds configuration, image lineage, every
+   component's bytes and host file identity, resource generation and requester.
+5. Follow the operation's canonical state/audit coordinates. Admission and
+   execution remeasure; the driver checks again immediately before installing
+   ownership. Mismatch fails without writing a new marker or applied-pin record.
+   Verified completion records the exact image/config baseline and registers
+   the per-resource component inventory. Reservation alone is not registration.
+   Interrupted operations remeasure during recovery without replaying mutation.
+
+Existing legacy v1 metadata and v2 records without component inventory are not
+mutation authority. Explicitly enroll them using the same measured operation;
+the service advances the desired generation when its old config pin differs.
+If selecting a new trusted snapshot, include the complete next-generation `vm`
+document in both approval and operation requests. No fingerprint-only fallback
+exists, including for approvals issued before measured adoption was introduced.
+
+Supported libvirt measurements include exact CPU/memory/disk/network/autostart,
+BIOS or configured UEFI code plus NVRAM, and coordinated software TPM state.
+Firecracker enrollment is isolated-network, no autostart/firmware/TPM, with the
+configured kernel arguments. Unsupported devices, external qcow2 data files,
+extra backing parents, ambiguous ownership, lost cold-state watches and
+unverifiable provenance are refused. Failed/interrupted inventory reservations
+remain evidence for explicit operator review; they are not automatically granted
+to another resource. Migration 000067 refuses rollback while evidence remains.
+Portable and PostgreSQL tests are not live libvirt/Firecracker host acceptance.
 
 ## Public connection metadata, not credentials
 

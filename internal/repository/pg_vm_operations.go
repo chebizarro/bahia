@@ -13,7 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-const vmApprovalColumns = `id,org_id,resource_id,lifecycle_class,generation,request_hash,provider_fingerprint,tier,requester,approver,reason,created_at,expires_at,consumed_at,schema_version`
+const vmApprovalColumns = `id,org_id,resource_id,lifecycle_class,generation,request_hash,provider_fingerprint,tier,requester,approver,reason,created_at,expires_at,consumed_at,schema_version,adoption_digest`
 
 func (r *PgVirtualizationRepository) CreateApproval(ctx context.Context, a *domain.VMApproval) error {
 	if err := domain.ValidateVMApproval(a); err != nil {
@@ -30,7 +30,7 @@ func (r *PgVirtualizationRepository) CreateApproval(ctx context.Context, a *doma
 		if v.Generation != a.Generation {
 			return ErrConflict
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO vm_operation_approvals (`+vmApprovalColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULL,1)`, a.ID, a.OrgID, a.ResourceID, a.LifecycleClass, a.Generation, a.RequestHash, a.ProviderFingerprint, a.Tier, a.Requester, a.Approver, a.Reason, a.CreatedAt, a.ExpiresAt)
+		_, err = tx.Exec(ctx, `INSERT INTO vm_operation_approvals (`+vmApprovalColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULL,1,$14)`, a.ID, a.OrgID, a.ResourceID, a.LifecycleClass, a.Generation, a.RequestHash, a.ProviderFingerprint, a.Tier, a.Requester, a.Approver, a.Reason, a.CreatedAt, a.ExpiresAt, a.AdoptionDigest)
 		if err != nil {
 			return err
 		}
@@ -43,7 +43,7 @@ func vmReadApproval(ctx context.Context, q pgQueryer, org, id uuid.UUID, lock bo
 		suffix = " FOR UPDATE"
 	}
 	a := new(domain.VMApproval)
-	err := q.QueryRow(ctx, `SELECT `+vmApprovalColumns+` FROM vm_operation_approvals WHERE org_id=$1 AND id=$2`+suffix, org, id).Scan(&a.ID, &a.OrgID, &a.ResourceID, &a.LifecycleClass, &a.Generation, &a.RequestHash, &a.ProviderFingerprint, &a.Tier, &a.Requester, &a.Approver, &a.Reason, &a.CreatedAt, &a.ExpiresAt, &a.ConsumedAt, &a.SchemaVersion)
+	err := q.QueryRow(ctx, `SELECT `+vmApprovalColumns+` FROM vm_operation_approvals WHERE org_id=$1 AND id=$2`+suffix, org, id).Scan(&a.ID, &a.OrgID, &a.ResourceID, &a.LifecycleClass, &a.Generation, &a.RequestHash, &a.ProviderFingerprint, &a.Tier, &a.Requester, &a.Approver, &a.Reason, &a.CreatedAt, &a.ExpiresAt, &a.ConsumedAt, &a.SchemaVersion, &a.AdoptionDigest)
 	if err != nil {
 		return nil, vmDBError(err)
 	}
@@ -70,7 +70,7 @@ func vmConsumeApproval(ctx context.Context, q pgQueryer, o *domain.VMOperation) 
 		return err
 	}
 	now := time.Now().UTC()
-	if a.ResourceID != o.ResourceID || a.LifecycleClass != o.LifecycleClass || a.Generation != o.ExpectedGeneration || a.RequestHash != o.RequestHash || a.ProviderFingerprint != o.ProviderFingerprint || a.Requester != o.Actor || a.Tier != o.RequiredTier || a.ConsumedAt != nil || !a.ExpiresAt.After(now) {
+	if a.ResourceID != o.ResourceID || a.LifecycleClass != o.LifecycleClass || a.Generation != o.ExpectedGeneration || a.AdoptionDigest != vmAdoptionDigest(o) || a.RequestHash != o.RequestHash || a.ProviderFingerprint != o.ProviderFingerprint || a.Requester != o.Actor || a.Tier != o.RequiredTier || a.ConsumedAt != nil || !a.ExpiresAt.After(now) {
 		return fmt.Errorf("%w: approval does not bind this request", ErrConflict)
 	}
 	if _, err = q.Exec(ctx, `UPDATE vm_operation_approvals SET consumed_at=$3 WHERE org_id=$1 AND id=$2 AND consumed_at IS NULL`, a.OrgID, a.ID, now); err != nil {
@@ -332,6 +332,11 @@ func (r *PgVirtualizationRepository) TransitionOperation(ctx context.Context, t 
 		}
 		if t.Phase == domain.VMOperationSucceeded {
 			if err = vmVerifyOperationCompletion(ctx, tx, o, v); err != nil {
+				return err
+			}
+		}
+		if o.Kind == domain.VMOperationAdopt && (t.Phase == domain.VMOperationExecuting || t.Phase == domain.VMOperationSucceeded) {
+			if err = vmEnrollAdoptionStorage(ctx, tx, o, v, t.Phase == domain.VMOperationSucceeded); err != nil {
 				return err
 			}
 		}
