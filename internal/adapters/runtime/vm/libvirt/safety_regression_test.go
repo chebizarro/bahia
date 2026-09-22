@@ -128,7 +128,11 @@ func TestColdGuardHoldsTPMLockAcrossEntireCoordinatedCopy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
 		lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: 0, Start: 0, Len: 0}
 		err = syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lock)
 		held := errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EACCES)
@@ -176,13 +180,17 @@ func TestColdGuardHoldsTPMLockAcrossEntireCoordinatedCopy(t *testing.T) {
 	}
 	check("yes")
 	if err = d.CopyPersistentComponent(guard.Context(), domain.VMComponentSWTPM, tpm, filepath.Join(t.TempDir(), "tpm.tar")); err != nil {
-		guard.Close()
+		if closeErr := guard.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
 	check("yes")
 	events.changed = true
 	if err = guard.Check(context.Background()); err == nil {
-		guard.Close()
+		if closeErr := guard.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal("cold barrier ignored queued transition")
 	}
 	if err = guard.Close(); err != nil {

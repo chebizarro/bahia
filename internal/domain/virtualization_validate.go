@@ -55,7 +55,7 @@ func vmToken(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._/-", r)) {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("._/-", r) {
 			return false
 		}
 	}
@@ -264,7 +264,9 @@ func ValidateVMPublicConnection(c VMPublicConnection) error {
 				return vmInvalid("connection hostname")
 			}
 			for _, r := range label {
-				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				switch {
+				case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+				default:
 					return vmInvalid("connection hostname")
 				}
 			}
@@ -272,7 +274,9 @@ func ValidateVMPublicConnection(c VMPublicConnection) error {
 	}
 	if c.Username != "" {
 		for _, r := range c.Username {
-			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			default:
 				return vmInvalid("connection username")
 			}
 		}

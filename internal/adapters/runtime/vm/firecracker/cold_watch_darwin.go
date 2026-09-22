@@ -25,14 +25,12 @@ func newColdFileWatch(paths []string) (coldFileWatch, error) {
 	for _, path := range paths {
 		f, err := unix.Open(path, unix.O_EVTONLY|unix.O_CLOEXEC, 0)
 		if err != nil {
-			w.Close()
-			return nil, err
+			return nil, errors.Join(err, w.Close())
 		}
 		w.files = append(w.files, f)
 		changes := []unix.Kevent_t{{Ident: uint64(f), Filter: unix.EVFILT_VNODE, Flags: unix.EV_ADD | unix.EV_CLEAR, Fflags: unix.NOTE_WRITE | unix.NOTE_EXTEND | unix.NOTE_DELETE | unix.NOTE_RENAME | unix.NOTE_ATTRIB | unix.NOTE_REVOKE}}
 		if _, err = unix.Kevent(fd, changes, nil, nil); err != nil {
-			w.Close()
-			return nil, err
+			return nil, errors.Join(err, w.Close())
 		}
 	}
 	return w, nil

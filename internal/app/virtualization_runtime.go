@@ -227,7 +227,7 @@ func superviseExecutionPlane(ctx context.Context, run func(context.Context) erro
 			return ctx.Err()
 		}
 		var provider *domain.VMProviderError
-		if !errors.Is(err, context.DeadlineExceeded) && !(errors.As(err, &provider) && provider.Retryable) {
+		if !errors.Is(err, context.DeadlineExceeded) && (!errors.As(err, &provider) || !provider.Retryable) {
 			return err
 		}
 		report(err)

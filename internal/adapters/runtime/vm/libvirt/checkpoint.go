@@ -24,8 +24,7 @@ func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (v
 	}
 	barrier, ok := sub.(interface{ CheckCold(context.Context) error })
 	if !ok {
-		sub.Close()
-		return nil, vm.ProviderError(domain.VMErrorUnsupported, nil)
+		return nil, vm.ProviderError(domain.VMErrorUnsupported, sub.Close())
 	}
 	var lock *os.File
 	if path := r.Components[domain.VMComponentSWTPM]; path != "" {
@@ -39,10 +38,9 @@ func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (v
 		}
 		if err != nil {
 			if lock != nil {
-				lock.Close()
+				err = errors.Join(err, lock.Close())
 			}
-			sub.Close()
-			return nil, vm.ProviderError(domain.VMErrorConflict, err)
+			return nil, vm.ProviderError(domain.VMErrorConflict, errors.Join(err, sub.Close()))
 		}
 		ctx = context.WithValue(ctx, coldTPMLockKey{}, path)
 	}
@@ -66,13 +64,12 @@ func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (v
 		return barrier.CheckCold(ctx)
 	})
 	if err = guard.Check(ctx); err != nil {
-		guard.Close()
-		return nil, err
+		return nil, vm.JoinCleanupError(err, guard.Close())
 	}
 	return guard, nil
 }
 
-func (d *Driver) CopyPersistentComponent(ctx context.Context, kind domain.VMComponentKind, source, dest string) error {
+func (d *Driver) CopyPersistentComponent(ctx context.Context, kind domain.VMComponentKind, source, dest string) (retErr error) {
 	if err := vm.CheckContainedPath(d.cfg.InstancesDir, source); err != nil {
 		return err
 	}
@@ -125,7 +122,7 @@ func (d *Driver) CopyPersistentComponent(ctx context.Context, kind domain.VMComp
 		if err != nil {
 			return err
 		}
-		defer lock.Close()
+		defer func() { retErr = vm.JoinCleanupError(retErr, lock.Close()) }()
 		stateLock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: 0, Start: 0, Len: 0}
 		if err = syscall.FcntlFlock(lock.Fd(), syscall.F_SETLK, &stateLock); err != nil {
 			return vm.ProviderError(domain.VMErrorConflict, err)

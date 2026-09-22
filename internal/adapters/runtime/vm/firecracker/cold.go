@@ -43,8 +43,7 @@ func (d *Driver) BeginColdCopy(ctx context.Context, r *vm.PersistentResource) (v
 	}
 	g := &coldGuard{ctx, d, r, watch}
 	if err = g.Check(ctx); err != nil {
-		g.Close()
-		return nil, err
+		return nil, vm.JoinCleanupError(err, g.Close())
 	}
 	return g, nil
 }

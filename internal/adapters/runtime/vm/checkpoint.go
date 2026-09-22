@@ -62,7 +62,7 @@ func (r contextReader) Read(b []byte) (int, error) {
 	return r.r.Read(b)
 }
 
-func CopyRegularFile(ctx context.Context, src, dst string) error {
+func CopyRegularFile(ctx context.Context, src, dst string) (retErr error) {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -74,7 +74,7 @@ func CopyRegularFile(ctx context.Context, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { retErr = JoinCleanupError(retErr, in.Close()) }()
 	opened, err := in.Stat()
 	if err != nil || !os.SameFile(info, opened) {
 		return ProviderError(domain.VMErrorIntegrity, err)
@@ -93,12 +93,12 @@ func CopyRegularFile(ctx context.Context, src, dst string) error {
 	return errors.Join(copyErr, syncErr, closeErr)
 }
 
-func HashComponent(ctx context.Context, path string) (string, int64, error) {
+func HashComponent(ctx context.Context, path string) (digest string, size int64, retErr error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { retErr = JoinCleanupError(retErr, f.Close()) }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return "", 0, ProviderError(domain.VMErrorIntegrity, err)
@@ -162,12 +162,12 @@ func PackTPM(ctx context.Context, src, dst string) error {
 	}
 	return err
 }
-func UnpackTPM(ctx context.Context, src, dst string) error {
+func UnpackTPM(ctx context.Context, src, dst string) (retErr error) {
 	f, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { retErr = JoinCleanupError(retErr, f.Close()) }()
 	if err = os.Mkdir(dst, 0700); err != nil {
 		return err
 	}
@@ -236,12 +236,12 @@ func writeJSON(ctx context.Context, path string, v any) error {
 	}
 	return atomicfile.WriteFile(ctx, path, ".write-*.tmp", data, 0600)
 }
-func syncDirectory(path string) error {
+func syncDirectory(path string) (retErr error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { retErr = JoinCleanupError(retErr, f.Close()) }()
 	return f.Sync()
 }
 
@@ -294,7 +294,7 @@ func (p *PersistentProvider) loadCheckpoint(ctx context.Context, q domain.VMProv
 	return &c, paths, nil
 }
 
-func (p *PersistentProvider) transfer(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, rec *persistentRecord, result *domain.VMProviderResult) (*domain.VMProviderResult, error) {
+func (p *PersistentProvider) transfer(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, rec *persistentRecord, result *domain.VMProviderResult) (out *domain.VMProviderResult, retErr error) {
 	if r.State != domain.VMRuntimeStopped || rec == nil {
 		return result, ProviderError(domain.VMErrorConflict, nil)
 	}
@@ -315,7 +315,7 @@ func (p *PersistentProvider) transfer(ctx context.Context, q domain.VMProviderOp
 		if err != nil {
 			return result, err
 		}
-		defer os.RemoveAll(stage)
+		defer func() { retErr = JoinCleanupError(retErr, os.RemoveAll(stage)) }()
 		for _, c := range cp.Components {
 			if err = CopyRegularFile(ctx, paths[c.Kind], filepath.Join(stage, c.StorageRef.String())); err != nil {
 				return result, err
@@ -493,7 +493,7 @@ func commitDirectory(stage, dest string) error {
 	return syncDirectory(filepath.Dir(dest))
 }
 
-func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, result *domain.VMProviderResult) (*domain.VMProviderResult, error) {
+func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, result *domain.VMProviderResult) (out *domain.VMProviderResult, retErr error) {
 	if q.Checkpoint == nil || q.Operation.CheckpointID == nil || q.Checkpoint.ID != *q.Operation.CheckpointID || q.Checkpoint.OrgID != q.Deployment.OrgID || !SameIdentity(q.Checkpoint.Identity, q.Deployment.Identity) {
 		return result, ProviderError(domain.VMErrorInvalid, nil)
 	}
@@ -516,7 +516,7 @@ func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProvider
 	if err != nil {
 		return result, err
 	}
-	defer guard.Close()
+	defer func() { retErr = JoinCleanupError(retErr, guard.Close()) }()
 	ctx = guard.Context()
 	if err = guard.Check(ctx); err != nil {
 		return result, err
@@ -525,7 +525,7 @@ func (p *PersistentProvider) checkpoint(ctx context.Context, q domain.VMProvider
 	if err != nil {
 		return result, err
 	}
-	defer os.RemoveAll(stage)
+	defer func() { retErr = JoinCleanupError(retErr, os.RemoveAll(stage)) }()
 	c := *q.Checkpoint
 	c.Components = nil
 	c.State = domain.VMArtifactCreating
@@ -607,7 +607,6 @@ func (p *PersistentProvider) deleteArtifact(ctx context.Context, q domain.VMProv
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	var dir string
 	var checkpoint *domain.VMCheckpoint
 	var export *domain.VMExport
 	switch q.Operation.DeleteTarget {
@@ -619,13 +618,12 @@ func (p *PersistentProvider) deleteArtifact(ctx context.Context, q domain.VMProv
 		if c.RetainUntil.After(time.Now()) {
 			return result, ProviderError(domain.VMErrorConflict, nil)
 		}
-		dir = p.artifactDir("checkpoints", c.ID)
 		checkpoint = c
 	case domain.VMDeleteExport:
 		if q.Export == nil || q.Operation.ExportID == nil || q.Export.ID != *q.Operation.ExportID || q.Export.OrgID != q.Deployment.OrgID {
 			return result, ProviderError(domain.VMErrorInvalid, nil)
 		}
-		dir = p.artifactDir("exports", q.Export.ID)
+		dir := p.artifactDir("exports", q.Export.ID)
 		for _, file := range []string{"manifest.json", "checkpoint.json"} {
 			if err := CheckContainedPath(p.cfg.StateDir, filepath.Join(dir, file)); err != nil {
 				return result, err

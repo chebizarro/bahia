@@ -72,7 +72,11 @@ func TestConformanceFirecrackerDefinitionAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	}()
 	spec := fcPersistentSpec(t, root)
 	p := &persistentProcs{fakeProcs: newFakeProcs(), exit: make(chan struct{})}
 	d := New(Config{InstancesDir: root, Binary: "/usr/bin/firecracker", Processes: p}, nil)
@@ -106,7 +110,11 @@ func TestConformanceFirecrackerShutdownNeverFallsBackToKill(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(root)
+			defer func() {
+				if err := os.RemoveAll(root); err != nil {
+					t.Error(err)
+				}
+			}()
 			spec := fcPersistentSpec(t, root)
 			p := &persistentProcs{fakeProcs: newFakeProcs(), exit: make(chan struct{}), lost: lost}
 			d := New(Config{InstancesDir: root, Binary: "/usr/bin/firecracker", Processes: p}, nil)
@@ -143,7 +151,12 @@ func TestConformanceFirecrackerShutdownNeverFallsBackToKill(t *testing.T) {
 			})}
 			done := make(chan struct{})
 			go func() { defer close(done); _ = server.Serve(listener) }()
-			defer func() { server.Close(); <-done }()
+			defer func() {
+				if err := server.Close(); err != nil {
+					t.Error(err)
+				}
+				<-done
+			}()
 			observed, err := d.InspectPersistent(context.Background(), spec.Marker.ProviderResourceID)
 			if err != nil {
 				t.Fatal(err)
@@ -171,7 +184,11 @@ func TestConformanceFirecrackerCorruptIdentityNeverReaped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	}()
 	spec := fcPersistentSpec(t, root)
 	d := New(Config{InstancesDir: root, Processes: &persistentProcs{fakeProcs: newFakeProcs()}}, nil)
 	if err := d.DefinePersistent(context.Background(), spec, &vm.PersistentResource{ID: spec.Marker.ProviderResourceID, State: domain.VMRuntimeAbsent}); err != nil {

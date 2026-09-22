@@ -116,12 +116,20 @@ func TestVirtualizationMetricsBoundedAndMirrored(t *testing.T) {
 	oldProvider := otel.GetMeterProvider()
 	otel.SetMeterProvider(mp)
 	defer otel.SetMeterProvider(oldProvider)
-	defer mp.Shutdown(ctx)
+	defer func() {
+		if err := mp.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
 	oldInstruments := virtualizationInstruments
 	virtualizationInstruments = newVirtualizationInstruments()
 	defer func() { virtualizationInstruments = oldInstruments }()
 	p := Setup(Config{}, zap.NewNop())
-	defer p.Shutdown(ctx)
+	defer func() {
+		if err := p.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
 	labels := VirtualizationLabels{Provider: "password=sentinel", LifecycleClass: "/private/sentinel", Result: "success", Operation: "checkpoint"}
 	for name := range virtualizationInstruments {
 		if err := RecordVirtualization(ctx, name, labels, 2); err != nil {
@@ -187,7 +195,11 @@ func TestVirtualizationMetricsConcurrentAndSanitizedSpan(t *testing.T) {
 	}
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	defer provider.Shutdown(context.Background())
+	defer func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx, span := provider.Tracer("test").Start(context.Background(), "vm")
 	EndVirtualizationOperation(ctx, span, VirtualizationLabels{Operation: "delete", Reason: "/private/sentinel", Result: "failure"}, &domain.VMProviderError{Code: domain.VMErrorIntegrity, Cause: errors.New("password=sentinel")})
 	for _, ended := range recorder.Ended() {

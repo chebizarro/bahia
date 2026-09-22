@@ -794,7 +794,10 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-		m.renderVirtualization(w)
+		if err := m.renderVirtualization(w); err != nil {
+			// The scrape transport failed; another write cannot repair the partial response.
+			return
+		}
 
 		// HTTP metrics
 		fmt.Fprintln(w, "# HELP bahia_http_requests_total Total HTTP requests by method, path, and status code")

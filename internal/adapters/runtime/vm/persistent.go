@@ -115,6 +115,22 @@ func ProviderError(code domain.VMErrorCode, cause error) error {
 	return &domain.VMProviderError{Code: code, Cause: cause, Unconfirmed: code == domain.VMErrorUnconfirmed, Retryable: code == domain.VMErrorUnconfirmed || code == domain.VMErrorUnavailable}
 }
 
+// JoinCleanupError retains both causes without exposing cleanup paths through a
+// classified provider error or changing its retry/confirmation policy.
+func JoinCleanupError(primary, cleanup error) error {
+	if cleanup == nil {
+		return primary
+	}
+	joined := errors.Join(primary, cleanup)
+	var provider *domain.VMProviderError
+	if errors.As(joined, &provider) {
+		classified := *provider
+		classified.Cause = joined
+		return &classified
+	}
+	return joined
+}
+
 func SameIdentity(a, b domain.VMResourceIdentity) bool { return reflect.DeepEqual(a, b) }
 
 // CheckPersistentResource is used at the last driver boundary before mutation.
@@ -462,7 +478,7 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 	}
 	// ExpectedGeneration is the desired-revision CAS, not the last applied
 	// revision: cancelled admissions may legitimately leave the provider behind.
-	if owned && r.Marker.AppliedGeneration > op.ExpectedGeneration && !(r.Marker.OperationID == op.ID && r.Marker.AppliedGeneration == op.ResourceGeneration) {
+	if owned && r.Marker.AppliedGeneration > op.ExpectedGeneration && (r.Marker.OperationID != op.ID || r.Marker.AppliedGeneration != op.ResourceGeneration) {
 		return result, ProviderError(domain.VMErrorConflict, nil)
 	}
 	if owned && rec != nil && r.Marker.OperationID == op.ID && r.Marker.AppliedGeneration == op.ResourceGeneration {
@@ -503,7 +519,7 @@ func (p *PersistentProvider) Execute(ctx context.Context, q domain.VMProviderOpe
 		}
 		measurement, guard, measureErr := p.measureAdoption(ctx, d, q.Image, r)
 		if guard != nil {
-			defer guard.Close()
+			defer func() { err = JoinCleanupError(err, guard.Close()) }()
 		}
 		if measureErr != nil {
 			return result, measureErr

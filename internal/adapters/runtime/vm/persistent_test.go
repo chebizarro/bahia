@@ -46,6 +46,7 @@ type memoryPersistentDriver struct {
 	inspectHook    func()
 	copyHook       func()
 	coldInvalid    bool
+	coldCloseErr   error
 }
 
 func (f *memoryPersistentDriver) InspectPersistent(_ context.Context, id uuid.UUID) (*PersistentResource, error) {
@@ -116,7 +117,7 @@ type memoryColdGuard struct {
 }
 
 func (g memoryColdGuard) Context() context.Context { return g.ctx }
-func (g memoryColdGuard) Close() error             { return nil }
+func (g memoryColdGuard) Close() error             { return g.driver.coldCloseErr }
 func (g memoryColdGuard) Check(ctx context.Context) error {
 	if g.driver.coldInvalid {
 		return ProviderError(domain.VMErrorConflict, nil)

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	native "github.com/digitalocean/go-libvirt"
+	"github.com/digitalocean/go-libvirt/socket/dialers"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
@@ -43,14 +44,16 @@ func (n nativeEvents) Subscribe(ctx context.Context, id uuid.UUID, reboot bool) 
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		if err = conn.SetDeadline(deadline); err != nil {
-			conn.Close()
-			return nil, err
+			return nil, errors.Join(err, conn.Close())
 		}
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	wire := &eventConn{Conn: conn}
-	client := native.New(wire)
-	fail := func(err error) (DomainSubscription, error) { stop(); conn.Close(); return nil, err }
+	client := native.NewWithDialer(dialers.NewAlreadyConnected(wire))
+	fail := func(err error) (DomainSubscription, error) {
+		stop()
+		return nil, errors.Join(err, conn.Close())
+	}
 	if err = client.ConnectToURI(native.ConnectURI(n.uri)); err != nil {
 		return fail(err)
 	}
@@ -149,7 +152,7 @@ type DomainEvent struct {
 	Reboot bool
 }
 
-func (d *Driver) eventTransition(ctx context.Context, r *vm.PersistentResource, command string, want domain.VMRuntimeState) error {
+func (d *Driver) eventTransition(ctx context.Context, r *vm.PersistentResource, command string, want domain.VMRuntimeState) (retErr error) {
 	if d.cfg.Events == nil {
 		return vm.ProviderError(domain.VMErrorUnsupported, nil)
 	}
@@ -157,7 +160,7 @@ func (d *Driver) eventTransition(ctx context.Context, r *vm.PersistentResource, 
 	if err != nil {
 		return vm.ProviderError(domain.VMErrorUnavailable, err)
 	}
-	defer sub.Close()
+	defer func() { retErr = vm.JoinCleanupError(retErr, sub.Close()) }()
 	// Registration precedes this re-inspection and actuation, closing both the
 	// lost-event window and the inspect/subscribe ownership race.
 	if err = d.recheck(ctx, r); err != nil {

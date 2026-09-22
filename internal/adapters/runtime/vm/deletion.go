@@ -146,7 +146,8 @@ func (p *PersistentProvider) deleteDeployment(ctx context.Context, q domain.VMPr
 		return result, ProviderError(domain.VMErrorUnconfirmed, err)
 	}
 	result.RetainedStorageRefs = []uuid.UUID{r.ID}
-	if disposition == domain.VMDataDelete {
+	switch disposition {
+	case domain.VMDataDelete:
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
@@ -160,7 +161,7 @@ func (p *PersistentProvider) deleteDeployment(ctx context.Context, q domain.VMPr
 			return result, err
 		}
 		result.RetainedStorageRefs = nil
-	} else if disposition == domain.VMDataExport {
+	case domain.VMDataExport:
 		result.RetainedStorageRefs = append(result.RetainedStorageRefs, q.Operation.ID)
 		result.Diagnostic.EvidenceDigest = deletion.ExportDigest
 	}
@@ -176,7 +177,7 @@ func (p *PersistentProvider) deleteDeployment(ctx context.Context, q domain.VMPr
 // A deletion export is a private retained recovery set, not a public VMExport
 // with invented access-policy credentials. The immutable manifest and opaque
 // retained references survive undefine; original disks/restore sets remain too.
-func (p *PersistentProvider) exportForDeletion(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, rec *persistentRecord) (string, error) {
+func (p *PersistentProvider) exportForDeletion(ctx context.Context, q domain.VMProviderOperation, r *PersistentResource, rec *persistentRecord) (digest string, retErr error) {
 	dir := p.artifactDir("retained-exports", q.Operation.ID)
 	if _, err := os.Lstat(dir); err == nil {
 		return p.verifyDeletionExport(ctx, q, "")
@@ -191,7 +192,7 @@ func (p *PersistentProvider) exportForDeletion(ctx context.Context, q domain.VMP
 	if err != nil {
 		return "", err
 	}
-	defer guard.Close()
+	defer func() { retErr = JoinCleanupError(retErr, guard.Close()) }()
 	ctx = guard.Context()
 	if err = guard.Check(ctx); err != nil {
 		return "", err
@@ -200,7 +201,7 @@ func (p *PersistentProvider) exportForDeletion(ctx context.Context, q domain.VMP
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(stage)
+	defer func() { retErr = JoinCleanupError(retErr, os.RemoveAll(stage)) }()
 	manifest := retainedExport{RequestHash: q.Operation.RequestHash, Deployment: rec.Deployment, SchemaVersion: 1, OperationID: q.Operation.ID, Identity: q.Deployment.Identity, Marker: *r.Marker}
 	kinds := RequiredComponents(manifest.Deployment.Provider, manifest.Deployment.Firmware, manifest.Deployment.TPM.Enabled)
 	if len(kinds) != len(r.Components) {

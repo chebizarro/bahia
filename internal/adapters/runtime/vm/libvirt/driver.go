@@ -313,7 +313,7 @@ func (d *Driver) Start(ctx context.Context, name string) error {
 // Stop shuts a domain down. Graceful stops request an ACPI shutdown and
 // wait (ctx-bounded) until the domain is off; forced stops use virsh
 // destroy. Stopping an already-off domain is a no-op.
-func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
+func (d *Driver) Stop(ctx context.Context, name string, graceful bool) (retErr error) {
 	if err := d.rejectPersistentLegacyMutation(ctx, name); err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
 	if err != nil {
 		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 	}
-	defer sub.Close()
+	defer func() { retErr = vm.JoinCleanupError(retErr, sub.Close()) }()
 	if err = d.VerifyLegacy(ctx, name, proof.ID); err != nil {
 		return err
 	}

@@ -20,13 +20,21 @@ func TestNativeRegistrationAcknowledgmentAndDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	}()
 	socket := filepath.Join(dir, "rpc.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	registration := make(chan struct{})
@@ -41,7 +49,11 @@ func TestNativeRegistrationAcknowledgmentAndDisconnect(t *testing.T) {
 			serverDone <- err
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		for {
 			var length uint32
@@ -149,7 +161,9 @@ func TestNativeRegistrationAcknowledgmentAndDisconnect(t *testing.T) {
 	select {
 	case got := <-returned:
 		if got.sub != nil {
-			got.sub.Close()
+			if err := got.sub.Close(); err != nil {
+				t.Error(err)
+			}
 		}
 		t.Fatalf("returned before registration acknowledgment: %v", got.err)
 	default:
@@ -164,7 +178,11 @@ func TestNativeRegistrationAcknowledgmentAndDisconnect(t *testing.T) {
 	if got.err != nil {
 		t.Fatal(got.err)
 	}
-	defer got.sub.Close()
+	defer func() {
+		if err := got.sub.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	close(emit)
 	observed, err := got.sub.Next(ctx)
 	if err != nil || observed.ID != id || observed.State != "stopped" {

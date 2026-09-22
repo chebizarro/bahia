@@ -59,7 +59,7 @@ func (p *PersistentProvider) MeasureAdoption(ctx context.Context, q domain.VMCha
 	}
 	m, guard, err := p.measureAdoption(ctx, q.Desired, q.Image, r)
 	if guard != nil {
-		defer guard.Close()
+		defer func() { err = JoinCleanupError(err, guard.Close()) }()
 	}
 	return m, err
 }
@@ -165,7 +165,7 @@ func (p *PersistentProvider) measureAdoption(ctx context.Context, d domain.Persi
 
 // MeasureAdoptionFile hashes regular files or a sorted, non-symlink TPM tree.
 // Device/inode identity prevents a same-path replacement from inheriting a claim.
-func MeasureAdoptionFile(ctx context.Context, path string) (AdoptionFile, error) {
+func MeasureAdoptionFile(ctx context.Context, path string) (file AdoptionFile, retErr error) {
 	result := AdoptionFile{Path: path}
 	if !filepath.IsAbs(path) || CheckContainedPath(filepath.Dir(path), path) != nil {
 		return result, ProviderError(domain.VMErrorIntegrity, nil)
@@ -185,7 +185,7 @@ func MeasureAdoptionFile(ctx context.Context, path string) (AdoptionFile, error)
 		if openErr != nil {
 			return result, ProviderError(domain.VMErrorIntegrity, openErr)
 		}
-		defer f.Close()
+		defer func() { retErr = JoinCleanupError(retErr, f.Close()) }()
 		opened, statErr := f.Stat()
 		if statErr != nil || !os.SameFile(info, opened) {
 			return result, ProviderError(domain.VMErrorConflict, statErr)

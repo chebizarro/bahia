@@ -74,8 +74,8 @@ func (d *vmBootstrapDelivery) Deliver(ctx context.Context, identity domain.VMRes
 		if manifest.SecretID != binding.Ref.ID || manifest.ServiceID != *v.ServiceID || (manifest.EnvironmentID != nil && *manifest.EnvironmentID != *v.EnvironmentID) || manifest.VersionID == uuid.Nil || manifest.Version < 1 || manifest.Outcome != domain.SecretAccessOutcomeSuccess {
 			return vmError(domain.VMErrorIntegrity)
 		}
+		// Go strings cannot be erased; clear the mutable delivery copy below.
 		payload := []byte(value)
-		value = ""
 		err = guest.ApplyBootstrap(ctx, binding.TargetKey, payload)
 		clear(payload)
 		audit := &domain.SecretAccessAudit{SecretID: manifest.SecretID, VersionID: manifest.VersionID, Version: manifest.Version, ServiceID: manifest.ServiceID, EnvironmentID: manifest.EnvironmentID, Operation: domain.SecretAccessOperationRuntimeApply, Outcome: domain.SecretAccessOutcomeSuccess, Actor: op.Actor, Reason: "persistent VM bootstrap delivery", RequestID: op.ID.String(), AccessedAt: manifest.AccessedAt}

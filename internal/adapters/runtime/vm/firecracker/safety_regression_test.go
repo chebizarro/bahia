@@ -108,7 +108,12 @@ func TestPersistentStartWaitsForDelayedSocketAndPreservesTimeoutEvidence(t *test
 				server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"state":"Running"}`)) })}
 				done := make(chan struct{})
 				go func() { defer close(done); _ = server.Serve(listener) }()
-				defer func() { server.Close(); <-done }()
+				defer func() {
+					if err := server.Close(); err != nil {
+						t.Error(err)
+					}
+					<-done
+				}()
 			case "cancel":
 				cancel()
 			case "exit":
@@ -194,7 +199,11 @@ func TestColdCopyKernelBarrierDetectsImmediateLaunchCycleAndWrites(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer guard.Close()
+			defer func() {
+				if err := guard.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			switch event {
 			case "launch":
 				socket := d.apiSocketPath(spec.Instance.Name)

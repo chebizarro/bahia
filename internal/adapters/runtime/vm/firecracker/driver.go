@@ -274,7 +274,7 @@ func (d *Driver) startVMM(ctx context.Context, name string) error {
 // the VMM API socket and wait up to the shutdown timeout (and ctx) for the
 // VMM to exit. Failure is unconfirmed; only explicit forced stops SIGKILL.
 // Stopping an already stopped instance is a no-op.
-func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
+func (d *Driver) Stop(ctx context.Context, name string, graceful bool) (retErr error) {
 	if err := d.rejectPersistentLegacyMutation(name); err != nil {
 		return err
 	}
@@ -305,7 +305,7 @@ func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
 	if err != nil {
 		return vm.ProviderError(domain.VMErrorUnconfirmed, err)
 	}
-	defer watch.Close()
+	defer func() { retErr = vm.JoinCleanupError(retErr, watch.Close()) }()
 	if err = d.VerifyLegacy(ctx, name, uuid.Nil); err != nil {
 		return err
 	}

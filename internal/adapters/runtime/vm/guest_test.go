@@ -150,7 +150,11 @@ func TestGuestDiagnosticsNeverLeakToMetadataOrLogs(t *testing.T) {
 				}
 				host, guest := net.Pipe()
 				go func() {
-					defer guest.Close()
+					defer func() {
+						if err := guest.Close(); err != nil {
+							t.Error(err)
+						}
+					}()
 					if phase == "metrics" {
 						fakeGuestAgent(t, guest, "rel-001", nil, secret)
 						return

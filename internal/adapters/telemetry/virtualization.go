@@ -154,7 +154,7 @@ func (m *Metrics) recordVirtualization(name string, labels VirtualizationLabels,
 }
 
 // Called with Metrics.mu held by the existing metrics endpoint.
-func (m *Metrics) renderVirtualization(w io.Writer) {
+func (m *Metrics) renderVirtualization(w io.Writer) error {
 	names := make([]string, 0, len(virtualizationInstruments))
 	for n := range virtualizationInstruments {
 		names = append(names, n)
@@ -165,7 +165,9 @@ func (m *Metrics) renderVirtualization(w io.Writer) {
 		if kind == "histogram" {
 			kind = "summary"
 		}
-		fmt.Fprintf(w, "# TYPE bahia_virtualization_%s %s\n", name, kind)
+		if _, err := fmt.Fprintf(w, "# TYPE bahia_virtualization_%s %s\n", name, kind); err != nil {
+			return err
+		}
 		for key, v := range m.virtualization {
 			if key.Name != name {
 				continue
@@ -175,13 +177,18 @@ func (m *Metrics) renderVirtualization(w io.Writer) {
 				parts = append(parts, fmt.Sprintf("%s=%q", a.Key, a.Value.AsString()))
 			}
 			labels := strings.Join(parts, ",")
+			var err error
 			if kind == "summary" {
-				fmt.Fprintf(w, "bahia_virtualization_%s_sum{%s} %g\nbahia_virtualization_%s_count{%s} %d\n", name, labels, v.Value, name, labels, v.Count)
+				_, err = fmt.Fprintf(w, "bahia_virtualization_%s_sum{%s} %g\nbahia_virtualization_%s_count{%s} %d\n", name, labels, v.Value, name, labels, v.Count)
 			} else {
-				fmt.Fprintf(w, "bahia_virtualization_%s{%s} %g\n", name, labels, v.Value)
+				_, err = fmt.Fprintf(w, "bahia_virtualization_%s{%s} %g\n", name, labels, v.Value)
+			}
+			if err != nil {
+				return err
 			}
 		}
 	}
+	return nil
 }
 
 // SanitizedVirtualizationError discards the entire underlying cause. Never pass

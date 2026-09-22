@@ -13,14 +13,14 @@ import (
 // Subscribe before launch so even a delayed socket creation wakes readiness.
 // VMM exit and transport loss are failures, never readiness; launch identity is
 // retained on timeout for subsequent exact-resource reconciliation.
-func (d *Driver) startPersistentVMM(ctx context.Context, name string) error {
+func (d *Driver) startPersistentVMM(ctx context.Context, name string) (retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	events, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
 	}
-	defer events.Close()
+	defer func() { retErr = vm.JoinCleanupError(retErr, events.Close()) }()
 	if err = events.Add(d.instanceDir(name)); err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (d *Driver) startPersistentVMM(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	defer exit.Close()
+	defer func() { retErr = vm.JoinCleanupError(retErr, exit.Close()) }()
 	exited := make(chan error, 1)
 	go func() { exited <- exit.Wait(ctx) }()
 	defer func() { cancel(); <-exited }()

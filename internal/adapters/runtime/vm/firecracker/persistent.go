@@ -264,7 +264,7 @@ func (d *Driver) DefinePersistent(ctx context.Context, s vm.PersistentSpec, curr
 	}
 	return atomicfile.WriteFile(ctx, filepath.Join(s.Instance.InstanceDir, ownershipFile), ".ownership-*.tmp", data, 0600)
 }
-func (d *Driver) TransitionPersistent(ctx context.Context, r *vm.PersistentResource, kind domain.VMOperationKind, force bool) error {
+func (d *Driver) TransitionPersistent(ctx context.Context, r *vm.PersistentResource, kind domain.VMOperationKind, force bool) (retErr error) {
 	if r.Marker == nil || domain.ValidateVMOwnershipMarker(*r.Marker) != nil || r.Marker.ProviderResourceID != r.ID {
 		return vm.ProviderError(domain.VMErrorForeign, nil)
 	}
@@ -311,7 +311,7 @@ func (d *Driver) TransitionPersistent(ctx context.Context, r *vm.PersistentResou
 			if err != nil {
 				return err
 			}
-			defer watch.Close()
+			defer func() { retErr = vm.JoinCleanupError(retErr, watch.Close()) }()
 			if err = d.recheckPersistent(ctx, r); err != nil {
 				return err
 			}
@@ -370,7 +370,8 @@ func inspectAPI(ctx context.Context, socket string) (domain.VMRuntimeState, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	// The decoded response/status is the evidence; body teardown cannot change it.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", vm.ProviderError(domain.VMErrorUnavailable, nil)
 	}

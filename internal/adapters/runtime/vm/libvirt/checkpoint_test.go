@@ -68,7 +68,11 @@ func TestTPMCheckpointRefusesActiveStateLock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
 		lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: 0, Start: 0, Len: 0}
 		if err = syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lock); err != nil {
 			t.Fatal(err)
@@ -101,7 +105,9 @@ func TestTPMCheckpointRefusesActiveStateLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		hold.Close()
+		if err := hold.Close(); err != nil {
+			t.Error(err)
+		}
 		if err := child.Wait(); err != nil {
 			t.Error(err)
 		}

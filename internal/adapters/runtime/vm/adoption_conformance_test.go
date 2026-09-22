@@ -92,7 +92,7 @@ type adoptionEvents struct{ host *adoptionHost }
 type adoptionSubscription struct{ host *adoptionHost }
 
 func (e adoptionEvents) Subscribe(context.Context, uuid.UUID, bool) (libvirt.DomainSubscription, error) {
-	return adoptionSubscription{host: e.host}, nil
+	return adoptionSubscription(e), nil
 }
 func (adoptionSubscription) Next(ctx context.Context) (libvirt.DomainEvent, error) {
 	<-ctx.Done()
