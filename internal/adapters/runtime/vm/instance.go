@@ -38,23 +38,23 @@ func InstancesDir(stateDir string) string {
 // core's source of truth for target-name -> instance resolution and feeds
 // drift (image digest, spec hash) through Observe.
 type InstanceMetadata struct {
-	Name          string            `json:"name"`
-	ServiceName   string            `json:"service_name"`
-	EnvironmentID string            `json:"environment_id,omitempty"`
-	RuntimeType   string            `json:"runtime_type"`
-	ImageRepo     string            `json:"image_repo"`
-	ImageDigest   string            `json:"image_digest"`
-	ImageID       string            `json:"image_id"`
-	ReleaseDir    string            `json:"release_dir"`
-	SpecHash      string            `json:"spec_hash"`
+	Name          string `json:"name"`
+	ServiceName   string `json:"service_name"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	RuntimeType   string `json:"runtime_type"`
+	ImageRepo     string `json:"image_repo"`
+	ImageDigest   string `json:"image_digest"`
+	ImageID       string `json:"image_id"`
+	ReleaseDir    string `json:"release_dir"`
+	SpecHash      string `json:"spec_hash"`
 	// AgentProtocolVersion is the guest-agent protocol version declared by
 	// the release manifest at deploy time. Zero or 1 means the image ships
 	// no service-mode agent: hypervisor-running is sufficient for healthy.
 	// 2+ means Observe requires a successful guest-agent ping for healthy.
-	AgentProtocolVersion int `json:"agent_protocol_version,omitempty"`
-	VsockCID      uint32            `json:"vsock_cid,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
+	AgentProtocolVersion int               `json:"agent_protocol_version,omitempty"`
+	VsockCID             uint32            `json:"vsock_cid,omitempty"`
+	Labels               map[string]string `json:"labels,omitempty"`
+	CreatedAt            time.Time         `json:"created_at"`
 }
 
 // InstanceName builds the hypervisor-visible instance name
@@ -162,7 +162,8 @@ func ReadInstanceMetadata(instanceDir string) (*InstanceMetadata, error) {
 }
 
 // FindInstancesByService scans the instances directory for instances whose
-// recorded service name matches, newest first. A missing instances
+// recorded service name matches. Ambiguous legacy matches are refused rather
+// than authorizing a mutation against whichever instance is newest. A missing instances
 // directory yields an empty result.
 func FindInstancesByService(instancesDir, serviceName string) ([]*InstanceMetadata, error) {
 	entries, err := os.ReadDir(instancesDir)
@@ -184,13 +185,13 @@ func FindInstancesByService(instancesDir, serviceName string) ([]*InstanceMetada
 		if md == nil || md.ServiceName != serviceName {
 			continue
 		}
+		if md.Name != entry.Name() {
+			return nil, fmt.Errorf("legacy instance metadata identity does not match its directory")
+		}
 		matches = append(matches, md)
 	}
-	// Newest first, so callers can treat matches[0] as authoritative.
-	for i := 1; i < len(matches); i++ {
-		for j := i; j > 0 && matches[j].CreatedAt.After(matches[j-1].CreatedAt); j-- {
-			matches[j], matches[j-1] = matches[j-1], matches[j]
-		}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("ambiguous legacy VM target %q", serviceName)
 	}
 	return matches, nil
 }

@@ -1,0 +1,1 @@
+{"consistency":"cold","state":"ready","firmware":"uefi","tpm":true,"kinds":["disk","nvram","swtpm"]}

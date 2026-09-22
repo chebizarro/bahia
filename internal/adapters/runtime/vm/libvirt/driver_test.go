@@ -44,6 +44,9 @@ func (f *fakeRunner) run(_ context.Context, binary string, args ...string) ([]by
 			return []byte(r.output), r.err
 		}
 	}
+	if strings.Contains(line, " dumpxml ") {
+		return []byte("<domain><metadata/></domain>"), nil
+	}
 	return nil, nil
 }
 

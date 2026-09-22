@@ -13,6 +13,56 @@ import (
 	"go.uber.org/zap"
 )
 
+// PersistentVMConfig binds a provider to one trusted host and private storage
+// pool. VerifyImage must validate catalog provenance under that host's trust
+// policy. The default release resolver uses ImageRoot/<release UUID>, not current.
+type PersistentVMConfig struct {
+	Provider    vm.PersistentConfig
+	ImageRoot   string
+	Libvirt     vmlibvirt.Config
+	Firecracker vmfirecracker.Config
+}
+
+// NewPersistentVMProvider is the C/E composition constructor. It is independent
+// of legacy Deploy, so persistent updates never invoke replace-on-deploy.
+func NewPersistentVMProvider(cfg PersistentVMConfig, logger *zap.Logger) (domain.PersistentVMProvider, error) {
+	if cfg.Provider.VerifyImage == nil {
+		return nil, fmt.Errorf("persistent VM provider requires a trusted image provenance verifier")
+	}
+	if cfg.Provider.ResolveRelease == nil {
+		if cfg.ImageRoot == "" {
+			return nil, fmt.Errorf("persistent VM provider requires an immutable image root or resolver")
+		}
+		cfg.Provider.ResolveRelease = func(ctx context.Context, image domain.VMImage) (*vm.Release, error) {
+			return vm.ResolvePinnedRelease(ctx, cfg.ImageRoot, image)
+		}
+	}
+	var driver vm.PersistentDriver
+	switch cfg.Provider.Host.Provider {
+	case domain.VMProviderLibvirt:
+		cfg.Libvirt.InstancesDir = vm.InstancesDir(cfg.Provider.StateDir)
+		cfg.Libvirt.ImageRoot = cfg.ImageRoot
+		driver = vmlibvirt.New(cfg.Libvirt, logger)
+	case domain.VMProviderFirecracker:
+		cfg.Firecracker.InstancesDir = vm.InstancesDir(cfg.Provider.StateDir)
+		cfg.Firecracker.ImageRoot = cfg.ImageRoot
+		driver = vmfirecracker.New(cfg.Firecracker, logger)
+	default:
+		return nil, fmt.Errorf("unsupported persistent VM provider")
+	}
+	return vm.NewPersistentProvider(cfg.Provider, driver)
+}
+
+// PersistentVMCapability is additive to Runtime/LifecycleRuntime; callers that
+// already hold a VM runtime can bind its core to exact host identity explicitly.
+type PersistentVMCapability interface {
+	PersistentVMProvider(vm.PersistentConfig) (domain.PersistentVMProvider, error)
+}
+
+func (a *vmRuntimeAdapter) PersistentVMProvider(cfg vm.PersistentConfig) (domain.PersistentVMProvider, error) {
+	return a.core.PersistentProvider(cfg)
+}
+
 // newVMQEMURuntime wires the shared VM runtime core to the libvirt/QEMU
 // hypervisor driver.
 func newVMQEMURuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
@@ -23,6 +73,7 @@ func newVMQEMURuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 	driver := vmlibvirt.New(vmlibvirt.Config{
 		URI:          uri,
 		InstancesDir: vm.InstancesDir(strings.TrimSpace(cfg.VM.StateDir)),
+		ImageRoot:    strings.TrimSpace(cfg.VM.ImageRoot),
 	}, logger)
 	core, err := vm.NewRuntime(vm.Config{
 		RuntimeType:    domain.RuntimeTypeVMQEMU,
@@ -46,6 +97,7 @@ func newVMQEMURuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 func newVMFirecrackerRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 	driver := vmfirecracker.New(vmfirecracker.Config{
 		InstancesDir: vm.InstancesDir(strings.TrimSpace(cfg.VM.StateDir)),
+		ImageRoot:    strings.TrimSpace(cfg.VM.ImageRoot),
 	}, logger)
 	core, err := vm.NewRuntime(vm.Config{
 		RuntimeType:    domain.RuntimeTypeVMFirecracker,

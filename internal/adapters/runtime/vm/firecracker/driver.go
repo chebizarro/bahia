@@ -52,6 +52,7 @@ const (
 
 // Config configures the firecracker driver.
 type Config struct {
+	ImageRoot string
 	// InstancesDir is the directory holding per-instance state
 	// directories; instance files (vmconfig.json, rootfs copy, vmm.json,
 	// api.socket, vsock.sock, console.log) live under
@@ -94,6 +95,9 @@ func New(cfg Config, logger *zap.Logger) *Driver {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
 	if cfg.Processes == nil {
+		if cfg.Binary == DefaultBinary {
+			cfg.Binary = "/usr/bin/firecracker"
+		}
 		cfg.Processes = newOSProcessManager()
 	}
 	return &Driver{cfg: cfg, logger: logger}
@@ -218,6 +222,13 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 // config file boots the VM immediately. The process identity is recorded
 // in vmm.json so State/Stop/adoption can find it across bahia restarts.
 func (d *Driver) Start(ctx context.Context, name string) error {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
+	return d.startVMM(ctx, name)
+}
+
+func (d *Driver) startVMM(ctx context.Context, name string) error {
 	dir := d.instanceDir(name)
 	configPath := filepath.Join(dir, vmConfigFileName)
 	if _, err := os.Stat(configPath); err != nil {
@@ -262,6 +273,9 @@ func (d *Driver) Start(ctx context.Context, name string) error {
 // VMM to exit, then fall back to SIGKILL; forced stops SIGKILL directly.
 // Stopping an already stopped instance is a no-op.
 func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
 	state, err := d.State(ctx, name)
 	if err != nil {
 		return err
@@ -326,6 +340,9 @@ func (d *Driver) waitForExit(ctx context.Context, record *vmmRecord) error {
 // Remaining instance files are removed with the instance directory by the
 // core. Destroying an absent instance returns nil.
 func (d *Driver) Destroy(ctx context.Context, name string) error {
+	if err := d.rejectPersistentLegacyMutation(name); err != nil {
+		return err
+	}
 	state, err := d.State(ctx, name)
 	if err != nil {
 		return err
@@ -464,8 +481,13 @@ func (d *Driver) AdoptOrphans(ctx context.Context) error {
 			continue
 		}
 		if recordErr != nil {
-			d.logger.Warn("firecracker instance has a corrupt VMM record; reaping",
-				zap.String("instance", name), zap.Error(recordErr))
+			errs = append(errs, fmt.Errorf("unconfirmed VMM identity for %q: %w", name, recordErr))
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, ownershipFile)); err == nil {
+			// Persistent v2 resources are recovered by exact-resource inspection, never
+			// by the legacy name-scanned registry cleanup path.
+			continue
 		}
 		reaped := false
 		for _, stale := range []string{vmmRecordFileName, apiSocketFileName, vsockSocketFileName} {

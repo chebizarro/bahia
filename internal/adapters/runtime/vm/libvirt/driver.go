@@ -6,6 +6,7 @@
 package libvirt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,9 +18,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -48,8 +53,20 @@ type CommandRunner func(ctx context.Context, binary string, args ...string) ([]b
 // the driver's guest-agent transport boundary; tests substitute a fake.
 type VsockDialer func(ctx context.Context, cid, port uint32) (net.Conn, error)
 
+// NetworkBinding maps an opaque admitted reference to operator-allowlisted
+// libvirt network/bridge configuration; request strings are never host names.
+type NetworkBinding struct {
+	Mode domain.VMNetworkMode
+	Name string
+}
+
 // Config configures the libvirt driver.
 type Config struct {
+	Networks map[uuid.UUID]NetworkBinding
+	// Events must acknowledge exact-domain subscription registration before mutation.
+	Events      DomainEvents
+	EventSocket string
+	ImageRoot   string
 	// URI is the libvirt connection URI (DefaultURI when empty).
 	URI string
 	// InstancesDir is the directory holding per-instance state
@@ -96,30 +113,106 @@ func New(cfg Config, logger *zap.Logger) *Driver {
 		cfg.FirmwareCodePath = DefaultFirmwareCodePath
 	}
 	if cfg.Runner == nil {
+		if cfg.VirshBinary == "virsh" {
+			cfg.VirshBinary = "/usr/bin/virsh"
+		}
+		if cfg.QEMUImgBinary == "qemu-img" {
+			cfg.QEMUImgBinary = "/usr/bin/qemu-img"
+		}
 		cfg.Runner = execRunner
 	}
 	if cfg.Dialer == nil {
 		cfg.Dialer = dialVsock
 	}
+	if cfg.Events == nil {
+		if cfg.EventSocket == "" && cfg.URI == DefaultURI {
+			cfg.EventSocket = "/var/run/libvirt/libvirt-sock"
+		}
+		cfg.Events = NewDomainEvents(cfg.EventSocket, cfg.URI)
+	}
 	return &Driver{cfg: cfg, logger: logger}
 }
 
+const maxCommandOutput = 1 << 20
+
+type boundedOutput struct {
+	mu       sync.Mutex
+	data     bytes.Buffer
+	cancel   context.CancelFunc
+	overflow bool
+}
+
+func (b *boundedOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(p) > maxCommandOutput-b.data.Len() {
+		b.overflow = true
+		b.cancel()
+		return 0, fmt.Errorf("provider output exceeds bound")
+	}
+	return b.data.Write(p)
+}
 func execRunner(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	if !filepath.IsAbs(binary) || (filepath.Base(binary) != "virsh" && filepath.Base(binary) != "qemu-img") {
+		return nil, fmt.Errorf("provider binary is not an absolute allowlisted executable")
+	}
+	for _, arg := range args {
+		if strings.ContainsAny(arg, "\x00\r\n") || len(arg) > 65536 {
+			return nil, fmt.Errorf("invalid provider argument")
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = append(os.Environ(), "LC_ALL=C")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return output, fmt.Errorf("%s %s: %w: %s", filepath.Base(binary), strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
 	}
-	return output, nil
+	command.WaitDelay = time.Second
+	output := &boundedOutput{cancel: cancel}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	if output.overflow {
+		err = fmt.Errorf("provider output exceeds bound")
+	}
+	if err != nil {
+		return output.data.Bytes(), fmt.Errorf("provider command failed: %w", err)
+	}
+	return output.data.Bytes(), nil
 }
 
 func (d *Driver) virsh(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("missing virsh operation")
+	}
+	switch args[0] {
+	case "list", "dumpxml", "metadata", "define", "autostart", "start", "shutdown", "reboot", "destroy", "undefine", "domstate":
+	default:
+		return nil, fmt.Errorf("virsh operation is not allowlisted")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
 	full := append([]string{"-c", d.cfg.URI}, args...)
 	return d.cfg.Runner(ctx, d.cfg.VirshBinary, full...)
 }
 
 func (d *Driver) qemuImg(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("missing qemu-img operation")
+	}
+	switch args[0] {
+	case "create", "info", "resize", "convert":
+	default:
+		return nil, fmt.Errorf("qemu-img operation is not allowlisted")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	return d.cfg.Runner(ctx, d.cfg.QEMUImgBinary, args...)
 }
 
@@ -195,6 +288,9 @@ func (d *Driver) Create(ctx context.Context, spec vm.InstanceSpec) error {
 
 // Start boots a defined domain.
 func (d *Driver) Start(ctx context.Context, name string) error {
+	if err := d.rejectPersistentLegacyMutation(ctx, name); err != nil {
+		return err
+	}
 	if _, err := d.virsh(ctx, "start", name); err != nil {
 		return fmt.Errorf("starting libvirt domain %q: %w", name, err)
 	}
@@ -205,6 +301,9 @@ func (d *Driver) Start(ctx context.Context, name string) error {
 // wait (ctx-bounded) until the domain is off; forced stops use virsh
 // destroy. Stopping an already-off domain is a no-op.
 func (d *Driver) Stop(ctx context.Context, name string, graceful bool) error {
+	if err := d.rejectPersistentLegacyMutation(ctx, name); err != nil {
+		return err
+	}
 	state, err := d.State(ctx, name)
 	if err != nil {
 		return err
@@ -255,6 +354,9 @@ func (d *Driver) Destroy(ctx context.Context, name string) error {
 	}
 	if state == vm.StateAbsent {
 		return nil
+	}
+	if err := d.rejectPersistentLegacyMutation(ctx, name); err != nil {
+		return err
 	}
 	if state != vm.StateStopped {
 		if output, err := d.virsh(ctx, "destroy", name); err != nil && !isNotRunningOutput(output, err) {

@@ -1,0 +1,7 @@
+[
+ ["qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", "$IMAGE/disk.qcow2", "$INSTANCE/disk.qcow2"],
+ ["qemu-img", "info", "--output=json", "$INSTANCE/disk.qcow2"],
+ ["qemu-img", "resize", "$INSTANCE/disk.qcow2", "1073741824"],
+ ["virsh", "-c", "qemu:///system", "define", "$INSTANCE/definition-00000000-0000-0000-0000-000000000006.xml"],
+ ["virsh", "-c", "qemu:///system", "autostart", "00000000-0000-0000-0000-000000000005", "--disable"]
+]

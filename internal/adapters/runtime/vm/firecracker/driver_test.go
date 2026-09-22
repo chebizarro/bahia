@@ -704,22 +704,21 @@ func TestAdoptOrphansAdoptsRunningAndReapsDead(t *testing.T) {
 	mustStart(t, driver, "i-dead")
 }
 
-func TestAdoptOrphansReapsCorruptRecord(t *testing.T) {
+func TestAdoptOrphansPreservesCorruptRecord(t *testing.T) {
 	driver, instancesDir := newTestDriver(t, newFakeProcs())
 	spec := fcSpec(t, instancesDir, "i1", 0)
 	mustCreate(t, driver, spec)
 	if err := os.WriteFile(filepath.Join(spec.InstanceDir, "vmm.json"), []byte("{corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.AdoptOrphans(context.Background()); err != nil {
-		t.Fatalf("AdoptOrphans: %v", err)
+	if err := driver.AdoptOrphans(context.Background()); err == nil {
+		t.Fatal("corrupt identity must remain unconfirmed")
 	}
-	if _, err := os.Stat(filepath.Join(spec.InstanceDir, "vmm.json")); !os.IsNotExist(err) {
-		t.Errorf("expected corrupt record reaped, stat err=%v", err)
+	if data, err := os.ReadFile(filepath.Join(spec.InstanceDir, "vmm.json")); err != nil || string(data) != "{corrupt" {
+		t.Fatalf("corrupt identity evidence was removed: %q / %v", data, err)
 	}
-	state, err := driver.State(context.Background(), "i1")
-	if err != nil || state != vm.StateStopped {
-		t.Errorf("expected stopped after reap, got %s / %v", state, err)
+	if _, err := driver.State(context.Background(), "i1"); err == nil {
+		t.Fatal("corrupt identity must not become stopped")
 	}
 }
 

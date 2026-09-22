@@ -155,13 +155,20 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	}
 	name := InstanceName(envID, serviceName)
 
-	// Replace semantics: tear down every existing instance recorded for
-	// this target before creating the new one.
+	// Legacy replace semantics are confined to the same environment and runtime;
+	// persistent-resource operations never use this name-scanned path.
 	existing, err := FindInstancesByService(r.instancesDir(), serviceName)
 	if err != nil {
 		return fmt.Errorf("scanning existing vm instances: %w", err)
 	}
 	for _, md := range existing {
+		expectedEnv := ""
+		if envID != uuid.Nil {
+			expectedEnv = envID.String()
+		}
+		if md.EnvironmentID != expectedEnv || md.RuntimeType != string(r.cfg.RuntimeType) {
+			return fmt.Errorf("legacy VM target belongs to another environment or runtime")
+		}
 		if err := r.removeInstance(ctx, md); err != nil {
 			return fmt.Errorf("removing existing vm instance %q: %w", md.Name, err)
 		}
@@ -307,6 +314,9 @@ func (r *Runtime) Undeploy(ctx context.Context, serviceName string) error {
 }
 
 func (r *Runtime) removeInstance(ctx context.Context, md *InstanceMetadata) error {
+	if md.RuntimeType != string(r.cfg.RuntimeType) {
+		return fmt.Errorf("legacy VM target belongs to another runtime")
+	}
 	if err := r.hv.Destroy(ctx, md.Name); err != nil {
 		return fmt.Errorf("destroying vm instance %q: %w", md.Name, err)
 	}
@@ -442,6 +452,9 @@ func (r *Runtime) requireInstance(serviceName string) (*InstanceMetadata, error)
 	}
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no vm instance found for target %q", serviceName)
+	}
+	if matches[0].RuntimeType != string(r.cfg.RuntimeType) {
+		return nil, fmt.Errorf("legacy VM target belongs to another runtime")
 	}
 	return matches[0], nil
 }
