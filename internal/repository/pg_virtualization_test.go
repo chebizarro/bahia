@@ -199,6 +199,14 @@ func TestVMControlPlanePostgresQuotaRaceAndStoppedRetention(t *testing.T) {
 	o.RuntimeObservedAt = &o.ObservedAt
 	require.NoError(t, r.AcceptVMObservation(ctx, h.OrgID, v.ID, o))
 	require.NoError(t, r.ReleaseCapacity(ctx, h.OrgID, rs[0].ID))
+	require.NoError(t, r.ReleaseCapacity(ctx, h.OrgID, rs[0].ID), "repeated absence must not terminate the watcher")
+	var releases int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM virtualization_resource_changes WHERE org_id=$1 AND resource_id=$2 AND change_type='released'`, h.OrgID, rs[0].ResourceID).Scan(&releases))
+	require.Equal(t, 1, releases, "release replay has no duplicate journal effect")
+	require.NoError(t, r.ReleaseCapacity(ctx, uuid.New(), rs[1].ID))
+	remaining, err := r.ListReservations(ctx, h.OrgID, h.ID)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1, "cross-tenant replay never releases another tenant's capacity")
 }
 func TestVMControlPlanePostgresArtifactsAndPlaneProbes(t *testing.T) {
 	pool, r := vmPostgres(t)

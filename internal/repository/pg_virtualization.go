@@ -723,6 +723,9 @@ func (r *PgVirtualizationRepository) ReleaseCapacity(ctx context.Context, org, i
 		var resource uuid.UUID
 		var kind domain.VirtualizationResourceKind
 		if err := tx.QueryRow(ctx, `SELECT resource_id,resource_kind FROM virtualization_capacity_reservations WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id).Scan(&resource, &kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil // Already released; never delete another tenant's reservation.
+			}
 			return err
 		}
 		safe := false

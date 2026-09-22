@@ -8,7 +8,11 @@ mutations. Read methods: `virtualization-host/list|get`, `vm-image/list|get`,
 `vm-export/list|get`, `vm-operation/get`. All require `org_id`; gets require `id`.
 
 Mutation methods: `vm-image/register`, `persistent-vm/create|update|operate`,
-`execution-plane/create|update|reconcile`, `vm-operation/approve|cancel`.
+`execution-plane/create|update|reconcile`, `vm-operation/approve|approve-plan|cancel`.
+`approve-plan` returns `status=approved` and `approval_id` for an exact proposed
+request; it does not admit an operation. The original requester submits the
+approved mutation separately. Deployment deletion carries an approval-bound
+`data_disposition` (`retain` by default, `export`, or explicit destructive `delete`).
 The E transport passes a verified principal and typed intent to C/D admission
 adapters. Missing adapters return unavailable. Tenant deployment permissions are
 mandatory; destructive approval and SecretRef resolution remain service-owned.

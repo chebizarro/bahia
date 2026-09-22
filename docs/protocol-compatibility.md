@@ -6,6 +6,10 @@ The additive virtualization v1 family uses existing ContextVM 25910, canonical
 state 30900 and audit 4903 kinds, checked against the Bahia implementation guide
 and Cascadia `registry/event-families.yaml`. No numeric allocation, legacy-kind
 reader, NIP-38 reinterpretation or Loom per-job transport replacement is added.
+The additive `vm-operation/approve-plan` method returns `approval_id` without an
+operation; clients then admit the approved mutation. Deployment-delete requests
+may set `data_disposition`; omitted and explicit `retain` are equivalent, including
+request hashing. Clone approvals bind the target revision and networking.
 
 Consumers can ignore unknown fields/tags, but must retain explicit lifecycle
 classes, author/tenant scoping and journal sequence/generation ordering. Public

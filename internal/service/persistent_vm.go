@@ -161,16 +161,33 @@ func vmHash(v any) (string, error) {
 }
 func vmRequestHash(p *auth.Principal, req VMOperationRequest) (string, error) {
 	req.ApprovalID = nil
-	if req.Kind == domain.VMOperationDelete && req.DeleteTarget == domain.VMDeleteDeployment {
-		req.DataDisposition = req.DataDisposition.Effective()
+	if req.Kind == domain.VMOperationDelete && req.DeleteTarget == domain.VMDeleteDeployment && req.DataDisposition.Effective() == domain.VMDataRetain {
+		// Preserve pre-disposition request hashes and treat explicit retain as default.
+		req.DataDisposition = ""
 	}
 	return vmHash(struct {
 		Actor   string
 		Request VMOperationRequest
 	}{vmActor(p), req})
 }
-func (s *PersistentVMService) replay(ctx context.Context, p *auth.Principal, req VMOperationRequest) (*domain.VMOperation, error) {
+func (s *PersistentVMService) boundRequestHash(ctx context.Context, p *auth.Principal, req VMOperationRequest) (string, *domain.PersistentVMDeployment, error) {
 	hash, err := vmRequestHash(p, req)
+	if err != nil || req.CloneTargetID == nil {
+		return hash, nil, err
+	}
+	target, err := s.cfg.Repository.Deployments().Get(ctx, req.OrgID, *req.CloneTargetID)
+	if err != nil {
+		return "", nil, err
+	}
+	hash, err = vmHash(struct {
+		RequestHash      string
+		TargetGeneration int64
+	}{hash, target.Generation})
+	return hash, target, err
+}
+
+func (s *PersistentVMService) replay(ctx context.Context, p *auth.Principal, req VMOperationRequest) (*domain.VMOperation, error) {
+	hash, _, err := s.boundRequestHash(ctx, p, req)
 	if err != nil {
 		return nil, err
 	}
@@ -347,6 +364,15 @@ func (s *PersistentVMService) admitOperation(ctx context.Context, input reposito
 	var guard func(context.Context, int) error
 	guard = func(ctx context.Context, index int) error {
 		if index == len(ids) {
+			if op.CloneTargetID != nil {
+				target, err := s.cfg.Repository.Deployments().Get(ctx, op.OrgID, *op.CloneTargetID)
+				if err != nil {
+					return err
+				}
+				if target.Generation != op.CloneTargetGeneration {
+					return repository.ErrConflict
+				}
+			}
 			if err := s.mutationFence(ctx, op.OrgID, op.ResourceID, op.CloneTargetID, uuid.Nil); err != nil {
 				return err
 			}
@@ -461,6 +487,23 @@ func (s *PersistentVMService) prepare(ctx context.Context, p *auth.Principal, re
 	}
 	op, err := s.operation(p, req, *h, target.Generation, plan, obs)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	hash, cloneTarget, err := s.boundRequestHash(ctx, p, req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	op.RequestHash = hash
+	if cloneTarget != nil {
+		op.CloneTargetGeneration = cloneTarget.Generation
+		if cloneTarget.Network.Mode == domain.VMNetworkBridged || len(cloneTarget.Network.PassthroughDeviceRefs) > 0 {
+			op.RequiredTier = domain.VMApprovalDestructive
+			if req.ApprovalID == nil {
+				op.Deadline = op.Deadline.Add(domain.VMApprovalMaxAge)
+			}
+		}
+	}
+	if err := domain.ValidateVMOperation(op); err != nil {
 		return nil, nil, nil, err
 	}
 	reservations := []domain.VMCapacityReservation{vmReservation(target, domain.PersistentVMResource, target.ID, target.Allocation)}
@@ -744,6 +787,9 @@ func (s *PersistentVMService) artifactReferences(ctx context.Context, p *auth.Pr
 		target, err := s.cfg.Repository.Deployments().Get(ctx, v.OrgID, *op.CloneTargetID)
 		if err != nil {
 			return nil, err
+		}
+		if target.Generation != op.CloneTargetGeneration {
+			return nil, repository.ErrConflict
 		}
 		if target.ID == v.ID || target.HostID != v.HostID || target.Identity.ProviderResourceID == v.Identity.ProviderResourceID || target.DesiredPower != domain.VMDesiredStopped || v.TPM.Enabled || target.TPM.Enabled || checkpoint == nil || checkpoint.TPMEnabled || target.ImageID != checkpoint.ImageID || target.ConfigDigest != checkpoint.ConfigDigest {
 			return nil, domain.ErrInvalidValue

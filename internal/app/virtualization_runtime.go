@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
@@ -214,6 +215,36 @@ func (r *virtualizationRuntime) replace(ctx context.Context, key vmWork, run fun
 	r.runs[key] = virtualizationRun{cancel, done}
 	go func() { defer close(done); defer cancel(); r.report(run(child)) }()
 }
+
+// A watcher failure is not a completed reconciliation. Run retracts eligibility
+// and joins its subscription before this supervisor reconnects with a new session.
+func superviseExecutionPlane(ctx context.Context, run func(context.Context) error, report func(error)) error {
+	backoff := 250 * time.Millisecond
+	for {
+		started := time.Now()
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var provider *domain.VMProviderError
+		if !errors.Is(err, context.DeadlineExceeded) && !(errors.As(err, &provider) && provider.Retryable) {
+			return err
+		}
+		report(err)
+		if time.Since(started) >= 30*time.Second {
+			backoff = 250 * time.Millisecond
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		backoff = min(2*backoff, 30*time.Second)
+	}
+}
+
 func (r *virtualizationRuntime) observe(ctx context.Context, key vmWork) error {
 	if r.vmReconciler == nil {
 		return nil
@@ -339,7 +370,9 @@ func (r *virtualizationRuntime) Run(ctx context.Context) error {
 						r.report(err)
 						continue
 					}
-					r.replace(ctx, w, func(ctx context.Context) error { return r.planes.Run(ctx, w.org, w.id) })
+					r.replace(ctx, w, func(ctx context.Context) error {
+						return superviseExecutionPlane(ctx, func(ctx context.Context) error { return r.planes.Run(ctx, w.org, w.id) }, r.report)
+					})
 				}
 			}
 		}

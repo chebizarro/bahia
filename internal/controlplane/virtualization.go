@@ -36,6 +36,8 @@ type VirtualizationMutation struct {
 	Image              *domain.VMImage                  `json:"image,omitempty"`
 	Plane              *domain.ExecutionPlaneDeployment `json:"plane,omitempty"`
 	Operation          domain.VMOperationKind           `json:"operation,omitempty"`
+	Requester          string                           `json:"requester,omitempty"`
+	ApprovalReason     string                           `json:"approval_reason,omitempty"`
 	ApprovalID         *uuid.UUID                       `json:"approval_id,omitempty"`
 	CheckpointID       *uuid.UUID                       `json:"checkpoint_id,omitempty"`
 	ExportID           *uuid.UUID                       `json:"export_id,omitempty"`
@@ -54,21 +56,23 @@ type ExecutionPlaneMutations interface {
 	MutateExecutionPlane(context.Context, VirtualizationPrincipal, string, VirtualizationMutation) (VirtualizationAdmission, error)
 }
 type VirtualizationAdmission struct {
+	ApprovalID  *uuid.UUID
 	ResourceID  uuid.UUID
 	OperationID uuid.UUID
 	Generation  int64
 }
 type VirtualizationAcknowledgment struct {
-	Status        string    `json:"status"`
-	ResourceID    uuid.UUID `json:"resource_id"`
-	OperationID   uuid.UUID `json:"operation_id"`
-	Generation    int64     `json:"generation"`
-	StateKind     int       `json:"state_kind"`
-	AuditKind     int       `json:"audit_kind"`
-	StateDTag     string    `json:"state_d_tag"`
-	OperationDTag string    `json:"operation_d_tag,omitempty"`
-	Author        string    `json:"author"`
-	OrgID         uuid.UUID `json:"org_id"`
+	ApprovalID    *uuid.UUID `json:"approval_id,omitempty"`
+	Status        string     `json:"status"`
+	ResourceID    uuid.UUID  `json:"resource_id"`
+	OperationID   uuid.UUID  `json:"operation_id"`
+	Generation    int64      `json:"generation"`
+	StateKind     int        `json:"state_kind"`
+	AuditKind     int        `json:"audit_kind"`
+	StateDTag     string     `json:"state_d_tag"`
+	OperationDTag string     `json:"operation_d_tag,omitempty"`
+	Author        string     `json:"author"`
+	OrgID         uuid.UUID  `json:"org_id"`
 }
 type VirtualizationHandlers struct {
 	Query      readmodel.VirtualizationQuery
@@ -88,7 +92,7 @@ var virtualizationFamilies = map[string]domain.VirtualizationResourceKind{
 
 // VirtualizationMethods is the method catalog for registration and discovery.
 func VirtualizationMethods() []string {
-	methods := []string{"virtualization-host/list", "virtualization-host/get", "vm-image/list", "vm-image/get", "vm-image/register", "persistent-vm/list", "persistent-vm/get", "persistent-vm/create", "persistent-vm/update", "persistent-vm/operate", "execution-plane/list", "execution-plane/get", "execution-plane/create", "execution-plane/update", "execution-plane/reconcile", "vm-checkpoint/list", "vm-checkpoint/get", "vm-export/list", "vm-export/get", "vm-operation/get", "vm-operation/approve", "vm-operation/cancel"}
+	methods := []string{"virtualization-host/list", "virtualization-host/get", "vm-image/list", "vm-image/get", "vm-image/register", "persistent-vm/list", "persistent-vm/get", "persistent-vm/create", "persistent-vm/update", "persistent-vm/operate", "execution-plane/list", "execution-plane/get", "execution-plane/create", "execution-plane/update", "execution-plane/reconcile", "vm-checkpoint/list", "vm-checkpoint/get", "vm-export/list", "vm-export/get", "vm-operation/get", "vm-operation/approve", "vm-operation/approve-plan", "vm-operation/cancel"}
 	return methods
 }
 func (h *VirtualizationHandlers) Register(t *EncryptedRequestTransport) {
@@ -253,7 +257,7 @@ func (h *VirtualizationHandlers) Handle(ctx context.Context, method string, r Co
 	if err != nil {
 		return nil, publicVirtualizationError(err)
 	}
-	if admission.ResourceID == uuid.Nil || admission.Generation < 1 || admission.OperationID == uuid.Nil {
+	if admission.ResourceID == uuid.Nil || admission.Generation < 1 || (admission.OperationID == uuid.Nil && (method != "vm-operation/approve-plan" || admission.ApprovalID == nil || *admission.ApprovalID == uuid.Nil)) {
 		return nil, readmodel.ErrVirtualizationUnavailable
 	}
 	// Operation actions acknowledge the persistent resource plus the operation's
@@ -266,9 +270,12 @@ func (h *VirtualizationHandlers) Handle(ctx context.Context, method string, r Co
 	if err != nil {
 		return nil, err
 	}
-	ack := VirtualizationAcknowledgment{Status: "accepted", ResourceID: admission.ResourceID, OperationID: admission.OperationID, Generation: admission.Generation, StateKind: kinds.CASControlState, AuditKind: kinds.CASAudit, StateDTag: coordinate, Author: h.CanonicalAuthor, OrgID: principal.OrgID}
-	if resourceKind == domain.PersistentVMResource {
+	ack := VirtualizationAcknowledgment{ApprovalID: admission.ApprovalID, Status: "accepted", ResourceID: admission.ResourceID, OperationID: admission.OperationID, Generation: admission.Generation, StateKind: kinds.CASControlState, AuditKind: kinds.CASAudit, StateDTag: coordinate, Author: h.CanonicalAuthor, OrgID: principal.OrgID}
+	if resourceKind == domain.PersistentVMResource && admission.OperationID != uuid.Nil {
 		ack.OperationDTag, _ = dto.VirtualizationCoordinate(domain.VMOperationResource, admission.OperationID)
+	}
+	if method == "vm-operation/approve-plan" {
+		ack.Status = "approved"
 	}
 	return ack, nil
 }

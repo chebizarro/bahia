@@ -1,3 +1,47 @@
+# Fixer S review remediation — 2026-09-22
+
+Task: `bahia-yrt7g.6`, branch `feat/vm-deployment-provisioning`. All nine Fixer S
+items in the orchestrator-owned review list were verified against source and
+addressed. No false positives or deferred Fixer S findings. Provider files are
+owned by Fixer P and were not edited here. No Oracle or push was performed.
+
+## Finding-to-regression mapping
+
+| Finding | Change and proof |
+|---|---|
+| Data disposition contract | First standalone commit `a7eb26b5`: additive `VMDataDisposition`, retain default, request/persistence/provider propagation and two-person approval. `TestVMDeleteDataDispositionApprovalAndProviderPropagation`, `TestVMDeleteDispositionBoundToApprovalAndIdempotency`, and invalid-target tests. Omitted/explicit retain preserve pre-disposition request hashes. |
+| Clone networking | Server derives destructive tier from target bridge/passthrough settings, hashes the exact target generation and rechecks it under admission/execution fences. `TestVMCloneNetworkApprovalBindsExactTargetRevision` covers approval, self-denial, changed target before admission/execution. |
+| Public desired-change approval | `vm-operation/approve-plan` returns an approval ID without inventing an operation or advancing desired state. Extended `TestVirtualizationPostgresIntentRecoveryAndPlane` drives a second operator through public handler, real service, PostgreSQL approval consumption and desired-update execution; self-approval is rejected. |
+| CLOSED auth-required eligibility | Observation callback retracts synchronously before AUTH, including auth failure. `TestPlaneObserveRetractsBeforeAuthentication`. |
+| Recurring/disabled drift | Matching current-session state clears the in-flight apply latch; each new drift episode has a distinct idempotency key; disabled desired state also converges. `TestPlaneRecurringDriftAndDisabledConvergence`. |
+| Transient probe timeout | App supervises transient watcher failures with cancellable capped reconnect backoff; each failed run retracts and joins before restart. Supervision tests use virtual time, probe test verifies retraction, and PostgreSQL app test injects the first probe timeout and recovers without another desired write. |
+| Lifetime pool exhaustion | Session advisory locks use hijacked dedicated connections and close on exit, leaving query pool slots available. `TestVMControlPlaneLocksDoNotStarveQueryPool` uses MaxConns=1, overlapping distinct lock sessions and a query, plus same-resource exclusion. Dedicated sessions still consume PostgreSQL server connections. |
+| Release replay | Missing tenant-scoped reservation is already released; verified-release checks remain for existing rows. Extended PostgreSQL quota/retention test proves replay, one release journal entry and cross-tenant isolation. |
+| Migration rollback race | Single DO statement locks all ten guarded tables before emptiness checks and drops them without releasing the locks. PostgreSQL down/up and `TestVMControlPlaneRollbackFencesAdmissionBeforeEmptinessCheck` prove rollback refusal, lock coverage and blocked concurrent journal admission. |
+
+## Final gates
+
+- `go build ./...`: PASS.
+- `go vet` and `go test -count=1` for `./internal/domain ./internal/service ./internal/controlplane ./internal/app/... ./internal/reconcile ./internal/adapters/loom ./internal/repository ./internal/db`: PASS.
+- Same package set with `go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0`: PASS.
+- PostgreSQL integration tests for app/repository/service, selected by `^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres)`, pass; final integration race results: app 10.671s, repository 22.783s, service 10.085s.
+- `git diff --check`: PASS.
+
+PostgreSQL was a disposable loopback-only PostgreSQL 16 Alpine container with
+fresh per-test schemas, not an existing service database. A concurrent in-flight
+Fixer P edit temporarily caused `newColdFileWatch` to be undefined during one
+integration race build; the unmodified provider files subsequently compiled and
+the complete final gate passed. Plain repo-wide race remains blocked by the
+pre-existing `bahia-4fz4z`; only the Nostr dependency's checkptr is disabled.
+
+Counterfactual Go overlays restored pre-fix production implementations without
+changing the working tree. Regressions failed with clone tier `expected: 2,
+actual: 1`, missing pre-AUTH retraction, recurring drift having one apply instead
+of two, disabled drift having zero instead of one, repeated capacity release
+returning `resource not found`, and a lock holding one query-pool connection.
+All pass with the fixes. No live provider, deployed Loom endpoint, desktop pilot
+or soak acceptance is claimed.
+
 # Integration verification — 2026-09-22
 
 Task: `bahia-yrt7g.3`, branch `feat/vm-deployment-provisioning`. This is **code-only** verification of Items A–E together. It does not establish live-host, desktop pilot, deployed administrative endpoint or soak acceptance.

@@ -8,6 +8,9 @@ reads and query-only REST compatibility routes. Mutation methods delegate only
 to injected C/D admission services; absent adapters or durable projection wiring
 return unavailable. Acknowledgments identify resource/generation/operation and
 the canonical signer/coordinates; they do not report provider completion.
+`vm-operation/approve-plan` returns an approval ID without creating an operation;
+the requester separately admits the exact approved mutation. Delete requests carry
+an explicit, approval-bound data disposition, defaulting to retain.
 
 Canonical 30900 snapshots and 4903 audit facts carry only explicit public DTOs.
 In-process post-commit signals wake durable journal replay, also run at startup

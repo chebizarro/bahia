@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type planeRelayFixture struct {
 	results     []nostrAdapter.PublishResult
 	authCalls   int
 	authError   error
+	onAuth      func()
 	onSubscribe func(int)
 	onPublish   func(nostr.Event)
 }
@@ -51,6 +53,9 @@ func (f *planeRelayFixture) PublishWithResults(_ context.Context, event nostr.Ev
 }
 func (f *planeRelayFixture) AuthenticateRelay(context.Context, string) error {
 	f.authCalls++
+	if f.onAuth != nil {
+		f.onAuth()
+	}
 	return f.authError
 }
 func planeClientFixture(t *testing.T, pool *planeRelayFixture, e domain.ExecutionPlaneEndpoint, now time.Time) *PlaneClient {
@@ -250,6 +255,43 @@ func (o planeRecordingObserver) OnUnavailable(_ context.Context, diagnostic doma
 		return o.unavailable()
 	}
 	return nil
+}
+
+func TestPlaneObserveRetractsBeforeAuthentication(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			e, p, o, key, now := planeFixture(t)
+			pool := newPlaneRelayFixture()
+			pool.events <- planeObservationEvent(t, e, o, key, now)
+			client := planeClientFixture(t, pool, e, now)
+			eligible, retracted := false, false
+			stop := errors.New("stop after authentication")
+			pool.onAuth = func() {
+				require.True(t, retracted)
+				require.False(t, eligible, "eligibility must be gone even if AUTH blocks")
+			}
+			if failure {
+				pool.authError = stop
+			}
+			pool.onSubscribe = func(n int) {
+				if n == 2 {
+					require.True(t, retracted)
+					close(pool.eose)
+				}
+			}
+			observer := planeRecordingObserver{
+				observation: func(domain.ExecutionPlaneObservation) error {
+					eligible = true
+					pool.closed <- nostrAdapter.RelayClosed{RelayURL: "wss://fixture.invalid", Reason: "auth-required: challenge"}
+					return nil
+				},
+				unavailable: func() error { eligible = false; retracted = true; return nil },
+				eose:        func() error { require.False(t, eligible); return stop },
+			}
+			require.ErrorIs(t, client.Observe(t.Context(), e, p.ID, observer), stop)
+			require.Equal(t, 1, pool.authCalls)
+		})
+	}
 }
 
 func TestPlaneObserveAuditsAndRejectsWindowsProbe(t *testing.T) {

@@ -13,7 +13,9 @@ operations. It does not infer lifecycle from a VM name:
 Bahia manages execution-plane package/config/image pins, capacity and probes, not
 Loom job domains. Desired capability lists are not capability grants. Only D's
 fresh authenticated probe contribution may grant scheduling eligibility; failures,
-expiry and session replacement retract it. Windows QEMU job capability is never
+expiry and session replacement retract it. CLOSED retracts eligibility before
+relay authentication, and transient watcher failures reconnect with backoff;
+only fresh authenticated evidence can restore eligibility. Windows QEMU job capability is never
 advertised. A returned probe-success flag is historical evidence, not eligibility.
 
 **Integration status:** the app composes the persistent provider, bootstrap and
@@ -101,7 +103,7 @@ separate. Artifact deletion is an explicit tombstone, not missing data.
 
 Supported ContextVM intents are `vm-image/register`,
 `persistent-vm/create|update|operate`, `execution-plane/create|update|reconcile`,
-and `vm-operation/approve|cancel`. They require organization
+and `vm-operation/approve|approve-plan|cancel`. They require organization
 `deployments:write`; C/D additionally authorize the exact action, expected
 generation, idempotency key and approval tier. Host/quota governance is not exposed
 as a bypassing create/update endpoint.
@@ -120,6 +122,26 @@ Resolved credentials are never valid bootstrap input: use authorized SecretRefs.
 Tier-2 destructive approvals remain service-owned, bound to the exact request,
 resource generation and provider fingerprint; a caller cannot self-grant a role
 or approval by passing fields in the ContextVM body.
+
+For a desired update or a clone requiring new capacity, a second authorized
+operator submits `vm-operation/approve-plan` with the **exact intended mutation**
+(`org_id`, VM `id`, `expected_generation`, `idempotency_key`, `operation`, `reason`,
+and any `vm`/artifact/clone fields), plus `requester` (the original operator's
+public key) and `approval_reason`. For updates, `operation` is `define`.
+The response has `status=approved` and `approval_id`; it does not create an
+operation or advance desired state. The original requester then submits the same
+mutation to `persistent-vm/update` or `/operate`, adding that `approval_id`.
+Approval is single-use, expires after 30 minutes, and cannot be self-issued.
+Changed request content, source generation, provider fingerprint or clone-target
+revision invalidates it. Bridged or passthrough clone-target networking requires
+this destructive tier even when the source uses isolated networking.
+
+Deployment deletion accepts `delete_target=deployment` and
+`data_disposition=retain|export|delete`. Omission means `retain`; disposition is
+bound to approval and carried to the provider. Explicit `delete` authorizes guest
+data destruction, never implied by deleting the deployment. Existing two-person
+approval requirements remain for all delete operations. Provider export support
+is a separate capability; selecting `export` is not proof an export completed.
 
 Acknowledgments contain `status=accepted`, `resource_id`, `operation_id`,
 `generation`, signer `author`, `org_id`, `state_kind`, `audit_kind`, `state_d_tag`,

@@ -5,7 +5,10 @@
 Virtualization reuses `CASControlState`/30900 and `CASAudit`/4903, consistent with
 Cascadia registry CF-9 state and audit semantics; it allocates no numeric kind and
 adds no legacy production kind. ContextVM intents remain 25910 with configured
-wrapping. It emits no new NIP-38 status family.
+wrapping. It emits no new NIP-38 status family. `vm-operation/approve-plan`
+returns an approval-only acknowledgment, not an operation or provider result.
+Deployment-delete intent includes approval-bound `data_disposition` with a retain
+default; this changes no canonical projection kind, schema, or tag.
 
 Both projections require `domain=virtualization`, explicit `entity`, `schema`,
 `org`, `generation`, journal `sequence` and explicit `lifecycle_class` tags.

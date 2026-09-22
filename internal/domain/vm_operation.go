@@ -198,16 +198,17 @@ type VMOperation struct {
 	ProviderCorrelationID uuid.UUID        `json:"provider_correlation_id"`
 	Deadline              time.Time        `json:"deadline"`
 	// Prepared storage object IDs are durable before side effects. Never store paths.
-	PreparedStorageRefs []uuid.UUID       `json:"prepared_storage_refs"`
-	CheckpointID        *uuid.UUID        `json:"checkpoint_id,omitempty"`
-	ExportID            *uuid.UUID        `json:"export_id,omitempty"`
-	CloneTargetID       *uuid.UUID        `json:"clone_target_id,omitempty"`
-	Plan                *VMChangePlan     `json:"plan,omitempty"`
-	AllowForceStop      bool              `json:"allow_force_stop"`
-	DeleteTarget        VMDeleteTarget    `json:"delete_target,omitempty"`
-	DataDisposition     VMDataDisposition `json:"data_disposition,omitempty"`
-	Outcome             VMDiagnostic      `json:"outcome"`
-	CompletedAt         *time.Time        `json:"completed_at,omitempty"`
+	PreparedStorageRefs   []uuid.UUID       `json:"prepared_storage_refs"`
+	CheckpointID          *uuid.UUID        `json:"checkpoint_id,omitempty"`
+	ExportID              *uuid.UUID        `json:"export_id,omitempty"`
+	CloneTargetID         *uuid.UUID        `json:"clone_target_id,omitempty"`
+	CloneTargetGeneration int64             `json:"clone_target_generation,omitempty"`
+	Plan                  *VMChangePlan     `json:"plan,omitempty"`
+	AllowForceStop        bool              `json:"allow_force_stop"`
+	DeleteTarget          VMDeleteTarget    `json:"delete_target,omitempty"`
+	DataDisposition       VMDataDisposition `json:"data_disposition,omitempty"`
+	Outcome               VMDiagnostic      `json:"outcome"`
+	CompletedAt           *time.Time        `json:"completed_at,omitempty"`
 }
 
 // PersistentVMProvider is Item B's capability; it does not replace Hypervisor.

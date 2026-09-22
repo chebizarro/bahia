@@ -6,7 +6,10 @@ The virtualization methods are registered in the signed ContextVM transport,
 not as unsigned HTTP MCP mutation aliases. Use `virtualization-host/list|get`,
 `vm-image/list|get|register`, `persistent-vm/list|get|create|update|operate`,
 `execution-plane/list|get|create|update|reconcile`, `vm-checkpoint/list|get`,
-`vm-export/list|get`, and `vm-operation/get|approve|cancel`.
+`vm-export/list|get`, and `vm-operation/get|approve|approve-plan|cancel`.
+`vm-operation/approve-plan` lets a second operator approve an exact proposed
+mutation before admission; it returns `approval_id`, not a fabricated operation.
+See the [approval workflow](features/virtual-machines.md#mutation-intents-and-approvals).
 
 Every request includes `org_id` and an authenticated signing principal. Reads
 require `deployments:read`; intents require `deployments:write` plus C/D's action

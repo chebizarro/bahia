@@ -84,11 +84,13 @@ func (p *integrationVMProvider) WatchPersistentVM(ctx context.Context, _ domain.
 }
 
 type integrationPlane struct {
-	mu           sync.Mutex
-	state        domain.ExecutionPlaneObservation
-	desired      domain.ExecutionPlaneDesired
-	observations chan domain.ExecutionPlaneObservation
-	applied      chan struct{}
+	mu             sync.Mutex
+	state          domain.ExecutionPlaneObservation
+	desired        domain.ExecutionPlaneDesired
+	observations   chan domain.ExecutionPlaneObservation
+	applied        chan struct{}
+	probeAttempts  int
+	failFirstProbe bool
 }
 
 func (p *integrationPlane) Discover(context.Context, domain.ExecutionPlaneEndpoint) (domain.ExecutionPlaneSupport, error) {
@@ -113,6 +115,10 @@ func (p *integrationPlane) Apply(_ context.Context, _ domain.ExecutionPlaneEndpo
 func (p *integrationPlane) Probe(_ context.Context, _ domain.ExecutionPlaneEndpoint, q domain.ExecutionPlaneProbeRequest) (*domain.ExecutionPlaneProbeEvidence, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.probeAttempts++
+	if p.failFirstProbe && p.probeAttempts == 1 {
+		return nil, context.DeadlineExceeded
+	}
 	p.state.VMObservationStamp = domain.VMObservationStamp{SchemaVersion: 1, ObservedGeneration: q.Generation, SessionID: q.SessionID, Sequence: q.Sequence, ObservedAt: time.Now().UTC()}
 	evidence := &domain.ExecutionPlaneProbeEvidence{VMObservationStamp: p.state.VMObservationStamp, PlaneID: q.PlaneID, Author: p.state.Author, LifecycleClasses: q.LifecycleClasses, Successful: true, PackageDigest: p.state.PackageDigest, ConfigRevision: p.state.ConfigRevision, ImagePins: p.state.ImagePins, Capabilities: p.desired.ExpectedCapabilities}
 	p.state.Probe = evidence
@@ -171,6 +177,8 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 	signer := keyer.NewPlainKeySigner([32]byte{8})
 	key, err := signer.GetPublicKey(ctx)
 	require.NoError(t, err)
+	approverKey, err := keyer.NewPlainKeySigner([32]byte{9}).GetPublicKey(ctx)
+	require.NoError(t, err)
 	org := uuid.New()
 	_, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,display_name,owner_pubkey) VALUES($1,$2,'integration',$3)`, org, org.String(), key.Hex())
 	require.NoError(t, err)
@@ -197,10 +205,10 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 	plane := domain.ExecutionPlaneDeployment{VirtualizationResourceMeta: meta(), HostID: h.ID, WorkerPubKey: key.Hex(), ManagementAuthor: key.Hex(), ManagementEndpointRef: uuid.New(), Desired: domain.ExecutionPlaneDesired{LifecycleClasses: []domain.VMLifecycleClass{domain.VMLifecycleLoomQEMU}, Package: domain.ExecutionPlanePackagePin{Digest: digest, Version: "1", Provenance: provenance}, Configuration: domain.ExecutionPlaneConfiguration{Network: domain.VMNetwork{Mode: domain.VMNetworkIsolated}}, ImagePins: []domain.ExecutionPlaneImagePin{{LifecycleClass: domain.VMLifecycleLoomQEMU, ImageID: image.ID, ManifestDigest: digest}}, ReservedCapacity: domain.VMCapacity{VCPU: 2, MemoryBytes: 4 << 30, DiskBytes: 10 << 30}, Concurrency: 2, ExpectedCapabilities: []domain.ExecutionPlaneCapability{{LifecycleClass: domain.VMLifecycleLoomQEMU, OS: domain.VMOSLinux, Architecture: "amd64", AgentProtocolVersion: "1"}}, State: domain.ExecutionPlaneEnabled, ProbePolicy: domain.ExecutionPlaneProbePolicy{IntervalSeconds: 60, FreshnessSeconds: 120}}}
 	plane.Desired.Configuration.Revision, err = service.ExecutionPlaneConfigRevision(plane.Desired.Configuration)
 	require.NoError(t, err)
-	boundary := &integrationPlane{desired: plane.Desired, observations: make(chan domain.ExecutionPlaneObservation, 8), applied: make(chan struct{}, 8), state: domain.ExecutionPlaneObservation{VMObservationStamp: domain.VMObservationStamp{SchemaVersion: 1, ObservedGeneration: 1, SessionID: uuid.New(), Sequence: 1, ObservedAt: time.Now().UTC()}, PlaneID: plane.ID, HostID: h.ID, Author: key.Hex(), LifecycleClasses: plane.Desired.LifecycleClasses, Availability: domain.VMObservationAvailable, Drift: domain.VMDriftDrifted, PackageDigest: "sha256:" + strings.Repeat("b", 64), ConfigRevision: plane.Desired.Configuration.Revision, ImagePins: plane.Desired.ImagePins, ReservedCapacity: plane.Desired.ReservedCapacity, Concurrency: 2, State: domain.ExecutionPlaneEnabled}}
+	boundary := &integrationPlane{failFirstProbe: true, desired: plane.Desired, observations: make(chan domain.ExecutionPlaneObservation, 8), applied: make(chan struct{}, 8), state: domain.ExecutionPlaneObservation{VMObservationStamp: domain.VMObservationStamp{SchemaVersion: 1, ObservedGeneration: 1, SessionID: uuid.New(), Sequence: 1, ObservedAt: time.Now().UTC()}, PlaneID: plane.ID, HostID: h.ID, Author: key.Hex(), LifecycleClasses: plane.Desired.LifecycleClasses, Availability: domain.VMObservationAvailable, Drift: domain.VMDriftDrifted, PackageDigest: "sha256:" + strings.Repeat("b", 64), ConfigRevision: plane.Desired.Configuration.Revision, ImagePins: plane.Desired.ImagePins, ReservedCapacity: plane.Desired.ReservedCapacity, Concurrency: 2, State: domain.ExecutionPlaneEnabled}}
 	provider := &integrationVMProvider{watched: make(chan struct{}, 8)}
 	rbac := auth.NewRBAC(vmAppMembers{org})
-	policy := &virtualizationPolicy{config: config.VirtualizationConfig{OperatorPubkeys: []string{key.Hex()}, Hosts: []config.VirtualizationHostPolicy{{OrgID: org, HostID: h.ID, TrustPolicyRef: h.TrustPolicyRef, TrustedSigners: []string{key.Hex()}}}}, rbac: rbac, events: store}
+	policy := &virtualizationPolicy{config: config.VirtualizationConfig{OperatorPubkeys: []string{key.Hex(), approverKey.Hex()}, Hosts: []config.VirtualizationHostPolicy{{OrgID: org, HostID: h.ID, TrustPolicyRef: h.TrustPolicyRef, TrustedSigners: []string{key.Hex()}}}}, rbac: rbac, events: store}
 	metrics := telemetry.Setup(telemetry.Config{}, zap.NewNop())
 	t.Cleanup(func() { require.NoError(t, metrics.Shutdown(context.Background())) })
 	start := func() (*Virtualization, func()) {
@@ -275,6 +283,9 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 		caps, err := v.VerifiedPlanes().VerifiedCapabilities(ctx, key.Hex(), time.Now())
 		return err == nil && len(caps) == 1
 	})
+	boundary.mu.Lock()
+	require.GreaterOrEqual(t, boundary.probeAttempts, 2, "transient probe timeout must reconnect without another desired write")
+	boundary.mu.Unlock()
 	require.NoError(t, v.Metrics.Collect(ctx))
 	output := httptest.NewRecorder()
 	metrics.MetricsHandler()(output, httptest.NewRequest("GET", "/metrics", nil))
@@ -287,10 +298,41 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 	data, _ := json.Marshal(projected)
 	require.Contains(t, string(data), vm.ID.String())
 	require.Contains(t, string(data), plane.ID.String())
+	// Public approval for an exact desired revision, without admitting it first.
+	desired, err := repo.Deployments().Get(ctx, org, vm.ID)
+	require.NoError(t, err)
+	desired.Generation++
+	desired.Observation, desired.ObservationCursor = nil, nil
+	network := uuid.New()
+	desired.Network = domain.VMNetwork{Mode: domain.VMNetworkBridged, NetworkRef: &network}
+	proposal := controlplane.VirtualizationMutation{OrgID: org, ID: vm.ID, ExpectedGeneration: 1, Operation: domain.VMOperationDefine, VM: desired, IdempotencyKey: "network-change", Reason: "bridge desktop", Requester: key.Hex(), ApprovalReason: "reviewed bridge"}
+	payload, err := json.Marshal(proposal)
+	require.NoError(t, err)
+	_, err = v.Handlers.Handle(ctx, "vm-operation/approve-plan", controlplane.ContextVMRequest{Event: &nostr.Event{PubKey: key}, RPC: controlplane.ContextVMJSONRPCRequest{Params: payload}})
+	require.Error(t, err, "self approval is forbidden")
+	approved, err := v.Handlers.Handle(ctx, "vm-operation/approve-plan", controlplane.ContextVMRequest{Event: &nostr.Event{PubKey: approverKey}, RPC: controlplane.ContextVMJSONRPCRequest{Params: payload}})
+	require.NoError(t, err)
+	approvalAck := approved.(controlplane.VirtualizationAcknowledgment)
+	require.Equal(t, "approved", approvalAck.Status)
+	require.NotNil(t, approvalAck.ApprovalID)
+	require.Empty(t, approvalAck.OperationDTag, "approval must not invent an operation")
+	stored, err := repo.Deployments().Get(ctx, org, vm.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), stored.Generation)
+	proposal.ApprovalID = approvalAck.ApprovalID
+	proposal.Requester, proposal.ApprovalReason = "", ""
+	updated := intent(v, "persistent-vm/update", proposal)
+	await(func() bool {
+		op, err := repo.GetOperation(ctx, org, updated.OperationID)
+		return err == nil && op.Phase == domain.VMOperationSucceeded
+	})
+	approval, err := repo.GetApproval(ctx, org, *approvalAck.ApprovalID)
+	require.NoError(t, err)
+	require.NotNil(t, approval.ConsumedAt)
 	provider.mu.Lock()
 	provider.crash = true
 	provider.mu.Unlock()
-	interrupted := intent(v, "persistent-vm/operate", controlplane.VirtualizationMutation{OrgID: org, ID: vm.ID, ExpectedGeneration: 1, Operation: domain.VMOperationStart, IdempotencyKey: "interrupted-start", Reason: "restart"})
+	interrupted := intent(v, "persistent-vm/operate", controlplane.VirtualizationMutation{OrgID: org, ID: vm.ID, ExpectedGeneration: 2, Operation: domain.VMOperationStart, IdempotencyKey: "interrupted-start", Reason: "restart"})
 	t.Log("unconfirmed interrupted")
 	await(func() bool {
 		op, err := repo.GetOperation(ctx, org, interrupted.OperationID)
@@ -313,5 +355,5 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 	provider.mu.Unlock()
 	ops, err := repo.ListOperations(ctx, org, vm.ID, 100, 0)
 	require.NoError(t, err)
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 3)
 }

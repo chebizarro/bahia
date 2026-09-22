@@ -7,6 +7,10 @@ completion. Follow returned signer/coordinates on 30900 state and 4903 audit wit
 `domain=virtualization`. Explicit lifecycle classes distinguish persistent VMs
 from both Loom job classes. Schemas are `bahia.state.virtualization.v1` and
 `bahia.audit.virtualization.v1`; no new numeric kind is introduced.
+For destructive desired changes, a second operator uses `vm-operation/approve-plan`
+to obtain `approval_id`, then the original requester admits the exact mutation.
+An approval-only response is not a VM operation. Deployment deletion defaults to
+retaining guest data; explicit `data_disposition=delete` remains two-person approved.
 
 Subscribe narrowly by author, state `#d` or audit `#state`, and `#org`. Validate
 IDs/signatures/timestamps/content, deduplicate event IDs, reject older journal

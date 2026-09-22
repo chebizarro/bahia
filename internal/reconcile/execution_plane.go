@@ -348,7 +348,7 @@ func (r *ExecutionPlaneReconciler) apply(ctx context.Context, run *planeRun) err
 		return err
 	}
 	defer cancel()
-	operation := uuid.NewSHA1(run.plane.ID, []byte(fmt.Sprintf("execution-plane-apply:%d", run.plane.Generation)))
+	operation := uuid.NewSHA1(run.plane.ID, []byte(fmt.Sprintf("execution-plane-apply:%d:%s:%d", run.plane.Generation, run.session, run.plane.ObservationCursor.Sequence)))
 	ack, err := r.client.Apply(bounded, planeEndpoint(&run.plane), domain.ExecutionPlaneApplyRequest{SchemaVersion: domain.VirtualizationSchemaVersion, PlaneID: run.plane.ID, HostID: run.plane.HostID, Generation: run.plane.Generation, OperationID: operation, Desired: run.plane.Desired})
 	if err != nil {
 		return err
@@ -461,22 +461,26 @@ func (r *ExecutionPlaneReconciler) accept(ctx context.Context, run *planeRun, o 
 		verified = domain.VerifiedExecutionPlaneCapabilities{}
 	}
 	run.plane = *p
+	if matches {
+		// Coalesce one in-flight repair, not every repair for this generation.
+		run.applied = false
+	}
 	run.verified = verified
 	r.mu.Unlock()
 	if err := r.emit(ctx, run, "observed", o.Diagnostic); err != nil {
 		return err
-	}
-	if p.Desired.State == domain.ExecutionPlaneDisabled {
-		if matches && !o.Draining {
-			return r.repo.ReleaseCapacity(ctx, p.OrgID, uuid.NewSHA1(p.ID, []byte("execution-plane-capacity")))
-		}
-		return nil
 	}
 	if o.Availability == domain.VMObservationUnavailable {
 		return r.retract(ctx, run, "unavailable", o.Diagnostic)
 	}
 	if !matches {
 		return r.apply(ctx, run)
+	}
+	if p.Desired.State == domain.ExecutionPlaneDisabled {
+		if !o.Draining {
+			return r.repo.ReleaseCapacity(ctx, p.OrgID, uuid.NewSHA1(p.ID, []byte("execution-plane-capacity")))
+		}
+		return nil
 	}
 	if confirmed == nil && o.Probe == nil {
 		return r.probe(ctx, run, o.Sequence)

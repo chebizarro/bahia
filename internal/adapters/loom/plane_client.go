@@ -275,6 +275,7 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 				return err
 			}
 		}
+		retracted := false
 		done, retry, err := func() (bool, bool, error) {
 			defer sub.Close()
 			defer cancel()
@@ -308,6 +309,13 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 					if !ok {
 						closed = nil
 						continue
+					}
+					// CLOSED invalidates eligibility before AUTH can block on the relay.
+					if disconnected != nil {
+						retracted = true
+						if err := disconnected(); err != nil {
+							return false, false, err
+						}
 					}
 					if nostrAdapter.IsAuthRequiredReason(reason.Reason) && !authenticated[reason.RelayURL] {
 						authenticated[reason.RelayURL] = true
@@ -343,7 +351,7 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 		if done {
 			return err
 		}
-		if disconnected != nil {
+		if disconnected != nil && !retracted {
 			if lostErr := disconnected(); lostErr != nil {
 				return errors.Join(err, lostErr)
 			}

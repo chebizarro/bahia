@@ -8,6 +8,11 @@
 | State | 30900 | `bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>` |
 | Audit | 4903 | `bahia.audit.virtualization.v1`, `state=<coordinate>`, no `d` |
 
+`vm-operation/approve-plan` adds an approval-only acknowledgment (`status=approved`,
+`approval_id`, no operation coordinate). Deployment-delete intent adds
+`data_disposition=retain|export|delete`, with retain as the default. These use
+existing ContextVM transport; canonical projection schemas and tags are unchanged.
+
 Tags: `domain=virtualization`, explicit `entity`, `schema`, `org`, `generation`,
 `sequence`, repeated `lifecycle_class`; audits add `type` and `protected=true`.
 An operation adds UUID `correlation`; a public-key actor adds `p`. `journal`

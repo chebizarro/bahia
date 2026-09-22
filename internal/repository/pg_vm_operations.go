@@ -459,11 +459,18 @@ func (r *PgVirtualizationRepository) WithOperationLock(ctx context.Context, org,
 	if org == uuid.Nil || resource == uuid.Nil || fn == nil {
 		return domain.ErrInvalidValue
 	}
-	conn, err := r.pool.Acquire(ctx)
+	pooled, err := r.pool.Acquire(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Release()
+	// Session locks may outlive a watcher. Remove the session from the query
+	// pool so N watchers cannot occupy every slot needed by their own callbacks.
+	conn := pooled.Hijack()
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, conn.Close(cleanup))
+	}()
 	key := org.String() + ":" + resource.String()
 	var locked bool
 	if err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,67))`, key).Scan(&locked); err != nil {
@@ -472,15 +479,15 @@ func (r *PgVirtualizationRepository) WithOperationLock(ctx context.Context, org,
 	if !locked {
 		return ErrConflict
 	}
-	// An unlock failure discards the connection, rather than returning a locked
-	// session to the pool. This lock cannot fence provider effects after DB loss.
+	// Unlock and close the dedicated session. This lock cannot fence provider
+	// effects after DB loss.
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		var unlocked bool
 		e := conn.QueryRow(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,67))`, key).Scan(&unlocked)
 		if e != nil || !unlocked {
-			closeErr := conn.Conn().Close(cleanup)
+			closeErr := conn.Close(cleanup)
 			resultErr = errors.Join(resultErr, &domain.VMProviderError{Code: domain.VMErrorUnconfirmed, Unconfirmed: true, Cause: errors.Join(e, closeErr)})
 		}
 	}()

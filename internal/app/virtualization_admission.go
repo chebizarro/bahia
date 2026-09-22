@@ -47,6 +47,12 @@ func (a vmAdmission) MutatePersistentVM(ctx context.Context, actor controlplane.
 	case "persistent-vm/operate":
 		op, err := r.vmService.RequestOperation(ctx, p, req)
 		return operationAdmission(op, err)
+	case "vm-operation/approve-plan":
+		approval, err := r.vmService.ApprovePlan(ctx, p, m.Requester, req, m.ApprovalReason)
+		if err != nil {
+			return controlplane.VirtualizationAdmission{}, err
+		}
+		return controlplane.VirtualizationAdmission{ResourceID: approval.ResourceID, Generation: approval.Generation, ApprovalID: &approval.ID}, nil
 	case "vm-operation/approve":
 		if _, err := r.vmService.ApproveOperation(ctx, p, actor.OrgID, m.ID, m.Reason); err != nil {
 			return controlplane.VirtualizationAdmission{}, err
