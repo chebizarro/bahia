@@ -1,3 +1,43 @@
+# Integration verification — 2026-09-22
+
+Task: `bahia-yrt7g.3`, branch `feat/vm-deployment-provisioning`. This is **code-only** verification of Items A–E together. It does not establish live-host, desktop pilot, deployed administrative endpoint or soak acceptance.
+
+## Integration changes and exercised behavior
+
+- Opt-in installation configuration constructs the real persistent provider, bootstrap service, lifecycle service/worker/reconciler, Loom plane client/service/reconciler and PostgreSQL repository. Missing configuration/dependencies retain unavailable mutations; no host fallback is introduced.
+- Provenance resolves an exact persisted artifact attestation and verifies event ID/signature, host-bound trusted signer and digest rather than trusting catalog flags. Operator allowlists and tenant RBAC are enforced; plane network/device/secret references are installation-bound. Plane bridging/passthrough remains denied rather than bypassing destructive approval.
+- Post-commit callbacks wake journal projection and aggregate telemetry. Admission uses a nonblocking coalesced worker queue, startup calls `Recover`, provider events trigger exact-resource observation, and plane generations own cancellable subscriptions. The live reconciler supplies Loom's verified capability source. Shutdown cancels and joins workers/reconcilers.
+- `TestVirtualizationPostgresIntentRecoveryAndPlane` uses a fresh schema, real migrations and `NewPgVirtualizationRepository`, with fake provider and administrative plane boundaries. It drives ContextVM intent through real services, reservations/operations, signed canonical projection and metrics; exercises provider-event guest-health changes and a package-drift apply/live-probe flow; interrupts a start after the external effect, restarts composition and proves recovery succeeds without another provider call or operation row.
+- Config YAML loading and rejection tests, provenance tampering/wrong-digest/wrong-host/wrong-tenant tests, and nonblocking queue coalescing tests are ordinary package tests.
+
+## Integration gate results
+
+| Gate | Result |
+|---|---|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./...` | PASS |
+| `make lint` | FAIL: 158 diagnostics in the capped full-repository output; inherited repository/Item B–E findings, tracked in `bahia-ipnlr` and `bahia-yrt7g.4` |
+| `golangci-lint run --new-from-rev=89e3fc50 ./...` | PASS: zero integration-new findings |
+| `golangci-lint run --new-from-rev=042e881b ./...` | FAIL: 31 inherited feature diagnostics (25 errcheck, 2 ineffassign, 4 staticcheck); `bahia-yrt7g.4` |
+| Focused race: app, config, reconcile, readmodel, runtime/vm and both drivers, service, controlplane, telemetry | PASS with dependency-only checkptr workaround |
+| PostgreSQL integration race: app, repository, service, selected VM tests | PASS: app 8.853s, repository 15.666s, service 4.897s |
+
+Race commands use `-race -gcflags=fiatjaf.com/nostr=-d=checkptr=0`; only the upstream Nostr package's checkptr instrumentation is disabled. Race instrumentation and checkptr for Bahia remain enabled. Plain repo-wide race is the known `bahia-4fz4z` upstream limitation, not fixed or claimed passing here. The same dependency-only workaround is already in `make race`.
+
+PostgreSQL command: `BAHIA_VM_TEST_DATABASE_URL=... go test -race -gcflags=fiatjaf.com/nostr=-d=checkptr=0 -tags=integration ./internal/app ./internal/repository ./internal/service -run '^(TestVirtualizationPostgres|TestVMControlPlane|TestPersistentVMPostgres)' -count=1 -timeout=180s`. It uses a dedicated loopback-only disposable PostgreSQL 16 Alpine container; each test creates and removes its own schema. The projection test signs and records events in the real in-memory Nostr outbox implementation; no live relay acceptance is claimed.
+
+## Item defects and review
+
+- Fixed Item D initial-session handling: a new PostgreSQL execution plane has a nil observation cursor. The reconciler previously rejected it before any apply. It now CAS-rotates from the nil session while retaining generation and restart fences. The first app test failed waiting for apply before this fix.
+- Fixed Item E empty shutdown critical sections: the projector now records closed state while joining in-flight recovery; the test reads its publication count while holding that lock.
+- Early test failures also exposed invalid test setup (an offline worker and reboot of a stopped VM) and an inappropriate concurrent manual `Recover` call. Fixtures now represent an eligible worker, interrupt a start, and repeat recovery only after joined shutdown. Production admission was not weakened.
+- One whole-feature Oracle review is pending the review commit. Findings and disposition will be recorded here after that single review.
+
+Live administrative compatibility remains `bahia-yrt7g.2`. Installation capacity observations and signed image/package evidence are prerequisites, never synthesized from configuration. Host installation/image construction, pilot and soak remain outside this integration task. No fake production provider/plane implementation or implicit fallback was added. No push is authorized.
+
+---
+
 # Item A verification
 
 Scope: `bahia-qw3qm`, branch `feat/vm-deployment-provisioning`. Contract checkpoint only; B–E and live acceptance are not claimed complete. Source plans were read and left unchanged. Migration directory inspection established `000066` as the next unused number.

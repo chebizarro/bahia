@@ -106,12 +106,16 @@ func (r *ExecutionPlaneReconciler) rotate(ctx context.Context, run *planeRun) er
 	if err != nil {
 		return err
 	}
-	if p.Generation != run.plane.Generation || p.ObservationCursor == nil {
+	if p.Generation != run.plane.Generation {
 		return repository.ErrConflict
+	}
+	expected := uuid.Nil
+	if p.ObservationCursor != nil {
+		expected = p.ObservationCursor.SessionID
 	}
 	next := uuid.New()
 	ref := repository.VirtualizationResourceRef{OrgID: p.OrgID, Kind: domain.ExecutionPlaneResource, ID: p.ID}
-	if err := r.repo.RotateObservationSession(ctx, ref, p.Generation, p.ObservationCursor.SessionID, next); err != nil {
+	if err := r.repo.RotateObservationSession(ctx, ref, p.Generation, expected, next); err != nil {
 		return err
 	}
 	r.mu.Lock()

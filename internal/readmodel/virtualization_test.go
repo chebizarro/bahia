@@ -217,9 +217,10 @@ func TestVirtualizationLiveBusAndShutdown(t *testing.T) {
 	// Await a durable checkpoint signal, never a sleep or completion timeout.
 	<-store.checkpointed
 	p.mu.Lock()
+	calls := pub.calls
 	p.mu.Unlock()
-	if pub.calls != 2 {
-		t.Fatalf("calls %d", pub.calls)
+	if calls != 2 {
+		t.Fatalf("calls %d", calls)
 	}
 	p.Close()
 	if err := p.Recover(context.Background(), org); !errors.Is(err, context.Canceled) {

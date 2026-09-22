@@ -37,6 +37,7 @@ type Config struct {
 	Reconcile       ReconcileConfig           `koanf:"reconcile"`
 	Supervision     SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
 	Runtime         RuntimeConfig             `koanf:"runtime"`
+	Virtualization  VirtualizationConfig      `koanf:"virtualization"`
 	Log             LogConfig                 `koanf:"log"`
 	Auth            AuthConfig                `koanf:"auth"`
 	Adoption        AdoptionConfig            `koanf:"adoption"`
@@ -1563,6 +1564,9 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.Virtualization.Validate(); err != nil {
+		return err
+	}
 	if err := c.validateSupervision(); err != nil {
 		return err
 	}

@@ -16,12 +16,54 @@ fresh authenticated probe contribution may grant scheduling eligibility; failure
 expiry and session replacement retract it. Windows QEMU job capability is never
 advertised. A returned probe-success flag is historical evidence, not eligibility.
 
-**Integration status:** queries and public projections are composed in the app.
-Mutation methods return `virtualization unavailable` until the orchestrator
-supplies the C/D admission adapters in `VirtualizationDependencies.PersistentVM`
-and `.ExecutionPlane`. There is no direct repository/provider or host-shell
+**Integration status:** the app composes the persistent provider, bootstrap and
+operation worker, persistent reconciler, Loom plane client/service/reconciler,
+journal projection and telemetry. Mutations remain `virtualization unavailable`
+until the required configuration, migrated repository, canonical signer/outbox
+and startup recovery are ready. There is no repository/provider or host-shell
 fallback. VM host/image installation, desktop pilots and soak are separate work;
 passing portable tests is not live-host acceptance.
+
+### Installation configuration
+
+`virtualization` in `config.yaml` is opt-in. It is separate from the legacy
+`runtime.vm` service runtime; persistent mutations never invoke legacy replacement
+`Deploy`. Configure:
+
+- `operator_pubkeys`: exact signed-intent actors, also subject to tenant RBAC.
+- `hosts`: registered `org_id`, `host_id`, `trust_policy_ref`, and explicit
+  `trusted_signers`. Provenance must name an already persisted, signed artifact
+  attestation (the existing kind-31200 artifact signature contract), with an
+  approved exact digest. Bahia re-verifies its event ID, Schnorr signature,
+  signer allowlist and digest; catalog `verified` flags are not trust authority.
+- `persistent_vm.enabled`, its registered `host_id`, `storage_pool_ref`, absolute
+  `state_dir` and immutable `image_root`. Exactly one local provider is bound per
+  process. Libvirt requires `libvirt_uri` (`qemu:///system` or `qemu:///session`)
+  and absolute `event_socket`; Firecracker requires an absolute
+  `firecracker_binary`. No remote-to-local fallback exists.
+- `reconcile_pubkey`: explicit operator identity used for governed persistent
+  power convergence. It must appear in `operator_pubkeys` and hold organization
+  deployment permission. No implicit system identity is granted privileges.
+- `plane_endpoints`: exact `host_id`, `endpoint_ref`, and authenticated `author`
+  for each administrative endpoint. Jobs consume the live reconciler's verified
+  capabilities, not advertised software or configured expected capabilities.
+- Optional host `networks`: entries with `ref`, `mode` and provider `name` bind
+  opaque network UUIDs to installed networks. Plane configuration permits only
+  isolated/allowlisted NAT networking; bridging/passthrough is rejected because
+  the plane API has no destructive-approval contract. `plane_secret_refs` are
+  allowlisted secret UUIDs, additionally checked against host tenant/service
+  ownership and read-secret permission; no values belong in config or intent.
+
+Host capacity observations must already be fresh for quota admission. Configure
+and register host inventory through the separately governed installation process;
+this wiring does not invent free capacity or mark inventory healthy from desired
+allocation. Package/image provenance evidence must be present before admission.
+
+Admission queues a post-commit wakeup without waiting for provider work. Startup
+calls operation `Recover`; interrupted operations are inspected rather than
+re-executed. Exact provider events trigger fresh observations. Desired plane
+changes cancel and join the prior generation's subscription before starting the
+new one. App shutdown cancels and joins workers, subscriptions and reconcilers.
 
 ## Reads and authorization
 

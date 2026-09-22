@@ -131,6 +131,7 @@ type VirtualizationProjector struct {
 	publisher VirtualizationSignedPublisher
 	author    string
 	mu        sync.Mutex
+	closed    bool
 	lifecycle context.Context
 	cancel    context.CancelFunc
 	now       func() time.Time
@@ -194,7 +195,12 @@ func (p *VirtualizationProjector) Available() bool {
 		return true
 	}
 }
-func (p *VirtualizationProjector) Close() { p.cancel(); p.mu.Lock(); p.mu.Unlock() }
+func (p *VirtualizationProjector) Close() {
+	p.cancel()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+}
 func (p *VirtualizationProjector) Run(ctx context.Context, orgs VirtualizationOrganizations) error {
 	defer p.Close()
 	if orgs == nil {
@@ -231,6 +237,9 @@ func (p *VirtualizationProjector) Recover(ctx context.Context, org uuid.UUID) er
 	defer stop()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return context.Canceled
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
