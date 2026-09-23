@@ -1,6 +1,6 @@
 # Build stage
-# node:22-alpine
-FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS builder
+# node:26-alpine
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
 
 ARG PUBLIC_BAHIA_BOOTSTRAP_RELAYS=""
 ARG PUBLIC_BAHIA_SERVICE_PUBKEYS=""
@@ -19,8 +19,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 COPY vendor ./vendor
 
-# Install dependencies
-RUN corepack enable && corepack prepare pnpm@10 --activate && pnpm install --frozen-lockfile
+# Node 26 does not bundle Corepack; use the same pnpm major as CI.
+RUN npm install --global pnpm@10 && pnpm install --frozen-lockfile
 
 # Copy source files
 COPY . .
