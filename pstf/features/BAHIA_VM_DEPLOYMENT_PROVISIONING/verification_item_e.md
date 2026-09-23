@@ -54,6 +54,54 @@ An early build hit concurrent Item B's unfinished `timeNow` references; a later
 full build passed after sibling progress. No sibling files were edited to obtain
 a pass.
 
+## Composition shutdown synchronization — bahia-z206p (2026-09-23)
+
+Root cause: **test-side startup synchronization**, not a production shutdown
+ordering change. `NewVirtualization` subscribes the projector to the live bus
+before `Run` starts. The test's injected admission service can therefore commit
+and project a mutation while `Run` has not yet completed startup recovery.
+The durable checkpoint proves projection, not startup readiness.
+
+In this composition (`Services == nil`), `Virtualization.Run` collects metrics
+and calls `VirtualizationProjector.Run`. The latter propagates startup recovery
+errors before reaching its cancellation-as-success wait. Canceling the test
+context before startup recovery reaches `Recover`'s context check correctly
+returns `context canceled`. This is distinct from the Item E fix in `f302eff0`:
+`Close` still cancels and joins recovery under the projector mutex, sets the
+closed flag, and rejects subsequent recovery.
+
+Counterfactual evidence at `1694a51f`:
+
+- `go test -race -run '^TestVirtualizationCompositionAdmissionProjectionAndShutdown$' ./internal/app/ -count=100 -cpu=1`:
+  **23/100 failures**, all `virtualization_test.go:158: context canceled`.
+- Temporarily holding the `Run` goroutine behind a channel until after the
+  checkpoint and cancellation reproduced **20/20 failures** with the same
+  error. Admission and signed projection succeeded without `Run` executing at
+  all, settling that the old checkpoint was not a startup barrier. The diagnostic
+  gate was removed; it is not part of the fix.
+
+The test now uses `testing/synctest` (already used by app supervision tests) to
+wait until the `Run` goroutine is durably blocked after startup, and explicitly
+fails if `Run` exited instead. Admission then exercises the real asynchronous
+bus, projector, signer, and outbox. The checkpoint-to-cancel sequence is unchanged:
+there is no added pre-shutdown drain barrier. Both the nil shutdown result and
+post-shutdown recovery rejection remain asserted. No production code, error
+semantics, retries, sleeps, scheduler settings, or assertion weakening were added.
+
+Verification with Go 1.26.3 on darwin/arm64:
+
+- `go test -race -run '^TestVirtualizationCompositionAdmissionProjectionAndShutdown$' ./internal/app/ -count=1000 -cpu=1,2,4`:
+  **passed 1,000 runs per CPU setting, 3,000 total**.
+- The same focused race command with `-count=1000` and no `-cpu` override:
+  **passed another 1,000 runs** under default scheduling.
+- `go build ./...`: **passed**.
+- `go vet ./...`: **passed**.
+- `go test ./...`: **passed**.
+- `make race` (`CGO_ENABLED=1 go test -race ./... -count=1`): **passed**.
+
+These are local gates, not a new CI or live-provider acceptance claim. Only the
+composition test, this evidence supplement, and the Beads record changed.
+
 ## Registration and remaining integration
 
 - Actual constructor/composition: `internal/app/app.go`, `New`.

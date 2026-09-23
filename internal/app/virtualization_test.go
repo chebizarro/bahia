@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -119,47 +120,57 @@ func (s vmAppService) MutatePersistentVM(ctx context.Context, p controlplane.Vir
 	return controlplane.VirtualizationAdmission{ResourceID: m.ID, OperationID: uuid.New(), Generation: 1}, nil
 }
 func TestVirtualizationCompositionAdmissionProjectionAndShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	org, id := uuid.New(), uuid.New()
-	repo := &vmAppRepo{}
-	bus := events.NewInProcessPublisher(zap.NewNop())
-	signer := keyer.NewPlainKeySigner([32]byte{2})
-	key, err := signer.GetPublicKey(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
-	v, err := NewVirtualization(VirtualizationDependencies{Repository: repo, PersistentVM: vmAppService{repo, bus}, RBAC: auth.NewRBAC(vmAppMembers{org}), Bus: bus, Store: store, Publisher: vmAppPublisher{store, signer}, Organizations: vmAppOrganizations{org}, CanonicalAuthor: key.Hex()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer v.Close()
-	done := make(chan error, 1)
-	go func() { done <- v.Run(ctx) }()
-	payload, _ := json.Marshal(controlplane.VirtualizationMutation{OrgID: org, ID: id})
-	response, err := v.Handlers.Handle(ctx, "persistent-vm/create", controlplane.ContextVMRequest{Event: &nostr.Event{PubKey: key}, RPC: controlplane.ContextVMJSONRPCRequest{Params: payload}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.(controlplane.VirtualizationAcknowledgment).StateDTag != "persistent-vm:"+id.String() {
-		t.Fatal(response)
-	}
-	<-store.checkpoint
-	states, err := store.ListByKind(ctx, kinds.CASControlState, 100)
-	if err != nil || len(states) != 1 {
-		t.Fatalf("projection %d %v", len(states), err)
-	}
-	if !strings.Contains(states[0].Content, id.String()) {
-		t.Fatal("projection identity")
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if err := v.Projector.Recover(context.Background(), org); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		org, id := uuid.New(), uuid.New()
+		repo := &vmAppRepo{}
+		bus := events.NewInProcessPublisher(zap.NewNop())
+		signer := keyer.NewPlainKeySigner([32]byte{2})
+		key, err := signer.GetPublicKey(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
+		v, err := NewVirtualization(VirtualizationDependencies{Repository: repo, PersistentVM: vmAppService{repo, bus}, RBAC: auth.NewRBAC(vmAppMembers{org}), Bus: bus, Store: store, Publisher: vmAppPublisher{store, signer}, Organizations: vmAppOrganizations{org}, CanonicalAuthor: key.Hex()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer v.Close()
+		done := make(chan error, 1)
+		go func() { done <- v.Run(ctx) }()
+		// Live bus projection can checkpoint before Run finishes startup recovery.
+		// Wait for Run's steady-state cancellation wait before admitting the mutation.
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("Run exited before admission: %v", err)
+		default:
+		}
+		payload, _ := json.Marshal(controlplane.VirtualizationMutation{OrgID: org, ID: id})
+		response, err := v.Handlers.Handle(ctx, "persistent-vm/create", controlplane.ContextVMRequest{Event: &nostr.Event{PubKey: key}, RPC: controlplane.ContextVMJSONRPCRequest{Params: payload}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.(controlplane.VirtualizationAcknowledgment).StateDTag != "persistent-vm:"+id.String() {
+			t.Fatal(response)
+		}
+		<-store.checkpoint
+		states, err := store.ListByKind(ctx, kinds.CASControlState, 100)
+		if err != nil || len(states) != 1 {
+			t.Fatalf("projection %d %v", len(states), err)
+		}
+		if !strings.Contains(states[0].Content, id.String()) {
+			t.Fatal("projection identity")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Projector.Recover(context.Background(), org); !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	})
 }
 func TestVirtualizationCompositionMissingDependenciesFailClosed(t *testing.T) {
 	v, err := NewVirtualization(VirtualizationDependencies{})
