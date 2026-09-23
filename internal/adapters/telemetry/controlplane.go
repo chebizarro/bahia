@@ -259,18 +259,18 @@ func EmitLifecycle(ctx context.Context, event, outcome string, err error, attrs 
 	record.SetTimestamp(now)
 	record.SetObservedTimestamp(now)
 	record.SetEventName(event)
-	record.SetBody(otellog.StringValue(event))
+	record.SetBody(attribute.StringValue(event))
 	if err != nil {
 		record.SetSeverity(otellog.SeverityError)
 		record.SetSeverityText("ERROR")
-		record.AddAttributes(otellog.String("error.type", fmt.Sprintf("%T", err)))
+		record.AddAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
 	} else {
 		record.SetSeverity(otellog.SeverityInfo)
 		record.SetSeverityText("INFO")
 	}
-	record.AddAttributes(otellog.String("outcome", boundedOutcome(outcome, err)))
+	record.AddAttributes(attribute.String("outcome", boundedOutcome(outcome, err)))
 	for _, attr := range attrs {
-		record.AddAttributes(otellog.String(string(attr.Key), attr.Value.Emit()))
+		record.AddAttributes(attribute.String(string(attr.Key), attr.Value.Emit()))
 	}
 	global.Logger(controlPlaneInstrumentationName).Emit(ctx, record)
 }

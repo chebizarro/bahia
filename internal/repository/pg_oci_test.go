@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	pgxmock "github.com/pashagolub/pgxmock/v4"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
 )

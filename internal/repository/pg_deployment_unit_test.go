@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/require"
 )
 

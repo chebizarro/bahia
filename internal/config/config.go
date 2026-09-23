@@ -588,7 +588,7 @@ func (c DBConfig) DSN() string {
 	u := &url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(c.User, c.Password),
-		Host:   fmt.Sprintf("%s:%d", c.Host, c.Port),
+		Host:   net.JoinHostPort(strings.Trim(c.Host, "[]"), strconv.Itoa(c.Port)),
 		Path:   c.Name,
 	}
 	q := u.Query()
@@ -3584,7 +3584,7 @@ func (c *Config) Validate() error {
 
 // ServerAddress returns the host:port string for the HTTP server.
 func (c *Config) ServerAddress() string {
-	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+	return net.JoinHostPort(strings.Trim(c.Server.Host, "[]"), strconv.Itoa(c.Server.Port))
 }
 
 const maxPrivateKeyFileBytes = 4096

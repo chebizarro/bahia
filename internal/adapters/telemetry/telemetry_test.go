@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.uber.org/zap"
 )
@@ -97,7 +98,7 @@ func TestSetup_OTLPHTTPExportsAndShutdown(t *testing.T) {
 	counter.Add(context.Background(), 1)
 	var record otellog.Record
 	record.SetTimestamp(time.Now())
-	record.SetBody(otellog.StringValue("test lifecycle log"))
+	record.SetBody(attribute.StringValue("test lifecycle log"))
 	provider.LoggerProvider().Logger("telemetry-test").Emit(context.Background(), record)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

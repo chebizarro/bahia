@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 )
 
 func acceptedReleaseStoreFixture() domain.HiveCIAcceptedRelease {
