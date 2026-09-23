@@ -17,6 +17,12 @@ import (
 	"fiatjaf.com/nostr"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestDisabledClientFailsClosed(t *testing.T) {
 	client, err := NewClient(Config{})
 	if err != nil {
@@ -39,13 +45,15 @@ func TestClientErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
 			run: func() error {
 				client := &Client{
 					enabled:    true,
-					privateKey: nostr.Generate().Hex(),
-					pubkey:     strings.Repeat("a", 63) + "z",
+					privateKey: "invalid",
+					pubkey:     nostr.Generate().Public().Hex(),
 					targets: map[string]Target{
 						"owned": {Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: "https://relay.example.com"},
 					},
-					httpClient: http.DefaultClient,
-					now:        time.Now,
+					httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return nil, errors.New("unexpected HTTP request")
+					})},
+					now: time.Now,
 				}
 				_, err := client.Call(context.Background(), "owned", MethodSupportedMethods, nil)
 				return err
