@@ -50,7 +50,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+        with:
+          # No later step needs authenticated Git or the v6+ credential include file.
+          persist-credentials: false
 
       - name: Preflight
         run: |

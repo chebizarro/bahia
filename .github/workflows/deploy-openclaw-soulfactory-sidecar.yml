@@ -1,7 +1,8 @@
 name: Deploy OpenClaw Soul Factory Sidecar
 
 # Runner contract: the target runner must have the labels `self-hosted`, `max`,
-# and `docker`; a writable GitHub workspace/temp directory; git, Docker Engine,
+# and `docker`; Actions Runner >= 2.327.1 (Node.js 24 for upload-artifact);
+# a writable GitHub workspace/temp directory; git, Docker Engine,
 # Docker Compose, Python 3, and base64; Docker access sufficient to inspect,
 # tag, and recreate containers; and read access to COMPOSE_FILE. The existing
 # Compose project must define COMPOSE_SERVICE with a /ready-based healthcheck.
@@ -272,8 +273,10 @@ jobs:
           docker image rm "$rollback_ref" >/dev/null
 
       - name: Upload sanitized image digest record
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
+          # Keep the named ZIP contract; archive: false ignores the name in v7.
+          archive: true
           name: openclaw-soulfactory-sidecar-${{ steps.release.outputs.sha }}
           path: ${{ steps.deploy.outputs.artifact_file }}
           if-no-files-found: error
