@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Build stage
-# golang:1.26.3-alpine
-FROM golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
+# golang:1.27.0-alpine
+FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS builder
 
 RUN apk add --no-cache git ca-certificates
 
@@ -64,8 +64,8 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     -o /bin/bahia-relay ./cmd/relay
 
 # Runtime stage
-# alpine:3.21
-FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
+# alpine:3.24
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 ARG GIT_COMMIT=dev
 ARG BUILD_DATE=unknown
