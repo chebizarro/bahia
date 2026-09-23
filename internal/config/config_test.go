@@ -2577,16 +2577,19 @@ func TestLoadEnvOverridesDefaults(t *testing.T) {
 }
 
 func TestServerAddress(t *testing.T) {
-	cfg := &Config{
-		Server: ServerConfig{
-			Host: "127.0.0.1",
-			Port: 9090,
-		},
-	}
-
-	expected := "127.0.0.1:9090"
-	if got := cfg.ServerAddress(); got != expected {
-		t.Errorf("expected address %s, got %s", expected, got)
+	for _, tc := range []struct{ host, want string }{
+		{"127.0.0.1", "127.0.0.1:9090"},
+		{"localhost", "localhost:9090"},
+		{"::1", "[::1]:9090"},
+		{"[::1]", "[::1]:9090"},
+		{"", ":9090"},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			cfg := &Config{Server: ServerConfig{Host: tc.host, Port: 9090}}
+			if got := cfg.ServerAddress(); got != tc.want {
+				t.Errorf("expected address %s, got %s", tc.want, got)
+			}
+		})
 	}
 }
 

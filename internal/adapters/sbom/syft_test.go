@@ -35,18 +35,22 @@ func TestSyftGeneratorGeneratesSPDXJSONFromRepositoryFixture(t *testing.T) {
 	var doc struct {
 		SPDXVersion string `json:"spdxVersion"`
 		Packages    []struct {
-			Name string `json:"name"`
+			Name    string `json:"name"`
+			Version string `json:"versionInfo"`
 		} `json:"packages"`
 	}
 	if err := json.Unmarshal(result.Payload, &doc); err != nil {
 		t.Fatalf("generated SPDX is not JSON: %v", err)
 	}
-	if doc.SPDXVersion == "" {
-		t.Fatal("generated SPDX payload is missing spdxVersion")
+	if doc.SPDXVersion != "SPDX-2.3" {
+		t.Fatalf("spdxVersion = %q, want SPDX-2.3", doc.SPDXVersion)
 	}
-	if len(doc.Packages) == 0 {
-		t.Fatal("generated SPDX payload has no packages")
+	for _, pkg := range doc.Packages {
+		if pkg.Name == "left-pad" && pkg.Version == "1.3.0" {
+			return
+		}
 	}
+	t.Fatalf("generated SPDX is missing fixture dependency left-pad@1.3.0: %+v", doc.Packages)
 }
 
 func TestSyftGeneratorGeneratesCycloneDXJSONFromRepositoryFixture(t *testing.T) {
@@ -70,9 +74,11 @@ func TestSyftGeneratorGeneratesCycloneDXJSONFromRepositoryFixture(t *testing.T) 
 	}
 
 	var bom struct {
-		BOMFormat  string `json:"bomFormat"`
-		Components []struct {
-			Name string `json:"name"`
+		BOMFormat   string `json:"bomFormat"`
+		SpecVersion string `json:"specVersion"`
+		Components  []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(result.Payload, &bom); err != nil {
@@ -81,7 +87,13 @@ func TestSyftGeneratorGeneratesCycloneDXJSONFromRepositoryFixture(t *testing.T) 
 	if bom.BOMFormat != "CycloneDX" {
 		t.Fatalf("bomFormat = %q, want CycloneDX", bom.BOMFormat)
 	}
-	if len(bom.Components) == 0 {
-		t.Fatal("generated CycloneDX payload has no components")
+	if bom.SpecVersion != "1.6" {
+		t.Fatalf("specVersion = %q, want 1.6", bom.SpecVersion)
 	}
+	for _, component := range bom.Components {
+		if component.Name == "left-pad" && component.Version == "1.3.0" {
+			return
+		}
+	}
+	t.Fatalf("generated CycloneDX is missing fixture dependency left-pad@1.3.0: %+v", bom.Components)
 }

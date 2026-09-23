@@ -14,6 +14,28 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestDBConfigDSNRoundTripsThroughPGX(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "::1", "[::1]"} {
+		t.Run(host, func(t *testing.T) {
+			cfg := config.DBConfig{
+				Host: host, Port: 5432, User: "bahia+test@example.org",
+				Password: `space +:@/?#%\'`, Name: "wave3+test", SSLMode: "disable",
+			}
+			parsed, err := pgxpool.ParseConfig(cfg.DSN())
+			if err != nil {
+				t.Fatalf("parse generated DSN: %v", cfg.RedactError(err))
+			}
+			conn := parsed.ConnConfig
+			if conn.Host != strings.Trim(cfg.Host, "[]") || int(conn.Port) != cfg.Port || conn.User != cfg.User || conn.Password != cfg.Password || conn.Database != cfg.Name {
+				t.Fatal("pgx changed a generated DSN field during parsing")
+			}
+			if conn.TLSConfig != nil {
+				t.Fatal("sslmode=disable unexpectedly enabled TLS")
+			}
+		})
+	}
+}
+
 func TestConnectRedactsCredentialRepresentationsFromParseErrors(t *testing.T) {
 	const secret = `DB-SECRET-SENTINEL:/@?&%\"<>`
 	cfg := config.DBConfig{
