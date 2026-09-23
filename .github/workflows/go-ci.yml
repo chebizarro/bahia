@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  go:
+  build-vet-test:
+    name: Build, vet, and test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -21,4 +22,15 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+
+  race:
+    name: Race
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
       - run: make race
