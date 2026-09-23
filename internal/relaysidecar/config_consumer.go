@@ -27,10 +27,15 @@ const (
 	configRelaySchema      = "cascadia.config.relay-sidecar.v1"
 )
 
+// ConfigEventSigner signs independently owned events. Implementations must be
+// safe for concurrent calls from Handle and the background activation loop.
 type ConfigEventSigner interface {
 	Sign(context.Context, *nostr.Event) error
 }
 
+// ConfigStatusPublisher publishes config status events. Handle and the background
+// activation loop may call Publish concurrently; implementations must support
+// concurrent use. Accepted and applied publications are not ordered by the caller.
 type ConfigStatusPublisher interface {
 	Publish(context.Context, nostr.Event) (int, error)
 }

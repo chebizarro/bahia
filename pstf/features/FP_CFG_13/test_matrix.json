@@ -5,6 +5,7 @@
     {"criterion":"AC3","tests":["TestReloadInitializationFailureKeepsActiveRuntimeServing"]},
     {"criterion":"AC4","tests":["TestLoadRejectsReadOnlyMutablePolicySeedWithActionableGuidance"]},
     {"criterion":"AC5","tests":["TestOpenClawConsumesSignedNIP51ControllerTrustListPersistBeforeApply"]},
-    {"criterion":"AC6","tests":["TestConfigFabricPublishApplyStatusClearsDriftEndToEnd"]}
+    {"criterion":"AC6","tests":["TestConfigFabricPublishApplyStatusClearsDriftEndToEnd"]},
+    {"criterion":"AC7","tests":["TestConfigConsumerPublishesStatusesConcurrently","TestConfigFabricPublishApplyStatusClearsDriftEndToEnd"]}
   ]
 }

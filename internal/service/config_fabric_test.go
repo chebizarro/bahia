@@ -54,12 +54,10 @@ func validPolicyRequest(version int) ConfigPublishRequest {
 }
 
 type configStatusRepoPublisher struct {
-	repo   repository.NostrEventRepository
-	events []nostr.Event
-	// published signals each recorded status event. The consumer publishes
-	// status from its activation worker, so tests must wait for it rather than
-	// reading events straight after Handle returns.
-	published chan struct{}
+	repo repository.NostrEventRepository
+	// Both Handle and the activation worker publish concurrently. Deliver each
+	// successfully recorded event through a channel, not a shared event slice.
+	published chan nostr.Event
 }
 
 func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Event) (int, error) {
@@ -70,14 +68,6 @@ func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Eve
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if p.published != nil {
-			select {
-			case p.published <- struct{}{}:
-			default:
-			}
-		}
-	}()
 	_, err = p.repo.Record(ctx, &repository.NostrEventRecord{
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
 		Content: event.Content, Tags: tags, Sig: hex.EncodeToString(event.Sig[:]),
@@ -86,8 +76,12 @@ func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Eve
 	if err != nil {
 		return 0, err
 	}
-	p.events = append(p.events, event)
-	return 1, nil
+	select {
+	case p.published <- event:
+		return 1, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 }
 
 func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
@@ -119,7 +113,7 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 		t.Fatalf("drift before apply = %#v err=%v", drift, err)
 	}
 
-	statusPublisher := &configStatusRepoPublisher{repo: repo, published: make(chan struct{}, 4)}
+	statusPublisher := &configStatusRepoPublisher{repo: repo, published: make(chan nostr.Event, 2)}
 	// Handle now records the desired coordinate and hands activation to the
 	// consumer's serial worker, so the projection arrives asynchronously and
 	// must be read off a channel rather than a shared variable.
@@ -153,30 +147,30 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 	if applied.EventID != receipt.EventID || len(applied.AllowedPubkeys) != 1 || applied.AllowedPubkeys[0] != managedPubkey {
 		t.Fatalf("applied projection = %#v", applied)
 	}
-	// The consumer is now two-phase: Handle publishes "accepted" when it records
-	// the desired coordinate, and the activation worker publishes "applied" once
-	// the config is live. The console keys drift on "applied", so wait for that
-	// one specifically rather than for the first status to arrive.
+	// Repository visibility does not imply Publish has finished. Wait for both
+	// successful publications, without assuming accepted arrives before applied.
 	deadline := time.After(5 * time.Second)
-	for {
-		if _, err := console.ListDrift(t.Context()); err != nil {
-			t.Fatalf("console drift poll: %v", err)
-		}
-		drift, err := console.ListDrift(t.Context())
-		if err != nil {
-			t.Fatalf("console drift poll: %v", err)
-		}
-		if len(drift) == 1 && drift[0].AppliedEventID != "" {
-			break
-		}
+	statuses := make(map[string]bool, 2)
+	for range 2 {
 		select {
-		case <-statusPublisher.published:
+		case event := <-statusPublisher.published:
+			var content struct {
+				Status        string `json:"status"`
+				ConfigEventID string `json:"config_event_id"`
+			}
+			if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+				t.Fatalf("decode status event: %v", err)
+			}
+			if content.ConfigEventID != receipt.EventID || statuses[content.Status] {
+				t.Fatalf("unexpected or duplicate status: %+v", content)
+			}
+			statuses[content.Status] = true
 		case <-deadline:
-			t.Fatalf("applied status never reached the console; drift = %#v", drift)
+			t.Fatalf("status publications did not complete; received = %v", statuses)
 		}
 	}
-	if len(statusPublisher.events) != 2 {
-		t.Fatalf("status events = %d, want 2 (accepted then applied)", len(statusPublisher.events))
+	if !statuses["accepted"] || !statuses["applied"] {
+		t.Fatalf("status events = %v, want accepted and applied", statuses)
 	}
 	drift, err = console.ListDrift(t.Context())
 	if err != nil {

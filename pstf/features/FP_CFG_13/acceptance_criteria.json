@@ -5,6 +5,7 @@
     {"id":"AC3","text":"A replacement relay runtime initializes before the active runtime stops, and initialization failure preserves service."},
     {"id":"AC4","text":"Legacy YAML seeding rejects read-only mounts with actionable guidance."},
     {"id":"AC5","text":"Signed trusted NIP-51 controller lists persist before hot application."},
-    {"id":"AC6","text":"Desired config publication reaches durable application, signed status publication, and a cleared console drift view."}
+    {"id":"AC6","text":"Desired config publication reaches durable application, signed status publication, and a cleared console drift view."},
+    {"id":"AC7","text":"Handle and background activation may publish status concurrently. Signers and publishers support concurrent use, both accepted and applied publications complete, and the production relay publisher persists the status coordinate without data races."}
   ]
 }
