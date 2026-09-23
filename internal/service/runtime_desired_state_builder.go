@@ -293,7 +293,11 @@ func desiredHealthcheck(input *domain.ManagedHTTPHealthcheck) *domain.Healthchec
 		return nil
 	}
 	return &domain.HealthcheckConfig{
-		Test:        []string{"CMD", "wget", "-q", "--spider", fmt.Sprintf("http://localhost:%d%s", input.Port, input.Path)},
+		// Use the IPv4 loopback literal. Minimal container images commonly map
+		// localhost to ::1 first, while applications may intentionally bind only
+		// 0.0.0.0; that combination produces a false unhealthy result even though
+		// the service is listening and reachable over IPv4.
+		Test:        []string{"CMD", "wget", "-q", "--spider", fmt.Sprintf("http://127.0.0.1:%d%s", input.Port, input.Path)},
 		Protocol:    input.Protocol,
 		Method:      input.Method,
 		Path:        input.Path,
