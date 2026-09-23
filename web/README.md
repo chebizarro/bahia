@@ -65,10 +65,14 @@ For encrypted browser flows, signer support must also expose NIP-44 encrypt/decr
 
 ## Development
 
+Use pnpm 10 and Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`. The Node.js
+minimum is required by jsdom 30 and isomorphic-dompurify 4; Node 20 is no
+longer supported. Commit `pnpm-lock.yaml` with dependency changes.
+
 ```bash
 cd web
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 The dev server proxies `/api` requests to `http://localhost:8080`.
@@ -76,7 +80,9 @@ The dev server proxies `/api` requests to `http://localhost:8080`.
 ## Quality Gates
 
 ```bash
-npm run lint
+pnpm run lint
+pnpm run test:unit
+pnpm run build
 ```
 
 The lint gate runs SvelteKit sync followed by `svelte-check --tsconfig ./tsconfig.json`.
