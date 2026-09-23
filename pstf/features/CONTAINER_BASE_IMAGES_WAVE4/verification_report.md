@@ -44,6 +44,16 @@ Web smoke initially queried before nginx readiness; the final smoke waited for D
 
 ## CI and deployment boundaries
 
+Initial PR Go CI run `35838512887` passed build/vet/test but failed Race at
+`internal/app/virtualization_test.go:158` (`context canceled`). All Go source,
+module files, Makefile, and Go CI configuration are unchanged from `ae4547e1`.
+The focused test passed 100 repetitions under normal scheduling, but
+`GOMAXPROCS=1 go test -race ./internal/app -run '^TestVirtualizationCompositionAdmissionProjectionAndShutdown$' -count=20`
+reproduced three identical failures. This scheduling-sensitive shutdown failure
+is tracked separately as `bahia-z206p`; no test suppression or application-code
+fix is included in this batch. Final CI conclusions are recorded in the PR.
+Initial Node 26 Vitest run `35838512819` passed all 97 test files.
+
 - PR Go CI uses `go-version-file: go.mod` (1.26.3), with separate build/vet/test and Race jobs. It does not verify the Go 1.27 container builder.
 - PR web jobs use Node 26 but do not run `docker build`. The web Vitest and Playwright workflows cannot establish nginx/container startup correctness.
 - `deploy-edge.yml` and `hive-ci-build.yml` build backend/web only through manual/deployment execution; the sidecar deployment builds the backend image on release/manual events. These require deployment infrastructure and are not PR gates.
