@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "bahia-lxc2q",
+    "status": "remediated",
+    "defects": [
+      "Real package artifact handlers were not dispatched.",
+      "Caller approval strings bypassed provenance.",
+      "Deprecation invoked destructive yank.",
+      "Drift emitted duplicate results before completion persistence.",
+      "Registry publication/projection failures could report success."
+    ],
+    "verification": [
+      "TestPackageContextVMReachabilityGateAndReplay",
+      "TestPackageContextVMRemovedRegistrationIsMethodNotFound",
+      "TestPackageApprovalProvenanceBindingAndSingleUse",
+      "TestPackageApprovalRequiresAuthenticDistinctSigner",
+      "TestPackageDeprecationPreservesBytesAndAvailability",
+      "TestPackagePublicationAndProjectionFailuresAreTerminalErrors",
+      "TestPackageDriftHasOneTerminalResponseAfterPersistence",
+      "TestPackageAuthorizationPostgresSingleUseAndDurableClaims"
+    ],
+    "issue_state_owner": "User; no bd or .beads changes performed."
+  }
+]

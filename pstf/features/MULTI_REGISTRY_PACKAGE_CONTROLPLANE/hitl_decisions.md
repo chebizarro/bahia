@@ -16,3 +16,16 @@
 - Exact promotion channels/environments and approval policy semantics.
 - Whether additional package formats or a raw/generic format should be added in a later compatibility phase.
 - Whether Item 4 should automatically replay non-terminal long-running package uploads on process restart or require a fresh signed operator intent.
+
+## bahia-lxc2q (2026-09-24)
+
+The explicit remediation request authorizes resolving approval provenance and
+yank/deprecate semantics before exposure. Follow the VM ApprovePlan model:
+server-reconstructed plan and resource snapshot, distinct authenticated fleet
+operator, ten-minute expiry and atomic one-use consumption. Local security
+admission records are authoritative even though resource tables remain projections.
+Deprecation is advisory metadata preserving access; explicit yank remains
+destructive. No package-manager-native deprecation capability is inferred.
+Interrupted operations remain claimed and require inspection before a fresh intent;
+there is no automatic retry of unknown backend outcomes. CLI/MCP approval-field
+exposure and repository apply/delete registration remain outside this task.

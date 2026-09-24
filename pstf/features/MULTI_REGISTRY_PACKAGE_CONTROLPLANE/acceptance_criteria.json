@@ -34,9 +34,9 @@
       "title": "Nostr-derived idempotency/projection cache exists without making DB the source of truth",
       "type": "architecture",
       "priority": "must",
-      "assertion": "Durable package intent rows are keyed by request_event_id and projection rows carry last_event_created_at/last_event_id ordering metadata, with docs/comments identifying DB as projection/cache only.",
-      "expected_result": "Duplicate request event IDs upsert one cached intent; stale projection writes are suppressed by event ordering predicates.",
-      "status": "covered_foundation"
+      "assertion": "Signed Nostr events describe desired package state; artifact/repository/publication/intent rows are projections. Separate local package_request_claims and package_approvals are authoritative admission and anti-replay records, not reconstructible from untrusted relay data.",
+      "expected_result": "Preserve admission records across projection rebuilds; duplicate signed requests and same-key resigning cannot repeat backend mutations, even after restart or publication/persistence failure.",
+      "status": "covered_bahia_lxc2q"
     },
     {
       "ac_id": "MRPC-AC-005",
@@ -97,18 +97,18 @@
       "title": "Package lifecycle mutations enter through signed Nostr request events",
       "type": "control_plane",
       "priority": "must",
-      "assertion": "Repository apply/delete, artifact publication intent, promotion, yank/deprecate, and drift detection are modeled as canonical package Nostr request kinds handled by the controlplane reactor.",
-      "expected_result": "The reactor subscribes to package request kinds, verifies/dedupes through existing event flow, publishes package status/result events, and records replaceable package repository/artifact/promotion projections.",
-      "status": "covered_item_3"
+      "assertion": "Package publish, promote, yank/deprecate, drift-detect and approve-plan enter through registered signed plain/wrapped ContextVM methods protected by FleetOperatorGate.",
+      "expected_result": "Each registered method executes the real implementation; absent registration returns -32601; unauthorized callers and empty allowlists fail before package storage access. Repository apply/delete registration is outside bahia-lxc2q.",
+      "status": "covered_bahia_lxc2q"
     },
     {
       "ac_id": "MRPC-AC-012",
       "title": "Package processing is idempotent and projection-backed without making DB authoritative",
       "type": "architecture",
       "priority": "must",
-      "assertion": "Package handlers use request_event_id intent rows as durable idempotency/recovery caches while signed Nostr events remain desired-state authority.",
-      "expected_result": "Duplicate terminal package request IDs replay cached terminal results instead of re-executing backend mutation; non-terminal requests report already_processing.",
-      "status": "covered_item_3"
+      "assertion": "Signed Nostr events describe desired package state; artifact/repository/publication/intent rows are projections. Separate local package_request_claims and package_approvals are authoritative admission and anti-replay records, not reconstructible from untrusted relay data.",
+      "expected_result": "Preserve admission records across projection rebuilds; duplicate signed requests and same-key resigning cannot repeat backend mutations, even after restart or publication/persistence failure.",
+      "status": "covered_bahia_lxc2q"
     },
     {
       "ac_id": "MRPC-AC-013",
@@ -136,6 +136,33 @@
       "assertion": "A package drift request compares projected repository/artifact desired state with backend-observed state and emits a package drift event containing observations and drift status.",
       "expected_result": "Kind 7992 drift events include repository correlation, observations, and projected last_event_id context for signed Nostr package state.",
       "status": "covered_item_3"
+    },
+    {
+      "ac_id": "MRPC-AC-016",
+      "title": "Approval provenance",
+      "type": "control_plane",
+      "priority": "must",
+      "assertion": "Publish/promote reject caller approval strings; a distinct allowlisted operator records a ten-minute approval for a server-reconstructed action and resource snapshot. Consumption is atomic, requester/method/hash-bound and single-use.",
+      "expected_result": "Verified by bahia-lxc2q tests in the test matrix.",
+      "status": "covered_bahia_lxc2q"
+    },
+    {
+      "ac_id": "MRPC-AC-017",
+      "title": "Yank and deprecation",
+      "type": "control_plane",
+      "priority": "must",
+      "assertion": "Deprecation changes advisory metadata only; bytes, URLs and availability remain. Explicit yank removes backend bytes.",
+      "expected_result": "Verified by bahia-lxc2q tests in the test matrix.",
+      "status": "covered_bahia_lxc2q"
+    },
+    {
+      "ac_id": "MRPC-AC-018",
+      "title": "Truthful completion",
+      "type": "control_plane",
+      "priority": "must",
+      "assertion": "No positive relay acceptance, projection failure or terminal persistence failure returns success. Drift emits one observation and exactly one transport terminal response after persistence.",
+      "expected_result": "Verified by bahia-lxc2q tests in the test matrix.",
+      "status": "covered_bahia_lxc2q"
     }
   ],
   "coverage_notes": [

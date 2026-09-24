@@ -10,6 +10,80 @@ Package features include:
 - **Promotion workflow** — Move packages between stages
 - **Drift detection** — Ensure repository consistency
 
+## Authenticated package mutations
+
+`package/publish`, `package/promote`, `package/yank`, and `package/drift-detect`
+execute through signed plain or wrapped ContextVM requests. Every method requires
+a configured, nonempty fleet-operator allowlist and an `idempotency_key` (or
+`_meta.progressToken`). Reusing that key with changed parameters is rejected.
+Durable request claims prevent re-execution across transport restarts, including
+when a backend change succeeds but publication or completion persistence fails.
+An interrupted request is not automatically retried: inspect the backend and
+canonical state before submitting a new intent.
+
+### Two-person approval
+
+When repository policy requires publish/promotion approval, a **different**
+allowlisted operator signs a `package/approve-plan` ContextVM request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "review-package",
+  "method": "package/approve-plan",
+  "params": {
+    "idempotency_key": "review-unique-key",
+    "requester_pubkey": "<publishing operator's hex public key>",
+    "method": "package/publish",
+    "params": {
+      "repository_id": "<repository UUID>",
+      "package_name": "utils",
+      "version": "1.2.3",
+      "filename": "utils.tgz",
+      "source_url": "https://packages.example.com/utils.tgz",
+      "sha256": "<64 lowercase hex characters>",
+      "size_bytes": 1234
+    }
+  }
+}
+```
+
+The server builds the plan hash from the action and current repository/artifact
+snapshots, including policy, digest, source and target identities and event
+revisions. It records the authenticated approver and returns `approval_id` and
+`expires_at`; this does not upload or promote anything. The requester submits the
+same action with that `approval_id` and a fresh mutation `idempotency_key`.
+Approvals expire after ten minutes, require the approver still to be allowlisted,
+and are consumed atomically before the backend attempt. Failed attempts do not
+restore approval. Changed requests or resource snapshots require a new approval.
+
+`approved_by` is not evidence and is rejected. Use raw ContextVM for this approval
+workflow; the existing CLI/MCP string approval arguments do not grant approval.
+The command publisher supports `approval_id`, but the CLI/MCP wrappers do not yet
+expose that field.
+
+### Yank versus deprecation
+
+`package/yank` with `deprecated: true` only publishes advisory deprecation metadata
+for an available artifact. It preserves bytes, download URL, digest and available
+status; package-manager-native deprecation messages are not claimed. With
+`deprecated: false` (the default), yank deliberately removes backend bytes and
+publishes a deleted artifact. Use deprecation when consumers must retain access.
+
+### Completion and observation
+
+Artifact and promotion registries use signed `30900` state. Drift observations use
+`30315` status and are not duplicate RPC results. Terminal package results use
+`30900`, `schema=bahia.result.package.v1`, `d=package:intent:<intent UUID>`, after
+intent persistence; the transport emits exactly one correlated JSON-RPC response.
+No relay acceptance, a rejected projection write, or a persistence error produces
+an error response rather than success. Partial backend changes are not rolled back.
+Migration `000069_package_authorization` adds authoritative local approval and
+admission records: preserve them across relay-projection rebuilds.
+
+Repository apply/delete are not registered by this handler group. Their existing
+publishers do not establish server reachability.
+
 ## Key Concepts
 
 ### Package Repository
@@ -243,7 +317,7 @@ Benefits:
 
 1. **Use semantic versioning** — Clear version progression
 2. **Promote through stages** — Test before stable
-3. **Yank bad versions** — Don't delete, mark unavailable
+3. **Choose the right operation** — Deprecate to retain access; yank to remove bytes
 4. **Document packages** — Include README and changelog
 5. **Monitor drift** — Ensure consistency
 

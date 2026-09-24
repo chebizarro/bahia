@@ -105,163 +105,88 @@ func (r *Reactor) handlePackageRepositoryDelete(ctx context.Context, event *nost
 	r.finishPackageIntent(ctx, event, intent, "repository_delete", map[string]any{"operation": "repository_delete", "status": "succeeded", "repository": out}, nil)
 }
 
-func (r *Reactor) handlePackagePublishIntent(ctx context.Context, event *nostr.Event) {
-	var cmd PackagePublishCommand
-	if !r.decodePackageRequest(ctx, event, &cmd) {
-		return
-	}
-	repo, err := r.lookupPackageRepository(ctx, cmd.RepositoryID, cmd.RepositoryName)
+func (r *Reactor) handlePackagePublishIntent(ctx context.Context, plan *packagePlan) (map[string]any, error) {
+	cmd := plan.cmd.(PackagePublishCommand)
+	artifact, err := r.packageService.PublishPackage(ctx, plan.repo, plan.artifact, service.PackagePublishRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, SourceURL: cmd.SourceURL, SHA256: cmd.SHA256, SizeBytes: cmd.SizeBytes, ContentType: cmd.ContentType, Metadata: cmd.Metadata})
 	if err != nil {
-		r.publishPackageError(ctx, event, domain.PackageOperationArtifactPublish, "validation", err.Error())
-		return
+		return nil, err
 	}
-	intent, ok := r.beginPackageIntent(ctx, event, domain.PackageOperationArtifactPublish, packageIntentFields{RepositoryID: repo.ID, RepositoryName: repo.Name, Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename}, cmd)
-	if !ok {
-		return
-	}
-	if repo.Policy.PublishRequiresApproval && strings.TrimSpace(cmd.ApprovedBy) == "" {
-		r.publishPackageStatus(ctx, event, intent, "policy_check", "rejected", "publication requires approval")
-		r.finishPackageIntent(ctx, event, intent, "artifact_publish", nil, fmt.Errorf("publication requires approval: %w", service.ErrPackageApprovalRequired))
-		return
-	}
-	r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking publication policy")
-	existing, _ := r.packageProjection.GetArtifact(ctx, repo.ID, strings.Trim(cmd.Namespace, "/"), cmd.PackageName, cmd.Version, cmd.Filename)
-	artifact, err := r.packageService.PublishPackage(ctx, repo, existing, service.PackagePublishRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, SourceURL: cmd.SourceURL, SHA256: cmd.SHA256, SizeBytes: cmd.SizeBytes, ContentType: cmd.ContentType, Metadata: cmd.Metadata})
-	if err != nil {
-		r.finishPackageIntent(ctx, event, intent, "artifact_publish", nil, err)
-		return
-	}
-	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "publication policy accepted")
-	if pubErr := r.publishPackageArtifactRegistry(ctx, artifact); pubErr != nil {
-		r.logger.Warn("publish package artifact registry failed", "error", pubErr)
+	if err := r.publishPackageArtifactRegistry(ctx, artifact); err != nil {
+		return nil, fmt.Errorf("publish artifact registry: %w", err)
 	}
 	now := time.Now().UTC()
-	publication := &domain.PackagePublication{ID: uuid.New(), RepositoryID: repo.ID, ArtifactID: artifact.ID, Status: domain.PackagePublicationStatusSucceeded, PolicyDecision: domain.PackagePolicyDecisionAllowed, PolicyRef: cmd.PolicyRef, ApprovedBy: cmd.ApprovedBy, PublishedAt: &now, Metadata: map[string]any{"operation": "artifact_publish"}, CreatedAt: now, UpdatedAt: now}
-	if pubErr := r.publishPackagePromotionRegistry(ctx, publication); pubErr != nil {
-		r.logger.Warn("publish package publication registry failed", "error", pubErr)
+	publication := &domain.PackagePublication{ID: uuid.New(), RepositoryID: plan.repo.ID, ArtifactID: artifact.ID, Status: domain.PackagePublicationStatusSucceeded, PolicyDecision: domain.PackagePolicyDecisionAllowed, PolicyRef: cmd.PolicyRef, ApprovedBy: plan.approvedBy, PublishedAt: &now, Metadata: map[string]any{"operation": "artifact_publish"}, CreatedAt: now, UpdatedAt: now}
+	if err := r.publishPackagePromotionRegistry(ctx, publication); err != nil {
+		return nil, fmt.Errorf("publish publication registry: %w", err)
 	}
-	r.finishPackageIntent(ctx, event, intent, "artifact_publish", map[string]any{"operation": "artifact_publish", "status": "succeeded", "artifact": artifact, "publication": publication}, nil)
+	return map[string]any{"artifact": artifact, "publication": publication}, nil
 }
 
-func (r *Reactor) handlePackagePromotionRequest(ctx context.Context, event *nostr.Event) {
-	var cmd PackagePromotionCommand
-	if !r.decodePackageRequest(ctx, event, &cmd) {
-		return
-	}
-	sourceRepo, err := r.lookupPackageRepository(ctx, cmd.SourceRepositoryID, cmd.SourceRepositoryName)
+func (r *Reactor) handlePackagePromotionRequest(ctx context.Context, plan *packagePlan) (map[string]any, error) {
+	cmd := plan.cmd.(PackagePromotionCommand)
+	target, publication, err := r.packageService.PromotePackage(ctx, plan.repo, plan.targetRepo, plan.artifact, plan.targetArtifact, service.PackagePromotionRequest{Environment: cmd.Environment, Channel: cmd.Channel, ApprovedBy: plan.approvedBy, PolicyRef: cmd.PolicyRef, Metadata: cmd.Metadata})
 	if err != nil {
-		r.publishPackageError(ctx, event, domain.PackageOperationPromote, "validation", err.Error())
-		return
+		return nil, err
 	}
-	targetRepo, err := r.lookupPackageRepository(ctx, cmd.TargetRepositoryID, cmd.TargetRepositoryName)
-	if err != nil {
-		r.publishPackageError(ctx, event, domain.PackageOperationPromote, "validation", err.Error())
-		return
-	}
-	intent, ok := r.beginPackageIntent(ctx, event, domain.PackageOperationPromote, packageIntentFields{RepositoryID: sourceRepo.ID, RepositoryName: sourceRepo.Name, Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename}, cmd)
-	if !ok {
-		return
-	}
-	artifact, err := r.packageProjection.GetArtifact(ctx, sourceRepo.ID, strings.Trim(cmd.Namespace, "/"), cmd.PackageName, cmd.Version, cmd.Filename)
-	if err != nil || artifact == nil {
-		r.finishPackageIntent(ctx, event, intent, "promote", nil, fmt.Errorf("source package artifact not found"))
-		return
-	}
-	r.publishPackageStatus(ctx, event, intent, "policy_check", "checking", "checking promotion policy")
-	existingTarget, _ := r.packageProjection.GetArtifact(ctx, targetRepo.ID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
-	target, publication, err := r.packageService.PromotePackage(ctx, sourceRepo, targetRepo, artifact, existingTarget, service.PackagePromotionRequest{Environment: cmd.Environment, Channel: cmd.Channel, ApprovedBy: cmd.ApprovedBy, PolicyRef: cmd.PolicyRef, Metadata: cmd.Metadata})
-	if err != nil {
-		status := "failed"
-		if errors.Is(err, service.ErrPackageApprovalRequired) || errors.Is(err, service.ErrPackagePolicyDenied) {
-			status = "rejected"
-		}
-		r.publishPackageStatus(ctx, event, intent, "policy_check", status, err.Error())
-		r.finishPackageIntent(ctx, event, intent, "promote", nil, err)
-		return
-	}
-	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "promotion policy accepted")
 	publication.Status = domain.PackagePublicationStatusSucceeded
-	if pubErr := r.publishPackageArtifactRegistry(ctx, target); pubErr != nil {
-		r.logger.Warn("publish promoted package artifact registry failed", "error", pubErr)
+	if err := r.publishPackageArtifactRegistry(ctx, target); err != nil {
+		return nil, fmt.Errorf("publish promoted artifact registry: %w", err)
 	}
-	if pubErr := r.publishPackagePromotionRegistry(ctx, publication); pubErr != nil {
-		r.logger.Warn("publish package promotion registry failed", "error", pubErr)
+	if err := r.publishPackagePromotionRegistry(ctx, publication); err != nil {
+		return nil, fmt.Errorf("publish promotion registry: %w", err)
 	}
-	r.finishPackageIntent(ctx, event, intent, "promote", map[string]any{"operation": "promote", "status": "succeeded", "artifact": target, "promotion": publication}, nil)
+	return map[string]any{"artifact": target, "promotion": publication}, nil
 }
 
-func (r *Reactor) handlePackageYankRequest(ctx context.Context, event *nostr.Event) {
-	var cmd PackageYankCommand
-	if !r.decodePackageRequest(ctx, event, &cmd) {
-		return
-	}
-	op := domain.PackageOperationYank
+func (r *Reactor) handlePackageYankRequest(ctx context.Context, plan *packagePlan) (map[string]any, error) {
+	cmd := plan.cmd.(PackageYankCommand)
+	var artifact *domain.PackageArtifact
+	var err error
 	if cmd.Deprecated {
-		op = domain.PackageOperationDeprecate
+		// Deprecation is advisory metadata. Do not call a backend deletion or
+		// alter availability, URL, digest, or tombstone state.
+		if plan.artifact == nil || plan.artifact.Deleted || plan.artifact.Status != domain.PackageArtifactStatusAvailable {
+			return nil, fmt.Errorf("only an available package artifact can be deprecated")
+		}
+		copy := *plan.artifact
+		copy.Metadata = make(map[string]any, len(plan.artifact.Metadata)+2)
+		for key, value := range plan.artifact.Metadata {
+			copy.Metadata[key] = value
+		}
+		copy.Metadata["deprecated"], copy.Metadata["deprecation_reason"] = true, cmd.Reason
+		copy.UpdatedAt = time.Now().UTC()
+		artifact = &copy
+	} else {
+		artifact, err = r.packageService.YankPackage(ctx, plan.repo, plan.artifact, service.PackageYankRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, Reason: cmd.Reason, Metadata: cmd.Metadata})
+		if err != nil {
+			return nil, err
+		}
 	}
-	repo, err := r.lookupPackageRepository(ctx, cmd.RepositoryID, cmd.RepositoryName)
-	if err != nil {
-		r.publishPackageError(ctx, event, op, "validation", err.Error())
-		return
+	if err := r.publishPackageArtifactRegistry(ctx, artifact); err != nil {
+		return nil, fmt.Errorf("publish package availability: %w", err)
 	}
-	intent, ok := r.beginPackageIntent(ctx, event, op, packageIntentFields{RepositoryID: repo.ID, RepositoryName: repo.Name, Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename}, cmd)
-	if !ok {
-		return
-	}
-	r.publishPackageStatus(ctx, event, intent, "policy_check", "approved", "yank policy accepted")
-	existing, _ := r.packageProjection.GetArtifact(ctx, repo.ID, strings.Trim(cmd.Namespace, "/"), cmd.PackageName, cmd.Version, cmd.Filename)
-	artifact, err := r.packageService.YankPackage(ctx, repo, existing, service.PackageYankRequest{Namespace: cmd.Namespace, PackageName: cmd.PackageName, Version: cmd.Version, Filename: cmd.Filename, Reason: cmd.Reason, Metadata: cmd.Metadata})
-	if err != nil {
-		r.finishPackageIntent(ctx, event, intent, string(op), nil, err)
-		return
-	}
-	if cmd.Deprecated && artifact.Metadata == nil {
-		artifact.Metadata = map[string]any{}
-	}
-	if cmd.Deprecated {
-		artifact.Metadata["deprecated"] = true
-		artifact.Metadata["deprecation_reason"] = cmd.Reason
-	}
-	if pubErr := r.publishPackageArtifactRegistry(ctx, artifact); pubErr != nil {
-		r.logger.Warn("publish yanked package artifact registry failed", "error", pubErr)
-	}
-	r.finishPackageIntent(ctx, event, intent, string(op), map[string]any{"operation": op, "status": "succeeded", "artifact": artifact}, nil)
+	return map[string]any{"artifact": artifact}, nil
 }
 
-func (r *Reactor) handlePackageDriftDetect(ctx context.Context, event *nostr.Event) {
-	var cmd PackageDriftDetectCommand
-	if !r.decodePackageRequest(ctx, event, &cmd) {
-		return
-	}
-	repo, err := r.lookupPackageRepository(ctx, cmd.RepositoryID, cmd.RepositoryName)
-	if err != nil {
-		r.publishPackageError(ctx, event, domain.PackageOperationDriftDetect, "validation", err.Error())
-		return
-	}
-	intent, ok := r.beginPackageIntent(ctx, event, domain.PackageOperationDriftDetect, packageIntentFields{RepositoryID: repo.ID, RepositoryName: repo.Name}, cmd)
-	if !ok {
-		return
-	}
+func (r *Reactor) handlePackageDriftDetect(ctx context.Context, plan *packagePlan) (map[string]any, error) {
+	cmd := plan.cmd.(PackageDriftDetectCommand)
 	observations := []service.PackageDriftObservation{}
-	repoObs, err := r.packageService.ObserveRepositoryDrift(ctx, repo)
+	repoObs, err := r.packageService.ObserveRepositoryDrift(ctx, plan.repo)
 	if err != nil {
-		r.finishPackageIntent(ctx, event, intent, "drift_detect", nil, err)
-		return
+		return nil, err
 	}
 	observations = append(observations, *repoObs)
 	if cmd.IncludeArtifacts {
 		const pageSize = 500
 		for offset := 0; ; offset += pageSize {
-			artifacts, listErr := r.packageProjection.ListArtifacts(ctx, repo.ID, pageSize, offset)
-			if listErr != nil {
-				r.finishPackageIntent(ctx, event, intent, "drift_detect", nil, listErr)
-				return
+			artifacts, err := r.packageProjection.ListArtifacts(ctx, plan.repo.ID, pageSize, offset)
+			if err != nil {
+				return nil, err
 			}
 			for i := range artifacts {
-				obs, obsErr := r.packageService.ObserveArtifactDrift(ctx, repo, &artifacts[i])
-				if obsErr != nil {
-					observations = append(observations, service.PackageDriftObservation{ResourceKind: "artifact", ResourceID: artifacts[i].ID.String(), Expected: true, Observed: false, Drifted: true, Reason: obsErr.Error()})
-					continue
+				obs, err := r.packageService.ObserveArtifactDrift(ctx, plan.repo, &artifacts[i])
+				if err != nil {
+					return nil, fmt.Errorf("observe package artifact drift: %w", err)
 				}
 				observations = append(observations, *obs)
 			}
@@ -272,13 +197,12 @@ func (r *Reactor) handlePackageDriftDetect(ctx context.Context, event *nostr.Eve
 	}
 	drifted := false
 	for _, obs := range observations {
-		if obs.Drifted {
-			drifted = true
-			break
-		}
+		drifted = drifted || obs.Drifted
 	}
-	r.publishPackageDriftEvent(ctx, event, repo, observations, drifted)
-	r.finishPackageIntent(ctx, event, intent, "drift_detect", map[string]any{"operation": "drift_detect", "status": "succeeded", "drifted": drifted, "observations": observations, "repository_last_event_id": repo.LastEventID}, nil)
+	if err := r.publishPackageDriftEvent(ctx, plan.request.Event, plan.repo, observations, drifted); err != nil {
+		return nil, err
+	}
+	return map[string]any{"drifted": drifted, "observations": observations, "repository_last_event_id": plan.repo.LastEventID}, nil
 }
 
 type packageIntentFields struct {
@@ -468,10 +392,11 @@ func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *do
 func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact) error {
 	d := fmt.Sprintf("%s:%s:%s:%s:%s", artifact.RepositoryID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:artifact:" + d}, {"domain", "package"}, {"entity", "artifact"}, {"schema", "bahia.state.package-artifact.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageArtifactRegistry)}, {"artifact", artifact.ID.String()}, {"repository", artifact.RepositoryID.String()}, {"repository_name", artifact.RepositoryName}, {"package", artifact.PackageName}, {"version", artifact.Version}, {"filename", artifact.Filename}, {"sha256", artifact.SHA256}, {"status", string(artifact.Status)}, {"deleted", fmt.Sprintf("%t", artifact.Deleted)}}, Content: mustJSON(artifact)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return err
+	// Advance the wire revision even when two changes occur in one second.
+	if last := nostr.Timestamp(artifact.LastEventCreatedAt.Unix()); event.CreatedAt <= last {
+		event.CreatedAt = last + 1
 	}
-	if _, err := r.publishEvent(ctx, event); err != nil {
+	if err := r.publishPackageState(ctx, event); err != nil {
 		return err
 	}
 	artifact.LastEventID = event.ID.Hex()
@@ -484,10 +409,7 @@ func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publicati
 	if publication.TargetRepositoryID != nil {
 		event.Tags = append(event.Tags, nostr.Tag{"target_repository", publication.TargetRepositoryID.String()})
 	}
-	if err := r.signEvent(ctx, event); err != nil {
-		return err
-	}
-	if _, err := r.publishEvent(ctx, event); err != nil {
+	if err := r.publishPackageState(ctx, event); err != nil {
 		return err
 	}
 	publication.LastEventID = event.ID.Hex()
@@ -495,16 +417,30 @@ func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publicati
 	return r.packageProjection.UpsertPublication(ctx, publication)
 }
 
-func (r *Reactor) publishPackageDriftEvent(ctx context.Context, requestEvent *nostr.Event, repo *domain.PackageRepository, observations []service.PackageDriftObservation, drifted bool) {
+func (r *Reactor) publishPackageDriftEvent(ctx context.Context, requestEvent *nostr.Event, repo *domain.PackageRepository, observations []service.PackageDriftObservation, drifted bool) error {
 	status := "ok"
 	if drifted {
 		status = "drifted"
 	}
 	content := map[string]any{"repository_id": repo.ID.String(), "repository_name": repo.Name, "status": status, "drifted": drifted, "observations": observations, "repository_last_event_id": repo.LastEventID}
 	tags := nostr.Tags{{"domain", "package"}, {"schema", "bahia.result.package-drift.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageDriftEvent)}, {"repository", repo.ID.String()}, {"repository_name", repo.Name}, {"status", status}}
-	if err := r.publishContextVMResult(ctx, requestEvent, content, tags, nil); err != nil {
-		r.zapLog.Warn("publish package drift event failed", zap.Error(err))
+	tags = append(tags, nostr.Tag{"d", "package:drift:" + repo.ID.String()}, nostr.Tag{"e", requestEvent.ID.Hex()}, nostr.Tag{"p", requestEvent.PubKey.Hex()})
+	return r.publishPackageState(ctx, &nostr.Event{Kind: KindNIP38Status, CreatedAt: nostr.Now(), Tags: tags, Content: mustJSON(content)})
+}
+
+// Publication is successful only with an affirmative relay acceptance.
+func (r *Reactor) publishPackageState(ctx context.Context, event *nostr.Event) error {
+	if err := r.signEvent(ctx, event); err != nil {
+		return err
 	}
+	accepted, err := r.publishEvent(ctx, event)
+	if err != nil {
+		return err
+	}
+	if accepted <= 0 {
+		return fmt.Errorf("no relay accepted package event")
+	}
+	return nil
 }
 
 func mustJSON(v any) string {
