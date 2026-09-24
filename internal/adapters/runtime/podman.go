@@ -73,14 +73,14 @@ func (o *PodmanObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 	rootless, err := o.DetectRootless(ctx)
 	if err != nil {
 		// Non-fatal: log but continue with rootless=false assumption.
-		o.DockerObserver.logger.Warn("podman rootless detection failed; assuming rootful",
+		o.logger.Warn("podman rootless detection failed; assuming rootful",
 			zap.Error(err))
 	}
 	warnings = append(warnings, validatePodmanRootlessResources(req.TargetService, rootless)...)
 
 	// Log any Podman-specific warnings.
 	for _, w := range warnings {
-		o.DockerObserver.logger.Warn(w)
+		o.logger.Warn(w)
 	}
 
 	// Delegate to the embedded Docker implementation.
@@ -279,8 +279,11 @@ func probePodmanRootless(ctx context.Context, obs *DockerObserver) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("podman rootless probe: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("podman rootless probe: /info returned %d", resp.StatusCode)
 	}

@@ -189,7 +189,11 @@ func readableRegularFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("open %q: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			return
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("stat %q: %w", path, err)

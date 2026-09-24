@@ -89,7 +89,11 @@ func (p *ExternalAPIProvisioner) Observe(ctx context.Context, req ProvisionCandi
 				health = domain.HealthStatusUnhealthy
 				meta["health_error"] = requestErr.Error()
 			} else {
-				defer resp.Body.Close()
+				defer func() {
+					if closeErr := resp.Body.Close(); closeErr != nil {
+						return
+					}
+				}()
 				meta["health_status_code"] = resp.StatusCode
 				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 					health = domain.HealthStatusUnhealthy

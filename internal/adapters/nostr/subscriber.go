@@ -556,10 +556,6 @@ func isAdoptionScopedInboundKind(kind int) bool {
 	return false
 }
 
-func isControlPlaneRequestKind(kind int) bool {
-	return isCanonicalControlPlaneRequest(kind)
-}
-
 func isLegacyProductionRuntimeKind(kind int) bool {
 	return (kind >= 5941 && kind <= 5999) ||
 		(kind >= 6961 && kind <= 6999) ||

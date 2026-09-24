@@ -171,9 +171,13 @@ func TestLogService_FetchRunLogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.Contains(path, "stdout") {
-			w.Write([]byte(stdoutContent))
+			if _, err := w.Write([]byte(stdoutContent)); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 		} else if strings.Contains(path, "stderr") {
-			w.Write([]byte(stderrContent))
+			if _, err := w.Write([]byte(stderrContent)); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -188,9 +192,13 @@ func TestLogService_FetchRunLogs(t *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.Contains(path, stdoutHash) {
-			w.Write([]byte(stdoutContent))
+			if _, err := w.Write([]byte(stdoutContent)); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 		} else if strings.Contains(path, stderrHash) {
-			w.Write([]byte(stderrContent))
+			if _, err := w.Write([]byte(stderrContent)); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -269,7 +277,7 @@ func TestNewLogService(t *testing.T) {
 	logService := NewLogService(blossomClient, nil, zap.NewNop())
 
 	if logService == nil {
-		t.Error("NewLogService() returned nil")
+		t.Fatal("NewLogService() returned nil")
 	}
 	if logService.blossom != blossomClient {
 		t.Error("NewLogService() did not set blossom client")

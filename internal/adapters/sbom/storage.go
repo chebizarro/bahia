@@ -211,17 +211,17 @@ func (r *StorageResolver) storeToBlossom(ctx context.Context, data []byte, forma
 		return nil, fmt.Errorf("invalid Blossom descriptor hash: %w", err)
 	}
 	if !strings.EqualFold(descriptorHash, expectedHash) {
-		return nil, fmt.Errorf("Blossom descriptor hash %s does not match uploaded payload SHA-256 %s", descriptorHash, expectedHash)
+		return nil, fmt.Errorf("blossom descriptor hash %s does not match uploaded payload SHA-256 %s", descriptorHash, expectedHash)
 	}
 	urlHash, err := extractBlossomHash(desc.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Blossom descriptor URL: %w", err)
 	}
 	if !strings.EqualFold(urlHash, expectedHash) {
-		return nil, fmt.Errorf("Blossom descriptor URL hash %s does not match uploaded payload SHA-256 %s", urlHash, expectedHash)
+		return nil, fmt.Errorf("blossom descriptor URL hash %s does not match uploaded payload SHA-256 %s", urlHash, expectedHash)
 	}
 	if desc.Size != int64(len(data)) {
-		return nil, fmt.Errorf("Blossom descriptor size %d does not match uploaded payload size %d", desc.Size, len(data))
+		return nil, fmt.Errorf("blossom descriptor size %d does not match uploaded payload size %d", desc.Size, len(data))
 	}
 
 	r.logger.Debug("stored SBOM to Blossom",

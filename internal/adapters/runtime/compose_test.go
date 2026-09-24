@@ -168,9 +168,13 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 			w.Header().Set("API-Version", "1.44")
 			w.Header().Set("OSType", "linux")
 		case "/v1.44/containers/running-id/json":
-			fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
+			if _, err := fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`); err != nil {
+				t.Errorf("write container response: %v", err)
+			}
 		case "/v1.44/images/sha256:runningimage/json":
-			fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}`)
+			if _, err := fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}`); err != nil {
+				t.Errorf("write image response: %v", err)
+			}
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -180,7 +184,7 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	if err != nil {
 		t.Fatalf("create docker client: %v", err)
 	}
-	t.Cleanup(func() { cli.Close() })
+	t.Cleanup(func() { checkTestError(t, cli.Close()) })
 	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop(), dockerClient: cli}
 	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
 	if err != nil {
@@ -206,9 +210,13 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 			w.Header().Set("API-Version", "1.44")
 			w.Header().Set("OSType", "linux")
 		case "/v1.44/containers/running-id/json":
-			fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
+			if _, err := fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`); err != nil {
+				t.Errorf("write container response: %v", err)
+			}
 		case "/v1.44/images/sha256:runningimage/json":
-			fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}`)
+			if _, err := fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}`); err != nil {
+				t.Errorf("write image response: %v", err)
+			}
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -218,7 +226,7 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	if err != nil {
 		t.Fatalf("create docker client: %v", err)
 	}
-	t.Cleanup(func() { cli.Close() })
+	t.Cleanup(func() { checkTestError(t, cli.Close()) })
 	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop(), dockerClient: cli}
 	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
 	if err != nil {

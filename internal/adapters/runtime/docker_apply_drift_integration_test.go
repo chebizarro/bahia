@@ -37,7 +37,7 @@ func TestIntegration_DriftInSync_ApplyNoOp(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	// Step 1: Drift detection — simulate observation returning matching hash.
@@ -83,7 +83,7 @@ func TestIntegration_StoppedHashMatch_ApplyRecreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	result, err := observer.ApplyDesiredState(context.Background(), applyTestRequest(spec))
@@ -119,7 +119,7 @@ func TestIntegration_DriftDrifted_ApplyRecreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	// Step 1: Drift detection — observation hash differs from desired.
@@ -168,7 +168,7 @@ func TestIntegration_DriftUnknown_MissingContainer_ApplyCreates(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	// Step 1: Drift detection — service not found.
@@ -222,7 +222,7 @@ func TestIntegration_DriftDrifted_UnhealthyMatchingHash_ApplyRecreates(t *testin
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	// Drift comparator says drifted because health is unacceptable.
@@ -274,7 +274,7 @@ func TestIntegration_DriftDrifted_Unhealthy_PullAlways_Recreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	// With pull=always, even matching hash triggers recreate.
@@ -321,7 +321,7 @@ func TestApplyDesiredState_PullIfNotPresent_HashMatch_NoOp(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -364,7 +364,7 @@ func TestApplyDesiredState_PullNever_HashMatch_NoOp(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -406,7 +406,7 @@ func TestApplyDesiredState_PullNever_HashDrift_RecreatesNoPull(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -442,7 +442,7 @@ func TestApplyDesiredState_SpecPullPolicy_UsedWhenRequestEmpty(t *testing.T) {
 	spec := applyTestSpec()
 	spec.PullPolicy = "never"
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -482,7 +482,7 @@ func TestApplyDesiredState_FoundByName_HashDrift_Recreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -512,7 +512,7 @@ func TestApplyDesiredState_SecretsInjectedInCreateBody(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	secrets := map[string]string{
@@ -598,7 +598,7 @@ func TestApplyDesiredState_StopSucceeds_RemoveFails_NoCreate(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -635,7 +635,7 @@ func TestApplyDesiredState_CreateSucceeds_StartFails_ExplicitError(t *testing.T)
 	mock.failStart = true
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -677,7 +677,7 @@ func TestApplyDesiredState_PullAlways_Failure_NoStopRemoveCreateStart(t *testing
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -727,7 +727,7 @@ func TestApplyDesiredState_DryRun_HashMatch_IsNoOp(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -921,7 +921,7 @@ func TestApplyDesiredState_AdditionalNetworkAttachment_FailureIsWarning(t *testi
 		},
 	}
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -1019,7 +1019,7 @@ func TestApplyDesiredState_AllErrorsExplicit(t *testing.T) {
 			tt.setup(mock)
 			spec := applyTestSpec()
 
-			server, observer := setupApplyTest(mock)
+			server, observer := setupApplyTest(t, mock)
 			defer server.Close()
 
 			req := applyTestRequest(spec)
@@ -1077,7 +1077,7 @@ func TestApplyDesiredState_StopRemoveErrorsExplicit(t *testing.T) {
 				},
 			})
 
-			server, observer := setupApplyTest(mock)
+			server, observer := setupApplyTest(t, mock)
 			defer server.Close()
 
 			req := applyTestRequest(spec)

@@ -478,7 +478,7 @@ func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, 
 		return "", ErrNotConnected
 	}
 	if len(plaintext) == 0 {
-		return "", fmt.Errorf("Signet NIP-44 binary encrypt requires a non-empty plaintext")
+		return "", fmt.Errorf("signet NIP-44 binary encrypt requires a non-empty plaintext")
 	}
 	if mockMode {
 		secret, err := nostr.SecretKeyFromHex(clientSecretKey)
@@ -849,7 +849,7 @@ func (c *Client) ConfiguredPublicKey() (string, error) {
 		}
 		return pubkey, nil
 	}
-	return "", fmt.Errorf("Signet signing pubkey is unavailable before connection")
+	return "", fmt.Errorf("signet signing pubkey is unavailable before connection")
 }
 
 type signetJSONRPCRequest struct {
@@ -878,7 +878,7 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 		return false, nil
 	}
 	if resp.Error != nil {
-		return true, fmt.Errorf("Signet management error %d: %s", resp.Error.Code, resp.Error.Message)
+		return true, fmt.Errorf("signet management error %d: %s", resp.Error.Code, resp.Error.Message)
 	}
 	if out == nil || len(resp.Result) == 0 || string(resp.Result) == "null" {
 		return true, nil
@@ -991,7 +991,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	go func() {
 		for result := range publishResults {
 			if result.Error != nil {
-				c.logger.Warn("Signet management relay rejected publish",
+				c.logger.Warn("signet management relay rejected publish",
 					"relay", result.RelayURL,
 					"error", result.Error,
 				)
@@ -1000,7 +1000,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	}()
 
 	for relayEvent := range responses {
-		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.Event.PubKey, relayEvent.Event.Content)
+		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.PubKey, relayEvent.Content)
 		if err != nil {
 			continue
 		}

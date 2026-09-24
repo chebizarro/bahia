@@ -73,10 +73,10 @@ func TestOSVPURLVersionRulesAndCommitShape(t *testing.T) {
 
 func TestOSVQueryConvenienceMethodsHydrateDetails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/querybatch":
+		switch r.URL.Path {
+		case "/querybatch":
 			_, _ = w.Write([]byte(`{"results":[{"vulns":[{"id":"GHSA-detail","modified":"2026-01-01T00:00:00Z"}]}]}`))
-		case r.URL.Path == "/vulns/GHSA-detail":
+		case "/vulns/GHSA-detail":
 			_, _ = w.Write([]byte(`{"id":"GHSA-detail","summary":"bad package","details":"full details","aliases":["CVE-2026-0001"],"database_specific":{"severity":"HIGH"},"references":[{"url":"https://example.test/advisory"}],"modified":"2026-01-02T00:00:00Z"}`))
 		default:
 			http.NotFound(w, r)

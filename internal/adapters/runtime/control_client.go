@@ -91,7 +91,11 @@ func (c *dockerEngineControlClient) PullImage(ctx context.Context, image string)
 	if err != nil {
 		return fmt.Errorf("executing docker pull: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("docker pull returned %d", resp.StatusCode)
 	}
@@ -136,8 +140,11 @@ func (c *dockerEngineControlClient) StopContainer(ctx context.Context, container
 	if err != nil {
 		return fmt.Errorf("stopping container: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	// 204 = stopped, 304 = already stopped — both are fine.
 	if resp.StatusCode != http.StatusNoContent &&
 		resp.StatusCode != http.StatusOK &&
@@ -157,8 +164,11 @@ func (c *dockerEngineControlClient) RemoveContainer(ctx context.Context, contain
 	if err != nil {
 		return fmt.Errorf("removing container: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("docker remove returned %d", resp.StatusCode)
 	}
@@ -193,8 +203,11 @@ func (c *dockerEngineControlClient) CreateContainer(ctx context.Context, name st
 	if err != nil {
 		return "", fmt.Errorf("creating container: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("docker create returned %d", resp.StatusCode)
 	}
@@ -219,8 +232,11 @@ func (c *dockerEngineControlClient) StartContainer(ctx context.Context, containe
 	if err != nil {
 		return fmt.Errorf("starting container: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("docker start returned %d", resp.StatusCode)
 	}
@@ -250,8 +266,11 @@ func (c *dockerEngineControlClient) ConnectNetwork(ctx context.Context, containe
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("docker network connect returned %d", resp.StatusCode)
 	}

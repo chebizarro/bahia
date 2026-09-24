@@ -562,7 +562,7 @@ func TestStreamLogsFollow(t *testing.T) {
 	if _, err := f.WriteString("second\n"); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	checkTestError(t, f.Close())
 	select {
 	case entry = <-ch:
 		if entry.Message != "second" {

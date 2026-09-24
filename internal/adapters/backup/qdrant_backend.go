@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,9 +47,9 @@ type qdrantSnapshotDesc struct {
 }
 
 type qdrantSnapshotResult struct {
-	Name  string `json:"name"`
-	Size  int64  `json:"size"`
-	Hash  string `json:"hash,omitempty"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Hash string `json:"hash,omitempty"`
 }
 
 type QdrantBackend struct {
@@ -95,7 +96,9 @@ func NewQdrantBackend(opts ...QdrantBackendOption) *QdrantBackend {
 	return b
 }
 
-func (b *QdrantBackend) BackendKind() domain.BackupBackendKind { return domain.BackupBackendQdrantSnapshot }
+func (b *QdrantBackend) BackendKind() domain.BackupBackendKind {
+	return domain.BackupBackendQdrantSnapshot
+}
 
 func (b *QdrantBackend) Capabilities() service.BackendCapabilities {
 	return service.BackendCapabilities{
@@ -175,9 +178,9 @@ func (b *QdrantBackend) VerifySnapshot(ctx context.Context, req service.BackupVe
 	}
 	evidence := map[string]any{
 		"qdrant_verify": map[string]any{
-			"snapshot_file":       snapshotFile,
-			"computed_checksum":   computedChecksum,
-			"snapshot":            req.SnapshotID,
+			"snapshot_file":     snapshotFile,
+			"computed_checksum": computedChecksum,
+			"snapshot":          req.SnapshotID,
 		},
 	}
 	storedChecksum := storedSnapshotChecksum(req.Run)
@@ -191,7 +194,7 @@ func (b *QdrantBackend) VerifySnapshot(ctx context.Context, req service.BackupVe
 	return &service.BackupVerifyResult{Verified: true, Status: domain.BackupVerificationSucceeded, Evidence: evidence}, nil
 }
 
-func (b *QdrantBackend) Restore(ctx context.Context, req service.BackupRestoreRequest) (*service.BackupRestoreResult, error) {
+func (b *QdrantBackend) Restore(ctx context.Context, req service.BackupRestoreRequest) (result *service.BackupRestoreResult, retErr error) {
 	if req.Run == nil || req.SourceRun == nil || req.Repository == nil {
 		return nil, fmt.Errorf("%w: qdrant restore request requires restore run, source run, and repository", service.ErrBackupBackendConfiguration)
 	}
@@ -231,7 +234,11 @@ func (b *QdrantBackend) Restore(ctx context.Context, req service.BackupRestoreRe
 	uploadDir := filepath.Dir(snapshotFile)
 	symlinkName := filepath.Join(uploadDir, targetCollection+".snapshot")
 	if err := os.Symlink(snapshotFile, symlinkName); err == nil {
-		defer os.Remove(symlinkName)
+		defer func() {
+			if removeErr := os.Remove(symlinkName); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				retErr = errors.Join(retErr, removeErr)
+			}
+		}()
 	}
 	if err := api.uploadSnapshot(ctx, targetCollection, snapshotFile); err != nil {
 		return nil, fmt.Errorf("%w: qdrant upload snapshot: %w", service.ErrBackupBackendExecution, err)
@@ -247,7 +254,7 @@ func (b *QdrantBackend) Restore(ctx context.Context, req service.BackupRestoreRe
 			"checksum_sha256":   computedChecksum,
 		},
 	}
-	result := &service.BackupRestoreResult{Verified: false, VerificationStatus: domain.BackupVerificationSkipped, Evidence: evidence}
+	result = &service.BackupRestoreResult{Verified: false, VerificationStatus: domain.BackupVerificationSkipped, Evidence: evidence}
 	snapshots, listErr := api.listSnapshots(ctx, targetCollection)
 	if listErr == nil && len(snapshots) > 0 {
 		result.Verified = true
@@ -338,7 +345,11 @@ func sha256File(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			return
+		}
+	}()
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
 		return "", err
@@ -403,7 +414,11 @@ func (a *defaultQdrantHTTPAPI) health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("qdrant: health check returned status %d", resp.StatusCode)
 	}
@@ -415,7 +430,11 @@ func (a *defaultQdrantHTTPAPI) createSnapshot(ctx context.Context, collection st
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return nil, fmt.Errorf("qdrant: create snapshot API error %d", resp.StatusCode)
 	}
@@ -424,7 +443,7 @@ func (a *defaultQdrantHTTPAPI) createSnapshot(ctx context.Context, collection st
 		return nil, err
 	}
 	var envelope struct {
-		Status string               `json:"status"`
+		Status string                `json:"status"`
 		Result *qdrantSnapshotResult `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -460,7 +479,11 @@ func (a *defaultQdrantHTTPAPI) listSnapshots(ctx context.Context, collection str
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("qdrant: list snapshots API error %d", resp.StatusCode)
 	}
@@ -469,7 +492,7 @@ func (a *defaultQdrantHTTPAPI) listSnapshots(ctx context.Context, collection str
 		return nil, err
 	}
 	var envelope struct {
-		Status string              `json:"status"`
+		Status string               `json:"status"`
 		Result []qdrantSnapshotDesc `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -483,7 +506,11 @@ func (a *defaultQdrantHTTPAPI) downloadSnapshot(ctx context.Context, collection,
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("qdrant: download snapshot API error %d", resp.StatusCode)
 	}
@@ -494,11 +521,13 @@ func (a *defaultQdrantHTTPAPI) downloadSnapshot(ctx context.Context, collection,
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 	hasher := sha256.New()
 	writer := io.MultiWriter(f, hasher)
 	if _, err := io.Copy(writer, resp.Body); err != nil {
-		return "", fmt.Errorf("qdrant: download snapshot write: %w", err)
+		return "", errors.Join(fmt.Errorf("qdrant: download snapshot write: %w", err), f.Close())
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("qdrant: close downloaded snapshot: %w", err)
 	}
 	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
 }
@@ -508,7 +537,11 @@ func (a *defaultQdrantHTTPAPI) uploadSnapshot(ctx context.Context, collection, s
 	if err != nil {
 		return fmt.Errorf("open snapshot file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			return
+		}
+	}()
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return err
@@ -531,7 +564,11 @@ func (a *defaultQdrantHTTPAPI) uploadSnapshot(ctx context.Context, collection, s
 	if err != nil {
 		return fmt.Errorf("upload snapshot: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("qdrant: upload snapshot API error %d", resp.StatusCode)
 	}
@@ -546,7 +583,11 @@ func (a *defaultQdrantHTTPAPI) recoverFromSnapshot(ctx context.Context, collecti
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("qdrant: recover snapshot API error %d", resp.StatusCode)
 	}

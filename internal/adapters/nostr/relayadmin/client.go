@@ -221,7 +221,11 @@ func (c *Client) Call(ctx context.Context, targetRef, method string, params []an
 	if err != nil {
 		return nil, fmt.Errorf("posting nip-86 request to target %q: %w", target.Ref, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if readErr != nil {
 		return nil, fmt.Errorf("reading nip-86 response: %w", readErr)
@@ -392,9 +396,10 @@ func relayHTTPURL(relayURL string) string {
 	if err != nil {
 		return relayURL
 	}
-	if parsed.Scheme == "wss" {
+	switch parsed.Scheme {
+	case "wss":
 		parsed.Scheme = "https"
-	} else if parsed.Scheme == "ws" {
+	case "ws":
 		parsed.Scheme = "http"
 	}
 	return parsed.String()

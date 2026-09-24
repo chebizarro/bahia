@@ -51,7 +51,7 @@ func NewCloudflareBackend(cfg CloudflareConfig, client *http.Client) (*Cloudflar
 		cfg.VerifyTimeout = 30 * time.Second
 	}
 	if strings.TrimSpace(cfg.APIToken) == "" || strings.TrimSpace(cfg.AccountID) == "" || strings.TrimSpace(cfg.TunnelID) == "" {
-		return nil, fmt.Errorf("Cloudflare API token, account ID, and tunnel ID are required")
+		return nil, fmt.Errorf("cloudflare API token, account ID, and tunnel ID are required")
 	}
 	if len(cfg.ZoneIDs) == 0 {
 		return nil, fmt.Errorf("at least one Cloudflare zone ID is required")
@@ -235,7 +235,7 @@ func (b *CloudflareBackend) validatePlan(plan *domain.DesiredPublicRoutePlan) er
 		return fmt.Errorf("route plan does not target this Cloudflare tunnel")
 	}
 	if _, ok := b.cfg.ZoneIDs[plan.Zone]; !ok {
-		return fmt.Errorf("Cloudflare zone %s is not configured", plan.Zone)
+		return fmt.Errorf("cloudflare zone %s is not configured", plan.Zone)
 	}
 	return nil
 }
@@ -457,9 +457,13 @@ func (b *CloudflareBackend) do(ctx context.Context, method, path string, body an
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Cloudflare API request failed")
+		return fmt.Errorf("cloudflare API request failed")
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return fmt.Errorf("read Cloudflare API response: %w", err)
@@ -473,7 +477,7 @@ func (b *CloudflareBackend) do(ctx context.Context, method, path string, body an
 		if len(envelope.Errors) > 0 && strings.TrimSpace(envelope.Errors[0].Message) != "" {
 			message = envelope.Errors[0].Message
 		}
-		return fmt.Errorf("Cloudflare API HTTP %d: %s", resp.StatusCode, message)
+		return fmt.Errorf("cloudflare API HTTP %d: %s", resp.StatusCode, message)
 	}
 	if out != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
 		if err := json.Unmarshal(envelope.Result, out); err != nil {

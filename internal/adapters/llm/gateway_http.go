@@ -168,7 +168,11 @@ func (m *HTTPGatewayRouteManager) do(ctx context.Context, method, gatewayRef, ro
 	if err != nil {
 		return nil, fmt.Errorf("gateway %s %s: %w", method, routeName, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return nil, fmt.Errorf("read gateway response: %w", readErr)

@@ -110,7 +110,7 @@ func (m *ConnectionManager) Changes() <-chan ConnectionState { return m.changes 
 
 func (m *ConnectionManager) Run(ctx context.Context) error {
 	if m == nil || m.client == nil {
-		return fmt.Errorf("Signet connection manager client is not configured")
+		return fmt.Errorf("signet connection manager client is not configured")
 	}
 	backoff := m.cfg.MinBackoff
 	for {
@@ -131,7 +131,7 @@ func (m *ConnectionManager) Run(ctx context.Context) error {
 			return nil
 		}
 		m.recordFailure(err)
-		m.cfg.Logger.Warn("Signet connection unavailable; retrying", "signer", m.cfg.Name, "error", err)
+		m.cfg.Logger.Warn("signet connection unavailable; retrying", "signer", m.cfg.Name, "error", err)
 		if err := waitContext(ctx, m.jitter(backoff)); err != nil {
 			return nil
 		}
@@ -175,7 +175,7 @@ func (m *ConnectionManager) connectAttempt(ctx context.Context) (context.CancelF
 		// Do not start another attempt until this one has observed cancellation
 		// and exited. This keeps exactly one Connect call active per manager.
 		<-result
-		return nil, fmt.Errorf("Signet connection attempt timed out after %s", m.cfg.AttemptTimeout)
+		return nil, fmt.Errorf("signet connection attempt timed out after %s", m.cfg.AttemptTimeout)
 	case <-ctx.Done():
 		cancelLifetime()
 		<-result

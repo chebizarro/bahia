@@ -111,7 +111,7 @@ func (c *Client) StoreAvatar(ctx context.Context, data []byte, contentType, fall
 	if fallbackURL != "" {
 		if err := validateDirectURL(fallbackURL); err != nil {
 			if uploadErr != nil {
-				return nil, fmt.Errorf("Blossom upload failed (%v) and fallback URL is invalid: %w", uploadErr, err)
+				return nil, fmt.Errorf("blossom upload failed (%v) and fallback URL is invalid: %w", uploadErr, err)
 			}
 			return nil, err
 		}
@@ -146,7 +146,7 @@ func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...Avata
 
 	if hash, err := HashFromRef(ref); err == nil {
 		if c == nil {
-			return nil, fmt.Errorf("Blossom client is required to resolve %s refs", AvatarRefPrefix)
+			return nil, fmt.Errorf("blossom client is required to resolve %s refs", AvatarRefPrefix)
 		}
 		data, contentType, err := c.downloadAvatarByHash(ctx, hash, resolveOpts.maxBytes)
 		if err != nil {
@@ -157,7 +157,7 @@ func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...Avata
 
 	if err := validateSHA256Hash(ref); err == nil {
 		if c == nil {
-			return nil, fmt.Errorf("Blossom client is required to resolve raw hash avatar refs")
+			return nil, fmt.Errorf("blossom client is required to resolve raw hash avatar refs")
 		}
 		hash := strings.ToLower(ref)
 		data, contentType, err := c.downloadAvatarByHash(ctx, hash, resolveOpts.maxBytes)
@@ -213,11 +213,11 @@ func (c *Client) avatarStoreResultFromDescriptor(bd *BlobDescriptor, data []byte
 		return nil, fmt.Errorf("invalid Blossom upload hash: %w", err)
 	}
 	if !VerifySHA256(data, hash) {
-		return nil, fmt.Errorf("Blossom upload hash does not match avatar bytes")
+		return nil, fmt.Errorf("blossom upload hash does not match avatar bytes")
 	}
 	urlValue := strings.TrimSpace(bd.URL)
 	if urlValue == "" {
-		return nil, fmt.Errorf("Blossom upload descriptor URL is empty")
+		return nil, fmt.Errorf("blossom upload descriptor URL is empty")
 	}
 	resultType := strings.TrimSpace(bd.Type)
 	if resultType == "" {
@@ -225,7 +225,7 @@ func (c *Client) avatarStoreResultFromDescriptor(bd *BlobDescriptor, data []byte
 	}
 	size := bd.Size
 	if size != int64(len(data)) {
-		return nil, fmt.Errorf("Blossom upload size %d does not match avatar size %d", size, len(data))
+		return nil, fmt.Errorf("blossom upload size %d does not match avatar size %d", size, len(data))
 	}
 	return &AvatarStoreResult{
 		Ref:         RefFromHash(hash),
@@ -267,7 +267,11 @@ func (c *Client) downloadAvatarURL(ctx context.Context, rawURL string, maxBytes 
 	if err != nil {
 		return nil, "", fmt.Errorf("fetching avatar preview: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, "", fmt.Errorf("avatar preview returned %d: %s", resp.StatusCode, string(body))

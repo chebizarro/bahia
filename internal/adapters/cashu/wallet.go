@@ -90,31 +90,6 @@ type MintInfo struct {
 	Version     string `json:"version"`
 }
 
-// getMintInfo fetches mint information.
-func (w *Wallet) getMintInfo(ctx context.Context, mintURL string) (*MintInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", mintURL+"/v1/info", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := w.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("mint returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var info MintInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, err
-	}
-	return &info, nil
-}
-
 // GetBalance fails explicitly because authoritative mint-backed proof state is unavailable.
 func (w *Wallet) GetBalance(mintURL string) (int64, error) {
 	mintURL = normalizeMintURL(mintURL)
@@ -190,8 +165,11 @@ func (w *Wallet) CreateMintQuote(ctx context.Context, mintURL string, amount int
 	if err != nil {
 		return nil, fmt.Errorf("mint quote request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read mint quote response: %w", err)

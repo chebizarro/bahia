@@ -288,7 +288,11 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	if err != nil {
 		return nil, fmt.Errorf("send %s request: %w", method, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPResponseBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s response: %w", method, err)

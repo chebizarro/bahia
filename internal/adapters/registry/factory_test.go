@@ -125,13 +125,15 @@ func TestVerifierAdapter(t *testing.T) {
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && r.URL.Path == "/v2/myorg/myapp/manifests/v1.0":
-			// Annotations fetch
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"annotations": map[string]string{"org.opencontainers.image.title": "myapp"},
-			})
+			checkTestError(
+				// Annotations fetch
+				t, json.NewEncoder(w).Encode(map[string]interface{}{
+					"annotations": map[string]string{"org.opencontainers.image.title": "myapp"},
+				}))
 		case r.URL.Path == "/v2/myorg/myapp/referrers/sha256:abc123":
-			// No referrers
-			json.NewEncoder(w).Encode(map[string]interface{}{"manifests": []interface{}{}})
+			checkTestError(
+				// No referrers
+				t, json.NewEncoder(w).Encode(map[string]interface{}{"manifests": []interface{}{}}))
 		case r.Method == http.MethodHead && r.URL.Path == "/v2/myorg/missing/manifests/v1.0":
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -285,13 +287,13 @@ func TestOCIClient_InspectImage(t *testing.T) {
 			w.Header().Set("Content-Length", "12345")
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && r.URL.Path == "/v2/myorg/myapp/manifests/latest":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"annotations": map[string]string{
 					"org.opencontainers.image.source": "https://github.com/myorg/myapp",
 				},
-			})
+			}))
 		case r.URL.Path == "/v2/myorg/myapp/referrers/sha256:deadbeef":
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"manifests": []map[string]interface{}{
 					{
 						"digest":       "sha256:sig001",
@@ -312,7 +314,7 @@ func TestOCIClient_InspectImage(t *testing.T) {
 						"size":         2000,
 					},
 				},
-			})
+			}))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -376,13 +378,14 @@ func TestOCIClient_InspectImageReturnsTypedAuthError(t *testing.T) {
 
 func TestOCIClient_ListTags(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/myorg/myapp/tags/list" {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+		switch r.URL.Path {
+		case "/v2/myorg/myapp/tags/list":
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"tags": []string{"v1.0", "v1.1", "latest"},
-			})
-		} else if r.URL.Path == "/v2/myorg/empty/tags/list" {
+			}))
+		case "/v2/myorg/empty/tags/list":
 			w.WriteHeader(http.StatusNotFound)
-		} else {
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -411,8 +414,9 @@ func TestOCIClient_ListTags(t *testing.T) {
 
 func TestOCIClient_GetReferrers(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/myorg/myapp/referrers/sha256:abc" {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+		switch r.URL.Path {
+		case "/v2/myorg/myapp/referrers/sha256:abc":
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"manifests": []map[string]interface{}{
 					{
 						"digest":       "sha256:ref1",
@@ -421,11 +425,11 @@ func TestOCIClient_GetReferrers(t *testing.T) {
 						"size":         100,
 					},
 				},
-			})
-		} else if r.URL.Path == "/v2/myorg/myapp/referrers/sha256:norefs" {
+			}))
+		case "/v2/myorg/myapp/referrers/sha256:norefs":
 			// Registry doesn't support referrers.
 			w.WriteHeader(http.StatusNotFound)
-		} else {
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))

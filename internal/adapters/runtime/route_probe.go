@@ -111,8 +111,11 @@ func (RouteProber) ProbeRoute(ctx context.Context, target domain.RouteCanaryTarg
 		observation.Duration = time.Since(started)
 		return observation, nil
 	}
-	defer response.Body.Close()
-
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	observation.Connected = true
 	observation.StatusCode = response.StatusCode
 	if response.TLS != nil {
@@ -175,7 +178,11 @@ func probeControl(ctx context.Context, client *http.Client, target domain.RouteC
 	if err != nil {
 		return control
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	control.Connected = true
 	control.StatusCode = response.StatusCode
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxRouteProbeBodyBytes))

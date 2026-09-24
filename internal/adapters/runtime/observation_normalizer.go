@@ -375,7 +375,11 @@ func inspectContainerForNormalization(ctx context.Context, observer *DockerObser
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker container inspect returned %d", resp.StatusCode)
 	}

@@ -43,7 +43,11 @@ func probeGuestAgent(ctx context.Context, hv Hypervisor, name, imageID string, p
 	if err != nil {
 		return nil, fmt.Errorf("dialing guest agent: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			return
+		}
+	}()
 	// Closing the connection on timeout/cancellation unblocks a pending
 	// Receive; SetDeadline covers transports that honor deadlines.
 	stop := context.AfterFunc(probeCtx, func() { _ = conn.Close() })

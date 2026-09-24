@@ -41,7 +41,9 @@ func newGuestFixture(t *testing.T, agentVersion, vsockPort int) *coreFixture {
 // requests until the connection closes.
 func fakeGuestAgent(t *testing.T, conn net.Conn, imageID string, metrics *protocol.MetricsReport, metricsErr string) {
 	t.Helper()
-	defer conn.Close()
+	defer func() {
+		checkTestError(t, conn.Close())
+	}()
 	codec := protocol.NewCodec(conn)
 	frame, err := codec.Receive()
 	if err != nil {
@@ -67,7 +69,7 @@ func fakeGuestAgent(t *testing.T, conn net.Conn, imageID string, metrics *protoc
 		}
 		switch request := frame.(type) {
 		case protocol.Ping:
-			if err := codec.Send(protocol.Pong{Seq: request.Seq}); err != nil {
+			if err := codec.Send(protocol.Pong(request)); err != nil {
 				return
 			}
 		case protocol.MetricsRequest:
@@ -215,7 +217,9 @@ func TestObserveGuestAgentErrorFrameDegrades(t *testing.T) {
 	fx.hv.vsockDial = func(context.Context, string, uint32) (net.Conn, error) {
 		host, guest := net.Pipe()
 		go func() {
-			defer guest.Close()
+			defer func() {
+				checkTestError(t, guest.Close())
+			}()
 			codec := protocol.NewCodec(guest)
 			if _, err := codec.Receive(); err != nil {
 				return

@@ -12,14 +12,9 @@ import (
 // Fragment directory layout constants
 // ---------------------------------------------------------------------------
 
-const (
-	// bahiaFragmentsDir is the subdirectory under .bahia/ where per-service
-	// fragment overlay files are written.
-	bahiaFragmentsDir = "fragments"
-
-	// fragmentStateFile is the fragment-tracking metadata file inside .bahia/fragments/.
-	fragmentStateFile = "fragment-state.json"
-)
+// bahiaFragmentsDir is the subdirectory under .bahia/ where per-service
+// fragment overlay files are written.
+const bahiaFragmentsDir = "fragments"
 
 // ---------------------------------------------------------------------------
 // FragmentLayout — fragment file path derivation and rendered content
@@ -36,7 +31,6 @@ const (
 //	    env/<service-key>.env               # Per-service env files
 //	    fragments/
 //	      <service-key>.yml                 # Per-service fragment (for eligible changes)
-//	      fragment-state.json               # Fragment metadata (which services have fragments)
 type FragmentLayout struct {
 	// FragmentDir is the directory for fragment files: <compose_dir>/.bahia/fragments/
 	FragmentDir string

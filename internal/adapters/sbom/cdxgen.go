@@ -63,7 +63,7 @@ func (g *CdxgenGenerator) Available(ctx context.Context) error {
 	return err
 }
 
-func (g *CdxgenGenerator) GenerateSBOM(ctx context.Context, req GenerateRequest) (*GenerateResult, error) {
+func (g *CdxgenGenerator) GenerateSBOM(ctx context.Context, req GenerateRequest) (result *GenerateResult, retErr error) {
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}
@@ -91,7 +91,11 @@ func (g *CdxgenGenerator) GenerateSBOM(ctx context.Context, req GenerateRequest)
 	if err := tmp.Close(); err != nil {
 		return nil, fmt.Errorf("closing cdxgen output file: %w", err)
 	}
-	defer os.Remove(outputPath)
+	defer func() {
+		if removeErr := os.Remove(outputPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			retErr = errors.Join(retErr, removeErr)
+		}
+	}()
 
 	args := []string{"-o", outputPath, "--spec-version", g.config.SpecVersion}
 	if strings.TrimSpace(g.config.ProjectType) != "" {

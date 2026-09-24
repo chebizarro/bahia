@@ -141,7 +141,7 @@ func TestNormalize_ExcludesVolatileFields(t *testing.T) {
 	inspected1.State = dockerContainerState{Status: "running"}
 
 	inspected2 := sampleInspectData()
-	inspected2.ID = "container-bbb222" // Different container ID
+	inspected2.ID = "container-bbb222"    // Different container ID
 	inspected2.Name = "/container-name-2" // Different name
 	inspected2.State = dockerContainerState{Status: "running"}
 
@@ -608,7 +608,9 @@ func TestInspectAndNormalizeDocker_Integration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json") {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(inspectJSON)
+			if _, err := w.Write(inspectJSON); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 			return
 		}
 		http.NotFound(w, r)
@@ -641,7 +643,9 @@ func TestInspectAndNormalizeCompose_Integration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json") {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(inspectJSON)
+			if _, err := w.Write(inspectJSON); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 			return
 		}
 		http.NotFound(w, r)
@@ -675,7 +679,9 @@ func TestInspectAndNormalize_ParityViaHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json") {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(inspectJSON)
+			if _, err := w.Write(inspectJSON); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 			return
 		}
 		http.NotFound(w, r)
@@ -775,7 +781,9 @@ func TestInspectAndNormalizeDocker_APIError(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"message":"container not found"}`)
+		if _, err := fmt.Fprint(w, `{"message":"container not found"}`); err != nil {
+			t.Errorf("test operation failed: %v", err)
+		}
 	}))
 	defer server.Close()
 

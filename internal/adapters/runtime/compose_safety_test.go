@@ -170,7 +170,7 @@ func TestSafety_RenderDeterminism_MapKeyStability(t *testing.T) {
 	if alphaIdx < 0 || betaIdx < 0 || middleIdx < 0 || omegaIdx < 0 || zebraIdx < 0 {
 		t.Fatal("not all env keys found in YAML")
 	}
-	if !(alphaIdx < betaIdx && betaIdx < middleIdx && middleIdx < omegaIdx && omegaIdx < zebraIdx) {
+	if alphaIdx >= betaIdx || betaIdx >= middleIdx || middleIdx >= omegaIdx || omegaIdx >= zebraIdx {
 		t.Error("env keys are not in sorted order in rendered YAML")
 	}
 
@@ -181,7 +181,7 @@ func TestSafety_RenderDeterminism_MapKeyStability(t *testing.T) {
 	if aLabelIdx < 0 || mLabelIdx < 0 || zLabelIdx < 0 {
 		t.Fatal("not all label keys found in YAML")
 	}
-	if !(aLabelIdx < mLabelIdx && mLabelIdx < zLabelIdx) {
+	if aLabelIdx >= mLabelIdx || mLabelIdx >= zLabelIdx {
 		t.Error("label keys are not in sorted order in rendered YAML")
 	}
 

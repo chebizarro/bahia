@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -310,30 +309,6 @@ func verifyReleaseFile(ctx context.Context, path, expected string) error {
 	}
 	if digest != "sha256:"+strings.ToLower(strings.TrimSpace(expected)) {
 		return fmt.Errorf("sha256 mismatch for release component")
-	}
-	return nil
-}
-
-func verifyFileSHA256(path, expected string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%s is not a regular file", path)
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return err
-	}
-	actual := hex.EncodeToString(hash.Sum(nil))
-	if !strings.EqualFold(actual, strings.TrimSpace(expected)) {
-		return fmt.Errorf("sha256 mismatch for %s: manifest declares %s but file hashes to %s", path, expected, actual)
 	}
 	return nil
 }

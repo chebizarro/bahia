@@ -198,7 +198,7 @@ func TestFilesystemBackendSyncIsDeterministicAndIdempotent(t *testing.T) {
 	if idxAAAA == -1 || idxA == -1 || idxZ == -1 {
 		t.Fatalf("expected sorted records in content:\n%s", content)
 	}
-	if !(idxA < idxAAAA && idxAAAA < idxZ) {
+	if idxA >= idxAAAA || idxAAAA >= idxZ {
 		t.Fatalf("records not sorted by FQDN, Type, Value:\n%s", content)
 	}
 }

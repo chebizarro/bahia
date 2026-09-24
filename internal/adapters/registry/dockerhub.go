@@ -75,10 +75,13 @@ func (a *DockerHubAuth) Token(ctx context.Context, scope string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("requesting Docker Hub token: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Docker Hub token endpoint returned %d", resp.StatusCode)
+		return "", fmt.Errorf("docker hub token endpoint returned %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryAuthBody+1))
@@ -86,7 +89,7 @@ func (a *DockerHubAuth) Token(ctx context.Context, scope string) (string, error)
 		return "", fmt.Errorf("reading Docker Hub token response: %w", err)
 	}
 	if len(body) > maxRegistryAuthBody {
-		return "", fmt.Errorf("Docker Hub token response exceeds %d bytes", maxRegistryAuthBody)
+		return "", fmt.Errorf("docker hub token response exceeds %d bytes", maxRegistryAuthBody)
 	}
 	var result struct {
 		Token     string `json:"token"`

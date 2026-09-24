@@ -131,8 +131,11 @@ func (c *Client) doList(ctx context.Context, url string) ([]BlobDescriptor, erro
 	if err != nil {
 		return nil, fmt.Errorf("requesting list: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)

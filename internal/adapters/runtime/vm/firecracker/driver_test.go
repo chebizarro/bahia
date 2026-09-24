@@ -54,7 +54,9 @@ func (f *fakeProcs) Start(_ context.Context, req StartVMMRequest) (VMMIdentity, 
 	if err != nil {
 		return VMMIdentity{}, err
 	}
-	file.Close()
+	if err := file.Close(); err != nil {
+		return VMMIdentity{}, err
+	}
 	marker := ""
 	for i, arg := range req.Args {
 		if arg == "--api-sock" && i+1 < len(req.Args) {
@@ -416,7 +418,9 @@ func TestStopGracefulViaAPISocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listening on api socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		checkTestClose(t, listener.Close())
+	}()
 	var gotRequest struct {
 		sync.Mutex
 		method, path, body string
@@ -434,8 +438,9 @@ func TestStopGracefulViaAPISocket(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
-
+	defer func() {
+		checkTestClose(t, server.Close())
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := driver.Stop(ctx, "i1", true); err != nil {
@@ -611,13 +616,17 @@ func TestVsockDialHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listening on vsock socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		checkTestClose(t, listener.Close())
+	}()
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			checkTestClose(t, conn.Close())
+		}()
 		reader := bufio.NewReader(conn)
 		line, err := reader.ReadString('\n')
 		if err != nil || line != "CONNECT 1024\n" {
@@ -633,7 +642,9 @@ func TestVsockDialHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VsockDial: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		checkTestClose(t, conn.Close())
+	}()
 	payload, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		t.Fatalf("reading guest payload: %v", err)
@@ -653,13 +664,17 @@ func TestVsockDialRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() {
+		checkTestClose(t, listener.Close())
+	}()
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			checkTestClose(t, conn.Close())
+		}()
 		reader := bufio.NewReader(conn)
 		_, _ = reader.ReadString('\n')
 		_, _ = conn.Write([]byte("KO\n"))

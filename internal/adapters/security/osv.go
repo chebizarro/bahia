@@ -385,7 +385,11 @@ func (c *OSVClient) doJSON(ctx context.Context, method, endpoint string, payload
 }
 
 func decodeOSVResponse(resp *http.Response, dest any, operation string) error {
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return classifyHTTPError(operation, resp.StatusCode, resp.Header.Get("Retry-After"), strings.TrimSpace(string(body)))
@@ -432,7 +436,7 @@ func classifyHTTPError(operation string, status int, retryAfterHeader string, bo
 func classifyTransportError(operation string, err error) *OSVError {
 	retryable := true
 	var netErr net.Error
-	if errors.As(err, &netErr) && !netErr.Temporary() && !netErr.Timeout() {
+	if errors.As(err, &netErr) && !netErr.Timeout() {
 		retryable = false
 	}
 	return &OSVError{Operation: operation, Retryable: retryable, Reason: "transport error", Err: err}

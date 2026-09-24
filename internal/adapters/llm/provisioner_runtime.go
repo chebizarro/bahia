@@ -175,7 +175,11 @@ func (p *RuntimeProvisioner) probeHealth(ctx context.Context, endpoint, healthPa
 		meta["health_error"] = err.Error()
 		return fallbackOrUnhealthy(fallback), meta
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	meta["health_status_code"] = resp.StatusCode
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return domain.HealthStatusHealthy, meta

@@ -519,8 +519,11 @@ func (p *FluxComfyUIAvatarProvider) GenerateAvatar(ctx context.Context, req Avat
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
@@ -590,8 +593,11 @@ func (p *FluxComfyUIAvatarProvider) fetchImage(ctx context.Context, rawURL strin
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("image fetch error %d", resp.StatusCode)
 	}

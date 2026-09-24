@@ -89,8 +89,11 @@ func (c *AnthropicAgentClient) Next(ctx context.Context, req AgentModelRequest, 
 	if err != nil {
 		return nil, fmt.Errorf("send Anthropic agent request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read Anthropic agent response: %w", err)
@@ -99,7 +102,7 @@ func (c *AnthropicAgentClient) Next(ctx context.Context, req AgentModelRequest, 
 		if isContextLimitResponse(resp.StatusCode, respBody) {
 			return nil, &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
 		}
-		return nil, fmt.Errorf("Anthropic agent API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("anthropic agent API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	modelResp, err := parseAnthropicAgentResponse(resp.StatusCode, respBody)
@@ -341,7 +344,7 @@ func parseAnthropicAgentResponse(statusCode int, body []byte) (*AgentModelRespon
 		if isContextLimitResponse(statusCode, body) || strings.Contains(strings.ToLower(apiResp.Error.Type), "context") {
 			return nil, &ContextTooLargeError{StatusCode: statusCode, Message: msg}
 		}
-		return nil, fmt.Errorf("Anthropic agent API error: %s", msg)
+		return nil, fmt.Errorf("anthropic agent API error: %s", msg)
 	}
 	content := []domain.AssistantAgentContentBlock{}
 	toolCalls := []domain.AssistantAgentToolCall{}
@@ -355,10 +358,10 @@ func parseAnthropicAgentResponse(statusCode int, body []byte) (*AgentModelRespon
 			id := strings.TrimSpace(block.ID)
 			name := strings.TrimSpace(block.Name)
 			if id == "" {
-				return nil, fmt.Errorf("Anthropic agent tool_use %d missing id", i)
+				return nil, fmt.Errorf("anthropic agent tool_use %d missing id", i)
 			}
 			if name == "" {
-				return nil, fmt.Errorf("Anthropic agent tool_use %q missing name", id)
+				return nil, fmt.Errorf("anthropic agent tool_use %q missing name", id)
 			}
 			args := map[string]any{}
 			if len(block.Input) > 0 && string(block.Input) != "null" {
@@ -368,11 +371,11 @@ func parseAnthropicAgentResponse(statusCode int, body []byte) (*AgentModelRespon
 			}
 			toolCalls = append(toolCalls, domain.AssistantAgentToolCall{ID: id, Name: name, Arguments: args})
 		default:
-			return nil, fmt.Errorf("Anthropic agent response has unsupported content block type %q", block.Type)
+			return nil, fmt.Errorf("anthropic agent response has unsupported content block type %q", block.Type)
 		}
 	}
 	if len(content) == 0 && len(toolCalls) == 0 {
-		return nil, fmt.Errorf("Anthropic agent response has no content or tool_use blocks")
+		return nil, fmt.Errorf("anthropic agent response has no content or tool_use blocks")
 	}
 	return &AgentModelResponse{Content: content, ToolCalls: toolCalls, StopReason: anthropicStopReason(apiResp.StopReason, len(toolCalls))}, nil
 }

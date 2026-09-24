@@ -1199,15 +1199,6 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
-func firstTime(values ...time.Time) time.Time {
-	for _, value := range values {
-		if !value.IsZero() {
-			return value
-		}
-	}
-	return time.Time{}
-}
-
 func decoderNotImplemented(kind int) DecodeFunc {
 	return func(*gonostr.Event) (*DecodedProjectionEvent, error) {
 		return nil, fmt.Errorf("decoder for kind %d not yet implemented", kind)

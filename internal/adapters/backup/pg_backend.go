@@ -74,8 +74,6 @@ func (b *PgBackend) Capabilities() service.BackendCapabilities {
 	}
 }
 
-
-
 func (b *PgBackend) run(ctx context.Context, binary string, args []string, extraEnv []string) (string, string, error) {
 	if b.runner == nil {
 		return "", "", fmt.Errorf("%w: pg command runner is not configured", service.ErrBackupBackendConfiguration)
@@ -134,12 +132,18 @@ func (b *PgBackend) CreateSnapshot(ctx context.Context, req service.BackupSnapsh
 	}
 	stdout, stderr, err := b.run(ctx, b.config.PgDumpBinary, args, pgEnv(req.Repository))
 	if err != nil {
-		os.Remove(tmpFile)
-		return nil, fmt.Errorf("%w: pg_dump failed: %w", service.ErrBackupBackendExecution, err)
+		cleanupErr := os.Remove(tmpFile)
+		if errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = nil
+		}
+		return nil, errors.Join(fmt.Errorf("%w: pg_dump failed: %w", service.ErrBackupBackendExecution, err), cleanupErr)
 	}
 	if err := os.Rename(tmpFile, dumpFile); err != nil {
-		os.Remove(tmpFile)
-		return nil, fmt.Errorf("%w: atomic rename of pg_dump output failed: %w", service.ErrBackupBackendConfiguration, err)
+		cleanupErr := os.Remove(tmpFile)
+		if errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = nil
+		}
+		return nil, errors.Join(fmt.Errorf("%w: atomic rename of pg_dump output failed: %w", service.ErrBackupBackendConfiguration, err), cleanupErr)
 	}
 	info, err := os.Stat(dumpFile)
 	if err != nil {

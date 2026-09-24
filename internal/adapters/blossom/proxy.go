@@ -101,8 +101,11 @@ func computeFileSHA256(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
 	}
-	defer f.Close()
-
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			return
+		}
+	}()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("hash file: %w", err)
@@ -139,8 +142,11 @@ func (c *Client) doUploadFile(ctx context.Context, url, path string, size int64,
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
-	defer f.Close()
-
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			return
+		}
+	}()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, f)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -161,8 +167,11 @@ func (c *Client) doUploadFile(ctx context.Context, url, path string, size int64,
 	if err != nil {
 		return nil, fmt.Errorf("uploading: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading upload response: %w", err)
@@ -202,8 +211,11 @@ func (c *Client) HeadByURL(ctx context.Context, url string) (*BlobHead, error) {
 	if err != nil {
 		return nil, fmt.Errorf("head request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	result := &BlobHead{
 		Exists:        resp.StatusCode == http.StatusOK,
 		URL:           url,
@@ -236,7 +248,11 @@ func (c *Client) OpenStreamByURL(ctx context.Context, url string) (*BlobStream, 
 		return nil, fmt.Errorf("opening stream: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				return
+			}
+		}()
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
