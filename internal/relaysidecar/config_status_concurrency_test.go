@@ -3,6 +3,7 @@ package relaysidecar
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -115,4 +116,79 @@ func TestConfigConsumerPublishesStatusesConcurrently(t *testing.T) {
 		stored = append(stored, event)
 	}
 	require.Len(t, stored, 1)
+}
+
+// Correct NIP-01 retention alone cannot guarantee terminal status: these two
+// phases still share one address. Keep this distinction explicit for bahia-1antv.
+func TestConfigStatusNIP01DoesNotImplyAppliedPrecedence(t *testing.T) {
+	for _, winnerStatus := range []string{"accepted", "applied"} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s-wins/reverse=%t", winnerStatus, reverse), func(t *testing.T) {
+				secret := nostr.SecretKey{1}
+				cfg := sidecarTestConfig(t)
+				cfg.PrivateKey = secret.Hex()
+				cfg.Sidecar.ServiceID = "relay-sidecar-test"
+				cfg.Sidecar.Scope = "edge"
+				cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
+				cfg.Sidecar.ConfigTrustedPubkeys = []string{secret.Public().Hex()}
+				server, err := New(cfg, nil)
+				require.NoError(t, err)
+				defer server.store.Close()
+				consumer := server.consumer
+				fixedNow := time.Now().Truncate(time.Second)
+				consumer.now = func() time.Time { return fixedNow }
+				publisher := consumer.publisher
+				var pair []nostr.Event
+				consumer.publisher = configStatusPublisherFunc(func(_ context.Context, event nostr.Event) (int, error) {
+					pair = append(pair, event)
+					return 1, nil
+				})
+				projection := ConfigProjection{ServiceID: cfg.Sidecar.ServiceID, Scope: cfg.Sidecar.Scope, PolicyName: "membership", Schema: configMembershipSchema, Version: 1}
+				found := false
+				for nonce := 1; nonce <= 256; nonce++ {
+					pair = nil
+					desiredID := fmt.Sprintf("%064x", nonce)
+					require.NoError(t, consumer.publishStatus(t.Context(), projection, desiredID, "accepted", ""))
+					require.NoError(t, consumer.publishStatus(t.Context(), projection, desiredID, "applied", ""))
+					lowest := pair[0]
+					if pair[1].ID.Hex() < lowest.ID.Hex() {
+						lowest = pair[1]
+					}
+					if statusNameForTest(t, lowest) == winnerStatus {
+						found = true
+						break
+					}
+				}
+				require.True(t, found, "could not construct the requested lexical winner")
+				require.Equal(t, pair[0].CreatedAt, pair[1].CreatedAt)
+				require.Equal(t, pair[0].Tags.GetD(), pair[1].Tags.GetD())
+				require.NotEqual(t, pair[0].ID, pair[1].ID)
+				if reverse {
+					pair[0], pair[1] = pair[1], pair[0]
+				}
+				for _, event := range pair {
+					require.True(t, event.CheckID())
+					require.True(t, event.VerifySignature())
+					accepted, err := publisher.Publish(t.Context(), event)
+					require.NoError(t, err)
+					require.Equal(t, 1, accepted)
+				}
+				var stored []nostr.Event
+				for event := range server.store.Query(t.Context(), nostr.Filter{Kinds: []nostr.Kind{configStatusKind}}, 10) {
+					stored = append(stored, event)
+				}
+				require.Len(t, stored, 1)
+				require.Equal(t, winnerStatus, statusNameForTest(t, stored[0]))
+			})
+		}
+	}
+}
+
+func statusNameForTest(t *testing.T, event nostr.Event) string {
+	t.Helper()
+	var content struct {
+		Status string `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(event.Content), &content))
+	return content.Status
 }

@@ -166,7 +166,7 @@ func (r *InMemoryNostrEventRepository) FindLatestByKindPubkeyDTag(_ context.Cont
 			continue
 		}
 		candidate := cloneNostrEventRecord(&rec)
-		if newest == nil || candidate.CreatedAt.After(newest.CreatedAt) {
+		if newest == nil || candidate.CreatedAt.After(newest.CreatedAt) || (candidate.CreatedAt.Equal(newest.CreatedAt) && candidate.ID < newest.ID) {
 			newest = &candidate
 		}
 	}
@@ -406,6 +406,9 @@ func stringSet(values []string) map[string]struct{} {
 
 func sortNostrEventRecordsNewestFirst(records []NostrEventRecord) {
 	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
 		return records[i].CreatedAt.After(records[j].CreatedAt)
 	})
 }

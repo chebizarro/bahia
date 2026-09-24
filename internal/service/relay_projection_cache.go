@@ -90,7 +90,8 @@ func (c *RelayProjectionCache) Apply(ctx context.Context, event any) error {
 	if err != nil {
 		return fmt.Errorf("getting relay projection meta for %s/%s: %w", projection.stream, projection.entityKey, err)
 	}
-	if existing != nil && !projection.updatedAt.After(existing.UpdatedAt) {
+	if existing != nil && (projection.updatedAt.Before(existing.UpdatedAt) ||
+		(projection.updatedAt.Equal(existing.UpdatedAt) && projection.sourceEventID >= existing.SourceEventID)) {
 		c.logger.Debug("skipping stale relay projection event", zap.String("stream", projection.stream), zap.String("entity_key", projection.entityKey), zap.String("source_event_id", projection.sourceEventID))
 		return nil
 	}

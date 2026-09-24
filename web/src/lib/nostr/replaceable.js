@@ -2,8 +2,8 @@ import { parseJsonContent } from './content.js';
 import { getDTag, getTagValue } from './tags.js';
 
 export function replaceableKey(event) {
-  if (!event || !event.kind || !event.pubkey) return '';
-  const d = getDTag(event);
+  if (!event || !Number.isInteger(event.kind) || !event.pubkey) return '';
+  const d = event.kind >= 30000 && event.kind < 40000 ? getDTag(event) : '';
   return d ? `${event.kind}:${event.pubkey}:${d}` : `${event.kind}:${event.pubkey}`;
 }
 
@@ -21,7 +21,7 @@ export function shouldAcceptReplaceableEvent(existing, incoming) {
   const existingCreated = Number(existing.created_at || 0);
   if (incomingCreated > existingCreated) return true;
   if (incomingCreated < existingCreated) return false;
-  return String(incoming.id) > String(existing.id);
+  return String(incoming.id) < String(existing.id);
 }
 
 export function upsertReplaceableEvent(map, event) {

@@ -1,0 +1,33 @@
+{
+  "id": "NIP01_REPLACEABLE_ORDERING",
+  "issue": "bahia-cmgb9",
+  "intent": "Browser, Go projections, and the sidecar retain the same NIP-01 replaceable winner regardless of delivery order.",
+  "acceptance_criteria": [
+    {
+      "id": "wire-order",
+      "requirement": "Newer signed created_at wins; at equal timestamps the lowest event ID wins, including tombstones and replay.",
+      "tests": ["web/tests/unit/nip01-replaceable.test.js", "TestSQLiteReplaceNIP01ArrivalOrderAndRestart", "TestRelayProjectionCacheNIP01SameSecondWinnerSurvivesReplay"]
+    },
+    {
+      "id": "projection-order",
+      "requirement": "Domain time cannot revive a losing wire event. Legacy logical-coordinate merges consider only each coordinate's retained winner.",
+      "tests": ["web/tests/unit/nip01-replaceable.test.js", "web/tests/unit/deployment-observability.test.js", "TestDecodedProjectionOrderingUsesWireTimestampNotDomainClock", "TestRelayProjectionWireTimeMigrationRebasesAndInvalidatesOnlyMetadata"]
+    },
+    {
+      "id": "reader-consistency",
+      "requirement": "Latest archive reads and fleet/runtime/FIPS selectors use lowest-ID ties.",
+      "tests": ["TestNostrArchiveLatestQueriesUseLowestIDOnTie", "TestNewestFleetConfigEventUsesTimestampThenEventID", "TestFleetConfigSnapshotTieRejectsHigherID", "TestConcordReplaceableTieKeepsLowestID", "TestRuntimeCapabilityTiesKeepLowestID", "TestRuntimeNIP65TiesKeepLowestID", "TestBridgeTieBreakSameCreatedAtLowestEventIDWins", "web/tests/unit/fleet-config-store.test.js"]
+    },
+    {
+      "id": "workflow-fixture",
+      "requirement": "Successive LLM workflow revisions use successive publication timestamps, not lexical ID growth; replay does not invent an older revision.",
+      "tests": ["web/tests/e2e/llm-route-release-deployment.spec.js"]
+    }
+  ],
+  "related_issue": {
+    "id": "bahia-1antv",
+    "status": "not_resolved_by_tie_break",
+    "reason": "Accepted and applied are separate facts on one addressable status coordinate. Either phase can have the lowest signed ID; NIP-01 does not assign terminal-phase precedence.",
+    "evidence": "TestConfigStatusNIP01DoesNotImplyAppliedPrecedence uses the production signer, publisher, policy and SQLite store in both arrival orders, with both possible phase winners."
+  }
+}

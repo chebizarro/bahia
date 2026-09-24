@@ -47,6 +47,8 @@ func (r *PgRelayProjectionMetaRepository) Upsert(ctx context.Context, meta Relay
 			source_event_id = EXCLUDED.source_event_id,
 			tombstoned = EXCLUDED.tombstoned
 		WHERE relay_projection_meta.updated_at < EXCLUDED.updated_at
+		   OR (relay_projection_meta.updated_at = EXCLUDED.updated_at
+		       AND EXCLUDED.source_event_id < relay_projection_meta.source_event_id)
 	`, meta.Stream, meta.EntityKey, meta.UpdatedAt, meta.SourceEventID, meta.Tombstoned)
 	if err != nil {
 		return fmt.Errorf("upserting relay projection meta: %w", err)

@@ -266,7 +266,12 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) {
 			servicePubkey = derived
 		}
 	}
-	sort.Slice(records, func(i, j int) bool { return records[i].CreatedAt.After(records[j].CreatedAt) })
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.After(records[j].CreatedAt)
+	})
 	seen := map[projectionKey]struct{}{}
 	s.mu.Lock()
 	defer s.mu.Unlock()

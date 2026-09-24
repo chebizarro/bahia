@@ -112,7 +112,8 @@ func (s *sqliteStore) Replace(ctx context.Context, event nostr.Event) error {
 			kind = excluded.kind,
 			pubkey = excluded.pubkey,
 			event_json = excluded.event_json
-		WHERE excluded.created_at > events.created_at`,
+		WHERE excluded.created_at > events.created_at
+		   OR (excluded.created_at = events.created_at AND excluded.id < events.id)`,
 		event.ID.Hex(), int64(event.CreatedAt), int(event.Kind), event.PubKey.Hex(), key, encoded)
 	if err != nil {
 		return fmt.Errorf("replace relay event: %w", err)

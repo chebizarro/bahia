@@ -349,7 +349,7 @@ func (r *Reactor) getProvisioningDraft(ctx context.Context, draftRef, draftEvent
 		if draftRef != "" && !draftMatchesRef(draft, draftRef) {
 			continue
 		}
-		if latest == nil || draft.UpdatedAt.After(latest.UpdatedAt) || (draft.UpdatedAt.Equal(latest.UpdatedAt) && draft.EventID > latest.EventID) {
+		if latest == nil || draft.UpdatedAt.After(latest.UpdatedAt) || (draft.UpdatedAt.Equal(latest.UpdatedAt) && draft.EventID < latest.EventID) {
 			latest = draft
 		}
 	}
@@ -381,7 +381,7 @@ func (r *Reactor) getProvisioningTemplate(ctx context.Context, templateRef strin
 		if template == nil || !templateMatchesRef(template, templateRef) {
 			continue
 		}
-		if latest == nil || template.UpdatedAt.After(latest.UpdatedAt) || (template.UpdatedAt.Equal(latest.UpdatedAt) && template.EventID > latest.EventID) {
+		if latest == nil || template.UpdatedAt.After(latest.UpdatedAt) || (template.UpdatedAt.Equal(latest.UpdatedAt) && template.EventID < latest.EventID) {
 			latest = template
 		}
 	}

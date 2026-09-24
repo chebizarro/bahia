@@ -39,7 +39,7 @@ func (r *relayProjectionMetaMemoryRepo) Upsert(_ context.Context, meta repositor
 
 	key := meta.Stream + "\x00" + meta.EntityKey
 	existing, ok := r.metas[key]
-	if ok && !meta.UpdatedAt.After(existing.UpdatedAt) {
+	if ok && (meta.UpdatedAt.Before(existing.UpdatedAt) || (meta.UpdatedAt.Equal(existing.UpdatedAt) && meta.SourceEventID >= existing.SourceEventID)) {
 		return nil
 	}
 	r.metas[key] = meta
@@ -306,5 +306,32 @@ func assertStoredMeta(t *testing.T, repo repository.RelayProjectionMetaRepositor
 	}
 	if meta.SourceEventID != sourceID || meta.Tombstoned != tombstoned {
 		t.Fatalf("unexpected meta: %+v", meta)
+	}
+}
+
+func TestRelayProjectionCacheNIP01SameSecondWinnerSurvivesReplay(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		repo := newRelayProjectionMetaMemoryRepo()
+		cache := service.NewRelayProjectionCache(repo, zap.NewNop())
+		at := time.Unix(1800000000, 0)
+		low := testProjectionEvent("svc-a", at, "1111")
+		high := testProjectionEvent("svc-a", at, "ffff")
+		low.Tombstone = true
+		order := []*nostr.DecodedProjectionEvent{low, high}
+		if reverse {
+			order = []*nostr.DecodedProjectionEvent{high, low}
+		}
+		var applied *nostr.DecodedProjectionEvent
+		cache.RegisterApplier(nostr.FamilyService, func(_ context.Context, event any) error {
+			applied = event.(*nostr.DecodedProjectionEvent)
+			return nil
+		})
+		for _, event := range append(order, high, low) {
+			requireApply(t, cache, event)
+		}
+		if applied != low {
+			t.Fatalf("applied %v; want lowest-ID tombstone", applied)
+		}
+		assertStoredMeta(t, repo, "service", "svc-a", low.SourceID, true)
 	}
 }

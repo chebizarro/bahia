@@ -100,7 +100,15 @@ func TestNewestFleetConfigEventUsesTimestampThenEventID(t *testing.T) {
 		{ID: firstID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)},
 		{ID: secondID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)},
 	}
-	if got := newestFleetConfigEvent(events); got == nil || got.ID != secondID {
+	if got := newestFleetConfigEvent(events); got == nil || got.ID != firstID {
 		t.Fatalf("newestFleetConfigEvent() = %#v", got)
+	}
+}
+
+func TestFleetConfigSnapshotTieRejectsHigherID(t *testing.T) {
+	low := &FleetConfigSnapshot{EventID: "1111", CreatedAt: 100}
+	high := &FleetConfigSnapshot{EventID: "ffff", CreatedAt: 100}
+	if fleetSnapshotBefore(low, high) || !fleetSnapshotBefore(high, low) {
+		t.Fatal("lower-ID fleet snapshot must supersede higher ID on timestamp tie")
 	}
 }

@@ -113,16 +113,31 @@ export async function installPublicLLMControlplaneHarness(
       return String(url || '').replace(/\/$/, '') === String(expected || '').replace(/\/$/, '');
     }
 
+    const readModelEvents = new Map(loadJson('__bahia_e2e_nostr_events', [])
+      .filter((event) => event.kind === KIND_CONTROL_STATE)
+      .map((event) => [`${event.kind}:${event.pubkey}:${event.tags.find((tag) => tag[0] === 'd')?.[1] || ''}`, event]));
     function nostrEvent({ id, kind, pubkey = servicePubkey, created_at = Math.floor(Date.now() / 1000), tags = [], content = {} }) {
-      return {
+      const serialized = typeof content === 'string' ? content : JSON.stringify(content);
+      const coordinate = `${kind}:${pubkey}:${tags.find((tag) => tag[0] === 'd')?.[1] || ''}`;
+      const previous = kind === KIND_CONTROL_STATE ? readModelEvents.get(coordinate) : null;
+      if (previous?.content === serialized && JSON.stringify(previous.tags) === JSON.stringify(tags)) return previous;
+      // Workflow steps are successive revisions, not competing same-second
+      // replacements. Give each revision its own second and replay it unchanged.
+      if (previous) created_at = Math.max(created_at, previous.created_at + 1);
+      const event = {
         id,
         kind,
         pubkey,
         created_at,
         tags,
-        content: typeof content === 'string' ? content : JSON.stringify(content),
+        content: serialized,
         sig: '0'.repeat(128)
       };
+      if (kind === KIND_CONTROL_STATE) {
+        event.id = `${id}-${created_at}`;
+        readModelEvents.set(coordinate, event);
+      }
+      return event;
     }
 
     function parseContextVMRequest(requestEvent) {

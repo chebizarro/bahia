@@ -49,11 +49,32 @@ export function compareProjectionVersions(left, right) {
   if (!right) return 1;
   if (left.domainTime !== right.domainTime) return left.domainTime > right.domainTime ? 1 : -1;
   if (left.relayTime !== right.relayTime) return left.relayTime > right.relayTime ? 1 : -1;
-  return left.eventId === right.eventId ? 0 : (left.eventId > right.eventId ? 1 : -1);
+  return left.eventId === right.eventId ? 0 : (left.eventId < right.eventId ? 1 : -1);
+}
+
+// Reduce NIP-01 winners first. Domain timestamps only order distinct relay
+// coordinates that project onto the same logical entity (e.g. legacy d-tags).
+export function selectProjectedEvent(event, replaceableEvents, id, watermarks) {
+  const { accepted, key } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return null;
+  if (!watermarks) return event;
+  const state = watermarks.get(id) || { candidates: new Map(), winner: null };
+  const previousWinner = state.winner;
+  state.candidates.set(key, event);
+  watermarks.set(id, state);
+  let winner = null;
+  for (const candidate of state.candidates.values()) {
+    if (!winner || compareProjectionVersions(
+      projectionVersion(parseJsonContent(candidate, {}), candidate),
+      projectionVersion(parseJsonContent(winner, {}), winner)
+    ) > 0) winner = candidate;
+  }
+  state.winner = winner;
+  return winner === previousWinner ? null : winner;
 }
 
 export function applyProjectedEntity(event, targetMap, replaceableEvents, idKeys = ['id'], watermarks = null) {
-  const content = contentWithEventMeta(event);
+  let content = contentWithEventMeta(event);
   let id = getDTag(event);
   for (const key of idKeys) {
     if (content[key]) {
@@ -63,16 +84,10 @@ export function applyProjectedEntity(event, targetMap, replaceableEvents, idKeys
   }
   if (!id) return false;
 
-  const incomingVersion = projectionVersion(content, event);
-  if (watermarks && compareProjectionVersions(incomingVersion, watermarks.get(id)) <= 0) {
-    return false;
-  }
-  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
-  // A corrected logical coordinate can coexist with a legacy d-tag. Domain
-  // updated_at is authoritative across those replaceable coordinates.
-  if (!accepted && !watermarks) return false;
-
-  if (watermarks) watermarks.set(id, incomingVersion);
+  const winner = selectProjectedEvent(event, replaceableEvents, id, watermarks);
+  if (!winner) return false;
+  event = winner;
+  content = contentWithEventMeta(winner);
   if (isReplaceableTombstone(event) || content.deleted === true) {
     targetMap.delete(id);
   } else {

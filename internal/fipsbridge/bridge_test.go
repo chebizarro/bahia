@@ -174,7 +174,7 @@ func TestBridgeSuppressesRedeliveredDuplicate(t *testing.T) {
 	require.Equal(t, npub, bridge.entries["drydock"])
 }
 
-func TestBridgeTieBreakSameCreatedAtHigherEventIDWins(t *testing.T) {
+func TestBridgeTieBreakSameCreatedAtLowestEventIDWins(t *testing.T) {
 	pubkey, npub := testIdentity(t)
 	bridge := newBridgeWithPool(Config{
 		BahiaPubkey:          pubkey,
@@ -199,7 +199,7 @@ func TestBridgeTieBreakSameCreatedAtHigherEventIDWins(t *testing.T) {
 	idA := nostrutil.EventIDHex(evA)
 	idB := nostrutil.EventIDHex(evB)
 	first, second := evA, evB
-	if idA > idB {
+	if idA < idB {
 		first, second = evB, evA
 	}
 	winner := second
@@ -208,7 +208,7 @@ func TestBridgeTieBreakSameCreatedAtHigherEventIDWins(t *testing.T) {
 	require.NoError(t, bridge.HandleEvent(context.Background(), second))
 	require.Len(t, bridge.latest, 1)
 
-	require.Equal(t, nostrutil.EventIDHex(winner), bridge.latest["31976:"+pubkey+":drydock.prod"].EventID, "higher event ID must win")
+	require.Equal(t, nostrutil.EventIDHex(winner), bridge.latest["31976:"+pubkey+":drydock.prod"].EventID, "lowest event ID must win")
 
 	require.NoError(t, bridge.HandleEvent(context.Background(), first))
 	require.Equal(t, nostrutil.EventIDHex(winner), bridge.latest["31976:"+pubkey+":drydock.prod"].EventID, "loser must not displace winner")
