@@ -2,7 +2,10 @@ package domain
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -207,11 +210,12 @@ func (t RouteCanaryTarget) ControlURL() string {
 // it is the scheme default so that the Host header and TLS server name stay
 // canonical for the hostname.
 func (t RouteCanaryTarget) URL() string {
-	host := t.Hostname
+	host := strings.Trim(t.Hostname, "[]")
+	authority := strings.TrimSuffix(net.JoinHostPort(host, ""), ":")
 	if t.Port != 0 && !t.isDefaultPort() {
-		host = fmt.Sprintf("%s:%d", t.Hostname, t.Port)
+		authority = net.JoinHostPort(host, strconv.Itoa(t.Port))
 	}
-	return t.Scheme + "://" + host + t.Path
+	return (&url.URL{Scheme: t.Scheme, Host: authority, Path: t.Path}).String()
 }
 
 func (t RouteCanaryTarget) isDefaultPort() bool {

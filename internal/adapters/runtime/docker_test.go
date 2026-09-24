@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -455,6 +456,44 @@ func TestDockerDeployInvalidPortDoesNotTouchDocker(t *testing.T) {
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("expected no Docker API requests, got %d", got)
+	}
+}
+
+func TestNormalizeDiscoveredPortsRoundTripsComposeBindings(t *testing.T) {
+	tests := []struct {
+		name       string
+		hostIP     string
+		want       string
+		parsedHost string
+	}{
+		{name: "empty wildcard", want: "8080:80"},
+		{name: "IPv4 wildcard", hostIP: "0.0.0.0", want: "8080:80"},
+		{name: "IPv6 wildcard", hostIP: "::", want: "8080:80"},
+		{name: "IPv4", hostIP: "192.0.2.10", want: "192.0.2.10:8080:80", parsedHost: "192.0.2.10"},
+		{name: "IPv6", hostIP: "2001:db8::10", want: "[2001:db8::10]:8080:80", parsedHost: "2001:db8::10"},
+		{name: "bracketed IPv6", hostIP: "[2001:db8::10]", want: "[2001:db8::10]:8080:80", parsedHost: "2001:db8::10"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := normalizeDiscoveredPorts(map[string][]dockerPortPublish{
+				"80/tcp": {{HostIP: test.hostIP, HostPort: "8080"}},
+			})
+			if len(got) != 1 || got[0] != test.want {
+				t.Fatalf("normalizeDiscoveredPorts() = %v, want [%q]", got, test.want)
+			}
+
+			parsed, err := composetypes.ParsePortConfig(got[0])
+			if err != nil {
+				t.Fatalf("compose-go ParsePortConfig(%q): %v", got[0], err)
+			}
+			if len(parsed) != 1 {
+				t.Fatalf("compose-go parsed %d bindings, want 1", len(parsed))
+			}
+			if parsed[0].HostIP != test.parsedHost || parsed[0].Published != "8080" || parsed[0].Target != 80 || parsed[0].Protocol != "tcp" {
+				t.Fatalf("unexpected compose-go binding: %#v", parsed[0])
+			}
+		})
 	}
 }
 

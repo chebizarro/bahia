@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -400,7 +401,7 @@ func normalizeDiscoveredPorts(ports map[string][]dockerPortPublish) []string {
 			mapped := binding.HostPort + ":" + portNumber
 			hostIP := strings.TrimSpace(binding.HostIP)
 			if hostIP != "" && hostIP != "0.0.0.0" && hostIP != "::" {
-				mapped = hostIP + ":" + mapped
+				mapped = net.JoinHostPort(strings.Trim(hostIP, "[]"), mapped)
 			}
 			if proto != "" && proto != "tcp" {
 				mapped += "/" + proto
