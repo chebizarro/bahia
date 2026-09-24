@@ -3,6 +3,7 @@ package nostr
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -758,5 +759,17 @@ func TestCatalogDecodesEnrichedRunWithApplyMetadata(t *testing.T) {
 	}
 	if decoded.Run.ObservationID != "obs-123" {
 		t.Fatalf("observation_id = %q, want obs-123", decoded.Run.ObservationID)
+	}
+}
+
+func TestDecodedProjectionOrderingUsesWireTimestampNotDomainClock(t *testing.T) {
+	event := &gonostr.Event{Kind: canonicalKind(KindCASControlState), CreatedAt: 100, Tags: gonostr.Tags{{"d", "service"}}}
+	event.Content = `{"id":"service","updated_at":"2027-01-15T00:00:00Z"}`
+	decoded, err := decodeServiceProjection(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Timestamp.Equal(time.Unix(100, 0)) {
+		t.Fatalf("ordering timestamp = %v, want signed created_at", decoded.Timestamp)
 	}
 }

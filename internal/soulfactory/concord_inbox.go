@@ -70,13 +70,13 @@ func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient n
 }
 
 // laterConcordEvent keeps the newer of two replaceable events, breaking a
-// created_at tie on the higher event id so every reader converges.
+// created_at tie on the lower event id per NIP-01 so every reader converges.
 func laterConcordEvent(current, candidate *nostr.Event) *nostr.Event {
 	if current == nil {
 		return candidate
 	}
 	if candidate.CreatedAt > current.CreatedAt ||
-		(candidate.CreatedAt == current.CreatedAt && candidate.ID.Hex() > current.ID.Hex()) {
+		(candidate.CreatedAt == current.CreatedAt && candidate.ID.Hex() < current.ID.Hex()) {
 		return candidate
 	}
 	return current

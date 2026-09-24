@@ -140,3 +140,20 @@ func recordEvents(t *testing.T, ctx context.Context, repo *InMemoryNostrEventRep
 		require.True(t, inserted)
 	}
 }
+
+func TestNostrArchiveLatestQueriesUseLowestIDOnTie(t *testing.T) {
+	repo := NewInMemoryNostrEventRepository()
+	for _, id := range []string{"ffff", "1111"} {
+		_, err := repo.Record(t.Context(), &NostrEventRecord{ID: id, Kind: 30900, PubKey: "author", Tags: []byte(`[["d","state"]]`), CreatedAt: time.Unix(100, 0)})
+		require.NoError(t, err)
+	}
+	latest, err := repo.FindLatestByKindPubkeyDTag(t.Context(), 30900, "author", "state", "")
+	require.NoError(t, err)
+	require.Equal(t, "1111", latest.ID)
+	listed, err := repo.ListByKind(t.Context(), 30900, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1111", listed[0].ID)
+	tagged, err := repo.FindByTag(t.Context(), "d", "state", []int{30900}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1111", tagged[0].ID)
+}

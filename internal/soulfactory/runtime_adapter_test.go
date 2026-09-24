@@ -456,3 +456,57 @@ func stringsRepeat(value string, count int) string {
 	}
 	return out
 }
+
+func TestRuntimeCapabilityTiesKeepLowestID(t *testing.T) {
+	controller := newFakeSigner(t)
+	runtime := newFakeSigner(t)
+	now := int64(nostr.Now())
+	content := map[string]interface{}{"schema": domain.SoulFactoryRuntimeCapabilitySchema, "runtime": "openclaw", "methods": []string{RuntimeMethodProvision}, "control_schema": domain.SoulFactoryRuntimeControlSchema, "controller_pubkeys": []string{controller.pubkey}}
+	first := signedRuntimeCapabilityEventAt(t, runtime, now, content, nostr.Tags{{tagParameterizedD, "same"}, {tagRuntime, "openclaw"}})
+	content["label"] = "second"
+	second := signedRuntimeCapabilityEventAt(t, runtime, now, content, nostr.Tags{{tagParameterizedD, "same"}, {tagRuntime, "openclaw"}})
+	low, high := first, second
+	if low.ID.Hex() > high.ID.Hex() {
+		low, high = high, low
+	}
+	for _, order := range [][]*nostr.Event{{low, high}, {high, low}} {
+		transport := &fakeRuntimeAdapterTransport{capabilities: order}
+		adapter, err := NewOpenClawRuntimeAdapter(RuntimeAdapterConfig{ControllerPubkey: controller.pubkey, Signer: controller, Relays: []string{"wss://fallback.example"}, Transport: transport})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := adapter.DiscoverCapabilities(t.Context(), domain.SoulRelayPolicySpec{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ID != low.ID.Hex() {
+			t.Fatalf("capabilities = %+v; want %s", got, low.ID.Hex())
+		}
+	}
+}
+
+func TestRuntimeNIP65TiesKeepLowestID(t *testing.T) {
+	controller := newFakeSigner(t)
+	runtime := newFakeSigner(t)
+	first := signedNIP65Event(t, runtime, nostr.Tags{{"r", "wss://one.example"}})
+	second := signedNIP65Event(t, runtime, nostr.Tags{{"r", "wss://two.example"}})
+	second.CreatedAt = first.CreatedAt
+	if err := runtime.Sign(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	low, high := first, second
+	if low.ID.Hex() > high.ID.Hex() {
+		low, high = high, low
+	}
+	for _, order := range [][]*nostr.Event{{low, high}, {high, low}} {
+		transport := &fakeRuntimeAdapterTransport{nip65: order}
+		adapter, err := NewOpenClawRuntimeAdapter(RuntimeAdapterConfig{ControllerPubkey: controller.pubkey, Signer: controller, Relays: []string{"wss://fallback.example"}, Transport: transport})
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy := adapter.fetchRuntimeNIP65Policy(t.Context(), runtime.pubkey, []string{"wss://fallback.example"})
+		if !reflect.DeepEqual(policy, parseNIP65RelayPolicy(low)) {
+			t.Fatalf("policy = %+v; want lowest-ID event", policy)
+		}
+	}
+}

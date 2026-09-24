@@ -322,7 +322,7 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 		if ev.CreatedAt < cursor.CreatedAt {
 			return nil
 		}
-		if ev.CreatedAt == cursor.CreatedAt && eventID <= cursor.EventID {
+		if ev.CreatedAt == cursor.CreatedAt && eventID >= cursor.EventID {
 			return nil
 		}
 	}

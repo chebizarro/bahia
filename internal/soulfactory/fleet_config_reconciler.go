@@ -111,7 +111,7 @@ func fleetSnapshotBefore(candidate, current *FleetConfigSnapshot) bool {
 	if candidate.CreatedAt != current.CreatedAt {
 		return candidate.CreatedAt < current.CreatedAt
 	}
-	return candidate.EventID < current.EventID
+	return candidate.EventID > current.EventID
 }
 
 func drainFleetErrors(errs <-chan error) []error {
@@ -447,7 +447,7 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 		agentID := tagValue(event.Tags, tagParameterizedD)
 		current := latest[agentID]
 		if current == nil || event.CreatedAt > current.CreatedAt ||
-			(event.CreatedAt == current.CreatedAt && event.ID.Hex() > current.ID.Hex()) {
+			(event.CreatedAt == current.CreatedAt && event.ID.Hex() < current.ID.Hex()) {
 			latest[agentID] = event
 		}
 	}

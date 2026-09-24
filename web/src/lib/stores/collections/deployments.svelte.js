@@ -4,8 +4,7 @@ import {
   getDTag,
   getTagValue,
   isReplaceableTombstone,
-  projectionVersion,
-  compareProjectionVersions,
+  selectProjectedEvent,
   replaceArray,
   sortByNameOrId,
   sortByNewestField
@@ -73,16 +72,15 @@ function applyScopedState(event, targetMap, replaceableEvents, scopeTags, waterm
   const id = composed || content.id || dTag;
   if (!id) return false;
 
-  const incomingVersion = projectionVersion(content, event);
-  if (watermarks && compareProjectionVersions(incomingVersion, watermarks.get(id)) <= 0) return false;
-  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
-  if (!accepted && !watermarks) return false;
-
-  if (watermarks) watermarks.set(id, incomingVersion);
+  const winner = selectProjectedEvent(event, replaceableEvents, id, watermarks);
+  if (!winner) return false;
+  event = winner;
+  const winnerContent = contentWithEventMeta(winner);
+  const winnerValues = Object.fromEntries(scopeTags.map(([field, tag]) => [field, winnerContent[field] || getTagValue(winner, tag)]));
   if (isReplaceableTombstone(event)) {
     targetMap.delete(id);
   } else {
-    targetMap.set(id, { ...content, ...values, id });
+    targetMap.set(id, { ...winnerContent, ...winnerValues, id });
   }
   return true;
 }

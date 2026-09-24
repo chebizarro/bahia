@@ -2070,6 +2070,9 @@ func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 		return fmt.Errorf("hydrate DNS endpoint projection cache: %w", err)
 	}
 	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
 		return records[i].CreatedAt.After(records[j].CreatedAt)
 	})
 	p.dnsCacheHydrated = true

@@ -40,6 +40,32 @@ This guide is the Bahia-specific implementation policy for Nostr event kinds, ev
 
 Use this guide before adding, publishing, subscribing to, decoding, migrating, or documenting any Nostr event.
 
+## Replaceable projection ordering
+
+Follow [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md): retain
+newer signed `created_at`, then the **lowest** event ID on a timestamp tie.
+Replaceable kinds (`0`, `3`, `10000`–`19999`) use `(kind, pubkey)`;
+addressable kinds (`30000`–`39999`) use `(kind, pubkey, d)`. In particular,
+control state `30900`, status `30315`, app data `30078`, and SoulFactory fleet
+config `31953` are addressable. Status labels do not override this rule.
+
+Browser collections reduce each wire coordinate before merging legacy and
+corrected coordinates by domain time. A payload's `updated_at` cannot promote
+a losing same-coordinate event. Go projection-cache ordering uses the signed
+wire timestamp, while decoded domain timestamps remain in the entity payload.
+Migration `000068_relay_projection_wire_time` rebases persisted ordering
+metadata from the source events' signed timestamps; metadata without a stored
+source is invalidated for replay, without deleting canonical events or entities.
+Archive latest queries, relay persistence, and runtime/fleet selectors use the
+same lowest-ID tie-break. Replay must preserve tombstone winners as well.
+
+A later publication within the same second is **not** necessarily a newer
+revision: hashes do not encode causal order. Workflow fixtures asserting a
+succession of states must assign distinct publication seconds, replay stable
+events, and test genuine same-second conflicts separately. Config consumer
+`accepted` and `applied` currently share one status coordinate; correct NIP-01
+retention does not guarantee applied-status durability (`bahia-1antv`).
+
 ## Core rule
 
 Do not allocate or revive a Bahia-specific event kind just because a new semantic exists.

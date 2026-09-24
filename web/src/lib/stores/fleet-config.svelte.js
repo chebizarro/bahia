@@ -117,7 +117,7 @@ export function createFleetConfigStore({
     const parsed = parseFleetConfigEvent(event, auth.pubkey);
     const current = state.event;
     if (current && (Number(current.created_at || 0) > Number(event.created_at || 0)
-      || (Number(current.created_at || 0) === Number(event.created_at || 0) && String(current.id || '') >= String(event.id || '')))) {
+      || (Number(current.created_at || 0) === Number(event.created_at || 0) && String(current.id || '') <= String(event.id || '')))) {
       return false;
     }
     state.event = event;

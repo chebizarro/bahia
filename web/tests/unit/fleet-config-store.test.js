@@ -158,3 +158,18 @@ describe('fleet config store', () => {
     expect(result.errors.join(' ')).toContain('${VAR}');
   });
 });
+
+it('retains the lowest-ID fleet config at equal created_at in either arrival order', () => {
+  const pubkey = 'c'.repeat(64);
+  const low = { id: '1'.repeat(64), kind: 31953, pubkey, created_at: 100,
+    tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
+    content: JSON.stringify(emptyFleetConfigDocument()) };
+  const high = { ...low, id: 'f'.repeat(64) };
+  for (const order of [[low, high], [high, low]]) {
+    const store = createFleetConfigStore({ auth: { pubkey }, client: {} });
+    order.forEach(store.apply);
+    expect(store.state.event.id).toBe(low.id);
+    expect(store.apply(high)).toBe(false);
+    expect(store.apply(low)).toBe(false);
+  }
+});

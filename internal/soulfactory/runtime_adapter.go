@@ -315,7 +315,7 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 		}
 		key := firstNonEmpty(capability.Coordinate, capability.ID)
 		current, exists := latestByCoordinate[key]
-		if !exists || capability.CreatedAt.After(current.CreatedAt) || (capability.CreatedAt.Equal(current.CreatedAt) && capability.ID > current.ID) {
+		if !exists || capability.CreatedAt.After(current.CreatedAt) || (capability.CreatedAt.Equal(current.CreatedAt) && capability.ID < current.ID) {
 			latestByCoordinate[key] = capability
 		}
 	}
@@ -329,7 +329,7 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 		if capabilities[i].Pubkey != capabilities[j].Pubkey {
 			return capabilities[i].Pubkey < capabilities[j].Pubkey
 		}
-		return capabilities[i].ID > capabilities[j].ID
+		return capabilities[i].ID < capabilities[j].ID
 	})
 	return capabilities, nil
 }
@@ -529,7 +529,7 @@ func (a *runtimeControlAdapter) fetchRuntimeNIP65Policy(ctx context.Context, run
 		if event.Kind != nostr.Kind(kindNIP65RelayListMetadata) || event.PubKey.Hex() != runtimePubkey || !validSignedEvent(event) {
 			continue
 		}
-		if latest == nil || event.CreatedAt > latest.CreatedAt || (event.CreatedAt == latest.CreatedAt && event.ID.Hex() > latest.ID.Hex()) {
+		if latest == nil || event.CreatedAt > latest.CreatedAt || (event.CreatedAt == latest.CreatedAt && event.ID.Hex() < latest.ID.Hex()) {
 			latest = event
 		}
 	}

@@ -576,7 +576,7 @@ func decodeServiceProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error)
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyService, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Service = &payload }), nil
+	return baseDecoded(ev, FamilyService, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Service = &payload }), nil
 }
 
 func decodeEnvironmentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -584,7 +584,7 @@ func decodeEnvironmentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyEnvironment, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Environment = &payload }), nil
+	return baseDecoded(ev, FamilyEnvironment, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Environment = &payload }), nil
 }
 
 func decodeBuildProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -592,7 +592,7 @@ func decodeBuildProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyBuild, payload.ID, payload.CreatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Build = &payload }), nil
+	return baseDecoded(ev, FamilyBuild, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Build = &payload }), nil
 }
 
 func decodeArtifactProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -600,7 +600,7 @@ func decodeArtifactProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyArtifact, payload.ID, payload.CreatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Artifact = &payload }), nil
+	return baseDecoded(ev, FamilyArtifact, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Artifact = &payload }), nil
 }
 
 func decodeIntentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -608,7 +608,7 @@ func decodeIntentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyIntent, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Intent = &payload }), nil
+	return baseDecoded(ev, FamilyIntent, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Intent = &payload }), nil
 }
 
 func decodeRunProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -616,7 +616,7 @@ func decodeRunProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyRun, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Run = &payload }), nil
+	return baseDecoded(ev, FamilyRun, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Run = &payload }), nil
 }
 
 func decodePolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -624,7 +624,7 @@ func decodePolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &payload); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyPolicy, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Policy = &payload }), nil
+	return baseDecoded(ev, FamilyPolicy, payload.ID, payload.Deleted, func(out *DecodedProjectionEvent) { out.Policy = &payload }), nil
 }
 
 func decodeStateProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -633,7 +633,7 @@ func decodeStateProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		return nil, err
 	}
 	key := payload.ServiceID + ":" + payload.EnvironmentID
-	return baseDecoded(ev, FamilyState, key, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.State = &payload }), nil
+	return baseDecoded(ev, FamilyState, key, payload.Deleted, func(out *DecodedProjectionEvent) { out.State = &payload }), nil
 }
 
 func decodeLoomJobStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -668,7 +668,7 @@ func decodeLoomJobStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, 
 		SourceEventID: eventIDHex(ev),
 		UpdatedAt:     ev.CreatedAt.Time().UTC(),
 	}
-	return baseDecoded(ev, FamilyLoom, jobID, payload.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
 		out.Tier = 3
 		out.Loom = &DecodedLoom{JobStatus: &payload}
@@ -710,7 +710,7 @@ func decodeLoomJobResultProjection(ev *gonostr.Event) (*DecodedProjectionEvent, 
 		SourceEventID: eventIDHex(ev),
 		FinishedAt:    ev.CreatedAt.Time().UTC(),
 	}
-	return baseDecoded(ev, FamilyLoom, jobID, payload.FinishedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
 		out.Tier = 3
 		out.Loom = &DecodedLoom{JobResult: &payload}
@@ -730,7 +730,7 @@ func decodeLoomJobCancellationProjection(ev *gonostr.Event) (*DecodedProjectionE
 		SourceEventID:   eventIDHex(ev),
 		RequestedAt:     ev.CreatedAt.Time().UTC(),
 	}
-	return baseDecoded(ev, FamilyLoom, jobID, payload.RequestedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
 		out.Tier = 3
 		out.Loom = &DecodedLoom{JobCancellation: &payload}
@@ -789,7 +789,7 @@ func decodeHiveCIWorkflowRunProjection(ev *gonostr.Event) (*DecodedProjectionEve
 			"triggered_by":  triggeredBy,
 		},
 	}
-	return baseDecoded(ev, FamilyHiveCI, run.RunEventID, run.EventCreatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyHiveCI, run.RunEventID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "hive_ci_live"
 		out.Tier = 3
 		out.HiveCI = &DecodedHiveCI{WorkflowRun: &run, QualityGate: gate}
@@ -873,7 +873,7 @@ func decodeHiveCIWorkflowResultProjection(ev *gonostr.Event) (*DecodedProjection
 			"image_digest":     imageDigest,
 		},
 	}
-	return baseDecoded(ev, FamilyHiveCI, result.RunEventID, result.EventCreatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyHiveCI, result.RunEventID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "hive_ci_live"
 		out.Tier = 3
 		out.HiveCI = &DecodedHiveCI{WorkflowResult: &result, QualityGate: gate}
@@ -885,7 +885,7 @@ func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &worker); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), eventPubKeyHex(ev)), worker.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), eventPubKeyHex(ev)), false, func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{Worker: &worker}
 	}), nil
 }
@@ -895,7 +895,7 @@ func decodeWorkerAssignmentProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if err := decodeContent(ev, &state); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), state.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), false, func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{AssignmentState: &state}
 	}), nil
 }
@@ -905,7 +905,7 @@ func decodeWorkerDrainProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err := decodeContent(ev, &status); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), status.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), false, func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{DrainStatus: &status}
 	}), nil
 }
@@ -915,7 +915,7 @@ func decodeWorkerEligibilityProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err := decodeContent(ev, &preview); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), preview.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), false, func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{EligibilityPreview: &preview}
 	}), nil
 }
@@ -972,7 +972,7 @@ func decodeWorkerAdvertisementProjection(ev *gonostr.Event) (*DecodedProjectionE
 		}
 	}
 	worker.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*worker)
-	return baseDecoded(ev, FamilyWorker, worker.PubKey, worker.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Worker = &DecodedWorker{Worker: worker} }), nil
+	return baseDecoded(ev, FamilyWorker, worker.PubKey, false, func(out *DecodedProjectionEvent) { out.Worker = &DecodedWorker{Worker: worker} }), nil
 }
 
 func decodeContinuityProfileProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -980,7 +980,7 @@ func decodeContinuityProfileProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), profile.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Profile: profile} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Profile: profile} }), nil
 }
 
 func decodeFailoverPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -988,7 +988,7 @@ func decodeFailoverPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent,
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), recipe.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
 }
 
 func decodeRecoveryWorkflowProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -996,7 +996,7 @@ func decodeRecoveryWorkflowProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), recipe.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
 }
 
 func decodeStandbyNodeProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1004,7 +1004,7 @@ func decodeStandbyNodeProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), def.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{StandbyNode: def} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{StandbyNode: def} }), nil
 }
 
 func decodeReplicationPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1012,7 +1012,7 @@ func decodeReplicationPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), policy.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{ReplicationPolicy: policy} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{ReplicationPolicy: policy} }), nil
 }
 
 func decodeNIP38StatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1027,7 +1027,7 @@ func decodeHeartbeatProjection(ev *gonostr.Event) (*DecodedProjectionEvent, erro
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), heartbeat.ObservedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Heartbeat: heartbeat} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Heartbeat: heartbeat} }), nil
 }
 
 func decodeContinuityCommandProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1041,7 +1041,7 @@ func decodeContinuityCommandProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), ev.CreatedAt.Time().UTC(), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Command: command} }), nil
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Command: command} }), nil
 }
 
 func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1053,7 +1053,7 @@ func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if eventKindMatches(ev, KindDegradedModeActivation) {
 		previous = domain.ContinuityMode(tagValueLocal(ev.Tags, "previous_profile"))
 	}
-	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), firstTime(status.ChangedAt, ev.CreatedAt.Time().UTC()), false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) {
 		out.Continuity = &DecodedContinuity{Status: &status, PreviousProfile: previous, RecoveryProgressKey: tagValueLocal(ev.Tags, "run")}
 	}), nil
 }
@@ -1119,10 +1119,10 @@ func decodeContent(ev *gonostr.Event, out any) error {
 	return nil
 }
 
-func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, updatedAt time.Time, tombstone bool, fill func(*DecodedProjectionEvent)) *DecodedProjectionEvent {
-	if updatedAt.IsZero() {
-		updatedAt = ev.CreatedAt.Time().UTC()
-	}
+func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, tombstone bool, fill func(*DecodedProjectionEvent)) *DecodedProjectionEvent {
+	// Projection ordering follows the signed wire timestamp, not content's
+	// domain clock: relays may discard a higher-ID event from the same second.
+	updatedAt := ev.CreatedAt.Time().UTC()
 	out := &DecodedProjectionEvent{Kind: eventKindInt(ev), DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Tier: 0, Timestamp: updatedAt.UTC(), SourceID: eventIDHex(ev), Family: family, Tombstone: tombstone}
 	if out.DTag == "" {
 		out.DTag = entityKey

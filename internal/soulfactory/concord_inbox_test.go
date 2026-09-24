@@ -306,3 +306,11 @@ func signedConcordEvent(t *testing.T, author fakeSigner, kind nostr.Kind, tags n
 	}
 	return event
 }
+
+func TestConcordReplaceableTieKeepsLowestID(t *testing.T) {
+	low := &nostr.Event{ID: nostr.ID{1}, CreatedAt: 100}
+	high := &nostr.Event{ID: nostr.ID{255}, CreatedAt: 100}
+	if laterConcordEvent(low, high) != low || laterConcordEvent(high, low) != low {
+		t.Fatal("same-second relay list must keep lowest ID")
+	}
+}

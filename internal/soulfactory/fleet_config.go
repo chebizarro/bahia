@@ -229,7 +229,7 @@ func newestFleetConfigEvent(events []*nostr.Event) *nostr.Event {
 			continue
 		}
 		if latest == nil || event.CreatedAt > latest.CreatedAt ||
-			(event.CreatedAt == latest.CreatedAt && event.ID.Hex() > latest.ID.Hex()) {
+			(event.CreatedAt == latest.CreatedAt && event.ID.Hex() < latest.ID.Hex()) {
 			latest = event
 		}
 	}

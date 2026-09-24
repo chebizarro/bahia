@@ -193,7 +193,7 @@ func (r *PgNostrEventRepository) RecordPublishFailure(ctx context.Context, id, p
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
 func (r *PgNostrEventRepository) FindLatestByKindPubkeyDTag(ctx context.Context, kind int, pubkey, dTag, excludeID string) (*NostrEventRecord, error) {
 	rec := &NostrEventRecord{}
-	err := r.pool.QueryRow(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 AND pubkey = $2 AND id <> $4 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags::jsonb) tag WHERE tag->>0 = 'd' AND tag->>1 = $3) ORDER BY created_at DESC LIMIT 1`, kind, pubkey, dTag, excludeID).
+	err := r.pool.QueryRow(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 AND pubkey = $2 AND id <> $4 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags::jsonb) tag WHERE tag->>0 = 'd' AND tag->>1 = $3) ORDER BY created_at DESC, id ASC LIMIT 1`, kind, pubkey, dTag, excludeID).
 		Scan(&rec.ID, &rec.Kind, &rec.PubKey, &rec.Content, &rec.Tags, &rec.Sig, &rec.CreatedAt, &rec.ReceivedAt, &rec.EntityType, &rec.EntityID,
 			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt)
 	if err != nil {
@@ -210,7 +210,7 @@ func (r *PgNostrEventRepository) ListByKind(ctx context.Context, kind int, limit
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 ORDER BY created_at DESC LIMIT $2`, kind, limit)
+	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 ORDER BY created_at DESC, id ASC LIMIT $2`, kind, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing nostr events by kind: %w", err)
 	}
@@ -286,7 +286,7 @@ func (r *PgNostrEventRepository) FindByTag(ctx context.Context, tagName, tagValu
 		query += ` AND kind = ANY($3)`
 		args = append(args, kinds)
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT $` + fmt.Sprint(len(args)+1)
+	query += ` ORDER BY created_at DESC, id ASC LIMIT $` + fmt.Sprint(len(args)+1)
 	args = append(args, limit)
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -301,7 +301,7 @@ func (r *PgNostrEventRepository) ListByEntity(ctx context.Context, entityType st
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at DESC LIMIT $3`, entityType, entityID, limit)
+	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at DESC, id ASC LIMIT $3`, entityType, entityID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing nostr events by entity: %w", err)
 	}
