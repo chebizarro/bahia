@@ -19,6 +19,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
+	"github.com/openagentsinc/bahia/internal/soulfactory/saga"
+	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +37,7 @@ type soulFactorySignerClient interface {
 }
 
 type soulFactoryRuntime struct {
+	sagaMonitor *saga.Monitor
 	reactor     *soulfactory.Reactor
 	integration *soulfactory.BahiaIntegration
 	provisioner soulfactory.ProvisioningEngine
@@ -136,7 +139,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	}
 
 	bahiaIntegration, err := newSoulFactoryBahiaIntegration(registry, soulfactory.BahiaIntegrationConfig{
-		OrganizationID:    sf.OrganizationID,
+		OrganizationID:     sf.OrganizationID,
 		AgentEnvironmentID: sf.AgentEnvironmentID,
 	}, slogLogger)
 	if err != nil {
@@ -198,6 +201,15 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		_ = closeSigner()
 		return nil, fmt.Errorf("configuring governed SoulFactory provisioning: %w", err)
 	}
+	instance := strings.TrimSpace(cfg.Telemetry.ServiceName)
+	if instance == "" {
+		instance = "bahia"
+	}
+	monitor, err := governedProvisioner.ProvisioningMonitor(instance, version.Semantic())
+	if err != nil {
+		_ = closeSigner()
+		return nil, fmt.Errorf("configuring provisioning monitor: %w", err)
+	}
 	if err := reactor.InstallProvisioningEngine(governedProvisioner); err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -211,6 +223,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		reactor:     reactor,
 		integration: bahiaIntegration,
 		provisioner: governedProvisioner,
+		sagaMonitor: monitor,
 		runner:      &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
 		connection:  connection,
 		close:       closeSigner,

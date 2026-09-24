@@ -203,21 +203,39 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 	return receipt, err
 }
 
+// Canonical LLM deployment approval ContextVM methods. These match the web
+// console (public-controlplane.svelte.js) and the legacy-kind migration
+// manifest (kinds.LLMDeploymentApproval -> approval/llm-approve), following the
+// approval/<domain>-approve convention used by backup and assistant approvals.
+const (
+	ContextVMMethodLLMApprovalApprove = "approval/llm-approve"
+	ContextVMMethodLLMApprovalReject  = "approval/llm-reject"
+)
+
 // PublishLLMApprovalRequest publishes a ContextVM approval request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd LLMApprovalCommand) (*LLMCommandReceipt, error) {
+	decision := strings.ToLower(strings.TrimSpace(cmd.Decision))
+	method := ContextVMMethodLLMApprovalApprove
+	switch decision {
+	case "approve":
+	case "reject":
+		method = ContextVMMethodLLMApprovalReject
+	default:
+		return nil, fmt.Errorf("decision must be approve or reject")
+	}
 	content := map[string]any{
 		"intent_id": cmd.IntentID.String(),
-		"decision":  cmd.Decision,
+		"decision":  decision,
 	}
 	tags := nostr.Tags{
 		{"intent", cmd.IntentID.String()},
-		{"decision", cmd.Decision},
+		{"decision", decision},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, "llm/approval", KindNIP38Status, KindContextVMMessage, tags, content)
+	receipt, err := p.publish(ctx, method, KindNIP38Status, KindContextVMMessage, tags, content)
 	if receipt != nil {
 		receipt.IntentID = cmd.IntentID.String()
-		receipt.Decision = cmd.Decision
+		receipt.Decision = decision
 	}
 	return receipt, err
 }

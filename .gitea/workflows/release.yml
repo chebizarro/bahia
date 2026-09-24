@@ -1,0 +1,55 @@
+name: Release (Hive CI)
+
+# The seeded pipeline maps this path to the backend service. Loom checks out the
+# authorized commit and supplies registry credentials via its Docker profile.
+# One signed build result carries one artifact; this workflow does not deploy.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_REPO: harbor.sharegap.net/cascadia/bahia
+    steps:
+      - name: Build and publish immutable backend artifact
+        run: |
+          set -euo pipefail
+          ref="${LOOM_CI_REF:-${GITHUB_REF:-}}"
+          [[ "$ref" == refs/heads/master ]] || { echo "ERROR: release requires master" >&2; exit 1; }
+          sha=$(git rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: invalid checkout SHA" >&2; exit 1; }
+          [[ "$(git rev-parse "${ref}^{commit}")" == "$sha" ]] || { echo "ERROR: checkout does not match requested ref" >&2; exit 1; }
+
+          # Clone credentials and the result signer must not reach build scripts.
+          if [[ "${HIVE_CI_GIT_USERNAME+x}" == x || "${HIVE_CI_GIT_PASSWORD+x}" == x || "${HIVE_CI_NSEC+x}" == x ]]; then
+            echo "ERROR: Hive CI credentials reached workflow-visible environment" >&2
+            exit 1
+          fi
+          command -v docker >/dev/null
+          docker version >/dev/null
+          tag="master-${sha:0:7}"
+          image="${IMAGE_REPO}:${tag}"
+          docker build \
+            --build-arg VERSION_BASE=0.1.0 \
+            --build-arg GIT_COMMIT="$sha" \
+            --build-arg VERSION="0.1.0-${sha}" \
+            --tag "$image" .
+          docker push "$image"
+
+          repo_digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image" 2>/dev/null || true)
+          digest="${repo_digest##*@}"
+          if [[ "$digest" == "$repo_digest" ]]; then
+            digest=""
+          fi
+          if [[ -z "$digest" ]] && docker buildx version >/dev/null 2>&1; then
+            digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: immutable digest unavailable" >&2; exit 1; }
+          printf 'BAHIA_ARTIFACT={"image_repo":"%s","image_tag":"%s","image_digest":"%s"}\n' \
+            "$IMAGE_REPO" "$tag" "$digest"

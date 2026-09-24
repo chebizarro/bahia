@@ -1,5 +1,13 @@
 # Bahia Nostr Event Specification
 
+## Canonical command envelopes
+
+Artifact, deployment-policy, and tool-approval publishers serialize JSON-RPC
+requests in ContextVM kind `25910`, with the request ID and `_meta.progressToken`
+correlated to the `d` tag. Retired request kinds `5985`–`5989` and `7977` are not
+writer contracts. A submitted receipt proves relay acceptance only; discovery
+separately reports registered server methods. See the [publisher contract](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+
 ## Virtualization v1
 
 | Surface | Kind | Schema / coordinate |

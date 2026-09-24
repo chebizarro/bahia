@@ -1,5 +1,13 @@
 # Bahia Nostr Control-Plane Events
 
+## Artifact, policy, and approval commands
+
+Use ContextVM `artifact/register`, `policy/create`, `policy/update`, `policy/delete`,
+`policy/evaluate`, and `tool/approval-response`, not retired numeric request kinds.
+LLM approvals use `approval/llm-approve` / `approval/llm-reject`; DNS record changes
+use `dns/record-set`. Check the advertised method list before assuming a server
+consumer exists. See the [publisher contract](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+
 ## Virtualization ContextVM methods
 
 Use signed kind-25910 JSON-RPC intents (or configured wrapping), never REST

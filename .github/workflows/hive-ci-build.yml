@@ -122,7 +122,7 @@ jobs:
           # Strip everything up to and including '@' to get the bare sha256:...
           digest="${raw##*@}"
 
-          if [[ -z "${digest}" || "${digest}" == "${raw}" ]]; then
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "ERROR: could not resolve manifest digest for ${IMAGE_REPO}:${tag}" >&2
             exit 1
           fi
@@ -184,4 +184,9 @@ jobs:
               print(f"ERROR: missing or empty fields in .hiveci-result.json: {missing}", file=sys.stderr)
               sys.exit(1)
           print("Validation passed:", {k: r[k] for k in required})
+          print("BAHIA_ARTIFACT=" + json.dumps({
+              "image_repo": r["imageRepo"],
+              "image_tag": r["imageTag"],
+              "image_digest": r["imageDigest"],
+          }, separators=(",", ":")))
           PY

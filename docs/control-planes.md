@@ -1,5 +1,13 @@
 # Bahia Control Planes
 
+## Publisher and discovery boundaries
+
+Artifact, policy, and tool-approval publishers use canonical ContextVM envelopes;
+LLM approval selects `approval/llm-approve` or `approval/llm-reject`. Discovery
+advertises registered server methods only, so outbound publisher support is not
+proof that the server can execute the request. AI/ML discovery remains read-model
+only until mutation consumers exist. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+
 ## Virtualization control boundary
 
 `virtualization-host`, `vm-image`, `persistent-vm`, `execution-plane`,

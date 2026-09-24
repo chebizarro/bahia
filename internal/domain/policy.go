@@ -69,6 +69,8 @@ type PolicyResult struct {
 	Passed      bool              `json:"passed"`
 	Enforcement PolicyEnforcement `json:"enforcement"`
 	Violations  []PolicyViolation `json:"violations,omitempty"`
+	// RequiresApproval is true when the policy contains a require_approval rule.
+	RequiresApproval bool `json:"requires_approval,omitempty"`
 }
 
 // PolicyViolation records a single rule failure.
@@ -84,6 +86,28 @@ type PolicyEvaluation struct {
 	Results  []PolicyResult `json:"results"`
 	Warnings int            `json:"warnings"`
 	Blockers int            `json:"blockers"`
+	// RequiresApproval is true when any applicable policy demands manual
+	// approval before the deployment may proceed.
+	RequiresApproval bool `json:"requires_approval,omitempty"`
+}
+
+// PolicyRequiresApproval reports whether the policy is enabled and contains a
+// require_approval rule.
+//
+// RuleRequireApproval is an approval gate rather than an artifact check: it
+// never produces a violation, but any enabled applicable policy containing it
+// forces matching deployment intents into pending approval (exactly like a
+// protected environment), regardless of the policy's enforcement mode.
+func PolicyRequiresApproval(policy DeploymentPolicy) bool {
+	if !policy.Enabled {
+		return false
+	}
+	for _, rule := range policy.Rules {
+		if rule.Type == RuleRequireApproval {
+			return true
+		}
+	}
+	return false
 }
 
 // IsBlocked returns true if any blocking policy failed.

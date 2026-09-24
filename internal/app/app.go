@@ -299,8 +299,12 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("image verification disabled, artifacts will not be verified against registry")
 	}
 
+	// Policy service gates both artifact and runtime-release deployment intents.
+	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
+
 	// Registry service.
 	registryOptions := []service.RegistryOption{
+		service.WithDeploymentApprovalPolicy(policySvc),
 		service.WithManualArtifactRegistration(cfg.HiveCI.AllowManualArtifactRegistration),
 		service.WithLiveArtifactImport(cfg.HiveCI.AllowLiveArtifactImport),
 	}
@@ -610,6 +614,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}()
 	if soulFactoryRuntime != nil {
+		telemetryProvider.SetOpenClawSagaExporter(soulFactoryRuntime.sagaMonitor.WritePrometheus)
 		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerTier(Tier2), RunnerRequired(false))
 		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection, Tier2)
 		bgManager.RegisterWithOptions(soulFactoryRuntime.runner, RunnerTier(Tier2))
@@ -823,9 +828,6 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
-
-	// Policy service.
-	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
 
 	var dnsProjector *reconcile.DNSProjector
 	var dnsZones []domain.DNSZone

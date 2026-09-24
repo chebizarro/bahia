@@ -29,6 +29,15 @@ The docker-compose.yml file defines three services:
 ## Usage
 
 ### Start the stack
+
+Set `BAHIA_NOSTR_PRIVATE_KEY` through your protected local environment and set
+`PUBLIC_BAHIA_SERVICE_PUBKEYS` to its trusted public signer identity (64-character
+hex). Compose passes the public bootstrap values to both the web build and its
+runtime. It refuses to start with an empty trusted-service list; the web container
+does not infer trusted service identity from an unsigned relay information document.
+An image whose bootstrap placeholders were replaced at build time needs no runtime
+bootstrap variables when run outside this Compose stack.
+
 ```bash
 docker compose up --build
 ```
