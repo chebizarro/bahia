@@ -1652,6 +1652,7 @@ func New(cfg *config.Config) (*App, error) {
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
+		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)

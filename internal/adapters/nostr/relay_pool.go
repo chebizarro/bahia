@@ -775,6 +775,20 @@ func (m *MergedSubscription) HasRealEOSE() bool {
 	return m.active.hasRealEOSE()
 }
 
+// AllRelaysReachedEOSE distinguishes complete history from terminal exhaustion.
+// The aggregate EndOfStoredEvents channel can also close on CLOSED/disconnect.
+func (m *MergedSubscription) AllRelaysReachedEOSE() bool {
+	if m == nil {
+		return false
+	}
+	if m.active == nil {
+		return m.HasRealEOSE()
+	}
+	m.active.mu.Lock()
+	defer m.active.mu.Unlock()
+	return m.active.initialRemaining == 0 && !m.active.initialWithoutEOSE && m.active.realEOSECount > 0
+}
+
 // Close cancels all relay subscriptions represented by the merged subscription.
 func (m *MergedSubscription) Close() {
 	if m == nil || m.closeFn == nil {
@@ -882,14 +896,15 @@ type activeMergedSubscription struct {
 	eventSources *sync.Map
 	dedup        *EventDeduplicator
 
-	mu               sync.Mutex
-	groups           map[string]*activeRelayGroup
-	initialRemaining int
-	initialPending   map[string]int
-	realEOSECount    int
-	eoseOnce         sync.Once
-	workers          sync.WaitGroup
-	closeOnce        sync.Once
+	mu                 sync.Mutex
+	groups             map[string]*activeRelayGroup
+	initialRemaining   int
+	initialWithoutEOSE bool
+	initialPending     map[string]int
+	realEOSECount      int
+	eoseOnce           sync.Once
+	workers            sync.WaitGroup
+	closeOnce          sync.Once
 }
 
 func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel context.CancelFunc, filters []nostr.Filter, subs []relaySubscription) *MergedSubscription {
@@ -974,10 +989,23 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 			}
 		}
 		if initial {
-			s.markInitialTerminal(relaySub.relayURL)
+			s.markInitialTerminal(relaySub.relayURL, realEOSE)
 		}
 	}
 	defer markTerminal(false)
+	forward := func(event nostr.Event) bool {
+		eventID := event.ID.Hex()
+		if eventID != "" && s.dedup.IsDuplicate(eventID) {
+			return true
+		}
+		s.eventSources.LoadOrStore(eventID, relaySub.relayURL)
+		select {
+		case s.events <- &event:
+			return true
+		case <-s.ctx.Done():
+			return false
+		}
+	}
 
 	for eoseCh != nil || eventsCh != nil || closedCh != nil {
 		select {
@@ -985,6 +1013,22 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 			return
 		case _, ok := <-eoseCh:
 			if ok || eoseCh != nil {
+				// A relay may have buffered EVENTs when EOSE becomes readable.
+				// Forward those before announcing that its history is complete.
+			drain:
+				for {
+					select {
+					case event, open := <-eventsCh:
+						if !open {
+							break drain
+						}
+						if !forward(event) {
+							return
+						}
+					default:
+						break drain
+					}
+				}
 				markTerminal(true)
 			}
 			eoseCh = nil
@@ -1006,23 +1050,18 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 				}
 				return
 			}
-			event := ev
-			eventID := event.ID.Hex()
-			if eventID != "" && s.dedup.IsDuplicate(eventID) {
-				continue
-			}
-			s.eventSources.LoadOrStore(eventID, relaySub.relayURL)
-			select {
-			case s.events <- &event:
-			case <-s.ctx.Done():
+			if !forward(ev) {
 				return
 			}
 		}
 	}
 }
 
-func (s *activeMergedSubscription) markInitialTerminal(relayURL string) {
+func (s *activeMergedSubscription) markInitialTerminal(relayURL string, realEOSE bool) {
 	s.mu.Lock()
+	if !realEOSE {
+		s.initialWithoutEOSE = true
+	}
 	if s.initialRemaining > 0 {
 		s.initialRemaining--
 	}

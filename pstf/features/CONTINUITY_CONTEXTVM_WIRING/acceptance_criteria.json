@@ -1,0 +1,13 @@
+{
+  "feature_id": "CONTINUITY_CONTEXTVM_WIRING",
+  "issue": "bahia-ir8v0",
+  "scope": "Continuity handlers only; tool approval and package handlers are sibling work.",
+  "criteria": [
+    {"id": "C1", "behavior": "Signed plain and wrapped ContextVM failover/recovery requests reach the real executor behind the fleet operator gate.", "tests": ["TestContinuityContextVMReachableAuthorizedAndReplaySafe", "TestContinuityContextVMPropagatesExecutionFailure"]},
+    {"id": "C2", "behavior": "Unauthorized authors and empty/nil allowlists cause no continuity storage reads or writes.", "tests": ["TestContinuityContextVMReachableAuthorizedAndReplaySafe", "TestContinuityDefinitionsFailClosedBeforeStorage", "TestContinuityContextVMInvalidParamsDoNotAccessStore"]},
+    {"id": "C3", "behavior": "Author/kind-scoped definitions hydrate from history and remain live; completion requires real EOSE, never elapsed time, CLOSED or exhaustion.", "tests": ["TestContinuityDefinitionsEOSEBackfillAndRealtime", "TestContinuityDefinitionsClosedAndCancellationAreNotEOSE", "TestContinuityBackfillRequiresEOSEFromEveryInitialSubscription", "TestContinuityBackfillForwardsBufferedHistoryBeforeEOSE", "TestContinuityCommandWaitsForHistoryBeforeStorage"]},
+    {"id": "C4", "behavior": "Definition replay is mutation-free and equal-timestamp ordering converges; command replay reuses retained outcomes, including after transport restart.", "tests": ["TestContinuityDefinitionsEOSEBackfillAndRealtime", "TestContinuityDefinitionsEqualTimestampUsesLowestID", "TestContinuityContextVMReachableAuthorizedAndReplaySafe", "TestContinuityContextVMReplayAfterTransportRestart"]},
+    {"id": "C5", "behavior": "Missing method registration yields -32601; invalid signatures and unsupported standby definitions are rejected before storage.", "tests": ["TestContinuityMissingRegistrationIsMethodNotFound", "TestContinuityDefinitionsRejectInvalidSignatureAndStandby"]}
+  ],
+  "deliberately_unwired": {"kind": 31402, "handler": "handleStandbyNodeDefinition", "reason": "No inventory consumer exists; do not introduce a competing placement/authority source just to eliminate unused lint."}
+}
