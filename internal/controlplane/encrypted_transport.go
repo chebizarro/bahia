@@ -1241,14 +1241,6 @@ func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
 	return len(t.authorizedPubkeys) > 0 && slices.Contains(t.authorizedPubkeys, pubkey)
 }
 
-func (t *EncryptedRequestTransport) matchesRoutingTags(event *nostr.Event) bool {
-	if event == nil || !tagContains(event.Tags, EncryptedRequestRoutingTag, EncryptedRequestWireVersion) {
-		return false
-	}
-	servicePubkey := t.responder.ServicePubkey()
-	return servicePubkey != "" && tagContains(event.Tags, tagRecipientPubkey, servicePubkey)
-}
-
 func tagContains(tags nostr.Tags, name, value string) bool {
 	for _, tag := range tags {
 		if len(tag) >= 2 && tag[0] == name && tag[1] == value {
@@ -1256,14 +1248,4 @@ func tagContains(tags nostr.Tags, name, value string) bool {
 		}
 	}
 	return false
-}
-
-func (t *EncryptedRequestTransport) publishError(ctx context.Context, event *nostr.Event, code, message string) {
-	if t.responder == nil {
-		t.logger.Warn("encrypted request responder unavailable", zap.String("event_id", event.ID.Hex()), zap.String("code", code))
-		return
-	}
-	if err := t.responder.PublishEncryptedResult(ctx, event, "error", nil, &ResultError{Code: code, Message: message}); err != nil {
-		t.logger.Error("publish encrypted error result failed", zap.String("event_id", event.ID.Hex()), zap.String("code", code), zap.Error(err))
-	}
 }

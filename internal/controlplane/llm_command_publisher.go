@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -19,11 +18,11 @@ type NostrEventPublisher interface {
 // LLMCommandPublisher emits canonical LLM control-plane request events.
 type LLMCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
 // NewLLMCommandPublisher creates a publisher for MCP-originated LLM commands.
-func NewLLMCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *LLMCommandPublisher {
+func NewLLMCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *LLMCommandPublisher {
 	return &LLMCommandPublisher{publisher: publisher, signer: signer}
 }
 

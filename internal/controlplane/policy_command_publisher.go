@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -21,10 +20,10 @@ const ContextVMMethodPolicyEvaluate = "policy/evaluate"
 // migration inputs only and are never published.
 type PolicyCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewPolicyCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *PolicyCommandPublisher {
+func NewPolicyCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *PolicyCommandPublisher {
 	return &PolicyCommandPublisher{publisher: publisher, signer: signer}
 }
 

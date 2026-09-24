@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"context"
-	"net/http"
 	"reflect"
 	"regexp"
 	"strings"
 	"time"
 
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/openagentsinc/bahia/internal/api/dto"
-	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -65,65 +62,6 @@ func WithAdoptionMetrics(metrics adoptionMetrics) AdoptionHandlerOption {
 	}
 }
 
-func (h *AdoptionHandler) recordScan(r *http.Request, targets []dto.AdoptionTargetRequest, candidateCount, redactedEnvKeyCount, redactedLabelKeyCount int, start time.Time, success bool, errMsg string) {
-	duration := time.Since(start)
-	if h.metrics != nil {
-		h.metrics.RecordAdoptionScan(len(targets), candidateCount, redactedEnvKeyCount+redactedLabelKeyCount, duration, success)
-	}
-	fields := adoptionLogFields(r, targets)
-	fields = append(fields,
-		zap.Int("target_count", len(targets)),
-		zap.Int("candidate_count", candidateCount),
-		zap.Int("redacted_env_key_count", redactedEnvKeyCount),
-		zap.Int("redacted_label_key_count", redactedLabelKeyCount),
-		zap.Int64("duration_ms", duration.Milliseconds()),
-		zap.String("result", resultStatus(success, errMsg)),
-	)
-	if errMsg != "" {
-		fields = append(fields, zap.String("error", errMsg))
-	}
-	h.logger.Info("adoption scan completed", fields...)
-}
-
-func (h *AdoptionHandler) recordImport(r *http.Request, targets []dto.AdoptionTargetRequest, candidateCount, successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount int, start time.Time, result, errMsg string) {
-	duration := time.Since(start)
-	metricsFailureCount := failureCount
-	if h.metrics != nil {
-		if result == "failed" && metricsFailureCount == 0 {
-			metricsFailureCount = 1
-		}
-		h.metrics.RecordAdoptionImport(candidateCount, successCount, metricsFailureCount, redactedEnvKeyCount+redactedLabelKeyCount, duration)
-	}
-	fields := adoptionLogFields(r, targets)
-	fields = append(fields,
-		zap.Int("target_count", len(targets)),
-		zap.Int("candidate_count", candidateCount),
-		zap.Int("success_count", successCount),
-		zap.Int("failure_count", failureCount),
-		zap.Int("redacted_env_key_count", redactedEnvKeyCount),
-		zap.Int("redacted_label_key_count", redactedLabelKeyCount),
-		zap.Int64("duration_ms", duration.Milliseconds()),
-		zap.String("result", result),
-	)
-	if errMsg != "" {
-		fields = append(fields, zap.String("error", errMsg))
-	}
-	h.logger.Info("adoption import completed", fields...)
-}
-
-func adoptionLogFields(r *http.Request, targets []dto.AdoptionTargetRequest) []zap.Field {
-	fields := requestActorLogFields(r)
-	fields = append(fields, zap.String("request_id", chimiddleware.GetReqID(r.Context())))
-	if len(targets) == 1 {
-		fields = append(fields,
-			zap.String("target_name", normalizeAdoptionName(targets[0].Name)),
-			zap.String("endpoint_ref", strings.TrimSpace(targets[0].EndpointRef)),
-			zap.String("environment_name", normalizeAdoptionName(targets[0].EnvironmentName)),
-		)
-	}
-	return fields
-}
-
 func adoptionPreviewStats(previews []service.AdoptionPreview) (candidateCount, redactedEnvKeyCount, redactedLabelKeyCount int) {
 	for _, preview := range previews {
 		candidateCount += len(preview.Containers)
@@ -146,25 +84,6 @@ func adoptionImportStats(results []service.AdoptionImportResult) (successCount, 
 		redactedLabelKeyCount += len(result.RedactedLabelKeys)
 	}
 	return successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount
-}
-
-func resultStatus(success bool, errMsg string) string {
-	if success && errMsg == "" {
-		return "success"
-	}
-	return "failed"
-}
-
-func requestActorLogFields(r *http.Request) []zap.Field {
-	fields := []zap.Field{}
-	if p := auth.GetPrincipal(r.Context()); p != nil && p.IsAuthenticated() {
-		fields = append(fields,
-			zap.String("actor_subject", p.Subject),
-			zap.String("actor_pubkey", p.PubKey),
-			zap.String("actor_method", string(p.Method)),
-		)
-	}
-	return fields
 }
 
 func validateAdoptionTargets(targets []dto.AdoptionTargetRequest) error {
@@ -228,15 +147,6 @@ func normalizeAdoptionName(name string) string {
 		name = strings.ReplaceAll(name, "--", "-")
 	}
 	return name
-}
-
-func writeAdoptionServiceError(w http.ResponseWriter, err error) {
-	msg := err.Error()
-	if strings.Contains(msg, "adoption target") || strings.Contains(msg, "docker_host") || strings.Contains(msg, "endpoint_ref") || strings.Contains(msg, "raw docker_host") || strings.Contains(msg, "import requires") || strings.Contains(msg, "selection") {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	writeError(w, http.StatusInternalServerError, msg)
 }
 
 func mapAdoptionTargets(targets []dto.AdoptionTargetRequest) []service.AdoptionTarget {

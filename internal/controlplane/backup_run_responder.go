@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -28,13 +27,13 @@ type backupResultPublisher interface {
 // BackupRunResponder publishes Nostr-native backup status, result, and attestation events.
 type BackupRunResponder struct {
 	publisher backupResultPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	registry  backupPublishRegistry
 	eventRepo repository.NostrEventRepository
 	logger    *zap.Logger
 }
 
-func NewBackupRunResponder(publisher backupResultPublisher, signer canonicalnostr.Signer, registry backupPublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRunResponder {
+func NewBackupRunResponder(publisher backupResultPublisher, signer nostr.Signer, registry backupPublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRunResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

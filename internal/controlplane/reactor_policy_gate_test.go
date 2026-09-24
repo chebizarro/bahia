@@ -906,12 +906,3 @@ func (r *testSBOMRepo) ListPackagesBySBOM(context.Context, uuid.UUID) ([]domain.
 func (r *testSBOMRepo) SearchPackagesByName(context.Context, string, int) ([]domain.SBOMPackage, error) {
 	return nil, nil
 }
-
-func decodeJSONMap(t *testing.T, content string) map[string]any {
-	t.Helper()
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(content), &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	return payload
-}

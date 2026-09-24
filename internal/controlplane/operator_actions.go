@@ -130,11 +130,11 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "action", req.Action, "service_id", req.ServiceID.String(), "environment_id", req.EnvironmentID.String())
 	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeDirectRuntime) {
 		logger.Warn("unauthorized direct-runtime action request")
-		r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("requester not in authorized direct-runtime list"))
+		r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("requester not in authorized direct-runtime list")))
 		return
 	}
 	if r.runtimeLifecycle == nil {
-		r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("runtime lifecycle service is not configured"))
+		r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("runtime lifecycle service is not configured")))
 		return
 	}
 
@@ -152,7 +152,7 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 	}
 	if err != nil {
 		logger.Error("direct-runtime action failed", "error", err)
-		r.publishActionResult(ctx, event, req.Action, "failed", err)
+		r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", err))
 		return
 	}
 	if err := r.publishRuntimeActionResult(ctx, event, req.Action, req.ServiceID, req.EnvironmentID, obs); err != nil {
@@ -178,22 +178,22 @@ func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Ev
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "operation", "scan")
 	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeAdoption) {
 		logger.Warn("unauthorized adoption scan request")
-		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "unauthorized", "requester not in authorized adoption list")
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "unauthorized", "requester not in authorized adoption list"))
 		return
 	}
 	if r.adoption == nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "adoption_unavailable", "adoption service is not configured")
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "adoption_unavailable", "adoption service is not configured"))
 		return
 	}
 
 	var req adoptionScanEventRequest
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "parse_error", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "parse_error", err.Error()))
 		return
 	}
 	targets, err := mapAdoptionEventTargets(req.Targets)
 	if err != nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "validation_error", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "validation_error", err.Error()))
 		return
 	}
 
@@ -201,7 +201,7 @@ func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Ev
 	previews, err := r.adoption.Scan(ctx, service.AdoptionScanRequest{Targets: targets})
 	if err != nil {
 		logger.Error("adoption scan failed", "error", err)
-		r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "operation_failed", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionScanResult, "scan", "operation_failed", err.Error()))
 		return
 	}
 	status := adoptionScanStatus(previews)
@@ -214,31 +214,31 @@ func (r *Reactor) handleAdoptionImportRequest(ctx context.Context, event *nostr.
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "operation", "import")
 	if !r.isAuthorizedFor(event.PubKey.Hex(), operatorScopeAdoption) {
 		logger.Warn("unauthorized adoption import request")
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "unauthorized", "requester not in authorized adoption list")
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "unauthorized", "requester not in authorized adoption list"))
 		return
 	}
 	if r.adoption == nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "adoption_unavailable", "adoption service is not configured")
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "adoption_unavailable", "adoption service is not configured"))
 		return
 	}
 
 	var req adoptionImportEventRequest
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "parse_error", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "parse_error", err.Error()))
 		return
 	}
 	targets, err := mapAdoptionEventTargets(req.Targets)
 	if err != nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", err.Error()))
 		return
 	}
 	if !req.ImportAll && len(req.Selections) == 0 {
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", "import requires import_all=true or at least one selection")
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", "import requires import_all=true or at least one selection"))
 		return
 	}
 	selections, err := mapAdoptionEventSelections(req.Selections)
 	if err != nil {
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "validation_error", err.Error()))
 		return
 	}
 
@@ -246,7 +246,7 @@ func (r *Reactor) handleAdoptionImportRequest(ctx context.Context, event *nostr.
 	results, err := r.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: req.ImportAll})
 	if err != nil {
 		logger.Error("adoption import failed", "error", err)
-		r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "operation_failed", err.Error())
+		r.logPublishError(r.publishAdoptionError(ctx, event, KindAdoptionImportResult, "import", "operation_failed", err.Error()))
 		return
 	}
 	status := adoptionImportStatus(results)

@@ -676,7 +676,11 @@ func (h *TenantHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete invite
-	h.invites.Delete(r.Context(), inviteID)
+	if err := h.invites.Delete(r.Context(), inviteID); err != nil {
+		h.logger.Error("failed to delete accepted invite", zap.String("invite_id", inviteID.String()), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to delete accepted invite")
+		return
+	}
 
 	writeData(w, http.StatusOK, member)
 }

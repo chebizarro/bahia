@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
@@ -27,11 +26,11 @@ const (
 // MLCommandPublisher emits generic AI/ML control-plane request events.
 type MLCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
 // NewMLCommandPublisher creates a publisher for REST/MCP-originated AI/ML commands.
-func NewMLCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *MLCommandPublisher {
+func NewMLCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *MLCommandPublisher {
 	return &MLCommandPublisher{publisher: publisher, signer: signer}
 }
 

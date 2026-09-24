@@ -132,7 +132,7 @@ func (rl *IPRateLimiter) cleanupStale(interval time.Duration) {
 func RateLimit(limiter *IPRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr // chi RealIP middleware sets this
+			ip := r.RemoteAddr // Trust the socket peer; forwarded headers are not globally trusted.
 
 			allowed, remaining := limiter.Allow(ip)
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", int(limiter.burst)))

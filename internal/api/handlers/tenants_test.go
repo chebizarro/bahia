@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,6 +107,7 @@ type testInviteRepo struct {
 	lookupOrgID    uuid.UUID
 	lookupInviteID uuid.UUID
 	invite         *domain.OrgInvite
+	deleteErr      error
 }
 
 func (r *testInviteRepo) Create(context.Context, *domain.OrgInvite) error { return nil }
@@ -124,7 +126,7 @@ func (r *testInviteRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.OrgInvi
 func (r *testInviteRepo) ListByPubkey(context.Context, string) ([]domain.OrgInvite, error) {
 	return nil, nil
 }
-func (r *testInviteRepo) Delete(context.Context, uuid.UUID) error    { return nil }
+func (r *testInviteRepo) Delete(context.Context, uuid.UUID) error    { return r.deleteErr }
 func (r *testInviteRepo) DeleteExpired(context.Context) (int, error) { return 0, nil }
 
 func TestCreateOrgBootstrapOwnerAllowlist(t *testing.T) {
@@ -241,6 +243,29 @@ func TestAcceptInviteScopesLookupByOrganization(t *testing.T) {
 	}
 	if invites.lookupOrgID != orgID || invites.lookupInviteID != inviteID {
 		t.Fatalf("lookup = (%s, %s), want (%s, %s)", invites.lookupOrgID, invites.lookupInviteID, orgID, inviteID)
+	}
+}
+
+func TestAcceptInviteReportsInviteDeletionFailure(t *testing.T) {
+	orgID := uuid.New()
+	inviteID := uuid.New()
+	pubkey := strings.Repeat("a", 64)
+	invites := &testInviteRepo{
+		invite:    &domain.OrgInvite{ID: inviteID, OrgID: orgID, Pubkey: pubkey, Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)},
+		deleteErr: errors.New("delete failed"),
+	}
+	h := NewTenantHandler(&testOrgRepo{}, &testMemberRepo{}, invites, nil, nil, zap.NewNop())
+	req := httptest.NewRequest(http.MethodPost, "/invites/"+inviteID.String()+"/accept?org_id="+orgID.String(), nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", inviteID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{Method: auth.MethodNIP98, PubKey: pubkey}))
+	w := httptest.NewRecorder()
+
+	h.AcceptInvite(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
 	}
 }
 

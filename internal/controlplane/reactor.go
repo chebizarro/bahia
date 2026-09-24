@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -168,7 +167,7 @@ type Reactor struct {
 	registry    *service.RegistryService
 	llmRegistry *service.LLMRegistryService
 	mlRegistry  *service.MLRegistryService
-	signer      canonicalnostr.Signer
+	signer      nostr.Signer
 	logger      *slog.Logger
 	zapLog      *zap.Logger
 	dedup       *nostrpool.EventDeduplicator
@@ -409,7 +408,7 @@ func WithDNSOperator(op DNSControlPlaneOperator) ReactorOption {
 // If pool is nil, a new pool will be created from the config relays.
 // signer is required for event signing. If pool is nil, config.PrivateKey is
 // only used to configure relay AUTH on the created pool.
-func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer canonicalnostr.Signer, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
+func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer nostr.Signer, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
@@ -451,6 +450,17 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		r.workerStatePublisher.ConfigureAudit(r.nostrEvents, r.zapLog)
 	}
 	return r
+}
+
+func (r *Reactor) logPublishError(err error) {
+	if err == nil {
+		return
+	}
+	if r != nil && r.zapLog != nil {
+		r.zapLog.Warn("control-plane response publish failed", zap.Error(err))
+		return
+	}
+	slog.Default().Warn("control-plane response publish failed", "error", err)
 }
 
 // Run starts the reactor and blocks until context is cancelled.
@@ -741,7 +751,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	// Validate authorization
 	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized deployment request")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 
@@ -749,7 +759,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	req, err := r.parseDeployRequest(event)
 	if err != nil {
 		logger.Error("failed to parse request", "error", err)
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 
@@ -759,36 +769,36 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	// Validate that service, environment, and artifact exist
 	if _, err := r.registry.GetService(ctx, req.ServiceID); err != nil {
 		logger.Error("service not found", "error", err)
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("service not found: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("service not found: %v", err)))
 		return
 	}
 	env, err := r.registry.GetEnvironment(ctx, req.EnvironmentID)
 	if err != nil {
 		logger.Error("environment not found", "error", err)
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("environment not found: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("environment not found: %v", err)))
 		return
 	}
 	if _, err := r.registry.GetArtifact(ctx, req.ArtifactID); err != nil {
 		logger.Error("artifact not found", "error", err)
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("artifact not found: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("artifact not found: %v", err)))
 		return
 	}
 
 	if r.policyService == nil {
 		logger.Error("policy service is not configured")
-		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
 		return
 	}
 	evaluation, err := r.policyService.Evaluate(ctx, req.ArtifactID, req.EnvironmentID)
 	if err != nil {
 		logger.Error("policy evaluation failed", "error", err)
-		r.publishError(ctx, event, "policy_evaluation_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "policy_evaluation_error", err.Error()))
 		return
 	}
 	if evaluation != nil && (!evaluation.Allowed || evaluation.Blockers > 0) {
 		reason := summarizePolicyBlockReason(evaluation)
 		logger.Warn("deployment blocked by policy evaluation", "blockers", evaluation.Blockers, "warnings", evaluation.Warnings, "reason", reason)
-		r.publishError(ctx, event, "policy_blocked", reason)
+		r.logPublishError(r.publishError(ctx, event, "policy_blocked", reason))
 		return
 	}
 
@@ -829,7 +839,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 			run.Error = err.Error()
 			now := time.Now()
 			run.CompletedAt = &now
-			r.publishError(ctx, event, "intent_error", err.Error())
+			r.logPublishError(r.publishError(ctx, event, "intent_error", err.Error()))
 			return
 		}
 		run.IntentID = &intent.ID
@@ -838,13 +848,13 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		now := time.Now()
 		run.CompletedAt = &now
 		logger.Info("deployment intent created for workflow", "intent_id", intent.ID)
-		r.publishDeploymentResult(ctx, event, intent)
+		r.logPublishError(r.publishDeploymentResult(ctx, event, intent))
 		return
 	}
 
 	if r.runtimeLifecycle == nil {
 		logger.Error("runtime lifecycle service is not configured")
-		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured"))
 		return
 	}
 
@@ -856,7 +866,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, "desired_state_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "desired_state_error", err.Error()))
 		return
 	}
 	intent := &domain.DeploymentIntent{
@@ -878,7 +888,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, "intent_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "intent_error", err.Error()))
 		return
 	}
 
@@ -891,7 +901,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Status = "completed"
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishDeploymentResult(ctx, event, intent)
+		r.logPublishError(r.publishDeploymentResult(ctx, event, intent))
 		return
 	}
 
@@ -914,7 +924,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, "run_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "run_error", err.Error()))
 		return
 	}
 	intent.Status = domain.IntentStatusDeploying
@@ -930,7 +940,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, "deployment_failed", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "deployment_failed", err.Error()))
 		return
 	}
 
@@ -941,7 +951,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		r.publishError(ctx, event, "run_completion_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "run_completion_error", err.Error()))
 		return
 	}
 	intent.Status = domain.IntentStatusDeployed
@@ -953,7 +963,7 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		run.CurrentStep = "observation_recorded"
 	}
 
-	r.publishDeploymentResult(ctx, event, intent)
+	r.logPublishError(r.publishDeploymentResult(ctx, event, intent))
 }
 
 func summarizePolicyBlockReason(evaluation *domain.PolicyEvaluation) string {
@@ -996,7 +1006,7 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 			if action == "" {
 				action = "direct_runtime"
 			}
-			r.publishActionResult(ctx, event, action, "failed", err)
+			r.logPublishError(r.publishActionResult(ctx, event, action, "failed", err))
 			return
 		}
 		r.handleDirectRuntimeActionRequest(ctx, event, req)
@@ -1005,7 +1015,7 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 
 	if !r.isAuthorized(event.PubKey.Hex()) {
 		logger.Warn("unauthorized service action")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 
@@ -1030,272 +1040,12 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 
 	// For now, log and acknowledge - actual actions will be implemented
 	// when service lifecycle methods are added to RegistryService
-	r.publishActionResult(ctx, event, action, "acknowledged", nil)
-}
-
-// handleServiceCreate processes a legacy service creation request in direct tests.
-func (r *Reactor) handleServiceCreate(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received service create request")
-
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		logger.Warn("unauthorized service create")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-
-	var req struct {
-		Name         string `json:"name"`
-		ArtifactRepo string `json:"artifact_repo"`
-		RepoURL      string `json:"repo_url,omitempty"`
-		RuntimeType  string `json:"runtime_type,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-
-	if req.Name == "" || req.ArtifactRepo == "" {
-		r.publishError(ctx, event, "validation_error", "name and artifact_repo are required")
-		return
-	}
-
-	runtimeType := domain.RuntimeTypeDocker
-	if req.RuntimeType != "" {
-		if err := domain.ValidateRuntimeType(domain.RuntimeType(req.RuntimeType)); err != nil {
-			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid runtime_type: %v", err))
-			return
-		}
-		runtimeType = domain.RuntimeType(req.RuntimeType)
-	}
-
-	svc := &domain.Service{
-		ID:           uuid.New(),
-		Name:         req.Name,
-		ArtifactRepo: req.ArtifactRepo,
-		RepoURL:      req.RepoURL,
-		RuntimeType:  runtimeType,
-	}
-
-	if err := r.registry.CreateService(ctx, svc); err != nil {
-		logger.Error("failed to create service", "error", err)
-		r.publishError(ctx, event, "create_error", err.Error())
-		return
-	}
-
-	logger.Info("service created", "service_id", svc.ID, "name", svc.Name)
-	r.publishServiceCreated(ctx, event, svc)
-}
-
-// handleEnvironmentCreate processes a legacy environment creation request in direct tests.
-func (r *Reactor) handleEnvironmentCreate(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received environment create request")
-
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		logger.Warn("unauthorized environment create")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-
-	var req struct {
-		Name           string `json:"name"`
-		Protected      bool   `json:"protected,omitempty"`
-		DeployStrategy string `json:"deploy_strategy,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-
-	if req.Name == "" {
-		r.publishError(ctx, event, "validation_error", "name is required")
-		return
-	}
-
-	deployStrategy := domain.DeployStrategyReplace
-	if req.DeployStrategy != "" {
-		deployStrategy = domain.DeployStrategy(req.DeployStrategy)
-	}
-
-	env := &domain.Environment{
-		ID:             uuid.New(),
-		Name:           req.Name,
-		Protected:      req.Protected,
-		DeployStrategy: deployStrategy,
-	}
-
-	if err := r.registry.CreateEnvironment(ctx, env); err != nil {
-		logger.Error("failed to create environment", "error", err)
-		r.publishError(ctx, event, "create_error", err.Error())
-		return
-	}
-
-	logger.Info("environment created", "environment_id", env.ID, "name", env.Name)
-	r.publishEnvironmentCreated(ctx, event, env)
-}
-
-func (r *Reactor) handleServiceUpdate(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-	var req struct {
-		ID            string                       `json:"id"`
-		Name          string                       `json:"name"`
-		ArtifactRepo  string                       `json:"artifact_repo"`
-		RepoURL       string                       `json:"repo_url,omitempty"`
-		DefaultBranch string                       `json:"default_branch,omitempty"`
-		RuntimeType   string                       `json:"runtime_type,omitempty"`
-		RuntimeConfig *domain.ServiceRuntimeConfig `json:"runtime_config,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "service")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service id: %v", err))
-		return
-	}
-	svc, err := r.registry.GetService(ctx, id)
-	if err != nil || svc == nil {
-		r.publishError(ctx, event, "not_found", "service not found")
-		return
-	}
-	if req.Name != "" {
-		svc.Name = req.Name
-	}
-	if req.ArtifactRepo != "" {
-		svc.ArtifactRepo = req.ArtifactRepo
-	}
-	svc.RepoURL = req.RepoURL
-	if req.DefaultBranch != "" {
-		svc.DefaultBranch = req.DefaultBranch
-	}
-	if req.RuntimeType != "" {
-		svc.RuntimeType = domain.RuntimeType(req.RuntimeType)
-	}
-	if req.RuntimeConfig != nil {
-		svc.RuntimeConfig = req.RuntimeConfig
-	}
-	if err := r.registry.UpdateService(ctx, svc); err != nil {
-		logger.Error("failed to update service", "error", err)
-		r.publishError(ctx, event, "update_error", err.Error())
-		return
-	}
-	r.publishActionResult(ctx, event, "service_update", "success", nil)
-}
-
-func (r *Reactor) handleServiceDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-	var req struct {
-		ID    string `json:"id"`
-		Force bool   `json:"force,omitempty"`
-	}
-	_ = json.Unmarshal([]byte(event.Content), &req)
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "service")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service id: %v", err))
-		return
-	}
-	if err := r.registry.DeleteService(ctx, id, req.Force); err != nil {
-		r.publishError(ctx, event, "delete_error", err.Error())
-		return
-	}
-	r.publishActionResult(ctx, event, "service_delete", "success", nil)
-}
-
-func (r *Reactor) handleEnvironmentUpdate(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-	var req struct {
-		ID                 string         `json:"id"`
-		Name               string         `json:"name"`
-		LoomWorkerSelector map[string]any `json:"loom_worker_selector,omitempty"`
-		RuntimeConfig      map[string]any `json:"runtime_config,omitempty"`
-		DeployStrategy     string         `json:"deploy_strategy,omitempty"`
-		Protected          bool           `json:"protected,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "environment")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment id: %v", err))
-		return
-	}
-	env, err := r.registry.GetEnvironment(ctx, id)
-	if err != nil || env == nil {
-		r.publishError(ctx, event, "not_found", "environment not found")
-		return
-	}
-	if req.Name != "" {
-		env.Name = req.Name
-	}
-	if req.LoomWorkerSelector != nil {
-		env.LoomWorkerSelector = req.LoomWorkerSelector
-	}
-	if req.RuntimeConfig != nil {
-		env.RuntimeConfig = req.RuntimeConfig
-	}
-	if req.DeployStrategy != "" {
-		env.DeployStrategy = domain.DeployStrategy(req.DeployStrategy)
-	}
-	env.Protected = req.Protected
-	if err := r.registry.UpdateEnvironment(ctx, env); err != nil {
-		logger.Error("failed to update environment", "error", err)
-		r.publishError(ctx, event, "update_error", err.Error())
-		return
-	}
-	r.publishActionResult(ctx, event, "environment_update", "success", nil)
-}
-
-func (r *Reactor) handleEnvironmentDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-	var req struct {
-		ID    string `json:"id"`
-		Force bool   `json:"force,omitempty"`
-	}
-	_ = json.Unmarshal([]byte(event.Content), &req)
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "environment")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment id: %v", err))
-		return
-	}
-	if err := r.registry.DeleteEnvironment(ctx, id, req.Force); err != nil {
-		r.publishError(ctx, event, "delete_error", err.Error())
-		return
-	}
-	r.publishActionResult(ctx, event, "environment_delete", "success", nil)
+	r.logPublishError(r.publishActionResult(ctx, event, action, "acknowledged", nil))
 }
 
 func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 	var req struct {
@@ -1312,17 +1062,17 @@ func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event
 		Metadata          map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	buildID, err := uuid.Parse(req.BuildID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid build_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid build_id: %v", err)))
 		return
 	}
 	serviceID, err := uuid.Parse(req.ServiceID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err)))
 		return
 	}
 	if req.ScanStatus == "" {
@@ -1330,71 +1080,10 @@ func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event
 	}
 	artifact := &domain.Artifact{BuildID: buildID, ServiceID: serviceID, ImageRepo: req.ImageRepo, ImageTag: req.ImageTag, ImageDigest: req.ImageDigest, ManifestMediaType: req.ManifestMediaType, SizeBytes: req.SizeBytes, SBOMURL: req.SBOMURL, SignatureRef: req.SignatureRef, ScanStatus: domain.ScanStatus(req.ScanStatus), Metadata: req.Metadata}
 	if err := r.registry.RegisterArtifact(ctx, artifact); err != nil {
-		r.publishError(ctx, event, "register_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "register_error", err.Error()))
 		return
 	}
-	r.publishActionResult(ctx, event, "artifact_register", "success", nil)
-}
-
-// handleDeploymentApproval processes a legacy deployment approval/rejection request in direct tests.
-func (r *Reactor) handleDeploymentApproval(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "approver", event.PubKey)
-	logger.Info("received deployment approval request")
-
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		logger.Warn("unauthorized approval request")
-		r.publishError(ctx, event, "unauthorized", "approver not in authorized list")
-		return
-	}
-
-	// Parse approval from tags
-	var intentID, decision string
-	for _, tag := range event.Tags {
-		if len(tag) < 2 {
-			continue
-		}
-		switch tag[0] {
-		case "intent":
-			intentID = tag[1]
-		case "decision":
-			decision = tag[1] // "approve" or "reject"
-		}
-	}
-
-	if intentID == "" {
-		r.publishError(ctx, event, "validation_error", "intent tag is required")
-		return
-	}
-	if decision != "approve" && decision != "reject" {
-		r.publishError(ctx, event, "validation_error", "decision must be 'approve' or 'reject'")
-		return
-	}
-
-	parsedIntentID, err := uuid.Parse(intentID)
-	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid intent id: %v", err))
-		return
-	}
-
-	logger = logger.With("intent_id", intentID, "decision", decision)
-
-	if decision == "approve" {
-		if err := r.registry.ApproveDeploymentIntent(ctx, parsedIntentID); err != nil {
-			logger.Error("failed to approve deployment", "error", err)
-			r.publishError(ctx, event, "approval_error", err.Error())
-			return
-		}
-		logger.Info("deployment approved")
-	} else {
-		if err := r.registry.RejectDeploymentIntent(ctx, parsedIntentID); err != nil {
-			logger.Error("failed to reject deployment", "error", err)
-			r.publishError(ctx, event, "rejection_error", err.Error())
-			return
-		}
-		logger.Info("deployment rejected")
-	}
-
-	r.publishApprovalResult(ctx, event, intentID, decision)
+	r.logPublishError(r.publishActionResult(ctx, event, "artifact_register", "success", nil))
 }
 
 // handleLLMRouteCreate processes a legacy LLM route creation request in direct tests.
@@ -1412,17 +1101,17 @@ func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) 
 		Metadata               map[string]any                 `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
 	if err := r.llmRegistry.CreateRoute(ctx, route); err != nil {
 		logger.Error("failed to create LLM route", "error", err)
-		r.publishLLMError(ctx, event, "create_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "create_error", err.Error()))
 		return
 	}
 	logger.Info("LLM route created", "route_id", route.ID.String(), "name", route.Name)
-	r.publishLLMRouteCreateResult(ctx, event, route)
+	r.logPublishError(r.publishLLMRouteCreateResult(ctx, event, route))
 }
 
 // handleLLMReleaseRegister processes a legacy LLM release registration request in direct tests.
@@ -1446,7 +1135,7 @@ func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Eve
 		Metadata           map[string]any                         `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	if req.RouteID == "" {
@@ -1454,17 +1143,17 @@ func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Eve
 	}
 	routeID, err := uuid.Parse(req.RouteID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err)))
 		return
 	}
 	release := &domain.LLMRelease{RouteID: routeID, Version: req.Version, ModelRef: req.ModelRef, ModelSource: req.ModelSource, ModelRevision: req.ModelRevision, EstimatedVRAMGB: req.EstimatedVRAMGB, BackendPreferences: req.BackendPreferences, RuntimeBackend: req.RuntimeBackend, ExternalBackend: req.ExternalBackend, PlacementPolicy: req.PlacementPolicy, PromotionGate: req.PromotionGate, Metadata: req.Metadata}
 	if err := r.llmRegistry.CreateRelease(ctx, release); err != nil {
 		logger.Error("failed to register LLM release", "error", err)
-		r.publishLLMError(ctx, event, "register_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "register_error", err.Error()))
 		return
 	}
 	logger.Info("LLM release registered", "route_id", routeID.String(), "release_id", release.ID.String())
-	r.publishLLMReleaseRegisterResult(ctx, event, release)
+	r.logPublishError(r.publishLLMReleaseRegisterResult(ctx, event, release))
 }
 
 // handleLLMDeployRequest processes a legacy LLM deployment request in direct tests.
@@ -1481,7 +1170,7 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 		Metadata      map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	if req.RouteID == "" {
@@ -1495,22 +1184,22 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 	}
 	routeID, err := uuid.Parse(req.RouteID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err)))
 		return
 	}
 	envID, err := uuid.Parse(req.EnvironmentID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 		return
 	}
 	releaseID, err := uuid.Parse(req.ReleaseID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid release_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid release_id: %v", err)))
 		return
 	}
 	delegation, err := authorizeIntentDelegation(event, req.ClaimedHuman, intentDelegationVersionLLM, intentDelegationCapabilityLLMDeploy, r.isAuthorized(event.PubKey.Hex()))
 	if err != nil {
-		r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error()))
 		return
 	}
 	if delegation != nil {
@@ -1528,11 +1217,11 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: event.PubKey.Hex(), SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
 	if err := r.llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		logger.Error("failed to create LLM deployment intent", "error", err)
-		r.publishLLMError(ctx, event, "intent_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "intent_error", err.Error()))
 		return
 	}
 	logger.Info("LLM deployment intent created", "intent_id", intent.ID.String())
-	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM deployment intent accepted")
+	r.logPublishError(r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM deployment intent accepted"))
 }
 
 // handleLLMDeploymentApproval processes a legacy LLM approval/rejection request in direct tests.
@@ -1553,12 +1242,12 @@ func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.
 		content.Decision = tagValueNostr(event.Tags, "decision")
 	}
 	if content.Decision != "approve" && content.Decision != "reject" {
-		r.publishLLMError(ctx, event, "validation_error", "decision must be 'approve' or 'reject'")
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", "decision must be 'approve' or 'reject'"))
 		return
 	}
 	intentID, err := uuid.Parse(content.IntentID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err)))
 		return
 	}
 	if content.Decision == "approve" {
@@ -1568,14 +1257,14 @@ func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.
 	}
 	if err != nil {
 		logger.Error("failed to apply LLM deployment approval decision", "error", err)
-		r.publishLLMError(ctx, event, "approval_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "approval_error", err.Error()))
 		return
 	}
 	intent, _ := r.llmRegistry.GetDeploymentIntent(ctx, intentID)
 	if intent == nil {
 		intent = &domain.LLMDeploymentIntent{ID: intentID}
 	}
-	r.publishLLMDeploymentResult(ctx, event, intent, content.Decision, "LLM deployment approval decision recorded")
+	r.logPublishError(r.publishLLMDeploymentResult(ctx, event, intent, content.Decision, "LLM deployment approval decision recorded"))
 }
 
 // handleLLMRollbackRequest processes a legacy LLM rollback request in direct tests.
@@ -1598,17 +1287,17 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 	}
 	routeID, err := uuid.Parse(req.RouteID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err)))
 		return
 	}
 	envID, err := uuid.Parse(req.EnvironmentID)
 	if err != nil {
-		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 		return
 	}
 	delegation, err := authorizeIntentDelegation(event, req.ClaimedHuman, intentDelegationVersionLLM, intentDelegationCapabilityLLMRollback, r.isAuthorized(event.PubKey.Hex()))
 	if err != nil {
-		r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "delegation_unauthorized", err.Error()))
 		return
 	}
 	if delegation != nil {
@@ -1626,21 +1315,21 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 	intent, err := r.llmRegistry.RollbackWithMetadata(ctx, routeID, envID, event.PubKey.Hex(), metadata)
 	if err != nil {
 		logger.Error("failed to initiate LLM rollback", "error", err)
-		r.publishLLMError(ctx, event, "rollback_error", err.Error())
+		r.logPublishError(r.publishLLMError(ctx, event, "rollback_error", err.Error()))
 		return
 	}
 	logger.Info("LLM rollback intent created", "intent_id", intent.ID.String())
-	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM rollback intent accepted")
+	r.logPublishError(r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM rollback intent accepted"))
 }
 
 func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.Event) error {
 	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("requester", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return fmt.Errorf("unauthorized requester")
 	}
 	if r.toolProvisioning == nil {
-		r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured")
+		r.logPublishError(r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured"))
 		return fmt.Errorf("tool provisioning repository not configured")
 	}
 	var req struct {
@@ -1651,21 +1340,21 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 		Reason        string               `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return fmt.Errorf("parse tool provisioning request: %w", err)
 	}
 	serviceID, err := uuid.Parse(req.ServiceID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err)))
 		return err
 	}
 	envID, err := uuid.Parse(req.EnvironmentID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 		return err
 	}
 	if len(req.Tools) == 0 {
-		r.publishError(ctx, event, "validation_error", "tools are required")
+		r.logPublishError(r.publishError(ctx, event, "validation_error", "tools are required"))
 		return fmt.Errorf("empty tools")
 	}
 	intent := &domain.ToolProvisionIntent{
@@ -1679,7 +1368,7 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := r.toolProvisioning.CreateIntent(ctx, intent); err != nil {
-		r.publishError(ctx, event, "intent_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "intent_error", err.Error()))
 		return fmt.Errorf("create tool provisioning intent: %w", err)
 	}
 	if r.toolResponder != nil {
@@ -1697,11 +1386,11 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.Event) error {
 	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("operator", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "operator not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "operator not in authorized list"))
 		return fmt.Errorf("unauthorized operator")
 	}
 	if r.toolProvisioning == nil {
-		r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured")
+		r.logPublishError(r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured"))
 		return fmt.Errorf("tool provisioning repository not configured")
 	}
 	var req struct {
@@ -1710,25 +1399,25 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return fmt.Errorf("parse tool approval response: %w", err)
 	}
 	intentID, err := uuid.Parse(req.IntentID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err)))
 		return err
 	}
 	if req.Action != "approve" && req.Action != "reject" {
-		r.publishError(ctx, event, "validation_error", "action must be 'approve' or 'reject'")
+		r.logPublishError(r.publishError(ctx, event, "validation_error", "action must be 'approve' or 'reject'"))
 		return fmt.Errorf("invalid action")
 	}
 	intent, err := r.toolProvisioning.GetIntent(ctx, intentID)
 	if err != nil {
-		r.publishError(ctx, event, "lookup_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "lookup_error", err.Error()))
 		return fmt.Errorf("get tool provisioning intent: %w", err)
 	}
 	if intent == nil {
-		r.publishError(ctx, event, "not_found", "tool provisioning intent not found")
+		r.logPublishError(r.publishError(ctx, event, "not_found", "tool provisioning intent not found"))
 		return fmt.Errorf("intent not found")
 	}
 	now := time.Now().UTC()
@@ -1740,7 +1429,7 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		intent.Status = domain.ToolProvisionStatusRejected
 	}
 	if err := r.toolProvisioning.UpdateIntent(ctx, intent); err != nil {
-		r.publishError(ctx, event, "update_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "update_error", err.Error()))
 		return fmt.Errorf("update tool provisioning intent: %w", err)
 	}
 	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey.Hex(), req.Reason); err != nil {
@@ -1771,11 +1460,11 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 
 func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 	if r.policyService == nil {
-		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
 		return
 	}
 	var req struct {
@@ -1786,14 +1475,14 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
 		Enabled       bool                `json:"enabled"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	policy := &domain.DeploymentPolicy{Name: req.Name, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
 	if req.EnvironmentID != nil && *req.EnvironmentID != "" {
 		id, err := uuid.Parse(*req.EnvironmentID)
 		if err != nil {
-			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+			r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 			return
 		}
 		policy.EnvironmentID = &id
@@ -1802,20 +1491,20 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
 		policy.Enforcement = domain.PolicyEnforcementWarn
 	}
 	if err := r.policyService.CreatePolicy(ctx, policy); err != nil {
-		r.publishError(ctx, event, "create_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "create_error", err.Error()))
 		return
 	}
-	r.publishPolicyRegistry(ctx, policy, false)
-	r.publishActionResult(ctx, event, "policy_create", "success", nil)
+	r.logPublishError(r.publishPolicyRegistry(ctx, policy, false))
+	r.logPublishError(r.publishActionResult(ctx, event, "policy_create", "success", nil))
 }
 
 func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 	if r.policyService == nil {
-		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
 		return
 	}
 	var req struct {
@@ -1827,7 +1516,7 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 		Enabled       *bool               `json:"enabled,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	if req.ID == "" {
@@ -1835,16 +1524,16 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 	}
 	id, err := uuid.Parse(req.ID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err)))
 		return
 	}
 	policy, err := r.policyService.GetPolicy(ctx, id)
 	if err != nil {
-		r.publishError(ctx, event, "lookup_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "lookup_error", err.Error()))
 		return
 	}
 	if policy == nil {
-		r.publishError(ctx, event, "not_found", "policy not found")
+		r.logPublishError(r.publishError(ctx, event, "not_found", "policy not found"))
 		return
 	}
 	if req.Name != nil {
@@ -1865,7 +1554,7 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 		} else {
 			envID, err := uuid.Parse(*req.EnvironmentID)
 			if err != nil {
-				r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+				r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 				return
 			}
 			policy.EnvironmentID = &envID
@@ -1875,20 +1564,20 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
 		policy.Enforcement = domain.PolicyEnforcementWarn
 	}
 	if err := r.policyService.UpdatePolicy(ctx, policy); err != nil {
-		r.publishError(ctx, event, "update_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "update_error", err.Error()))
 		return
 	}
-	r.publishPolicyRegistry(ctx, policy, false)
-	r.publishActionResult(ctx, event, "policy_update", "success", nil)
+	r.logPublishError(r.publishPolicyRegistry(ctx, policy, false))
+	r.logPublishError(r.publishActionResult(ctx, event, "policy_update", "success", nil))
 }
 
 func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 	if r.policyService == nil {
-		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
 		return
 	}
 	var req struct {
@@ -1900,24 +1589,24 @@ func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
 	}
 	id, err := uuid.Parse(req.ID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err)))
 		return
 	}
 	if err := r.policyService.DeletePolicy(ctx, id); err != nil {
-		r.publishError(ctx, event, "delete_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "delete_error", err.Error()))
 		return
 	}
-	r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: id, UpdatedAt: time.Now().UTC()}, true)
-	r.publishActionResult(ctx, event, "policy_delete", "success", nil)
+	r.logPublishError(r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: id, UpdatedAt: time.Now().UTC()}, true))
+	r.logPublishError(r.publishActionResult(ctx, event, "policy_delete", "success", nil))
 }
 
 func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return
 	}
 	if r.policyService == nil {
-		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
 		return
 	}
 	var req struct {
@@ -1925,22 +1614,22 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 		EnvironmentID string `json:"environment_id"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.publishError(ctx, event, "parse_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return
 	}
 	artifactID, err := uuid.Parse(req.ArtifactID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid artifact_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid artifact_id: %v", err)))
 		return
 	}
 	envID, err := uuid.Parse(req.EnvironmentID)
 	if err != nil {
-		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
 		return
 	}
 	evaluation, err := r.policyService.Evaluate(ctx, artifactID, envID)
 	if err != nil {
-		r.publishError(ctx, event, "evaluate_error", err.Error())
+		r.logPublishError(r.publishError(ctx, event, "evaluate_error", err.Error()))
 		return
 	}
 	tags := nostr.Tags{{"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
@@ -1951,11 +1640,11 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishLLMError(ctx, event, "unauthorized", "requester not in authorized list")
+		r.logPublishError(r.publishLLMError(ctx, event, "unauthorized", "requester not in authorized list"))
 		return false
 	}
 	if r.llmRegistry == nil {
-		r.publishLLMError(ctx, event, step+"_unavailable", "LLM registry is not configured")
+		r.logPublishError(r.publishLLMError(ctx, event, step+"_unavailable", "LLM registry is not configured"))
 		return false
 	}
 	return true
@@ -2509,29 +2198,6 @@ func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.E
 	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
 }
 
-// publishApprovalResult publishes a result for deployment approval/rejection.
-func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr.Event, intentID, decision string) error {
-	content := map[string]interface{}{
-		"intent_id": intentID,
-		"decision":  decision,
-	}
-	tags := nostr.Tags{
-		{"status", "success"},
-		{"intent", intentID},
-		{"decision", decision},
-	}
-	if parsedIntentID, err := uuid.Parse(intentID); err == nil {
-		if intent, err := r.registry.GetDeploymentIntent(ctx, parsedIntentID); err == nil && intent != nil {
-			tags = append(tags,
-				nostr.Tag{"service", intent.ServiceID.String()},
-				nostr.Tag{"environment", intent.EnvironmentID.String()},
-				nostr.Tag{"artifact", intent.ArtifactID.String()},
-			)
-		}
-	}
-	return r.publishContextVMResult(ctx, requestEvent, content, tags, nil)
-}
-
 func (r *Reactor) publishLLMRouteCreateResult(ctx context.Context, requestEvent *nostr.Event, route *domain.LLMRoute) error {
 	payload := map[string]any{
 		"route_id": route.ID.String(),
@@ -2649,38 +2315,6 @@ func appendLLMRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags
 		}
 	}
 	return tags
-}
-
-// publishServiceCreated publishes a result for service creation.
-func (r *Reactor) publishServiceCreated(ctx context.Context, requestEvent *nostr.Event, svc *domain.Service) error {
-	payload := map[string]interface{}{
-		"service_id":    svc.ID.String(),
-		"name":          svc.Name,
-		"artifact_repo": svc.ArtifactRepo,
-		"runtime_type":  svc.RuntimeType,
-	}
-	tags := nostr.Tags{
-		{"status", "success"},
-		{"type", "service_created"},
-		{"service", svc.ID.String()},
-	}
-	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
-}
-
-// publishEnvironmentCreated publishes a result for environment creation.
-func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *nostr.Event, env *domain.Environment) error {
-	payload := map[string]interface{}{
-		"environment_id":  env.ID.String(),
-		"name":            env.Name,
-		"protected":       env.Protected,
-		"deploy_strategy": env.DeployStrategy,
-	}
-	tags := nostr.Tags{
-		{"status", "success"},
-		{"type", "environment_created"},
-		{"environment", env.ID.String()},
-	}
-	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
 }
 
 // publishError publishes a ContextVM error response for retained direct handler paths.
@@ -2845,257 +2479,6 @@ type ObservationRequest struct {
 	ObservedVersion     string    `json:"observed_version,omitempty"`
 	HealthStatus        string    `json:"health_status"`
 	Source              string    `json:"source"`
-}
-
-// handleObservationSubmit processes a legacy observation submission in direct tests.
-func (r *Reactor) handleObservationSubmit(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received observation submission")
-
-	// Validate authorization
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		logger.Warn("unauthorized observation submission")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-
-	// Parse observation request
-	var req ObservationRequest
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		logger.Error("failed to parse observation request", "error", err)
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-
-	// Validate required fields
-	if req.ServiceID == uuid.Nil {
-		r.publishError(ctx, event, "validation_error", "service_id is required")
-		return
-	}
-	if req.EnvironmentID == uuid.Nil {
-		r.publishError(ctx, event, "validation_error", "environment_id is required")
-		return
-	}
-	if req.ObservedImageDigest == "" {
-		r.publishError(ctx, event, "validation_error", "observed_image_digest is required")
-		return
-	}
-
-	// Parse health status
-	healthStatus := domain.HealthStatus(req.HealthStatus)
-	if healthStatus == "" {
-		healthStatus = domain.HealthStatusUnknown
-	}
-
-	// Create and record observation
-	obs := &domain.RuntimeObservation{
-		ID:                  uuid.New(),
-		ServiceID:           req.ServiceID,
-		EnvironmentID:       req.EnvironmentID,
-		ObservedImageDigest: req.ObservedImageDigest,
-		ObservedImageRepo:   req.ObservedImageRepo,
-		ObservedContainerID: req.ObservedContainerID,
-		ObservedHost:        req.ObservedHost,
-		ObservedVersion:     req.ObservedVersion,
-		HealthStatus:        healthStatus,
-		Source:              req.Source,
-		ObservedAt:          time.Now(),
-	}
-
-	if err := r.registry.RecordObservation(ctx, obs); err != nil {
-		logger.Error("failed to record observation", "error", err)
-		r.publishError(ctx, event, "record_error", err.Error())
-		return
-	}
-
-	logger.Info("observation recorded", "observation_id", obs.ID)
-
-	// Publish observation result
-	if err := r.publishObservationResult(ctx, event, obs); err != nil {
-		logger.Error("failed to publish observation result", "error", err)
-	}
-
-	// Publish updated state event
-	if err := r.publishStateEvent(ctx, req.ServiceID, req.EnvironmentID); err != nil {
-		logger.Error("failed to publish state event", "error", err)
-	}
-}
-
-// handleDriftRemediate processes a legacy drift remediation request in direct tests.
-func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
-	logger.Info("received drift remediation request")
-
-	// Validate authorization
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		logger.Warn("unauthorized drift remediation request")
-		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
-		return
-	}
-
-	// Parse request - expects service_id and environment_id
-	var req struct {
-		ServiceID     uuid.UUID `json:"service_id"`
-		EnvironmentID uuid.UUID `json:"environment_id"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		logger.Error("failed to parse remediation request", "error", err)
-		r.publishError(ctx, event, "parse_error", err.Error())
-		return
-	}
-
-	// Get current state
-	state, err := r.registry.GetEnvironmentServiceState(ctx, req.ServiceID, req.EnvironmentID)
-	if err != nil {
-		logger.Error("failed to get service state", "error", err)
-		r.publishError(ctx, event, "state_error", err.Error())
-		return
-	}
-
-	// Check if remediation is currently needed. approval_required reconciliation
-	// records remediation_needed and waits for an authorized remediation request.
-	if state.DriftStatus != domain.DriftStatusDrifted && state.DriftStatus != domain.DriftStatusRemediationNeeded {
-		r.publishRemediationResult(ctx, event, state, "not_drifted", "Service is not in drifted or remediation-needed state")
-		return
-	}
-
-	// If we have a desired artifact, create a new deployment intent to remediate
-	if state.DesiredArtifactID == nil {
-		r.publishRemediationResult(ctx, event, state, "no_desired_artifact", "No desired artifact configured")
-		return
-	}
-
-	// Create deployment intent to restore desired state
-	intent := &domain.DeploymentIntent{
-		ID:            uuid.New(),
-		ServiceID:     req.ServiceID,
-		EnvironmentID: req.EnvironmentID,
-		ArtifactID:    *state.DesiredArtifactID,
-		RequestedBy:   event.PubKey.Hex(),
-		SourceKind:    domain.SourceKindEventTriggered,
-		Status:        domain.IntentStatusPending,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
-		logger.Error("failed to create remediation intent", "error", err)
-		r.publishError(ctx, event, "intent_error", err.Error())
-		return
-	}
-
-	logger.Info("remediation intent created", "intent_id", intent.ID)
-	r.publishRemediationResult(ctx, event, state, "remediation_started", fmt.Sprintf("Deployment intent %s created", intent.ID))
-}
-
-// publishObservationResult publishes a ContextVM observation result for retained direct handler paths.
-func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *nostr.Event, obs *domain.RuntimeObservation) error {
-	payload := map[string]interface{}{
-		"observation_id":        obs.ID.String(),
-		"service_id":            obs.ServiceID.String(),
-		"environment_id":        obs.EnvironmentID.String(),
-		"observed_image_digest": obs.ObservedImageDigest,
-		"health_status":         string(obs.HealthStatus),
-		"observed_at":           obs.ObservedAt.Format(time.RFC3339),
-	}
-	tags := nostr.Tags{
-		{"status", "success"},
-		{"service", obs.ServiceID.String()},
-		{"environment", obs.EnvironmentID.String()},
-		{"observation", obs.ID.String()},
-	}
-	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
-}
-
-// publishRemediationResult publishes a ContextVM remediation result for retained direct handler paths.
-func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *nostr.Event, state *domain.EnvironmentServiceState, status, message string) error {
-	payload := map[string]interface{}{
-		"service_id":     state.ServiceID.String(),
-		"environment_id": state.EnvironmentID.String(),
-		"drift_status":   string(state.DriftStatus),
-		"status":         status,
-		"message":        message,
-	}
-	tags := nostr.Tags{
-		{"status", status},
-		{"service", state.ServiceID.String()},
-		{"environment", state.EnvironmentID.String()},
-	}
-	if state.DesiredArtifactID != nil {
-		tags = append(tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
-	}
-	if state.DesiredIntentID != nil {
-		tags = append(tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
-	}
-	return r.publishContextVMResult(ctx, requestEvent, payload, tags, nil)
-}
-
-// publishStateEvent publishes canonical CAS service state.
-// The d-tag is formatted as "service:env" to allow per-service-environment state tracking.
-func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.UUID) error {
-	state, err := r.registry.GetEnvironmentServiceState(ctx, serviceID, envID)
-	if err != nil {
-		return fmt.Errorf("get state: %w", err)
-	}
-
-	// Build state content
-	content := map[string]interface{}{
-		"service_id":     state.ServiceID.String(),
-		"environment_id": state.EnvironmentID.String(),
-		"drift_status":   string(state.DriftStatus),
-		"deleted":        false,
-		"updated_at":     state.UpdatedAt.Format(time.RFC3339),
-	}
-	if state.DesiredArtifactID != nil {
-		content["desired_artifact_id"] = state.DesiredArtifactID.String()
-	}
-	if state.DesiredIntentID != nil {
-		content["desired_intent_id"] = state.DesiredIntentID.String()
-	}
-	if state.LastSuccessfulRunID != nil {
-		content["last_successful_run_id"] = state.LastSuccessfulRunID.String()
-	}
-	if state.CurrentObservationID != nil {
-		content["current_observation_id"] = state.CurrentObservationID.String()
-	}
-	if state.LastReconciledAt != nil {
-		content["last_reconciled_at"] = state.LastReconciledAt.Format(time.RFC3339)
-	}
-
-	contentJSON, _ := json.Marshal(content)
-	dTag := fmt.Sprintf("%s:%s", serviceID.String(), envID.String())
-
-	event := &nostr.Event{
-		Kind:      nostrpool.KindCASControlState,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"d", dTag},
-			{"domain", "service"},
-			{"entity", "state"},
-			{"schema", "bahia.cp-state.v1"},
-			{"service", serviceID.String()},
-			{"environment", envID.String()},
-			{"deleted", "false"},
-			{"drift_status", string(state.DriftStatus)},
-		},
-		Content: string(contentJSON),
-	}
-	if state.DesiredArtifactID != nil {
-		event.Tags = append(event.Tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
-	}
-	if state.DesiredIntentID != nil {
-		event.Tags = append(event.Tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
-	}
-	if state.LastSuccessfulRunID != nil {
-		event.Tags = append(event.Tags, nostr.Tag{"run", state.LastSuccessfulRunID.String()})
-	}
-
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign state event: %w", err)
-	}
-
-	_, err = r.publishEvent(ctx, event)
-	return err
 }
 
 func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {

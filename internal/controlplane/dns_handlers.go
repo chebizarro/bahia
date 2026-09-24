@@ -195,9 +195,10 @@ func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) 
 	r.publishDNSOperationStatusForAction(ctx, event, dnsActionPolicyApply, "DNS policy apply requested; reconciling")
 	result := dnsPolicyApplyOp(ctx, r.dnsOperator, json.RawMessage(event.Content))
 	r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, result.Action, result.Status, result.Step, result.Message, result.Details)
-	if result.Status == "succeeded" {
+	switch result.Status {
+	case "succeeded":
 		r.logger.Info("persisted DNS policy apply request", "event_id", event.ID, "policy_id", result.Details["policy_id"], "policy", result.Details["policy"], "rules", result.Details["rule_count"])
-	} else if result.Status == "failed" {
+	case "failed":
 		r.logger.Warn("DNS policy apply failed", "event_id", event.ID, "error", result.Message)
 	}
 }

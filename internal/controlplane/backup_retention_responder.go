@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -22,13 +21,13 @@ type backupRetentionPublishRegistry interface {
 // BackupRetentionResponder publishes retention progress observations and terminal results.
 type BackupRetentionResponder struct {
 	publisher backupResultPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	registry  backupRetentionPublishRegistry
 	eventRepo repository.NostrEventRepository
 	logger    *zap.Logger
 }
 
-func NewBackupRetentionResponder(publisher backupResultPublisher, signer canonicalnostr.Signer, registry backupRetentionPublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRetentionResponder {
+func NewBackupRetentionResponder(publisher backupResultPublisher, signer nostr.Signer, registry backupRetentionPublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRetentionResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 )
 
@@ -26,10 +25,10 @@ const (
 // WorkerCommandPublisher emits canonical worker-management command events.
 type WorkerCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewWorkerCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *WorkerCommandPublisher {
+func NewWorkerCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *WorkerCommandPublisher {
 	return &WorkerCommandPublisher{publisher: publisher, signer: signer}
 }
 

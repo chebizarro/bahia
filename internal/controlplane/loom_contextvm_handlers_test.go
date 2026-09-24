@@ -13,10 +13,15 @@ import (
 )
 
 var (
-	testSubmitterPriv, testSubmitterPub = testNostrKeypair()
-	testOperatorPriv, testOperatorPub   = testNostrKeypair()
-	testUnrelatedPriv, testUnrelatedPub = testNostrKeypair()
+	testSubmitterPub = newTestNostrPubkey()
+	testOperatorPub  = newTestNostrPubkey()
+	testUnrelatedPub = newTestNostrPubkey()
 )
+
+func newTestNostrPubkey() string {
+	_, pubkey := testNostrKeypair()
+	return pubkey
+}
 
 type mockLoomClient struct {
 	mu               sync.RWMutex

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -22,7 +21,7 @@ const workerCleanupStateSchema = "bahia.state.worker-cleanup.v1"
 // than infer status from command acknowledgments.
 type WorkerCleanupStatePublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 
 	auditRepo repository.NostrEventRepository
 	logger    *zap.Logger
@@ -31,7 +30,7 @@ type WorkerCleanupStatePublisher struct {
 	lastPublishedAt map[string]nostr.Timestamp
 }
 
-func NewWorkerCleanupStatePublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *WorkerCleanupStatePublisher {
+func NewWorkerCleanupStatePublisher(publisher NostrEventPublisher, signer nostr.Signer) *WorkerCleanupStatePublisher {
 	return &WorkerCleanupStatePublisher{
 		publisher:       publisher,
 		signer:          signer,

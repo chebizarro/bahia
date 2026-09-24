@@ -2,16 +2,11 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -66,47 +61,6 @@ func WithServiceActionMetrics(metrics runtimeActionMetrics) ServiceActionHandler
 	}
 }
 
-func (h *ServiceActionHandler) recordRuntimeAction(r *http.Request, action string, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result, errMsg string) {
-	duration := time.Since(start)
-	if h.metrics != nil {
-		h.metrics.RecordRuntimeAction(action, result, duration)
-	}
-	fields := requestActorLogFields(r)
-	fields = append(fields,
-		zap.String("request_id", chimiddleware.GetReqID(r.Context())),
-		zap.String("action", action),
-		zap.String("service_id", serviceID.String()),
-		zap.String("environment_id", envID.String()),
-		zap.Int64("duration_ms", duration.Milliseconds()),
-		zap.String("result", result),
-	)
-	if artifactID != nil {
-		fields = append(fields, zap.String("artifact_id", artifactID.String()))
-	}
-	if errMsg != "" {
-		fields = append(fields, zap.String("error", errMsg))
-	}
-	h.logger.Info("direct runtime action completed", fields...)
-}
-
-func (h *ServiceActionHandler) parseIDs(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
-	if h.lifecycle == nil {
-		writeError(w, http.StatusServiceUnavailable, "runtime lifecycle service is not configured")
-		return uuid.Nil, uuid.Nil, false
-	}
-	serviceID, err := uuidParam(r, "serviceId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid service id")
-		return uuid.Nil, uuid.Nil, false
-	}
-	envID, err := uuidParam(r, "envId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid environment id")
-		return uuid.Nil, uuid.Nil, false
-	}
-	return serviceID, envID, true
-}
-
 func writeRuntimeLifecycleError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	switch {
@@ -119,20 +73,4 @@ func writeRuntimeLifecycleError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, msg)
 	}
-}
-
-func decodeDeployServiceActionRequest(w http.ResponseWriter, r *http.Request) (dto.DeployServiceActionRequest, bool) {
-	var req dto.DeployServiceActionRequest
-	if r.Body == nil || r.Body == http.NoBody {
-		return req, true
-	}
-	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		if errors.Is(err, io.EOF) {
-			return req, true
-		}
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return req, false
-	}
-	return req, true
 }

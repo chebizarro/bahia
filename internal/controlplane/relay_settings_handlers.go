@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -58,7 +57,7 @@ type RelaySettingsHandlers struct {
 	projectionStore   repository.RelayPolicyProjectionRepository
 	servicePubkey     string
 	publisher         NostrEventPublisher
-	signer            canonicalnostr.Signer
+	signer            nostr.Signer
 	logger            *zap.Logger
 	now               func() time.Time
 	freshnessWindow   time.Duration
@@ -620,7 +619,7 @@ func (h *RelaySettingsHandlers) publishAudit(ctx context.Context, req ContextVMR
 	return nil
 }
 
-func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (NostrEventPublisher, canonicalnostr.Signer, error) {
+func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (NostrEventPublisher, nostr.Signer, error) {
 	_ = req
 	if h.publisher == nil {
 		return nil, nil, fmt.Errorf("relay settings publisher is not configured")

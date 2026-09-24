@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,8 +49,14 @@ func writeMessage(w http.ResponseWriter, status int, msg string) {
 }
 
 func decodeJSON(r *http.Request, v any) error {
-	defer r.Body.Close()
+	defer closeReadBody(r.Body)
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func closeReadBody(body io.Closer) {
+	if err := body.Close(); err != nil {
+		zap.L().Warn("failed to close request body", zap.Error(err))
+	}
 }
 
 func uuidParam(r *http.Request, name string) (uuid.UUID, error) {

@@ -151,7 +151,7 @@ func (h *SBOMHandler) IngestSBOM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "reading SBOM body: "+err.Error())
 		return
 	}
-	defer r.Body.Close()
+	defer closeReadBody(r.Body)
 	if len(body) > maxSBOMIngestBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "SBOM payload exceeds 10 MiB limit")
 		return

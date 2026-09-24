@@ -511,7 +511,7 @@ func relayPolicyStateFromProjection(projection *repository.RelayPolicyProjection
 	if projection == nil {
 		return nil, fmt.Errorf("projection is required")
 	}
-	if strings.ToLower(projection.AuthorPubkey) != strings.ToLower(strings.TrimSpace(servicePubkey)) {
+	if !strings.EqualFold(projection.AuthorPubkey, strings.TrimSpace(servicePubkey)) {
 		return nil, fmt.Errorf("projection author does not match trusted service pubkey")
 	}
 	if projection.Schema != RelaySettingsSchema {
