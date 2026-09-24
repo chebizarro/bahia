@@ -156,7 +156,7 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 		return nil, err
 	}
 	if h == nil || h.starter == nil {
-		return nil, fmt.Errorf("Gitea mirror and HiveCI build initiation are not configured")
+		return nil, fmt.Errorf("gitea mirror and HiveCI build initiation are not configured")
 	}
 	if h.registry == nil || h.builds == nil || h.services == nil || h.secrets == nil {
 		return nil, fmt.Errorf("build request handling is not configured")

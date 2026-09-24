@@ -96,7 +96,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Global middleware.
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.Recoverer(logger))
 	r.Use(middleware.CORS(middleware.NewCORSConfig(corsCfg.AllowedOrigins)))
@@ -990,21 +989,4 @@ func middlewareAuthConfig(cfg config.AuthConfig) auth.MiddlewareConfig {
 		out.NIP98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
 	}
 	return out
-}
-
-func adoptionEnabled(cfg *config.Config) bool {
-	return cfg != nil && cfg.Adoption.Enabled
-}
-
-func directRuntimeEnabled(cfg *config.Config) bool {
-	return cfg != nil && cfg.DirectRuntime.Enabled
-}
-
-func operatorAccessMiddlewareConfig(cfg config.OperatorAccessConfig, resolver *auth.NIP05Resolver) middleware.OperatorAccessConfig {
-	return middleware.OperatorAccessConfig{
-		AllowedSubjects: cfg.AllowedSubjects,
-		AllowedPubkeys:  cfg.AllowedPubkeys,
-		AllowedEmails:   cfg.AllowedEmails,
-		NIP05Resolver:   resolver,
-	}
 }

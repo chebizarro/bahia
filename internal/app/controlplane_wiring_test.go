@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 
-	canonicalnostr "fiatjaf.com/nostr"
 	"reflect"
 	"testing"
 	"time"
@@ -130,7 +129,7 @@ func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testi
 	for _, tt := range []struct {
 		name      string
 		publisher controlplane.NostrEventPublisher
-		signer    canonicalnostr.Signer
+		signer    nostr.Signer
 		relays    []string
 	}{
 		{name: "nil publisher", signer: signer, relays: []string{"ws://relay.test"}},

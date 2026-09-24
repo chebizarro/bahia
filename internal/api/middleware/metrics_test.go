@@ -26,7 +26,9 @@ func TestMetrics_RecordsRequest(t *testing.T) {
 	recorder := &mockMetricsRecorder{}
 	handler := Metrics(recorder)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 
 	req := httptest.NewRequest("GET", "/test", nil)
@@ -77,7 +79,9 @@ func TestMetrics_DefaultStatus(t *testing.T) {
 	recorder := &mockMetricsRecorder{}
 	handler := Metrics(recorder)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Write without explicit status -> defaults to 200
-		w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
@@ -2913,7 +2912,7 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		}
 	}
 	if token == "" || strings.HasPrefix(token, "{") {
-		return nil, nil, fmt.Errorf("Cloudflare credential secret does not contain an API token")
+		return nil, nil, fmt.Errorf("cloudflare credential secret does not contain an API token")
 	}
 	zoneIDs := make(map[string]string, len(cfg.Zones))
 	zones := make([]service.PublicRouteZone, 0, len(cfg.Zones))
@@ -3472,7 +3471,7 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 	return append(opts, controlplane.WithNostrEventRepository(repo))
 }
 
-func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer, relays []string) *controlplane.PolicyCommandPublisher {
+func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) *controlplane.PolicyCommandPublisher {
 	if deps == nil || publisher == nil || signer == nil || len(relays) == 0 {
 		return nil
 	}
@@ -3482,7 +3481,7 @@ func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.Nos
 	return policyPublisher
 }
 
-func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModelRepository, publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer, relays []string) {
+func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModelRepository, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
 	if deps == nil {
 		return
 	}

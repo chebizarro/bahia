@@ -95,7 +95,7 @@ func TestRouterTierGatedRoutesReturn503Body(t *testing.T) {
 
 	resp, err := http.Get(server.URL + "/api/v1/services")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 
 	var body map[string]any
@@ -117,7 +117,7 @@ func getHealthResponse(t *testing.T, url string, wantStatus int) dto.HealthRespo
 	t.Helper()
 	resp, err := http.Get(url)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	require.Equal(t, wantStatus, resp.StatusCode)
 
 	var health dto.HealthResponse

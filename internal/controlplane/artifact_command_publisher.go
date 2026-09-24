@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -59,10 +58,10 @@ type RelayOutcome struct {
 // published.
 type ArtifactCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewArtifactCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *ArtifactCommandPublisher {
+func NewArtifactCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *ArtifactCommandPublisher {
 	return &ArtifactCommandPublisher{publisher: publisher, signer: signer}
 }
 

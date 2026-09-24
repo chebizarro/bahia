@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 )
 
@@ -19,10 +18,10 @@ const ContextVMMethodToolApprovalResponse = "tool/approval-response"
 // migration input only and is never published.
 type ToolApprovalCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewToolApprovalCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *ToolApprovalCommandPublisher {
+func NewToolApprovalCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *ToolApprovalCommandPublisher {
 	return &ToolApprovalCommandPublisher{publisher: publisher, signer: signer}
 }
 

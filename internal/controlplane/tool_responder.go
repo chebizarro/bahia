@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -17,12 +16,12 @@ import (
 // ToolResponder handles publishing tool provisioning status/result events.
 type ToolResponder struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	nostrRepo repository.NostrEventRepository
 	logger    *zap.Logger
 }
 
-func NewToolResponder(publisher NostrEventPublisher, signer canonicalnostr.Signer, logger *zap.Logger, nostrRepo repository.NostrEventRepository) *ToolResponder {
+func NewToolResponder(publisher NostrEventPublisher, signer nostr.Signer, logger *zap.Logger, nostrRepo repository.NostrEventRepository) *ToolResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

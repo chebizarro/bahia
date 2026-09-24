@@ -307,7 +307,7 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer closeResponseBody(t, resp.Body)
 			if resp.StatusCode != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403", resp.StatusCode)
 			}
@@ -356,7 +356,7 @@ func tenantIsolationGET(t *testing.T, fixture tenantIsolationFixture, path strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}

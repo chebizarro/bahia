@@ -8,14 +8,13 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (_ *nostr.Event, _ int, _ string, retErr error) {
+func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer nostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (_ *nostr.Event, _ int, _ string, retErr error) {
 	ctx, span := telemetry.StartOperation(ctx, "bahia.contextvm.dispatch",
 		attribute.Int("nostr.kind", int(KindContextVMMessage)), attribute.String("rpc.method", method))
 	defer func() {
@@ -43,7 +42,7 @@ func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher,
 	return ev, published, dTag, nil
 }
 
-func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer canonicalnostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string, beforePublish func(*nostr.Event, string) (func(), error)) (_ *nostr.Event, _ int, _ string, retErr error) {
+func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPublisher, signer nostr.Signer, recipientPubkey, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string, beforePublish func(*nostr.Event, string) (func(), error)) (_ *nostr.Event, _ int, _ string, retErr error) {
 	ctx, span := telemetry.StartOperation(ctx, "bahia.contextvm.dispatch",
 		attribute.Int("nostr.kind", int(KindContextVMMessage)), attribute.String("rpc.method", method), attribute.Bool("nostr.nip59", true))
 	defer func() {
@@ -95,7 +94,7 @@ func publishContextVMCommandNIP59(ctx context.Context, publisher NostrEventPubli
 	return rumor, published, dTag, nil
 }
 
-func buildContextVMCommand(ctx context.Context, signer canonicalnostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (*nostr.Event, string, error) {
+func buildContextVMCommand(ctx context.Context, signer nostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (*nostr.Event, string, error) {
 	method = strings.TrimSpace(method)
 	if method == "" {
 		return nil, "", fmt.Errorf("%s ContextVM method is required", label)

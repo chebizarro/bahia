@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -15,10 +14,10 @@ import (
 // ServiceCommandPublisher emits canonical service deployment command events.
 type ServiceCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewServiceCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *ServiceCommandPublisher {
+func NewServiceCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *ServiceCommandPublisher {
 	return &ServiceCommandPublisher{publisher: publisher, signer: signer}
 }
 

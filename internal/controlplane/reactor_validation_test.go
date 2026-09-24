@@ -152,39 +152,3 @@ func assertFilterMissingKinds(t *testing.T, filter gonostr.Filter, kinds ...int)
 		}
 	}
 }
-
-func filterWithKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) gonostr.Filter {
-	t.Helper()
-	for _, filter := range filters {
-		matched := true
-		for _, kind := range kinds {
-			if !slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return filter
-		}
-	}
-	t.Fatalf("no filter contained all kinds %v", kinds)
-	return gonostr.Filter{}
-}
-
-func filterWithoutKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) gonostr.Filter {
-	t.Helper()
-	for _, filter := range filters {
-		matched := true
-		for _, kind := range kinds {
-			if slices.Contains(filter.Kinds, gonostr.Kind(kind)) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return filter
-		}
-	}
-	t.Fatalf("no filter excluded all kinds %v", kinds)
-	return gonostr.Filter{}
-}

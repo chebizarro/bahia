@@ -393,18 +393,6 @@ func backendKinds(values []string) []domain.LLMBackendKind {
 	}
 	return out
 }
-func runtimeBackend(req *dto.LLMRuntimeManagedBackendRequest) *domain.LLMRuntimeManagedBackendConfig {
-	if req == nil {
-		return nil
-	}
-	return &domain.LLMRuntimeManagedBackendConfig{Image: req.Image, Scheme: req.Scheme, ContainerPort: req.ContainerPort, HostPort: req.HostPort, HealthPath: req.HealthPath, Environment: req.Environment, Volumes: req.Volumes, Command: req.Command, Entrypoint: req.Entrypoint, WorkingDir: req.WorkingDir, NetworkMode: req.NetworkMode, PullAlways: req.PullAlways}
-}
-func externalBackend(req *dto.LLMExternalBackendRequest) *domain.LLMExternalBackendConfig {
-	if req == nil {
-		return nil
-	}
-	return &domain.LLMExternalBackendConfig{BaseURL: req.BaseURL, HealthURL: req.HealthURL, HealthHeaders: req.HealthHeaders, HealthHeaderSecretRefs: req.HealthHeaderSecretRefs}
-}
 
 func workerFromLLMHostRequest(req dto.RegisterLLMHostRequest) *domain.Worker {
 	w := &domain.Worker{PubKey: req.PubKey, Name: req.Name, Description: req.Description, Architecture: req.Architecture, MaxConcurrentJobs: req.MaxConcurrentJobs, CurrentQueueDepth: req.CurrentQueueDepth, MinDurationSecs: req.MinDurationSecs, MaxDurationSecs: req.MaxDurationSecs, Geohash: req.Geohash, PreferredRelays: req.PreferredRelays}

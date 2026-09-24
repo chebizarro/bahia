@@ -733,7 +733,7 @@ func doJSON(t *testing.T, method, url string, body any) (*http.Response, map[str
 	}
 
 	respBody, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	closeResponseBody(t, resp.Body)
 
 	var result map[string]any
 	if len(respBody) > 0 {
@@ -746,6 +746,13 @@ func doJSON(t *testing.T, method, url string, body any) (*http.Response, map[str
 		}
 	}
 	return resp, result
+}
+
+func closeResponseBody(t *testing.T, body io.Closer) {
+	t.Helper()
+	if err := body.Close(); err != nil {
+		t.Errorf("close response body: %v", err)
+	}
 }
 
 func assertDeprecatedMutationRouteRemoved(t *testing.T, method, path string, resp *http.Response, body map[string]any) {
@@ -834,7 +841,7 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected legacy agent route to be removed, got status %d", resp.StatusCode)
 	}
@@ -859,7 +866,7 @@ func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) 
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusUnauthorized {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected protected MCP Bearer request to be rejected, status=%d body=%s", resp.StatusCode, string(body))
@@ -891,7 +898,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected protected MCP NIP-98 request to succeed without JWT, status=%d body=%s", resp.StatusCode, string(body))
@@ -915,6 +922,23 @@ func TestHealth(t *testing.T) {
 	}
 	if body["requested_tier"] != float64(2) || body["active_tier"] != float64(2) {
 		t.Errorf("expected requested/active tier 2, got %v/%v", body["requested_tier"], body["active_tier"])
+	}
+}
+
+func TestRouterRateLimitDoesNotTrustForwardedClientIP(t *testing.T) {
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{})
+	for i := 0; i <= 100; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if i < 100 && recorder.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d was rate limited before the configured burst", i+1)
+		}
+		if i == 100 && recorder.Code != http.StatusTooManyRequests {
+			t.Fatalf("request %d status = %d, want %d", i+1, recorder.Code, http.StatusTooManyRequests)
+		}
 	}
 }
 
@@ -1078,7 +1102,7 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("member read status = %d, want 200", resp.StatusCode)
 	}
@@ -1090,7 +1114,7 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-org read status = %d, want 403", resp.StatusCode)
 	}
@@ -1102,7 +1126,7 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-member read status = %d, want 403", resp.StatusCode)
 	}
@@ -1128,7 +1152,7 @@ func TestSignedUnknownPrincipalCannotCrossPlatformBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(t, resp.Body)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
 	}
@@ -1313,13 +1337,13 @@ func TestDeploymentFlow(t *testing.T) {
 	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/deploy", "v2.0", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	intentID := seedTestIntent(t, registry, svcID, envID, artID, "test-user")
 
-	resp, body := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
+	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get intent: expected 200, got %d", resp.StatusCode)
 	}
 
 	// Create deployment run.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
+	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
 		"deployment_intent_id": intentID,
 		"loom_job_id":          "loom-123",
 	})

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -18,12 +17,12 @@ import (
 // LLMResponder publishes threaded Nostr lifecycle replies for background LLM provisioning.
 type LLMResponder struct {
 	pool      *nostrpool.RelayPool
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	logger    *zap.Logger
 	eventRepo repository.NostrEventRepository
 }
 
-func NewLLMResponder(pool *nostrpool.RelayPool, signer canonicalnostr.Signer, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *LLMResponder {
+func NewLLMResponder(pool *nostrpool.RelayPool, signer nostr.Signer, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *LLMResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

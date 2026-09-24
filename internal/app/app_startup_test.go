@@ -23,6 +23,18 @@ import (
 	"go.uber.org/zap"
 )
 
+func closeWithNoError(t *testing.T, closeFn func() error) {
+	t.Helper()
+	require.NoError(t, closeFn())
+}
+
+func syncTestLogger(t *testing.T, logger *zap.Logger) {
+	t.Helper()
+	if err := logger.Sync(); err != nil {
+		t.Logf("test logger sync returned %v", err)
+	}
+}
+
 func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
@@ -30,7 +42,7 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 	cfg := startupTestConfig(ModeEmergency)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.Nil(t, app.DB)
@@ -46,7 +58,7 @@ func TestNewKeepsFullModeWhenDatabaseAvailable(t *testing.T) {
 	cfg := startupTestConfig(ModeFull)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.NotNil(t, app.ModePolicy)
@@ -77,7 +89,7 @@ func TestNewDoesNotRegisterSoulFactoryWhenDisabled(t *testing.T) {
 	cfg.SoulFactory.Enabled = false
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.Nil(t, app.SoulFactory)
@@ -101,9 +113,9 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	cfg.Nostr.BrowserRelays = []string{"wss://browser.example", "wss://relay.example"}
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
-	defer app.soulFactoryCloser()
+	defer closeWithNoError(t, app.soulFactoryCloser)
 
 	require.NotNil(t, app.SoulFactory)
 	require.True(t, appHasRunner(app, "soulfactory"))
@@ -140,9 +152,9 @@ func TestNewWiresBahiaIntegrationIntoSoulFactory(t *testing.T) {
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
-	defer app.soulFactoryCloser()
+	defer closeWithNoError(t, app.soulFactoryCloser)
 	require.Same(t, app.Registry, wiredRegistry)
 }
 
@@ -183,9 +195,9 @@ func TestNewRegistersMultipleSoulFactoryRuntimes(t *testing.T) {
 	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq", "synthetic-3"}
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
-	defer app.soulFactoryCloser()
+	defer closeWithNoError(t, app.soulFactoryCloser)
 
 	require.NotNil(t, app.SoulFactory)
 	require.Len(t, adapterConfigs, 3)
@@ -276,7 +288,7 @@ func TestNewRegistersDatabaseRecoveryRunnerWhenHigherTierStartupLosesDB(t *testi
 	cfg := startupTestConfig(ModeFull)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.True(t, appHasRunner(app, "database-recovery"))
@@ -289,7 +301,7 @@ func TestNewSkipsDatabaseRecoveryRunnerInEmergencyMode(t *testing.T) {
 	cfg := startupTestConfig(ModeEmergency)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.False(t, appHasRunner(app, "database-recovery"))
@@ -375,16 +387,16 @@ func appHasRunner(app *App, name string) bool {
 func configureValidSoulFactory(t *testing.T, cfg *config.Config, controllerPubkey string) {
 	t.Helper()
 	cfg.SoulFactory = config.SoulFactoryConfig{
-		Enabled:           true,
-		Relays:            []string{"wss://relay.example"},
-		AdditionalRelays:  []string{"wss://private.example", "wss://relay.example"},
-		AuthorizedPubkeys: []string{controllerPubkey},
-		SoulFactoryPubkey: controllerPubkey,
-		SignetBunkerURI:   "bunker://" + controllerPubkey + "?relay=wss://relay.example",
-		LLMBaseURL:        "https://llm.example",
-		LLMModel:          "soul-model",
-		LLMAPIKey:         "test-api-key",
-		LLMTimeout:        30 * time.Second,
+		Enabled:              true,
+		Relays:               []string{"wss://relay.example"},
+		AdditionalRelays:     []string{"wss://private.example", "wss://relay.example"},
+		AuthorizedPubkeys:    []string{controllerPubkey},
+		SoulFactoryPubkey:    controllerPubkey,
+		SignetBunkerURI:      "bunker://" + controllerPubkey + "?relay=wss://relay.example",
+		LLMBaseURL:           "https://llm.example",
+		LLMModel:             "soul-model",
+		LLMAPIKey:            "test-api-key",
+		LLMTimeout:           30 * time.Second,
 		ProvisioningStateDir: t.TempDir(),
 	}
 }

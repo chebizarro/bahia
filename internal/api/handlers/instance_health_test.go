@@ -50,24 +50,6 @@ func (f *instanceHealthRepoFake) ListRecentRecoveryAttempts(_ context.Context, _
 	return append([]domain.RecoveryAttempt(nil), f.attempts...), nil
 }
 
-type instanceServiceRepoFake struct {
-	repository.ServiceRepository
-	byID map[uuid.UUID]*domain.Service
-}
-
-func (f *instanceServiceRepoFake) GetByID(_ context.Context, id uuid.UUID) (*domain.Service, error) {
-	return f.byID[id], nil
-}
-
-type instanceEnvironmentRepoFake struct {
-	repository.EnvironmentRepository
-	byID map[uuid.UUID]*domain.Environment
-}
-
-func (f *instanceEnvironmentRepoFake) GetByID(_ context.Context, id uuid.UUID) (*domain.Environment, error) {
-	return f.byID[id], nil
-}
-
 type instanceOperatorFake struct {
 	setKey      domain.ManagedInstanceKey
 	setActor    string

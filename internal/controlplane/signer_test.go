@@ -5,22 +5,21 @@ import (
 	"errors"
 	"testing"
 
-	canonicalnostr "fiatjaf.com/nostr"
 	gonostr "fiatjaf.com/nostr"
 )
 
 type signerContextKey struct{}
 
 type contextCheckingSigner struct {
-	delegate canonicalnostr.Signer
+	delegate gonostr.Signer
 	want     string
 }
 
-func (s *contextCheckingSigner) GetPublicKey(ctx context.Context) (canonicalnostr.PubKey, error) {
+func (s *contextCheckingSigner) GetPublicKey(ctx context.Context) (gonostr.PubKey, error) {
 	return s.delegate.GetPublicKey(ctx)
 }
 
-func (s *contextCheckingSigner) SignEvent(ctx context.Context, ev *canonicalnostr.Event) error {
+func (s *contextCheckingSigner) SignEvent(ctx context.Context, ev *gonostr.Event) error {
 	if got, _ := ctx.Value(signerContextKey{}).(string); got != s.want {
 		return errors.New("signer did not receive call context")
 	}

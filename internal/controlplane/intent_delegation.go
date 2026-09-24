@@ -32,7 +32,7 @@ var (
 	errIntentDelegationNoEvent   = errors.New("signed request event is required")
 	errIntentDelegationNoPubkey  = errors.New("signed request pubkey is required")
 	errIntentDelegationUntrusted = errors.New("signer is not entitled to claim delegation")
-	errIntentDelegationSelf      = errors.New("Bahia service signer cannot supply requester authority")
+	errIntentDelegationSelf      = errors.New("bahia service signer cannot supply requester authority")
 )
 
 // authorizeIntentDelegation turns a requested_by claim into a verifiable

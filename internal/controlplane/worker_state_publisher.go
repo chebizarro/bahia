@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -18,7 +17,7 @@ import (
 // control-plane clients.
 type WorkerStatePublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 
 	auditRepo repository.NostrEventRepository
 	logger    *zap.Logger
@@ -27,7 +26,7 @@ type WorkerStatePublisher struct {
 	lastPublishedAt map[string]nostr.Timestamp
 }
 
-func NewWorkerStatePublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *WorkerStatePublisher {
+func NewWorkerStatePublisher(publisher NostrEventPublisher, signer nostr.Signer) *WorkerStatePublisher {
 	return &WorkerStatePublisher{
 		publisher:       publisher,
 		signer:          signer,

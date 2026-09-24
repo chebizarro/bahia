@@ -191,14 +191,14 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	// resolver has been wired (primarily for existing tests and callers).
 	var logChan <-chan runtime.LogEntry
 	if h.resolver != nil {
-		rt, err := h.resolver.Resolve(svc, env)
-		if err != nil {
+		rt, resolveErr := h.resolver.Resolve(svc, env)
+		if resolveErr != nil {
 			h.logger.Error("failed to resolve runtime for log stream",
 				zap.String("service", svc.Name),
 				zap.String("environment", env.Name),
-				zap.Error(err),
+				zap.Error(resolveErr),
 			)
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve runtime: %v", err))
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve runtime: %v", resolveErr))
 			return
 		}
 		logChan, err = rt.StreamLogs(r.Context(), opts.ServiceName, runtime.LogOptions{
@@ -267,22 +267,18 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "event: log\ndata: %s\n\n", data); err != nil {
+				h.logger.Warn("failed to write SSE log event", zap.Error(err))
+				return
+			}
 			flusher.Flush()
 
 		case <-heartbeat.C:
-			fmt.Fprint(w, ": heartbeat\n\n")
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				h.logger.Warn("failed to write SSE heartbeat", zap.Error(err))
+				return
+			}
 			flusher.Flush()
 		}
 	}
-}
-
-// logsResponse wraps run logs for JSON response.
-type logsResponse struct {
-	RunID     string `json:"run_id"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	ExitCode  *int   `json:"exit_code,omitempty"`
-	StartedAt string `json:"started_at,omitempty"`
-	Duration  string `json:"duration,omitempty"`
 }

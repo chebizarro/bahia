@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -22,13 +21,13 @@ type backupRestorePublishRegistry interface {
 // BackupRestoreResponder publishes Nostr-native restore status, approval-result, and terminal result events.
 type BackupRestoreResponder struct {
 	publisher backupResultPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	registry  backupRestorePublishRegistry
 	eventRepo repository.NostrEventRepository
 	logger    *zap.Logger
 }
 
-func NewBackupRestoreResponder(publisher backupResultPublisher, signer canonicalnostr.Signer, registry backupRestorePublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRestoreResponder {
+func NewBackupRestoreResponder(publisher backupResultPublisher, signer nostr.Signer, registry backupRestorePublishRegistry, eventRepo repository.NostrEventRepository, logger *zap.Logger) *BackupRestoreResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

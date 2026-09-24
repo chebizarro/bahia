@@ -97,35 +97,6 @@ func (h *DeploymentHandler) validateServiceInOrg(w http.ResponseWriter, r *http.
 	return serviceInAuthzOrg(w, r, svc.OrgID)
 }
 
-func (h *DeploymentHandler) validateServiceEnvInOrg(w http.ResponseWriter, r *http.Request, serviceID, envID uuid.UUID) bool {
-	if authzOrgID(r) == uuid.Nil {
-		return true
-	}
-	svc, err := h.registry.GetService(r.Context(), serviceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return false
-	}
-	if svc == nil {
-		writeError(w, http.StatusNotFound, "service not found")
-		return false
-	}
-	env, err := h.registry.GetEnvironment(r.Context(), envID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return false
-	}
-	if env == nil {
-		writeError(w, http.StatusNotFound, "environment not found")
-		return false
-	}
-	if svc.OrgID != env.OrgID {
-		writeError(w, http.StatusForbidden, "access denied")
-		return false
-	}
-	return serviceInAuthzOrg(w, r, svc.OrgID)
-}
-
 // --- Deployment Runs ---
 
 func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {

@@ -128,7 +128,9 @@ func (h *BlossomHandler) DownloadBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		return
+	}
 }
 
 // GetStats returns upload/download statistics for all servers.

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -66,7 +65,7 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, 
 
 type backupContextVMHandlers struct {
 	publisher     NostrEventPublisher
-	signer        canonicalnostr.Signer
+	signer        nostr.Signer
 	servicePubkey string
 	authorizer    encryptedTenantAuthorizer
 }
@@ -544,7 +543,7 @@ func (h backupContextVMHandlers) authorizeDelegation(ctx context.Context, reques
 		return nil, fmt.Errorf("backup delegation service identity is not configured")
 	}
 	if requesterPubkey == servicePubkey {
-		return nil, fmt.Errorf("Bahia service signer cannot supply backup requester authority")
+		return nil, fmt.Errorf("bahia service signer cannot supply backup requester authority")
 	}
 	tenantID, err := h.resolveDelegationTenant(ctx, request.Event, params, domain.PermManageBackups)
 	if err != nil {

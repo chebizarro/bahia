@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +113,7 @@ func (m *mockLiveLogResolver) Resolve(_ *domain.Service, _ *domain.Environment) 
 
 type mockLiveLogRuntime struct {
 	serviceName string
+	err         error
 }
 
 func (m *mockLiveLogRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeDocker }
@@ -123,6 +126,9 @@ func (m *mockLiveLogRuntime) Deploy(_ context.Context, _, _ string, _ runtime.De
 func (m *mockLiveLogRuntime) Undeploy(_ context.Context, _ string) error { return nil }
 func (m *mockLiveLogRuntime) StreamLogs(_ context.Context, serviceName string, _ runtime.LogOptions) (<-chan runtime.LogEntry, error) {
 	m.serviceName = serviceName
+	if m.err != nil {
+		return nil, m.err
+	}
 	ch := make(chan runtime.LogEntry)
 	close(ch)
 	return ch, nil
@@ -162,11 +168,16 @@ func TestLogHandler_GetRunLogs(t *testing.T) {
 	// Create mock Blossom server
 	blossomServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/"+stdoutHash {
-			w.Write([]byte(stdoutContent))
-		} else if path == "/"+stderrHash {
-			w.Write([]byte(stderrContent))
-		} else {
+		switch path {
+		case "/" + stdoutHash:
+			if _, err := w.Write([]byte(stdoutContent)); err != nil {
+				t.Errorf("write stdout fixture: %v", err)
+			}
+		case "/" + stderrHash:
+			if _, err := w.Write([]byte(stderrContent)); err != nil {
+				t.Errorf("write stderr fixture: %v", err)
+			}
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -292,7 +303,9 @@ func TestLogHandler_GetRunLogs_WithTail(t *testing.T) {
 	stdoutHash := blossom.ComputeSHA256([]byte(stdoutContent))
 
 	blossomServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(stdoutContent))
+		if _, err := w.Write([]byte(stdoutContent)); err != nil {
+			t.Errorf("write stdout fixture: %v", err)
+		}
 	}))
 	defer blossomServer.Close()
 
@@ -348,10 +361,15 @@ func TestLogHandler_GetRunLogs_StreamFilter(t *testing.T) {
 
 	blossomServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/"+stdoutHash {
-			w.Write([]byte(stdoutContent))
-		} else if path == "/"+stderrHash {
-			w.Write([]byte(stderrContent))
+		switch path {
+		case "/" + stdoutHash:
+			if _, err := w.Write([]byte(stdoutContent)); err != nil {
+				t.Errorf("write stdout fixture: %v", err)
+			}
+		case "/" + stderrHash:
+			if _, err := w.Write([]byte(stderrContent)); err != nil {
+				t.Errorf("write stderr fixture: %v", err)
+			}
 		}
 	}))
 	defer blossomServer.Close()
@@ -386,7 +404,9 @@ func TestLogHandler_GetRunLogs_StreamFilter(t *testing.T) {
 	var resp struct {
 		Data runtime.RunLogs `json:"data"`
 	}
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
 
 	if resp.Data.Stdout != stdoutContent {
 		t.Errorf("stdout filter: Stdout = %q, want %q", resp.Data.Stdout, stdoutContent)
@@ -407,7 +427,9 @@ func TestLogHandler_GetRunLogs_StreamFilter(t *testing.T) {
 	var resp2 struct {
 		Data runtime.RunLogs `json:"data"`
 	}
-	json.NewDecoder(rr.Body).Decode(&resp2)
+	if err := json.NewDecoder(rr.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
 
 	if resp2.Data.Stderr != stderrContent {
 		t.Errorf("stderr filter: Stderr = %q, want %q", resp2.Data.Stderr, stderrContent)
@@ -468,6 +490,33 @@ func TestLogHandler_StreamLiveLogs_UsesRuntimeTargetName(t *testing.T) {
 	}
 	if rt.serviceName != "legacy-api" {
 		t.Fatalf("StreamLogs called with serviceName %q, want legacy-api", rt.serviceName)
+	}
+}
+
+func TestLogHandler_StreamLiveLogs_ReportsRuntimeStreamFailure(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	runtimeErr := errors.New("stream unavailable")
+	rt := &mockLiveLogRuntime{err: runtimeErr}
+	handler := NewLogHandlerWithResolver(nil, &mockLiveLogResolver{rt: rt}, nil,
+		&mockServiceRepo{svc: &domain.Service{ID: serviceID, Name: "svc"}},
+		&mockEnvRepo{env: &domain.Environment{ID: envID, Name: "env"}},
+		&mockEnvStateRepo{}, testZapLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/services/"+serviceID.String()+"/environments/"+envID.String()+"/logs", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", serviceID.String())
+	rctx.URLParams.Add("envId", envID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rr := httptest.NewRecorder()
+
+	handler.StreamLiveLogs(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("StreamLiveLogs() status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(rr.Body.String(), runtimeErr.Error()) {
+		t.Fatalf("StreamLiveLogs() body = %q, want stream error", rr.Body.String())
 	}
 }
 

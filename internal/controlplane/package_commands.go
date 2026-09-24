@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -13,10 +12,10 @@ import (
 // PackageCommandPublisher emits canonical package control-plane request events.
 type PackageCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
-func NewPackageCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *PackageCommandPublisher {
+func NewPackageCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) *PackageCommandPublisher {
 	return &PackageCommandPublisher{publisher: publisher, signer: signer}
 }
 

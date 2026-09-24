@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -81,17 +80,4 @@ func decodeContextVMParams(params json.RawMessage, out any) error {
 		return json.Unmarshal([]byte(`{}`), out)
 	}
 	return json.Unmarshal(params, out)
-}
-
-func assistantHasPTag(tags nostr.Tags, pubkey string) bool {
-	pubkey = strings.ToLower(strings.TrimSpace(pubkey))
-	if pubkey == "" {
-		return true
-	}
-	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] == "p" && strings.ToLower(strings.TrimSpace(tag[1])) == pubkey {
-			return true
-		}
-	}
-	return false
 }

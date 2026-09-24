@@ -3,7 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"net/http"
+	"errors"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -11,40 +11,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
-
-type contentKeySet map[string]struct{}
-
-func set(s ...string) contentKeySet {
-	m := make(contentKeySet, len(s))
-	for _, v := range s {
-		m[v] = struct{}{}
-	}
-	return m
-}
-
-func hasKeys(actual contentKeySet, required contentKeySet) bool {
-	for k := range required {
-		if _, ok := actual[k]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func keysOf(raw json.RawMessage) (contentKeySet, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
-	}
-	ks := make(contentKeySet, len(m))
-	for k := range m {
-		if k == "jsonrpc" || k == "id" || k == "error" || k == "result" {
-			continue
-		}
-		ks[k] = struct{}{}
-	}
-	return ks, nil
-}
 
 func newTestReactor(t *testing.T, publisher NostrEventPublisher) (*Reactor, string) {
 	t.Helper()
@@ -251,7 +217,7 @@ func TestPublishFailureIsLogged(t *testing.T) {
 type failingNostrPublisher struct{}
 
 func (f *failingNostrPublisher) Publish(_ context.Context, _ nostr.Event) (int, error) {
-	return 0, &http.ProtocolError{ErrorString: "simulated publish failure"}
+	return 0, errors.New("simulated publish failure")
 }
 
 var _ NostrEventPublisher = (*failingNostrPublisher)(nil)

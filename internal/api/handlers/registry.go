@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/service"
+	"go.uber.org/zap"
 )
 
 const ociAPIVersionHeader = "registry/2.0"
@@ -47,10 +48,7 @@ func (h *OCIRegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	r = middleware.WithRegistryPrincipal(r, middleware.ResolveRegistryPrincipal(r, h.nip98, h.ociCfg))
 
-	path := r.URL.Path
-	if strings.HasPrefix(path, "/v2") {
-		path = strings.TrimPrefix(path, "/v2")
-	}
+	path := strings.TrimPrefix(r.URL.Path, "/v2")
 	if path == "" {
 		path = "/"
 	}
@@ -168,7 +166,11 @@ func (h *OCIRegistryHandler) handleBlob(w http.ResponseWriter, r *http.Request, 
 		writeOCIServiceError(w, err)
 		return
 	}
-	defer resp.Stream.Close()
+	defer func() {
+		if err := resp.Stream.Close(); err != nil {
+			zap.L().Warn("failed to close registry blob stream", zap.Error(err))
+		}
+	}()
 	w.Header().Set("Content-Type", resp.ContentType)
 	w.Header().Set("Docker-Content-Digest", resp.DockerContentDigest)
 	w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))

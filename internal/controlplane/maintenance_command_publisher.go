@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 )
 
@@ -37,7 +36,7 @@ const (
 // driver; this publisher is the Bahia control-plane side (J4).
 type MaintenanceCommandPublisher struct {
 	publisher NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	observer  MaintenanceRequestObserver
 }
 
@@ -59,7 +58,7 @@ type MaintenanceRequestObserver interface {
 	RegisterMaintenanceRequest(MaintenanceRequestCorrelation) (cancel func(), err error)
 }
 
-func NewMaintenanceCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer, observers ...MaintenanceRequestObserver) *MaintenanceCommandPublisher {
+func NewMaintenanceCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer, observers ...MaintenanceRequestObserver) *MaintenanceCommandPublisher {
 	var observer MaintenanceRequestObserver
 	if len(observers) > 0 {
 		observer = observers[0]

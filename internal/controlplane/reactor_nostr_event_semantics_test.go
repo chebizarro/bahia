@@ -488,13 +488,3 @@ func (s *allStepsRuntimeStub) Restart(_ context.Context, _, _ uuid.UUID) (*domai
 func (s *allStepsRuntimeStub) Stop(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
 	return s.obs, nil
 }
-
-// hasTagKey checks if any tag with the given key exists.
-func hasTagKey(tags nostr.Tags, key string) bool {
-	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] == key {
-			return true
-		}
-	}
-	return false
-}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -19,12 +18,12 @@ import (
 // ML progress is represented by 3198x read models, so PublishStatus is a no-op.
 type MLResponder struct {
 	pool      *nostrpool.RelayPool
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 	logger    *zap.Logger
 	eventRepo repository.NostrEventRepository
 }
 
-func NewMLResponder(pool *nostrpool.RelayPool, signer canonicalnostr.Signer, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *MLResponder {
+func NewMLResponder(pool *nostrpool.RelayPool, signer nostr.Signer, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *MLResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -235,19 +234,6 @@ func metadataString(metadata map[string]any, key string) string {
 		return fmt.Sprint(value)
 	}
 	return ""
-}
-
-func mlResultKindForRequest(requestKind int) (int, error) {
-	switch requestKind {
-	case KindMLRecipeRunRequest:
-		return KindMLRecipeRunResult, nil
-	case KindMLInferenceDeployRequest:
-		return KindMLInferenceDeployResult, nil
-	case KindMLInferenceRollbackRequest:
-		return KindMLInferenceRollbackResult, nil
-	default:
-		return 0, fmt.Errorf("unsupported ML result request kind %d", requestKind)
-	}
 }
 
 func normalizeMLTerminalStatus(status string) string {

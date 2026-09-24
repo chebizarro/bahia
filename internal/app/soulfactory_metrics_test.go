@@ -21,10 +21,10 @@ func TestNewExportsLiveGovernedSagaStore(t *testing.T) {
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	app, err := New(cfg)
 	require.NoError(t, err)
-	defer app.Logger.Sync()
+	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
-	defer app.soulFactoryCloser()
-	defer app.Telemetry.Shutdown(context.Background())
+	defer closeWithNoError(t, app.soulFactoryCloser)
+	defer closeWithNoError(t, func() error { return app.Telemetry.Shutdown(context.Background()) })
 
 	// Persist after startup: a scrape must observe the live engine's checkpoints,
 	// not a separate metrics-only store or a startup snapshot.
