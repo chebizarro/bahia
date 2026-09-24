@@ -180,7 +180,7 @@ type Reactor struct {
 
 	toolProvisioning              repository.ToolProvisioningRepository
 	toolResponder                 *ToolResponder
-	toolCoordinator               *service.ToolProvisioningCoordinator
+	toolCoordinator               toolApprovalProcessor
 	policyService                 *service.PolicyService
 	adoption                      AdoptionOperatorService
 	runtimeLifecycle              RuntimeLifecycleOperatorService
@@ -1387,12 +1387,14 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.Event) error {
 	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("operator", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "operator not in authorized list"))
 		return fmt.Errorf("unauthorized operator")
 	}
 	if r.toolProvisioning == nil {
-		r.logPublishError(r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured"))
 		return fmt.Errorf("tool provisioning repository not configured")
+	}
+	decisionRepository, ok := r.toolProvisioning.(toolApprovalDecisionRepository)
+	if !ok {
+		return fmt.Errorf("tool provisioning repository does not support atomic approval decisions")
 	}
 	var req struct {
 		IntentID string `json:"intent_id"`
@@ -1400,38 +1402,22 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
 		return fmt.Errorf("parse tool approval response: %w", err)
 	}
 	intentID, err := uuid.Parse(req.IntentID)
 	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err)))
-		return err
+		return fmt.Errorf("invalid intent_id: %w", err)
 	}
 	if req.Action != "approve" && req.Action != "reject" {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", "action must be 'approve' or 'reject'"))
 		return fmt.Errorf("invalid action")
 	}
-	intent, err := r.toolProvisioning.GetIntent(ctx, intentID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "lookup_error", err.Error()))
-		return fmt.Errorf("get tool provisioning intent: %w", err)
-	}
-	if intent == nil {
-		r.logPublishError(r.publishError(ctx, event, "not_found", "tool provisioning intent not found"))
-		return fmt.Errorf("intent not found")
-	}
-	now := time.Now().UTC()
+	decision := domain.ToolProvisionStatusRejected
 	if req.Action == "approve" {
-		intent.Status = domain.ToolProvisionStatusApproved
-		intent.ApprovedBy = event.PubKey.Hex()
-		intent.ApprovedAt = &now
-	} else {
-		intent.Status = domain.ToolProvisionStatusRejected
+		decision = domain.ToolProvisionStatusApproved
 	}
-	if err := r.toolProvisioning.UpdateIntent(ctx, intent); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "update_error", err.Error()))
-		return fmt.Errorf("update tool provisioning intent: %w", err)
+	intent, err := decisionRepository.ApplyToolApprovalDecision(ctx, intentID, decision, event.PubKey.Hex(), time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("apply tool approval decision: %w", err)
 	}
 	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey.Hex(), req.Reason); err != nil {
 		logger.Warn("failed to log tool approval action", zap.Error(err))
