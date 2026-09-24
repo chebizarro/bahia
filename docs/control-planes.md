@@ -532,3 +532,13 @@ highest applied config version and checks its target event ID to determine drift
 Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
 See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
 for tags, retention trade-offs, subscription scope, and upgrade semantics.
+
+### Mutation consumer adjudication
+
+Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter are registered
+against the production reactor's services and execute directly through ContextVM.
+The global operator allowlist gates every method, including wrapped requests;
+empty configuration fails closed. Missing repositories produce configuration
+errors. Responses belong to the transport; canonical state publication failures
+are not acknowledged as success. Continuity, package and tool-approval gaps remain
+explicitly recorded in the ContextVM migration verification report.

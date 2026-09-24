@@ -445,3 +445,12 @@ highest applied config version and checks its target event ID to determine drift
 Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
 See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
 for tags, retention trade-offs, subscription scope, and upgrade semantics.
+
+### Policy and scheduling consumer status
+
+The ContextVM policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter
+methods have fail-closed operator-gated consumers. Policy CRUD emits `30900`
+state (`domain=policy`, `schema=bahia.cp-state.v1`, `d=<policy-id>`) and deletion
+tombstones, matching the canonical projector; no legacy registry event is
+published. The transport owns the single correlated response, encrypted reply
+and replay. See the migration verification report for capabilities still unwired.

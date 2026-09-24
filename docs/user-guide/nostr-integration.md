@@ -872,3 +872,13 @@ highest applied config version and checks its target event ID to determine drift
 Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
 See [Config Fabric durable status receipts](../nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
 for tags, retention trade-offs, subscription scope, and upgrade semantics.
+
+### Verified policy and worker mutations
+
+Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter execute via
+signed ContextVM requests, using `nostr.authorized_pubkeys` as the required
+operator allowlist. Empty configuration denies all callers. See
+[Policies](features/policies.md#deployment-policy-contextvm-mutations) and
+[Workers](features/workers.md#direct-scheduling-mutations) for request, state
+and failure semantics. A command publisher alone is not proof of a consumer;
+continuity/package/tool-approval gaps remain in the migration verification report.

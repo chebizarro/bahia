@@ -132,10 +132,7 @@ func fleetOperatorRegistrations(t *testing.T) []fleetOperatorRegistration {
 			methods: []fleetOperatorMethod{
 				{ContextVMMethodWorkerCleanup, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-cleanup:1","cleanup_mode":"reclaimable_only"}`)},
 				{ContextVMMethodWorkerCordon, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-cordon:1"}`)},
-				{ContextVMMethodWorkerUncordon, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-uncordon:1"}`)},
 				{ContextVMMethodWorkerDrain, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-drain:1"}`)},
-				{ContextVMMethodWorkerUndrain, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-undrain:1"}`)},
-				{ContextVMMethodWorkerMaintenanceEnter, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-maintenance-enter:1"}`)},
 				{ContextVMMethodWorkerMaintenanceExit, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-maintenance-exit:1"}`)},
 				{ContextVMMethodWorkerLabelsUpdate, []byte(`{"worker_pubkey":"worker-1","idempotency_key":"worker-labels-update:1","labels":{"region":"us-west"}}`)},
 			},

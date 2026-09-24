@@ -253,3 +253,12 @@ highest applied config version and checks its target event ID to determine drift
 Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
 See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
 for tags, retention trade-offs, subscription scope, and upgrade semantics.
+
+### Adjudicated ContextVM mutations
+
+Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter use direct,
+operator-gated ContextVM consumers with transport-owned responses. Policy registry
+output is canonical `30900` (`domain=policy`, `schema=bahia.cp-state.v1`,
+`d=<policy-id>`); retired policy command/registry kinds are not re-enabled.
+This does not claim the remaining continuity/package/tool-approval consumers
+are implemented; consult the ContextVM migration verification report.

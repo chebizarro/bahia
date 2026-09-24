@@ -205,6 +205,7 @@ type Reactor struct {
 	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
 	eventBus                      events.Publisher
 	workerStatePublisher          *WorkerStatePublisher
+	lastPolicyPublishedAt         map[uuid.UUID]nostr.Timestamp
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -1458,186 +1459,6 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 	return nil
 }
 
-func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
-		return
-	}
-	if r.policyService == nil {
-		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
-		return
-	}
-	var req struct {
-		Name          string              `json:"name"`
-		EnvironmentID *string             `json:"environment_id,omitempty"`
-		Rules         []domain.PolicyRule `json:"rules"`
-		Enforcement   string              `json:"enforcement"`
-		Enabled       bool                `json:"enabled"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
-		return
-	}
-	policy := &domain.DeploymentPolicy{Name: req.Name, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
-	if req.EnvironmentID != nil && *req.EnvironmentID != "" {
-		id, err := uuid.Parse(*req.EnvironmentID)
-		if err != nil {
-			r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
-			return
-		}
-		policy.EnvironmentID = &id
-	}
-	if policy.Enforcement == "" {
-		policy.Enforcement = domain.PolicyEnforcementWarn
-	}
-	if err := r.policyService.CreatePolicy(ctx, policy); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "create_error", err.Error()))
-		return
-	}
-	r.logPublishError(r.publishPolicyRegistry(ctx, policy, false))
-	r.logPublishError(r.publishActionResult(ctx, event, "policy_create", "success", nil))
-}
-
-func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
-		return
-	}
-	if r.policyService == nil {
-		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
-		return
-	}
-	var req struct {
-		ID            string              `json:"id"`
-		Name          *string             `json:"name,omitempty"`
-		EnvironmentID *string             `json:"environment_id,omitempty"`
-		Rules         []domain.PolicyRule `json:"rules,omitempty"`
-		Enforcement   *string             `json:"enforcement,omitempty"`
-		Enabled       *bool               `json:"enabled,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
-		return
-	}
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "policy")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err)))
-		return
-	}
-	policy, err := r.policyService.GetPolicy(ctx, id)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "lookup_error", err.Error()))
-		return
-	}
-	if policy == nil {
-		r.logPublishError(r.publishError(ctx, event, "not_found", "policy not found"))
-		return
-	}
-	if req.Name != nil {
-		policy.Name = strings.TrimSpace(*req.Name)
-	}
-	if req.Rules != nil {
-		policy.Rules = req.Rules
-	}
-	if req.Enforcement != nil {
-		policy.Enforcement = domain.PolicyEnforcement(strings.TrimSpace(*req.Enforcement))
-	}
-	if req.Enabled != nil {
-		policy.Enabled = *req.Enabled
-	}
-	if req.EnvironmentID != nil {
-		if strings.TrimSpace(*req.EnvironmentID) == "" {
-			policy.EnvironmentID = nil
-		} else {
-			envID, err := uuid.Parse(*req.EnvironmentID)
-			if err != nil {
-				r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
-				return
-			}
-			policy.EnvironmentID = &envID
-		}
-	}
-	if policy.Enforcement == "" {
-		policy.Enforcement = domain.PolicyEnforcementWarn
-	}
-	if err := r.policyService.UpdatePolicy(ctx, policy); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "update_error", err.Error()))
-		return
-	}
-	r.logPublishError(r.publishPolicyRegistry(ctx, policy, false))
-	r.logPublishError(r.publishActionResult(ctx, event, "policy_update", "success", nil))
-}
-
-func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
-		return
-	}
-	if r.policyService == nil {
-		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
-		return
-	}
-	var req struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal([]byte(event.Content), &req)
-	if req.ID == "" {
-		req.ID = tagValueNostr(event.Tags, "policy")
-	}
-	id, err := uuid.Parse(req.ID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err)))
-		return
-	}
-	if err := r.policyService.DeletePolicy(ctx, id); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "delete_error", err.Error()))
-		return
-	}
-	r.logPublishError(r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: id, UpdatedAt: time.Now().UTC()}, true))
-	r.logPublishError(r.publishActionResult(ctx, event, "policy_delete", "success", nil))
-}
-
-func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
-		return
-	}
-	if r.policyService == nil {
-		r.logPublishError(r.publishError(ctx, event, "policy_unavailable", "policy service is not configured"))
-		return
-	}
-	var req struct {
-		ArtifactID    string `json:"artifact_id"`
-		EnvironmentID string `json:"environment_id"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
-		return
-	}
-	artifactID, err := uuid.Parse(req.ArtifactID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid artifact_id: %v", err)))
-		return
-	}
-	envID, err := uuid.Parse(req.EnvironmentID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
-		return
-	}
-	evaluation, err := r.policyService.Evaluate(ctx, artifactID, envID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "evaluate_error", err.Error()))
-		return
-	}
-	tags := nostr.Tags{{"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
-	if err := r.publishContextVMResult(ctx, event, evaluation, tags, nil); err != nil {
-		r.zapLog.Warn("control-plane evaluation result publish failed", zap.Error(err))
-	}
-}
-
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
 	if !r.isAuthorized(event.PubKey.Hex()) {
 		r.logPublishError(r.publishLLMError(ctx, event, "unauthorized", "requester not in authorized list"))
@@ -2504,12 +2325,29 @@ func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.Depl
 			tags = append(tags, nostr.Tag{"environment", policy.EnvironmentID.String()})
 		}
 	}
-	event := &nostr.Event{Kind: KindPolicyRegistry, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
+	tags = append(tags, nostr.Tag{"domain", "policy"}, nostr.Tag{"schema", "bahia.cp-state.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPolicyRegistry)})
+	r.mu.Lock()
+	if r.lastPolicyPublishedAt == nil {
+		r.lastPolicyPublishedAt = make(map[uuid.UUID]nostr.Timestamp)
+	}
+	createdAt := nostr.Now()
+	if last := r.lastPolicyPublishedAt[policy.ID]; createdAt <= last {
+		createdAt = last + 1
+	}
+	r.lastPolicyPublishedAt[policy.ID] = createdAt
+	r.mu.Unlock()
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: createdAt, Tags: tags, Content: string(contentJSON)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign policy registry event: %w", err)
 	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	published, err := r.publishEvent(ctx, event)
+	if err != nil {
+		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("publish policy registry: no relay accepted the event")
+	}
+	return nil
 }
 
 // PublishServiceRegistry publishes canonical CAS service registry state.

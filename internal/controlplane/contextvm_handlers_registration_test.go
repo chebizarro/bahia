@@ -27,7 +27,7 @@ func commandEventFromPublishes(t *testing.T, events []nostr.Event) nostr.Event {
 	return nostr.Event{}
 }
 
-func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
+func TestWorkerContextVMForwardersDispatchRemainingMethods(t *testing.T) {
 	tests := []struct {
 		method  string
 		command string
@@ -35,10 +35,7 @@ func TestWorkerContextVMHandlersDispatchAllWebMethods(t *testing.T) {
 	}{
 		{ContextVMMethodWorkerCleanup, WorkerCommandCleanupRequest, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-cleanup:1", "cleanup_mode": "reclaimable_only"}},
 		{ContextVMMethodWorkerCordon, WorkerCommandCordon, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-cordon:1"}},
-		{ContextVMMethodWorkerUncordon, WorkerCommandUncordon, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-uncordon:1"}},
 		{ContextVMMethodWorkerDrain, WorkerCommandDrain, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-drain:1"}},
-		{ContextVMMethodWorkerUndrain, WorkerCommandUndrain, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-undrain:1"}},
-		{ContextVMMethodWorkerMaintenanceEnter, WorkerCommandMaintenanceEnter, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-maintenance-enter:1"}},
 		{ContextVMMethodWorkerMaintenanceExit, WorkerCommandMaintenanceExit, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-maintenance-exit:1"}},
 		{ContextVMMethodWorkerLabelsUpdate, WorkerCommandLabelsUpdate, map[string]any{"worker_pubkey": "worker-1", "idempotency_key": "worker-labels-update:1", "labels": map[string]string{"region": "us-west"}}},
 	}

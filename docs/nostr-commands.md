@@ -382,3 +382,13 @@ highest applied config version and checks its target event ID to determine drift
 Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
 See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
 for tags, retention trade-offs, subscription scope, and upgrade semantics.
+
+### Verified mutation execution
+
+Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter have direct
+ContextVM consumers guarded by the global operator allowlist (empty denies all).
+They return transport-owned correlated results, not another command publication.
+Policy CRUD publishes canonical `30900` registry state; worker transitions
+publish canonical worker state. Package and tool-approval publisher availability
+still does not establish production consumer availability; see the migration
+verification report for the remaining gaps.

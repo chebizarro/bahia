@@ -282,3 +282,19 @@ Configure an organization-scoped webhook or Nostr DM channel for the worker even
 - [Deployments](deployments.md) — Worker execution
 - [ML Models](ml-models.md) — ML inference hosting
 - [Payments](payments.md) — Worker costs
+
+### Direct scheduling mutations
+
+`worker/uncordon`, `worker/undrain`, and `worker/maintenance-enter` now execute
+the scheduling transition directly rather than republishing the same request.
+They require the verified caller to be in `nostr.authorized_pubkeys`; empty
+operator configuration denies all calls. Supply a lowercase hexadecimal
+`worker_pubkey` and `idempotency_key` (or `_meta.progressToken`). Conflicting
+worker/idempotency tags and invalid transitions (including disabled workers)
+are rejected before writes.
+
+Success means the repository was updated and a signed canonical worker state
+event was accepted by at least one relay. The transport returns one correlated
+result and handles encrypted replies and replay. Publication failure after a
+storage update is an error, not a successful acknowledgment. Other worker
+forwarding handlers were not converted by this adjudication.

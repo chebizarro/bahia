@@ -168,3 +168,105 @@ provider acceptance. No deployment or remote publication was performed. Existing
 unimplemented mutation consumers remain unadvertised; publishing a request is
 not proof of completion. User owns issue state. RepoPrompt Oracle review could
 not run (`targetBindingMismatch`); the worktree diff was reviewed directly.
+
+
+## Unused implementation adjudication (2026-09-24)
+
+Scope: worktree `bahia-unwired`, branch `lint/unwired-adjudication`, baseline
+`31a904872f45e0f544ec2402b43db9b768bce708`. The unrestricted controlplane lint
+command reported 23 unused findings. No suppression, lint configuration change,
+legacy runtime re-enablement, issue-state operation, push or merge was used.
+
+### Per-finding disposition
+
+Paths below are relative to `internal/controlplane/` unless otherwise noted.
+**Wired** means an actual production consumer and signed-transport tests, not
+merely a reference inserted to quiet the linter. **Open** means the retained
+implementation is not safe to expose by adding a registration alone.
+
+| # | Original unused finding | Disposition and evidence |
+|---|---|---|
+| 1 | `Reactor.handleFailoverRequest` | **Open.** `continuity_command_handlers.go:11` decodes retired kind 38430. Serialization still emits that kind (`internal/adapters/nostr/continuity_serialization.go:426,504,574`); the runtime rejects it. No ContextVM replacement consumer exists. Migrate the command contract, prerequisite definitions, replay/idempotency and execution/result path together rather than restore legacy ingress. |
+| 2 | `Reactor.handleRecoveryRequest` | **Open.** `continuity_command_handlers.go:28` has the same problem for retired kind 38431. The application subscribes to the internal recovery event but no production ingress emits it (`internal/app/app.go:2274`). |
+| 3 | `continuityCommandRequestedEvent` | **Open.** `continuity_command_handlers.go:45` supplies source, target and idempotency data exclusively to the two retained command handlers. Deleting it would erase part of that unwired command path, not remove a superseded implementation. |
+| 4 | `Reactor.handleFailoverPolicyDefinition` | **Open.** `continuity_definition_handlers.go:31` emits the event consumed by `StoreRecipe` (`internal/app/app.go:2234`). Canonical definition kind 31401 is absent from reactor request/replay kinds (`reactor.go:1657,1666`) and dispatch. Needs an author-scoped definition subscription/backfill, not a new mutation RPC. |
+| 5 | `Reactor.handleStandbyNodeDefinition` | **Open.** `continuity_definition_handlers.go:50` has no runtime ingress; its `EventStandbyNodeDefinitionObserved` additionally has no production subscriber. Requires a real standby inventory/storage consumer as well as subscription/backfill. |
+| 6 | `Reactor.handleReplicationPolicyDefinition` | **Open.** `continuity_definition_handlers.go:76` emits the input for `StoreReplicationPolicy` (`internal/app/app.go:2244`), but canonical kind 31403 is absent from runtime subscriptions/replay/dispatch. Needs the complete definition hydration path. |
+| 7 | `Reactor.handleRecoveryWorkflowDefinition` | **Open.** `continuity_definition_handlers.go:95` emits the recovery recipe consumed at `internal/app/app.go:2254`; kind 31404 has the same missing subscription/backfill/dispatch. |
+| 8 | `Reactor.handlePackagePublishIntent` | **Open.** `package_commands.go:151` publishes `package/publish`, with no registered consumer. `package_handlers.go:122` accepts any nonempty caller-supplied `ApprovedBy` as approval. Define/verify approval authority before exposing it; registry failure also currently only logs before terminal success. |
+| 9 | `Reactor.handlePackagePromotionRequest` | **Open.** `package_commands.go:169` publishes `package/promote`; the only prior registrations were transport tests. The service's approval check only tests nonempty `ApprovedBy` (`internal/service/package_registry.go:583`), and handler lines 184-190 swallow state publication failures before success. Requires approval provenance and reliable completion, not just a gate wrapper. |
+| 10 | `Reactor.handlePackageYankRequest` | **Open.** `package_commands.go:181` publishes `package/yank`. The retained handler uses `YankPackage` even for `Deprecated`, then adds deprecation metadata (`package_handlers.go:199-225`); the service marks the artifact deleted (`internal/service/package_registry.go:433-464`). Resolve destructive yank versus deprecation semantics and state/terminal failure ordering before exposure. |
+| 11 | `Reactor.handlePackageDriftDetect` | **Open.** `package_commands.go:193` publishes `package/drift-detect`. Lines 280-281 publish a drift result and then another terminal package result; persistence only occurs in the latter path. A transport wrapper would add yet another response. Refactor to one transport-owned result after intent persistence, with correlated drift data and replay tests. |
+| 12 | `Reactor.publishPackageArtifactRegistry` | **Open.** `package_handlers.go:468` is required by publish/promote/yank, not superseded by another working consumer. It publishes then projects, ignores a zero-relay count, and its callers log failures and continue to success. Repair publication/projection/terminal semantics with those operations. |
+| 13 | `Reactor.publishPackagePromotionRegistry` | **Open.** `package_handlers.go:482` is the retained publication/promotion projection writer. Same zero-accept/projection/terminal-success gap; no other live command path supplies this capability. |
+| 14 | `Reactor.publishPackageDriftEvent` | **Open.** `package_handlers.go:498` emits the first of two direct responses from the unwired drift handler. Retain until the drift command is migrated to one persisted, transport-owned completion; no production replacement exists today. |
+| 15 | `Reactor.handleToolApprovalResponse` | **Open.** `tool_approval_command_publisher.go:72` publishes the advertised method; no production registration exists. `reactor.go:1424-1445` overwrites any intent's status without a pending-state/CAS guard, then may execute provisioning again. Needs approval transition/idempotency and audit guarantees, not a new authenticated entrypoint to this implementation. |
+| 16 | `Reactor.handlePolicyCreate` | **Wired.** Converted to ContextVM params/results in `policy_contextvm_handlers.go:13`, registered at `reactor_contextvm_handlers.go:21-33`, called by production assembly (`internal/app/app.go:1756`). FleetOperatorGate authorizes the verified inner signer before service access; empty/nil gate denies all. Requires idempotency for creation, validates inputs, persists via PolicyService, publishes canonical registry state and returns correlated `policy_id`. |
+| 17 | `Reactor.handlePolicyUpdate` | **Wired.** `policy_contextvm_handlers.go:40`; same production registration/gate. Loads the stored policy, validates a copy before writing, persists and publishes state; errors return through the transport. |
+| 18 | `Reactor.handlePolicyDelete` | **Wired.** `policy_contextvm_handlers.go:98`; same registration/gate. Validates ID, deletes via PolicyService and publishes a canonical tombstone before success. |
+| 19 | `Reactor.handlePolicyEvaluate` | **Wired.** `policy_contextvm_handlers.go:117`; same registration/gate, UUID validation and actual PolicyService evaluation. Tests exercise a blocking signature policy rather than an unconditional mock success. |
+| 20 | `Reactor.publishPolicyRegistry` | **Wired.** `reactor.go:2305`, invoked by the three gated CRUD handlers. Migrated retired output to projector-compatible `30900` / `domain=policy` / `schema=bahia.cp-state.v1` / `d=id`; positive relay acceptance required and per-policy timestamps increase. The existing projector publishes startup snapshots (`internal/adapters/nostr/projector.go:931,2688`), not live CRUD/tombstones, so it did not supersede this responsibility. |
+| 21 | `Reactor.handleWorkerUncordonRequest` | **Wired.** `reactor_contextvm_handlers.go:36`, gated registration at line 18. Direct repository scheduling transition to active, shared legacy transition validator, canonical state publication and transport result. |
+| 22 | `Reactor.handleWorkerUndrainRequest` | **Wired.** `reactor_contextvm_handlers.go:40`, gated registration at line 19. Same direct path for draining to active. |
+| 23 | `Reactor.handleWorkerMaintenanceEnterRequest` | **Wired.** `reactor_contextvm_handlers.go:44`, gated registration at line 20. Same direct path to maintenance. Disabled workers, conflicting worker/idempotency tags and invalid keys are rejected before writes. |
+
+### Why no deletion-only adjudications
+
+The apparent worker replacements called `WorkerCommandPublisher`, whose
+`publishLifecycle` / `publishPlacement` publishes the same ContextVM method
+(`worker_command_publisher.go:158-210`). Reactor dispatch did not consume it.
+Those three forwarding wrappers and their registration-only test rows have been
+replaced with real scheduling mutations and stronger signed transport tests;
+the unused Reactor implementations were not safely superseded legacy twins.
+Other worker forwarders remain outside the 23-finding scope and must not be
+mistaken for proof of completed mutations.
+
+### Authorization, completion and test evidence
+
+`FleetOperatorGate.wrap` (`fleet_operator_gate.go:26`) gates all seven methods
+against `cfg.Nostr.AuthorizedPubkeys`, not an inferred service/outer-wrapper
+identity or a permissive fallback. Production installs the registrar after the
+reactor's real dependencies are supplied; policy handlers report unavailable
+when the database repository is absent. Legacy numeric command subscriptions
+were not reintroduced. The transport owns correlation, encryption and response
+replay; handlers do not synthesize Nostr requests or republish incoming commands.
+
+`reactor_contextvm_handlers_test.go` covers each of the seven methods through
+signed plaintext and wrapped transport dispatch for allowed, outsider, empty
+allowlist and nil-gate cases. The transport admits both test principals, so the
+rejections prove the method gate. Assertions cover zero unauthorized storage
+access, worker/policy persistence, actual blocking evaluation, canonical signed
+state/tombstones, no republished command, response correlation, replay without
+repeat mutation, disabled workers, conflicting tags, invalid IDs/rules/enforcement,
+unavailable services, repository failure, zero-relay publication rejection and
+same-policy state ordering. Existing worker transition tests still pass.
+
+Counterfactual: temporarily removing only the new registrar's registrations made
+`TestReactorContextVMMutationsReachableAndAuthorized` fail with
+`Code:-32601 Message:method not found`; restoring them passed. Focused
+`go test ./internal/controlplane ./internal/app` passed. RepoPrompt Oracle review
+was attempted with the worktree diff artifact and failed `targetBindingMismatch`;
+the diff was reviewed directly. RepoPrompt's earlier logical-path edit incorrectly
+landed in main despite its worktree binding; the exact patch was transferred to
+the requested worktree and only that accidental main edit was reversed. Main was
+verified clean. All subsequent edits used the physical worktree.
+
+Final repository-wide verification (`GOMAXPROCS=4`, `GOFLAGS=-p=2`):
+
+| Gate | Outcome |
+|---|---|
+| `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0` | Exit 1: exactly 15 `unused` findings; no other findings |
+| `make lint` | Exit 2 from make / exit 1 from lint: the same 15 findings |
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./...` | PASS |
+| `make race` (`CGO_ENABLED=1 go test -race ./... -count=1`) | PASS |
+| `git diff --check` | PASS |
+
+Context triage used Jev advisory filtering (14 requests, 83,971 input tokens,
+approximately $0.003528). Its selected ranges were only navigation aids;
+load-bearing claims were checked directly against the physical worktree.
+The full lint count is **15**, all deliberately retained `unused` findings above;
+`make lint` remains nonzero. This is partial migration completion, not a zero-lint
+claim or live relay/provider acceptance. The user owns issue state for the open
+findings; no `bd` operations were performed.
