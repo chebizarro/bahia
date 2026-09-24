@@ -116,7 +116,9 @@ func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Se
 	if !desiredExposesPort(desired, req.UpstreamPort) {
 		return nil, false, fmt.Errorf("upstream port %d is not exposed by the signed managed runtime configuration", req.UpstreamPort)
 	}
-	originURL := fmt.Sprintf("%s://%s", req.UpstreamScheme, net.JoinHostPort(strings.TrimSpace(origin.Host), strconv.Itoa(req.UpstreamPort)))
+	originHost := strings.Trim(strings.TrimSpace(origin.Host), "[]")
+	canonicalOrigin := url.URL{Scheme: req.UpstreamScheme, Host: net.JoinHostPort(originHost, strconv.Itoa(req.UpstreamPort))}
+	originURL := canonicalOrigin.String()
 	if _, err := url.ParseRequestURI(originURL); err != nil {
 		return nil, false, fmt.Errorf("configured route origin is invalid: %w", err)
 	}
@@ -126,7 +128,7 @@ func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Se
 		Hostname: req.Hostname, Zone: zone.Name, BackendRef: zone.BackendRef, Provider: p.cfg.Provider, ProviderConfigHash: p.cfg.ConfigHash,
 		DNS:        domain.DesiredPublicRouteDNS{Type: "CNAME", Name: req.Hostname, Value: p.cfg.DNSTarget, TTL: zone.TTL, Proxied: true, SourceCoordinate: coordinate},
 		Tunnel:     domain.DesiredPublicRouteTunnel{TunnelRef: p.cfg.TunnelRef, Hostname: req.Hostname, OriginURL: originURL},
-		Proxy:      domain.DesiredPublicRouteProxy{HostMatch: req.Hostname, UpstreamScheme: req.UpstreamScheme, UpstreamHost: origin.Host, UpstreamPort: req.UpstreamPort, HealthPath: req.HealthPath},
+		Proxy:      domain.DesiredPublicRouteProxy{HostMatch: req.Hostname, UpstreamScheme: req.UpstreamScheme, UpstreamHost: originHost, UpstreamPort: req.UpstreamPort, HealthPath: req.HealthPath},
 		TLS:        domain.DesiredPublicRouteTLS{Mode: "managed", Provider: "cloudflare"},
 		Operations: []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply_and_verify", Summary: "apply the signed runtime state and verify container health"}, {Order: 2, Resource: "tunnel_proxy", Action: "upsert", Summary: "route " + req.Hostname + " to " + originURL}, {Order: 3, Resource: "dns", Action: "upsert", Summary: "publish proxied CNAME " + req.Hostname + " -> " + p.cfg.DNSTarget}, {Order: 4, Resource: "https", Action: "verify", Summary: "verify managed TLS and GET " + req.HealthPath}},
 		Rollback:   []domain.DesiredPublicRouteChange{{Order: 1, Resource: "dns", Action: "restore_or_withdraw", Summary: "restore the prior DNS record or withdraw the new hostname"}, {Order: 2, Resource: "tunnel_proxy", Action: "restore", Summary: "restore the prior remote tunnel ingress configuration"}, {Order: 3, Resource: "application", Action: "restore", Summary: "restore and observe the prior desired runtime state"}},

@@ -73,6 +73,37 @@ func TestPublicRoutePlannerPlansExactProtectedRoute(t *testing.T) {
 	}
 }
 
+func TestPublicRoutePlannerCanonicalizesOriginAuthority(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+		wantURL  string
+	}{
+		{name: "hostname", host: "edge-01.internal", wantHost: "edge-01.internal", wantURL: "http://edge-01.internal:8080"},
+		{name: "IPv4", host: "192.0.2.10", wantHost: "192.0.2.10", wantURL: "http://192.0.2.10:8080"},
+		{name: "IPv6", host: "2001:db8::10", wantHost: "2001:db8::10", wantURL: "http://[2001:db8::10]:8080"},
+		{name: "bracketed IPv6", host: "[2001:db8::10]", wantHost: "2001:db8::10", wantURL: "http://[2001:db8::10]:8080"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			planner, _, svc, env, desired := publicRouteFixture(t)
+			planner.cfg.Origins[0].Host = test.host
+			plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+			if plan.Tunnel.OriginURL != test.wantURL {
+				t.Fatalf("OriginURL = %q, want %q", plan.Tunnel.OriginURL, test.wantURL)
+			}
+			if plan.Proxy.UpstreamHost != test.wantHost {
+				t.Fatalf("UpstreamHost = %q, want %q", plan.Proxy.UpstreamHost, test.wantHost)
+			}
+		})
+	}
+}
+
 func TestPublicRoutePlannerPolicyAndCollisionValidation(t *testing.T) {
 	tests := []struct {
 		name string

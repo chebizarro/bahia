@@ -327,14 +327,37 @@ func TestRouteCanaryKeyCoordinateIsStable(t *testing.T) {
 	}
 }
 
-func TestRouteCanaryTargetURLOmitsDefaultPort(t *testing.T) {
-	target := baseTarget()
-	if got := target.URL(); got != "https://git.example.net/healthz" {
-		t.Fatalf("got %q", got)
+func TestRouteCanaryTargetURLsBracketIPv6(t *testing.T) {
+	tests := []struct {
+		name        string
+		scheme      string
+		hostname    string
+		port        int
+		wantURL     string
+		wantControl string
+	}{
+		{name: "hostname default port", scheme: "https", hostname: "git.example.net", port: 443, wantURL: "https://git.example.net/healthz", wantControl: "https://git.example.net/control"},
+		{name: "hostname nondefault port", scheme: "http", hostname: "canary.internal", port: 8080, wantURL: "http://canary.internal:8080/healthz", wantControl: "http://canary.internal:8080/control"},
+		{name: "IPv4 default port", scheme: "http", hostname: "127.0.0.1", port: 80, wantURL: "http://127.0.0.1/healthz", wantControl: "http://127.0.0.1/control"},
+		{name: "IPv6 default port", scheme: "https", hostname: "::1", port: 443, wantURL: "https://[::1]/healthz", wantControl: "https://[::1]/control"},
+		{name: "IPv6 nondefault port", scheme: "http", hostname: "2001:db8::10", port: 8080, wantURL: "http://[2001:db8::10]:8080/healthz", wantControl: "http://[2001:db8::10]:8080/control"},
+		{name: "bracketed IPv6", scheme: "http", hostname: "[2001:db8::10]", port: 8080, wantURL: "http://[2001:db8::10]:8080/healthz", wantControl: "http://[2001:db8::10]:8080/control"},
 	}
-	target.Port = 8443
-	if got := target.URL(); got != "https://git.example.net:8443/healthz" {
-		t.Fatalf("got %q", got)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target := baseTarget()
+			target.Scheme = test.scheme
+			target.Hostname = test.hostname
+			target.Port = test.port
+			target.ControlPath = "/control"
+			if got := target.URL(); got != test.wantURL {
+				t.Fatalf("URL() = %q, want %q", got, test.wantURL)
+			}
+			if got := target.ControlURL(); got != test.wantControl {
+				t.Fatalf("ControlURL() = %q, want %q", got, test.wantControl)
+			}
+		})
 	}
 }
 

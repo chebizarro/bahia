@@ -1,8 +1,11 @@
 package controlplane
 
 import (
+	"net"
+	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -161,6 +164,10 @@ func buildDesiredStateSummary(state *domain.DesiredServiceSpec) *desiredStateSum
 
 	if state.PublicRoute != nil {
 		r := state.PublicRoute
+		proxyUpstream := url.URL{
+			Scheme: r.Proxy.UpstreamScheme,
+			Host:   net.JoinHostPort(strings.Trim(r.Proxy.UpstreamHost, "[]"), strconv.Itoa(r.Proxy.UpstreamPort)),
+		}
 		summary.PublicRoute = &publicRouteSummary{
 			Hostname:        r.Hostname,
 			DNSName:         r.DNS.Name,
@@ -170,7 +177,7 @@ func buildDesiredStateSummary(state *domain.DesiredServiceSpec) *desiredStateSum
 			Proxied:         r.DNS.Proxied,
 			TLSMode:         r.TLS.Mode,
 			TunnelOriginURL: r.Tunnel.OriginURL,
-			ProxyUpstream:   r.Proxy.UpstreamScheme + "://" + r.Proxy.UpstreamHost + ":" + portStr(r.Proxy.UpstreamPort),
+			ProxyUpstream:   proxyUpstream.String(),
 			ProxyHealthPath: r.Proxy.HealthPath,
 			OperationsCount: len(r.Operations),
 			RollbackCount:   len(r.Rollback),
@@ -188,13 +195,6 @@ func buildDesiredStateSummary(state *domain.DesiredServiceSpec) *desiredStateSum
 	}
 
 	return summary
-}
-
-func portStr(p int) string {
-	if p == 0 {
-		return ""
-	}
-	return strconv.Itoa(p)
 }
 
 func copyStringSlice(src []string) []string {
