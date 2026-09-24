@@ -182,15 +182,18 @@ export function rollbackDeployment(payload) {
   const unitId = payload.deployment_unit_id;
   const artifactId = payload.target_artifact_id;
   const supersedesIntentId = payload.supersedes_intent_id;
+  if (!artifactId) {
+    return Promise.reject(new Error('Rollback requires an explicit artifact target from deployment history.'));
+  }
   return publishCommand({
     operation: 'service/rollback',
     tags: [
       ['service', serviceId],
       ['environment', environmentId],
-      ...(unitId ? [['unit', unitId]] : []),
+      ['unit', unitId],
       ['artifact', artifactId],
       ['intent', supersedesIntentId]
-    ],
+    ].filter((tag) => tag[1]),
     content: payload
   });
 }
