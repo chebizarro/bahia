@@ -143,6 +143,8 @@ export async function installEmptyRestFallbacks(page) {
   await page.route('**/api/v1/**', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ data: [] })
+    body: JSON.stringify({ data: new URL(route.request().url()).pathname === '/api/v1/orgs'
+      ? [{ id: 'org-e2e', name: 'E2E organization', role: 'owner' }]
+      : [] })
   }));
 }

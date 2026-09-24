@@ -6,6 +6,35 @@ const systemInfo = createPublicSystemInfo();
 
 function serviceDetailState() {
   return createPublicState({
+    // Deployment history for svc-existing-1 in env-prod: currently on
+    // artifact-existing-1, previously deployed artifact-previous-1. Rollback
+    // resolves an explicit previously successful artifact from this history.
+    deploymentIntents: [
+      {
+        id: 'intent-deployed-current',
+        service_id: 'svc-existing-1',
+        environment_id: 'env-prod',
+        artifact_id: 'artifact-existing-1',
+        approval_status: 'approved',
+        status: 'deployed',
+        deployment_status: 'deployed',
+        source_kind: 'manual',
+        created_at: '2026-05-03T10:10:00.000Z',
+        updated_at: '2026-05-03T10:12:00.000Z'
+      },
+      {
+        id: 'intent-deployed-previous',
+        service_id: 'svc-existing-1',
+        environment_id: 'env-prod',
+        artifact_id: 'artifact-previous-1',
+        approval_status: 'approved',
+        status: 'deployed',
+        deployment_status: 'deployed',
+        source_kind: 'manual',
+        created_at: '2026-05-02T10:10:00.000Z',
+        updated_at: '2026-05-02T10:12:00.000Z'
+      }
+    ],
     artifacts: [
       {
         id: 'artifact-existing-1',
@@ -73,6 +102,7 @@ test.describe('Service detail signer-first public actions', () => {
         expect.objectContaining({
           service_id: 'svc-existing-1',
           environment_id: 'env-prod',
+          artifact_id: 'artifact-previous-1',
           source_kind: 'rollback'
         })
       ])

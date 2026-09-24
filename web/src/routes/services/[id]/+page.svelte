@@ -19,6 +19,7 @@
     artifacts as artifactStore,
     environments as environmentStore,
     workers as workerStore,
+    deploymentIntents as deploymentIntentStore,
     loadServices,
     loadBuilds,
     loadArtifacts,
@@ -393,6 +394,11 @@
     return null;
   }
 
+  function intentRecency(intent) {
+    const value = Date.parse(intent?.updated_at || intent?.created_at || '');
+    return Number.isNaN(value) ? 0 : value;
+  }
+
   function artifactOptionLabel(artifact) {
     const parts = [artifactDisplayName(artifact)];
     const digest = artifact.image_digest || artifact.digest;
@@ -750,15 +756,25 @@
       return;
     }
 
+    const target = rollbackTarget;
+    if (!target.artifact_id) {
+      rollbackError = 'No previous successful artifact exists for this environment. Choose a specific artifact instead.';
+      return;
+    }
+
     rollingBack = true;
     rollbackError = null;
 
     try {
-      if (rollbackForm.mode === 'previous') {
-        await rollbackDeployment(serviceId, rollbackForm.environment_id);
-      } else {
-        await createDeploymentIntent(serviceId, rollbackForm.environment_id, rollbackForm.artifact_id);
-      }
+      // service/rollback always carries an explicit, previously successful
+      // artifact target. The relay never infers rollback history for us.
+      await rollbackDeployment({
+        service_id: serviceId,
+        environment_id: rollbackForm.environment_id,
+        ...(target.deployment_unit_id ? { deployment_unit_id: target.deployment_unit_id } : {}),
+        target_artifact_id: target.artifact_id,
+        ...(target.supersedes_intent_id ? { supersedes_intent_id: target.supersedes_intent_id } : {})
+      });
       rollbackOpen = false;
       goto('/deployments');
     } catch (err) {
@@ -993,7 +1009,40 @@
       : ''
   );
   let selectedRollbackEnvironment = $derived(environments.find(environment => environment.id === rollbackForm.environment_id));
-  let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackForm.artifact_id));
+  // Deployment history for this service scoped to the selected rollback
+  // environment, newest first. Only deployed intents are rollback evidence.
+  let rollbackDeployedIntents = $derived(
+    deploymentIntentStore
+      .filter((intent) =>
+        intent.service_id === serviceId &&
+        intent.environment_id === rollbackForm.environment_id &&
+        String(intent.status || intent.deployment_status || '').toLowerCase() === 'deployed')
+      .slice()
+      .sort((a, b) => intentRecency(b) - intentRecency(a))
+  );
+  let rollbackCurrentIntent = $derived(rollbackDeployedIntents[0] || null);
+  let rollbackPreviousIntent = $derived(
+    rollbackDeployedIntents.find((intent) =>
+      intent.id !== rollbackCurrentIntent?.id &&
+      intent.artifact_id &&
+      intent.artifact_id !== rollbackCurrentIntent?.artifact_id) || null
+  );
+  let rollbackTarget = $derived.by(() => {
+    const supersedes = rollbackCurrentIntent?.id || '';
+    if (rollbackForm.mode === 'artifact') {
+      return {
+        artifact_id: rollbackForm.artifact_id,
+        supersedes_intent_id: supersedes,
+        deployment_unit_id: rollbackCurrentIntent?.deployment_unit_id || ''
+      };
+    }
+    return {
+      artifact_id: rollbackPreviousIntent?.artifact_id || '',
+      supersedes_intent_id: supersedes,
+      deployment_unit_id: rollbackPreviousIntent?.deployment_unit_id || rollbackCurrentIntent?.deployment_unit_id || ''
+    };
+  });
+  let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackTarget.artifact_id));
   let deployPolicyGateError = $derived.by(() => {
     if (!deployForm.environment_id || !deployForm.artifact_id) return '';
     if (deployTargetError) return deployTargetError;
@@ -1003,7 +1052,7 @@
     if (policyPreviewBlocked(deployPolicyPreview)) return 'Resolve policy blockers before you can create an intent.';
     return '';
   });
-  let deployCreateDisabled = $derived(deployStep !== 5 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
+  let deployCreateDisabled = $derived(deployStep !== 6 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
   let deployDesiredStateDiff = $derived(desiredStateChanges(deployCurrentDesiredState, deployDesiredStatePreview));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
@@ -1811,12 +1860,18 @@
             <dt>Mode</dt>
             <dd>{rollbackForm.mode === 'previous' ? 'Previous successful version' : 'Specific artifact'}</dd>
           </div>
-          {#if rollbackForm.mode === 'artifact'}
-            <div>
-              <dt>Artifact</dt>
-              <dd>{selectedRollbackArtifact ? artifactOptionLabel(selectedRollbackArtifact) : 'Select an artifact'}</dd>
-            </div>
-          {/if}
+          <div>
+            <dt>Artifact</dt>
+            <dd>
+              {#if selectedRollbackArtifact}
+                {artifactOptionLabel(selectedRollbackArtifact)}
+              {:else if rollbackForm.mode === 'artifact'}
+                Select an artifact
+              {:else}
+                No previous successful artifact for this environment
+              {/if}
+            </dd>
+          </div>
         </dl>
       </div>
     {/if}

@@ -3,7 +3,7 @@ export const E2E_SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce2
 
 const DEFAULT_DISCOVERY_INFO = {
   nostr: {
-    browser_relays: [],
+    browser_relays: ['ws://relay.test.local'],
     service_pubkey: E2E_SERVICE_PUBKEY
   },
   features: {
@@ -15,7 +15,8 @@ const DEFAULT_DISCOVERY_INFO = {
 
 /**
  * Install browser-side mocks that must exist before Svelte mounts.
- * This gives protected-route smoke tests a persisted NIP-07 identity and a
+ * This gives protected-route smoke tests a persisted NIP-07 identity, a backend
+ * membership response (owner by default, overridable for access tests), and a
  * deterministic WebSocket relay environment without requiring extensions, a live
  * backend, or a live relay.
  */
@@ -24,6 +25,7 @@ export async function installE2EMocks(
   {
     authenticated = true,
     extension = true,
+    backendRole = 'owner',
     sseEvents = [],
     nostrEvents = [],
     systemInfo = null,
@@ -31,7 +33,7 @@ export async function installE2EMocks(
     contextVMOperations = []
   } = {}
 ) {
-  const effectiveSystemInfo = systemInfo || {
+  const discoveryInfo = systemInfo || {
     ...DEFAULT_DISCOVERY_INFO,
     features: {
       ...DEFAULT_DISCOVERY_INFO.features,
@@ -40,6 +42,13 @@ export async function installE2EMocks(
       legacy_sse: !(Array.isArray(nostrEvents) && nostrEvents.length > 0)
     }
   };
+  const effectiveSystemInfo = {
+    ...discoveryInfo,
+    features: { direct_nostr_http_auth: true, ...discoveryInfo.features }
+  };
+  await page.route('**/api/v1/orgs', (route) => route.fulfill({
+    json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
+  }));
   await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {

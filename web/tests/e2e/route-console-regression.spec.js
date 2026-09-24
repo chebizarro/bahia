@@ -68,7 +68,8 @@ const fixtures = {
   },
   organization: {
     id: 'org-1',
-    name: 'Acme'
+    name: 'Acme',
+    role: 'owner'
   },
   package: {
     id: 'pkg-1',
@@ -302,6 +303,7 @@ test.describe('route console regressions', () => {
       expect(response?.ok(), `${path} should not return HTTP ${response?.status()}`).toBe(true);
       await page.waitForLoadState('networkidle');
 
+      await expect(page).toHaveURL(path);
       await expect(page.locator('body')).toBeVisible();
       await assertNoRuntimeErrors();
     });

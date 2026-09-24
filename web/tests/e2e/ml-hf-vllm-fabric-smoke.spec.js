@@ -44,6 +44,7 @@ const relaySystemInfo = {
     service_pubkey: SERVICE_PUBKEY
   },
   features: {
+    direct_nostr_http_auth: true,
     relay_sidecar: true,
     relay_read_models: true,
     legacy_sse: false

@@ -12,7 +12,8 @@ export async function attachRuntimeErrorGuards(page, { allowConsole = [] } = {})
     if (msg.type() !== 'error') return;
     const text = msg.text();
     if (allowConsole.some((pattern) => text.includes(pattern))) return;
-    consoleErrors.push(text);
+    const url = msg.location().url;
+    consoleErrors.push(url ? `${text} (${url})` : text);
   });
 
   return async function assertNoRuntimeErrors() {

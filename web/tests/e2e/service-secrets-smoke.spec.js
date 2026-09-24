@@ -110,12 +110,6 @@ async function seedEncryptedSecrets(page) {
   }, { serviceId: SERVICE_ID, secrets: seededSecrets });
 }
 
-async function seedContextVMOperations(page, operations) {
-  await page.addInitScript((seededOperations) => {
-    window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = [...(seededOperations || [])];
-  }, operations);
-}
-
 async function queueContextVMOperation(page, operation) {
   await page.evaluate((nextOperation) => {
     const queue = Array.isArray(window.__BAHIA_E2E_CONTEXTVM_OPERATIONS)
@@ -132,9 +126,9 @@ function secretOperation(operation, payload = {}) {
 
 test.beforeEach(async ({ page }) => {
   await seedEncryptedSecrets(page);
-  await seedContextVMOperations(page, [secretOperation('services.secrets.list')]);
   await installE2EMocks(page, {
     systemInfo: relaySystemInfo,
+    contextVMOperations: [secretOperation('services.secrets.list')],
     nostrEvents: [serviceEvent(), buildEvent(), artifactEvent()]
   });
 });

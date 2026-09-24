@@ -1,3 +1,5 @@
+import { dev } from '$app/environment';
+
 const DEFAULT_VERSION_URL = '/_app/version.json';
 const DEFAULT_INTERVAL_MS = 30_000;
 
@@ -21,7 +23,7 @@ export function createVersionReloadWatcher({
   let checking = false;
 
   async function checkVersion() {
-    if (stopped || checking || typeof fetchImpl !== 'function') return;
+    if (dev || stopped || checking || typeof fetchImpl !== 'function') return;
     checking = true;
     try {
       const response = await fetchImpl(`${versionUrl}?t=${Date.now()}`, {
@@ -58,7 +60,8 @@ export function createVersionReloadWatcher({
   }
 
   function start() {
-    if (stopped) return () => {};
+    // Vite serves HMR, not the production /_app/version.json asset.
+    if (dev || stopped) return () => {};
     void checkVersion();
     schedule();
     window?.addEventListener?.('focus', checkVersion);
