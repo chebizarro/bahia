@@ -80,6 +80,7 @@ The current top-level CLI command groups are:
 - `workers`
 - `logs`
 - `policies`
+- `config`
 - `secrets`
 - `orgs`
 - `package`

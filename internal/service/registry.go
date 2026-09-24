@@ -53,6 +53,7 @@ type RegistryService struct {
 	state                           repository.EnvironmentServiceStateRepository
 	txExecutor                      repository.TxExecutor
 	verifier                        ImageVerifier
+	approvalPolicy                  DeploymentApprovalPolicy
 	allowManualArtifactRegistration bool
 	allowLiveArtifactImport         bool
 	publisher                       events.Publisher
@@ -74,6 +75,21 @@ func WithRegistryTxExecutor(executor repository.TxExecutor) RegistryOption {
 func WithAgentRuntimeReleaseRepository(releases repository.AgentRuntimeReleaseRepository) RegistryOption {
 	return func(s *RegistryService) {
 		s.runtimeReleases = releases
+	}
+}
+
+// DeploymentApprovalPolicy decides whether deployment policies (the
+// require_approval rule) demand manual approval for a deployment
+// into an environment, independently of environment.protected.
+type DeploymentApprovalPolicy interface {
+	DeploymentApprovalRequired(ctx context.Context, environmentID uuid.UUID) (bool, error)
+}
+
+// WithDeploymentApprovalPolicy enables policy-driven approval gating on
+// deployment intent creation. Without it, only environment.protected gates.
+func WithDeploymentApprovalPolicy(policy DeploymentApprovalPolicy) RegistryOption {
+	return func(s *RegistryService) {
+		s.approvalPolicy = policy
 	}
 }
 
@@ -1364,15 +1380,10 @@ func (s *RegistryService) CreateDeploymentIntentForRuntimeRelease(
 	if bound == nil {
 		return nil, fmt.Errorf("runtime release %s is not bound to service %s", releaseID, di.ServiceID)
 	}
-	if env.Protected {
-		di.ApprovalStatus = domain.ApprovalStatusPending
-		di.Status = domain.IntentStatusPending
-	} else {
-		di.ApprovalStatus = domain.ApprovalStatusNotRequired
-		if di.Status == "" {
-			di.Status = domain.IntentStatusApproved
-		}
+	if err := s.applyDeploymentApproval(ctx, env, di); err != nil {
+		return nil, err
 	}
+
 	if di.Metadata == nil {
 		di.Metadata = map[string]any{}
 	}
@@ -1432,6 +1443,29 @@ func (s *RegistryService) GetDeploymentIntentForRuntimeRelease(
 	return &domain.RuntimeReleaseDeploymentIntent{Intent: *intent, Binding: bound.Binding, Release: bound.Release}, nil
 }
 
+// applyDeploymentApproval ignores caller-supplied approval when the environment
+// or an enabled policy requires an explicit decision on the persisted intent.
+func (s *RegistryService) applyDeploymentApproval(ctx context.Context, env *domain.Environment, di *domain.DeploymentIntent) error {
+	required := env.Protected
+	if !required && s.approvalPolicy != nil {
+		var err error
+		required, err = s.approvalPolicy.DeploymentApprovalRequired(ctx, di.EnvironmentID)
+		if err != nil {
+			return fmt.Errorf("evaluating deployment approval policy: %w", err)
+		}
+	}
+	if required {
+		di.ApprovalStatus = domain.ApprovalStatusPending
+		di.Status = domain.IntentStatusPending
+	} else {
+		di.ApprovalStatus = domain.ApprovalStatusNotRequired
+		if di.Status == "" {
+			di.Status = domain.IntentStatusApproved
+		}
+	}
+	return nil
+}
+
 // CreateDeploymentIntent creates a new deployment intent and updates the environment service state.
 func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain.DeploymentIntent) error {
 	// Validate referenced entities exist.
@@ -1465,16 +1499,8 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		return fmt.Errorf("artifact %s does not belong to service %s", di.ArtifactID, di.ServiceID)
 	}
 
-	// Creation never accepts caller-supplied approval for protected environments;
-	// approval must be recorded through ApproveDeploymentIntent after the intent exists.
-	if env.Protected {
-		di.ApprovalStatus = domain.ApprovalStatusPending
-		di.Status = domain.IntentStatusPending
-	} else {
-		di.ApprovalStatus = domain.ApprovalStatusNotRequired
-		if di.Status == "" {
-			di.Status = domain.IntentStatusApproved
-		}
+	if err := s.applyDeploymentApproval(ctx, env, di); err != nil {
+		return err
 	}
 
 	if err := s.intents.Create(ctx, di); err != nil {

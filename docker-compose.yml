@@ -104,6 +104,9 @@ services:
         PUBLIC_BAHIA_WEB_BASE_VERSION: ${VERSION_BASE:-0.1.0}
         PUBLIC_BAHIA_GIT_COMMIT: ${GIT_COMMIT:-dev}
         PUBLIC_BAHIA_WEB_VERSION: ${WEB_VERSION:-}
+    environment:
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-ws://localhost:3334/relay}
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:?PUBLIC_BAHIA_SERVICE_PUBKEYS must explicitly identify the trusted Bahia signer}
     ports:
       - "3000:80"
     depends_on:

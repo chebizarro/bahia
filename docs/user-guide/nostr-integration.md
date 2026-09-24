@@ -1,5 +1,14 @@
 # Nostr Integration
 
+## Command availability
+
+Artifact, policy, and tool-approval requests use signed ContextVM messages.
+A submitted receipt means relay acceptance, not execution or completion. Only
+methods in the server's discovery method list are advertised as callable; LLM/ML
+publisher support alone does not establish a mutation consumer. LLM approval
+publishers use `approval/llm-approve` / `approval/llm-reject`, while DNS record writes
+use `dns/record-set`. See the [publisher contract](../nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+
 ## Virtualization subscriptions
 
 VM/plane intents use ContextVM 25910; acknowledgments are admission, not execution

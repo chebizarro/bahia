@@ -196,16 +196,22 @@ Scheduled rescans are repository-backed due records derived from enabled policy-
 
 ### Approval Rules
 
-```yaml
-rules:
-  require_approval: true
-  min_approvers: 2
-  approver_pubkeys:
-    - "npub1admin..."
-  auto_approve_if:
-    - "no_vulnerabilities"
-    - "tests_passed"
+An enabled global or environment-scoped policy with `require_approval` forces
+matching deployment intents into pending approval, even in an unprotected
+environment. This applies to artifact-backed and runtime-release-backed intents
+and ignores caller-supplied approval. Approval must be recorded separately.
+
+```json
+{"name":"manual-review","enabled":true,"enforcement":"warn","rules":[{"type":"require_approval"}]}
 ```
+
+This is an approval gate, not an artifact violation: policy evaluation reports
+`requires_approval: true` without adding a blocker or warning. Both `warn` and
+`block` enforcement modes require approval. Disabled policies and policies scoped
+to another environment do not. An unreadable policy store prevents intent
+creation; it cannot silently bypass the gate. Protected environments still require
+approval independently of policy. Multi-approver counts, approver allowlists, and
+auto-approval conditions are not supported policy parameters.
 
 ### Signature Rules
 

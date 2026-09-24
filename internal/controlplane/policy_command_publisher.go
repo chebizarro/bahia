@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,7 +11,14 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// PolicyCommandPublisher emits canonical deployment-policy mutation commands.
+// ContextVMMethodPolicyEvaluate is the ContextVM method for deployment-policy
+// evaluation. It pairs with ContextVMMethodPolicyCreate/Update/Delete and is the
+// method name the web control plane already publishes.
+const ContextVMMethodPolicyEvaluate = "policy/evaluate"
+
+// PolicyCommandPublisher emits canonical deployment-policy mutation commands as
+// signed ContextVM kind 25910 requests. Legacy request kinds 5986-5989 are
+// migration inputs only and are never published.
 type PolicyCommandPublisher struct {
 	publisher NostrEventPublisher
 	signer    canonicalnostr.Signer
@@ -63,21 +69,21 @@ func (p *PolicyCommandPublisher) PublishPolicyCreateRequest(ctx context.Context,
 	if len(cmd.Rules) == 0 {
 		return nil, fmt.Errorf("rules is required")
 	}
-	return p.publish(ctx, KindPolicyCreate, "policy-create", cmd, false)
+	return p.publish(ctx, ContextVMMethodPolicyCreate, "policy-create", cmd, false)
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyUpdateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
-	return p.publish(ctx, KindPolicyUpdate, "policy-update", cmd, true)
+	return p.publish(ctx, ContextVMMethodPolicyUpdate, "policy-update", cmd, true)
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyDeleteRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
-	return p.publish(ctx, KindPolicyDelete, "policy-delete", cmd, true)
+	return p.publish(ctx, ContextVMMethodPolicyDelete, "policy-delete", cmd, true)
 }
 
 func (p *PolicyCommandPublisher) PublishPolicyEvaluateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
@@ -87,18 +93,18 @@ func (p *PolicyCommandPublisher) PublishPolicyEvaluateRequest(ctx context.Contex
 	if cmd.EnvironmentID == nil || *cmd.EnvironmentID == uuid.Nil {
 		return nil, fmt.Errorf("environment id is required")
 	}
-	return p.publish(ctx, KindPolicyEvaluate, "policy-evaluate", cmd, false)
+	return p.publish(ctx, ContextVMMethodPolicyEvaluate, "policy-evaluate", cmd, false)
 }
 
-func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultPrefix string, cmd PolicyMutationCommand, includeID bool) (*PolicyCommandReceipt, error) {
+func (p *PolicyCommandPublisher) publish(ctx context.Context, method string, defaultPrefix string, cmd PolicyMutationCommand, includeID bool) (*PolicyCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("policy command publisher is not configured")
 	}
 	content := map[string]any{}
-	if includeID || kind == KindPolicyDelete {
+	if includeID || method == ContextVMMethodPolicyDelete {
 		content["id"] = cmd.ID.String()
 	}
-	if kind == KindPolicyEvaluate {
+	if method == ContextVMMethodPolicyEvaluate {
 		content["artifact_id"] = cmd.ArtifactID.String()
 		if cmd.EnvironmentID != nil && *cmd.EnvironmentID != uuid.Nil {
 			content["environment_id"] = cmd.EnvironmentID.String()
@@ -106,7 +112,7 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultP
 		if cmd.ServiceID != nil && *cmd.ServiceID != uuid.Nil {
 			content["service_id"] = cmd.ServiceID.String()
 		}
-	} else if kind != KindPolicyDelete {
+	} else if method != ContextVMMethodPolicyDelete {
 		if strings.TrimSpace(cmd.Name) != "" {
 			content["name"] = strings.TrimSpace(cmd.Name)
 		}
@@ -143,36 +149,20 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, kind int, defaultP
 	if dTag == "" {
 		dTag = defaultPrefix + ":" + uuid.NewString()
 	}
-	body, err := json.Marshal(content)
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, cmd.AgentID, tags, content, "policy command")
 	if err != nil {
-		return nil, fmt.Errorf("marshal policy command: %w", err)
-	}
-	eventTags := nostr.Tags{{"d", dTag}}
-	eventTags = append(eventTags, compactTags(tags)...)
-	if agentID := strings.TrimSpace(cmd.AgentID); agentID != "" {
-		eventTags = append(eventTags, nostr.Tag{"agent", agentID})
-	}
-	ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: eventTags, Content: string(body)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign policy command: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	if err != nil {
-		if published > 0 {
-			receipt := policyReceiptFromEvent(ev, dTag, published, "error")
+		if ev != nil && published > 0 {
+			receipt := policyReceiptFromEvent(ev, method, dTag, published, "error")
 			receipt.Error = err.Error()
 			return receipt, nil
 		}
-		return nil, fmt.Errorf("publish policy command: %w", err)
+		return nil, err
 	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish policy command: no relay accepted the request; retry after relay reconnect")
-	}
-	return policyReceiptFromEvent(ev, dTag, published, "submitted"), nil
+	return policyReceiptFromEvent(ev, method, dTag, published, "submitted"), nil
 }
 
-func policyReceiptFromEvent(ev *nostr.Event, dTag string, published int, status string) *PolicyCommandReceipt {
-	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: int(ev.Kind), ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(int(ev.Kind)), DTag: dTag, IdempotencyKey: dTag, Status: status, PublishedRelays: published}
+func policyReceiptFromEvent(ev *nostr.Event, method, dTag string, published int, status string) *PolicyCommandReceipt {
+	receipt := &PolicyCommandReceipt{RequestEventID: ev.ID.Hex(), RequestPubkey: ev.PubKey.Hex(), RequestKind: int(ev.Kind), StatusKind: KindNIP38Status, ResultKind: KindContextVMMessage, ReadModelKinds: policyReadModels(method), DTag: dTag, IdempotencyKey: dTag, Status: status, PublishedRelays: published}
 	populatePolicyReceiptTags(receipt, ev.Tags)
 	return receipt
 }
@@ -185,8 +175,8 @@ func populatePolicyReceiptTags(receipt *PolicyCommandReceipt, tags nostr.Tags) {
 	receipt.ServiceID = tagValueNostr(tags, "service")
 }
 
-func policyReadModels(kind int) map[string]int {
-	if kind == KindPolicyEvaluate {
+func policyReadModels(method string) map[string]int {
+	if method == ContextVMMethodPolicyEvaluate {
 		return nil
 	}
 	return map[string]int{"policy_registry": KindCASControlState}

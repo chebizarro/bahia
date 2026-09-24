@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,7 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// ToolApprovalCommandPublisher emits canonical tool provisioning approval responses.
+// ContextVMMethodToolApprovalResponse is the operator reply to the
+// "tool/approval-request" ContextVM message Bahia's ToolResponder emits.
+const ContextVMMethodToolApprovalResponse = "tool/approval-response"
+
+// ToolApprovalCommandPublisher emits canonical tool provisioning approval
+// responses as signed ContextVM kind 25910 requests. Legacy kind 7977 is a
+// migration input only and is never published.
 type ToolApprovalCommandPublisher struct {
 	publisher NostrEventPublisher
 	signer    canonicalnostr.Signer
@@ -64,29 +69,15 @@ func (p *ToolApprovalCommandPublisher) PublishToolApprovalResponse(ctx context.C
 		dTag = "tool-approval:" + cmd.IntentID.String() + ":" + action
 	}
 	content := map[string]any{"intent_id": cmd.IntentID.String(), "action": action, "reason": reason}
-	body, err := json.Marshal(content)
+	tags := nostr.Tags{{"intent", cmd.IntentID.String()}, {"action", action}}
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, ContextVMMethodToolApprovalResponse, dTag, cmd.AgentID, tags, content, "tool approval response")
 	if err != nil {
-		return nil, fmt.Errorf("marshal tool approval response: %w", err)
-	}
-	tags := nostr.Tags{{"d", dTag}, {"intent", cmd.IntentID.String()}, {"action", action}}
-	if agentID := strings.TrimSpace(cmd.AgentID); agentID != "" {
-		tags = append(tags, nostr.Tag{"agent", agentID})
-	}
-	ev := &nostr.Event{Kind: KindToolApprovalResponse, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign tool approval response: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	if err != nil {
-		if published > 0 {
+		if ev != nil && published > 0 {
 			receipt := toolApprovalReceiptFromEvent(ev, dTag, published, "error")
 			receipt.Error = err.Error()
 			return receipt, nil
 		}
-		return nil, fmt.Errorf("publish tool approval response: %w", err)
-	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish tool approval response: no relay accepted the request; retry after relay reconnect")
+		return nil, err
 	}
 	return toolApprovalReceiptFromEvent(ev, dTag, published, "submitted"), nil
 }

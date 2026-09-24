@@ -128,3 +128,43 @@ Verification:
 - PASS: focused adapter/projection tests cover provisioning correlation, action tag projection, parser compatibility, malformed-param rejection, signed `30900`/`4903` publication, and direct-interop isolation.
 
 Remaining `fp-30` work is explicitly staged: project lifecycle actions and authoritative Soul read models onto canonical `30900`/`4903`, migrate browser/CLI publishers and subscribers, contract direct request-kind ingress, and complete the max sidecar deployment proof.
+
+## Stranded-remediation salvage — bahia-plf9g — 2026-09-24
+
+Ported the relevant parts of `71da3a42` onto master baseline `56c5e3b8` in
+`chore/branch-salvage`, without importing route canaries:
+
+- Discovery advertises only registered methods; DNS retains current override
+  retirement and uses `dns/record-set`. LLM approvals use the browser's existing
+  approve/reject method names.
+- Artifact, policy and tool-approval publishers use signed canonical ContextVM
+  envelopes and acceptance-aware correlation, not legacy request kinds.
+- Registered the existing config CLI; enforced require_approval for both artifact
+  and runtime-release deployment intents; wired saga metrics to the live governed
+  provisioner's store instead of the stranded patch's disconnected store option.
+- Restored the seeded release workflow and artifact marker while retaining the
+  legacy result-file contract. Bootstrap requires explicit service signer trust;
+  no unsigned relay-document identity inference was ported.
+- Allowlist authorization/config validation was already covered by `fe7deb48`
+  (bahia-kppzm). No redundant validator or pre-filter startup warning was added.
+
+Regression evidence: before the port, root CLI tests failed with "root command
+missing config command group" and "unknown command config"; canonical publisher
+fixtures did not compile against missing APIs. New executable workflow tests
+rejected invalid digests, mismatched refs/checkouts and credential leakage.
+
+PASS on the complete salvage tree (`GOMAXPROCS=4`, `GOFLAGS=-p=2`):
+`go build ./...`, `go vet ./...`, `go test ./...`, and `make race`.
+Coverage includes production app startup to HTTP /metrics with a checkpoint
+written after startup; pending/error policy gates on both deployment paths;
+actual handler registration against discovery; signed publisher envelopes;
+CLI HTTP routing; and executable workflow/bootstrap scripts with isolated
+command fixtures. `git diff --check` passed.
+`docker compose --env-file /dev/null config --quiet` also passed with explicit
+fixture signer/public-key and socket-GID inputs; no containers were started.
+
+These are local portable checks, not live registry, Compose deployment or VM
+provider acceptance. No deployment or remote publication was performed. Existing
+unimplemented mutation consumers remain unadvertised; publishing a request is
+not proof of completion. User owns issue state. RepoPrompt Oracle review could
+not run (`targetBindingMismatch`); the worktree diff was reviewed directly.

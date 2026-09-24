@@ -82,6 +82,15 @@ Remove only consumed one-time handoff and proven failed-run client material. Ret
 
 ## Incident and alert response
 
+When SoulFactory is enabled, Bahia's `/metrics` scrape includes
+`bahia_openclaw_provisioning_*` from the governed provisioner's live checkpoint
+store at `<soul_factory.provisioning_state_dir>/sagas`. The monitor shares the
+engine's store, reads durable state on each scrape, and does not reconcile or
+mutate runs. Build labels use Bahia's build version; the instance label uses
+`telemetry.service_name`. No separate `openclaw_saga_store_dir` is required.
+With SoulFactory disabled these gauges are absent, not evidence of healthy runs.
+
+
 | Alert | Immediate action |
 | --- | --- |
 | BahiaOpenClawProvisioningStageStuck | Inspect run/stage and dependency readiness; dry-run reconcile. |

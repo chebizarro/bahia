@@ -1,5 +1,14 @@
 # Bahia Protocol Compatibility Matrix
 
+## Publisher migration and discovery
+
+Artifact, policy, and tool-approval writers now use ContextVM envelopes rather
+than retired request kinds `5985`–`5989` / `7977`. No new numeric kinds or legacy
+runtime readers are introduced. LLM approvals align with the existing browser
+methods `approval/llm-approve` and `approval/llm-reject`. Discovery omits unregistered
+methods and retains the newer `dns/override-retire` handler alongside canonical
+`dns/record-set`. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+
 ## Virtualization public surfaces
 
 The additive virtualization v1 family uses existing ContextVM 25910, canonical

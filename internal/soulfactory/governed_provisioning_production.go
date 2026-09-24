@@ -57,6 +57,11 @@ type ProductionGovernedProvisioner struct {
 	units    repository.DeploymentUnitRepository
 }
 
+// ProvisioningMonitor observes the same durable store used by reconciliation.
+func (p *ProductionGovernedProvisioner) ProvisioningMonitor(instance, build string) (*saga.Monitor, error) {
+	return saga.NewMonitor(saga.MonitorConfig{Store: p.store, Instance: instance, Build: build})
+}
+
 // ownsTerminalFailureProjection tells Reactor that governed reconciliation
 // durably publishes its own failed/rolled-back provisioning result. Success is
 // intentionally still published by Reactor after StageRunning is confirmed.

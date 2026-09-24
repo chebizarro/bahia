@@ -1,5 +1,22 @@
 # Bahia Nostr Event Implementation Guide
 
+## Artifact, policy, and approval publishers
+
+Artifact registration, policy create/update/delete/evaluate, and tool approval
+publishers emit signed ContextVM JSON-RPC kind `25910` envelopes through the shared
+command publisher, never retired request kinds `5985`–`5989` or `7977`. They retain
+idempotency/progress tokens, correlate receipts with the request event, and require
+relay acceptance. Methods are `artifact/register`, `policy/create`, `policy/update`,
+`policy/delete`, `policy/evaluate`, and `tool/approval-response`. LLM approval uses
+`approval/llm-approve` or `approval/llm-reject`, selected by the validated decision.
+
+Publisher support does not imply a registered server consumer. Discovery's
+`control_plane.methods` contains only registered methods; unsupported LLM, ML,
+package, policy and tool methods are not advertised. AI/ML discovery describes
+read models, not callable ML mutation handlers. DNS advertises `dns/record-set`
+and retains `dns/override-retire`, not the unregistered `dns/record-override` or
+`dns/backend-register`. Receipts acknowledge submission, never durable completion.
+
 ## Virtualization public projection contract
 
 Virtualization reuses `CASControlState`/30900 and `CASAudit`/4903, consistent with
