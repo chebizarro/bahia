@@ -206,11 +206,52 @@
       "determinism_notes": [
         "Targeted internal/app go test compiles startup wiring without enabling REST CRUD routes."
       ]
+    },
+    {
+      "test_id": "MRPC-T-016",
+      "ac_ids": [
+        "MRPC-AC-011",
+        "MRPC-AC-012"
+      ],
+      "title": "Signed dispatch, gate-before-storage, removed registration and restart replay",
+      "type": "unit_and_integration",
+      "target_path": "internal/controlplane/package_contextvm_handlers_test.go: TestPackageContextVMReachabilityGateAndReplay, TestPackageContextVMRemovedRegistrationIsMethodNotFound",
+      "status": "implemented",
+      "determinism_notes": [
+        "Real filesystem backend and signed request transport; no sleep-driven completion. PostgreSQL integration exercises concurrent single-use approval consumption."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-017",
+      "ac_ids": [
+        "MRPC-AC-016"
+      ],
+      "title": "Approval provenance, snapshot binding and atomic consumption",
+      "type": "unit_and_integration",
+      "target_path": "internal/controlplane/package_contextvm_handlers_test.go: TestPackageApprovalProvenanceBindingAndSingleUse; internal/repository/pg_package_authorization_test.go; internal/repository/pg_package_authorization_integration_test.go",
+      "status": "implemented",
+      "determinism_notes": [
+        "Real filesystem backend and signed request transport; no sleep-driven completion. PostgreSQL integration exercises concurrent single-use approval consumption."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-018",
+      "ac_ids": [
+        "MRPC-AC-017",
+        "MRPC-AC-018"
+      ],
+      "title": "Non-destructive deprecation and truthful single terminal completion",
+      "type": "unit_and_integration",
+      "target_path": "internal/controlplane/package_contextvm_handlers_test.go: TestPackageDeprecationPreservesBytesAndAvailability, TestPackagePublicationAndProjectionFailuresAreTerminalErrors, TestPackageDriftHasOneTerminalResponseAfterPersistence",
+      "status": "implemented",
+      "determinism_notes": [
+        "Real filesystem backend and signed request transport; no sleep-driven completion. PostgreSQL integration exercises concurrent single-use approval consumption."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 15,
-    "criteria_with_tests_or_review": 15,
+    "criteria_total": 18,
+    "criteria_with_tests_or_review": 18,
     "known_gaps": [
       "CLI package commands are intentionally deferred to Item 4.",
       "Nexus/Pulp production auth secret resolution and exact API/version variants remain HITL follow-up decisions."

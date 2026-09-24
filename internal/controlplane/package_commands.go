@@ -51,6 +51,7 @@ type PackagePublishCommand struct {
 	SizeBytes      int64          `json:"size_bytes"`
 	ContentType    string         `json:"content_type,omitempty"`
 	ApprovedBy     string         `json:"approved_by,omitempty"`
+	ApprovalID     uuid.UUID      `json:"approval_id,omitempty"`
 	PolicyRef      string         `json:"policy_ref,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
@@ -67,6 +68,7 @@ type PackagePromotionCommand struct {
 	Environment          string         `json:"environment,omitempty"`
 	Channel              string         `json:"channel,omitempty"`
 	ApprovedBy           string         `json:"approved_by,omitempty"`
+	ApprovalID           uuid.UUID      `json:"approval_id,omitempty"`
 	PolicyRef            string         `json:"policy_ref,omitempty"`
 	Metadata             map[string]any `json:"metadata,omitempty"`
 }
@@ -148,6 +150,9 @@ func (p *PackageCommandPublisher) PublishPackagePublishRequest(ctx context.Conte
 		content["repository_id"] = cmd.RepositoryID.String()
 	}
 	tags := packageArtifactTags(domain.PackageOperationArtifactPublish, cmd.RepositoryID, cmd.RepositoryName, cmd.Namespace, cmd.PackageName, cmd.Version, cmd.Filename, cmd.SHA256)
+	if cmd.ApprovalID != uuid.Nil {
+		content["approval_id"] = cmd.ApprovalID.String()
+	}
 	return p.publish(ctx, "package/publish", tags, content)
 }
 
@@ -160,6 +165,9 @@ func (p *PackageCommandPublisher) PublishPackagePromotionRequest(ctx context.Con
 		content["target_repository_id"] = cmd.TargetRepositoryID.String()
 	}
 	tags := packageArtifactTags(domain.PackageOperationPromote, cmd.SourceRepositoryID, cmd.SourceRepositoryName, cmd.Namespace, cmd.PackageName, cmd.Version, cmd.Filename, "")
+	if cmd.ApprovalID != uuid.Nil {
+		content["approval_id"] = cmd.ApprovalID.String()
+	}
 	if cmd.TargetRepositoryID != uuid.Nil {
 		tags = append(tags, nostr.Tag{"target_repository", cmd.TargetRepositoryID.String()})
 	}

@@ -68,3 +68,72 @@ The original Oracle review identified four backend/service risks; the patch addr
 - source fetch verification is bounded by declared/policy size before writing unbounded bytes to disk.
 
 `go test ./...` was rerun after these fixes and passed.
+
+## bahia-lxc2q remediation — 2026-09-24
+
+This section supersedes the historical Item 3 reachability/provenance claims for
+publish, promote, yank/deprecate and drift detection. It does not claim that
+repository apply/delete or unrelated package backends have been remediated.
+
+### Implemented and verified
+
+- All seven previously unused package implementations are reachable through the
+  domain ContextVM registration group; app wiring adds exactly one line.
+- Plain and wrapped signed dispatch reaches the real backend/projection paths.
+  Missing registrations produce `-32601`. Unauthorized callers and nil/empty
+  gates are denied before package storage access.
+- `package/approve-plan` records an authenticated, distinct allowlisted approver
+  using the VM server-built-plan model. The ten-minute approval binds requester,
+  method, complete action and source/target repository/artifact snapshots. Atomic
+  PostgreSQL consumption verifies current approver allowlisting and expiry and
+  rejects reuse; only the consumed record supplies `ApprovedBy` to the service.
+- Durable request claims precede execution and survive transport restart/cache
+  loss. Unknown outcomes do not re-execute. A separate completion-confirmation
+  marker prevents replaying success when terminal publication was not confirmed.
+- Deprecation preserves bytes, digest, URL and availability and only adds advisory
+  metadata. Explicit yank still removes bytes; real filesystem reads prove both.
+- Artifact/promotion publication and projection errors propagate. Zero relay
+  acceptance and zero-row stale projection writes are errors. Artifact wire
+  revisions advance across same-second updates. Drift emits an observation, not
+  a duplicate RPC result; terminal persistence precedes the canonical terminal
+  state, and the transport owns the single JSON-RPC response.
+
+### Gates
+
+| Command | Result |
+| --- | --- |
+| `go test ./internal/controlplane ./internal/repository -run 'TestPackage\|TestPgPackage' -count=1` | PASS |
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./...` | PASS |
+| `make race` | PASS |
+| `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0` | Nonzero only for 8 unchanged sibling-owned unused findings; all 7 package findings removed |
+| `go test -tags=integration -race ./internal/repository -run '^TestPackageAuthorizationPostgres' -count=1 -v` | PASS against an isolated temporary local PostgreSQL database, removed afterwards |
+| `git diff --check` | PASS |
+
+The PostgreSQL test verifies mismatched bindings are rejected without consumption,
+exactly one of eight concurrent approval consumers wins, and request claims plus
+completion confirmation survive repository reconstruction. Handler tests cover
+forged identity strings/unknown approval IDs, wrong requester, changed action and
+resource revision, expiry, revocation, self-approval, invalid signed approval
+origin, consumed grant replay, publication/projection/persistence failures, and
+restart replay without repeat backend work.
+
+### Scope and handoff
+
+- Migration `000069_package_authorization` is required. These admission/approval
+  tables are authoritative local security records, not relay-rebuildable caches.
+- CLI/MCP approval-ID arguments were not added: use the documented raw ContextVM
+  workflow. Their legacy `approved_by` arguments cannot grant approval.
+- Repository apply/delete registration and sibling continuity/tool approval
+  implementations remain outside this task. No requested target was left unwired.
+- Oracle review was attempted after exporting a worktree diff, but RepoPrompt
+  returned `targetBindingMismatch`; no independent Oracle review is claimed.
+  Source, SQL, test coverage, explicit path scope and main-checkout cleanliness
+  were reviewed locally instead.
+- Jev `find-lines` narrowed the VM/transport reference reads: 6 successful
+  requests, 42,770 input tokens, approximately $0.001797. The first guessed VM
+  filename was absent and corrected before reading the real reference.
+- No `bd` or `.beads` mutations, push, merge, deployment, or sibling-file changes.
+  Issue lifecycle remains user-owned. The only shared application change is the
+  package registration call; the main checkout remained clean.

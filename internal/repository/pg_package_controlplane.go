@@ -12,9 +12,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// PgPackageControlPlaneRepository stores package read models derived from Nostr events.
-// Tables written by this repository are projections/caches only; Nostr events remain
-// the source of truth for desired package control-plane state.
+// PgPackageControlPlaneRepository stores Nostr-derived package read models and
+// local request/approval admission records. Resource projections are rebuildable;
+// security admission records are authoritative and must not be replayed from relays.
 type PgPackageControlPlaneRepository struct {
 	pool pgQueryer
 }
@@ -109,7 +109,7 @@ func (r *PgPackageControlPlaneRepository) UpsertArtifact(ctx context.Context, ar
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	result, err := r.pool.Exec(ctx, `
 		INSERT INTO package_artifacts_projection (`+packageArtifactColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, '{}'::jsonb), $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		ON CONFLICT (repository_id, namespace, package_name, version, filename) DO UPDATE SET
@@ -138,6 +138,9 @@ func (r *PgPackageControlPlaneRepository) UpsertArtifact(ctx context.Context, ar
 		artifact.LastEventID, artifact.LastEventCreatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting package artifact projection: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("package projection rejected stale event: %w", ErrStaleRevision)
 	}
 	return nil
 }
@@ -176,7 +179,7 @@ func (r *PgPackageControlPlaneRepository) UpsertPublication(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	result, err := r.pool.Exec(ctx, `
 		INSERT INTO package_publications_projection (`+packagePublicationColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15, '{}'::jsonb), $16, $17, $18, $19)
 		ON CONFLICT (id) DO UPDATE SET
@@ -207,6 +210,9 @@ func (r *PgPackageControlPlaneRepository) UpsertPublication(ctx context.Context,
 		publication.LastEventID, publication.LastEventCreatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting package publication projection: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("package projection rejected stale event: %w", ErrStaleRevision)
 	}
 	return nil
 }
