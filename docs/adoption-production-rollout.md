@@ -22,9 +22,12 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 
 ## Enablement checklist
 
-1. Enable signer-first operator features and allowlists:
+1. Enable signer-first operator features and allowlists (use the same signer in the global and relevant scoped lists):
 
    ```yaml
+   auth:
+     enabled: true
+
    adoption:
      enabled: true
      allow_raw_docker_hosts: false
@@ -36,13 +39,13 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
      allowed_pubkeys: ["<operator-hex-pubkey>"]
 
    nostr:
-     authorized_pubkeys: ["<global-operator-hex-pubkey>"]
+     authorized_pubkeys: ["<operator-hex-pubkey>"]
    ```
 
    Notes:
-   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` scope signer-first operator execution.
-   - `nostr.authorized_pubkeys` remains the global fallback for public operator request authorization.
-   - Subject/email operator allowlists are compatibility-only and do not authorize signer-first public events.
+   - Each enabled surface requires a non-empty `allowed_pubkeys` list of 64-character hex keys at config load; whitespace is trimmed, case normalized, and duplicates removed.
+   - ContextVM requires membership in both `nostr.authorized_pubkeys` and the relevant scoped list. Neither list is a fallback for the other; empty lists deny all requests.
+   - Subject/email operator allowlists are compatibility-only and do not authorize signer-first requests. Subject/email-only configurations are rejected for enabled surfaces.
 
 2. Configure endpoint aliases; do not expose Docker credentials to clients:
 
@@ -181,3 +184,35 @@ If adoption or direct-runtime execution causes unexpected behavior:
 - Canonical encrypted request/result terminology: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
 - Encrypted request/result wire marker is `encrypted=bahia-encrypted-v1`.
 - If a release requirement still depends on the legacy HTTP operator path, record that dependency explicitly in the signoff evidence.
+
+## Allowlist upgrade (bahia-kppzm)
+
+This security hardening deliberately breaks compatibility with configurations
+that enabled adoption or direct-runtime actions with only subjects/emails, blank pubkeys, or
+malformed pubkeys. Previously, subject/email-only configurations passed load
+validation and left the scoped ContextVM allowlist empty, admitting any signer
+that passed the transport-wide gate. A global allowlist alone is no longer
+sufficient for these methods.
+
+Before upgrading:
+1. Set each enabled surface's `allowed_pubkeys` to the operators' full 64-character
+   hex public keys (not npubs, subjects, or email addresses).
+2. Include those same signers in `nostr.authorized_pubkeys` for ContextVM transport
+   admission; a scoped key does not bypass the global gate.
+3. Keep `auth.enabled=true` and the service's `nostr.private_key` configured.
+   Disable the surface if no operator should have access.
+
+Enabled surfaces with missing/invalid scoped keys now fail configuration load
+with an actionable error rather than starting with unusable operator access.
+Disabled surfaces may keep empty lists. No allow-any escape hatch is provided.
+
+The committed defaults and Compose config keep these surfaces disabled, and the
+committed enabled operator rehearsal config already has valid scoped keys.
+Subject-only and malformed-key test fixtures relied on the old validation and
+have been corrected. Private deployment overrides must be checked before rollout.
+
+This follows the explicit-grant, empty-means-deny convention established by
+`bahia-zz8n` (reactor fallback removal, commit `9a5902c5`). The later transport
+hardening (`ca348cf1`) already denies an empty global list. Unlike the older
+unmerged `bahia-9sav5` patch, an empty transport list is not a disabled pre-filter;
+its proposed warning would misdescribe current behavior.

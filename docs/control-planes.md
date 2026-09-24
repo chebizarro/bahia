@@ -338,10 +338,12 @@ CLI behavior:
 
 Authorization uses the verified inner ContextVM event pubkey after unwrap:
 
-- `nostr.authorized_pubkeys` is the global fallback for public operator request authorization.
-- `adoption.allowed_pubkeys` additionally authorizes adoption ContextVM methods.
-- `direct_runtime_actions.allowed_pubkeys` additionally authorizes direct-runtime ContextVM service action methods.
-- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by ContextVM event authorization.
+- `nostr.authorized_pubkeys` gates ContextVM transport admission; an empty list denies all requests.
+- `adoption.allowed_pubkeys` is also required for `adoption/scan` and `adoption/import`.
+- `direct_runtime_actions.allowed_pubkeys` is also required for `service/action` (deploy/restart/stop).
+- These are cumulative checks, not fallback lists: a signer must be in the global list and the relevant scoped list. Empty scoped lists deny all signers, including globally authorized operators.
+- Enabling adoption or direct-runtime actions requires at least one valid 64-hex scoped pubkey at config load. Keys are trimmed, lowercased, and deduplicated; matching is case-insensitive.
+- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and cannot authorize ContextVM requests. Subject/email-only configurations for enabled surfaces now fail config load; see the [upgrade instructions](adoption-production-rollout.md#allowlist-upgrade-bahia-kppzm).
 
 #### Adoption scan/import
 

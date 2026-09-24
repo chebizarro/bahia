@@ -766,6 +766,15 @@ Operations check pubkey authorization:
 | `adoption.allowed_pubkeys` | Runtime adoption |
 | `direct_runtime_actions.allowed_pubkeys` | Deploy/restart/stop |
 
+For adoption and direct-runtime ContextVM methods, the signer must be in **both**
+the global list and the relevant scoped list. Empty lists deny access; the global
+list is not a substitute for a scoped list. Enabling either surface requires at
+least one valid 64-character hex scoped pubkey at config load. Keys are trimmed,
+normalized to lowercase, and deduplicated; matching is case-insensitive.
+Subject/email-only allowlists no longer validate for enabled surfaces.
+Before upgrading an existing configuration, follow the
+[operator allowlist upgrade instructions](../adoption-production-rollout.md#allowlist-upgrade-bahia-kppzm).
+
 ### Event Pubkey
 
 Authorization is based on the verified inner ContextVM event `pubkey` after unwrap:

@@ -90,3 +90,81 @@ Recommended next moves:
 1. Use this slice as the reference PSTF pattern for future operator-only signer-first flows.
 2. Local Docker+relay rehearsal evidence has been captured for release commit `afb06407c45d4ac307d4168fefc516e41835548f` at `docs/investigations/signer-first-operator-rehearsal-2026-05-04/`.
 3. Keep staged/live SF-01 through SF-11 as the production enablement gate.
+
+## ContextVM allowlist regression — bahia-kppzm (2026-09-23)
+
+Scope: local `fix/contextvm-allowlist-failclosed` worktree, based on
+`ce5afde483ef82c9a87bacb73558ebc5ad30f983`. No web/E2E changes or live deployment
+verification. The historical reactor evidence above did not cover the separate
+ContextVM handler allowlist.
+
+### Decision and compatibility
+
+- Recovered the exact helper and config validation precedent from `71da3a42`
+  (`bahia-9sav5`), without bringing in its unrelated changes.
+- Verified `bahia-zz8n` in `9a5902c5`: it removed hardcoded developer-key fallback
+  and added request-time empty-list denial/tests. It did not add config validation
+  or an authorization startup warning.
+- Current transport admission was subsequently hardened in `ca348cf1`. An empty
+  global list already denies requests; do not restore the stranded patch's
+  allow-any pre-filter semantics or misleading warning.
+- Empty scoped lists now deny at request time. Both requester and configured
+  keys compare case-insensitively, including constructor callers that bypass
+  config loading.
+- Choose a config-load error, not just a warning, when an enabled surface has
+  no valid scoped pubkeys. Existing load validation already required operator
+  identities; requiring the identity type actually consumed by these methods
+  prevents silent runtime lockout. Reuse `normalizePubkeyList`, also used for
+  the global Nostr list, for trim/lowercase/64-hex validation/deduplication.
+- Disabled defaults remain valid with empty lists. Committed Compose settings
+  omit enablement and inherit disabled defaults; the committed enabled rehearsal
+  config has valid scoped pubkeys. Existing subject-only/malformed-key config
+  tests and global-fallback documentation depended on the old behavior and were
+  corrected. Private overrides were not inspected and need the documented upgrade
+  check. For ContextVM, membership is required in both global and scoped lists.
+- No new production stubs, fallback identities, allow-any switches, or hardcoded
+  production keys were introduced. Beads lifecycle remains user-owned.
+
+### Regression evidence
+
+Before changing production code, the new tests failed on the original code:
+- `authorizedContextVMPubkey(..., []) = true, want false`.
+- Scan, import, deploy, restart, and stop each returned
+  `response error = <nil>, want "requester not in authorized ... list"` with
+  empty scoped lists, while both signers were explicitly admitted globally.
+- Upper/mixed-case comparisons denied listed signers.
+- Subject/email-only and malformed-key YAML loaded without error; mixed-case
+  duplicate keys were not normalized.
+
+After the fix, `go test ./internal/config ./internal/controlplane -count=1`
+passes. SFOAR-AC-012 maps to SFOAR-T-012/T-013 and the new tests:
+- `TestAuthorizedContextVMPubkeyFailsClosed`
+- `TestOperatorContextVMHandlersScopedAuthorization`
+- `TestLoadSignerFirstOperatorAllowlists`
+- `TestDisabledOperatorSurfacesAllowEmptyAllowlists`
+
+Signed transport-dispatch tests exercise all three registered handlers, valid
+payloads, nil/empty/unlisted lists, mixed-case admission, cross-surface isolation,
+response correlation and service non-execution on rejection. They do not rely
+on the global gate rejecting requests before the method-specific gate.
+
+### Full gates
+
+| Command | Result |
+|---|---|
+| `go build ./...` | PASS (exit 0) |
+| `go vet ./...` | PASS (exit 0) |
+| `go test ./...` | PASS (exit 0) |
+| `make race` (`CGO_ENABLED=1 go test -race ./... -count=1`) | PASS (exit 0) |
+
+The acceptance/test JSON parses and all 12 criteria have mapped tests.
+`git diff --check` passes. Staged/live operator signoff remains outside this
+local regression fix; historical rehearsal evidence is not new live acceptance.
+
+### Investigation tooling
+
+Jev `find-lines`/`filter-search` were used to narrow handler, config and
+history-reference reads: 18 requests, 126,918 input tokens, about $0.00533.
+Presence scores were 0.92–0.96. The broad config query emphasized the global
+normalizer, so targeted source checks were still needed for the scoped guards;
+relevance ranking was not treated as proof of absence.
