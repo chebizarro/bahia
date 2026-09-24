@@ -108,8 +108,11 @@ func (c *OCIClient) InspectImage(ctx context.Context, repo, reference string) (*
 	if err != nil {
 		return nil, fmt.Errorf("executing manifest HEAD: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return &ImageInspection{Exists: false}, nil
 	}
@@ -252,8 +255,11 @@ func (c *OCIClient) ListTags(ctx context.Context, repo string) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("listing tags: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
@@ -290,8 +296,11 @@ func (c *OCIClient) GetReferrers(ctx context.Context, repo, digest string) ([]Re
 	if err != nil {
 		return nil, fmt.Errorf("fetching referrers: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	// Referrers API is optional; many registries return 404.
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		return nil, nil
@@ -331,8 +340,11 @@ func (c *OCIClient) fetchAnnotations(ctx context.Context, repo, reference string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil
 	}

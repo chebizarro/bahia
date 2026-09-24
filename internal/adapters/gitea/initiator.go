@@ -300,11 +300,11 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	mirrorReadPassword := ""
 	if i.loom != nil {
 		if mirrorReadUsername == "" || strings.ContainsAny(mirrorReadUsername, "\x00\r\n") || mirrorReadCredentialRef == "" {
-			return nil, fmt.Errorf("Loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
+			return nil, fmt.Errorf("loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
 		}
 		mirrorReadSecretID, parseErr := uuid.Parse(mirrorReadCredentialRef)
 		if parseErr != nil || mirrorReadSecretID == uuid.Nil {
-			return nil, fmt.Errorf("Loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
+			return nil, fmt.Errorf("loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
 		}
 		var manifest domain.SecretAccessManifest
 		mirrorReadPassword, manifest, err = i.secrets.ResolveSecretWithAudit(ctx, mirrorReadCredentialRef, domain.SecretResolveOptions{

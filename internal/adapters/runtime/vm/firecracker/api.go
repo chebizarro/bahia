@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,7 +34,11 @@ func sendCtrlAltDel(ctx context.Context, socketPath string) error {
 	if err != nil {
 		return fmt.Errorf("firecracker API SendCtrlAltDel: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("firecracker API SendCtrlAltDel: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -54,17 +59,14 @@ func dialHybridVsock(ctx context.Context, udsPath string, port uint32) (net.Conn
 		_ = conn.SetDeadline(deadline)
 	}
 	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("vsock CONNECT handshake write: %w", err)
+		return nil, errors.Join(fmt.Errorf("vsock CONNECT handshake write: %w", err), conn.Close())
 	}
 	line, err := readHandshakeLine(conn)
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("vsock CONNECT handshake read: %w", err)
+		return nil, errors.Join(fmt.Errorf("vsock CONNECT handshake read: %w", err), conn.Close())
 	}
 	if !strings.HasPrefix(line, "OK ") {
-		conn.Close()
-		return nil, fmt.Errorf("vsock CONNECT to guest port %d refused: %q", port, line)
+		return nil, errors.Join(fmt.Errorf("vsock CONNECT to guest port %d refused: %q", port, line), conn.Close())
 	}
 	_ = conn.SetDeadline(time.Time{}) // clear the handshake deadline
 	return conn, nil

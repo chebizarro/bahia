@@ -495,7 +495,11 @@ func copyFile(source, destination string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() {
+		if closeErr := src.Close(); closeErr != nil {
+			return
+		}
+	}()
 	dst, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err

@@ -169,7 +169,11 @@ func (d *DockerDiscovery) inspectContainer(ctx context.Context, containerID stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker container inspect returned %d", resp.StatusCode)
 	}
@@ -193,7 +197,11 @@ func (d *DockerDiscovery) inspectImage(ctx context.Context, imageRef string) (*d
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker image inspect returned %d", resp.StatusCode)
 	}
@@ -539,7 +547,7 @@ func hasUnsupportedNetworkAliases(networks map[string]dockerContainerAttachment,
 
 func isHexAlias(alias string) bool {
 	for _, ch := range alias {
-		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
 			return false
 		}
 	}

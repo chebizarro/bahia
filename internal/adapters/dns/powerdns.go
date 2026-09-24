@@ -110,7 +110,11 @@ func (b *PowerDNSBackend) Health(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("PowerDNS backend health check failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if err := expectPowerDNSSuccess(resp); err != nil {
 		return fmt.Errorf("PowerDNS backend health check failed: %w", err)
 	}
@@ -128,7 +132,11 @@ func (b *PowerDNSBackend) ListRecords(ctx context.Context, zone domain.DNSZone) 
 	if err != nil {
 		return nil, fmt.Errorf("list PowerDNS zone %q records: %w", zone.Name, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if err := expectPowerDNSSuccess(resp); err != nil {
 		return nil, fmt.Errorf("list PowerDNS zone %q records: %w", zone.Name, err)
 	}
@@ -169,7 +177,11 @@ func (b *PowerDNSBackend) SyncZone(ctx context.Context, zone domain.DNSZone, rec
 	if err != nil {
 		return fmt.Errorf("sync PowerDNS zone %q: %w", zone.Name, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if err := expectPowerDNSSuccess(resp); err != nil {
 		return fmt.Errorf("sync PowerDNS zone %q: %w", zone.Name, err)
 	}

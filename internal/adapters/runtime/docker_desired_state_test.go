@@ -656,11 +656,13 @@ func TestFindBahiaManagedContainer_PrefersLabels(t *testing.T) {
 		filters := r.URL.Query().Get("filters")
 		w.Header().Set("Content-Type", "application/json")
 		if filters != "" {
-			// Label-based query — return the label-matched container.
-			json.NewEncoder(w).Encode([]DockerContainer{labelContainer})
+			checkTestError(
+				// Label-based query — return the label-matched container.
+				t, json.NewEncoder(w).Encode([]DockerContainer{labelContainer}))
 		} else {
-			// All containers query — return the name-matched container.
-			json.NewEncoder(w).Encode([]DockerContainer{nameContainer})
+			checkTestError(
+				// All containers query — return the name-matched container.
+				t, json.NewEncoder(w).Encode([]DockerContainer{nameContainer}))
 		}
 	}))
 	defer server.Close()
@@ -697,10 +699,11 @@ func TestFindBahiaManagedContainer_FallsBackToName(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		filters := r.URL.Query().Get("filters")
 		if filters != "" {
-			// Label query returns empty.
-			json.NewEncoder(w).Encode([]DockerContainer{})
+			checkTestError(
+				// Label query returns empty.
+				t, json.NewEncoder(w).Encode([]DockerContainer{}))
 		} else {
-			json.NewEncoder(w).Encode([]DockerContainer{nameContainer})
+			checkTestError(t, json.NewEncoder(w).Encode([]DockerContainer{nameContainer}))
 		}
 	}))
 	defer server.Close()
@@ -729,7 +732,7 @@ func TestFindBahiaManagedContainer_NoMatch(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]DockerContainer{})
+		checkTestError(t, json.NewEncoder(w).Encode([]DockerContainer{}))
 	}))
 	defer server.Close()
 

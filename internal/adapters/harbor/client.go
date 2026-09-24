@@ -15,10 +15,10 @@ import (
 
 // ArtifactInfo holds metadata retrieved from Harbor.
 type ArtifactInfo struct {
-	Digest    string `json:"digest"`
-	MediaType string `json:"media_type"`
-	Size      int64  `json:"size"`
-	Tags      []Tag  `json:"tags"`
+	Digest     string `json:"digest"`
+	MediaType  string `json:"media_type"`
+	Size       int64  `json:"size"`
+	Tags       []Tag  `json:"tags"`
 	ScanStatus string `json:"scan_status,omitempty"`
 }
 
@@ -63,8 +63,11 @@ func (c *Client) ResolveTag(ctx context.Context, project, repo, tag string) (*Ar
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("harbor API returned %d: %s", resp.StatusCode, string(body))
@@ -91,8 +94,11 @@ func (c *Client) ImageExists(ctx context.Context, project, repo, reference strin
 	if err != nil {
 		return false, fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	return resp.StatusCode == http.StatusOK, nil
 }
 

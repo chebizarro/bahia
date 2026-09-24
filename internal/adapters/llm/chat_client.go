@@ -179,8 +179,11 @@ func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, user
 	if err != nil {
 		return "", "", fmt.Errorf("send chat completion request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", "", fmt.Errorf("read chat completion response: %w", err)
@@ -255,8 +258,11 @@ func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPro
 	if err != nil {
 		return "", "", fmt.Errorf("send streaming chat completion request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {

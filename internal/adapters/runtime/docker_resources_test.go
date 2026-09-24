@@ -45,7 +45,7 @@ func newMockDockerServer() *mockDockerServer {
 	}
 }
 
-func (m *mockDockerServer) handler() http.Handler {
+func (m *mockDockerServer) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -58,10 +58,10 @@ func (m *mockDockerServer) handler() http.Handler {
 			m.inspectedNetworks = append(m.inspectedNetworks, name)
 			if net, ok := m.networks[name]; ok {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(net)
+				checkTestError(t, json.NewEncoder(w).Encode(net))
 			} else {
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{"message": "network not found"})
+				checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"message": "network not found"}))
 			}
 
 		// Network create: POST /v1.44/networks/create
@@ -87,7 +87,7 @@ func (m *mockDockerServer) handler() http.Handler {
 				Labels: body.Labels,
 			}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"Id": "net-" + body.Name})
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"Id": "net-" + body.Name}))
 
 		// Volume inspect: GET /v1.44/volumes/{name}
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.44/volumes/"):
@@ -95,10 +95,10 @@ func (m *mockDockerServer) handler() http.Handler {
 			m.inspectedVolumes = append(m.inspectedVolumes, name)
 			if vol, ok := m.volumes[name]; ok {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(vol)
+				checkTestError(t, json.NewEncoder(w).Encode(vol))
 			} else {
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{"message": "volume not found"})
+				checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"message": "volume not found"}))
 			}
 
 		// Volume create: POST /v1.44/volumes/create
@@ -124,7 +124,7 @@ func (m *mockDockerServer) handler() http.Handler {
 				Labels: body.Labels,
 			}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"Name": body.Name})
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"Name": body.Name}))
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -132,8 +132,8 @@ func (m *mockDockerServer) handler() http.Handler {
 	})
 }
 
-func setupTestServer(mock *mockDockerServer) (*httptest.Server, *DockerObserver) {
-	server := httptest.NewServer(mock.handler())
+func setupTestServer(t *testing.T, mock *mockDockerServer) (*httptest.Server, *DockerObserver) {
+	server := httptest.NewServer(mock.handler(t))
 	observer := &DockerObserver{
 		httpClient: server.Client(),
 		host:       server.URL,
@@ -149,7 +149,7 @@ func setupTestServer(mock *mockDockerServer) (*httptest.Server, *DockerObserver)
 func TestEnsureNetworks_CreatesNew(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -201,7 +201,7 @@ func TestEnsureNetworks_ExistingCompatible(t *testing.T) {
 		Driver: "bridge",
 		Labels: map[string]string{"bahia.managed": "true"},
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -230,7 +230,7 @@ func TestEnsureNetworks_ExistingCompatible_DefaultDriver(t *testing.T) {
 		Name:   "app-net",
 		Driver: "bridge",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -254,7 +254,7 @@ func TestEnsureNetworks_ExistingIncompatible(t *testing.T) {
 		Name:   "app-net",
 		Driver: "overlay",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -279,7 +279,7 @@ func TestEnsureNetworks_ExistingIncompatible(t *testing.T) {
 func TestEnsureNetworks_EmptyName(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	err := EnsureNetworks(context.Background(), observer, []domain.NetworkSpec{{Name: ""}})
@@ -294,7 +294,7 @@ func TestEnsureNetworks_EmptyName(t *testing.T) {
 func TestEnsureNetworks_EmptySpecs(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	// No specs = no-op, no error.
@@ -311,7 +311,7 @@ func TestEnsureNetworks_EmptySpecs(t *testing.T) {
 func TestEnsureNetworks_WithOptions(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -344,7 +344,7 @@ func TestEnsureNetworks_WithOptions(t *testing.T) {
 func TestEnsureVolumes_CreatesNew(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -389,7 +389,7 @@ func TestEnsureVolumes_ExistingCompatible(t *testing.T) {
 		Driver: "local",
 		Labels: map[string]string{"bahia.managed": "true"},
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -416,7 +416,7 @@ func TestEnsureVolumes_ExistingCompatible_DefaultDriver(t *testing.T) {
 		Name:   "app-data",
 		Driver: "local",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -440,7 +440,7 @@ func TestEnsureVolumes_ExistingIncompatible(t *testing.T) {
 		Name:   "app-data",
 		Driver: "nfs",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -465,7 +465,7 @@ func TestEnsureVolumes_ExistingIncompatible(t *testing.T) {
 func TestEnsureVolumes_EmptyName(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	err := EnsureVolumes(context.Background(), observer, []domain.VolumeSpec{{Name: ""}})
@@ -480,7 +480,7 @@ func TestEnsureVolumes_EmptyName(t *testing.T) {
 func TestEnsureVolumes_EmptySpecs(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	err := EnsureVolumes(context.Background(), observer, nil)
@@ -496,7 +496,7 @@ func TestEnsureVolumes_EmptySpecs(t *testing.T) {
 func TestEnsureVolumes_WithDriverOpts(t *testing.T) {
 	t.Parallel()
 	mock := newMockDockerServer()
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -534,7 +534,7 @@ func TestEnsureNetworks_MixedExistingAndNew(t *testing.T) {
 		Name:   "existing-net",
 		Driver: "bridge",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{
@@ -563,7 +563,7 @@ func TestEnsureVolumes_MixedExistingAndNew(t *testing.T) {
 		Name:   "existing-vol",
 		Driver: "local",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.VolumeSpec{
@@ -591,7 +591,7 @@ func TestEnsureNetworks_StopsOnFirstIncompatible(t *testing.T) {
 		Name:   "bad-net",
 		Driver: "overlay",
 	}
-	server, observer := setupTestServer(mock)
+	server, observer := setupTestServer(t, mock)
 	defer server.Close()
 
 	specs := []domain.NetworkSpec{

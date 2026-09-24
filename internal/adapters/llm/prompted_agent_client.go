@@ -95,8 +95,11 @@ func (c *PromptedAgentClient) Next(ctx context.Context, req AgentModelRequest, o
 	if err != nil {
 		return nil, fmt.Errorf("send prompted agent request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read prompted agent response: %w", err)

@@ -177,7 +177,7 @@ func TestPgBackendVerifySnapshotUsesPgRestoreList(t *testing.T) {
 
 	// First create a dump file
 	dumpFile := filepath.Join(stagingDir, run.ID.String()+".dump")
-	os.WriteFile(dumpFile, []byte("dummy dump content"), 0600)
+	checkTestError(t, os.WriteFile(dumpFile, []byte("dummy dump content"), 0600))
 
 	result, err := backend.VerifySnapshot(context.Background(), service.BackupVerifyRequest{
 		Run:        run,
@@ -230,7 +230,7 @@ func TestPgBackendVerifySnapshotFailsOnPgRestoreListError(t *testing.T) {
 	recipe := pgRecipeFixture(repo.ID)
 	run := pgRunFixture(recipe)
 	dumpFile := filepath.Join(stagingDir, run.ID.String()+".dump")
-	os.WriteFile(dumpFile, []byte("corrupted"), 0600)
+	checkTestError(t, os.WriteFile(dumpFile, []byte("corrupted"), 0600))
 
 	result, err := backend.VerifySnapshot(context.Background(), service.BackupVerifyRequest{
 		Run:        run,
@@ -271,7 +271,7 @@ func TestPgBackendRestoreRunsPgRestore(t *testing.T) {
 
 	// Create the dump file
 	dumpFile := filepath.Join(stagingDir, sourceRun.ID.String()+".dump")
-	os.WriteFile(dumpFile, []byte("dump content"), 0600)
+	checkTestError(t, os.WriteFile(dumpFile, []byte("dump content"), 0600))
 
 	result, err := backend.Restore(context.Background(), service.BackupRestoreRequest{
 		Run: restoreRun, SourceRun: sourceRun, Recipe: recipe, Repository: repo,
@@ -324,7 +324,7 @@ func TestPgBackendRestoreWithVerifyTargetRunsIntegrityCheck(t *testing.T) {
 	restoreRun.RestoreTargetRef = "verify:"
 
 	dumpFile := filepath.Join(stagingDir, sourceRun.ID.String()+".dump")
-	os.WriteFile(dumpFile, []byte("dump content"), 0600)
+	checkTestError(t, os.WriteFile(dumpFile, []byte("dump content"), 0600))
 
 	result, err := backend.Restore(context.Background(), service.BackupRestoreRequest{
 		Run: restoreRun, SourceRun: sourceRun, Recipe: recipe, Repository: repo,
@@ -356,10 +356,8 @@ func (r *recordingPgRunner) Run(_ context.Context, binary string, args []string,
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "--file=") {
 				filePath := arg[7:]
-				if strings.HasSuffix(filePath, ".tmp") {
-					os.WriteFile(filePath, []byte("dump content"), 0600)
-				} else {
-					os.WriteFile(filePath, []byte("dump content"), 0600)
+				if err := os.WriteFile(filePath, []byte("dump content"), 0600); err != nil {
+					return "", "", err
 				}
 			}
 		}

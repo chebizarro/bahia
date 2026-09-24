@@ -90,8 +90,11 @@ func (c *OpenAIAgentClient) Next(ctx context.Context, req AgentModelRequest, onE
 	if err != nil {
 		return nil, fmt.Errorf("send OpenAI agent request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read OpenAI agent response: %w", err)

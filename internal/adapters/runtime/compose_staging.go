@@ -373,16 +373,6 @@ func (e *ComposeValidationError) Unwrap() error {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// readFileString reads a file and returns its content as a string.
-// Used in tests and validation paths.
-func readFileString(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
 // isValidJSON checks if data is valid JSON (used in staging validation).
 func isValidJSON(data []byte) bool {
 	var v json.RawMessage

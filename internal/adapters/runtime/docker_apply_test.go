@@ -74,7 +74,7 @@ func (m *applyMockState) addContainer(c DockerContainer) {
 	m.containers[c.ID] = c
 }
 
-func (m *applyMockState) handler() http.Handler {
+func (m *applyMockState) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -83,7 +83,7 @@ func (m *applyMockState) handler() http.Handler {
 		switch {
 		// List containers: GET /v1.44/containers/json
 		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
-			m.handleListContainers(w, r)
+			m.handleListContainers(t, w, r)
 
 		// Stop container: POST /v1.44/containers/{id}/stop
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/stop"):
@@ -111,7 +111,7 @@ func (m *applyMockState) handler() http.Handler {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
 			name := r.URL.Query().Get("name")
 			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
+			checkTestError(t, json.NewDecoder(r.Body).Decode(&body))
 			m.createCalls = append(m.createCalls, createCall{Name: name, Body: body})
 			if m.failCreate {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -120,7 +120,7 @@ func (m *applyMockState) handler() http.Handler {
 			m.nextContainerID++
 			newID := fmt.Sprintf("container-%d", m.nextContainerID)
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"Id": newID})
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"Id": newID}))
 
 		// Start container: POST /v1.44/containers/{id}/start
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/start"):
@@ -141,7 +141,9 @@ func (m *applyMockState) handler() http.Handler {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"done"}`))
+			if _, err := w.Write([]byte(`{"status":"done"}`)); err != nil {
+				t.Errorf("write pull response: %v", err)
+			}
 
 		// Network connect: POST /v1.44/networks/{name}/connect
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/connect"):
@@ -152,7 +154,7 @@ func (m *applyMockState) handler() http.Handler {
 				networkName = parts[3]
 			}
 			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
+			checkTestError(t, json.NewDecoder(r.Body).Decode(&body))
 			containerID, _ := body["Container"].(string)
 			m.connectCalls = append(m.connectCalls, connectCall{NetworkName: networkName, ContainerID: containerID})
 			w.WriteHeader(http.StatusOK)
@@ -162,7 +164,7 @@ func (m *applyMockState) handler() http.Handler {
 			name := strings.TrimPrefix(r.URL.Path, "/v1.44/networks/")
 			if net, ok := m.networks[name]; ok {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(net)
+				checkTestError(t, json.NewEncoder(w).Encode(net))
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
@@ -173,21 +175,21 @@ func (m *applyMockState) handler() http.Handler {
 				Name   string `json:"Name"`
 				Driver string `json:"Driver"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			checkTestError(t, json.NewDecoder(r.Body).Decode(&body))
 			driver := body.Driver
 			if driver == "" {
 				driver = "bridge"
 			}
 			m.networks[body.Name] = mockDockerResource{Name: body.Name, Driver: driver}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"Id": "net-" + body.Name})
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"Id": "net-" + body.Name}))
 
 		// Volume inspect: GET /v1.44/volumes/{name}
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1.44/volumes/"):
 			name := strings.TrimPrefix(r.URL.Path, "/v1.44/volumes/")
 			if vol, ok := m.volumes[name]; ok {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(vol)
+				checkTestError(t, json.NewEncoder(w).Encode(vol))
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
@@ -198,14 +200,14 @@ func (m *applyMockState) handler() http.Handler {
 				Name   string `json:"Name"`
 				Driver string `json:"Driver"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			checkTestError(t, json.NewDecoder(r.Body).Decode(&body))
 			driver := body.Driver
 			if driver == "" {
 				driver = "local"
 			}
 			m.volumes[body.Name] = mockDockerResource{Name: body.Name, Driver: driver}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"Name": body.Name})
+			checkTestError(t, json.NewEncoder(w).Encode(map[string]string{"Name": body.Name}))
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -213,14 +215,14 @@ func (m *applyMockState) handler() http.Handler {
 	})
 }
 
-func (m *applyMockState) handleListContainers(w http.ResponseWriter, r *http.Request) {
+func (m *applyMockState) handleListContainers(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	filtersRaw := r.URL.Query().Get("filters")
 	var containers []DockerContainer
 
 	if filtersRaw != "" {
 		// Parse filters for label-based lookup.
 		var filters map[string][]string
-		json.Unmarshal([]byte(filtersRaw), &filters)
+		checkTestError(t, json.Unmarshal([]byte(filtersRaw), &filters))
 		labelFilters := filters["label"]
 
 		for _, c := range m.containers {
@@ -233,8 +235,7 @@ func (m *applyMockState) handleListContainers(w http.ResponseWriter, r *http.Req
 			containers = append(containers, c)
 		}
 	}
-
-	json.NewEncoder(w).Encode(containers)
+	checkTestError(t, json.NewEncoder(w).Encode(containers))
 }
 
 func matchesLabelFilters(c DockerContainer, filters []string) bool {
@@ -256,8 +257,8 @@ func extractContainerID(path, suffix string) string {
 	return strings.TrimSuffix(trimmed, "/"+strings.TrimPrefix(suffix, "/"))
 }
 
-func setupApplyTest(mock *applyMockState) (*httptest.Server, *DockerObserver) {
-	server := httptest.NewServer(mock.handler())
+func setupApplyTest(t *testing.T, mock *applyMockState) (*httptest.Server, *DockerObserver) {
+	server := httptest.NewServer(mock.handler(t))
 	observer := &DockerObserver{
 		httpClient: server.Client(),
 		host:       server.URL,
@@ -318,7 +319,7 @@ func TestApplyDesiredState_NoOp_HashMatch(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -382,7 +383,7 @@ func TestApplyDesiredState_HashMatch_PullAlways_Recreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -437,7 +438,7 @@ func TestApplyDesiredState_HashDrift_Recreates(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -483,7 +484,7 @@ func TestApplyDesiredState_MissingContainer_CreatesFresh(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -534,7 +535,7 @@ func TestApplyDesiredState_PullNever_SkipsPull(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -563,7 +564,7 @@ func TestApplyDesiredState_PullFailure_Always_Fatal(t *testing.T) {
 	mock.failPull = true
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -593,7 +594,7 @@ func TestApplyDesiredState_PullFailure_IfNotPresent_Warning(t *testing.T) {
 	mock.failPull = true
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -644,7 +645,7 @@ func TestApplyDesiredState_StopFailure_Fatal(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -680,7 +681,7 @@ func TestApplyDesiredState_RemoveFailure_Fatal(t *testing.T) {
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -703,7 +704,7 @@ func TestApplyDesiredState_CreateFailure_Fatal(t *testing.T) {
 	mock.failCreate = true
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -729,7 +730,7 @@ func TestApplyDesiredState_StartFailure_Fatal(t *testing.T) {
 	mock.failStart = true
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -749,7 +750,7 @@ func TestApplyDesiredState_StartFailure_Fatal(t *testing.T) {
 func TestApplyDesiredState_NilSpec_Error(t *testing.T) {
 	t.Parallel()
 	mock := newApplyMockState()
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := DesiredStateApplyRequest{TargetService: nil}
@@ -771,7 +772,7 @@ func TestApplyDesiredState_DryRun_NoMutations(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -810,7 +811,7 @@ func TestApplyDesiredState_DryRun_ExistingContainer_ShowsRecreate(t *testing.T) 
 		},
 	})
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -841,7 +842,7 @@ func TestApplyDesiredState_EnvironmentRevision(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -863,7 +864,7 @@ func TestApplyDesiredState_NilPlan_EmptyRevision(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := DesiredStateApplyRequest{
@@ -890,7 +891,7 @@ func TestApplyDesiredState_EnsuresNetworkForCustomNetworkMode(t *testing.T) {
 	spec := applyTestSpec()
 	spec.NetworkMode = "custom-network"
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -911,7 +912,7 @@ func TestApplyDesiredState_SkipsNetworkEnsureForHostMode(t *testing.T) {
 	spec := applyTestSpec()
 	spec.NetworkMode = "host"
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -935,7 +936,7 @@ func TestApplyDesiredState_EnsuresNamedVolumes(t *testing.T) {
 	spec := applyTestSpec()
 	spec.Volumes = []string{"app-data:/data", "/host/path:/mnt"}
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -962,7 +963,7 @@ func TestApplyDesiredState_ContainerConfigPassedCorrectly(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 
 	req := applyTestRequest(spec)
@@ -1306,7 +1307,7 @@ func TestApplyDesiredState_ContinuesWhenStopErrorLeavesContainerExited(t *testin
 func TestDockerDeploy_DelegatesMutationsToControlClient(t *testing.T) {
 	t.Parallel()
 	mock := newApplyMockState()
-	server, observer := setupApplyTest(mock)
+	server, observer := setupApplyTest(t, mock)
 	defer server.Close()
 	control := &recordingDockerControlClient{}
 	observer.controlClient = control

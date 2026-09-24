@@ -604,7 +604,11 @@ func readConsoleFrom(path string, offset int64) (string, int64, error) {
 	if err != nil {
 		return "", offset, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			return
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return "", offset, err

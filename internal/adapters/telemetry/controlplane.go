@@ -270,7 +270,7 @@ func EmitLifecycle(ctx context.Context, event, outcome string, err error, attrs 
 	}
 	record.AddAttributes(attribute.String("outcome", boundedOutcome(outcome, err)))
 	for _, attr := range attrs {
-		record.AddAttributes(attribute.String(string(attr.Key), attr.Value.Emit()))
+		record.AddAttributes(attribute.String(string(attr.Key), attr.Value.String()))
 	}
 	global.Logger(controlPlaneInstrumentationName).Emit(ctx, record)
 }

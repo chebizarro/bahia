@@ -132,10 +132,6 @@ func (c *Client) downloadFromServerWithLimit(ctx context.Context, url string, ma
 	return nil, fmt.Errorf("after %d retries: %w", c.maxRetries, lastErr)
 }
 
-func (c *Client) doDownload(ctx context.Context, url string) ([]byte, error) {
-	return c.doDownloadWithLimit(ctx, url, 0)
-}
-
 func (c *Client) doDownloadWithLimit(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -150,8 +146,11 @@ func (c *Client) doDownloadWithLimit(ctx context.Context, url string, maxBytes i
 	if err != nil {
 		return nil, fmt.Errorf("downloading: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("blob not found: %s", url)
 	}
@@ -191,7 +190,7 @@ func (c *Client) Exists(ctx context.Context, hash string) (bool, string, error) 
 		}
 	}
 	if lastErr != nil {
-		return false, "", fmt.Errorf("Blossom existence is indeterminate: %w", lastErr)
+		return false, "", fmt.Errorf("blossom existence is indeterminate: %w", lastErr)
 	}
 	return false, "", nil
 }
@@ -206,8 +205,11 @@ func (c *Client) checkExists(ctx context.Context, url string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return true, nil

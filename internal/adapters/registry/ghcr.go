@@ -75,8 +75,11 @@ func (a *GHCRAuth) Token(ctx context.Context, scope string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("requesting GHCR token: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GHCR token endpoint returned %d", resp.StatusCode)
 	}

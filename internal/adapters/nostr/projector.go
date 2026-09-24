@@ -665,16 +665,24 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.publishBackupRepositoryByID(ctx, firstString(stringifyMapValue(e.Data, "repository_id"), e.EntityID))
 	case service.EventBackupRunChanged:
 		p.publishBackupRunByID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		p.publishBackupRuntimeObservation(ctx)
+		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
+			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
 	case service.EventBackupRestoreChanged:
 		p.publishBackupRestoreByID(ctx, firstString(stringifyMapValue(e.Data, "restore_id"), e.EntityID))
-		p.publishBackupRuntimeObservation(ctx)
+		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
+			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
 	case service.EventBackupVerificationChanged:
 		p.publishBackupVerificationByRunID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		p.publishBackupRuntimeObservation(ctx)
+		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
+			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
 	case service.EventBackupRetentionChanged:
 		p.publishBackupRetentionByID(ctx, firstString(stringifyMapValue(e.Data, "retention_run_id"), e.EntityID))
-		p.publishBackupRuntimeObservation(ctx)
+		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
+			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
 	}
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
@@ -845,10 +853,6 @@ func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uu
 	if err := p.publishLLMRouteState(ctx, state); err != nil {
 		p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
 	}
-}
-
-func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
-	return p.publishPublicRouteSnapshotsFromSource(ctx, legacyProjectorSource{source: p.source}, services, envs)
 }
 
 func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, snapshotSource ProjectorSource, services []domain.Service, envs []domain.Environment) (int, int, int, int) {

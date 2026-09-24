@@ -64,8 +64,11 @@ func inspectNetwork(ctx context.Context, observer *DockerObserver, name string) 
 	if err != nil {
 		return nil, false, fmt.Errorf("inspecting network: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
 	}
@@ -133,8 +136,11 @@ func createNetwork(ctx context.Context, observer *DockerObserver, spec domain.Ne
 	if err != nil {
 		return fmt.Errorf("creating network: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("docker network create returned %d", resp.StatusCode)
 	}
@@ -191,8 +197,11 @@ func inspectVolume(ctx context.Context, observer *DockerObserver, name string) (
 	if err != nil {
 		return nil, false, fmt.Errorf("inspecting volume: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
 	}
@@ -260,8 +269,11 @@ func createVolume(ctx context.Context, observer *DockerObserver, spec domain.Vol
 	if err != nil {
 		return fmt.Errorf("creating volume: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("docker volume create returned %d", resp.StatusCode)
 	}

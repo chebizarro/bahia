@@ -36,8 +36,11 @@ func (g *SyftGenerator) GenerateSBOM(ctx context.Context, req GenerateRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("resolving Syft source: %w", err)
 	}
-	defer src.Close()
-
+	defer func() {
+		if closeErr := src.Close(); closeErr != nil {
+			return
+		}
+	}()
 	createCfg := g.newCreateConfig()
 	syftSBOM, err := anchoreSyft.CreateSBOM(ctx, src, createCfg)
 	if err != nil {
@@ -105,7 +108,7 @@ func encodeSyftSBOM(s syftsbom.SBOM, requested domain.SBOMFormat) ([]byte, error
 	}
 	encoder := collection.GetByString(encoderName)
 	if encoder == nil {
-		return nil, fmt.Errorf("Syft encoder %q is unavailable", encoderName)
+		return nil, fmt.Errorf("syft encoder %q is unavailable", encoderName)
 	}
 
 	return format.Encode(s, encoder)

@@ -118,8 +118,11 @@ func (b *DockerBuilder) BuildImage(ctx context.Context, req BuildRequest) (*Buil
 	if err != nil {
 		return nil, fmt.Errorf("docker build request failed: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("docker build returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -154,7 +157,11 @@ func (b *DockerBuilder) PushImage(ctx context.Context, imageID string, targetRef
 	if err != nil {
 		return fmt.Errorf("docker tag request failed: %w", err)
 	}
-	defer tagResp.Body.Close()
+	defer func() {
+		if closeErr := tagResp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if tagResp.StatusCode != http.StatusCreated && tagResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(tagResp.Body)
 		return fmt.Errorf("docker tag returned %d: %s", tagResp.StatusCode, strings.TrimSpace(string(body)))
@@ -172,7 +179,11 @@ func (b *DockerBuilder) PushImage(ctx context.Context, imageID string, targetRef
 	if err != nil {
 		return fmt.Errorf("docker push request failed: %w", err)
 	}
-	defer pushResp.Body.Close()
+	defer func() {
+		if closeErr := pushResp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if pushResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(pushResp.Body)
 		return fmt.Errorf("docker push returned %d: %s", pushResp.StatusCode, strings.TrimSpace(string(body)))
@@ -205,7 +216,11 @@ func (b *DockerBuilder) CheckImageExists(ctx context.Context, toolsetHash string
 	if err != nil {
 		return "", false, fmt.Errorf("docker image check failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return "", false, fmt.Errorf("docker image check returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -226,7 +241,6 @@ func (b *DockerBuilder) CheckImageExists(ctx context.Context, toolsetHash string
 func (b *DockerBuilder) buildContextTar(dockerfile string, lockFile []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	defer tw.Close()
 
 	files := map[string][]byte{
 		"Dockerfile":      []byte(dockerfile),

@@ -81,19 +81,19 @@ func validatedBuildDependencies(dependencies []BuildDependency) ([]BuildDependen
 	for index := range ordered {
 		name := strings.TrimSpace(ordered[index].Name)
 		if !buildDependencyNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("Loom job build dependency %d has an invalid name", index)
+			return nil, fmt.Errorf("loom job build dependency %d has an invalid name", index)
 		}
 		if _, duplicate := seen[name]; duplicate {
-			return nil, fmt.Errorf("Loom job build dependency %d duplicates a name", index)
+			return nil, fmt.Errorf("loom job build dependency %d duplicates a name", index)
 		}
 		seen[name] = struct{}{}
 		cloneURL := strings.TrimSpace(ordered[index].CloneURL)
 		if !isCredentialFreeHTTPSCloneURL(cloneURL) {
-			return nil, fmt.Errorf("Loom job build dependency %d URL must be credential-free absolute HTTPS", index)
+			return nil, fmt.Errorf("loom job build dependency %d URL must be credential-free absolute HTTPS", index)
 		}
 		sha := strings.TrimSpace(ordered[index].CommitSHA)
 		if !isLowerFullCommitSHA(sha) {
-			return nil, fmt.Errorf("Loom job build dependency %d must use an immutable 40-hex commit SHA", index)
+			return nil, fmt.Errorf("loom job build dependency %d must use an immutable 40-hex commit SHA", index)
 		}
 		ordered[index] = BuildDependency{Name: name, CloneURL: cloneURL, CommitSHA: sha}
 	}

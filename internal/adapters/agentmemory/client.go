@@ -268,7 +268,7 @@ func (c *Client) loadTaskIDs() (map[string]string, error) {
 	return taskIDs, nil
 }
 
-func (c *Client) persistTaskIDs(taskIDs map[string]string) error {
+func (c *Client) persistTaskIDs(taskIDs map[string]string) (retErr error) {
 	data, err := json.Marshal(taskIDs)
 	if err != nil {
 		return err
@@ -282,18 +282,19 @@ func (c *Client) persistTaskIDs(taskIDs map[string]string) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() {
+		if removeErr := os.Remove(tmpName); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			retErr = errors.Join(retErr, removeErr)
+		}
+	}()
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
 		return err

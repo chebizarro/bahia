@@ -20,7 +20,7 @@ const NostrSignatureKind = 31200
 
 // ErrNostrPullVerificationUnavailable indicates that the pull-based SignatureVerifier contract cannot query event-backed attestations.
 // Callers must use the subscribed persistence pipeline or VerifyEvent and must not interpret this as a successful empty verification.
-var ErrNostrPullVerificationUnavailable = errors.New("Nostr signature pull verification is unavailable; verify subscribed attestation events with VerifyEvent")
+var ErrNostrPullVerificationUnavailable = errors.New("nostr signature pull verification is unavailable; verify subscribed attestation events with VerifyEvent")
 
 // NostrArtifactAttestation is the expected content structure of a kind 31200 event.
 type NostrArtifactAttestation struct {

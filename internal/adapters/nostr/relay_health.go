@@ -282,7 +282,6 @@ func sortFloat64s(a []float64) {
 type RelayHealthTracker struct {
 	mu      sync.RWMutex
 	relays  map[string]*RelayHealth
-	alerts  []RelayHealthAlert
 	alertCh chan RelayHealthAlert
 }
 

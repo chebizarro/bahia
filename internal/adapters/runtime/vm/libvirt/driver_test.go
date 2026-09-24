@@ -480,8 +480,12 @@ func TestVsockDialUsesRecordedCID(t *testing.T) {
 	instancesDir := t.TempDir()
 	var gotCID, gotPort uint32
 	host, guest := net.Pipe()
-	defer host.Close()
-	defer guest.Close()
+	defer func() {
+		checkTestError(t, host.Close())
+	}()
+	defer func() {
+		checkTestError(t, guest.Close())
+	}()
 	driver := New(Config{
 		URI:          "qemu:///session",
 		InstancesDir: instancesDir,

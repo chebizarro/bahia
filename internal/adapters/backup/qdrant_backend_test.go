@@ -91,7 +91,7 @@ func TestQdrantBackendVerifySnapshotVerifiesChecksum(t *testing.T) {
 	stagingDir := t.TempDir()
 	snapshotContent := []byte("mock snapshot data")
 	dumpFile := filepath.Join(stagingDir, "test-snap.snapshot")
-	os.WriteFile(dumpFile, snapshotContent, 0600)
+	checkTestError(t, os.WriteFile(dumpFile, snapshotContent, 0600))
 
 	api := &recordingQdrantAPI{}
 	backend := NewQdrantBackend(withQdrantAPI(api), WithQdrantStagingDir(stagingDir))
@@ -107,7 +107,6 @@ func TestQdrantBackendVerifySnapshotVerifiesChecksum(t *testing.T) {
 		},
 	}
 
-
 	result, err := backend.VerifySnapshot(context.Background(), service.BackupVerifyRequest{
 		Run: run, Repository: repo,
 		SnapshotID: "snap-1", Mode: domain.BackupVerificationQdrantSnapshotVerify,
@@ -121,7 +120,7 @@ func TestQdrantBackendVerifySnapshotVerifiesChecksum(t *testing.T) {
 func TestQdrantBackendVerifySnapshotRejectsMismatchedChecksum(t *testing.T) {
 	stagingDir := t.TempDir()
 	dumpFile := filepath.Join(stagingDir, "test-snap.snapshot")
-	os.WriteFile(dumpFile, []byte("corrupted data"), 0600)
+	checkTestError(t, os.WriteFile(dumpFile, []byte("corrupted data"), 0600))
 
 	api := &recordingQdrantAPI{}
 	backend := NewQdrantBackend(withQdrantAPI(api), WithQdrantStagingDir(stagingDir))
@@ -152,7 +151,7 @@ func TestQdrantBackendRestoreUploadsAndRecovers(t *testing.T) {
 	snapshotContent := []byte("mock snapshot data")
 	sourceRunID := uuid.New()
 	dumpFile := filepath.Join(stagingDir, sourceRunID.String()+".snapshot")
-	os.WriteFile(dumpFile, snapshotContent, 0600)
+	checkTestError(t, os.WriteFile(dumpFile, snapshotContent, 0600))
 
 	api := &recordingQdrantAPI{
 		snapshots: []qdrantSnapshotDesc{{
@@ -204,13 +203,13 @@ func TestQdrantBackendRestoreMismatchedRunFails(t *testing.T) {
 }
 
 type recordingQdrantAPI struct {
-	healthCalled    bool
-	createCalled    bool
-	pollCalled      bool
-	downloadCalled  bool
-	uploadCalled    bool
-	recoverCalled   bool
-	listCalled      bool
+	healthCalled   bool
+	createCalled   bool
+	pollCalled     bool
+	downloadCalled bool
+	uploadCalled   bool
+	recoverCalled  bool
+	listCalled     bool
 
 	snapshotResult *qdrantSnapshotResult
 	createErr      error
@@ -244,9 +243,10 @@ func (r *recordingQdrantAPI) downloadSnapshot(ctx context.Context, collection, s
 	if r.downloadCS != "" {
 		return r.downloadCS, nil
 	}
-	os.WriteFile(destPath, []byte("mock snapshot data"), 0600)
-	cs, _ := sha256File(destPath)
-	return cs, nil
+	if err := os.WriteFile(destPath, []byte("mock snapshot data"), 0600); err != nil {
+		return "", err
+	}
+	return sha256File(destPath)
 }
 
 func (r *recordingQdrantAPI) uploadSnapshot(ctx context.Context, collection, snapshotPath string) error {
@@ -271,7 +271,7 @@ func qdrantRepositoryFixture() *domain.BackupRepository {
 		Backend:       domain.BackupBackendQdrantSnapshot,
 		RepositoryURI: "http://localhost:6333",
 		Metadata: map[string]any{
-			"qdrant_url":    "http://localhost:6333",
+			"qdrant_url":     "http://localhost:6333",
 			"qdrant_api_key": "test-key",
 		},
 	}

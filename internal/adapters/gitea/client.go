@@ -119,7 +119,11 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 	if err != nil {
 		return 0, scrubSecrets(err, append([]string{c.adminToken}, secretsToScrub...)...)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
 		secrets := append([]string{c.adminToken}, secretsToScrub...)

@@ -94,8 +94,11 @@ func (b *FIPSBackend) ListRecords(ctx context.Context, zone domain.DNSZone) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("read DNS FIPS hosts file %q: %w", hostsPath, err)
 	}
-	defer file.Close()
-
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			return
+		}
+	}()
 	records := []domain.DNSRecord{}
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0

@@ -786,6 +786,25 @@ func (m *Metrics) SetCashuWalletBalance(mintURL string, balance int64) {
 
 // --- Prometheus Export ---
 
+type prometheusWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *prometheusWriter) println(args ...interface{}) {
+	if w.err != nil {
+		return
+	}
+	_, w.err = fmt.Fprintln(w.writer, args...)
+}
+
+func (w *prometheusWriter) printf(format string, args ...interface{}) {
+	if w.err != nil {
+		return
+	}
+	_, w.err = fmt.Fprintf(w.writer, format, args...)
+}
+
 // MetricsHandler returns an HTTP handler that serves Prometheus-compatible metrics.
 func (p *Provider) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -802,308 +821,310 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			return
 		}
 
+		writer := &prometheusWriter{writer: w}
+
 		// HTTP metrics
-		fmt.Fprintln(w, "# HELP bahia_http_requests_total Total HTTP requests by method, path, and status code")
-		fmt.Fprintln(w, "# TYPE bahia_http_requests_total counter")
+		writer.println("# HELP bahia_http_requests_total Total HTTP requests by method, path, and status code")
+		writer.println("# TYPE bahia_http_requests_total counter")
 		for key, count := range m.HTTPRequestsTotal {
-			fmt.Fprintf(w, "bahia_http_requests_total{key=%q} %d\n", key, count)
+			writer.printf("bahia_http_requests_total{key=%q} %d\n", key, count)
 		}
 
 		if len(m.HTTPRequestDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_http_request_duration_seconds HTTP request duration in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_http_request_duration_seconds summary")
+			writer.println("# HELP bahia_http_request_duration_seconds HTTP request duration in seconds")
+			writer.println("# TYPE bahia_http_request_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.HTTPRequestDurations)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds_sum %.6f\n", m.HTTPRequestDurationSum)
-			fmt.Fprintf(w, "bahia_http_request_duration_seconds_count %d\n", m.HTTPRequestDurationCount)
+			writer.printf("bahia_http_request_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_http_request_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_http_request_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_http_request_duration_seconds_sum %.6f\n", m.HTTPRequestDurationSum)
+			writer.printf("bahia_http_request_duration_seconds_count %d\n", m.HTTPRequestDurationCount)
 		}
 
 		// Deployment metrics
-		fmt.Fprintln(w, "# HELP bahia_deployments_total Total deployments by service, environment, and status")
-		fmt.Fprintln(w, "# TYPE bahia_deployments_total counter")
+		writer.println("# HELP bahia_deployments_total Total deployments by service, environment, and status")
+		writer.println("# TYPE bahia_deployments_total counter")
 		for key, count := range m.DeploymentsTotal {
-			fmt.Fprintf(w, "bahia_deployments_total{key=%q} %d\n", key, count)
+			writer.printf("bahia_deployments_total{key=%q} %d\n", key, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_drift_detected_total Total drift detections")
-		fmt.Fprintln(w, "# TYPE bahia_drift_detected_total counter")
-		fmt.Fprintf(w, "bahia_drift_detected_total %d\n", m.DriftDetectedTotal)
+		writer.println("# HELP bahia_drift_detected_total Total drift detections")
+		writer.println("# TYPE bahia_drift_detected_total counter")
+		writer.printf("bahia_drift_detected_total %d\n", m.DriftDetectedTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_hygiene_scans_total Total hygiene dry-run scans issued")
-		fmt.Fprintln(w, "# TYPE bahia_hygiene_scans_total counter")
-		fmt.Fprintf(w, "bahia_hygiene_scans_total %d\n", m.HygieneScansTotal)
-		fmt.Fprintln(w, "# HELP bahia_hygiene_candidates_total Hygiene scan candidates by class")
-		fmt.Fprintln(w, "# TYPE bahia_hygiene_candidates_total counter")
+		writer.println("# HELP bahia_hygiene_scans_total Total hygiene dry-run scans issued")
+		writer.println("# TYPE bahia_hygiene_scans_total counter")
+		writer.printf("bahia_hygiene_scans_total %d\n", m.HygieneScansTotal)
+		writer.println("# HELP bahia_hygiene_candidates_total Hygiene scan candidates by class")
+		writer.println("# TYPE bahia_hygiene_candidates_total counter")
 		for class, count := range m.HygieneCandidatesTotal {
-			fmt.Fprintf(w, "bahia_hygiene_candidates_total{class=%q} %d\n", class, count)
+			writer.printf("bahia_hygiene_candidates_total{class=%q} %d\n", class, count)
 		}
-		fmt.Fprintln(w, "# HELP bahia_hygiene_actions_total Hygiene maintenance intents by method and status")
-		fmt.Fprintln(w, "# TYPE bahia_hygiene_actions_total counter")
+		writer.println("# HELP bahia_hygiene_actions_total Hygiene maintenance intents by method and status")
+		writer.println("# TYPE bahia_hygiene_actions_total counter")
 		for key, count := range m.HygieneActionsTotal {
 			parts := strings.SplitN(key, ":", 2)
 			status := ""
 			if len(parts) == 2 {
 				status = parts[1]
 			}
-			fmt.Fprintf(w, "bahia_hygiene_actions_total{method=%q,status=%q} %d\n", parts[0], status, count)
+			writer.printf("bahia_hygiene_actions_total{method=%q,status=%q} %d\n", parts[0], status, count)
 		}
-		fmt.Fprintln(w, "# HELP bahia_hygiene_pressure_breaches_total Pressure threshold breaches (disk>85%% / inode)")
-		fmt.Fprintln(w, "# TYPE bahia_hygiene_pressure_breaches_total counter")
-		fmt.Fprintf(w, "bahia_hygiene_pressure_breaches_total %d\n", m.HygienePressureBreachesTotal)
+		writer.println("# HELP bahia_hygiene_pressure_breaches_total Pressure threshold breaches (disk>85%% / inode)")
+		writer.println("# TYPE bahia_hygiene_pressure_breaches_total counter")
+		writer.printf("bahia_hygiene_pressure_breaches_total %d\n", m.HygienePressureBreachesTotal)
 
 		// Adoption/direct-runtime operational metrics
-		fmt.Fprintln(w, "# HELP bahia_adoption_scans_total Adoption scan requests by status")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_scans_total counter")
+		writer.println("# HELP bahia_adoption_scans_total Adoption scan requests by status")
+		writer.println("# TYPE bahia_adoption_scans_total counter")
 		for status, count := range m.AdoptionScansTotal {
-			fmt.Fprintf(w, "bahia_adoption_scans_total{status=%q} %d\n", status, count)
+			writer.printf("bahia_adoption_scans_total{status=%q} %d\n", status, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_targets_scanned_total Adoption runtime targets scanned")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_targets_scanned_total counter")
-		fmt.Fprintf(w, "bahia_adoption_targets_scanned_total %d\n", m.AdoptionTargetsScannedTotal)
+		writer.println("# HELP bahia_adoption_targets_scanned_total Adoption runtime targets scanned")
+		writer.println("# TYPE bahia_adoption_targets_scanned_total counter")
+		writer.printf("bahia_adoption_targets_scanned_total %d\n", m.AdoptionTargetsScannedTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_candidates_total Adoption candidates observed or processed")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_candidates_total counter")
-		fmt.Fprintf(w, "bahia_adoption_candidates_total %d\n", m.AdoptionCandidatesTotal)
+		writer.println("# HELP bahia_adoption_candidates_total Adoption candidates observed or processed")
+		writer.println("# TYPE bahia_adoption_candidates_total counter")
+		writer.printf("bahia_adoption_candidates_total %d\n", m.AdoptionCandidatesTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_redacted_keys_total Sensitive adoption env/label keys redacted or extracted")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_redacted_keys_total counter")
-		fmt.Fprintf(w, "bahia_adoption_redacted_keys_total %d\n", m.AdoptionRedactedKeysTotal)
+		writer.println("# HELP bahia_adoption_redacted_keys_total Sensitive adoption env/label keys redacted or extracted")
+		writer.println("# TYPE bahia_adoption_redacted_keys_total counter")
+		writer.printf("bahia_adoption_redacted_keys_total %d\n", m.AdoptionRedactedKeysTotal)
 
 		if len(m.AdoptionScanDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_adoption_scan_duration_seconds Adoption scan duration in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_adoption_scan_duration_seconds summary")
+			writer.println("# HELP bahia_adoption_scan_duration_seconds Adoption scan duration in seconds")
+			writer.println("# TYPE bahia_adoption_scan_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.AdoptionScanDurations)
-			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds_count %d\n", len(m.AdoptionScanDurations))
+			writer.printf("bahia_adoption_scan_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_adoption_scan_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_adoption_scan_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_adoption_scan_duration_seconds_count %d\n", len(m.AdoptionScanDurations))
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_imports_total Adoption import batches by status")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_imports_total counter")
+		writer.println("# HELP bahia_adoption_imports_total Adoption import batches by status")
+		writer.println("# TYPE bahia_adoption_imports_total counter")
 		for status, count := range m.AdoptionImportsTotal {
-			fmt.Fprintf(w, "bahia_adoption_imports_total{status=%q} %d\n", status, count)
+			writer.printf("bahia_adoption_imports_total{status=%q} %d\n", status, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_import_success_total Adoption import candidates that succeeded")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_import_success_total counter")
-		fmt.Fprintf(w, "bahia_adoption_import_success_total %d\n", m.AdoptionImportSuccessTotal)
+		writer.println("# HELP bahia_adoption_import_success_total Adoption import candidates that succeeded")
+		writer.println("# TYPE bahia_adoption_import_success_total counter")
+		writer.printf("bahia_adoption_import_success_total %d\n", m.AdoptionImportSuccessTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_adoption_import_failure_total Adoption import candidates that failed")
-		fmt.Fprintln(w, "# TYPE bahia_adoption_import_failure_total counter")
-		fmt.Fprintf(w, "bahia_adoption_import_failure_total %d\n", m.AdoptionImportFailureTotal)
+		writer.println("# HELP bahia_adoption_import_failure_total Adoption import candidates that failed")
+		writer.println("# TYPE bahia_adoption_import_failure_total counter")
+		writer.printf("bahia_adoption_import_failure_total %d\n", m.AdoptionImportFailureTotal)
 
 		if len(m.AdoptionImportDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_adoption_import_duration_seconds Adoption import batch duration in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_adoption_import_duration_seconds summary")
+			writer.println("# HELP bahia_adoption_import_duration_seconds Adoption import batch duration in seconds")
+			writer.println("# TYPE bahia_adoption_import_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.AdoptionImportDurations)
-			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds_count %d\n", len(m.AdoptionImportDurations))
+			writer.printf("bahia_adoption_import_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_adoption_import_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_adoption_import_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_adoption_import_duration_seconds_count %d\n", len(m.AdoptionImportDurations))
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_runtime_actions_total Direct runtime actions by action and status")
-		fmt.Fprintln(w, "# TYPE bahia_runtime_actions_total counter")
+		writer.println("# HELP bahia_runtime_actions_total Direct runtime actions by action and status")
+		writer.println("# TYPE bahia_runtime_actions_total counter")
 		for key, count := range m.RuntimeActionsTotal {
-			fmt.Fprintf(w, "bahia_runtime_actions_total{key=%q} %d\n", key, count)
+			writer.printf("bahia_runtime_actions_total{key=%q} %d\n", key, count)
 		}
 
 		if len(m.RuntimeActionDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_runtime_action_duration_seconds Direct runtime action duration in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_runtime_action_duration_seconds summary")
+			writer.println("# HELP bahia_runtime_action_duration_seconds Direct runtime action duration in seconds")
+			writer.println("# TYPE bahia_runtime_action_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.RuntimeActionDurations)
-			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds_count %d\n", len(m.RuntimeActionDurations))
+			writer.printf("bahia_runtime_action_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_runtime_action_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_runtime_action_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_runtime_action_duration_seconds_count %d\n", len(m.RuntimeActionDurations))
 		}
 
 		// Reconciliation metrics
-		fmt.Fprintln(w, "# HELP bahia_reconcile_total Total reconciliation cycles")
-		fmt.Fprintln(w, "# TYPE bahia_reconcile_total counter")
-		fmt.Fprintf(w, "bahia_reconcile_total %d\n", m.ReconcileTotal)
+		writer.println("# HELP bahia_reconcile_total Total reconciliation cycles")
+		writer.println("# TYPE bahia_reconcile_total counter")
+		writer.printf("bahia_reconcile_total %d\n", m.ReconcileTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_reconcile_states_checked Number of states checked in last reconcile")
-		fmt.Fprintln(w, "# TYPE bahia_reconcile_states_checked gauge")
-		fmt.Fprintf(w, "bahia_reconcile_states_checked %d\n", m.ReconcileStatesChecked)
+		writer.println("# HELP bahia_reconcile_states_checked Number of states checked in last reconcile")
+		writer.println("# TYPE bahia_reconcile_states_checked gauge")
+		writer.printf("bahia_reconcile_states_checked %d\n", m.ReconcileStatesChecked)
 
 		if len(m.ReconcileDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_reconcile_duration_seconds Reconciliation cycle duration in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_reconcile_duration_seconds summary")
+			writer.println("# HELP bahia_reconcile_duration_seconds Reconciliation cycle duration in seconds")
+			writer.println("# TYPE bahia_reconcile_duration_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.ReconcileDurations)
-			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_reconcile_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_reconcile_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_reconcile_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_reconcile_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_controlplane_dispatch_total ContextVM and Loom dispatch outcomes")
-		fmt.Fprintln(w, "# TYPE bahia_controlplane_dispatch_total counter")
+		writer.println("# HELP bahia_controlplane_dispatch_total ContextVM and Loom dispatch outcomes")
+		writer.println("# TYPE bahia_controlplane_dispatch_total counter")
 		for key, count := range m.ControlPlaneDispatches {
 			parts := strings.SplitN(key, ":", 2)
 			outcome := ""
 			if len(parts) == 2 {
 				outcome = parts[1]
 			}
-			fmt.Fprintf(w, "bahia_controlplane_dispatch_total{kind=%q,outcome=%q} %d\n", parts[0], outcome, count)
+			writer.printf("bahia_controlplane_dispatch_total{kind=%q,outcome=%q} %d\n", parts[0], outcome, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_release_outcomes_total Promotion and rollback outcomes")
-		fmt.Fprintln(w, "# TYPE bahia_release_outcomes_total counter")
+		writer.println("# HELP bahia_release_outcomes_total Promotion and rollback outcomes")
+		writer.println("# TYPE bahia_release_outcomes_total counter")
 		for key, count := range m.ReleaseOutcomes {
 			parts := strings.SplitN(key, ":", 2)
 			outcome := ""
 			if len(parts) == 2 {
 				outcome = parts[1]
 			}
-			fmt.Fprintf(w, "bahia_release_outcomes_total{operation=%q,outcome=%q} %d\n", parts[0], outcome, count)
+			writer.printf("bahia_release_outcomes_total{operation=%q,outcome=%q} %d\n", parts[0], outcome, count)
 		}
 
 		// Nostr metrics
-		fmt.Fprintln(w, "# HELP bahia_nostr_events_published_total Nostr events published by kind")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_events_published_total counter")
+		writer.println("# HELP bahia_nostr_events_published_total Nostr events published by kind")
+		writer.println("# TYPE bahia_nostr_events_published_total counter")
 		for kind, count := range m.NostrEventsPublished {
-			fmt.Fprintf(w, "bahia_nostr_events_published_total{kind=%q} %d\n", kind, count)
+			writer.printf("bahia_nostr_events_published_total{kind=%q} %d\n", kind, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_events_received_total Nostr events received by kind")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_events_received_total counter")
+		writer.println("# HELP bahia_nostr_events_received_total Nostr events received by kind")
+		writer.println("# TYPE bahia_nostr_events_received_total counter")
 		for kind, count := range m.NostrEventsReceived {
-			fmt.Fprintf(w, "bahia_nostr_events_received_total{kind=%q} %d\n", kind, count)
+			writer.printf("bahia_nostr_events_received_total{kind=%q} %d\n", kind, count)
 		}
-		fmt.Fprintln(w, "# HELP bahia_audit_4903_anomalies_total Invalid or contradictory kind-4903 audit events")
-		fmt.Fprintln(w, "# TYPE bahia_audit_4903_anomalies_total counter")
-		fmt.Fprintf(w, "bahia_audit_4903_anomalies_total %d\n", m.Audit4903AnomaliesTotal)
-		fmt.Fprintln(w, "# HELP bahia_authorization_rejections_total Authorization rejections by bounded reason")
-		fmt.Fprintln(w, "# TYPE bahia_authorization_rejections_total counter")
+		writer.println("# HELP bahia_audit_4903_anomalies_total Invalid or contradictory kind-4903 audit events")
+		writer.println("# TYPE bahia_audit_4903_anomalies_total counter")
+		writer.printf("bahia_audit_4903_anomalies_total %d\n", m.Audit4903AnomaliesTotal)
+		writer.println("# HELP bahia_authorization_rejections_total Authorization rejections by bounded reason")
+		writer.println("# TYPE bahia_authorization_rejections_total counter")
 		for _, reason := range []string{"policy", "identity", "replay", "signature", "other"} {
-			fmt.Fprintf(w, "bahia_authorization_rejections_total{reason=%q} %d\n", reason, m.AuthorizationRejections[reason])
+			writer.printf("bahia_authorization_rejections_total{reason=%q} %d\n", reason, m.AuthorizationRejections[reason])
 		}
-		fmt.Fprintln(w, "# HELP bahia_tier_rejections_total Requests rejected because Bahia's active tier was insufficient")
-		fmt.Fprintln(w, "# TYPE bahia_tier_rejections_total counter")
+		writer.println("# HELP bahia_tier_rejections_total Requests rejected because Bahia's active tier was insufficient")
+		writer.println("# TYPE bahia_tier_rejections_total counter")
 		for _, tier := range []string{"0", "1", "2", "3", "other"} {
-			fmt.Fprintf(w, "bahia_tier_rejections_total{tier=%q} %d\n", tier, m.TierRejections[tier])
+			writer.printf("bahia_tier_rejections_total{tier=%q} %d\n", tier, m.TierRejections[tier])
 		}
 
 		// Nostr protocol metrics (EOSE, OK, reconnects)
 		if len(m.NostrEOSELatencies) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_nostr_eose_latency_seconds Time from subscription start to EOSE receipt")
-			fmt.Fprintln(w, "# TYPE bahia_nostr_eose_latency_seconds summary")
+			writer.println("# HELP bahia_nostr_eose_latency_seconds Time from subscription start to EOSE receipt")
+			writer.println("# TYPE bahia_nostr_eose_latency_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.NostrEOSELatencies)
-			fmt.Fprintf(w, "bahia_nostr_eose_latency_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_nostr_eose_latency_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_nostr_eose_latency_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_nostr_eose_latency_seconds_count %d\n", len(m.NostrEOSELatencies))
+			writer.printf("bahia_nostr_eose_latency_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_nostr_eose_latency_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_nostr_eose_latency_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_nostr_eose_latency_seconds_count %d\n", len(m.NostrEOSELatencies))
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_publish_ok_total Successful publishes by relay")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_publish_ok_total counter")
+		writer.println("# HELP bahia_nostr_publish_ok_total Successful publishes by relay")
+		writer.println("# TYPE bahia_nostr_publish_ok_total counter")
 		for relay, count := range m.NostrPublishOK {
-			fmt.Fprintf(w, "bahia_nostr_publish_ok_total{relay=%q} %d\n", relay, count)
+			writer.printf("bahia_nostr_publish_ok_total{relay=%q} %d\n", relay, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_publish_failed_total Failed publishes by relay and reason")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_publish_failed_total counter")
+		writer.println("# HELP bahia_nostr_publish_failed_total Failed publishes by relay and reason")
+		writer.println("# TYPE bahia_nostr_publish_failed_total counter")
 		for key, count := range m.NostrPublishFailed {
-			fmt.Fprintf(w, "bahia_nostr_publish_failed_total{key=%q} %d\n", key, count)
+			writer.printf("bahia_nostr_publish_failed_total{key=%q} %d\n", key, count)
 		}
 
 		if len(m.NostrPublishLatencies) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_nostr_publish_latency_seconds Publish latency in seconds")
-			fmt.Fprintln(w, "# TYPE bahia_nostr_publish_latency_seconds summary")
+			writer.println("# HELP bahia_nostr_publish_latency_seconds Publish latency in seconds")
+			writer.println("# TYPE bahia_nostr_publish_latency_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.NostrPublishLatencies)
-			fmt.Fprintf(w, "bahia_nostr_publish_latency_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_nostr_publish_latency_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_nostr_publish_latency_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_nostr_publish_latency_seconds_count %d\n", len(m.NostrPublishLatencies))
+			writer.printf("bahia_nostr_publish_latency_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_nostr_publish_latency_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_nostr_publish_latency_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_nostr_publish_latency_seconds_count %d\n", len(m.NostrPublishLatencies))
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_reconnects_total Relay reconnection attempts")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_reconnects_total counter")
+		writer.println("# HELP bahia_nostr_reconnects_total Relay reconnection attempts")
+		writer.println("# TYPE bahia_nostr_reconnects_total counter")
 		for relay, count := range m.NostrReconnects {
-			fmt.Fprintf(w, "bahia_nostr_reconnects_total{relay=%q} %d\n", relay, count)
+			writer.printf("bahia_nostr_reconnects_total{relay=%q} %d\n", relay, count)
 		}
 
 		if len(m.NostrBackoffDurations) > 0 {
-			fmt.Fprintln(w, "# HELP bahia_nostr_backoff_seconds Backoff duration before reconnection")
-			fmt.Fprintln(w, "# TYPE bahia_nostr_backoff_seconds summary")
+			writer.println("# HELP bahia_nostr_backoff_seconds Backoff duration before reconnection")
+			writer.println("# TYPE bahia_nostr_backoff_seconds summary")
 			p50, p90, p99 := calculatePercentiles(m.NostrBackoffDurations)
-			fmt.Fprintf(w, "bahia_nostr_backoff_seconds{quantile=\"0.5\"} %.6f\n", p50)
-			fmt.Fprintf(w, "bahia_nostr_backoff_seconds{quantile=\"0.9\"} %.6f\n", p90)
-			fmt.Fprintf(w, "bahia_nostr_backoff_seconds{quantile=\"0.99\"} %.6f\n", p99)
-			fmt.Fprintf(w, "bahia_nostr_backoff_seconds_count %d\n", len(m.NostrBackoffDurations))
+			writer.printf("bahia_nostr_backoff_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			writer.printf("bahia_nostr_backoff_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			writer.printf("bahia_nostr_backoff_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			writer.printf("bahia_nostr_backoff_seconds_count %d\n", len(m.NostrBackoffDurations))
 		}
 
 		// Relay health metrics
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_healthy Whether relay is healthy (1=yes, 0=no)")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_healthy gauge")
+		writer.println("# HELP bahia_nostr_relay_healthy Whether relay is healthy (1=yes, 0=no)")
+		writer.println("# TYPE bahia_nostr_relay_healthy gauge")
 		for relay, healthy := range m.NostrRelayHealthy {
 			val := 0
 			if healthy {
 				val = 1
 			}
-			fmt.Fprintf(w, "bahia_nostr_relay_healthy{relay=%q} %d\n", relay, val)
+			writer.printf("bahia_nostr_relay_healthy{relay=%q} %d\n", relay, val)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_degraded Whether relay is degraded (1=yes, 0=no)")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_degraded gauge")
+		writer.println("# HELP bahia_nostr_relay_degraded Whether relay is degraded (1=yes, 0=no)")
+		writer.println("# TYPE bahia_nostr_relay_degraded gauge")
 		for relay, degraded := range m.NostrRelayDegraded {
 			val := 0
 			if degraded {
 				val = 1
 			}
-			fmt.Fprintf(w, "bahia_nostr_relay_degraded{relay=%q} %d\n", relay, val)
+			writer.printf("bahia_nostr_relay_degraded{relay=%q} %d\n", relay, val)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_success_rate Relay publish success rate (0.0-1.0)")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_success_rate gauge")
+		writer.println("# HELP bahia_nostr_relay_success_rate Relay publish success rate (0.0-1.0)")
+		writer.println("# TYPE bahia_nostr_relay_success_rate gauge")
 		for relay, rate := range m.NostrRelaySuccessRate {
-			fmt.Fprintf(w, "bahia_nostr_relay_success_rate{relay=%q} %.4f\n", relay, rate)
+			writer.printf("bahia_nostr_relay_success_rate{relay=%q} %.4f\n", relay, rate)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_closed_total Relay CLOSED frames by relay and bounded reason")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_closed_total counter")
+		writer.println("# HELP bahia_nostr_relay_closed_total Relay CLOSED frames by relay and bounded reason")
+		writer.println("# TYPE bahia_nostr_relay_closed_total counter")
 		for relay, reasons := range m.NostrRelayClosedReasons {
 			for reason, count := range reasons {
-				fmt.Fprintf(w, "bahia_nostr_relay_closed_total{relay=%q,reason=%q} %d\n", relay, reason, count)
+				writer.printf("bahia_nostr_relay_closed_total{relay=%q,reason=%q} %d\n", relay, reason, count)
 			}
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_rereq_attempts_total Relay subscription recovery REQ attempts")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_rereq_attempts_total counter")
+		writer.println("# HELP bahia_nostr_relay_rereq_attempts_total Relay subscription recovery REQ attempts")
+		writer.println("# TYPE bahia_nostr_relay_rereq_attempts_total counter")
 		for relay, count := range m.NostrRelayReREQAttempts {
-			fmt.Fprintf(w, "bahia_nostr_relay_rereq_attempts_total{relay=%q} %d\n", relay, count)
+			writer.printf("bahia_nostr_relay_rereq_attempts_total{relay=%q} %d\n", relay, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relay_reconnect_attempts_total Relay transport reconnect attempts")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relay_reconnect_attempts_total counter")
+		writer.println("# HELP bahia_nostr_relay_reconnect_attempts_total Relay transport reconnect attempts")
+		writer.println("# TYPE bahia_nostr_relay_reconnect_attempts_total counter")
 		for relay, count := range m.NostrRelayReconnectAttempts {
-			fmt.Fprintf(w, "bahia_nostr_relay_reconnect_attempts_total{relay=%q} %d\n", relay, count)
+			writer.printf("bahia_nostr_relay_reconnect_attempts_total{relay=%q} %d\n", relay, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_outbox_depth Unpublished events in the durable Nostr publish outbox")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_outbox_depth gauge")
-		fmt.Fprintf(w, "bahia_nostr_outbox_depth %d\n", m.NostrOutboxDepth)
+		writer.println("# HELP bahia_nostr_outbox_depth Unpublished events in the durable Nostr publish outbox")
+		writer.println("# TYPE bahia_nostr_outbox_depth gauge")
+		writer.printf("bahia_nostr_outbox_depth %d\n", m.NostrOutboxDepth)
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_bytes gauge")
-		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"total\"} %d\n", m.NostrEventStoreTotalBytes)
-		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"heap\"} %d\n", m.NostrEventStoreHeapBytes)
-		fmt.Fprintf(w, "bahia_nostr_event_store_bytes{component=\"indexes\"} %d\n", m.NostrEventStoreIndexBytes)
-		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_rows Estimated PostgreSQL Nostr event rows by state")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_rows gauge")
-		fmt.Fprintf(w, "bahia_nostr_event_store_rows{state=\"live\"} %d\n", m.NostrEventStoreLiveRows)
-		fmt.Fprintf(w, "bahia_nostr_event_store_rows{state=\"dead\"} %d\n", m.NostrEventStoreDeadRows)
-		fmt.Fprintln(w, "# HELP bahia_nostr_event_store_oldest_hot_timestamp_seconds Oldest eligible hot Nostr event Unix timestamp; zero until the online archive index exists")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_event_store_oldest_hot_timestamp_seconds gauge")
-		fmt.Fprintf(w, "bahia_nostr_event_store_oldest_hot_timestamp_seconds %d\n", m.NostrEventStoreOldestUnix)
-		fmt.Fprintln(w, "# HELP bahia_nostr_archive_batches Archive batches by bounded lifecycle state")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_archive_batches gauge")
+		writer.println("# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
+		writer.println("# TYPE bahia_nostr_event_store_bytes gauge")
+		writer.printf("bahia_nostr_event_store_bytes{component=\"total\"} %d\n", m.NostrEventStoreTotalBytes)
+		writer.printf("bahia_nostr_event_store_bytes{component=\"heap\"} %d\n", m.NostrEventStoreHeapBytes)
+		writer.printf("bahia_nostr_event_store_bytes{component=\"indexes\"} %d\n", m.NostrEventStoreIndexBytes)
+		writer.println("# HELP bahia_nostr_event_store_rows Estimated PostgreSQL Nostr event rows by state")
+		writer.println("# TYPE bahia_nostr_event_store_rows gauge")
+		writer.printf("bahia_nostr_event_store_rows{state=\"live\"} %d\n", m.NostrEventStoreLiveRows)
+		writer.printf("bahia_nostr_event_store_rows{state=\"dead\"} %d\n", m.NostrEventStoreDeadRows)
+		writer.println("# HELP bahia_nostr_event_store_oldest_hot_timestamp_seconds Oldest eligible hot Nostr event Unix timestamp; zero until the online archive index exists")
+		writer.println("# TYPE bahia_nostr_event_store_oldest_hot_timestamp_seconds gauge")
+		writer.printf("bahia_nostr_event_store_oldest_hot_timestamp_seconds %d\n", m.NostrEventStoreOldestUnix)
+		writer.println("# HELP bahia_nostr_archive_batches Archive batches by bounded lifecycle state")
+		writer.println("# TYPE bahia_nostr_archive_batches gauge")
 		for _, status := range []string{"claimed", "exported", "protected", "pruned"} {
-			fmt.Fprintf(w, "bahia_nostr_archive_batches{status=%q} %d\n", status, m.NostrArchiveBatches[status])
+			writer.printf("bahia_nostr_archive_batches{status=%q} %d\n", status, m.NostrArchiveBatches[status])
 		}
 
 		// Aggregate relay health counts
@@ -1119,72 +1140,76 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 				unhealthyCount++
 			}
 		}
-		fmt.Fprintln(w, "# HELP bahia_nostr_relays_healthy_total Count of healthy relays")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relays_healthy_total gauge")
-		fmt.Fprintf(w, "bahia_nostr_relays_healthy_total %d\n", healthyCount)
+		writer.println("# HELP bahia_nostr_relays_healthy_total Count of healthy relays")
+		writer.println("# TYPE bahia_nostr_relays_healthy_total gauge")
+		writer.printf("bahia_nostr_relays_healthy_total %d\n", healthyCount)
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relays_degraded_total Count of degraded relays")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relays_degraded_total gauge")
-		fmt.Fprintf(w, "bahia_nostr_relays_degraded_total %d\n", degradedCount)
+		writer.println("# HELP bahia_nostr_relays_degraded_total Count of degraded relays")
+		writer.println("# TYPE bahia_nostr_relays_degraded_total gauge")
+		writer.printf("bahia_nostr_relays_degraded_total %d\n", degradedCount)
 
-		fmt.Fprintln(w, "# HELP bahia_nostr_relays_unhealthy_total Count of unhealthy relays")
-		fmt.Fprintln(w, "# TYPE bahia_nostr_relays_unhealthy_total gauge")
-		fmt.Fprintf(w, "bahia_nostr_relays_unhealthy_total %d\n", unhealthyCount)
+		writer.println("# HELP bahia_nostr_relays_unhealthy_total Count of unhealthy relays")
+		writer.println("# TYPE bahia_nostr_relays_unhealthy_total gauge")
+		writer.printf("bahia_nostr_relays_unhealthy_total %d\n", unhealthyCount)
 
 		// Fleet health metrics
-		fmt.Fprintln(w, "# HELP bahia_fleet_health_entities Fleet health entity counts by bounded domain and health status")
-		fmt.Fprintln(w, "# TYPE bahia_fleet_health_entities gauge")
+		writer.println("# HELP bahia_fleet_health_entities Fleet health entity counts by bounded domain and health status")
+		writer.println("# TYPE bahia_fleet_health_entities gauge")
 		for _, domain := range fleetHealthDomains {
 			for _, status := range fleetHealthStatuses {
 				key := domain + ":" + status
-				fmt.Fprintf(w, "bahia_fleet_health_entities{domain=%q,status=%q} %d\n", domain, status, m.FleetHealthEntities[key])
+				writer.printf("bahia_fleet_health_entities{domain=%q,status=%q} %d\n", domain, status, m.FleetHealthEntities[key])
 			}
 		}
 
 		// Worker metrics
-		fmt.Fprintln(w, "# HELP bahia_workers_active Currently active (online) workers")
-		fmt.Fprintln(w, "# TYPE bahia_workers_active gauge")
-		fmt.Fprintf(w, "bahia_workers_active %d\n", m.WorkersActive)
+		writer.println("# HELP bahia_workers_active Currently active (online) workers")
+		writer.println("# TYPE bahia_workers_active gauge")
+		writer.printf("bahia_workers_active %d\n", m.WorkersActive)
 
-		fmt.Fprintln(w, "# HELP bahia_workers_total Total known workers")
-		fmt.Fprintln(w, "# TYPE bahia_workers_total gauge")
-		fmt.Fprintf(w, "bahia_workers_total %d\n", m.WorkersTotal)
+		writer.println("# HELP bahia_workers_total Total known workers")
+		writer.println("# TYPE bahia_workers_total gauge")
+		writer.printf("bahia_workers_total %d\n", m.WorkersTotal)
 
-		fmt.Fprintln(w, "# HELP bahia_loom_jobs_inflight Currently in-flight Loom jobs")
-		fmt.Fprintln(w, "# TYPE bahia_loom_jobs_inflight gauge")
-		fmt.Fprintf(w, "bahia_loom_jobs_inflight %d\n", m.LoomJobsInflight)
+		writer.println("# HELP bahia_loom_jobs_inflight Currently in-flight Loom jobs")
+		writer.println("# TYPE bahia_loom_jobs_inflight gauge")
+		writer.printf("bahia_loom_jobs_inflight %d\n", m.LoomJobsInflight)
 
-		fmt.Fprintln(w, "# HELP bahia_loom_jobs_total Total Loom jobs by status")
-		fmt.Fprintln(w, "# TYPE bahia_loom_jobs_total counter")
+		writer.println("# HELP bahia_loom_jobs_total Total Loom jobs by status")
+		writer.println("# TYPE bahia_loom_jobs_total counter")
 		for status, count := range m.LoomJobsTotal {
-			fmt.Fprintf(w, "bahia_loom_jobs_total{status=%q} %d\n", status, count)
+			writer.printf("bahia_loom_jobs_total{status=%q} %d\n", status, count)
 		}
-		renderFleetHealthMetrics(w, fleetHealth)
-		renderNostrFleetHealthMetrics(w, nostrFleetHealth)
+		renderFleetHealthMetrics(writer, fleetHealth)
+		renderNostrFleetHealthMetrics(writer, nostrFleetHealth)
 
 		// Cashu payment metrics
-		fmt.Fprintln(w, "# HELP bahia_cashu_payments_total Total Cashu payments by status")
-		fmt.Fprintln(w, "# TYPE bahia_cashu_payments_total counter")
+		writer.println("# HELP bahia_cashu_payments_total Total Cashu payments by status")
+		writer.println("# TYPE bahia_cashu_payments_total counter")
 		for status, count := range m.CashuPaymentsTotal {
-			fmt.Fprintf(w, "bahia_cashu_payments_total{status=%q} %d\n", status, count)
+			writer.printf("bahia_cashu_payments_total{status=%q} %d\n", status, count)
 		}
 
-		fmt.Fprintln(w, "# HELP bahia_cashu_payments_sats_total Total sats paid via Cashu")
-		fmt.Fprintln(w, "# TYPE bahia_cashu_payments_sats_total counter")
-		fmt.Fprintf(w, "bahia_cashu_payments_sats_total %d\n", m.CashuPaymentsSats)
+		writer.println("# HELP bahia_cashu_payments_sats_total Total sats paid via Cashu")
+		writer.println("# TYPE bahia_cashu_payments_sats_total counter")
+		writer.printf("bahia_cashu_payments_sats_total %d\n", m.CashuPaymentsSats)
 
-		fmt.Fprintln(w, "# HELP bahia_cashu_wallet_balance_sats Current wallet balance in sats by mint")
-		fmt.Fprintln(w, "# TYPE bahia_cashu_wallet_balance_sats gauge")
+		writer.println("# HELP bahia_cashu_wallet_balance_sats Current wallet balance in sats by mint")
+		writer.println("# TYPE bahia_cashu_wallet_balance_sats gauge")
 		for mint, balance := range m.CashuWalletBalance {
-			fmt.Fprintf(w, "bahia_cashu_wallet_balance_sats{mint=%q} %d\n", mint, balance)
+			writer.printf("bahia_cashu_wallet_balance_sats{mint=%q} %d\n", mint, balance)
 		}
+		if writer.err != nil {
+			return
+		}
+
 		p.openClawSagaMu.RLock()
 		export := p.openClawSaga
 		p.openClawSagaMu.RUnlock()
 		if export != nil {
 			if err := export(r.Context(), w); err != nil {
 				p.logger.Error("exporting OpenClaw saga metrics", zap.Error(err))
-				fmt.Fprintln(w, "# OpenClaw saga metrics unavailable")
+				writer.println("# OpenClaw saga metrics unavailable")
 			}
 		}
 	}
@@ -1202,36 +1227,36 @@ func (p *Provider) SetOpenClawSagaExporter(export func(context.Context, io.Write
 	p.openClawSaga = export
 }
 
-func renderNostrFleetHealthMetrics(w http.ResponseWriter, snapshot NostrFleetHealthSnapshot) {
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_subscription_active Whether the canonical relay subscription is active")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_subscription_active gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_subscription_active %d\n", boolGauge(snapshot.SubscriptionActive))
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_caught_up Whether canonical relay history reached EOSE")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_caught_up gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_caught_up %d\n", boolGauge(snapshot.CaughtUp))
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_last_event_timestamp_seconds Latest canonical observable event timestamp")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_last_event_timestamp_seconds gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_last_event_timestamp_seconds %d\n", unixOrZero(snapshot.LastEventAt))
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_last_ingested_timestamp_seconds Latest canonical observable ingestion timestamp")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_last_ingested_timestamp_seconds gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_last_ingested_timestamp_seconds %d\n", unixOrZero(snapshot.LastIngestedAt))
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_relay_closed_total Relay CLOSED frames observed by the projector subscription")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_relay_closed_total counter")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_relay_closed_total %d\n", snapshot.RelayClosedTotal)
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_projector_errors_total Distinct rejected or over-limit observable events; redeliveries of the same event are counted once")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_projector_errors_total counter")
-	fmt.Fprintf(w, "bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_nostr_entities Observed fleet entities by domain and health status, projected from Nostr state")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_nostr_entities gauge")
+func renderNostrFleetHealthMetrics(writer *prometheusWriter, snapshot NostrFleetHealthSnapshot) {
+	writer.println("# HELP bahia_fleet_health_projector_subscription_active Whether the canonical relay subscription is active")
+	writer.println("# TYPE bahia_fleet_health_projector_subscription_active gauge")
+	writer.printf("bahia_fleet_health_projector_subscription_active %d\n", boolGauge(snapshot.SubscriptionActive))
+	writer.println("# HELP bahia_fleet_health_projector_caught_up Whether canonical relay history reached EOSE")
+	writer.println("# TYPE bahia_fleet_health_projector_caught_up gauge")
+	writer.printf("bahia_fleet_health_projector_caught_up %d\n", boolGauge(snapshot.CaughtUp))
+	writer.println("# HELP bahia_fleet_health_projector_last_event_timestamp_seconds Latest canonical observable event timestamp")
+	writer.println("# TYPE bahia_fleet_health_projector_last_event_timestamp_seconds gauge")
+	writer.printf("bahia_fleet_health_projector_last_event_timestamp_seconds %d\n", unixOrZero(snapshot.LastEventAt))
+	writer.println("# HELP bahia_fleet_health_projector_last_ingested_timestamp_seconds Latest canonical observable ingestion timestamp")
+	writer.println("# TYPE bahia_fleet_health_projector_last_ingested_timestamp_seconds gauge")
+	writer.printf("bahia_fleet_health_projector_last_ingested_timestamp_seconds %d\n", unixOrZero(snapshot.LastIngestedAt))
+	writer.println("# HELP bahia_fleet_health_projector_relay_closed_total Relay CLOSED frames observed by the projector subscription")
+	writer.println("# TYPE bahia_fleet_health_projector_relay_closed_total counter")
+	writer.printf("bahia_fleet_health_projector_relay_closed_total %d\n", snapshot.RelayClosedTotal)
+	writer.println("# HELP bahia_fleet_health_projector_errors_total Distinct rejected or over-limit observable events; redeliveries of the same event are counted once")
+	writer.println("# TYPE bahia_fleet_health_projector_errors_total counter")
+	writer.printf("bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
+	writer.println("# HELP bahia_fleet_health_nostr_entities Observed fleet entities by domain and health status, projected from Nostr state")
+	writer.println("# TYPE bahia_fleet_health_nostr_entities gauge")
 	for _, domain := range nostrFleetHealthDomains {
 		for _, status := range fleetHealthStatuses {
-			fmt.Fprintf(w, "bahia_fleet_health_nostr_entities{domain=%q,status=%q} %d\n", domain, status, snapshot.Entities[domain+":"+status])
+			writer.printf("bahia_fleet_health_nostr_entities{domain=%q,status=%q} %d\n", domain, status, snapshot.Entities[domain+":"+status])
 		}
 	}
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_nostr_heartbeat_lag_seconds Seconds since the last observed heartbeat for each fleet entity")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_nostr_heartbeat_lag_seconds gauge")
+	writer.println("# HELP bahia_fleet_health_nostr_heartbeat_lag_seconds Seconds since the last observed heartbeat for each fleet entity")
+	writer.println("# TYPE bahia_fleet_health_nostr_heartbeat_lag_seconds gauge")
 	for _, entity := range sortedFloatKeys(snapshot.HeartbeatLagSeconds) {
-		fmt.Fprintf(w, "bahia_fleet_health_nostr_heartbeat_lag_seconds{entity=%q} %.0f\n", entity, snapshot.HeartbeatLagSeconds[entity])
+		writer.printf("bahia_fleet_health_nostr_heartbeat_lag_seconds{entity=%q} %.0f\n", entity, snapshot.HeartbeatLagSeconds[entity])
 	}
 }
 
@@ -1249,42 +1274,42 @@ func boolGauge(value bool) int {
 	return 0
 }
 
-func renderFleetHealthMetrics(w http.ResponseWriter, snapshot FleetHealthSnapshot) {
-	fmt.Fprintln(w, "# HELP bahia_worker_capacity_class_workers Workers by placement capacity class")
-	fmt.Fprintln(w, "# TYPE bahia_worker_capacity_class_workers gauge")
+func renderFleetHealthMetrics(writer *prometheusWriter, snapshot FleetHealthSnapshot) {
+	writer.println("# HELP bahia_worker_capacity_class_workers Workers by placement capacity class")
+	writer.println("# TYPE bahia_worker_capacity_class_workers gauge")
 	for _, class := range []string{"open", "reduced", "cleanup_only", "blocked"} {
-		fmt.Fprintf(w, "bahia_worker_capacity_class_workers{class=%q} %d\n", class, snapshot.WorkerCapacity[class])
+		writer.printf("bahia_worker_capacity_class_workers{class=%q} %d\n", class, snapshot.WorkerCapacity[class])
 	}
-	fmt.Fprintln(w, "# HELP bahia_worker_telemetry_freshness_workers Workers by telemetry freshness")
-	fmt.Fprintln(w, "# TYPE bahia_worker_telemetry_freshness_workers gauge")
+	writer.println("# HELP bahia_worker_telemetry_freshness_workers Workers by telemetry freshness")
+	writer.println("# TYPE bahia_worker_telemetry_freshness_workers gauge")
 	for _, state := range []string{"fresh", "stale", "absent"} {
-		fmt.Fprintf(w, "bahia_worker_telemetry_freshness_workers{state=%q} %d\n", state, snapshot.TelemetryFreshness[state])
+		writer.printf("bahia_worker_telemetry_freshness_workers{state=%q} %d\n", state, snapshot.TelemetryFreshness[state])
 	}
-	fmt.Fprintln(w, "# HELP bahia_worker_heartbeat_lag_seconds Seconds since each known worker heartbeat")
-	fmt.Fprintln(w, "# TYPE bahia_worker_heartbeat_lag_seconds gauge")
+	writer.println("# HELP bahia_worker_heartbeat_lag_seconds Seconds since each known worker heartbeat")
+	writer.println("# TYPE bahia_worker_heartbeat_lag_seconds gauge")
 	for _, worker := range sortedFloatKeys(snapshot.HeartbeatLagSeconds) {
-		fmt.Fprintf(w, "bahia_worker_heartbeat_lag_seconds{worker=%q} %.0f\n", worker, snapshot.HeartbeatLagSeconds[worker])
+		writer.printf("bahia_worker_heartbeat_lag_seconds{worker=%q} %.0f\n", worker, snapshot.HeartbeatLagSeconds[worker])
 	}
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_states Service states by drift status")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_states gauge")
+	writer.println("# HELP bahia_fleet_health_drift_states Service states by drift status")
+	writer.println("# TYPE bahia_fleet_health_drift_states gauge")
 	for _, status := range []string{"in_sync", "drifted", "unknown", "deploying", "remediation_needed"} {
-		fmt.Fprintf(w, "bahia_fleet_health_drift_states{status=%q} %d\n", status, snapshot.DriftStates[status])
+		writer.printf("bahia_fleet_health_drift_states{status=%q} %d\n", status, snapshot.DriftStates[status])
 	}
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_age_seconds_max Age of the oldest drifted service state")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_age_seconds_max gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_drift_age_seconds_max %.0f\n", snapshot.MaxDriftAgeSeconds)
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_drift_stuck Service states whose drift is stuck")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_drift_stuck gauge")
-	fmt.Fprintf(w, "bahia_fleet_health_drift_stuck %d\n", snapshot.StuckDriftStates)
-	fmt.Fprintln(w, "# HELP bahia_fleet_health_services Services by derived health")
-	fmt.Fprintln(w, "# TYPE bahia_fleet_health_services gauge")
+	writer.println("# HELP bahia_fleet_health_drift_age_seconds_max Age of the oldest drifted service state")
+	writer.println("# TYPE bahia_fleet_health_drift_age_seconds_max gauge")
+	writer.printf("bahia_fleet_health_drift_age_seconds_max %.0f\n", snapshot.MaxDriftAgeSeconds)
+	writer.println("# HELP bahia_fleet_health_drift_stuck Service states whose drift is stuck")
+	writer.println("# TYPE bahia_fleet_health_drift_stuck gauge")
+	writer.printf("bahia_fleet_health_drift_stuck %d\n", snapshot.StuckDriftStates)
+	writer.println("# HELP bahia_fleet_health_services Services by derived health")
+	writer.println("# TYPE bahia_fleet_health_services gauge")
 	for _, health := range []string{"healthy", "degraded", "unknown"} {
-		fmt.Fprintf(w, "bahia_fleet_health_services{health=%q} %d\n", health, snapshot.ServiceHealth[health])
+		writer.printf("bahia_fleet_health_services{health=%q} %d\n", health, snapshot.ServiceHealth[health])
 	}
-	fmt.Fprintln(w, "# HELP bahia_worker_pressure_recommendations Workers by recommended pressure action")
-	fmt.Fprintln(w, "# TYPE bahia_worker_pressure_recommendations gauge")
+	writer.println("# HELP bahia_worker_pressure_recommendations Workers by recommended pressure action")
+	writer.println("# TYPE bahia_worker_pressure_recommendations gauge")
 	for _, action := range []string{"none", "cleanup_recommended", "operator_intervention"} {
-		fmt.Fprintf(w, "bahia_worker_pressure_recommendations{action=%q} %d\n", action, snapshot.PressureActions[action])
+		writer.printf("bahia_worker_pressure_recommendations{action=%q} %d\n", action, snapshot.PressureActions[action])
 	}
 }
 

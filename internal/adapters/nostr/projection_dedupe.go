@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -178,7 +177,7 @@ func projectionFingerprint(wireKind int, tags gonostr.Tags, content string) stri
 	}
 	sort.Strings(tagLines)
 	h := sha256.New()
-	fmt.Fprintf(h, "%d\x00%s\x00", wireKind, strings.Join(tagLines, "\x1e"))
+	h.Write([]byte(strconv.Itoa(wireKind) + "\x00" + strings.Join(tagLines, "\x1e") + "\x00"))
 	h.Write([]byte(stableContent(content)))
 	return hex.EncodeToString(h.Sum(nil))
 }

@@ -132,8 +132,11 @@ func (c *Client) doUpload(ctx context.Context, url string, data []byte, contentT
 	if err != nil {
 		return nil, fmt.Errorf("uploading: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading upload response: %w", err)

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -426,7 +427,11 @@ func (o *DockerObserver) inspectContainerByID(ctx context.Context, containerID s
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker container inspect returned %d", resp.StatusCode)
 	}
@@ -456,7 +461,11 @@ func (o *DockerObserver) containerMemoryStats(ctx context.Context, containerID s
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker container stats returned %d", resp.StatusCode)
 	}
@@ -477,8 +486,12 @@ func (o *DockerObserver) containerActionByID(ctx context.Context, containerID, a
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && !(action == "stop" && resp.StatusCode == http.StatusNotModified) {
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && (action != "stop" || resp.StatusCode != http.StatusNotModified) {
 		return fmt.Errorf("docker %s returned %d", action, resp.StatusCode)
 	}
 	return nil
@@ -674,7 +687,11 @@ func (o *DockerObserver) Restart(ctx context.Context, targetName string) error {
 	if err != nil {
 		return fmt.Errorf("restarting container %s: %w", targetName, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("docker restart returned %d", resp.StatusCode)
 	}
@@ -696,7 +713,11 @@ func (o *DockerObserver) Stop(ctx context.Context, targetName string) error {
 	if err != nil {
 		return fmt.Errorf("stopping container %s: %w", targetName, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotModified {
 		return fmt.Errorf("docker stop returned %d", resp.StatusCode)
 	}
@@ -738,13 +759,16 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("docker logs returned %d", resp.StatusCode)
+		return nil, errors.Join(fmt.Errorf("docker logs returned %d", resp.StatusCode), resp.Body.Close())
 	}
 
 	ch := make(chan LogEntry, 64)
 	go func() {
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				return
+			}
+		}()
 		defer close(ch)
 
 		buf := make([]byte, 8192)
@@ -936,7 +960,11 @@ func (o *DockerObserver) listContainersRaw(ctx context.Context, query url.Values
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("docker API returned %d", resp.StatusCode)
 	}
@@ -1071,7 +1099,11 @@ func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, i
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("docker image inspect returned %d", resp.StatusCode)
 	}

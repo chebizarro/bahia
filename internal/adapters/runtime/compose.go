@@ -449,7 +449,11 @@ func (r *ComposeRuntime) StreamLogs(ctx context.Context, serviceName string, opt
 	ch := make(chan LogEntry, 64)
 	go func() {
 		defer close(ch)
-		defer cmd.Wait()
+		defer func() {
+			if waitErr := cmd.Wait(); waitErr != nil {
+				return
+			}
+		}()
 
 		buf := make([]byte, 8192)
 		for {
@@ -581,7 +585,7 @@ func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Log
 		logger.Debug("docker client not available for image inspect", zap.String("image", inspectRef), zap.Error(err))
 		return fallbackRepo, digestFromReference(inspectRef)
 	}
-	inspected, _, err := dockerCli.ImageInspectWithRaw(ctx, inspectRef)
+	inspected, err := dockerCli.ImageInspect(ctx, inspectRef)
 	if err != nil {
 		logger.Debug("failed to inspect compose image for digest", zap.String("image", inspectRef), zap.Error(err))
 		return fallbackRepo, digestFromReference(inspectRef)

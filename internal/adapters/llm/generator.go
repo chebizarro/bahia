@@ -155,8 +155,11 @@ func (g *SoulGenerator) callLLM(ctx context.Context, prompt string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("send request: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	// Read response
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

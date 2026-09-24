@@ -89,7 +89,11 @@ func (HTTPProber) Probe(ctx context.Context, config HTTPProbeConfig) HTTPProbeRe
 		result.Duration = time.Since(started)
 		return result
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return
+		}
+	}()
 	result.StatusCode = resp.StatusCode
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPProbeBodyBytes))
 	result.Detail = domain.SanitizeEvidence(string(body))

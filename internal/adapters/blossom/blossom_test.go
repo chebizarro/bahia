@@ -165,15 +165,16 @@ func TestClient_Upload(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(BlobDescriptor{
+		checkTestError(t, json.NewEncoder(w).Encode(BlobDescriptor{
 			URL:      server.URL + "/" + hashStr,
 			SHA256:   hashStr,
 			Size:     int64(len(data)),
 			Uploaded: BlossomTimestamp{Time: time.Now()},
-		})
+		}))
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
@@ -203,11 +204,11 @@ func TestClient_Upload_Fallback(t *testing.T) {
 	var goodServer *httptest.Server
 	goodServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(BlobDescriptor{
+		checkTestError(t, json.NewEncoder(w).Encode(BlobDescriptor{
 			URL:    goodServer.URL + "/" + hashStr,
 			SHA256: hashStr,
 			Size:   int64(len(data)),
-		})
+		}))
 	}))
 	defer goodServer.Close()
 
@@ -250,8 +251,9 @@ func TestClient_UploadRejectsMalformedOrUnconfirmedResponse(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body(server.URL)))
 			}))
-			defer server.Close()
-
+			defer func() {
+				server.Close()
+			}()
 			client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
 			client.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 			descriptor, err := client.Upload(context.Background(), data, "text/plain")
@@ -284,10 +286,13 @@ func TestClient_Download(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("test operation failed: %v", err)
+		}
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
@@ -308,10 +313,13 @@ func TestClient_Download_HashMismatch(t *testing.T) {
 	wrongHash := "0000000000000000000000000000000000000000000000000000000000000000"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("test operation failed: %v", err)
+		}
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
@@ -334,10 +342,13 @@ func TestClient_DownloadByHash(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("test operation failed: %v", err)
+		}
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
@@ -365,8 +376,9 @@ func TestClient_Exists(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
@@ -397,7 +409,9 @@ func TestClient_ExistsReturnsIndeterminateOnServerFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
-	defer server.Close()
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
 
 	exists, foundServer, err := client.Exists(context.Background(), strings.Repeat("a", 64))
@@ -417,21 +431,29 @@ func TestClient_GetStats(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "PUT" {
-			json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hashStr, SHA256: hashStr, Size: int64(len(data))})
+			checkTestError(t, json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hashStr, SHA256: hashStr, Size: int64(len(data))}))
 		} else {
-			w.Write(data)
+			if _, err := w.Write(data); err != nil {
+				t.Errorf("test operation failed: %v", err)
+			}
 		}
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:    []string{server.URL},
 		MaxRetries: 1,
 	}, testLogger())
+	if _, err :=
 
-	// Do some operations
-	client.Upload(context.Background(), data, "")
-	client.Download(context.Background(), server.URL+"/"+hashStr)
+		// Do some operations
+		client.Upload(context.Background(), data, ""); err != nil {
+		t.Errorf("test operation failed: %v", err)
+	}
+	if _, err := client.Download(context.Background(), server.URL+"/"+hashStr); err != nil {
+		t.Errorf("test operation failed: %v", err)
+	}
 
 	stats := client.GetStats()
 	if stats[server.URL]["uploads"] != 1 {
@@ -572,7 +594,7 @@ func TestClient_CreateAuthHeader_NoPayload(t *testing.T) {
 	eventJSON, _ := base64.RawURLEncoding.DecodeString(encodedEvent)
 
 	var event nostr.Event
-	json.Unmarshal(eventJSON, &event)
+	checkTestError(t, json.Unmarshal(eventJSON, &event))
 
 	for _, tag := range event.Tags {
 		if len(tag) >= 1 && tag[0] == "x" {
@@ -592,14 +614,15 @@ func TestClient_Upload_WithAuth(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(BlobDescriptor{
+		checkTestError(t, json.NewEncoder(w).Encode(BlobDescriptor{
 			URL:    server.URL + "/" + hashStr,
 			SHA256: hashStr,
 			Size:   int64(len(data)),
-		})
+		}))
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{
 		Servers:       []string{server.URL},
 		PrivateKeyHex: privateKey,
@@ -648,10 +671,11 @@ func TestClient_UploadFile(t *testing.T) {
 			t.Fatalf("unexpected hash header: %s", r.Header.Get("X-SHA-256"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hash, SHA256: hash, Size: int64(len(data))})
+		checkTestError(t, json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hash, SHA256: hash, Size: int64(len(data))}))
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
 	bd, err := client.UploadFile(context.Background(), path, "application/octet-stream", "")
 	if err != nil {
@@ -675,8 +699,9 @@ func TestClient_DownloadAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testi
 		called = true
 		t.Fatalf("server should not receive unauthenticated fallback request")
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
 	_, err := client.Download(context.Background(), server.URL+"/"+hash)
 	if !errors.Is(err, ErrAuthHeader) {
@@ -693,8 +718,9 @@ func TestClient_ProxyAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testing.
 		called = true
 		t.Fatalf("server should not receive unauthenticated fallback request")
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
 	url := server.URL + "/" + strings.Repeat("a", 64)
 
@@ -726,8 +752,9 @@ func TestClient_HeadByURLAndOpenStreamByURL(t *testing.T) {
 		w.Header().Set("Etag", `"etag-1"`)
 		_, _ = w.Write(data)
 	}))
-	defer server.Close()
-
+	defer func() {
+		server.Close()
+	}()
 	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
 	url := server.URL + "/" + hash
 
@@ -749,8 +776,9 @@ func TestClient_HeadByURLAndOpenStreamByURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStreamByURL() error = %v", err)
 	}
-	defer stream.Close()
-
+	defer func() {
+		checkTestError(t, stream.Close())
+	}()
 	if stream.ContentType != "application/vnd.oci.image.layer.v1.tar" {
 		t.Fatalf("unexpected content type: %s", stream.ContentType)
 	}

@@ -363,11 +363,6 @@ func IsAuthRequiredReason(reason string) bool {
 	return normalized == "auth-required" || strings.HasPrefix(normalized, "auth-required:")
 }
 
-func subscribeAuthRequired(err error) bool {
-	_, ok := subscribeAuthRequiredReason(err)
-	return ok
-}
-
 func subscribeAuthRequiredReason(err error) (string, bool) {
 	if err == nil {
 		return "", false
@@ -1282,7 +1277,9 @@ func closeManagedRelay(pool *RelayPool, mr *managedRelay) {
 	}
 	mr.mu.Lock()
 	if mr.relay != nil {
-		mr.relay.Close()
+		if err := mr.relay.Close(); err != nil {
+			pool.logger.Warn("close relay connection failed", zap.String("relay", mr.url), zap.Error(err))
+		}
 	}
 	mr.connected = false
 	mr.lastErr = nil

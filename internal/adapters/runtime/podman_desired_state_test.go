@@ -50,7 +50,7 @@ func TestPodmanApplyDesiredState_DelegatesToDocker(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -101,7 +101,7 @@ func TestPodmanApplyDesiredState_NoOp_HashMatch(t *testing.T) {
 		},
 	})
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -145,7 +145,7 @@ func TestPodmanApplyDesiredState_HashDrift_Recreates(t *testing.T) {
 		},
 	})
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -179,7 +179,7 @@ func TestPodmanApplyDesiredState_DryRun(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -227,7 +227,7 @@ func TestPodmanApplyDesiredState_RejectsComposeExtension(t *testing.T) {
 		ProjectName: "test-project",
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -259,7 +259,7 @@ func TestPodmanApplyDesiredState_RejectsKubernetesExtension(t *testing.T) {
 	spec := applyTestSpec()
 	spec.KubernetesExtension = &domain.KubernetesExtension{}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -287,7 +287,7 @@ func TestPodmanApplyDesiredState_RejectsOverlayNetworkDriver(t *testing.T) {
 		},
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -319,7 +319,7 @@ func TestPodmanApplyDesiredState_RejectsUnsupportedHostConfig(t *testing.T) {
 				},
 			}
 
-			server, dockerObserver := setupApplyTest(mock)
+			server, dockerObserver := setupApplyTest(t, mock)
 			defer server.Close()
 
 			podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -353,7 +353,7 @@ func TestPodmanApplyDesiredState_AcceptsDockerExtension_SupportedFields(t *testi
 		},
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -374,7 +374,7 @@ func TestPodmanApplyDesiredState_AcceptsPodmanExtension(t *testing.T) {
 	spec := applyTestSpec()
 	spec.PodmanExtension = &domain.PodmanExtension{}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -399,7 +399,7 @@ func TestPodmanApplyDesiredState_AcceptsBridgeNetwork(t *testing.T) {
 		},
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -460,7 +460,7 @@ func TestPodmanApplyDesiredState_PropagatesEnvironmentRevision(t *testing.T) {
 	mock := newApplyMockState()
 	spec := applyTestSpec()
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -578,7 +578,7 @@ func TestPodmanApplyDesiredState_HealthcheckWarnings_PropagateToResult(t *testin
 		StartPeriod: "60s",
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
@@ -688,7 +688,7 @@ func TestPodmanApplyDesiredState_RootlessResourceWarnings_PropagateToResult(t *t
 		},
 	}
 
-	server, dockerObserver := setupApplyTest(mock)
+	server, dockerObserver := setupApplyTest(t, mock)
 	defer server.Close()
 
 	podman := &PodmanObserver{DockerObserver: dockerObserver}
