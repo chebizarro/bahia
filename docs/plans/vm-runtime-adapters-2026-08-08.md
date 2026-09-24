@@ -4,6 +4,19 @@ Status: implemented (work items 1–11 done; item 9's KVM-host integration tests
 Date: 2026-08-08
 Related: `loom-worker/docs/plans/vm-job-isolation-2026-08-01.md`, `docs/plans/desired-state-runtime-architecture-2026-05-26.md`
 
+> **Governance correction (2026-09-21):** This historical plan implemented
+> service-runtime adapters that can create long-lived Firecracker and QEMU
+> instances inside Bahia. It is not the contract for the desktop-VM feature or
+> for Loom execution planes. The accepted architecture now separates Bahia-owned
+> persistent libvirt deployments from Loom-owned per-job Firecracker/QEMU
+> domains. New work follows `internal/domain/virtualization.go` and
+> `docs/user-guide/features/virtual-machines.md`: Bahia may reconcile an
+> execution plane's package/config/image pins and live-probe-derived capability,
+> but must not create, adopt, retain or fall back to host execution for an
+> individual Loom job. Existing `vm-firecracker`/`vm-qemu` service-runtime code
+> remains legacy until a separately reviewed contraction/migration task removes
+> or isolates it; its presence is not execution-plane acceptance.
+
 ## Goal
 
 Let bahia deploy and monitor long-lived VM instances — Firecracker microVMs and QEMU/KVM domains via libvirt (including Windows guests) — as environment services, with the same lifecycle, observation, drift, and log surfaces that docker/podman containers get today.
