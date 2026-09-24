@@ -38,6 +38,59 @@ The browser requests at most 1,000 events for each continuity filter and dedupli
 
 A displayed definition is desired configuration; status and progress events are the observable evidence of what happened.
 
+## Operator commands and backend hydration
+
+Failover and recovery mutation intent uses ContextVM, not legacy kinds `38430`
+and `38431`. Send a signed kind `25910` JSON-RPC request addressed (`p`) to the
+Bahia service, optionally wrapped in `1059` or `21059`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "continuity-run-1",
+  "method": "continuity/failover",
+  "params": {
+    "service_key": "api",
+    "target_worker_pubkey": "<32-byte lowercase hex worker public key>",
+    "recipe_name": "switch",
+    "target_profile": "degraded",
+    "idempotency_key": "<stable unique run key>"
+  }
+}
+```
+
+Use `continuity/recovery` with `target_profile: "full"` for recovery. The profile
+and recipe name are optional; the target worker and service key are required.
+`_meta.progressToken` can supply the idempotency key instead. Requester identity
+comes from the authenticated inner event, never `requested_by` in the payload.
+Both methods require `nostr.authorized_pubkeys`; an empty list denies everyone.
+
+The backend loads profiles (`31400`), failover policies (`31401`), replication
+policies (`31403`), and recovery workflows (`31404`) from a long-lived REQ scoped
+to those kinds and the configured operator authors. It discovers the inventory
+from their definitions, so `d` coordinates are not known before backfill. The
+cold rebuild starts from history without a truncating limit or persisted cursor.
+Definitions are applied synchronously; command execution waits for actual EOSE
+from every initially subscribed stream. CLOSED, disconnect, cancellation and
+elapsed time do not count as successful catch-up. The REQ stays open for live
+updates, and replay/older replacements do not mutate the current projection.
+Equal timestamps prefer the lexicographically lower event ID.
+
+Commands execute the selected stored recipe rather than republishing a legacy
+command. Immediate errors include missing recipes and unavailable runtime
+adapters. The JSON-RPC result reports the executor's outcome; durable operational
+truth still comes from signed continuity status/progress observables. Retry with
+the same idempotency key and unchanged params to replay a retained result rather
+than repeat recipe actions. The transport's configured response retention applies;
+this is not a transactional exactly-once guarantee across execution/process crashes.
+
+Standby definitions (`31402`) are deliberately **not ingested by this backend
+runner**. The existing standby handler has no downstream inventory consumer.
+Replication policies and explicit command targets remain the runtime's sources
+of standby selection; adding a second inventory requires an explicit integration
+and authority decision. The browser may still display standby definitions.
+The browser's legacy Requests view is historical, not a command submission path.
+
 ## Related
 
 - [Deployments](deployments.md) — Rollout and rollback behavior

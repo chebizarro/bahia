@@ -44,7 +44,7 @@ func TestInMemoryContinuityDefinitionStoreProfileLatestValueRules(t *testing.T) 
 		ServiceKey:          "svc-api",
 		PrimaryWorkerPubKey: "tie-break-primary",
 		UpdatedAt:           base,
-		SourceEventID:       "event-c",
+		SourceEventID:       "event-a",
 		Profiles: map[domain.ContinuityMode]domain.ContinuityProfileSpec{
 			domain.ContinuityModeFull: {Attributes: map[string]string{"tier": "full"}},
 		},

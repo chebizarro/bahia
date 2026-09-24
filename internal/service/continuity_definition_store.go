@@ -211,7 +211,8 @@ func replaceableDefinitionNewer(incomingAt time.Time, incomingEventID string, cu
 	if incomingAt.Before(currentAt) {
 		return false
 	}
-	return strings.TrimSpace(incomingEventID) > strings.TrimSpace(currentEventID)
+	// NIP-01 selects the lexicographically lowest id for equal timestamps.
+	return strings.TrimSpace(incomingEventID) < strings.TrimSpace(currentEventID)
 }
 
 func cloneServiceContinuityProfile(profile domain.ServiceContinuityProfile) domain.ServiceContinuityProfile {

@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -28,23 +30,13 @@ func (r *Reactor) handleContinuityProfileDefinition(ctx context.Context, event *
 	})
 }
 
-func (r *Reactor) handleFailoverPolicyDefinition(ctx context.Context, event *gonostr.Event) {
-	if !r.authorizeContinuityDefinition(event) {
-		return
-	}
-	recipe, err := nostradapter.DecodeFailoverPolicyEvent(event)
+func (h *ContinuityRuntime) handleFailoverPolicyDefinition(event *gonostr.Event) error {
+	definition, err := nostradapter.DecodeFailoverPolicyEvent(event)
 	if err != nil {
-		r.logger.Warn("invalid failover policy event", "event_id", event.ID, "error", err)
-		return
+		return err
 	}
-	r.eventBus.Publish(ctx, events.Event{
-		Type:     events.EventFailoverPolicyObserved,
-		EntityID: recipe.ServiceKey,
-		Data: events.ContinuityRecipeObserved{
-			Source: continuitySource(event),
-			Recipe: *recipe,
-		},
-	})
+	_, err = h.definitions.StoreRecipe(*definition)
+	return err
 }
 
 func (r *Reactor) handleStandbyNodeDefinition(ctx context.Context, event *gonostr.Event) {
@@ -73,42 +65,22 @@ func (r *Reactor) handleStandbyNodeDefinition(ctx context.Context, event *gonost
 	})
 }
 
-func (r *Reactor) handleReplicationPolicyDefinition(ctx context.Context, event *gonostr.Event) {
-	if !r.authorizeContinuityDefinition(event) {
-		return
-	}
-	policy, err := nostradapter.DecodeReplicationPolicyEvent(event)
+func (h *ContinuityRuntime) handleReplicationPolicyDefinition(event *gonostr.Event) error {
+	definition, err := nostradapter.DecodeReplicationPolicyEvent(event)
 	if err != nil {
-		r.logger.Warn("invalid replication policy event", "event_id", event.ID, "error", err)
-		return
+		return err
 	}
-	r.eventBus.Publish(ctx, events.Event{
-		Type:     events.EventReplicationPolicyObserved,
-		EntityID: policy.ServiceKey,
-		Data: events.ReplicationPolicyObserved{
-			Source: continuitySource(event),
-			Policy: *policy,
-		},
-	})
+	_, err = h.definitions.StoreReplicationPolicy(*definition)
+	return err
 }
 
-func (r *Reactor) handleRecoveryWorkflowDefinition(ctx context.Context, event *gonostr.Event) {
-	if !r.authorizeContinuityDefinition(event) {
-		return
-	}
-	recipe, err := nostradapter.DecodeRecoveryWorkflowEvent(event)
+func (h *ContinuityRuntime) handleRecoveryWorkflowDefinition(event *gonostr.Event) error {
+	definition, err := nostradapter.DecodeRecoveryWorkflowEvent(event)
 	if err != nil {
-		r.logger.Warn("invalid recovery workflow event", "event_id", event.ID, "error", err)
-		return
+		return err
 	}
-	r.eventBus.Publish(ctx, events.Event{
-		Type:     events.EventRecoveryWorkflowObserved,
-		EntityID: recipe.ServiceKey,
-		Data: events.ContinuityRecipeObserved{
-			Source: continuitySource(event),
-			Recipe: *recipe,
-		},
-	})
+	_, err = h.definitions.StoreRecipe(*definition)
+	return err
 }
 
 func (r *Reactor) handleHeartbeatObservation(ctx context.Context, event *gonostr.Event) {
@@ -149,4 +121,35 @@ func continuitySource(event *gonostr.Event) events.NostrSource {
 		PubKey:    event.PubKey.Hex(),
 		CreatedAt: event.CreatedAt.Time(),
 	}
+}
+
+// handleDefinition shares the fail-closed operator gate with commands, but
+// consumes signed canonical definitions rather than inventing RPC apply methods.
+func (h *ContinuityRuntime) handleDefinition(ctx context.Context, event *gonostr.Event) error {
+	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
+		return err
+	}
+	_, err := h.gate.wrap(func(_ context.Context, request ContextVMRequest) (any, error) {
+		if h.definitions == nil {
+			return nil, fmt.Errorf("continuity definition store is not configured")
+		}
+		switch request.Event.Kind {
+		case nostradapter.KindContinuityProfile:
+			profile, err := nostradapter.DecodeContinuityProfileEvent(request.Event)
+			if err != nil {
+				return nil, err
+			}
+			_, err = h.definitions.StoreProfile(*profile)
+			return nil, err
+		case nostradapter.KindFailoverPolicy:
+			return nil, h.handleFailoverPolicyDefinition(request.Event)
+		case nostradapter.KindReplicationPolicy:
+			return nil, h.handleReplicationPolicyDefinition(request.Event)
+		case nostradapter.KindRecoveryWorkflow:
+			return nil, h.handleRecoveryWorkflowDefinition(request.Event)
+		default:
+			return nil, fmt.Errorf("unsupported continuity definition kind %d", request.Event.Kind)
+		}
+	})(ctx, ContextVMRequest{Event: event})
+	return err
 }
