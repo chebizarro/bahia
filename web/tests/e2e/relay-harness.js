@@ -5,7 +5,7 @@ import { finalizeEvent, getPublicKey, nip44 } from 'nostr-tools';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
-const defaultAddr = process.env.BAHIA_TEST_RELAY_ADDR || '127.0.0.1:48629';
+const defaultAddr = process.env.BAHIA_TEST_RELAY_ADDR || '127.0.0.1:0';
 const OPERATOR_SECRET_HEX = '3333333333333333333333333333333333333333333333333333333333333333';
 const operatorSecretKey = hexToBytes(OPERATOR_SECRET_HEX);
 export const RELAY_OPERATOR_PUBKEY = getPublicKey(operatorSecretKey);
@@ -16,18 +16,23 @@ function hexToBytes(hex) {
   return Uint8Array.from(normalized.match(/.{1,2}/g).map((byte) => Number.parseInt(byte, 16)));
 }
 
-export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = waitForRelayReady, spawnImpl = spawn } = {}) {
-  const healthUrl = `http://${addr}/healthz`;
-  const existing = await readRelayHealth(healthUrl);
-  if (existing?.ok) {
-    return relayHandle(addr, null, existing);
-  }
+const activeRelayProcesses = new Map();
+let cleanupHooksInstalled = false;
 
+export async function startBahiaTestRelay({
+  addr = defaultAddr,
+  waitForReady = waitForRelayReady,
+  spawnImpl = spawn,
+  killImpl = process.kill.bind(process)
+} = {}) {
   const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr], {
     cwd: repoRoot,
+    detached: process.platform !== 'win32',
     env: { ...process.env, BAHIA_TEST_RELAY_ADDR: addr },
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  activeRelayProcesses.set(child, killImpl);
+  installCleanupHooks();
 
   let output = '';
   let resolveReady;
@@ -38,7 +43,8 @@ export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = w
   });
   const captureOutput = (chunk) => {
     output += chunk.toString();
-    if (output.includes('bahia test relay listening on ')) resolveReady();
+    const match = output.match(/bahia test relay listening on (\S+)/);
+    if (match) resolveReady(match[1]);
   };
   child.stdout.on('data', captureOutput);
   child.stderr.on('data', captureOutput);
@@ -48,30 +54,31 @@ export async function startBahiaTestRelay({ addr = defaultAddr, waitForReady = w
 
   let timeout;
   try {
-    const health = await Promise.race([
-      waitForReady({ child, healthUrl, ready, readHealth: readRelayHealth }),
+    const started = await Promise.race([
+      waitForReady({ child, ready, readHealth: readRelayHealth }),
       new Promise((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`Timed out waiting for Bahia test relay at ${healthUrl}:\n${output}`)), 20_000);
+        timeout = setTimeout(() => reject(new Error(`Timed out waiting for Bahia test relay requested at ${addr}:\n${output}`)), 20_000);
       })
     ]);
-    if (!health?.ok) {
-      throw new Error(`Bahia test relay signaled readiness before health was available at ${healthUrl}:\n${output}`);
+    if (!started.health?.ok) {
+      throw new Error(`Bahia test relay signaled readiness before health was available at ${started.healthUrl}:\n${output}`);
     }
-    return relayHandle(addr, child, health);
+    return relayHandle(started.addr, child, started.health, killImpl);
   } catch (error) {
-    if (child.exitCode === null) child.kill('SIGTERM');
+    await stopRelayProcess(child, killImpl);
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function waitForRelayReady({ healthUrl, ready, readHealth }) {
-  await ready;
-  return readHealth(healthUrl);
+async function waitForRelayReady({ ready, readHealth }) {
+  const addr = await ready;
+  const healthUrl = `http://${addr}/healthz`;
+  return { addr, healthUrl, health: await readHealth(healthUrl) };
 }
 
-function relayHandle(addr, child, health) {
+function relayHandle(addr, child, health, killImpl) {
   return {
     addr,
     httpUrl: `http://${addr}`,
@@ -79,11 +86,78 @@ function relayHandle(addr, child, health) {
     servicePubkey: health.service_pubkey,
     eventCount: health.events,
     async stop() {
-      if (!child || child.exitCode !== null) return;
-      child.kill('SIGTERM');
-      await new Promise((resolve) => child.once('exit', resolve));
+      await stopRelayProcess(child, killImpl);
     }
   };
+}
+
+async function stopRelayProcess(child, killImpl) {
+  if (!child) return;
+
+  if (child.exitCode === null) {
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    let forceKillTimer;
+    signalRelayProcess(child, 'SIGTERM', killImpl);
+    const exitedGracefully = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolve) => {
+        forceKillTimer = setTimeout(() => resolve(false), 5_000);
+      })
+    ]);
+    clearTimeout(forceKillTimer);
+    if (!exitedGracefully) {
+      signalRelayProcess(child, 'SIGKILL', killImpl);
+      await exited;
+    }
+  } else {
+    signalRelayProcess(child, 'SIGTERM', killImpl);
+  }
+
+  if (relayProcessGroupIsAlive(child, killImpl)) {
+    signalRelayProcess(child, 'SIGKILL', killImpl);
+  }
+  activeRelayProcesses.delete(child);
+}
+
+function signalRelayProcess(child, signal, killImpl) {
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      killImpl(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code === 'ESRCH') return;
+    }
+  }
+  if (child.exitCode === null) child.kill(signal);
+}
+
+function relayProcessGroupIsAlive(child, killImpl) {
+  if (process.platform === 'win32' || !child.pid) return false;
+  try {
+    killImpl(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installCleanupHooks() {
+  if (cleanupHooksInstalled) return;
+  cleanupHooksInstalled = true;
+  process.once('exit', () => stopAllRelayProcesses('SIGKILL'));
+  process.once('SIGINT', () => terminateAfterCleanup(130));
+  process.once('SIGTERM', () => terminateAfterCleanup(143));
+}
+
+function stopAllRelayProcesses(signal) {
+  for (const [child, killImpl] of activeRelayProcesses) {
+    signalRelayProcess(child, signal, killImpl);
+  }
+}
+
+function terminateAfterCleanup(exitCode) {
+  stopAllRelayProcesses('SIGTERM');
+  process.exit(exitCode);
 }
 
 async function readRelayHealth(url) {

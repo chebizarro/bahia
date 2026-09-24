@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -54,7 +55,7 @@ type eventSpec struct {
 }
 
 func main() {
-	addr := flag.String("addr", strutil.Env("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:48629"), "HTTP/WebSocket listen address")
+	addr := flag.String("addr", strutil.Env("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:0"), "HTTP/WebSocket listen address")
 	flag.Parse()
 
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)
@@ -72,7 +73,14 @@ func main() {
 	relay.Info.SupportedNIPs = []any{1, 11, 42, 51, 65, 78}
 	relay.UseEventstore(store, 10000)
 
-	wsURL := "ws://" + *addr
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("listen on %s: %v", *addr, err)
+	}
+	defer listener.Close()
+
+	actualAddr := listener.Addr().String()
+	wsURL := "ws://" + actualAddr
 	seedEvents, err := seedCorpus(wsURL)
 	if err != nil {
 		log.Fatalf("build seed corpus: %v", err)
@@ -102,8 +110,8 @@ func main() {
 		fmt.Fprintf(w, `{"ok":true,"relay":"%s","service_pubkey":"%s","events":%d}`+"\n", wsURL, serviceKey.Public().Hex(), len(seedEvents))
 	})
 
-	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d", *addr, serviceKey.Public().Hex(), len(seedEvents))
-	if err := http.ListenAndServe(*addr, relay); err != nil {
+	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d", actualAddr, serviceKey.Public().Hex(), len(seedEvents))
+	if err := http.Serve(listener, relay); err != nil {
 		log.Fatal(err)
 	}
 }
