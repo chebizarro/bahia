@@ -22,7 +22,7 @@ const (
 	configListKind         = nostr.Kind(kinds.ConfigACLList)
 	configPolicyKind       = nostr.Kind(kinds.ConfigPolicy)
 	configStatusKind       = nostr.Kind(kinds.CASControlState)
-	configStatusSchema     = "cascadia.config.status.v1"
+	configStatusSchema     = "cascadia.config.status.v2"
 	configMembershipSchema = "cascadia.config.membership.v1"
 	configRelaySchema      = "cascadia.config.relay-sidecar.v1"
 )
@@ -539,11 +539,14 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 	if err != nil {
 		return err
 	}
+	// Each phase is a durable fact about one signed desired event. Sharing an
+	// address across phases or target versions lets NIP-01 replacement erase
+	// applied truth, regardless of publication order or timestamp precision.
 	event := nostr.Event{
 		Kind:      configStatusKind,
 		CreatedAt: nostr.Timestamp(c.now().Unix()),
 		Tags: nostr.Tags{
-			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope},
+			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope + ":" + desiredEventID + ":" + status},
 			{"domain", "config-status"},
 			{"schema", configStatusSchema},
 			{"status", status},

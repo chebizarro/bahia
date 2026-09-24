@@ -48,7 +48,7 @@ evaluated_at: "2024-01-15T10:00:00Z"
 
 ## Config Fabric operator console
 
-Bahia retains config desired-state and `cascadia.config.status.v1` events in its Nostr event store, so drift remains available after restart or while relays are unavailable.
+Bahia retains config desired-state and `cascadia.config.status.v2` receipts in its Nostr event store, so drift remains available after restart or while relays are unavailable. Each desired event and phase has its own address: accepted or rejected status cannot overwrite applied evidence, even in the same second. Replay selects the highest applied config version and clears drift only when its event ID and version match the desired config. Retained v1 status events remain readable; upgrade readers before v2 publishers. See [durable status semantics](../../nostr-event-implementation-guide.md#config-fabric-durable-status-receipts).
 
 Open **Config Fabric** in the **Admin** navigation section. The console lists every managed service, policy, and scope with:
 

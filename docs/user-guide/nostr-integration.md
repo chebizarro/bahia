@@ -860,3 +860,15 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 ### Shared agent runtime releases
 
 Bahia projects shared verified runtime releases as kind `30315` control state using schema `bahia.agent-runtime-release.v1`. Filter narrowly by `domain=agent-runtime-release` plus `org`/`digest`, or by `domain=agent-service-release` plus `org`/`agent`/`service`. Binding events retain `release_channel`, source event, and previous-binding correlation for exact rollback lookup. They do not represent deployment intent.
+
+
+## Config Fabric status durability
+
+Config Fabric status uses kind `30900`, `domain=config-status`, and
+`schema=cascadia.config.status.v2`, addressed by desired event and phase:
+`config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`.
+Accepted/rejected receipts cannot replace applied evidence. Replay selects the
+highest applied config version and checks its target event ID to determine drift.
+Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
+See [Config Fabric durable status receipts](../nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
+for tags, retention trade-offs, subscription scope, and upgrade semantics.

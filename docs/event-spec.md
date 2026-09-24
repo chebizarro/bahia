@@ -433,3 +433,15 @@ Canonical kind: `30315`.
 - `domain=agent-service-release`: `d=agent-service-release:<uuid>`; tags include `org`, `agent`, `service`, `release`, `release_channel`, `source_event`, and optional `previous_binding`. Content is an append-only binding.
 
 Workspace/persona repositories are never runtime-source fields in this schema.
+
+
+## Config Fabric status durability
+
+Config Fabric status uses kind `30900`, `domain=config-status`, and
+`schema=cascadia.config.status.v2`, addressed by desired event and phase:
+`config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`.
+Accepted/rejected receipts cannot replace applied evidence. Replay selects the
+highest applied config version and checks its target event ID to determine drift.
+Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
+See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
+for tags, retention trade-offs, subscription scope, and upgrade semantics.

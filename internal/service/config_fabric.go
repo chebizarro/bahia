@@ -26,8 +26,9 @@ const (
 )
 
 const (
-	configStatusSchema = "cascadia.config.status.v1"
-	configEntityType   = "config-fabric.desired"
+	configStatusSchema       = "cascadia.config.status.v2"
+	legacyConfigStatusSchema = "cascadia.config.status.v1"
+	configEntityType         = "config-fabric.desired"
 )
 
 var (
@@ -541,7 +542,10 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 				Version: status.Version, Status: status.Status, EffectiveVersion: status.EffectiveVersion,
 				LastAppliedEventID: status.LastAppliedEventID, Reason: status.Reason, CreatedAt: status.CreatedAt,
 			})
-			if view.AppliedEventID == "" && status.Status == "applied" {
+			// Status coordinates preserve per-target facts, not one wall-clock
+			// snapshot. Versions are monotonic; a delayed older receipt must
+			// not roll the effective configuration backwards.
+			if status.Status == "applied" && status.EffectiveVersion > view.AppliedVersion {
 				view.AppliedEventID = status.LastAppliedEventID
 				view.AppliedVersion = status.EffectiveVersion
 			}
@@ -638,7 +642,8 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	if err != nil {
 		return status, err
 	}
-	if schema, err := exactlyOneTag(tags, "schema"); err != nil || schema != configStatusSchema {
+	schema, err := exactlyOneTag(tags, "schema")
+	if err != nil || (schema != configStatusSchema && schema != legacyConfigStatusSchema) {
 		return status, fmt.Errorf("invalid status schema tag")
 	}
 	if domain, err := exactlyOneTag(tags, "domain"); err != nil || domain != "config-status" {
@@ -668,18 +673,25 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	}
 	status.PolicyName = schemaMatch[1]
 	dTag, err := exactlyOneTag(tags, "d")
-	if err != nil || dTag != "config-status:"+status.ServiceID+":"+status.PolicyName+":"+status.Scope {
+	expectedDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
+	if schema == configStatusSchema {
+		expectedDTag += ":" + status.ConfigEventID + ":" + status.Status
+	}
+	if err != nil || dTag != expectedDTag {
 		return status, fmt.Errorf("invalid config status d tag")
 	}
 	if status.Status == "applied" {
 		if status.EffectiveVersion < 1 || !isHex(status.LastAppliedEventID, 32) {
 			return status, fmt.Errorf("invalid applied status content")
 		}
+		if schema == configStatusSchema && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
+			return status, fmt.Errorf("applied status target mismatch")
+		}
 	} else if status.Status == "rejected" {
 		if strings.TrimSpace(status.Reason) == "" || looksLikeSecretValue(status.Reason) {
 			return status, fmt.Errorf("invalid rejected status reason")
 		}
-	} else {
+	} else if status.Status != "accepted" {
 		return status, fmt.Errorf("invalid status")
 	}
 	status.EventID = record.ID

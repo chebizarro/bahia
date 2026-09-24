@@ -221,6 +221,45 @@ Use canonical state.
 
 Use NIP-78 kind `30078` instead when the object is app-specific data, user/application settings, local UI state, or a registry whose semantics are not a fleet-wide control-plane projection.
 
+#### Config Fabric durable status receipts
+
+Config consumers publish kind `30900`, `domain=config-status`, and
+`schema=cascadia.config.status.v2`. Each receipt is a complete fact about one
+signed desired config event and one phase, with this address:
+
+`d=config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`
+
+The phases are `accepted`, `applied`, and `rejected`. The existing `service`,
+`scope`, `version`, `status`, and `e=<config_event_id>` tags match the content.
+An `applied` receipt must bind `last_applied_event_id` to `config_event_id` and
+`effective_version` to `version`. `accepted` only acknowledges durable admission;
+it is not proof of activation. A rejection of a duplicate desired event does
+not retract a previously published applied fact.
+
+This address separates both phases and target events. A relay retaining one
+event per `(kind, pubkey, d)` therefore cannot replace applied truth with
+accepted/rejected progress, or lose a newer target's applied fact to an older
+target's same-second receipt. Retried publications of the same phase and target
+still use ordinary NIP-01 replacement. No relay-specific status precedence,
+mutex, fabricated future timestamp, or higher-resolution `created_at` is used:
+NIP-01 timestamps remain Unix seconds and equal-time ties remain lowest-ID wins.
+
+Replay folds applied receipts by greatest effective config version, not by
+publication time. Rollback publishes a higher config version containing the
+older policy. Drift clears only when both the applied event ID and effective
+version match the current desired event. Keep subscriptions scoped to kind,
+service/scope and, when following a target, `#e`; clients querying exact `#d`
+addresses must enumerate the target's phases instead of the old shared address.
+This trades a single lossy snapshot for up to three retained coordinates per
+desired event per consumer author; history is not bounded to one service row.
+
+Readers also accept retained `cascadia.config.status.v1` records at the old
+`config-status:<service>:<policy>:<scope>` address. Writers emit only v2. Upgrade
+readers before writers; an old v1-only reader cannot decode v2. Previously lost
+v1 applied events cannot be reconstructed from accepted status: no migration
+may invent activation evidence.
+
+
 Relay settings operator policy uses canonical state kind `30900` with `d=relay-settings:operator`, `domain=relay-settings`, and `schema=bahia.relay-settings.v1`. The state records the current service-authored browser, ContextVM, service, DM, NIP-66 monitor, and NIP-86 managed-target policy after a `settings/relay-policy.apply` ContextVM intent is accepted.
 
 ### 4. Is this an immutable audit fact or attestation?
