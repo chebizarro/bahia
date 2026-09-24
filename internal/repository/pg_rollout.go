@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -147,14 +148,12 @@ func (r *PgRolloutPlanRepository) CreateSteps(ctx context.Context, steps []domai
 	}
 
 	br := r.pool.SendBatch(ctx, batch)
-	defer br.Close()
-
 	for range steps {
 		if _, err := br.Exec(); err != nil {
-			return fmt.Errorf("batch insert step: %w", err)
+			return errors.Join(fmt.Errorf("batch insert step: %w", err), br.Close())
 		}
 	}
-	return nil
+	return br.Close()
 }
 
 func (r *PgRolloutPlanRepository) GetStepByID(ctx context.Context, id uuid.UUID) (*domain.RolloutStep, error) {

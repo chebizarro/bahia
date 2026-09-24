@@ -197,7 +197,7 @@ func newTestPolicyServiceWithOptions(opts ...PolicyServiceOption) (*PolicyServic
 
 func evaluateBlockingRule(t *testing.T, svc *PolicyService, policyRepo *mockPolicyRepo, sbomRepo *mockSBOMRepoForPolicy, rule domain.PolicyRule) *domain.PolicyEvaluation {
 	t.Helper()
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        string(rule.Type),
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -296,7 +296,7 @@ func TestPolicyService_Evaluate_RequireSignature_Pass(t *testing.T) {
 	svc, policyRepo, sigRepo, _ := newTestPolicyService()
 	sigRepo.hasSig = true
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "require-sig",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -324,7 +324,7 @@ func TestPolicyService_Evaluate_RequireSignature_DiscoveredOnlyBlocks(t *testing
 		VerificationStatus: domain.SignatureStatusDiscovered,
 	}}
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "require-sig",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -347,7 +347,7 @@ func TestPolicyService_Evaluate_RequireSignature_Block(t *testing.T) {
 	svc, policyRepo, sigRepo, _ := newTestPolicyService()
 	sigRepo.hasSig = false
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "require-sig",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -370,7 +370,7 @@ func TestPolicyService_Evaluate_RequireSignature_Warn(t *testing.T) {
 	svc, policyRepo, sigRepo, _ := newTestPolicyService()
 	sigRepo.hasSig = false
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "require-sig-warn",
 		Enforcement: domain.PolicyEnforcementWarn,
 		Enabled:     true,
@@ -392,7 +392,7 @@ func TestPolicyService_Evaluate_RequireSignature_Warn(t *testing.T) {
 func TestPolicyService_Evaluate_RequireSBOM(t *testing.T) {
 	svc, policyRepo, _, sbomRepo := newTestPolicyService()
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "require-sbom",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -427,7 +427,7 @@ func TestPolicyService_Evaluate_MaxCriticalVulns(t *testing.T) {
 		CriticalCount: 3,
 	}
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "max-crit",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -457,7 +457,7 @@ func TestPolicyService_Evaluate_UsesLatestSecurityCountsBeforeSBOMFallback(t *te
 	securityRepo := newMemorySecurityRepo(target, nil)
 	securityRepo.latest[target.TargetKeyHash] = &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: uuid.New(), Status: domain.SecurityScanCompleted, FindingCount: 2, SeverityCounts: domain.SecuritySeverityCounts{High: 2}, ScannedAt: time.Now().UTC()}
 	svc.security = securityRepo
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "max-high", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleMaxHighVulns, Params: map[string]any{"max": 0}}}})
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{Name: "max-high", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleMaxHighVulns, Params: map[string]any{"max": 0}}}})
 
 	eval, err := svc.Evaluate(context.Background(), artifactID, uuid.New())
 	if err != nil {
@@ -470,7 +470,7 @@ func TestPolicyService_Evaluate_SecurityOSVScanStates(t *testing.T) {
 	t.Run("no scan blocks by default", func(t *testing.T) {
 		svc, policyRepo, _, _ := newTestPolicyService()
 		svc.security = newMemorySecurityRepo(domain.SecurityTarget{}, nil)
-		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan}}})
+		createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan}}})
 		eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
 		if err != nil {
 			t.Fatal(err)
@@ -480,7 +480,7 @@ func TestPolicyService_Evaluate_SecurityOSVScanStates(t *testing.T) {
 	t.Run("no scan can pass explicitly", func(t *testing.T) {
 		svc, policyRepo, _, _ := newTestPolicyService()
 		svc.security = newMemorySecurityRepo(domain.SecurityTarget{}, nil)
-		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"no_scan": "pass"}}}})
+		createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"no_scan": "pass"}}}})
 		eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
 		if err != nil {
 			t.Fatal(err)
@@ -498,7 +498,7 @@ func TestPolicyService_Evaluate_SecurityOSVScanStates(t *testing.T) {
 		securityRepo := newMemorySecurityRepo(target, nil)
 		securityRepo.latest[target.TargetKeyHash] = &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: uuid.New(), Status: domain.SecurityScanCompleted, ScannedAt: time.Now().UTC().Add(-2 * time.Hour)}
 		svc.security = securityRepo
-		policyRepo.Create(context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"freshness_seconds": 60, "stale": "warn"}}}})
+		createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"freshness_seconds": 60, "stale": "warn"}}}})
 		eval, err := svc.Evaluate(context.Background(), artifactID, uuid.New())
 		if err != nil {
 			t.Fatal(err)
@@ -561,7 +561,7 @@ func TestPolicyService_Evaluate_BlockPackage(t *testing.T) {
 		{Name: "log4j-core", Version: "2.14.1"},
 	}
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "block-log4j",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -595,7 +595,7 @@ func TestPolicyService_Evaluate_MultipleRules(t *testing.T) {
 		HighCount:     5,
 	}
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:        "strict-policy",
 		Enforcement: domain.PolicyEnforcementBlock,
 		Enabled:     true,
@@ -623,7 +623,7 @@ func TestPolicyService_Evaluate_EnvSpecificPolicy(t *testing.T) {
 	envID := uuid.New()
 	otherEnvID := uuid.New()
 
-	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, context.Background(), &domain.DeploymentPolicy{
 		Name:          "prod-sig-required",
 		EnvironmentID: &envID,
 		Enforcement:   domain.PolicyEnforcementBlock,
@@ -1045,5 +1045,12 @@ func TestGetStringParam(t *testing.T) {
 	}
 	if getStringParam(map[string]any{"status": "warning"}, "status", "clean") != "warning" {
 		t.Error("string param should return value")
+	}
+}
+
+func createTestPolicy(t *testing.T, repo *mockPolicyRepo, ctx context.Context, policy *domain.DeploymentPolicy) {
+	t.Helper()
+	if err := repo.Create(ctx, policy); err != nil {
+		t.Fatalf("create policy: %v", err)
 	}
 }

@@ -183,7 +183,7 @@ func concordControlReadKey(communityRoot []byte, communityID [32]byte, epoch uin
 // matches the seal's (NIP-59's impersonation check).
 func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKey [32]byte) (*concordControlFold, error) {
 	if address == nostr.ZeroPK {
-		return nil, fmt.Errorf("Control Plane address is unset")
+		return nil, fmt.Errorf("control Plane address is unset")
 	}
 	byEntity := make(map[[32]byte][]concordEdition)
 	seen := make(map[nostr.ID]struct{}, len(events))
@@ -220,7 +220,7 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 		seen[edition.rumorID] = struct{}{}
 		accepted++
 		if accepted > concordControlEditionLimit {
-			return nil, fmt.Errorf("Control Plane exceeds %d editions; refusing to fold a partial plane", concordControlEditionLimit)
+			return nil, fmt.Errorf("control Plane exceeds %d editions; refusing to fold a partial plane", concordControlEditionLimit)
 		}
 		byEntity[edition.entity] = append(byEntity[edition.entity], edition)
 	}
@@ -477,7 +477,7 @@ func (m *concordMembership) resolveConcordRotationAuthority(
 	head, ok := fold.head(eid)
 	if !ok {
 		return concordAuthorityCitation{}, nil, fmt.Errorf(
-			"Rotator %s holds no Grant on the folded Control Plane at epoch %d: CORD-06 §3 requires a rotation to cite the Grant it acts under, and a fabricated citation is worse than none",
+			"rotator %s holds no Grant on the folded Control Plane at epoch %d: CORD-06 §3 requires a rotation to cite the Grant it acts under, and a fabricated citation is worse than none",
 			rotator.Hex(), bundle.RootEpoch)
 	}
 	return concordAuthorityCitation{eid: hex.EncodeToString(eid[:]), version: head.version, hash: head.hash}, fold, nil

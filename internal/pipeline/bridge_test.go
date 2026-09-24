@@ -423,25 +423,6 @@ func (m *mockCanonicalRegistry) CreateDeploymentIntent(ctx context.Context, inte
 	return m.intents.Create(ctx, intent)
 }
 
-type mockDesiredStateBuilder struct {
-	unitID uuid.UUID
-	hash   string
-	calls  int
-}
-
-func (m *mockDesiredStateBuilder) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID, _ *uuid.UUID) (*domain.DesiredServiceSpec, error) {
-	m.calls++
-	return &domain.DesiredServiceSpec{
-		SchemaVersion:     "4",
-		ServiceID:         serviceID,
-		EnvironmentID:     envID,
-		ArtifactID:        artifactID,
-		DeploymentUnitID:  &m.unitID,
-		DeploymentUnitKey: "default",
-		DesiredHash:       m.hash,
-	}, nil
-}
-
 func (m *mockCanonicalRegistry) RegisterReleaseArtifactWithAudit(
 	ctx context.Context,
 	build *domain.Build,

@@ -98,7 +98,7 @@ func (s *Server) listFIPSMeshNodes(ctx context.Context) ([]fipsMeshNode, error) 
 			if endpoint.Family != domain.DNSEndpointFamilyMesh {
 				continue
 			}
-			worker, _ := workersByPubkey[strings.TrimSpace(endpoint.WorkerPubkey)]
+			worker := workersByPubkey[strings.TrimSpace(endpoint.WorkerPubkey)]
 			node := fipsMeshNodeFromEndpoint(endpoint, worker)
 			nodes = append(nodes, node)
 			if node.WorkerPubkey != "" {

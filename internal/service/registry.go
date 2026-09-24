@@ -1796,7 +1796,6 @@ func (s *RegistryService) repairStateAfterRejectedIntent(ctx context.Context, re
 		case domain.IntentStatusDeployed, domain.IntentStatusDeploying, domain.IntentStatusApproved:
 			state.DesiredArtifactID = &candidate.ArtifactID
 			state.DesiredIntentID = &candidate.ID
-			break
 		default:
 			continue
 		}

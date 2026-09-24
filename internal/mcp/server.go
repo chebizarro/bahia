@@ -4059,7 +4059,9 @@ func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string
 			"approve_url":   fmt.Sprintf("%s/tools/%s/approve", baseURL, intent.ID),
 			"reject_url":    fmt.Sprintf("%s/tools/%s/reject", baseURL, intent.ID),
 		}
-		s.notificationDisp.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), payload)
+		if err := s.notificationDisp.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), payload); err != nil {
+			s.logger.Error("tool provisioning approval notification failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		}
 	}
 
 	return jsonResult(map[string]interface{}{
@@ -4763,31 +4765,6 @@ func runsToMaps(runs []domain.DeploymentRun) []map[string]interface{} {
 	return result
 }
 
-func observationToMap(obs *domain.RuntimeObservation) map[string]interface{} {
-	m := map[string]interface{}{
-		"id":                    obs.ID.String(),
-		"service_id":            obs.ServiceID.String(),
-		"environment_id":        obs.EnvironmentID.String(),
-		"observed_image_digest": obs.ObservedImageDigest,
-		"health_status":         string(obs.HealthStatus),
-		"source":                obs.Source,
-		"observed_at":           obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
-	}
-	if obs.ObservedImageRepo != "" {
-		m["observed_image_repo"] = obs.ObservedImageRepo
-	}
-	if obs.ObservedContainerID != "" {
-		m["observed_container_id"] = obs.ObservedContainerID
-	}
-	if obs.ObservedHost != "" {
-		m["observed_host"] = obs.ObservedHost
-	}
-	if obs.ObservedVersion != "" {
-		m["observed_version"] = obs.ObservedVersion
-	}
-	return m
-}
-
 func runToMap(r *domain.DeploymentRun) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":                   r.ID.String(),
@@ -5188,30 +5165,6 @@ func policyToMap(p *domain.DeploymentPolicy) map[string]interface{} {
 		m["environment_id"] = p.EnvironmentID.String()
 	}
 	return m
-}
-
-func policyResultsToMaps(results []domain.PolicyResult) []map[string]interface{} {
-	output := make([]map[string]interface{}, len(results))
-	for i, r := range results {
-		m := map[string]interface{}{
-			"policy_id":   r.PolicyID.String(),
-			"policy_name": r.PolicyName,
-			"passed":      r.Passed,
-			"enforcement": string(r.Enforcement),
-		}
-		if len(r.Violations) > 0 {
-			violations := make([]map[string]interface{}, len(r.Violations))
-			for j, v := range r.Violations {
-				violations[j] = map[string]interface{}{
-					"rule":    string(v.Rule),
-					"message": v.Message,
-				}
-			}
-			m["violations"] = violations
-		}
-		output[i] = m
-	}
-	return output
 }
 
 // --- Notification Handlers ---

@@ -139,7 +139,7 @@ func TestRuntimeApplyLock_UnlockOnPanic(t *testing.T) {
 
 	// Simulate a panic inside a deploy operation with deferred unlock.
 	func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 
 		unlock, err := lock.Lock(ctx, envID)
 		require.NoError(t, err)

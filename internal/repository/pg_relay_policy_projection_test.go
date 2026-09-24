@@ -59,7 +59,7 @@ func TestRelayPolicyProjectionReplacementPredicate(t *testing.T) {
 func TestRelayPolicyProjectionQueriesExecuteOrderingInvariant(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { require.NoError(t, db.Close()) }()
 
 	_, err = db.Exec(`
 		CREATE TABLE relay_policy_projections (

@@ -384,7 +384,7 @@ func dedupeKinds(kinds []domain.LLMBackendKind) []domain.LLMBackendKind {
 	seen := map[domain.LLMBackendKind]bool{}
 	out := make([]domain.LLMBackendKind, 0, len(kinds))
 	for _, kind := range kinds {
-		if kind == "" || seen[kind] != false {
+		if kind == "" || seen[kind] {
 			continue
 		}
 		seen[kind] = true

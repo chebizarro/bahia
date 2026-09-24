@@ -663,7 +663,7 @@ func fallbackOrError[T any](cmd *cobra.Command, err error, fallback func(context
 		return zero, err
 	}
 	if outputFormat == "table" && cmd != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "→ signer-first operator request unavailable before relay acceptance; using explicit HTTP fallback: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ signer-first operator request unavailable before relay acceptance; using explicit HTTP fallback: %v\n", err)
 	}
 	return fallback(cmd.Context())
 }
@@ -685,7 +685,7 @@ func operatorStatusCallback(cmd *cobra.Command, label string) func(client.Operat
 		if message == "" {
 			message = "status update"
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "→ %s: %s\n", label, message)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ %s: %s\n", label, message)
 	}
 }
 

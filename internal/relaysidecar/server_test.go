@@ -41,7 +41,7 @@ func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer server.Close()
+	defer closeSidecarTest(t, server)
 
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
@@ -63,7 +63,7 @@ func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	supportedAuth := testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(supportedBody), time.Now())
 	resp := call(supportedBody, supportedAuth)
 	raw, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	closeSidecarTest(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("supportedmethods status=%d body=%s", resp.StatusCode, raw)
 	}
@@ -76,7 +76,7 @@ func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	allowBody := fmt.Sprintf(`{"method":"allowpubkey","params":["%s","managed"]}`, managedKey.Public().Hex())
 	allowAuth := testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(allowBody), time.Now())
 	resp = call(allowBody, allowAuth)
-	resp.Body.Close()
+	closeSidecarTest(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("allowpubkey status=%d", resp.StatusCode)
 	}
@@ -96,21 +96,21 @@ func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	}
 
 	resp = call(allowBody, allowAuth)
-	resp.Body.Close()
+	closeSidecarTest(t, resp.Body)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("replayed NIP-98 status=%d, want 401", resp.StatusCode)
 	}
 
 	nameBody := `{"method":"changerelayname","params":["Managed Bahia Relay"]}`
 	resp = call(nameBody, testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(nameBody), time.Now()))
-	resp.Body.Close()
+	closeSidecarTest(t, resp.Body)
 	if resp.StatusCode != http.StatusOK || server.Relay().Info.Name != "Managed Bahia Relay" {
 		t.Fatalf("metadata mutation was not persisted and hot-applied: status=%d name=%q", resp.StatusCode, server.Relay().Info.Name)
 	}
 
 	banBody := fmt.Sprintf(`{"method":"banpubkey","params":["%s","revoked"]}`, managedKey.Public().Hex())
 	resp = call(banBody, testNIP98Header(t, adminKey, cfg.Sidecar.PublicURL, []byte(banBody), time.Now()))
-	resp.Body.Close()
+	closeSidecarTest(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("banpubkey status=%d", resp.StatusCode)
 	}
@@ -194,7 +194,7 @@ func TestSidecarDecouplesPublisherAcknowledgementFromBroadcast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer server.store.Close()
+	defer closeSidecarTest(t, server.store)
 
 	relay := server.Relay()
 	if relay.PreventBroadcast == nil || !relay.PreventBroadcast(nil, nostr.Filter{}, nostr.Event{}) {
@@ -238,7 +238,7 @@ func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second New() error: %v", err)
 	}
-	defer second.store.Close()
+	defer closeSidecarTest(t, second.store)
 	for stored := range second.Relay().QueryStored(context.Background(), nostr.Filter{IDs: []nostr.ID{event.ID}}) {
 		if stored.ID == event.ID {
 			return
@@ -615,7 +615,7 @@ func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %q: %v", path, err)
 		}
-		resp.Body.Close()
+		closeSidecarTest(t, resp.Body)
 		if resp.StatusCode == http.StatusNotFound {
 			t.Fatalf("status at %q = %d, expected non-404 websocket handling", path, resp.StatusCode)
 		}
@@ -645,7 +645,7 @@ func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /relay: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeSidecarTest(t, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -883,7 +883,7 @@ func TestSidecarBroadcastQueueSaturationDoesNotBlockEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer server.Close()
+	defer closeSidecarTest(t, server)
 
 	done := make(chan struct{})
 	for i := 0; i < 256; i++ {
@@ -915,4 +915,11 @@ func TestSidecarBroadcastQueueSaturationDoesNotBlockEvents(t *testing.T) {
 		t.Fatal("AddEvent blocked when broadcast queue was full")
 	}
 	close(done)
+}
+
+func closeSidecarTest(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close test resource: %v", err)
+	}
 }

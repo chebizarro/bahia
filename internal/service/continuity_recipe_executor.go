@@ -195,14 +195,6 @@ func WithContinuityDNSAdapter(adapter ContinuityDNSAdapter) continuityRecipeExec
 	}
 }
 
-func withContinuityRecipeClock(now func() time.Time) continuityRecipeExecutorOption {
-	return func(e *continuityRecipeExecutor) {
-		if now != nil {
-			e.now = now
-		}
-	}
-}
-
 // NewContinuityRecipeExecutor creates the shared failover/recovery recipe executor.
 func NewContinuityRecipeExecutor(publisher events.Publisher, opts ...continuityRecipeExecutorOption) ContinuityRecipeExecutor {
 	if publisher == nil {
@@ -224,29 +216,11 @@ func NewContinuityRecipeExecutor(publisher events.Publisher, opts ...continuityR
 }
 
 func (e *continuityRecipeExecutor) ExecuteFailover(ctx context.Context, req FailoverExecutionRequest) error {
-	return e.execute(ctx, domain.ContinuityRecipeKindFailover, executionRequest{
-		ServiceKey:            req.ServiceKey,
-		RecipeName:            req.RecipeName,
-		TargetProfile:         req.TargetProfile,
-		PrimaryWorkerPubKey:   req.PrimaryWorkerPubKey,
-		SelectedStandbyPubKey: req.SelectedStandbyPubKey,
-		RequestedBy:           req.RequestedBy,
-		RunID:                 req.RunID,
-		Recipe:                req.Recipe,
-	})
+	return e.execute(ctx, domain.ContinuityRecipeKindFailover, executionRequest(req))
 }
 
 func (e *continuityRecipeExecutor) ExecuteRecovery(ctx context.Context, req RecoveryExecutionRequest) error {
-	return e.execute(ctx, domain.ContinuityRecipeKindRecovery, executionRequest{
-		ServiceKey:            req.ServiceKey,
-		RecipeName:            req.RecipeName,
-		TargetProfile:         req.TargetProfile,
-		PrimaryWorkerPubKey:   req.PrimaryWorkerPubKey,
-		SelectedStandbyPubKey: req.SelectedStandbyPubKey,
-		RequestedBy:           req.RequestedBy,
-		RunID:                 req.RunID,
-		Recipe:                req.Recipe,
-	})
+	return e.execute(ctx, domain.ContinuityRecipeKindRecovery, executionRequest(req))
 }
 
 type executionRequest struct {

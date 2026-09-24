@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -60,13 +61,11 @@ func newSQLiteStore(dataDir string) (*sqliteStore, error) {
 			ON events(replaceable_key) WHERE replaceable_key IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS events_created_at ON events(created_at DESC);
 	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("initialize relay sidecar event store: %w", err)
+		return nil, errors.Join(fmt.Errorf("initialize relay sidecar event store: %w", err), db.Close())
 	}
 	readDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("open relay sidecar read pool: %w", err)
+		return nil, errors.Join(fmt.Errorf("open relay sidecar read pool: %w", err), db.Close())
 	}
 	readDB.SetMaxOpenConns(32)
 	return &sqliteStore{db: db, readDB: readDB}, nil
@@ -167,7 +166,7 @@ func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) (uint32, e
 	if err != nil {
 		return 0, fmt.Errorf("count relay events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var count uint32
 	for rows.Next() {
@@ -208,7 +207,7 @@ func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit i
 		if err != nil {
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		matched := 0
 		for rows.Next() {

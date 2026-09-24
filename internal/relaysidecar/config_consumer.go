@@ -3,6 +3,7 @@ package relaysidecar
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -513,8 +514,8 @@ func (c *ConfigConsumer) persist(ctx context.Context, state configProjectionStat
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	syncErr := directory.Sync()
+	return errors.Join(syncErr, directory.Close())
 }
 
 func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigProjection, desiredEventID string, status, reason string) error {

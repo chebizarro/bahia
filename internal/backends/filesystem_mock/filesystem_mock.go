@@ -143,7 +143,7 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("create temp artifact: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 
 	h := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(tmp, h), req.Reader)
@@ -228,7 +228,7 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer stream.ReadCloser.Close()
+	defer func() { _ = stream.ReadCloser.Close() }()
 	return b.StoreArtifact(ctx, targetRepo, packagebackend.StoreArtifactRequest{
 		Namespace:   artifact.Namespace,
 		PackageName: artifact.PackageName,
@@ -346,7 +346,7 @@ func (b *Backend) observeArtifactPath(repo domain.PackageRepository, relPath str
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
@@ -445,7 +445,7 @@ func (b *Backend) generatePyPIIndex(repo domain.PackageRepository, artifacts []p
 	var root strings.Builder
 	root.WriteString("<!DOCTYPE html>\n<html><body>\n")
 	for _, pkg := range packages {
-		root.WriteString(fmt.Sprintf("<a href=\"%s/\">%s</a>\n", html.EscapeString(pkg), html.EscapeString(pkg)))
+		fmt.Fprintf(&root, "<a href=\"%s/\">%s</a>\n", html.EscapeString(pkg), html.EscapeString(pkg))
 	}
 	root.WriteString("</body></html>\n")
 	if err := b.writeIndexFile(repo, filepath.Join("pypi", "simple", "index.html"), []byte(root.String())); err != nil {
@@ -457,7 +457,7 @@ func (b *Backend) generatePyPIIndex(repo domain.PackageRepository, artifacts []p
 		var page strings.Builder
 		page.WriteString("<!DOCTYPE html>\n<html><body>\n")
 		for _, item := range items {
-			page.WriteString(fmt.Sprintf("<a href=\"%s#sha256=%s\">%s</a>\n", html.EscapeString(item.DownloadURL), html.EscapeString(item.SHA256), html.EscapeString(item.Filename)))
+			fmt.Fprintf(&page, "<a href=\"%s#sha256=%s\">%s</a>\n", html.EscapeString(item.DownloadURL), html.EscapeString(item.SHA256), html.EscapeString(item.Filename))
 		}
 		page.WriteString("</body></html>\n")
 		if err := b.writeIndexFile(repo, filepath.Join("pypi", "simple", pkg, "index.html"), []byte(page.String())); err != nil {

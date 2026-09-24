@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	"github.com/google/uuid"
@@ -32,7 +31,7 @@ const (
 type OperatorControlPlaneConfig struct {
 	Relays        []string
 	PrivateKey    string // 64-character hex or nsec input
-	Signer        canonicalnostr.Signer
+	Signer        nostr.Signer
 	Pubkey        string
 	CloseSigner   func() error
 	ServicePubkey string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
@@ -306,7 +305,7 @@ func (t *relayPoolOperatorTransport) Close() {
 type OperatorControlPlaneClient struct {
 	relays            []string
 	privateKey        string
-	signer            canonicalnostr.Signer
+	signer            nostr.Signer
 	cipher            contextVMCipherSigner
 	pubkey            string
 	transport         operatorRelayTransport

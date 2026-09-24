@@ -37,10 +37,10 @@ type ArtifactManager struct {
 func NewArtifactManager(store Store, dir string) (*ArtifactManager, error) {
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if store == nil {
-		return nil, errors.New("Nostr archive store is required")
+		return nil, errors.New("nostr archive store is required")
 	}
 	if dir == "." || !filepath.IsAbs(dir) {
-		return nil, errors.New("Nostr archive directory must be absolute")
+		return nil, errors.New("nostr archive directory must be absolute")
 	}
 	return &ArtifactManager{store: store, dir: dir}, nil
 }
@@ -54,14 +54,14 @@ func (m *ArtifactManager) Export(ctx context.Context, id uuid.UUID) (*repository
 		return nil, err
 	}
 	if batch.Status != repository.NostrArchiveStatusClaimed && batch.Status != repository.NostrArchiveStatusExported {
-		return nil, fmt.Errorf("Nostr archive batch %s cannot export from status %s", id, batch.Status)
+		return nil, fmt.Errorf("nostr archive batch %s cannot export from status %s", id, batch.Status)
 	}
 	rows, err := m.store.ListArchiveBatchJSON(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(rows)) != batch.RowCount {
-		return nil, fmt.Errorf("Nostr archive batch %s row count changed: manifest=%d selected=%d", id, batch.RowCount, len(rows))
+		return nil, fmt.Errorf("nostr archive batch %s row count changed: manifest=%d selected=%d", id, batch.RowCount, len(rows))
 	}
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating Nostr archive directory: %w", err)
@@ -83,7 +83,7 @@ func (m *ArtifactManager) Export(ctx context.Context, id uuid.UUID) (*repository
 	if err != nil {
 		return nil, fmt.Errorf("creating Nostr archive compressor: %w", err)
 	}
-	zw.Header.ModTime = time.Unix(0, 0).UTC()
+	zw.ModTime = time.Unix(0, 0).UTC()
 	for _, row := range rows {
 		if _, err := io.WriteString(zw, row+"\n"); err != nil {
 			_ = zw.Close()
@@ -122,7 +122,7 @@ func (m *ArtifactManager) ConfirmProtected(ctx context.Context, id uuid.UUID, ob
 		return err
 	}
 	if digest != batch.SHA256 {
-		return fmt.Errorf("Nostr archive artifact digest mismatch: recorded=%s actual=%s", batch.SHA256, digest)
+		return fmt.Errorf("nostr archive artifact digest mismatch: recorded=%s actual=%s", batch.SHA256, digest)
 	}
 	return m.store.MarkArchiveProtected(ctx, id, objectURI, objectVersion, digest)
 }
@@ -133,25 +133,25 @@ func (m *ArtifactManager) Restore(ctx context.Context, id uuid.UUID) (int64, err
 		return 0, err
 	}
 	if batch.Status == repository.NostrArchiveStatusClaimed {
-		return 0, fmt.Errorf("Nostr archive batch %s has not been exported", id)
+		return 0, fmt.Errorf("nostr archive batch %s has not been exported", id)
 	}
 	digest, _, err := fileSHA256(batch.ExportedPath)
 	if err != nil {
 		return 0, err
 	}
 	if digest != batch.SHA256 {
-		return 0, fmt.Errorf("Nostr archive artifact digest mismatch: recorded=%s actual=%s", batch.SHA256, digest)
+		return 0, fmt.Errorf("nostr archive artifact digest mismatch: recorded=%s actual=%s", batch.SHA256, digest)
 	}
 	file, err := os.Open(batch.ExportedPath)
 	if err != nil {
 		return 0, fmt.Errorf("opening Nostr archive artifact: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	zr, err := gzip.NewReader(file)
 	if err != nil {
 		return 0, fmt.Errorf("opening Nostr archive compressor: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	scanner := bufio.NewScanner(zr)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	rows := make([]string, 0, batch.RowCount)
@@ -162,7 +162,7 @@ func (m *ArtifactManager) Restore(ctx context.Context, id uuid.UUID) (int64, err
 		return 0, fmt.Errorf("reading Nostr archive artifact: %w", err)
 	}
 	if int64(len(rows)) != batch.RowCount {
-		return 0, fmt.Errorf("Nostr archive artifact row count mismatch: manifest=%d artifact=%d", batch.RowCount, len(rows))
+		return 0, fmt.Errorf("nostr archive artifact row count mismatch: manifest=%d artifact=%d", batch.RowCount, len(rows))
 	}
 	return m.store.RestoreArchiveBatchJSON(ctx, rows)
 }
@@ -183,7 +183,7 @@ func fileSHA256(path string) (string, int64, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("opening Nostr archive artifact: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	n, err := io.Copy(hash, file)
 	if err != nil {
@@ -197,9 +197,13 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return fmt.Errorf("opening Nostr archive directory for sync: %w", err)
 	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("syncing Nostr archive directory: %w", err)
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		return errors.Join(fmt.Errorf("syncing Nostr archive directory: %w", syncErr), closeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing Nostr archive directory: %w", closeErr)
 	}
 	return nil
 }

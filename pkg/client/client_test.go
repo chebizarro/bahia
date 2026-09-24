@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -50,7 +51,7 @@ func TestListServices(t *testing.T) {
 			t.Errorf("path = %s, want /api/v1/services", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": services})
+		encodeClientTestJSON(t, w, map[string]any{"data": services})
 	}))
 	defer server.Close()
 
@@ -72,7 +73,7 @@ func TestGetService(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": svc})
+		encodeClientTestJSON(t, w, map[string]any{"data": svc})
 	}))
 	defer server.Close()
 
@@ -205,7 +206,7 @@ func TestGetEnvironment(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": env})
+		encodeClientTestJSON(t, w, map[string]any{"data": env})
 	}))
 	defer server.Close()
 
@@ -321,7 +322,7 @@ func TestCreatePolicyRestMutationRemoved(t *testing.T) {
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+		encodeClientTestJSON(t, w, map[string]string{"error": "not found"})
 	}))
 	defer server.Close()
 
@@ -340,7 +341,7 @@ func TestNIP98AuthorizationHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": []domain.Service{}})
+		encodeClientTestJSON(t, w, map[string]any{"data": []domain.Service{}})
 	}))
 	defer server.Close()
 
@@ -406,7 +407,7 @@ func TestListWorkers(t *testing.T) {
 			t.Errorf("path = %s, want /api/v1/workers", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": workers})
+		encodeClientTestJSON(t, w, map[string]any{"data": workers})
 	}))
 	defer server.Close()
 
@@ -438,7 +439,7 @@ func TestGetRunLogs(t *testing.T) {
 			t.Errorf("query = %s, want tail=50", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": logs})
+		encodeClientTestJSON(t, w, map[string]any{"data": logs})
 	}))
 	defer server.Close()
 
@@ -459,7 +460,7 @@ func TestListSecrets(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": secrets})
+		encodeClientTestJSON(t, w, map[string]any{"data": secrets})
 	}))
 	defer server.Close()
 
@@ -476,9 +477,9 @@ func TestListSecrets(t *testing.T) {
 func TestSetSecret(t *testing.T) {
 	var gotBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		decodeClientTestJSON(t, r.Body, &gotBody)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": SecretRef{ID: "new-secret", Name: gotBody["name"], Version: 1}})
+		encodeClientTestJSON(t, w, map[string]any{"data": SecretRef{ID: "new-secret", Name: gotBody["name"], Version: 1}})
 	}))
 	defer server.Close()
 
@@ -498,10 +499,10 @@ func TestSetSecret(t *testing.T) {
 func TestCreateOrg(t *testing.T) {
 	var gotBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		decodeClientTestJSON(t, r.Body, &gotBody)
 		w.Header().Set("Content-Type", "application/json")
 		org := domain.Organization{ID: uuid.New(), Name: gotBody["name"], DisplayName: gotBody["display_name"]}
-		json.NewEncoder(w).Encode(map[string]any{"data": org})
+		encodeClientTestJSON(t, w, map[string]any{"data": org})
 	}))
 	defer server.Close()
 
@@ -525,7 +526,7 @@ func TestListOrgMembers(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": members})
+		encodeClientTestJSON(t, w, map[string]any{"data": members})
 	}))
 	defer server.Close()
 
@@ -658,7 +659,7 @@ func TestStreamLiveLogs(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
 
-		w.Write([]byte(`data: {"timestamp":"2024-01-01T00:00:00Z","stream":"stdout","message":"hello"}` + "\n\n"))
+		writeClientTestBytes(t, w, []byte(`data: {"timestamp":"2024-01-01T00:00:00Z","stream":"stdout","message":"hello"}`+"\n\n"))
 		flusher.Flush()
 	}))
 	defer server.Close()
@@ -693,4 +694,25 @@ func TestStreamLiveLogs(t *testing.T) {
 	}
 	event := decodeNIP98Header(t, gotAuth)
 	assertNIP98Event(t, event, http.MethodGet, server.URL+"/api/v1/services/svc-123/environments/env-456/logs?follow=true&tail=100")
+}
+
+func encodeClientTestJSON(t *testing.T, w io.Writer, value any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Errorf("encode test response: %v", err)
+	}
+}
+
+func decodeClientTestJSON(t *testing.T, r io.Reader, value any) {
+	t.Helper()
+	if err := json.NewDecoder(r).Decode(value); err != nil {
+		t.Errorf("decode test request: %v", err)
+	}
+}
+
+func writeClientTestBytes(t *testing.T, w io.Writer, data []byte) {
+	t.Helper()
+	if _, err := w.Write(data); err != nil {
+		t.Errorf("write test response: %v", err)
+	}
 }

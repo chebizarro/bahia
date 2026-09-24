@@ -193,7 +193,7 @@ func TestOCIRegistryService_ProxyBlobGETAndHEAD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProxyBlobGET() error = %v", err)
 	}
-	defer getResp.Stream.Close()
+	defer func() { _ = getResp.Stream.Close() }()
 	got, _ := io.ReadAll(getResp.Stream.Body)
 	if string(got) != "blob-data" {
 		t.Fatalf("blob body mismatch: %q", string(got))

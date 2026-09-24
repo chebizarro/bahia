@@ -157,7 +157,9 @@ func (c *ToolProvisioningCoordinator) processValidation(ctx context.Context, int
 			return err
 		}
 		if c.dispatcher != nil {
-			c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "approval_flags": intent.ApprovalFlags})
+			if err := c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "approval_flags": intent.ApprovalFlags}); err != nil {
+				c.logger.Error("tool provisioning approval notification failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+			}
 		}
 		return nil
 	}
@@ -227,7 +229,7 @@ func (c *ToolProvisioningCoordinator) processBuildAndDeploy(ctx context.Context,
 	intent.ToolsetHash = build.ComputeToolsetHash(base, intent.ResolvedTools, c.config.InstallerVersion)
 	imageRef := c.targetRef(intent.ToolsetHash)
 	if c.builder != nil {
-		imageID, hit, err := c.builder.CheckImageExists(ctx, intent.ToolsetHash)
+		_, hit, err := c.builder.CheckImageExists(ctx, intent.ToolsetHash)
 		if err != nil {
 			return c.fail(ctx, intent, "image cache check failed", err)
 		}
@@ -236,8 +238,7 @@ func (c *ToolProvisioningCoordinator) processBuildAndDeploy(ctx context.Context,
 			if err != nil {
 				return c.fail(ctx, intent, "image build failed", err)
 			}
-			imageID = result.ImageID
-			if err := c.builder.PushImage(ctx, imageID, imageRef); err != nil {
+			if err := c.builder.PushImage(ctx, result.ImageID, imageRef); err != nil {
 				return c.fail(ctx, intent, "image push failed", err)
 			}
 		}
@@ -282,7 +283,9 @@ func (c *ToolProvisioningCoordinator) processBuildAndDeploy(ctx context.Context,
 		return err
 	}
 	if c.dispatcher != nil {
-		c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionCompleted), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "toolset_hash": intent.ToolsetHash})
+		if err := c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionCompleted), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "toolset_hash": intent.ToolsetHash}); err != nil {
+			c.logger.Error("tool provisioning completion notification failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		}
 	}
 	c.publishResult(ctx, intent, true, "")
 	return nil
@@ -351,7 +354,9 @@ func (c *ToolProvisioningCoordinator) fail(ctx context.Context, intent *domain.T
 	c.publishStatus(ctx, intent, "failed", message)
 	c.publishResult(ctx, intent, false, message+": "+cause.Error())
 	if c.dispatcher != nil {
-		c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionFailed), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "error": cause.Error()})
+		if err := c.dispatcher.Dispatch(ctx, string(events.EventToolProvisionFailed), map[string]any{"intent_id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "error": cause.Error()}); err != nil {
+			c.logger.Error("tool provisioning failure notification failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		}
 	}
 	return cause
 }

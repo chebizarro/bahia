@@ -103,7 +103,7 @@ func NewLoomContainerRecipeDispatchAdapter(client MLRecipeContainerJobClient) *L
 
 func (a *LoomContainerRecipeDispatchAdapter) DispatchStep(ctx context.Context, req MLRecipeJobDispatchRequest) (*MLRecipeJobDispatchResult, error) {
 	if a == nil || a.client == nil {
-		return nil, fmt.Errorf("Loom/container recipe dispatch client is not configured")
+		return nil, fmt.Errorf("loom/container recipe dispatch client is not configured")
 	}
 	job := MLRecipeContainerJob{
 		StepIndex:      req.StepIndex,

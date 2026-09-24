@@ -662,7 +662,7 @@ func (p *productionProvisioningPort) ensureServiceUnit(ctx context.Context, spec
 	}
 	orgID := p.engine.full.bahiaIntegration.OrganizationID()
 	if orgID == uuid.Nil || service.OrgID != orgID {
-		return fmt.Errorf("Soul service is not in the configured organization")
+		return fmt.Errorf("soul service is not in the configured organization")
 	}
 	envID, err := p.engine.full.bahiaIntegration.EnsureAgentEnvironment(ctx)
 	if err != nil {

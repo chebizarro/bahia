@@ -745,7 +745,7 @@ func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testi
 		invalid.Content = `{"jsonrpc":"2.0","id":"tampered","result":{"action":"tampered"}}`
 		transport.events <- invalid
 		future := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "future"})
-		future.CreatedAt = nostr.Timestamp(int64(nostr.Now()) + 601)
+		future.CreatedAt = nostr.Timestamp(int64(nostr.Now()) + 3600)
 		if err := future.Sign(mustOperatorTestSecret(t, replyKey)); err != nil {
 			t.Fatalf("sign future reply: %v", err)
 		}

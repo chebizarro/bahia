@@ -403,6 +403,3 @@ func ValidateSpec(spec *domain.DesiredServiceSpec) error {
 
 	return nil
 }
-
-// newUUID is a test helper alias; production code uses uuid.New() directly.
-var newUUID = uuid.New

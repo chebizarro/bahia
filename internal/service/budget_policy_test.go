@@ -12,13 +12,13 @@ import (
 )
 
 type mockBudgetPolicyRepo struct {
-	policies []domain.BudgetPolicy
-	createErr error
+	policies    []domain.BudgetPolicy
+	createErr   error
 	getByIDFunc func(id uuid.UUID) (*domain.BudgetPolicy, error)
 	resolveFunc func(agentPubkey, taskID string) ([]domain.BudgetPolicy, error)
-	listFunc func(enabledOnly bool) ([]domain.BudgetPolicy, error)
-	updateErr error
-	deleteErr error
+	listFunc    func(enabledOnly bool) ([]domain.BudgetPolicy, error)
+	updateErr   error
+	deleteErr   error
 }
 
 func (m *mockBudgetPolicyRepo) Create(ctx context.Context, p *domain.BudgetPolicy) error {
@@ -148,10 +148,6 @@ func (m *mockLedgerQuery) SumByTask(ctx context.Context, taskID string, resource
 	return m.sumByTaskVal, nil
 }
 
-func nowPtr(t time.Time) *time.Time {
-	return &t
-}
-
 func TestBudgetPolicyValidateRejectsNil(t *testing.T) {
 	err := domain.ValidateBudgetPolicy(nil)
 	require.Error(t, err)
@@ -171,8 +167,8 @@ func TestBudgetPolicyValidateRejectsEmptyName(t *testing.T) {
 
 func TestBudgetPolicyValidateRejectsNoAgentOrTask(t *testing.T) {
 	p := &domain.BudgetPolicy{
-		Name:  "test",
-		Scope: domain.BudgetPolicyScopeAgent,
+		Name:   "test",
+		Scope:  domain.BudgetPolicyScopeAgent,
 		Limits: []domain.BudgetLimit{{ResourceType: domain.UsageResourceTypeCompute, MaxAmount: 1000}},
 	}
 	err := domain.ValidateBudgetPolicy(p)

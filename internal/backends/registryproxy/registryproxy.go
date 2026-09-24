@@ -154,7 +154,7 @@ func (b *Backend) checkHealth(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("%s health check failed: status=%d", b.typ, resp.StatusCode)

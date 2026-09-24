@@ -14,7 +14,11 @@ func TestRelayProjectionWireTimeMigrationRebasesAndInvalidatesOnlyMetadata(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	}()
 	_, err = db.Exec(`
  CREATE TABLE nostr_events (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
  CREATE TABLE relay_projection_meta (stream TEXT, entity_key TEXT, updated_at INTEGER, source_event_id TEXT);

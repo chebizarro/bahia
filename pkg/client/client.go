@@ -406,7 +406,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -675,7 +675,7 @@ func (c *Client) StreamLiveLogs(ctx context.Context, serviceID, envID string, ta
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

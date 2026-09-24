@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -100,7 +99,7 @@ type AssistantOrchestratorConfig struct {
 	ToolInvoker      AssistantAsyncToolInvoker
 	Publisher        AssistantEventPublisher
 	Subscriber       AssistantRelaySubscriber
-	Signer           canonicalnostr.Signer
+	Signer           nostr.Signer
 	Identity         AssistantIdentity
 	AllowedToolNames []string
 	InitialSessions  []domain.AssistantSession
@@ -117,7 +116,7 @@ type AssistantOrchestrator struct {
 	toolInvoker      AssistantAsyncToolInvoker
 	publisher        AssistantEventPublisher
 	subscriber       AssistantRelaySubscriber
-	signer           canonicalnostr.Signer
+	signer           nostr.Signer
 	identity         AssistantIdentity
 	allowedTools     map[string]struct{}
 	logger           *slog.Logger
@@ -1265,7 +1264,7 @@ func stringFromMap(m map[string]any, key string) string {
 	}
 }
 
-func signGoNostrEvent(ctx context.Context, signer canonicalnostr.Signer, ev *nostr.Event) error {
+func signGoNostrEvent(ctx context.Context, signer nostr.Signer, ev *nostr.Event) error {
 	if ev == nil {
 		return fmt.Errorf("nostr event is nil")
 	}

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -685,10 +684,7 @@ type cronField struct {
 }
 
 func (f cronField) matches(value int) bool {
-	if f.values[value] {
-		return true
-	}
-	return false
+	return f.values[value]
 }
 
 func parseCronField(raw string, min, max int, aliases map[int]int) (cronField, error) {
@@ -774,13 +770,4 @@ func aliasValue(value int, aliases map[int]int) int {
 		return mapped
 	}
 	return value
-}
-
-func sortedCronValues(field cronField) []int {
-	values := make([]int, 0, len(field.values))
-	for value := range field.values {
-		values = append(values, value)
-	}
-	sort.Ints(values)
-	return values
 }

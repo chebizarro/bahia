@@ -897,7 +897,7 @@ func (p *FullProvisioner) RotateConcordCommunity(ctx context.Context, rotation C
 	}
 	rotator, ok := p.concordMembership.(concordCommunityRotator)
 	if !ok || rotator == nil {
-		return nil, fmt.Errorf("Concord onboarding is not configured")
+		return nil, fmt.Errorf("concord onboarding is not configured")
 	}
 	receipt, err := rotator.Rotate(ctx, rotation)
 	if receipt != nil {

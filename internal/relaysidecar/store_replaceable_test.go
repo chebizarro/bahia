@@ -40,7 +40,7 @@ func TestSQLiteReplaceNIP01ArrivalOrderAndRestart(t *testing.T) {
 				require.NoError(t, store.Close())
 				store, err = newSQLiteStore(dir)
 				require.NoError(t, err)
-				defer store.Close()
+				defer func() { require.NoError(t, store.Close()) }()
 				var events []nostr.Event
 				for ev := range store.Query(t.Context(), nostr.Filter{Kinds: []nostr.Kind{kind}}, 10) {
 					events = append(events, ev)

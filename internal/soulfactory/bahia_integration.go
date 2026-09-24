@@ -389,12 +389,12 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 
 	// Map bahia states to soul deploy status
 	var deployStatus string
-	switch {
-	case state.DriftStatus == domain.DriftStatusInSync:
+	switch state.DriftStatus {
+	case domain.DriftStatusInSync:
 		deployStatus = "deployed"
-	case state.DriftStatus == domain.DriftStatusDeploying:
+	case domain.DriftStatusDeploying:
 		deployStatus = "deploying"
-	case state.DriftStatus == domain.DriftStatusDrifted:
+	case domain.DriftStatusDrifted:
 		deployStatus = "drifted"
 	default:
 		deployStatus = "unknown"

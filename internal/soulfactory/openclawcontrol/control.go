@@ -1812,10 +1812,6 @@ func (e *Executor) runOpenClawOutput(ctx context.Context, args ...string) ([]byt
 	return out, failed(ErrorExecutionFailed, err.Error(), true, nil)
 }
 
-func (e *Executor) containerArgs(args ...string) []string {
-	return e.containerArgsFor(e.config.Container, args...)
-}
-
 func (e *Executor) containerArgsFor(container string, args ...string) []string {
 	if strings.TrimSpace(container) != "" {
 		return append([]string{"--container", strings.TrimSpace(container)}, args...)
@@ -2205,7 +2201,7 @@ func isEnvironmentPlaceholder(value string) bool {
 	}
 	name := value[2 : len(value)-1]
 	for index, char := range name {
-		if !(char == '_' || char >= 'A' && char <= 'Z' || index > 0 && char >= '0' && char <= '9') {
+		if char != '_' && (char < 'A' || char > 'Z') && (index <= 0 || char < '0' || char > '9') {
 			return false
 		}
 	}

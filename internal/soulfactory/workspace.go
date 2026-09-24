@@ -78,7 +78,7 @@ func (m *WorkspaceManager) InitWorkspace(ctx context.Context, soul *domain.Agent
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Initialize git repo
 	if err := m.runGit(ctx, tmpDir, "init"); err != nil {

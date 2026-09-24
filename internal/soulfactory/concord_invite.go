@@ -15,11 +15,12 @@ import (
 	"fiatjaf.com/nostr/nip59"
 )
 
+const concordDirectInviteKind nostr.Kind = 3313
+
 const (
-	concordDirectInviteKind  nostr.Kind = 3313
-	concordInviteMaxBytes               = 65535
-	concordInviteMaxChannels            = 256
-	concordInviteMaxRelays              = 5
+	concordInviteMaxBytes    = 65535
+	concordInviteMaxChannels = 256
+	concordInviteMaxRelays   = 5
 )
 
 // ConcordCommunity identifies one configured community and where its CORD-05
@@ -89,11 +90,11 @@ func (s *concordCommunitySource) resolve(ctx context.Context, bus *SoulFactoryRe
 func validateConcordCommunity(bundle json.RawMessage, communityID string, bus *SoulFactoryRelayBus) (validatedConcordCommunity, error) {
 	validated, err := validateConcordInviteBundle(bundle, communityID)
 	if err != nil {
-		return validatedConcordCommunity{}, fmt.Errorf("Concord community %s invite bundle: %w", communityID, err)
+		return validatedConcordCommunity{}, fmt.Errorf("concord community %s invite bundle: %w", communityID, err)
 	}
 	validated.relayEndpoints, err = concordRelayEndpoints(bus, validated.relays)
 	if err != nil {
-		return validatedConcordCommunity{}, fmt.Errorf("Concord community %s relay configuration: %w", communityID, err)
+		return validatedConcordCommunity{}, fmt.Errorf("concord community %s relay configuration: %w", communityID, err)
 	}
 	return validated, nil
 }
@@ -134,10 +135,10 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 	}
 	inviteSigner, ok := signer.(concordInviteSigner)
 	if !ok {
-		return nil, fmt.Errorf("Concord onboarding requires a Signet signer with NIP-44 encryption and decryption")
+		return nil, fmt.Errorf("concord onboarding requires a Signet signer with NIP-44 encryption and decryption")
 	}
 	if bus == nil {
-		return nil, fmt.Errorf("Concord onboarding requires a SoulFactory relay bus")
+		return nil, fmt.Errorf("concord onboarding requires a SoulFactory relay bus")
 	}
 
 	membership := &concordMembership{
@@ -150,7 +151,7 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 	for i, community := range communities {
 		communityID := strings.ToLower(strings.TrimSpace(community.CommunityID))
 		if !validConcordHex32(communityID) {
-			return nil, fmt.Errorf("Concord community %d has invalid community_id", i)
+			return nil, fmt.Errorf("concord community %d has invalid community_id", i)
 		}
 		if _, duplicate := seen[communityID]; duplicate {
 			continue
@@ -169,12 +170,12 @@ func newConcordCommunitySource(communityID string, community ConcordCommunity, s
 	sealedPath := strings.TrimSpace(community.SealedBundlePath)
 	hasBundle := len(bytes.TrimSpace(community.InviteBundle)) > 0
 	if hasBundle == (sealedPath != "") {
-		return nil, fmt.Errorf("Concord community %s requires exactly one custody source", communityID)
+		return nil, fmt.Errorf("concord community %s requires exactly one custody source", communityID)
 	}
 	if sealedPath != "" {
 		custody, err := newSealedConcordCustody(sealedPath, signer)
 		if err != nil {
-			return nil, fmt.Errorf("Concord community %s custody: %w", communityID, err)
+			return nil, fmt.Errorf("concord community %s custody: %w", communityID, err)
 		}
 		return &concordCommunitySource{communityID: communityID, custody: custody}, nil
 	}
@@ -210,7 +211,7 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 	}
 	for _, community := range resolved {
 		if community.expiresAt != nil && *community.expiresAt <= m.now().UnixMilli() {
-			return nil, fmt.Errorf("Concord community %s invite bundle is expired", community.communityID)
+			return nil, fmt.Errorf("concord community %s invite bundle is expired", community.communityID)
 		}
 	}
 	staffHex, err := m.signer.GetPublicKey(ctx)
@@ -266,23 +267,23 @@ func (m *concordMembership) deliver(ctx context.Context, community validatedConc
 		recipientPK,
 		func(plaintext string) (string, error) {
 			if len([]byte(plaintext)) > concordInviteMaxBytes {
-				return "", fmt.Errorf("Concord rumor exceeds NIP-44 plaintext limit")
+				return "", fmt.Errorf("concord rumor exceeds NIP-44 plaintext limit")
 			}
 			ciphertext, encryptErr := m.signer.NIP44Encrypt(ctx, recipientPK, plaintext)
 			if encryptErr != nil {
-				return "", fmt.Errorf("Signet NIP-44 encrypt Concord rumor: %w", encryptErr)
+				return "", fmt.Errorf("signet NIP-44 encrypt Concord rumor: %w", encryptErr)
 			}
 			return ciphertext, nil
 		},
 		func(seal *nostr.Event) error {
 			if seal == nil || seal.Kind != nostr.KindSeal {
-				return fmt.Errorf("Concord invite seal has invalid kind")
+				return fmt.Errorf("concord invite seal has invalid kind")
 			}
 			if signErr := m.signer.Sign(ctx, seal); signErr != nil {
-				return fmt.Errorf("Signet sign Concord invite seal: %w", signErr)
+				return fmt.Errorf("signet sign Concord invite seal: %w", signErr)
 			}
 			if seal.PubKey != staffPK || !validSignedEvent(seal) {
-				return fmt.Errorf("Signet returned an invalid Concord invite seal")
+				return fmt.Errorf("signet returned an invalid Concord invite seal")
 			}
 			return nil
 		},

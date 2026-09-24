@@ -211,12 +211,12 @@ func (s *OCIRegistryService) CleanupExpiredUploads(ctx context.Context, now time
 	return count, nil
 }
 
-func (s *OCIRegistryService) appendUploadLocked(ctx context.Context, upload *domain.OCIBlobUpload, contentLength int64, body io.Reader) error {
+func (s *OCIRegistryService) appendUploadLocked(ctx context.Context, upload *domain.OCIBlobUpload, contentLength int64, body io.Reader) (retErr error) {
 	f, err := os.OpenFile(upload.SpoolPath, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return fmt.Errorf("open spool file: %w", err)
 	}
-	defer f.Close()
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
 
 	written, err := io.CopyN(f, body, contentLength)
 	if err != nil {
@@ -244,7 +244,7 @@ func sha256File(path string) (hexDigest string, size int64, err error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 
 	h := sha256.New()
 	n, err := io.Copy(h, f)

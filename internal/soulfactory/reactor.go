@@ -622,11 +622,6 @@ func (r *Reactor) parseProvisioningRequest(event *nostr.Event) (*domain.Provisio
 	return ParseProvisioningRequestEvent(event)
 }
 
-// parseSoulAction extracts action data from a kind:1950 event.
-func (r *Reactor) parseSoulAction(event *nostr.Event) (*domain.SoulAction, error) {
-	return ParseSoulActionEvent(event)
-}
-
 // publishStatus publishes a kind:6950 progress event.
 func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string, runID ...string) error {
 	event := BuildProvisioningStatusEvent(requestEvent, step, current, total, message, runID...)
@@ -656,20 +651,6 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 		return err
 	}
 	return r.publishCanonicalProvisioningObservable(ctx, requestEvent, event)
-}
-
-func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Event, action *domain.SoulAction, message string) error {
-	if action.Initiator == "" {
-		action.Initiator = sourceEvent.PubKey.Hex()
-	}
-	event, err := BuildActionResultEvent(action, "error", map[string]interface{}{"error": message}, ActionResultLegacy)
-	if err != nil {
-		return err
-	}
-	if err := r.signer.Sign(ctx, event); err != nil {
-		return fmt.Errorf("sign action error event: %w", err)
-	}
-	return r.publish(ctx, event, r.provisioningPublicationRelays())
 }
 
 // publishError publishes a kind:7950 error result event.

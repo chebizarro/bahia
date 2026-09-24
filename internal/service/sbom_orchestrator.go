@@ -620,7 +620,7 @@ func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item 
 	}
 	payloadSHA := sha256Hex(item.Payload)
 	if !strings.EqualFold(stored.Hash, payloadSHA) {
-		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("Blossom payload hash %s does not match local payload SHA-256 %s", stored.Hash, payloadSHA)
+		return nil, nil, domain.SBOMIndexEntry{}, "", fmt.Errorf("blossom payload hash %s does not match local payload SHA-256 %s", stored.Hash, payloadSHA)
 	}
 	packages := manifestPackagesToLegacy(parsed.Packages)
 	att, err := sbomadapter.NewAttestationBuilder(item.Generator.ID, item.Generator.Version, item.Generator.Pubkey).BuildAttestation(sbomadapter.BuildAttestationInput{Subject: &item.Subject, SBOMData: item.Payload, Format: parsed.Manifest.Format, Location: stored.Location, Generator: &item.Generator, ParsedPackages: packages})

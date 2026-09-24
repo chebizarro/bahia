@@ -331,7 +331,7 @@ func validateInvariantInput(input AgentManagementInvariantInput) error {
 			return errors.New("every Soul record requires agent_id and source_ref")
 		}
 		if soul.Provenance != ProvenanceCanonical && soul.Provenance != ProvenanceHydration {
-			return fmt.Errorf("Soul %q requires an explicit canonical or hydration provenance", soul.AgentID)
+			return fmt.Errorf("soul %q requires an explicit canonical or hydration provenance", soul.AgentID)
 		}
 	}
 	for _, svc := range input.Services {

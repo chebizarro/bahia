@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -871,37 +872,37 @@ func (s *RuntimeLifecycleService) resolve(ctx context.Context, serviceID, envID 
 
 func (s *RuntimeLifecycleService) validateDirectRuntimeState(ctx context.Context, serviceID, envID uuid.UUID) error {
 	if s.state == nil {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	st, err := s.state.Get(ctx, serviceID, envID)
 	if err != nil {
 		return fmt.Errorf("looking up direct runtime state: %w", err)
 	}
 	if st == nil {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	return nil
 }
 
 func validateDirectRuntimeWorkload(svc *domain.Service, env *domain.Environment) error {
 	if svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	if env == nil || env.RuntimeConfig == nil {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	mode, _ := stringFromAny(env.RuntimeConfig["management_mode"])
 	if mode != "direct_runtime" {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	adopted := svc.RuntimeConfig.Adopted
 	hostAlias, _ := stringFromAny(env.RuntimeConfig["host_alias"])
 	if adopted.HostAlias == "" || hostAlias != adopted.HostAlias {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	envEndpointRef, _ := stringFromAny(env.RuntimeConfig["endpoint_ref"])
 	if envEndpointRef != adopted.EndpointRef {
-		return fmt.Errorf(directRuntimeGuardrailMessage)
+		return errors.New(directRuntimeGuardrailMessage)
 	}
 	return nil
 }

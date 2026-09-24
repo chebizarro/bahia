@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -504,7 +503,7 @@ func assistantApprovalSource(sessionID, suffix string) AssistantRequestSource {
 	return AssistantRequestSource{Event: &nostr.Event{ID: assistantTestID(id), PubKey: assistantTestPubKey("operator"), Kind: 25910}, OperatorPubkey: "operator", RequestID: id, DedupKey: "assistant-approval:" + sessionID + ":" + suffix}
 }
 
-func testAssistantSigner(t *testing.T) canonicalnostr.Signer {
+func testAssistantSigner(t *testing.T) nostr.Signer {
 	t.Helper()
 	secret := nostr.Generate()
 	return keyer.NewPlainKeySigner([32]byte(secret))

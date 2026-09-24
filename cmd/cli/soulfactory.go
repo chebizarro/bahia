@@ -12,6 +12,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/spf13/cobra"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // SoulFactoryConfig holds Soul Factory CLI configuration.
@@ -166,7 +168,7 @@ func soulsProvisionCommand() *cobra.Command {
 				return fmt.Errorf("must specify --brief or --template")
 			}
 			if name == "" {
-				name = strings.Title(strings.ReplaceAll(agentID, "-", " "))
+				name = cases.Title(language.Und, cases.NoLower).String(strings.ReplaceAll(agentID, "-", " "))
 			}
 			if tier == "" {
 				tier = string(domain.SoulTierStandard)
@@ -205,7 +207,9 @@ func soulsProvisionCommand() *cobra.Command {
 				return fmt.Errorf("%s", firstNonEmpty(run.Error, "provisioning failed"))
 			}
 			if outputFormat == "table" {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ Soul provisioned: %s\n", firstNonEmpty(run.AgentID, agentID))
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "✓ Soul provisioned: %s\n", firstNonEmpty(run.AgentID, agentID)); err != nil {
+					return fmt.Errorf("write provisioning result: %w", err)
+				}
 			}
 			_ = interactive
 			return nil
@@ -262,10 +266,16 @@ func soulsRevokeCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
 			if !force {
-				fmt.Fprintf(cmd.OutOrStdout(), "⚠️  This will permanently revoke soul '%s' and cannot be undone.\n", agentID)
-				fmt.Fprint(cmd.OutOrStdout(), "Type the agent ID to confirm: ")
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "⚠️  This will permanently revoke soul '%s' and cannot be undone.\n", agentID); err != nil {
+					return fmt.Errorf("write revocation warning: %w", err)
+				}
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), "Type the agent ID to confirm: "); err != nil {
+					return fmt.Errorf("write revocation prompt: %w", err)
+				}
 				var confirm string
-				fmt.Fscanln(cmd.InOrStdin(), &confirm)
+				if _, err := fmt.Fscanln(cmd.InOrStdin(), &confirm); err != nil {
+					return fmt.Errorf("read revocation confirmation: %w", err)
+				}
 				if confirm != agentID {
 					return fmt.Errorf("confirmation failed")
 				}
@@ -409,7 +419,7 @@ func soulProvisionStatusCallback(cmd *cobra.Command) func(soulfactory.SoulFactor
 		if message == "" {
 			message = "status update"
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "→ provisioning: %s\n", message)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ provisioning: %s\n", message)
 	}
 }
 
@@ -506,28 +516,5 @@ func templateToCLI(template domain.SoulTemplate) Template {
 		Description: template.Description,
 		Tier:        string(template.Tier),
 		Tags:        append([]string(nil), template.Tags...),
-	}
-}
-
-func buildProvisioningRequestEvent(agentID, name, tier, template, brief string) map[string]interface{} {
-	tags := [][]string{
-		{"agent-id", agentID},
-		{"name", name},
-		{"tier", tier},
-		{"output", "application/json"},
-	}
-
-	if template != "" {
-		tags = append(tags, []string{"template", template})
-	}
-
-	content := map[string]string{"brief": brief}
-	contentJSON, _ := json.Marshal(content)
-
-	return map[string]interface{}{
-		"kind":       5950,
-		"created_at": time.Now().Unix(),
-		"tags":       tags,
-		"content":    string(contentJSON),
 	}
 }

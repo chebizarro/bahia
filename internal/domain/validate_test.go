@@ -123,11 +123,6 @@ func TestValidateImageDigest(t *testing.T) {
 
 func TestValidateGitSHA(t *testing.T) {
 	valid := []string{
-		"abc1234", // short SHA
-		"abc1234567890abcdef1234567890abcdef12345678", // 42 chars... wait, let me use correct ones
-	}
-	// Actually let me be precise
-	valid = []string{
 		"abc1234", // 7 chars (short SHA)
 		"a3ed95caeb02ffe68cdd9fd84406680ae93d633c", // 40 chars (full SHA)
 		"abcdef1", // 7 chars

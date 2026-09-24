@@ -87,7 +87,6 @@ func run(ctx context.Context, configPath, action string, stdout *os.File) error 
 			if err := manager.StageHandoff(ctx, cfg.IdentityID, oneTimeBunkerURI); err != nil {
 				return fmt.Errorf("stage protected one-time Metiq bunker handoff: %w", err)
 			}
-			oneTimeBunkerURI = ""
 		} else if req.RuntimePubkey == "" {
 			req.RuntimePubkey = existing.RuntimePubkey
 			req.ManagedPubkey = existing.ManagedPubkey
@@ -102,13 +101,14 @@ func run(ctx context.Context, configPath, action string, stdout *os.File) error 
 			return err
 		}
 	case "inspect":
-		output, err = manager.Inspect(ctx, cfg.IdentityID)
-		if err != nil {
-			return err
+		existing, inspectErr := manager.Inspect(ctx, cfg.IdentityID)
+		if inspectErr != nil {
+			return inspectErr
 		}
-		if output == nil {
-			return fmt.Errorf("Metiq Signet enrollment does not exist")
+		if existing == nil {
+			return fmt.Errorf("metiq Signet enrollment does not exist")
 		}
+		output = existing
 	case "revoke", "compensate":
 		if err := manager.Revoke(ctx, cfg.IdentityID); err != nil {
 			return err

@@ -114,10 +114,10 @@ func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAu
 		return nil, nil
 	}
 	if signer == nil {
-		return nil, fmt.Errorf("Communikeys assignment requires a signer")
+		return nil, fmt.Errorf("communikeys assignment requires a signer")
 	}
 	if bus == nil {
-		return nil, fmt.Errorf("Communikeys assignment requires a SoulFactory relay bus")
+		return nil, fmt.Errorf("communikeys assignment requires a SoulFactory relay bus")
 	}
 
 	membership := &communikeysMembership{signer: signer, bus: bus}
@@ -127,26 +127,26 @@ func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAu
 		address := strings.ToLower(strings.TrimSpace(community.DefinitionAddress))
 		ownerHex, communityID, err := parseCommunikeysDefinitionAddress(address)
 		if err != nil {
-			return nil, fmt.Errorf("Communikeys community %d: %w", i, err)
+			return nil, fmt.Errorf("communikeys community %d: %w", i, err)
 		}
 		// The owner reference is positional: canonical hex only, no curve lift.
 		owner, err := nostr.PubKeyFromHexCheap(ownerHex)
 		if err != nil {
-			return nil, fmt.Errorf("Communikeys community %d has invalid owner pubkey: %w", i, err)
+			return nil, fmt.Errorf("communikeys community %d has invalid owner pubkey: %w", i, err)
 		}
 		// The list author is a real delegated signer, so it MUST lift to a
 		// usable signing key — unlike the opaque community ID.
 		listAuthorHex := strings.ToLower(strings.TrimSpace(community.ListAuthor))
 		listAuthor, err := nostr.PubKeyFromHex(listAuthorHex)
 		if err != nil {
-			return nil, fmt.Errorf("Communikeys community %d list author must be a real signing pubkey: %w", i, err)
+			return nil, fmt.Errorf("communikeys community %d list author must be a real signing pubkey: %w", i, err)
 		}
 		shard := community.Shard
 		if shard == 0 {
 			shard = 1
 		}
 		if shard < 0 {
-			return nil, fmt.Errorf("Communikeys community %d shard must be 0/1 (unsharded) or >= 2, got %d", i, community.Shard)
+			return nil, fmt.Errorf("communikeys community %d shard must be 0/1 (unsharded) or >= 2, got %d", i, community.Shard)
 		}
 
 		// Two same-ID branches with different owners are distinct communities;
@@ -170,14 +170,14 @@ func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAu
 				continue
 			}
 			if !communikeysPurposePattern.MatchString(purpose) {
-				return nil, fmt.Errorf("Communikeys community %d section purpose %q must be a lowercase token of letters, digits, and single hyphens", i, rawPurpose)
+				return nil, fmt.Errorf("communikeys community %d section purpose %q must be a lowercase token of letters, digits, and single hyphens", i, rawPurpose)
 			}
 			if _, duplicate := sectionSets[key][purpose]; duplicate {
 				continue
 			}
 			identifier, err := sectionListD(communityID, purpose, shard)
 			if err != nil {
-				return nil, fmt.Errorf("Communikeys community %d: %w", i, err)
+				return nil, fmt.Errorf("communikeys community %d: %w", i, err)
 			}
 			sectionSets[key][purpose] = struct{}{}
 			membership.communities[index].sections = append(membership.communities[index].sections, communikeysSectionTarget{
@@ -189,7 +189,7 @@ func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAu
 	}
 	for i, community := range membership.communities {
 		if len(community.sections) == 0 {
-			return nil, fmt.Errorf("Communikeys community %d (%s) requires at least one section purpose", i, community.definitionAddress)
+			return nil, fmt.Errorf("communikeys community %d (%s) requires at least one section purpose", i, community.definitionAddress)
 		}
 	}
 	return membership, nil
@@ -223,7 +223,7 @@ func (m *communikeysMembership) Assign(ctx context.Context, pubkey string) ([]st
 		referenced := communikeysReferencedListCoordinates(definition)
 		for _, section := range community.sections {
 			if _, ok := referenced[section.coordinate]; !ok {
-				return assigned, fmt.Errorf("Communikeys definition %s does not reference profile list %s in any content section; grants to an unreferenced coordinate are invisible to readers", community.definitionAddress, section.coordinate)
+				return assigned, fmt.Errorf("communikeys definition %s does not reference profile list %s in any content section; grants to an unreferenced coordinate are invisible to readers", community.definitionAddress, section.coordinate)
 			}
 			latest, err := m.latestProfileList(ctx, community.listAuthor, section.identifier)
 			if err != nil {

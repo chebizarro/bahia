@@ -18,19 +18,13 @@ const (
 	OnboardStepPolicy      OnboardStep = "policy"
 )
 
-var onboardStepOrder = []OnboardStep{
-	OnboardStepService,
-	OnboardStepEnvironment,
-	OnboardStepPolicy,
-}
-
 type OnboardReport struct {
-	ServiceID      string       `json:"service_id,omitempty"`
-	EnvironmentID  string       `json:"environment_id,omitempty"`
-	PolicyID       string       `json:"policy_id,omitempty"`
+	ServiceID      string        `json:"service_id,omitempty"`
+	EnvironmentID  string        `json:"environment_id,omitempty"`
+	PolicyID       string        `json:"policy_id,omitempty"`
 	CompletedSteps []OnboardStep `json:"completed_steps"`
-	Message        string       `json:"message,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	Message        string        `json:"message,omitempty"`
+	Error          string        `json:"error,omitempty"`
 }
 
 func appCommands() *cobra.Command {

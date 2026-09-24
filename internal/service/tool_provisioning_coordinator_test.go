@@ -281,11 +281,6 @@ func (r *coordinatorRuntimeFake) release(index int) {
 	r.mu.Unlock()
 	close(release)
 }
-func (r *coordinatorRuntimeFake) call(index int) coordinatorDeployCall {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.calls[index]
-}
 func (r *coordinatorRuntimeFake) maxActiveFor(serviceName string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

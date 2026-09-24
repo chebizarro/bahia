@@ -302,7 +302,7 @@ func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageReposi
 		}
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer stream.ReadCloser.Close()
+	defer func() { _ = stream.ReadCloser.Close() }()
 	// Existence and size are server-observed. SHA-256 is deliberately omitted:
 	// GetArtifact only has the control-plane's expected hash, not an independent
 	// Pulp checksum, so Capabilities.CanObserveDrift remains false.
@@ -314,7 +314,7 @@ func (b *Backend) findRepository(ctx context.Context, name string) (bool, string
 	if err != nil {
 		return false, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return false, "", nil
 	}
@@ -407,7 +407,7 @@ func (b *Backend) postJSON(ctx context.Context, path string, payload any) (*http
 }
 
 func (b *Backend) acceptTask(ctx context.Context, resp *http.Response, action string) error {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return packagebackend.ResponseError(resp, action)
 	}

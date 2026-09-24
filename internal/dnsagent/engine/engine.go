@@ -278,7 +278,7 @@ func (e *Engine) ListZone(ctx context.Context, zone domain.DNSZone) (ZoneSnapsho
 	if err != nil {
 		return ZoneSnapshot{}, fmt.Errorf("read dnsmasq zone config %q: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	snapshot, err := parseZone(zone, file, ctx)
 	if err != nil {
 		var lineErr *parseLineError

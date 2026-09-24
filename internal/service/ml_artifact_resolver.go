@@ -138,7 +138,7 @@ func (r *HTTPMLArtifactResolver) ResolveArtifact(ctx context.Context, input MLAr
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP artifact metadata request failed: %s", resp.Status)
 	}
@@ -164,7 +164,7 @@ func (LocalFileMLArtifactResolver) ResolveArtifact(ctx context.Context, input ML
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err

@@ -15,7 +15,7 @@ func TestPolicyService_Evaluate_RequireApprovalIsGateNotViolation(t *testing.T) 
 	ctx := context.Background()
 	svc, policyRepo, _, _ := newTestPolicyService()
 	envID := uuid.New()
-	policyRepo.Create(ctx, &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, ctx, &domain.DeploymentPolicy{
 		Name:          "prod-approval",
 		EnvironmentID: &envID,
 		Enforcement:   domain.PolicyEnforcementBlock,
@@ -87,7 +87,7 @@ func TestPolicyService_DeploymentApprovalRequired(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, policyRepo, _, _ := newTestPolicyService()
 			if tt.policy != nil {
-				policyRepo.Create(ctx, tt.policy)
+				createTestPolicy(t, policyRepo, ctx, tt.policy)
 			}
 			got, err := svc.DeploymentApprovalRequired(ctx, tt.env)
 			if err != nil {
@@ -214,7 +214,7 @@ func TestCreateDeploymentIntent_RealPolicyServiceRequireApproval(t *testing.T) {
 	registry, _, _ := newApprovalGatedRegistry(t, policySvc)
 	svc, env := seedServiceAndEnv(t, registry)
 	artifact := seedArtifact(t, registry, svc, "sha256:real-policy-approval")
-	policyRepo.Create(ctx, &domain.DeploymentPolicy{
+	createTestPolicy(t, policyRepo, ctx, &domain.DeploymentPolicy{
 		Name:          "env-approval",
 		EnvironmentID: &env.ID,
 		Enforcement:   domain.PolicyEnforcementBlock,
