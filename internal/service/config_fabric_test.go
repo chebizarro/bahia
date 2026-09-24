@@ -346,7 +346,7 @@ func recordStatus(t *testing.T, repo repository.NostrEventRepository, configEven
 	content, _ := json.Marshal(payload)
 	tags, _ := json.Marshal(nostr.Tags{
 		{"d", "config-status:khatru-relay:rate-limits:prod"}, {"domain", "config-status"},
-		{"schema", configStatusSchema}, {"status", status}, {"service", "khatru-relay"},
+		{"schema", legacyConfigStatusSchema}, {"status", status}, {"service", "khatru-relay"},
 		{"scope", "prod"}, {"version", strconv.Itoa(version)}, {"e", configEventID},
 	})
 	id := strings.Repeat("c", 64)
@@ -355,5 +355,54 @@ func recordStatus(t *testing.T, repo repository.NostrEventRepository, configEven
 	}
 	if _, err := repo.Record(context.Background(), &repository.NostrEventRecord{ID: id, Kind: ConfigFabricStatusKind, Content: string(content), Tags: tags, CreatedAt: createdAt}); err != nil {
 		t.Fatalf("record status: %v", err)
+	}
+}
+
+func TestConfigFabricStatusCoordinatesAndTargetBinding(t *testing.T) {
+	const target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const base = "config-status:khatru-relay:rate-limits:prod"
+	for _, tc := range []struct {
+		name, schema, status, d, appliedID string
+		effective                          int
+		valid                              bool
+	}{
+		{"legacy-applied", legacyConfigStatusSchema, "applied", base, target, 4, true},
+		{"legacy-rejected", legacyConfigStatusSchema, "rejected", base, "", 0, true},
+		{"applied", configStatusSchema, "applied", base + ":" + target + ":applied", target, 4, true},
+		{"accepted", configStatusSchema, "accepted", base + ":" + target + ":accepted", "", 0, true},
+		{"rejected", configStatusSchema, "rejected", base + ":" + target + ":rejected", "", 0, true},
+		{"shared-coordinate", configStatusSchema, "applied", base, target, 4, false},
+		{"wrong-phase", configStatusSchema, "applied", base + ":" + target + ":accepted", target, 4, false},
+		{"wrong-coordinate-target", configStatusSchema, "applied", base + ":" + other + ":applied", target, 4, false},
+		{"wrong-applied-target", configStatusSchema, "applied", base + ":" + target + ":applied", other, 4, false},
+		{"wrong-effective-version", configStatusSchema, "applied", base + ":" + target + ":applied", target, 3, false},
+		{"unknown-phase", configStatusSchema, "unknown", base + ":" + target + ":unknown", "", 0, false},
+		{"unknown-schema", "cascadia.config.status.v3", "applied", base + ":" + target + ":applied", target, 4, false},
+		{"v2-address-with-v1-schema", legacyConfigStatusSchema, "applied", base + ":" + target + ":applied", target, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content, err := json.Marshal(statusConfig{
+				ServiceID: "khatru-relay", Scope: "prod", Version: 4,
+				PolicySchema: "cascadia.config.rate-limits.v1", ConfigEventID: target,
+				Status: tc.status, EffectiveVersion: tc.effective, LastAppliedEventID: tc.appliedID,
+				Reason: "version does not advance desired version",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tags, err := json.Marshal(nostr.Tags{
+				{"d", tc.d}, {"domain", "config-status"}, {"schema", tc.schema},
+				{"service", "khatru-relay"}, {"scope", "prod"}, {"version", "4"},
+				{"status", tc.status}, {"e", target},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = statusFromRecord(repository.NostrEventRecord{Content: string(content), Tags: tags})
+			if (err == nil) != tc.valid {
+				t.Fatalf("statusFromRecord() error = %v, want valid=%t", err, tc.valid)
+			}
+		})
 	}
 }

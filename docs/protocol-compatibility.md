@@ -241,3 +241,15 @@ Route canary transitions use existing canonical observable kinds only, under `do
 ### Agent runtime release schema compatibility
 
 `bahia.agent-runtime-release.v1` is additive on canonical kind `30315`. Older consumers may ignore the two new `domain` values. Consumers that understand them must preserve tenant tags, immutable provenance, explicit branch/channel, and previous-binding rollback linkage; they must not infer per-agent build evidence from a shared release.
+
+
+## Config Fabric status durability
+
+Config Fabric status uses kind `30900`, `domain=config-status`, and
+`schema=cascadia.config.status.v2`, addressed by desired event and phase:
+`config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`.
+Accepted/rejected receipts cannot replace applied evidence. Replay selects the
+highest applied config version and checks its target event ID to determine drift.
+Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
+See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
+for tags, retention trade-offs, subscription scope, and upgrade semantics.

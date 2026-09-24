@@ -370,3 +370,15 @@ Route canary transitions use existing canonical observable kinds only, under `do
 ### Agent runtime releases are not commands
 
 Kind `30315` events with schema `bahia.agent-runtime-release.v1` are read projections for verified runtime releases and append-only agent/service bindings. They must not be interpreted as `service/deploy`, deployment intent, identity lifecycle, or custody mutation commands.
+
+
+## Config Fabric status durability
+
+Config Fabric status uses kind `30900`, `domain=config-status`, and
+`schema=cascadia.config.status.v2`, addressed by desired event and phase:
+`config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`.
+Accepted/rejected receipts cannot replace applied evidence. Replay selects the
+highest applied config version and checks its target event ID to determine drift.
+Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
+See [Config Fabric durable status receipts](nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
+for tags, retention trade-offs, subscription scope, and upgrade semantics.

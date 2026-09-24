@@ -107,7 +107,7 @@ func buildConfigEvent(t *testing.T, sk nostr.SecretKey, policyName, schema strin
 func appliedVersionForTest(c *ConfigConsumer, author, policyName string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.state.Applied[author+"\x00"+"relay-sidecar-test"+"\x00"+"edge"+"\x00"+policyName].Version
+	return c.state.Applied[author+"\x00"+c.serviceID+"\x00"+c.scope+"\x00"+policyName].Version
 }
 
 // Version ordering only means anything WITHIN one coordinate: two versions of
