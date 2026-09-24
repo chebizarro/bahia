@@ -199,11 +199,76 @@
       "determinism_notes": ["Pure output assertion."],
       "status": "pass",
       "failure_reason": null
+    },
+    {
+      "test_id": "SFOAR-T-012",
+      "ac_ids": [
+        "SFOAR-AC-012",
+        "SFOAR-AC-005",
+        "SFOAR-AC-008"
+      ],
+      "title": "Scoped ContextVM authorization after global admission",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/operator_contextvm_handlers_auth_test.go",
+      "description": "TestAuthorizedContextVMPubkeyFailsClosed and TestOperatorContextVMHandlersScopedAuthorization cover the helper and signed dispatch through all three registered handlers, including deploy/restart/stop.",
+      "preconditions": [
+        "Both signers admitted at transport."
+      ],
+      "steps": [
+        "Dispatch valid requests with nil, empty, unlisted, listed, mixed-case, and other-scope-only lists."
+      ],
+      "expected_result": "Authorization errors deny execution; allowed requests invoke only the intended service.",
+      "fixtures": [
+        "Existing deterministic test signer keys"
+      ],
+      "mocks": [
+        "Existing recording adoption/runtime services and event publisher"
+      ],
+      "data_requirements": [
+        "Valid endpoint-ref and UUID parameters"
+      ],
+      "determinism_notes": [
+        "Direct event dispatch; no sleeps, Docker, or live relay."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFOAR-T-013",
+      "ac_ids": [
+        "SFOAR-AC-012"
+      ],
+      "title": "Load-time scoped allowlist validation and normalization",
+      "type": "unit",
+      "existing_or_new": "new",
+      "target_path": "internal/config/operator_allowlist_test.go",
+      "description": "TestLoadSignerFirstOperatorAllowlists tests both enabled surfaces via Load; TestDisabledOperatorSurfacesAllowEmptyAllowlists preserves opt-in defaults.",
+      "preconditions": [
+        "Config enables auth and supplies the service signing key."
+      ],
+      "steps": [
+        "Load missing, blank, subject/email-only, malformed, and mixed-case duplicate lists.",
+        "Validate disabled defaults."
+      ],
+      "expected_result": "Enabled surfaces require valid scoped keys; keys normalize and deduplicate; disabled defaults validate.",
+      "fixtures": [
+        "Temporary YAML configuration files"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "64-character hex test public keys"
+      ],
+      "determinism_notes": [
+        "Temporary local files; no network."
+      ],
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
-    "criteria_total": 11,
-    "criteria_with_tests": 11,
+    "criteria_total": 12,
+    "criteria_with_tests": 12,
     "known_gaps": []
   },
   "implementation_notes": [

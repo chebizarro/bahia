@@ -256,6 +256,14 @@ make run-dev
 
 ### "Unauthorized" errors
 
+For operator ContextVM adoption and direct-runtime actions, configure the signer
+in both `nostr.authorized_pubkeys` and the relevant `adoption.allowed_pubkeys`
+or `direct_runtime_actions.allowed_pubkeys` list. Empty lists deny access.
+Enabling either surface requires valid 64-character hex scoped pubkeys at config
+load; subject/email-only lists are rejected. See the
+[allowlist upgrade instructions](../adoption-production-rollout.md#allowlist-upgrade-bahia-kppzm)
+before updating an existing deployment.
+
 Enable authentication and provide your Nostr pubkey:
 ```yaml
 auth:

@@ -167,11 +167,10 @@ func parseDirectRuntimeActionPayload(raw directRuntimeActionEventRequest) (parse
 
 func authorizedContextVMPubkey(pubkey string, authorized []string) bool {
 	pubkey = strings.TrimSpace(pubkey)
-	if pubkey == "" {
+	if pubkey == "" || len(authorized) == 0 {
 		return false
 	}
-	if len(authorized) == 0 {
-		return true
-	}
-	return slices.Contains(authorized, pubkey)
+	return slices.ContainsFunc(authorized, func(allowed string) bool {
+		return strings.EqualFold(strings.TrimSpace(allowed), pubkey)
+	})
 }

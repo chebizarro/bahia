@@ -2273,7 +2273,7 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("adoption requires auth", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		err := cfg.validate()
 		if err == nil || !strings.Contains(err.Error(), "auth.enabled=true") {
 			t.Fatalf("validate error = %v, want auth requirement", err)
@@ -2338,9 +2338,9 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		cfg.DirectRuntime.Enabled = true
-		cfg.DirectRuntime.AllowedPubkeys = []string{"abcdef"}
+		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		cfg.LLM.Enabled = true
 		cfg.LLM.AllowOperationalREST = true
 		cfg.LLM.AllowedSubjects = []string{"llm-ops"}
@@ -2381,7 +2381,7 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedPubkeys = []string{"abcdef"}
+		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
 		}
@@ -2455,7 +2455,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when adoption.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
@@ -2465,7 +2465,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
 		cfg.DirectRuntime.Enabled = true
-		cfg.DirectRuntime.AllowedSubjects = []string{"ops"}
+		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when direct_runtime_actions.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
@@ -2484,13 +2484,15 @@ adoption:
   allowed_subjects:
     - ops-user
   allowed_pubkeys:
-    - abc123
+    - abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01
   allowed_emails:
     - ops@example.com
 direct_runtime_actions:
   enabled: true
   allowed_subjects:
     - runtime-user
+  allowed_pubkeys:
+    - abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01
 llm:
   enabled: true
   allow_operational_rest: true
@@ -2655,7 +2657,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	adoptionAllowed.Nostr.PrivateKey = "test-secret-key"
 	adoptionAllowed.Auth.Enabled = true
 	adoptionAllowed.Adoption.Enabled = true
-	adoptionAllowed.Adoption.AllowedSubjects = []string{"ops"}
+	adoptionAllowed.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 	if err := adoptionAllowed.validate(); err != nil {
 		t.Fatalf("adoption with auth and allowlist should validate: %v", err)
 	}
@@ -2677,7 +2679,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	directAllowed.Nostr.PrivateKey = "test-secret-key"
 	directAllowed.Auth.Enabled = true
 	directAllowed.DirectRuntime.Enabled = true
-	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}
+	directAllowed.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 	if err := directAllowed.validate(); err != nil {
 		t.Fatalf("direct runtime with auth and allowlist should validate: %v", err)
 	}

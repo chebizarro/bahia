@@ -136,7 +136,9 @@ adoption:
   # Locked-down default. MVP deployments enable this only with auth.enabled=true,
   # operator pubkey allowlists, and endpoint_ref targets such as btc-01-docker.
   # Privileged adoption scan/import routes are disabled by default.
-  # To enable, set auth.enabled=true and configure at least one operator allowlist.
+  # To enable, set auth.enabled=true and at least one 64-hex allowed_pubkeys entry.
+  # Empty/subject-only/email-only lists fail config validation when enabled.
+  # ContextVM also requires the signer in nostr.authorized_pubkeys.
   enabled: false
   # Compose-origin containers are blocked unless operators explicitly accept
   # direct Docker takeover semantics for those workloads.
@@ -149,7 +151,9 @@ direct_runtime_actions:
   # Locked-down default. MVP deployments enable this only after btc-01 endpoint_ref
   # registration and operator allowlist review.
   # Direct deploy/restart/stop runtime routes are disabled by default.
-  # To enable, set auth.enabled=true and configure at least one operator allowlist.
+  # To enable, set auth.enabled=true and at least one 64-hex allowed_pubkeys entry.
+  # Empty/subject-only/email-only lists fail config validation when enabled.
+  # ContextVM also requires the signer in nostr.authorized_pubkeys.
   enabled: false
   allowed_subjects: []
   allowed_pubkeys: []

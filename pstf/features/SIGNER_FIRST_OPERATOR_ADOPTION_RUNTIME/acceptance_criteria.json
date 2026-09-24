@@ -360,6 +360,42 @@
         "cmd/cli/operator_nostr_test.go"
       ],
       "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFOAR-AC-012",
+      "title": "ContextVM operator allowlists fail closed and validate at config load (bahia-kppzm)",
+      "type": "security",
+      "priority": "must",
+      "assertion": "adoption/scan, adoption/import, and service/action require the verified signer in the method-specific allowlist even after global transport admission. Empty lists deny; configured hex keys match case-insensitively. Enabled surfaces require non-empty valid scoped pubkeys at load.",
+      "preconditions": [
+        "Both test signers pass the global transport allowlist.",
+        "Requests use valid signed ContextVM events and valid operation parameters."
+      ],
+      "steps": [
+        "Exercise nil/empty, populated, mixed-case, and other-scope-only allowlists through registered methods.",
+        "Load enabled surface configs with missing, blank, subject/email-only, malformed, or mixed-case duplicate pubkeys.",
+        "Validate defaults with both surfaces disabled."
+      ],
+      "expected_result": "Denied requests return an authorization error without service execution; only listed signers reach the intended service. Invalid enabled configs fail load with the surface name and actionable error; valid keys are normalized and deduplicated.",
+      "negative_cases": [
+        "A global or other-surface allowlist must not bypass the method-specific gate.",
+        "Subjects or emails must not make an empty signer allowlist valid.",
+        "Disabled surfaces need not configure operator pubkeys."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_contextvm_handlers.go",
+        "internal/controlplane/operator_contextvm_handlers_auth_test.go",
+        "internal/config/config.go",
+        "internal/config/operator_allowlist_test.go",
+        "docs/adoption-production-rollout.md"
+      ],
+      "requires_human_approval": false
     }
   ],
   "coverage_notes": [
