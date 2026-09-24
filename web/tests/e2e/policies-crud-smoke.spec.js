@@ -107,13 +107,18 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
       localStorage.setItem('__BAHIA_E2E_POLICY_STATE', JSON.stringify(window.__BAHIA_E2E_POLICY_STATE));
     }
 
+    let policyCreatedAt = loadJson('__bahia_e2e_nostr_events', [])
+      .filter((event) => event.tags?.some((tag) => tag[0] === 'schema' && tag[1] === POLICY_SCHEMA))
+      .reduce((latest, event) => Math.max(latest, event.created_at || 0), Math.floor(Date.now() / 1000));
+
     function policyEvent(policy, idPrefix = 'policy-reg') {
       const deleted = Boolean(policy.deleted);
       return {
         id: `${idPrefix}-${policy.id}`,
         kind: KIND_CONTROL_STATE,
         pubkey: servicePubkey,
-        created_at: Math.floor(Date.now() / 1000),
+        // Canonical revisions must not depend on event-ID ordering within a second.
+        created_at: ++policyCreatedAt,
         tags: [
           ['domain', 'controlplane'],
           ['schema', POLICY_SCHEMA],

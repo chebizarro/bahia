@@ -147,7 +147,7 @@ assistant:
 2. Click **Sign In**
 3. Connect with your Nostr signer (NIP-07 extension or NIP-46 bunker)
 
-Protected routes, including Settings, fail closed until a signer-first session is present. NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; a capability advertisement alone is provisional.
+Protected routes, including Settings, fail closed until a signer-first session and backend membership are verified. NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; a capability advertisement alone is provisional. During session restoration, protected routes display “Checking authentication...” until that probe finishes. A rejected or unavailable probe returns you to the dashboard; successful membership is still subject to the route's role requirements.
 
 After sign-in, open the user menu and choose **Edit Profile**, or go directly to `/settings/profile`, to edit your Nostr kind-0 metadata. The profile editor validates fields locally, signs the kind-0 event with the active NIP-07 or NIP-46 signer, publishes to writable Nostr relays from the signer/NIP-65 relay list, and shows the relay OK acceptance/rejection outcomes.
 

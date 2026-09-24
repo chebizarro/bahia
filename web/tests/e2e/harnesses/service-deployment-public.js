@@ -1,3 +1,4 @@
+import { expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY } from '../helpers.js';
 
 export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
@@ -77,10 +78,16 @@ export function createPublicState(overrides = {}) {
 }
 
 export async function advanceDesiredStateWizardToReliability(dialog, { ports = '' } = {}) {
+  await expect(dialog.locator('.wizard-steps .active')).toHaveText('1. Target');
   await dialog.getByRole('button', { name: 'Continue' }).click();
+  await expect(dialog.locator('.wizard-steps .active')).toHaveText('2. Public route');
+  await dialog.getByRole('button', { name: 'Continue' }).click();
+  await expect(dialog.locator('.wizard-steps .active')).toHaveText('3. Service');
   if (ports) await dialog.getByLabel('Port mappings').fill(ports);
   await dialog.getByRole('button', { name: 'Continue' }).click();
+  await expect(dialog.locator('.wizard-steps .active')).toHaveText('4. Configuration');
   await dialog.getByRole('button', { name: 'Continue' }).click();
+  await expect(dialog.locator('.wizard-steps .active')).toHaveText('5. Reliability');
 }
 
 export async function reachDesiredStateReview(dialog, {
@@ -791,7 +798,8 @@ export async function installPublicServiceDeploymentHarness(
 
     function rollbackResult(requestEvent, payload) {
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
-      const artifact = state.artifacts.find((candidate) => candidate.service_id === payload.service_id) || null;
+      const artifact = state.artifacts.find((candidate) => candidate.service_id === payload.service_id && candidate.id === payload.target_artifact_id);
+      if (!artifact) throw new Error('Rollback requires a registered artifact for this service');
       const intent = {
         id: `intent-${state.nextIntentId++}`,
         service_id: payload.service_id,

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { SOUL_FACTORY_PROVISIONING_REQUEST } from '../../src/lib/nostr/kinds.gen.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const RUNTIME_PUBKEY = 'd'.repeat(64);
@@ -175,13 +176,13 @@ test.describe('Soul Signing Smoke Test', () => {
   });
 
   test('should include provisioning request tags', async ({ page }) => {
-    await page.addInitScript(() => {
+    await page.addInitScript((provisioningKind) => {
       const originalSign = window.nostr.signEvent;
       window.nostr.signEvent = async (event) => {
-        window._capturedEvent = event;
+        if (event.kind === provisioningKind) window._capturedEvent = event;
         return originalSign(event);
       };
-    });
+    }, SOUL_FACTORY_PROVISIONING_REQUEST);
 
     await page.goto('/souls/new');
 

@@ -10,10 +10,12 @@
   $effect(() => {
     if (initialized) return;
 
-    initialized = true;
-    if (untrack(() => authState.status) === 'unknown') {
-      void untrack(() => initializeAuth());
-    }
+    // Signer restoration can finish before the backend membership probe.
+    // Keep the route pending until the entire bootstrap has settled.
+    void untrack(async () => {
+      await initializeAuth();
+      initialized = true;
+    });
   });
 
   const isLoading = $derived(

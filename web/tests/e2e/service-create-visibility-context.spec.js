@@ -35,9 +35,11 @@ function pagedServicesState() {
 
 test.describe('Service create visibility with preserved list state', () => {
   test('preserves active runtime/search filters and does not force-show a non-matching created service', async ({ page }) => {
+    const initialState = createPublicState();
+    initialState.services[0].runtime_type = 'docker';
     await installE2EMocks(page, { systemInfo });
     await installPublicServiceDeploymentHarness(page, {
-      initialState: createPublicState(),
+      initialState,
       emitCreateServiceProjection: false
     });
 

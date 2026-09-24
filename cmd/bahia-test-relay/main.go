@@ -39,10 +39,10 @@ const (
 	kindSBOMAttestation         = kinds.SBOMAttestation
 	kindLongFormContent         = kinds.LongFormContent
 	kindLoomWorkerAdvertisement = kinds.LoomWorkerAdvertisement
-	kindSoulAction              = kinds.ContextVMMessage
-	kindSoulTemplate            = kinds.CASControlState
-	kindAgentSoul               = kinds.CASControlState
-	kindSoulDraft               = kinds.CASControlState
+	kindSoulAction              = kinds.SoulFactoryAction
+	kindSoulTemplate            = kinds.SoulFactoryTemplate
+	kindAgentSoul               = kinds.SoulFactoryAgentSoul
+	kindSoulDraft               = kinds.SoulFactoryDraft
 	kindRuntimeCapability       = kinds.SoulFactoryRuntimeCapability
 )
 
@@ -150,7 +150,7 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 
 	if err := add(eventSpec{Kind: kindContextVMServer, Author: serviceKey, Tags: nostr.Tags{{"d", "bahia-system-v1"}}, Content: map[string]any{
 		"schema":   "bahia.system-discovery.v1",
-		"features": map[string]any{"relay_sidecar": true, "relay_read_models": true, "encrypted_nostr_requests": true, "legacy_sse": false, "publish_enabled": true},
+		"features": map[string]any{"relay_sidecar": true, "relay_read_models": true, "encrypted_nostr_requests": true, "direct_nostr_http_auth": true, "legacy_sse": false, "publish_enabled": true},
 		"nostr":    map[string]any{"trusted_relay_monitor_pubkeys": []string{}},
 	}}); err != nil {
 		return nil, err

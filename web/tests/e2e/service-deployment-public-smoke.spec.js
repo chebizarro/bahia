@@ -79,8 +79,10 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
 
     const intentLink = page.locator('tbody tr').first();
     await intentLink.click();
-    await expect(page.getByRole('heading', { name: 'Deployment Intent' })).toBeVisible();
-    await expect(page.getByText('Deployment Runs (1)')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Deployment', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Runs and logs', exact: true })).toBeVisible();
+    await expect(page.locator('a.run-row')).toHaveCount(1);
+    await expect(page.locator('a.run-row')).toHaveAttribute('href', '/deployments/runs/run-2');
 
     const transportTrace = await page.evaluate(() => ({
       relays: window.__BAHIA_E2E_PUBLIC_PUBLISHES.map((entry) => entry.relay),

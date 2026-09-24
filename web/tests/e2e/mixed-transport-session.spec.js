@@ -88,6 +88,7 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       publicOks: window.__BAHIA_E2E_PUBLIC_OKS,
       publicResults: window.__BAHIA_E2E_PUBLIC_RESULTS,
       encryptedRequests: window.__BAHIA_E2E_ENCRYPTED_REQUESTS,
+      encryptedWirePublishes: window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES,
       encryptedOks: window.__BAHIA_E2E_ENCRYPTED_OKS,
       encryptedResults: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
       encryptedOperations: window.__BAHIA_E2E_ENCRYPTED_OPERATIONS
@@ -98,7 +99,8 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       expect.objectContaining({ kind: 25910, operation: 'service/create' })
     ]));
     expect(trace.publicRequests.every((request) => request.kind === 25910)).toBe(true);
-    expect(trace.publicRequests.every((request) => normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
+    expect(new Set(trace.publicRequests.map((request) => normalizeRelay(request.relay))))
+      .toEqual(new Set([ENCRYPTED_RELAY, PUBLIC_RELAY]));
     expect(trace.publicRequests.some((request) => request.kind === KIND_GIFT_WRAP)).toBe(false);
     for (const request of trace.publicRequests) {
       expect(trace.publicOks).toEqual(expect.arrayContaining([
@@ -114,8 +116,12 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       'notifications.channels.test'
     ]));
     expect(trace.encryptedRequests.length).toBeGreaterThanOrEqual(2);
-    expect(trace.encryptedRequests.every((request) => request.kind === KIND_GIFT_WRAP && normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
-    expect(trace.encryptedRequests.some((request) => normalizeRelay(request.relay) === PUBLIC_RELAY)).toBe(false);
+    expect(trace.encryptedRequests.every((request) => request.kind === KIND_GIFT_WRAP)).toBe(true);
+    expect(new Set(trace.encryptedWirePublishes.map((request) => normalizeRelay(request.relay))))
+      .toEqual(new Set([ENCRYPTED_RELAY, PUBLIC_RELAY]));
+    // The fixture service answers on its ContextVM relay; wire publication above
+    // must still reach the complete discovered relay set.
+    expect(trace.encryptedRequests.every((request) => normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
     for (const request of trace.encryptedRequests) {
       expect(request.innerKind).toBe(KIND_CONTEXTVM);
       expect(request.requesterPubkey).toBe(TEST_PUBKEY);

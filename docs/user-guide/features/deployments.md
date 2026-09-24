@@ -102,11 +102,12 @@ For a Compose service:
 
 1. Go to **Services** and select the service, then click **Deploy**.
 2. Select the environment, an explicit deployment unit when the environment is ambiguous, and a registered artifact with a full immutable `sha256` digest.
-3. Enter the Compose service name, port mappings, command arguments, and literal non-secret environment values.
-4. Select service secrets by opaque reference and choose the environment variable name for each. Secret values are never placed in the signed payload or desired-state preview.
-5. Configure the HTTP `GET` healthcheck, restart policy, volumes, and CPU/memory limits.
-6. Review the backend-canonical non-secret desired-state diff, exact JSON, SHA-256 hash, policy result, and cost estimate.
-7. Click **Sign & submit idempotently**. The browser signer first persists the reviewed managed configuration with `service/update`, then signs `service/deploy` with that exact displayed hash as `expected_desired_state_hash` and its idempotency key.
+3. In **Public route**, leave the deployment private or configure Bahia-managed HTTPS.
+4. In **Service**, enter the Compose service name, port mappings, command arguments, and literal non-secret environment values.
+5. In **Configuration**, select service secrets by opaque reference and choose the environment variable name for each. Secret values are never placed in the signed payload or desired-state preview.
+6. In **Reliability**, configure the HTTP `GET` healthcheck, restart policy, volumes, and CPU/memory limits.
+7. In **Review & sign**, review the backend-canonical non-secret desired-state diff, exact JSON, SHA-256 hash, policy result, and cost estimate.
+8. Click **Sign & submit idempotently**. Submission is enabled only on this final step after successful preview without policy blockers. The browser signer first persists the reviewed managed configuration with `service/update`, then signs `service/deploy` with that exact displayed hash as `expected_desired_state_hash` and its idempotency key.
 
 For an Arcana-ready deployment, operators can enter a `8080:8080` port mapping and enable `GET /healthz` on port `8080`; these are operator-entered values, not product-specific defaults in the generic wizard.
 

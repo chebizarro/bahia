@@ -40,6 +40,7 @@ export async function installEncryptedNotificationHarness(
 ) {
   await page.addInitScript(({ servicePubkey, encryptedRelay, publicRelay, initialChannels, initialLogs, operationErrors, operatorPubkey }) => {
     window.__BAHIA_E2E_ENCRYPTED_PUBLISHES = [];
+    window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES = [];
     window.__BAHIA_E2E_ENCRYPTED_OPERATIONS = [];
     window.__BAHIA_E2E_ENCRYPTED_REQUESTS = [];
     window.__BAHIA_E2E_ENCRYPTED_OKS = [];
@@ -235,6 +236,10 @@ export async function installEncryptedNotificationHarness(
         message = JSON.parse(data);
       } catch {
         return originalSend.call(this, data);
+      }
+
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_GIFT_WRAP) {
+        window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES.push({ relay: this.url, eventId: message[1].id, kind: message[1].kind });
       }
 
       if (Array.isArray(message) && message[0] === 'REQ') {

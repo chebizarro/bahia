@@ -1003,7 +1003,7 @@
     if (policyPreviewBlocked(deployPolicyPreview)) return 'Resolve policy blockers before you can create an intent.';
     return '';
   });
-  let deployCreateDisabled = $derived(deployStep !== 5 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
+  let deployCreateDisabled = $derived(deployStep !== 6 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
   let deployDesiredStateDiff = $derived(desiredStateChanges(deployCurrentDesiredState, deployDesiredStatePreview));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
