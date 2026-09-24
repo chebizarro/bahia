@@ -3,6 +3,7 @@ package saga
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -119,5 +120,26 @@ func TestStoreRejectsUnsanitizedFailureHistory(t *testing.T) {
 	run.Version++
 	if err := store.Save(ctx, run, expected); err == nil {
 		t.Fatal("unsanitized failure history was accepted")
+	}
+}
+
+type failingMetricsWriter struct{}
+
+func (failingMetricsWriter) Write([]byte) (int, error) {
+	return 0, errors.New("metrics sink unavailable")
+}
+
+func TestMonitorWritePrometheusReturnsWriterFailure(t *testing.T) {
+	_, _, store := fixtureEngine(t, nil)
+	monitor, err := NewMonitor(MonitorConfig{
+		Store: store, Instance: "test", Build: "build",
+		Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := monitor.WritePrometheus(context.Background(), failingMetricsWriter{}); err == nil || !strings.Contains(err.Error(), "metrics sink unavailable") {
+		t.Fatalf("WritePrometheus() error = %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,5 +81,37 @@ func TestLoadEnrollmentConfigRejectsUnknownSecretFields(t *testing.T) {
 	}
 	if _, err := loadEnrollmentConfig(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunInspectReportsMissingEnrollment(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	config := `{
+  "identity_id":"metiq-runtime",
+  "controller_pubkey":"` + strings.Repeat("b", 64) + `",
+  "provisioner_pubkey":"` + strings.Repeat("c", 64) + `",
+  "state_dir":"` + filepath.Join(root, "state") + `",
+  "client_key_dir":"` + filepath.Join(root, "keys") + `",
+  "signet_container":"signetd",
+  "signet_config_path":"/etc/signet/signet.conf",
+  "provisioner_credential_file":"` + filepath.Join(root, "provisioner.nsec") + `"
+}`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := os.CreateTemp(root, "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stdout.Close(); err != nil {
+			t.Errorf("close stdout: %v", err)
+		}
+	})
+
+	err = run(context.Background(), configPath, "inspect", stdout)
+	if err == nil || !strings.Contains(err.Error(), "enrollment does not exist") {
+		t.Fatalf("run(inspect) error = %v", err)
 	}
 }

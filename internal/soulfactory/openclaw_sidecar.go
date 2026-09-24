@@ -1066,12 +1066,3 @@ func normalizeOpenClawOutcome(invocation OpenClawControlInvocation, outcome *Ope
 func controlError(code, message string, retryable bool) *RuntimeControlError {
 	return &RuntimeControlError{Code: code, Message: message, Retryable: retryable}
 }
-
-func sortedMapKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}

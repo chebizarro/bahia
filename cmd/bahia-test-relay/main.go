@@ -77,7 +77,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen on %s: %v", *addr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	actualAddr := listener.Addr().String()
 	wsURL := "ws://" + actualAddr
@@ -107,7 +107,9 @@ func main() {
 	router := relay.Router()
 	router.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, `{"ok":true,"relay":"%s","service_pubkey":"%s","events":%d}`+"\n", wsURL, serviceKey.Public().Hex(), len(seedEvents))
+		if _, err := fmt.Fprintf(w, `{"ok":true,"relay":"%s","service_pubkey":"%s","events":%d}`+"\n", wsURL, serviceKey.Public().Hex(), len(seedEvents)); err != nil {
+			log.Printf("write health response: %v", err)
+		}
 	})
 
 	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d", actualAddr, serviceKey.Public().Hex(), len(seedEvents))

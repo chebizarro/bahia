@@ -168,7 +168,7 @@ func (b *Backend) getRepository(ctx context.Context, name string) (repositoryCon
 	if err != nil {
 		return repositoryConfiguration{}, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return repositoryConfiguration{}, false, nil
 	}
@@ -232,7 +232,7 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		return packagebackend.RepositoryObservation{Exists: false, PublicURL: b.repositoryURL(name)}, nil
 	}
@@ -245,7 +245,7 @@ func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepo
 	if err != nil {
 		return packagebackend.RepositoryObservation{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return packagebackend.RepositoryObservation{Exists: false, PublicURL: b.repositoryURL(name)}, nil
 	}
@@ -268,7 +268,7 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, SHA256: req.SHA256, SizeBytes: req.SizeBytes}, nil
 	}
@@ -311,7 +311,7 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer stream.ReadCloser.Close()
+	defer func() { _ = stream.ReadCloser.Close() }()
 	return b.StoreArtifact(ctx, targetRepo, packagebackend.StoreArtifactRequest{Namespace: artifact.Namespace, PackageName: artifact.PackageName, Version: artifact.Version, Filename: artifact.Filename, ContentType: artifact.ContentType, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes, Metadata: req.Metadata, Reader: stream.ReadCloser})
 }
 
@@ -329,7 +329,7 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		return packagebackend.ArtifactObservation{Exists: false, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, Yanked: true}, nil
 	}

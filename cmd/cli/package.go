@@ -465,7 +465,7 @@ func packageFileSource(path, filename, sha string, size int64) (string, string, 
 		if err != nil {
 			return "", "", "", 0, fmt.Errorf("open package file: %w", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		h := sha256.New()
 		if _, err := io.Copy(h, file); err != nil {
 			return "", "", "", 0, fmt.Errorf("hash package file: %w", err)
@@ -491,7 +491,7 @@ func packageStatusCallback(cmd *cobra.Command) func(packageStatusEvent) {
 		if message == "" {
 			message = "status update"
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "→ package: %s\n", message)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ package: %s\n", message)
 	}
 }
 

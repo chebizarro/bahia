@@ -31,7 +31,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if strings.TrimSpace(*inputPath) == "" || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: soulfactory-legacy-adoption-report -input <path|->")
+		if _, err := fmt.Fprintln(stderr, "usage: soulfactory-legacy-adoption-report -input <path|->"); err != nil {
+			return exitInvalid
+		}
 		return exitUsage
 	}
 
@@ -40,7 +42,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *inputPath != "-" {
 		file, err := os.Open(*inputPath)
 		if err != nil {
-			fmt.Fprintln(stderr, fmt.Errorf("open input: %w", err))
+			if _, writeErr := fmt.Fprintln(stderr, fmt.Errorf("open input: %w", err)); writeErr != nil {
+				return exitInvalid
+			}
 			return exitInvalid
 		}
 		reader = file
@@ -52,22 +56,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	input, err := decodeInput(reader)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		if _, writeErr := fmt.Fprintln(stderr, err); writeErr != nil {
+			return exitInvalid
+		}
 		return exitInvalid
 	}
 	report, classificationErr := soulfactory.ClassifyLegacyAgents(input)
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
-		fmt.Fprintln(stderr, fmt.Errorf("write report: %w", err))
+		if _, writeErr := fmt.Fprintln(stderr, fmt.Errorf("write report: %w", err)); writeErr != nil {
+			return exitInvalid
+		}
 		return exitInvalid
 	}
 	if errors.Is(classificationErr, soulfactory.ErrLegacyAdoptionAmbiguous) {
-		fmt.Fprintln(stderr, "refused: legacy agent adoption classification is ambiguous")
+		if _, writeErr := fmt.Fprintln(stderr, "refused: legacy agent adoption classification is ambiguous"); writeErr != nil {
+			return exitInvalid
+		}
 		return exitAmbiguous
 	}
 	if classificationErr != nil {
-		fmt.Fprintln(stderr, classificationErr)
+		if _, writeErr := fmt.Fprintln(stderr, classificationErr); writeErr != nil {
+			return exitInvalid
+		}
 		return exitInvalid
 	}
 	return 0

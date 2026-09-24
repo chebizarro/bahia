@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
@@ -15,11 +14,11 @@ import (
 // NostrBackupCommandPublisher signs and publishes backup control-plane request events.
 type NostrBackupCommandPublisher struct {
 	publisher controlplane.NostrEventPublisher
-	signer    canonicalnostr.Signer
+	signer    nostr.Signer
 }
 
 // NewBackupCommandPublisher creates the signer-first publisher used by production MCP backup tools.
-func NewBackupCommandPublisher(publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer) *NostrBackupCommandPublisher {
+func NewBackupCommandPublisher(publisher controlplane.NostrEventPublisher, signer nostr.Signer) *NostrBackupCommandPublisher {
 	return &NostrBackupCommandPublisher{publisher: publisher, signer: signer}
 }
 

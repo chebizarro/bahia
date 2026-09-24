@@ -122,7 +122,7 @@ type concordRotationPlan struct {
 // receipt and the error, and re-running the delivery is idempotent.
 func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation) (*ConcordRotationReceipt, error) {
 	if m == nil || len(m.communities) == 0 {
-		return nil, fmt.Errorf("Concord onboarding is not configured")
+		return nil, fmt.Errorf("concord onboarding is not configured")
 	}
 	m.rotateMu.Lock()
 	defer m.rotateMu.Unlock()
@@ -130,29 +130,29 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	communityID := strings.ToLower(strings.TrimSpace(rotation.CommunityID))
 	source := m.findCommunity(communityID)
 	if source == nil {
-		return nil, fmt.Errorf("Concord community %s is not configured", communityID)
+		return nil, fmt.Errorf("concord community %s is not configured", communityID)
 	}
 	if !rotation.Refound && len(rotation.ChannelIDs) == 0 {
-		return nil, fmt.Errorf("Concord rotation for %s must name a Refounding or at least one channel", communityID)
+		return nil, fmt.Errorf("concord rotation for %s must name a Refounding or at least one channel", communityID)
 	}
 	if !source.custody.Writable() {
-		return nil, fmt.Errorf("Concord community %s cannot rotate: %s is read-only; CORD-06 requires Signet-sealed custody (invite_bundle_sealed_file)", communityID, source.custody.Source())
+		return nil, fmt.Errorf("concord community %s cannot rotate: %s is read-only; CORD-06 requires Signet-sealed custody (invite_bundle_sealed_file)", communityID, source.custody.Source())
 	}
 	recipients, err := normalizeConcordRecipients(rotation.Recipients)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	staff, err := normalizeConcordStaff(rotation.Staff, recipients)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	blobRecipients, err := concordRekeyRecipients(recipients, staff)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	inviteTargets, err := normalizeConcordDirectInvites(rotation.DirectInvites, recipients)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 
 	current, record, err := source.resolve(ctx, m.bus)
@@ -161,7 +161,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	}
 	var bundle concordInviteBundle
 	if err := json.Unmarshal(current.bundle, &bundle); err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: decode current invite bundle: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: decode current invite bundle: %w", communityID, err)
 	}
 	staffPK, err := m.staffPubKey(ctx)
 	if err != nil {
@@ -178,17 +178,17 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	// Refounding outright if it cannot reliably fold all Control events.
 	citation, fold, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, rotation.Refound)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	if rotation.Refound {
 		if err := concordFoldIsCompactable(fold); err != nil {
-			return nil, fmt.Errorf("Concord Refounding for %s: %w", communityID, err)
+			return nil, fmt.Errorf("concord Refounding for %s: %w", communityID, err)
 		}
 	}
 
 	plan, err := m.planConcordRotation(current.bundle, record, rotation, communityID)
 	if err != nil {
-		return nil, fmt.Errorf("Concord rotation for %s: %w", communityID, err)
+		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	// Fail closed on self-minted material: the rotated bundle must validate and
 	// bind to the relay bus exactly like a configured one.
@@ -197,7 +197,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, fmt.Errorf("rotated %w", err)
 	}
 	if next.expiresAt != nil && *next.expiresAt <= m.now().UnixMilli() {
-		return nil, fmt.Errorf("Concord rotation for %s produced an expired invite bundle", communityID)
+		return nil, fmt.Errorf("concord rotation for %s produced an expired invite bundle", communityID)
 	}
 
 	if err := source.custody.Store(ctx, concordCustodyRecord{Bundle: plan.bundle, ControlRoot: plan.controlRoot}); err != nil {
@@ -405,7 +405,7 @@ func (m *concordMembership) planConcordRotation(raw json.RawMessage, record conc
 		if wanted && public && !rotation.Refound {
 			return plan, fmt.Errorf("channel %s is public and rotates only with a Refounding", channel.ID)
 		}
-		if !wanted && !(public && rotation.Refound) {
+		if !wanted && (!public || !rotation.Refound) {
 			continue
 		}
 		delete(requested, channel.ID)

@@ -195,9 +195,15 @@ func (m *Monitor) WritePrometheus(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "# HELP bahia_openclaw_provisioning_build_info OpenClaw provisioning monitor build identity")
-	fmt.Fprintln(w, "# TYPE bahia_openclaw_provisioning_build_info gauge")
-	fmt.Fprintf(w, "bahia_openclaw_provisioning_build_info{instance=%s,build=%s} 1\n", quoteLabel(snapshot.Instance), quoteLabel(snapshot.Build))
+	if _, err := fmt.Fprintln(w, "# HELP bahia_openclaw_provisioning_build_info OpenClaw provisioning monitor build identity"); err != nil {
+		return fmt.Errorf("write provisioning metrics help: %w", err)
+	}
+	if _, err := fmt.Fprintln(w, "# TYPE bahia_openclaw_provisioning_build_info gauge"); err != nil {
+		return fmt.Errorf("write provisioning metrics type: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "bahia_openclaw_provisioning_build_info{instance=%s,build=%s} 1\n", quoteLabel(snapshot.Instance), quoteLabel(snapshot.Build)); err != nil {
+		return fmt.Errorf("write provisioning build metric: %w", err)
+	}
 	for _, definition := range []struct{ name, help string }{
 		{"bahia_openclaw_provisioning_stage", "Current durable stage for an OpenClaw provisioning run"},
 		{"bahia_openclaw_provisioning_stage_age_seconds", "Seconds since the current durable stage began"},
@@ -215,7 +221,9 @@ func (m *Monitor) WritePrometheus(ctx context.Context, w io.Writer) error {
 		{"bahia_openclaw_provisioning_signet_unauthorized_responses", "Durable Signet policy denials during enrollment"},
 		{"bahia_openclaw_provisioning_correlation_mismatches", "Durable resource correlation conflicts"},
 	} {
-		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", definition.name, definition.help, definition.name)
+		if _, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", definition.name, definition.help, definition.name); err != nil {
+			return fmt.Errorf("write provisioning metric definition: %w", err)
+		}
 	}
 	for _, run := range snapshot.Runs {
 		labels := fmt.Sprintf("instance=%s,build=%s,request_id=%s,run_id=%s,agent_id=%s,stage=%s",
@@ -238,11 +246,15 @@ func (m *Monitor) WritePrometheus(ctx context.Context, w io.Writer) error {
 			{"bahia_openclaw_provisioning_correlation_mismatches", strconv.Itoa(run.CorrelationMismatches)},
 		}
 		for _, value := range values {
-			fmt.Fprintf(w, "%s{%s} %s\n", value.name, labels, value.value)
+			if _, err := fmt.Fprintf(w, "%s{%s} %s\n", value.name, labels, value.value); err != nil {
+				return fmt.Errorf("write provisioning metric %s: %w", value.name, err)
+			}
 		}
 		for _, stage := range forwardStages {
 			if duration, ok := run.StageDurations[stage]; ok {
-				fmt.Fprintf(w, "bahia_openclaw_provisioning_stage_duration_seconds{%s,observed_stage=%s} %.6f\n", labels, quoteLabel(string(stage)), duration.Seconds())
+				if _, err := fmt.Fprintf(w, "bahia_openclaw_provisioning_stage_duration_seconds{%s,observed_stage=%s} %.6f\n", labels, quoteLabel(string(stage)), duration.Seconds()); err != nil {
+					return fmt.Errorf("write provisioning stage duration metric: %w", err)
+				}
 			}
 		}
 	}

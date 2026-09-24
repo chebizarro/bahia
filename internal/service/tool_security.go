@@ -399,7 +399,7 @@ func (s *ToolSecurityService) getJSON(ctx context.Context, rawURL string, out an
 	if err != nil {
 		return fmt.Errorf("query %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfter := strings.TrimSpace(resp.Header.Get("Retry-After"))

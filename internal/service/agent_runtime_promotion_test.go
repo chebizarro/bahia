@@ -173,19 +173,6 @@ func promotionTestSubscription(serviceID, environmentID uuid.UUID) RuntimePromot
 	}
 }
 
-func newPromotionTestService(
-	subs []RuntimePromotionSubscription,
-) (*AgentRuntimePromotionService, *memoryAgentReleaseRepo, *memoryServiceRepo, *recordingPromotionIntentSink) {
-	releaseRepo := newMemoryAgentReleaseRepo()
-	intentSink := &recordingPromotionIntentSink{}
-	svc := NewAgentRuntimePromotionService(
-		NewAgentRuntimeReleaseService(releaseRepo, memoryServiceRepo{}),
-		fakeRuntimeSubscriptionSource{subs: subs},
-		intentSink,
-	)
-	return svc, releaseRepo, &memoryServiceRepo{}, intentSink
-}
-
 func TestPromoteSubscribedSoulsCreatesOneIntentPerMatchingSubscriber(t *testing.T) {
 	orgID := uuid.New()
 	serviceID, envID := uuid.New(), uuid.New()

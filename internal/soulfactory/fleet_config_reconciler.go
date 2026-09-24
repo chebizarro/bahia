@@ -425,7 +425,7 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 		return r.listSoulsFn(ctx)
 	}
 	if r.relayBus == nil {
-		return nil, fmt.Errorf("Soul Factory relay bus is not configured")
+		return nil, fmt.Errorf("soul Factory relay bus is not configured")
 	}
 	factory, err := nostr.PubKeyFromHex(strings.TrimSpace(r.config.SoulFactoryPubkey))
 	if err != nil {
@@ -465,7 +465,7 @@ func (r *Reactor) getFleetConfigRevision(ctx context.Context, eventID string) (*
 		return r.getFleetConfigRevisionFn(ctx, eventID)
 	}
 	if r.relayBus == nil {
-		return nil, fmt.Errorf("Soul Factory relay bus is not configured")
+		return nil, fmt.Errorf("soul Factory relay bus is not configured")
 	}
 	id, err := nostr.IDFromHex(strings.TrimSpace(eventID))
 	if err != nil {

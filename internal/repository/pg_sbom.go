@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -166,12 +167,17 @@ func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Co
 	return nil
 }
 
-func (r *PgSBOMRepository) ProjectManifest(ctx context.Context, manifest *domain.SBOMManifest, packages []domain.SBOMManifestPackage) error {
+func (r *PgSBOMRepository) ProjectManifest(ctx context.Context, manifest *domain.SBOMManifest, packages []domain.SBOMManifestPackage) (retErr error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning SBOM manifest projection: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			retErr = errors.Join(retErr, fmt.Errorf("rolling back SBOM manifest projection: %w", rollbackErr))
+		}
+	}()
 
 	if err := createManifest(ctx, tx, manifest); err != nil {
 		return err
@@ -399,14 +405,12 @@ func createArtifactPackages(ctx context.Context, db sbomQuerier, packages []doma
 	}
 
 	br := db.SendBatch(ctx, batch)
-	defer br.Close()
-
 	for range packages {
 		if _, err := br.Exec(); err != nil {
-			return fmt.Errorf("inserting SBOM package: %w", err)
+			return errors.Join(fmt.Errorf("inserting SBOM package: %w", err), br.Close())
 		}
 	}
-	return nil
+	return br.Close()
 }
 
 func createManifest(ctx context.Context, db sbomQuerier, manifest *domain.SBOMManifest) error {
@@ -503,13 +507,12 @@ func createManifestPackages(ctx context.Context, db sbomQuerier, packages []doma
 			pkg.ID, pkg.ManifestID, pkg.Name, pkg.Version, nilIfEmpty(pkg.Ecosystem), nilIfEmpty(pkg.License), nilIfEmpty(pkg.PURL), nilIfEmpty(pkg.CPE))
 	}
 	br := db.SendBatch(ctx, batch)
-	defer br.Close()
 	for range packages {
 		if _, err := br.Exec(); err != nil {
-			return fmt.Errorf("inserting SBOM manifest package: %w", err)
+			return errors.Join(fmt.Errorf("inserting SBOM manifest package: %w", err), br.Close())
 		}
 	}
-	return nil
+	return br.Close()
 }
 
 func artifactSBOMFromManifest(manifest *domain.SBOMManifest, artifactID uuid.UUID) *domain.ArtifactSBOM {

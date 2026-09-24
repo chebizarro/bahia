@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"fiatjaf.com/nostr"
@@ -56,9 +57,9 @@ type soulClientSigner interface {
 }
 
 type NostrClient struct {
-	relays              []string
-	signer              soulClientSigner
-	transport           SoulFactoryTransport
+	relays                []string
+	signer                soulClientSigner
+	transport             SoulFactoryTransport
 	expectedFactoryPubkey string // when set, reject results not signed by this pubkey
 }
 
@@ -490,9 +491,9 @@ func ParseSoulEvent(event *nostr.Event) *domain.AgentSoul {
 				soul.BahiaServiceID = &id
 			}
 		case "allowed-kind":
-			var kind int
-			fmt.Sscanf(tag[1], "%d", &kind)
-			soul.AllowedKinds = append(soul.AllowedKinds, kind)
+			if kind, err := strconv.Atoi(tag[1]); err == nil {
+				soul.AllowedKinds = append(soul.AllowedKinds, kind)
+			}
 		case "tool":
 			grant := domain.ToolGrant{MCPServer: tag[1]}
 			if len(tag) > 2 {
@@ -531,9 +532,9 @@ func ParseTemplateEvent(event *nostr.Event) *domain.SoulTemplate {
 		case "t":
 			template.Tags = append(template.Tags, tag[1])
 		case "default-kind":
-			var kind int
-			fmt.Sscanf(tag[1], "%d", &kind)
-			template.DefaultKinds = append(template.DefaultKinds, kind)
+			if kind, err := strconv.Atoi(tag[1]); err == nil {
+				template.DefaultKinds = append(template.DefaultKinds, kind)
+			}
 		case "tool":
 			grant := domain.ToolGrant{MCPServer: tag[1]}
 			if len(tag) > 2 {

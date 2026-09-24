@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -98,10 +99,6 @@ func newRootCommand() *cobra.Command {
 	)
 
 	return rootCmd
-}
-
-func signerFirstMutationUnavailable(method string) error {
-	return fmt.Errorf("%s is no longer available through REST-backed CLI mutations; publish a signed ContextVM/Nostr %s command with an operator signer instead", method, method)
 }
 
 // --- Auth Commands ---
@@ -703,8 +700,8 @@ func deployCommands() *cobra.Command {
 	deploymentsCmd := &cobra.Command{
 		Use:   "deployments",
 		Short: "Deployment commands",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
 		},
 	}
 	deploymentsCmd.AddCommand(
@@ -1189,13 +1186,13 @@ func secretsCommands() *cobra.Command {
 		Use:   "list [service-id]",
 		Short: "List secrets for a service",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
 			if err != nil {
 				return err
 			}
 			if closeSigner != nil {
-				defer closeSigner()
+				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
 			}
 			secrets, err := apiClient.ListSecrets(cmd.Context(), args[0])
 			if err != nil {
@@ -1216,13 +1213,13 @@ func secretsCommands() *cobra.Command {
 		Use:   "set [service-id] [name] [value]",
 		Short: "Set a secret",
 		Args:  cobra.RangeArgs(2, 3),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
 			if err != nil {
 				return err
 			}
 			if closeSigner != nil {
-				defer closeSigner()
+				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
 			}
 			if valueFile != "" && len(args) == 3 {
 				return fmt.Errorf("provide either [value] or --value-file, not both")
@@ -1255,13 +1252,13 @@ func secretsCommands() *cobra.Command {
 		Use:   "delete [service-id] [secret-id]",
 		Short: "Delete a secret",
 		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
 			if err != nil {
 				return err
 			}
 			if closeSigner != nil {
-				defer closeSigner()
+				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
 			}
 			if err := apiClient.DeleteSecret(cmd.Context(), args[0], args[1]); err != nil {
 				return err
@@ -1433,9 +1430,13 @@ func outputSingle(item any) error {
 
 func outputTable[T any](items []T, headers []string, rowFn func(T) []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, strings.Join(headers, "\t"))
+	if _, err := fmt.Fprintln(w, strings.Join(headers, "\t")); err != nil {
+		return fmt.Errorf("write table header: %w", err)
+	}
 	for _, item := range items {
-		fmt.Fprintln(w, strings.Join(rowFn(item), "\t"))
+		if _, err := fmt.Fprintln(w, strings.Join(rowFn(item), "\t")); err != nil {
+			return fmt.Errorf("write table row: %w", err)
+		}
 	}
 	return w.Flush()
 }
@@ -1548,11 +1549,11 @@ func readNostrPrivateKeyInput(cmd *cobra.Command, path string) (string, error) {
 		return "", fmt.Errorf("read Nostr private key: %w", err)
 	}
 	if len(data) > maxNostrPrivateKeyInputBytes {
-		return "", fmt.Errorf("Nostr private key input exceeds %d bytes", maxNostrPrivateKeyInputBytes)
+		return "", fmt.Errorf("nostr private key input exceeds %d bytes", maxNostrPrivateKeyInputBytes)
 	}
 	key := strings.TrimSpace(string(data))
 	if key == "" {
-		return "", fmt.Errorf("Nostr private key input is empty")
+		return "", fmt.Errorf("nostr private key input is empty")
 	}
 	return key, nil
 }

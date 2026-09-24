@@ -102,7 +102,7 @@ func TestNexusObserveArtifactUsesBackendChecksum(t *testing.T) {
 		if r.URL.Path != "/service/rest/v1/search/assets" || r.URL.Query().Get("repository") != "raw-npm" || r.URL.Query().Get("name") != "scope/pkg/1.0.0/pkg.tgz" {
 			t.Fatalf("unexpected request %s", r.URL.String())
 		}
-		io.WriteString(w, `{"items":[{"path":"scope/pkg/1.0.0/pkg.tgz","downloadUrl":"https://nexus.example/repository/raw-npm/scope/pkg/1.0.0/pkg.tgz","checksum":{"sha256":"`+backendHash+`"},"fileSize":8}],"continuationToken":null}`)
+		writeTestResponse(t, w, `{"items":[{"path":"scope/pkg/1.0.0/pkg.tgz","downloadUrl":"https://nexus.example/repository/raw-npm/scope/pkg/1.0.0/pkg.tgz","checksum":{"sha256":"`+backendHash+`"},"fileSize":8}],"continuationToken":null}`)
 	}))
 	defer server.Close()
 	backend, err := New(Config{BaseURL: server.URL})
@@ -123,10 +123,10 @@ func TestNexusListArtifactsPagination(t *testing.T) {
 	t.Run("assembles pages", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("continuationToken") == "" {
-				io.WriteString(w, `{"items":[{"path":"a.tgz","checksum":{"sha256":"aa"}}],"continuationToken":"next"}`)
+				writeTestResponse(t, w, `{"items":[{"path":"a.tgz","checksum":{"sha256":"aa"}}],"continuationToken":"next"}`)
 				return
 			}
-			io.WriteString(w, `{"items":[{"path":"b.tgz","checksum":{"sha256":"bb"}}],"continuationToken":null}`)
+			writeTestResponse(t, w, `{"items":[{"path":"b.tgz","checksum":{"sha256":"bb"}}],"continuationToken":null}`)
 		}))
 		defer server.Close()
 		backend, _ := New(Config{BaseURL: server.URL})
@@ -141,7 +141,7 @@ func TestNexusListArtifactsPagination(t *testing.T) {
 
 	t.Run("rejects repeated cursor", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			io.WriteString(w, `{"items":[],"continuationToken":"stuck"}`)
+			writeTestResponse(t, w, `{"items":[],"continuationToken":"stuck"}`)
 		}))
 		defer server.Close()
 		backend, _ := New(Config{BaseURL: server.URL})
@@ -204,4 +204,11 @@ func writeNexusRepository(t *testing.T, w http.ResponseWriter, name, blobStore s
 
 func testRepo() domain.PackageRepository {
 	return domain.PackageRepository{Name: "repo", ExternalRepositoryName: "raw-npm", Format: domain.PackageRepositoryFormatNPM, BackendRef: "nexus", BackendType: domain.PackageBackendNexus}
+}
+
+func writeTestResponse(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write test response: %v", err)
+	}
 }

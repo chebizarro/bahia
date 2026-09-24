@@ -71,8 +71,6 @@ func (h *StatusSyncHandler) HandleEvent(ctx context.Context, event events.Event)
 		return // Not a soul-factory managed service
 	}
 
-	logger = logger.With("agent_id", soul.AgentID, "service_id", serviceID)
-
 	switch event.Type {
 	case events.EventDeploymentRunCompleted:
 		h.handleDeploymentComplete(ctx, soul, event)

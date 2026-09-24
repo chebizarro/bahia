@@ -136,7 +136,7 @@ func (r *PgNostrEventArchiveRepository) ClaimArchiveBatch(ctx context.Context, c
 		return nil, err
 	}
 	if !ready {
-		return nil, errors.New("Nostr archive online indexes are not ready; run ensure-indexes before claiming rows")
+		return nil, errors.New("nostr archive online indexes are not ready; run ensure-indexes before claiming rows")
 	}
 	batchID := uuid.New()
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -227,7 +227,7 @@ func (r *PgNostrEventArchiveRepository) MarkArchiveExported(ctx context.Context,
 	path = strings.TrimSpace(path)
 	sha256 = strings.ToLower(strings.TrimSpace(sha256))
 	if path == "" || len(sha256) != 64 || compressedBytes <= 0 {
-		return errors.New("Nostr archive export metadata is incomplete")
+		return errors.New("nostr archive export metadata is incomplete")
 	}
 	tag, err := r.pool.Exec(ctx, `UPDATE nostr_event_archive_batches SET status = 'exported', exported_path = $2, sha256 = $3, compressed_bytes = $4, exported_at = now() WHERE id = $1 AND status IN ('claimed', 'exported')`, id, path, sha256, compressedBytes)
 	if err != nil {
@@ -256,7 +256,7 @@ func (r *PgNostrEventArchiveRepository) MarkArchiveProtected(ctx context.Context
 		return fmt.Errorf("protecting Nostr archive batch: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return errors.New("Nostr archive batch is not exported or digest does not match")
+		return errors.New("nostr archive batch is not exported or digest does not match")
 	}
 	return nil
 }
@@ -265,7 +265,7 @@ func (r *PgNostrEventArchiveRepository) MarkArchiveProtected(ctx context.Context
 // true only after no member remains and the batch is durably marked pruned.
 func (r *PgNostrEventArchiveRepository) PruneArchiveBatch(ctx context.Context, id uuid.UUID, limit int) (deleted int64, done bool, err error) {
 	if limit <= 0 {
-		return 0, false, errors.New("Nostr archive prune limit must be positive")
+		return 0, false, errors.New("nostr archive prune limit must be positive")
 	}
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

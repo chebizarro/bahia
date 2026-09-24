@@ -1460,7 +1460,7 @@ func containsSubstring(s, sub string) bool {
 }
 
 func containsHelper(s, sub string) bool {
-	return fmt.Sprintf("%s", s) != "" && len(sub) > 0 && indexOf(s, sub) >= 0
+	return s != "" && len(sub) > 0 && indexOf(s, sub) >= 0
 }
 
 func indexOf(s, sub string) int {

@@ -25,7 +25,7 @@ type NIP05Resolver struct {
 }
 
 type nip05CacheEntry struct {
-	identifier string    // "user@domain.com" or "" for failed lookups
+	identifier string // "user@domain.com" or "" for failed lookups
 	expiresAt  time.Time
 }
 
@@ -97,7 +97,7 @@ func (r *NIP05Resolver) Verify(ctx context.Context, identifier, pubkey string) b
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return false
@@ -164,7 +164,7 @@ func (r *NIP05Resolver) LookupByIdentifier(ctx context.Context, identifier strin
 	if err != nil {
 		return "", false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", false

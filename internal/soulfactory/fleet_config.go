@@ -7,7 +7,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 
@@ -214,7 +213,7 @@ func isEnvironmentPlaceholder(value string) bool {
 	}
 	name := value[2 : len(value)-1]
 	for index, char := range name {
-		if !(char == '_' || char >= 'A' && char <= 'Z' || index > 0 && char >= '0' && char <= '9') {
+		if char != '_' && (char < 'A' || char > 'Z') && (index <= 0 || char < '0' || char > '9') {
 			return false
 		}
 	}
@@ -234,11 +233,4 @@ func newestFleetConfigEvent(events []*nostr.Event) *nostr.Event {
 		}
 	}
 	return latest
-}
-
-func fleetConfigCreatedAt(snapshot *FleetConfigSnapshot) time.Time {
-	if snapshot == nil {
-		return time.Time{}
-	}
-	return time.Unix(snapshot.CreatedAt, 0)
 }

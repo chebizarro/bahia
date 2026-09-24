@@ -254,7 +254,7 @@ func (m *concordMembership) mintConcordRekeyBlobs(
 		// NIP-46's JSON params cannot carry them, hence the binary-safe path.
 		wrapped, err := m.signer.NIP44EncryptBytes(ctx, recipient.pk, plaintext)
 		if err != nil {
-			return nil, fmt.Errorf("Signet NIP-44 encrypt %s rekey blob for %s: %w", scope.label(), recipient.hex, err)
+			return nil, fmt.Errorf("signet NIP-44 encrypt %s rekey blob for %s: %w", scope.label(), recipient.hex, err)
 		}
 		blobs = append(blobs, concordRekeyBlob{Locator: locator, Wrapped: wrapped})
 	}
@@ -369,10 +369,10 @@ func (m *concordMembership) wrapConcordStreamEvent(ctx context.Context, stream c
 	// checks against its folded Roster, so it is signed by the Signet-held
 	// staff key and never by anything derived locally.
 	if err := m.signer.Sign(ctx, &seal); err != nil {
-		return nostr.Event{}, fmt.Errorf("Signet sign seal: %w", err)
+		return nostr.Event{}, fmt.Errorf("signet sign seal: %w", err)
 	}
 	if seal.PubKey != rotator || seal.Kind != concordStreamSealKind || !validSignedEvent(&seal) {
-		return nostr.Event{}, fmt.Errorf("Signet returned an invalid seal")
+		return nostr.Event{}, fmt.Errorf("signet returned an invalid seal")
 	}
 	sealJSON := seal.String()
 	// The library will happily encrypt past NIP-44's ceiling by widening the

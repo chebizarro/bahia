@@ -142,7 +142,6 @@ func run(configPath string) error {
 				logger.Warn("config reload initialization failed; keeping current sidecar", zap.Error(replaceErr))
 				continue
 			}
-			cfg = candidate
 			logger.Info("config reload applied", zap.String("path", configPath))
 		}
 	}

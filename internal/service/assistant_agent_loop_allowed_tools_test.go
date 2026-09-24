@@ -12,18 +12,6 @@ import (
 // the model. These tests drive the loop the way a compromised or confused model
 // would: by naming a tool that was never advertised to it.
 
-func deniedObservationForCall(res *AssistantAgentLoopResult, callID string) *domain.AssistantToolObservation {
-	if res == nil {
-		return nil
-	}
-	for _, obs := range res.Observations {
-		if obs != nil && obs.ToolCallID == callID && obs.Status == domain.AssistantToolObservationDenied {
-			return obs
-		}
-	}
-	return nil
-}
-
 // An empty but non-nil allow list means "no tools", not "all tools". The old
 // len()==0 check conflated it with an absent scope.
 func TestAssistantAgentLoopEmptyAllowedToolsPermitsNothing(t *testing.T) {

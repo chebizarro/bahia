@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/chacha20poly1305"
 
@@ -107,7 +106,7 @@ type AssistantTranscriptRecord struct {
 type AssistantTranscriptStoreConfig struct {
 	Publisher      AssistantEventPublisher
 	Subscriber     AssistantRelaySubscriber
-	Signer         canonicalnostr.Signer
+	Signer         nostr.Signer
 	Identity       AssistantIdentity
 	KeyProvider    AssistantTranscriptKeyProvider
 	ServicePubkey  string
@@ -122,7 +121,7 @@ type AssistantTranscriptStoreConfig struct {
 type AssistantTranscriptStore struct {
 	publisher      AssistantEventPublisher
 	subscriber     AssistantRelaySubscriber
-	signer         canonicalnostr.Signer
+	signer         nostr.Signer
 	identity       AssistantIdentity
 	keys           AssistantTranscriptKeyProvider
 	servicePubkey  string

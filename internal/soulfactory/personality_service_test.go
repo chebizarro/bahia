@@ -49,7 +49,7 @@ func TestPersonalityServiceMapsPersonaToOpenClawPromptSections(t *testing.T) {
 	roleIdx := strings.Index(mapping.SystemPrompt, "### Role")
 	guidelinesIdx := strings.Index(mapping.SystemPrompt, "### Guidelines")
 	redLinesIdx := strings.Index(mapping.SystemPrompt, "### Red Lines")
-	if roleIdx < 0 || guidelinesIdx < 0 || redLinesIdx < 0 || !(roleIdx < guidelinesIdx && guidelinesIdx < redLinesIdx) {
+	if roleIdx < 0 || guidelinesIdx < 0 || redLinesIdx < 0 || (roleIdx >= guidelinesIdx || guidelinesIdx >= redLinesIdx) {
 		t.Fatalf("system prompt sections not in deterministic order:\n%s", mapping.SystemPrompt)
 	}
 	if mapping.RuntimeParams.Schema != PersonalityRuntimeParamsSchema || mapping.RuntimeParams.OpenClaw.SystemPromptOverride != mapping.SystemPrompt {

@@ -319,8 +319,9 @@ func TestRouteCanaryKeyCoordinateIsStable(t *testing.T) {
 	if withUnit.Coordinate() == withoutUnit.Coordinate() {
 		t.Fatal("keys differing by deployment unit produced the same coordinate")
 	}
-	if withUnit.Coordinate() != withUnit.Coordinate() {
-		t.Fatal("coordinate is not stable")
+	coordinate := withUnit.Coordinate()
+	if got := withUnit.Coordinate(); got != coordinate {
+		t.Fatalf("coordinate changed from %q to %q", coordinate, got)
 	}
 	if withoutUnit.Coordinate() != "route:"+serviceID.String()+":"+envID.String()+":none:git.example.net" {
 		t.Fatalf("unexpected coordinate %q", withoutUnit.Coordinate())

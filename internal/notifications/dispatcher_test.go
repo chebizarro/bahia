@@ -207,7 +207,7 @@ func TestDispatcher_Dispatch(t *testing.T) {
 	d := NewDispatcher(repo, zap.NewNop())
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
-	d.Dispatch(context.Background(), "deployment_intent.created", map[string]any{"service": "api"})
+	dispatchTestNotification(t, d, context.Background(), "deployment_intent.created", map[string]any{"service": "api"})
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
@@ -260,7 +260,7 @@ func TestDispatcher_EventFilter(t *testing.T) {
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
 	// Send a non-matching event.
-	d.Dispatch(context.Background(), "build.registered", map[string]any{})
+	dispatchTestNotification(t, d, context.Background(), "build.registered", map[string]any{})
 
 	sender.mu.Lock()
 	if len(sender.sent) != 0 {
@@ -269,7 +269,7 @@ func TestDispatcher_EventFilter(t *testing.T) {
 	sender.mu.Unlock()
 
 	// Send a matching event.
-	d.Dispatch(context.Background(), "drift.detected", map[string]any{})
+	dispatchTestNotification(t, d, context.Background(), "drift.detected", map[string]any{})
 
 	sender.mu.Lock()
 	if len(sender.sent) != 1 {
@@ -293,7 +293,7 @@ func TestDispatcher_DisabledChannel(t *testing.T) {
 	d := NewDispatcher(repo, zap.NewNop())
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
-	d.Dispatch(context.Background(), "test", map[string]any{})
+	dispatchTestNotification(t, d, context.Background(), "test", map[string]any{})
 
 	sender.mu.Lock()
 	if len(sender.sent) != 0 {
@@ -318,7 +318,9 @@ func TestDispatcher_FailedDelivery(t *testing.T) {
 	d := NewDispatcher(repo, zap.NewNop())
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
-	d.Dispatch(context.Background(), "test", map[string]any{})
+	if err := d.Dispatch(context.Background(), "test", map[string]any{}); err == nil {
+		t.Fatal("Dispatch returned nil, want delivery failure")
+	}
 
 	// Should have a log entry with retrying status.
 	repo.mu.Lock()
@@ -407,7 +409,7 @@ func TestDispatcher_LogCreated(t *testing.T) {
 	d := NewDispatcher(repo, zap.NewNop())
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
-	d.Dispatch(context.Background(), "test.event", map[string]any{"key": "value"})
+	dispatchTestNotification(t, d, context.Background(), "test.event", map[string]any{"key": "value"})
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
@@ -666,4 +668,11 @@ func TestRetryFailed(t *testing.T) {
 		t.Errorf("expected 1 sent, got %d", len(sender.sent))
 	}
 	sender.mu.Unlock()
+}
+
+func dispatchTestNotification(t *testing.T, d *Dispatcher, ctx context.Context, eventType string, payload map[string]any) {
+	t.Helper()
+	if err := d.Dispatch(ctx, eventType, payload); err != nil {
+		t.Fatalf("dispatch notification: %v", err)
+	}
 }

@@ -390,7 +390,7 @@ func (s *PackageRegistryService) PromotePackage(ctx context.Context, sourceRepo 
 		if streamErr != nil {
 			return nil, nil, streamErr
 		}
-		defer stream.ReadCloser.Close()
+		defer func() { _ = stream.ReadCloser.Close() }()
 		obs, err = targetBackend.StoreArtifact(ctx, *targetRepo, packagebackend.StoreArtifactRequest{Namespace: artifact.Namespace, PackageName: artifact.PackageName, Version: artifact.Version, Filename: artifact.Filename, ContentType: artifact.ContentType, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes, Metadata: req.Metadata, Reader: stream.ReadCloser})
 	}
 	if err != nil {
@@ -633,7 +633,7 @@ func (s *PackageRegistryService) fetchAndVerifySource(ctx context.Context, rawUR
 	default:
 		return nil, "", 0, nil, fmt.Errorf("source_url scheme %q is unsupported", parsed.Scheme)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	tmp, err := os.CreateTemp("", "bahia-package-source-*")
 	if err != nil {
 		return nil, "", 0, nil, fmt.Errorf("create package source temp file: %w", err)

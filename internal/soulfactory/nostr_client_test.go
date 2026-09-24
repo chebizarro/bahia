@@ -268,3 +268,21 @@ func TestExecuteSoulActionRejectsEventsFromWrongAuthor(t *testing.T) {
 		t.Fatalf("WithExpectedFactoryPubkey() = %q, want %q", client2.expectedFactoryPubkey, otherPubkey)
 	}
 }
+
+func TestParseSoulEventIgnoresMalformedAllowedKind(t *testing.T) {
+	event := &nostr.Event{Tags: nostr.Tags{{"allowed-kind", "not-a-kind"}, {"allowed-kind", "1950"}}}
+
+	soul := ParseSoulEvent(event)
+	if len(soul.AllowedKinds) != 1 || soul.AllowedKinds[0] != 1950 {
+		t.Fatalf("allowed kinds = %v, want [1950]", soul.AllowedKinds)
+	}
+}
+
+func TestParseTemplateEventIgnoresMalformedDefaultKind(t *testing.T) {
+	event := &nostr.Event{Tags: nostr.Tags{{"default-kind", "not-a-kind"}, {"default-kind", "1950"}}}
+
+	template := ParseTemplateEvent(event)
+	if len(template.DefaultKinds) != 1 || template.DefaultKinds[0] != 1950 {
+		t.Fatalf("default kinds = %v, want [1950]", template.DefaultKinds)
+	}
+}

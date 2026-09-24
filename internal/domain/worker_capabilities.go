@@ -20,9 +20,7 @@ func NormalizeWorkerMLCapabilities(w Worker) WorkerMLCapabilities {
 		}
 	}
 	for _, accel := range w.Accelerators {
-		for _, cls := range acceleratorClasses(accel) {
-			caps.Accelerators = append(caps.Accelerators, cls)
-		}
+		caps.Accelerators = append(caps.Accelerators, acceleratorClasses(accel)...)
 	}
 	caps.Tasks = dedupeMLTaskKinds(caps.Tasks)
 	caps.Runtimes = dedupeMLRuntimeKinds(caps.Runtimes)

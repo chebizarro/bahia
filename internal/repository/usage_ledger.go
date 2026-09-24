@@ -100,11 +100,9 @@ func (r *PgUsageLedgerRepository) List(ctx context.Context, filter domain.UsageL
 	}
 	query += fmt.Sprintf(` LIMIT $%d`, argIdx)
 	args = append(args, filter.Limit)
-	argIdx++
 	if filter.Offset > 0 {
 		query += fmt.Sprintf(` OFFSET $%d`, argIdx)
 		args = append(args, filter.Offset)
-		argIdx++
 	}
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -123,7 +121,6 @@ func (r *PgUsageLedgerRepository) GetCorrections(ctx context.Context, originalID
 	defer rows.Close()
 	return scanUsageLedgerRecords(rows)
 }
-
 
 func (r *PgUsageLedgerRepository) SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {
 	query := "SELECT COALESCE(SUM(amount), 0) FROM usage_ledger_records WHERE task_id = $1"

@@ -409,9 +409,10 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	}
 	eventType := events.EventRuntimeRecoveryCompleted
 	severity := domain.AlertSeverityInfo
-	if attempt.Result == domain.RecoveryAttemptFailed {
+	switch attempt.Result {
+	case domain.RecoveryAttemptFailed:
 		eventType, severity = events.EventRuntimeRecoveryFailed, domain.AlertSeverityError
-	} else if attempt.Result == domain.RecoveryAttemptDegraded {
+	case domain.RecoveryAttemptDegraded:
 		severity = domain.AlertSeverityWarning
 	}
 	s.publish(ctx, eventType, attempt.CorrelationID, ManagedInstanceRecoveryEvent{EventID: attempt.ID.String(), Health: *health, Decision: decision, Attempt: attempt, Severity: severity, OccurredAt: attempt.RequestedAt})
@@ -428,9 +429,10 @@ func (s *ManagedInstanceSupervisor) reconcilePendingAttempt(ctx context.Context,
 	}
 	eventType := events.EventRuntimeRecoveryCompleted
 	severity := domain.AlertSeverityInfo
-	if attempt.Result == domain.RecoveryAttemptFailed {
+	switch attempt.Result {
+	case domain.RecoveryAttemptFailed:
 		eventType, severity = events.EventRuntimeRecoveryFailed, domain.AlertSeverityError
-	} else if attempt.Result == domain.RecoveryAttemptDegraded {
+	case domain.RecoveryAttemptDegraded:
 		severity = domain.AlertSeverityWarning
 	}
 	s.publish(ctx, eventType, attempt.CorrelationID, ManagedInstanceRecoveryEvent{EventID: attempt.ID.String(), Health: *health, Attempt: attempt, Severity: severity, OccurredAt: health.LastObservedAt})

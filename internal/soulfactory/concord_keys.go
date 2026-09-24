@@ -44,7 +44,7 @@ type concordGroupKey struct {
 func concordHKDF(secret []byte, label string, id [32]byte, epoch *uint64, suffix []byte) ([32]byte, error) {
 	var derived [32]byte
 	if len(secret) == 0 {
-		return derived, fmt.Errorf("Concord derivation secret is empty")
+		return derived, fmt.Errorf("concord derivation secret is empty")
 	}
 	info := make([]byte, 0, len(label)+1+32+8+len(suffix))
 	info = append(info, label...)
@@ -57,10 +57,10 @@ func concordHKDF(secret []byte, label string, id [32]byte, epoch *uint64, suffix
 
 	key, err := hkdf.Key(sha256.New, secret, nil, string(info), 32)
 	if err != nil {
-		return derived, fmt.Errorf("Concord HKDF %s: %w", label, err)
+		return derived, fmt.Errorf("concord HKDF %s: %w", label, err)
 	}
 	if len(key) != 32 {
-		return derived, fmt.Errorf("Concord HKDF %s produced %d bytes, want 32", label, len(key))
+		return derived, fmt.Errorf("concord HKDF %s produced %d bytes, want 32", label, len(key))
 	}
 	copy(derived[:], key)
 	return derived, nil
@@ -91,11 +91,11 @@ func deriveConcordGroupKey(label string, secret []byte, id [32]byte, epoch *uint
 		}
 		conversationKey, err := nip44.GenerateConversationKey(pubKey, secretKey)
 		if err != nil {
-			return group, fmt.Errorf("Concord %s conversation key: %w", label, err)
+			return group, fmt.Errorf("concord %s conversation key: %w", label, err)
 		}
 		return concordGroupKey{SecretKey: secretKey, PubKey: pubKey, ConversationKey: conversationKey}, nil
 	}
-	return group, fmt.Errorf("Concord %s derivation exhausted scalar normalization retries", label)
+	return group, fmt.Errorf("concord %s derivation exhausted scalar normalization retries", label)
 }
 
 // validConcordScalar reports whether seed is a usable secp256k1 secret key,

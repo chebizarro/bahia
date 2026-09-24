@@ -14,7 +14,6 @@ type mockUsageLedgerRepo struct {
 	records        []domain.UsageLedgerRecord
 	insertErr      error
 	getByIDFunc    func(id uuid.UUID) (*domain.UsageLedgerRecord, error)
-	listFilter     domain.UsageLedgerFilter
 	listRecords    []domain.UsageLedgerRecord
 	listErr        error
 	sumByAgentVal  int64
@@ -52,7 +51,6 @@ func (m *mockUsageLedgerRepo) List(ctx context.Context, filter domain.UsageLedge
 func (m *mockUsageLedgerRepo) GetCorrections(ctx context.Context, originalID uuid.UUID) ([]domain.UsageLedgerRecord, error) {
 	return m.getCorrections, nil
 }
-
 
 func (m *mockUsageLedgerRepo) SumByTask(ctx context.Context, taskID string, resourceType domain.UsageResourceType, since, until time.Time) (int64, error) {
 	if m.sumByAgentErr != nil {
@@ -189,7 +187,7 @@ func TestUsageLedgerCorrectionDeltaApplied(t *testing.T) {
 	}
 
 	repo := &mockUsageLedgerRepo{
-		records: []domain.UsageLedgerRecord{*original, *correction},
+		records:       []domain.UsageLedgerRecord{*original, *correction},
 		sumByAgentVal: 100,
 		listRecords:   []domain.UsageLedgerRecord{*original, *correction},
 	}
@@ -201,8 +199,8 @@ func TestUsageLedgerCorrectionDeltaApplied(t *testing.T) {
 
 func TestUsageLedgerRecordValidationCatchesMissingFields(t *testing.T) {
 	tests := []struct {
-		name  string
-		mod   func(*domain.UsageLedgerRecord)
+		name string
+		mod  func(*domain.UsageLedgerRecord)
 	}{
 		{"empty agent_pubkey", func(r *domain.UsageLedgerRecord) { r.AgentPubkey = "" }},
 		{"empty resource_type", func(r *domain.UsageLedgerRecord) { r.ResourceType = "" }},

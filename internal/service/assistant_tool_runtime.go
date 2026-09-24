@@ -655,7 +655,7 @@ func (o *AssistantOrchestrator) PublishAssistantStatus(ctx context.Context, sess
 // agentic runtime resume API.
 func (o *AssistantOrchestrator) ObserveAssistantAsyncResult(ctx context.Context, sessionID, toolCallID, toolName string, receipt *domain.AsyncToolReceipt) (AssistantAsyncObservationOutcome, error) {
 	outcome, err := o.observeDownstreamResult(ctx, sessionID, domain.AssistantPlanStep{StepID: toolCallID, ToolName: toolName}, receipt)
-	return AssistantAsyncObservationOutcome{Status: outcome.Status, Event: outcome.Event}, err
+	return AssistantAsyncObservationOutcome(outcome), err
 }
 
 func assistantAgentLoopMetadata(session *domain.AssistantSession) domain.AssistantAgentLoopMetadata {

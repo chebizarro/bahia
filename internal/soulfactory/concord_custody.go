@@ -121,7 +121,7 @@ func (c *sealedConcordCustody) Load(ctx context.Context) (concordCustodyRecord, 
 	}
 	plaintext, err := c.signer.NIP44Decrypt(ctx, staffPK, sealed)
 	if err != nil {
-		return concordCustodyRecord{}, fmt.Errorf("Signet unseal custody %s: %w", c.path, err)
+		return concordCustodyRecord{}, fmt.Errorf("signet unseal custody %s: %w", c.path, err)
 	}
 	record, err := decodeConcordCustodyDocument([]byte(plaintext))
 	if err != nil {
@@ -141,10 +141,10 @@ func (c *sealedConcordCustody) Store(ctx context.Context, record concordCustodyR
 	}
 	sealed, err := c.signer.NIP44Encrypt(ctx, staffPK, string(plaintext))
 	if err != nil {
-		return fmt.Errorf("Signet seal custody %s: %w", c.path, err)
+		return fmt.Errorf("signet seal custody %s: %w", c.path, err)
 	}
 	if strings.TrimSpace(sealed) == "" {
-		return fmt.Errorf("Signet returned an empty sealed payload for custody %s", c.path)
+		return fmt.Errorf("signet returned an empty sealed payload for custody %s", c.path)
 	}
 	// Never replace custody with material Signet cannot reopen: unseal the
 	// fresh payload and require it to match before it becomes the only copy.

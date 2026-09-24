@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,7 +37,7 @@ func TestNIP05Resolver_Verify(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		encodeNIP05TestJSON(t, w, resp)
 	}))
 	defer server.Close()
 
@@ -194,7 +195,7 @@ func TestNIP05Resolution_Integration(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		encodeNIP05TestJSON(t, w, map[string]any{
 			"names": map[string]string{
 				"alice": pubkey,
 			},
@@ -252,5 +253,12 @@ func TestMiddlewareConfig_NIP05Resolver(t *testing.T) {
 
 	if cfg.NIP05Resolver == nil {
 		t.Error("expected NIP05Resolver to be set")
+	}
+}
+
+func encodeNIP05TestJSON(t *testing.T, w io.Writer, value any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Errorf("encode test response: %v", err)
 	}
 }

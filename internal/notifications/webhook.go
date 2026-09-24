@@ -80,7 +80,7 @@ func (s *WebhookSender) Send(ctx context.Context, ch *domain.NotificationChannel
 	if err != nil {
 		return fmt.Errorf("webhook request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

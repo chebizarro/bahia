@@ -598,7 +598,7 @@ func (e *goNostrRelayEndpoint) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.relay != nil {
-		e.relay.Close()
+		_ = e.relay.Close()
 		e.relay = nil
 	}
 }
@@ -622,7 +622,7 @@ func (e *goNostrRelayEndpoint) resetRelay() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.relay != nil {
-		e.relay.Close()
+		_ = e.relay.Close()
 		e.relay = nil
 	}
 }

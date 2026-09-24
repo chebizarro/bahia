@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -423,7 +425,7 @@ func openAITTSCapabilities() VoiceProviderCapabilities {
 	for _, voice := range voices {
 		metadata = append(metadata, VoiceMetadata{
 			ID:        voice,
-			Name:      strings.Title(voice),
+			Name:      cases.Title(language.Und, cases.NoLower).String(voice),
 			Languages: []string{"multilingual"},
 			Gender:    VoiceGenderNeutral,
 			StyleTags: []string{"general", "assistant"},

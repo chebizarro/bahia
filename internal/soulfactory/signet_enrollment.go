@@ -166,7 +166,7 @@ func NewOpenClawSignetEnrollmentManager(config OpenClawSignetEnrollmentConfig) (
 	if config.Profile != nil {
 		for _, method := range config.Profile.Methods {
 			if strings.TrimSpace(method) == "*" {
-				return nil, fmt.Errorf("Signet enrollment profile methods must not contain wildcards")
+				return nil, fmt.Errorf("signet enrollment profile methods must not contain wildcards")
 			}
 		}
 		profile = SignetEnrollmentProfile{
@@ -176,7 +176,7 @@ func NewOpenClawSignetEnrollmentManager(config OpenClawSignetEnrollmentConfig) (
 		}
 	}
 	if profile.ContractSchema == "" || len(profile.Methods) == 0 || len(profile.EventKinds) == 0 {
-		return nil, fmt.Errorf("Signet enrollment profile requires schema, methods, and event kinds")
+		return nil, fmt.Errorf("signet enrollment profile requires schema, methods, and event kinds")
 	}
 	return &OpenClawSignetEnrollmentManager{config: config, profile: profile}, nil
 }
@@ -538,7 +538,7 @@ func NewContainerSignetctl(config SignetctlConfig) (*ContainerSignetctl, error) 
 		config.DockerBin = "docker"
 	}
 	if config.Container == "" || config.ConfigPath == "" || !filepath.IsAbs(config.ProvisionerCredentialFile) {
-		return nil, fmt.Errorf("Signet container, config path, and absolute provisioner credential file are required")
+		return nil, fmt.Errorf("signet container, config path, and absolute provisioner credential file are required")
 	}
 	if config.CredentialOwnerUID < 0 {
 		config.CredentialOwnerUID = os.Geteuid()
@@ -582,7 +582,7 @@ func (c *ContainerSignetctl) Provision(ctx context.Context, identityID string) (
 		return "", err
 	}
 	if _, _, _, err := sanitizeOneTimeBunkerURI(bunkerURI); err != nil {
-		return "", fmt.Errorf("Signet provision returned an invalid one-time bunker URI: %w", err)
+		return "", fmt.Errorf("signet provision returned an invalid one-time bunker URI: %w", err)
 	}
 	return bunkerURI, nil
 }

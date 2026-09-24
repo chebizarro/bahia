@@ -2155,7 +2155,7 @@ func (c *Config) validateLLM() error {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when llm.allow_operational_rest=true")
 		}
-		if c.LLM.OperatorAccessConfig.Empty() {
+		if c.LLM.Empty() {
 			return fmt.Errorf("config validation failed: llm operator allowlist is required when llm.allow_operational_rest=true")
 		}
 		if !c.LLM.Enabled {
@@ -2812,7 +2812,7 @@ func (c *Config) validateEdgeRouting() error {
 	}
 	if r.APIBaseURL != "" {
 		parsed, err := url.Parse(r.APIBaseURL)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(c.DevMode && parsed.Scheme == "http")) {
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && (!c.DevMode || parsed.Scheme != "http")) {
 			return fmt.Errorf("config validation failed: edge_routing.api_base_url must use HTTPS (HTTP is allowed only in dev_mode)")
 		}
 	}
@@ -3622,7 +3622,7 @@ func LoadPrivateKey(path, envDenyKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeyFileBytes+1))
 	if err != nil {
 		return "", err

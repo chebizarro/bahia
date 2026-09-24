@@ -338,10 +338,11 @@ func buildOpenClawMemorySearchConfig(provider, model, strategy string, autoIndex
 		Provider: provider,
 		Model:    model,
 	}
-	if strategy == MemoryStrategySessionAware {
+	switch strategy {
+	case MemoryStrategySessionAware:
 		cfg.Sources = []string{"memory", "sessions"}
 		cfg.Experimental = &OpenClawMemoryExperimentalConfig{SessionMemory: true}
-	} else if strategy == MemoryStrategyLongTerm {
+	case MemoryStrategyLongTerm:
 		cfg.Sources = []string{"memory"}
 	}
 	if autoIndex {

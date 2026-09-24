@@ -398,7 +398,7 @@ func (p *RKNNServerProvisioner) observeHealth(ctx context.Context, healthURL str
 	if err != nil {
 		return fallbackOrUnhealthy(fallback)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return domain.HealthStatusHealthy
 	}
@@ -421,7 +421,7 @@ func (p *RKNNServerProvisioner) runSmoke(ctx context.Context, endpoint string, c
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	meta := map[string]any{"passed": resp.StatusCode >= 200 && resp.StatusCode < 300, "smoke_url": smokeURL, "status_code": resp.StatusCode}
 	if len(limited) > 0 {
