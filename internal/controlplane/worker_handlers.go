@@ -40,20 +40,8 @@ func (r *Reactor) handleWorkerCordonRequest(ctx context.Context, event *nostr.Ev
 	r.handleWorkerSchedulingRequest(ctx, event, WorkerCommandCordon, domain.WorkerSchedulingCordoned)
 }
 
-func (r *Reactor) handleWorkerUncordonRequest(ctx context.Context, event *nostr.Event) {
-	r.handleWorkerSchedulingRequest(ctx, event, WorkerCommandUncordon, domain.WorkerSchedulingActive)
-}
-
 func (r *Reactor) handleWorkerDrainRequest(ctx context.Context, event *nostr.Event) {
 	r.handleWorkerSchedulingRequest(ctx, event, WorkerCommandDrain, domain.WorkerSchedulingDraining)
-}
-
-func (r *Reactor) handleWorkerUndrainRequest(ctx context.Context, event *nostr.Event) {
-	r.handleWorkerSchedulingRequest(ctx, event, WorkerCommandUndrain, domain.WorkerSchedulingActive)
-}
-
-func (r *Reactor) handleWorkerMaintenanceEnterRequest(ctx context.Context, event *nostr.Event) {
-	r.handleWorkerSchedulingRequest(ctx, event, WorkerCommandMaintenanceEnter, domain.WorkerSchedulingMaintenance)
 }
 
 func (r *Reactor) handleWorkerMaintenanceExitRequest(ctx context.Context, event *nostr.Event) {
@@ -66,38 +54,45 @@ func (r *Reactor) handleWorkerSchedulingRequest(ctx context.Context, event *nost
 		return
 	}
 	r.publishWorkerStatus(ctx, event, req, command, "running", "updating", "worker scheduling state update started")
-	worker, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey)
+	worker, code, err := r.updateWorkerSchedulingState(ctx, req.WorkerPubKey, req.Reason, command, targetState)
 	if err != nil {
-		r.publishWorkerResult(ctx, event, req, command, "failed", "lookup_error", err.Error(), nil)
+		r.publishWorkerResult(ctx, event, req, command, "failed", code, err.Error(), worker)
 		return
-	}
-	if worker == nil {
-		r.publishWorkerResult(ctx, event, req, command, "failed", "not_found", "worker not found", nil)
-		return
-	}
-	if err := validateWorkerSchedulingTransition(command, worker.SchedulingState, targetState); err != nil {
-		r.publishWorkerResult(ctx, event, req, command, "failed", "invalid_transition", err.Error(), worker)
-		return
-	}
-	updater, ok := r.workerRepo.(workerSchedulingStateUpdater)
-	if !ok {
-		r.publishWorkerResult(ctx, event, req, command, "failed", "worker_repository_unavailable", "worker repository cannot update worker scheduling state", worker)
-		return
-	}
-	if err := updater.UpdateSchedulingState(ctx, req.WorkerPubKey, targetState, strings.TrimSpace(req.Reason)); err != nil {
-		r.publishWorkerResult(ctx, event, req, command, "failed", "update_error", err.Error(), worker)
-		return
-	}
-	if refreshed, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey); err == nil && refreshed != nil {
-		worker = refreshed
-	} else {
-		worker.SchedulingState = targetState
-		worker.SchedulingNote = strings.TrimSpace(req.Reason)
 	}
 	if err := r.publishWorkerState(ctx, worker); err != nil {
 		r.logger.Warn("publish worker state read model failed", "worker", req.WorkerPubKey, "error", err)
 	}
 	r.publishWorkerResult(ctx, event, req, command, "succeeded", string(targetState), "worker scheduling state updated", worker)
+}
+
+func (r *Reactor) updateWorkerSchedulingState(ctx context.Context, pubkey, reason, command string, target domain.WorkerSchedulingState) (*domain.Worker, string, error) {
+	if r.workerRepo == nil {
+		return nil, "worker_repository_unavailable", fmt.Errorf("worker repository is not configured")
+	}
+	worker, err := r.workerRepo.GetByPubKey(ctx, pubkey)
+	if err != nil {
+		return nil, "lookup_error", err
+	}
+	if worker == nil {
+		return nil, "not_found", fmt.Errorf("worker not found")
+	}
+	if err := validateWorkerSchedulingTransition(command, worker.SchedulingState, target); err != nil {
+		return worker, "invalid_transition", err
+	}
+	updater, ok := r.workerRepo.(workerSchedulingStateUpdater)
+	if !ok {
+		return worker, "worker_repository_unavailable", fmt.Errorf("worker repository cannot update worker scheduling state")
+	}
+	if err := updater.UpdateSchedulingState(ctx, pubkey, target, strings.TrimSpace(reason)); err != nil {
+		return worker, "update_error", err
+	}
+	if refreshed, err := r.workerRepo.GetByPubKey(ctx, pubkey); err == nil && refreshed != nil {
+		worker = refreshed
+	} else {
+		worker.SchedulingState = target
+		worker.SchedulingNote = strings.TrimSpace(reason)
+	}
+	return worker, "", nil
 }
 
 func (r *Reactor) handleWorkerLabelsUpdateRequest(ctx context.Context, event *nostr.Event) {

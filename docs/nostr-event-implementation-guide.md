@@ -666,3 +666,13 @@ Known limits:
 ### Agent runtime release read models
 
 Shared verified agent runtime releases use canonical CAS control-state kind `30315` with schema `bahia.agent-runtime-release.v1`. `domain=agent-runtime-release` projects immutable runtime source and provenance; `domain=agent-service-release` projects an append-only agent/service binding and its optional `previous_binding`. Runtime source `repository`, `branch`, and `release_channel` are distinct from Soul workspace/persona repository fields. These are observables, not deployment intent (`25910`) commands.
+
+### Adjudicated mutation consumers (2026-09-24)
+
+Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter now execute
+inside the ContextVM transport behind the fail-closed fleet operator gate.
+Policy registry writes use `30900`, `domain=policy`, `schema=bahia.cp-state.v1`,
+and `d=<policy-id>` (the same shape as the projector); they never emit the retired
+policy registry kind. See the policy/worker user guides and the
+`NOSTR_NATIVE_CONTEXTVM_MIGRATION` verification report for tested behavior and
+the retained, unwired continuity/package/tool-approval findings.

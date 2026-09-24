@@ -14,6 +14,7 @@ import (
 func TestDiscoveryAdvertisesOnlyRegisteredContextVMMethods(t *testing.T) {
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), nil, zap.NewNop())
 	RegisterWorkerContextVMHandlers(transport, nil)
+	(&Reactor{}).RegisterMutationContextVMHandlers(transport, nil)
 	RegisterDNSContextVMHandlers(transport, nil, true, nil)
 	RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
 	RegisterSBOMContextVMHandlers(transport, &fakeSBOMRequestRunner{}, nil)

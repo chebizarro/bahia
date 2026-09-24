@@ -393,3 +393,21 @@ Policy state is published as Nostr events:
 - [Artifacts](artifacts.md) — Policy targets
 - [Deployments](deployments.md) — Policy enforcement
 - [Environments](environments.md) — Policy scope
+
+## Deployment-policy ContextVM mutations
+
+`policy/create`, `policy/update`, `policy/delete`, and `policy/evaluate` execute
+through the authenticated ContextVM transport. The global
+`nostr.authorized_pubkeys` operator allowlist is required; an empty list denies
+every caller. The verified inner signer is authoritative for wrapped requests.
+
+Use JSON-RPC `params`, not legacy event content. Supply an `idempotency_key` (or
+`_meta.progressToken`) for retryable requests; creation requires it. Create and
+update validate names, enforcement (`warn` or `block`), environment UUIDs and
+implemented rule types. Unknown/unimplemented rule types are rejected.
+
+CRUD results include `policy_id`; evaluation returns the actual policy decision.
+CRUD also publishes signed `30900` state with `domain=policy`,
+`schema=bahia.cp-state.v1`, and `d=<policy-id>`, including delete tombstones. A
+registry publication failure is reported as an error even if storage has already
+changed; inspect persisted state before submitting a new idempotency key.

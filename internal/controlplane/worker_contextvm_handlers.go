@@ -17,10 +17,7 @@ func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate 
 	h := workerContextVMHandlers{publisher: NewWorkerCommandPublisher(transport.responder.publisher, transport.responder.signer)}
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerCleanup, gate.wrap(h.cleanup))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, gate.wrap(h.cordon))
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerUncordon, gate.wrap(h.uncordon))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerDrain, gate.wrap(h.drain))
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerUndrain, gate.wrap(h.undrain))
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceEnter, gate.wrap(h.maintenanceEnter))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceExit, gate.wrap(h.maintenanceExit))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerLabelsUpdate, gate.wrap(h.labelsUpdate))
 }
@@ -57,39 +54,12 @@ func (h workerContextVMHandlers) cordon(ctx context.Context, request ContextVMRe
 	return workerCommandAck(receipt), err
 }
 
-func (h workerContextVMHandlers) uncordon(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
-	if err != nil {
-		return nil, err
-	}
-	receipt, err := h.publisher.PublishWorkerUncordonRequest(ctx, cmd)
-	return workerCommandAck(receipt), err
-}
-
 func (h workerContextVMHandlers) drain(ctx context.Context, request ContextVMRequest) (any, error) {
 	_, cmd, err := h.lifecycleCommand(request)
 	if err != nil {
 		return nil, err
 	}
 	receipt, err := h.publisher.PublishWorkerDrainRequest(ctx, cmd)
-	return workerCommandAck(receipt), err
-}
-
-func (h workerContextVMHandlers) undrain(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
-	if err != nil {
-		return nil, err
-	}
-	receipt, err := h.publisher.PublishWorkerUndrainRequest(ctx, cmd)
-	return workerCommandAck(receipt), err
-}
-
-func (h workerContextVMHandlers) maintenanceEnter(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
-	if err != nil {
-		return nil, err
-	}
-	receipt, err := h.publisher.PublishWorkerMaintenanceEnterRequest(ctx, cmd)
 	return workerCommandAck(receipt), err
 }
 
