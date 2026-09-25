@@ -1608,7 +1608,7 @@ func New(cfg *config.Config) (*App, error) {
 				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
 				controlPlanePool,
 				controlPlaneSigner,
-				giteaAdapter.NewMemoryInitiationStore(),
+				giteaAdapter.NewPgInitiationStore(pool, secretEncryptor),
 				giteaAdapter.InitiatorConfig{
 					GiteaBaseURL:                  cfg.HiveCI.Initiator.GiteaBaseURL,
 					MirrorOwner:                   cfg.HiveCI.Initiator.MirrorOwner,
@@ -1627,6 +1627,7 @@ func New(cfg *config.Config) (*App, error) {
 				logger,
 				giteaAdapter.WithLoomJobSubmitter(hiveCIJobClient),
 				giteaAdapter.WithWorkflowRunLookup(hiveRunLookup),
+				giteaAdapter.WithPublicationInspector(giteaAdapter.NewRelayPublicationInspector(controlPlanePool)),
 			)
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",

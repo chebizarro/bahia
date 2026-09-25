@@ -79,6 +79,7 @@ type HiveCIBuildStartRequest struct {
 }
 
 type HiveCIBuildStartResult struct {
+	BuildID uuid.UUID
 	GitSHA  string
 	GitRef  string
 	CIRunID string
@@ -221,6 +222,9 @@ func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request Conte
 	}
 	if result == nil || !fullGitSHA.MatchString(strings.TrimSpace(result.GitSHA)) || strings.TrimSpace(result.CIRunID) == "" {
 		return nil, fmt.Errorf("build initiator did not return an immutable commit and CI run ID")
+	}
+	if result.BuildID != uuid.Nil && result.BuildID != buildID {
+		return nil, fmt.Errorf("build initiator returned a conflicting canonical build ID")
 	}
 	resolvedRef := strings.TrimSpace(result.GitRef)
 	if resolvedRef == "" {
