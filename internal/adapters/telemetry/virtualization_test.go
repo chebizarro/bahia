@@ -122,7 +122,11 @@ func TestVirtualizationMetricsBoundedAndMirrored(t *testing.T) {
 		}
 	}()
 	oldInstruments := virtualizationInstruments
-	virtualizationInstruments = newVirtualizationInstruments()
+	var err error
+	virtualizationInstruments, err = newVirtualizationInstruments(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() { virtualizationInstruments = oldInstruments }()
 	p := Setup(Config{}, zap.NewNop())
 	defer func() {

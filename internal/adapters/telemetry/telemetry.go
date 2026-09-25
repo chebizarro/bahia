@@ -13,6 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/otlptranslator"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otlploggrpc "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
@@ -21,6 +24,7 @@ import (
 	otlpmetrichttp "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otlptracehttp "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/metric"
@@ -56,6 +60,7 @@ type Provider struct {
 	tracerProvider     *sdktrace.TracerProvider
 	meterProvider      *sdkmetric.MeterProvider
 	loggerProvider     *sdklog.LoggerProvider
+	prometheusHandler  http.Handler
 	setupErr           error
 	shutdownOnce       sync.Once
 	shutdownErr        error
@@ -66,6 +71,7 @@ var activeMetrics atomic.Pointer[Metrics]
 // Metrics collects application-level counters and gauges.
 type Metrics struct {
 	mu             sync.RWMutex
+	otel           *appMetricInstruments
 	virtualization map[virtualizationMetricKey]virtualizationMetricValue
 
 	// HTTP metrics
@@ -187,19 +193,19 @@ func NewMetrics() *Metrics {
 // Setup initializes telemetry with the given configuration.
 // Returns a Provider that can be used to record metrics and shut down cleanly.
 func Setup(cfg Config, logger *zap.Logger) *Provider {
+	return setup(cfg, logger)
+}
+
+func setup(cfg Config, logger *zap.Logger, additionalReaders ...sdkmetric.Reader) *Provider {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	p := &Provider{
-		config:  cfg,
-		logger:  logger,
-		metrics: NewMetrics(),
-		now:     time.Now,
-	}
-	activeMetrics.Store(p.metrics)
+	p := &Provider{config: cfg, logger: logger, now: time.Now}
 	p.nostrFleetHealth = newNostrFleetHealthProjector(func() time.Time { return p.now() })
 
 	if !cfg.Enabled {
+		p.metrics = NewMetrics()
+		activeMetrics.Store(p.metrics)
 		logger.Info("telemetry disabled")
 		return p
 	}
@@ -208,23 +214,56 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 	if serviceName == "" {
 		serviceName = "bahia"
 	}
+	res := telemetryResource(cfg, serviceName)
+	registry := prometheus.NewRegistry()
+	prometheusExporter, err := otelprom.New(
+		otelprom.WithRegisterer(registry),
+		otelprom.WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithoutSuffixes),
+		otelprom.WithoutScopeInfo(),
+		otelprom.WithoutTargetInfo(),
+	)
+	if err != nil {
+		p.setupErr = fmt.Errorf("configuring Prometheus telemetry: %w", err)
+		p.metrics = NewMetrics()
+		activeMetrics.Store(p.metrics)
+		logger.Error("telemetry Prometheus initialization failed", zap.Error(p.setupErr))
+		return p
+	}
+	p.prometheusHandler = promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+	readers := append(additionalReaders, prometheusExporter)
 
 	exportMode := "prometheus"
 	if strings.TrimSpace(cfg.OTLPEndpoint) != "" {
-		tracerProvider, meterProvider, loggerProvider, err := configureOTLP(context.Background(), cfg, serviceName)
-		if err != nil {
-			p.setupErr = fmt.Errorf("configuring OTLP telemetry: %w", err)
+		tracerProvider, meterProvider, loggerProvider, configureErr := configureOTLP(context.Background(), cfg, res, readers...)
+		if configureErr != nil {
+			p.setupErr = fmt.Errorf("configuring OTLP telemetry: %w", configureErr)
 			logger.Error("telemetry OTLP initialization failed", zap.Error(p.setupErr))
 		} else {
 			p.tracerProvider = tracerProvider
 			p.meterProvider = meterProvider
 			p.loggerProvider = loggerProvider
 			otel.SetTracerProvider(tracerProvider)
-			otel.SetMeterProvider(meterProvider)
 			global.SetLoggerProvider(loggerProvider)
 			exportMode = "prometheus+otlp"
 		}
 	}
+	if p.meterProvider == nil {
+		p.meterProvider = newMeterProvider(res, readers...)
+	}
+	otel.SetMeterProvider(p.meterProvider)
+
+	p.metrics, err = newMetricsWithProvider(p.meterProvider)
+	if err != nil {
+		p.setupErr = errors.Join(p.setupErr, fmt.Errorf("creating application metrics: %w", err))
+		p.metrics = NewMetrics()
+	}
+	if err := configureVirtualizationMeterProvider(p.meterProvider); err != nil {
+		p.setupErr = errors.Join(p.setupErr, fmt.Errorf("creating virtualization metrics: %w", err))
+	}
+	if err := configureControlPlaneMeterProvider(p.meterProvider); err != nil {
+		p.setupErr = errors.Join(p.setupErr, fmt.Errorf("creating control-plane metrics: %w", err))
+	}
+	activeMetrics.Store(p.metrics)
 
 	logger.Info("telemetry initialized",
 		zap.String("service", serviceName),
@@ -232,8 +271,23 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		zap.String("environment", cfg.Environment),
 		zap.String("export_mode", exportMode),
 	)
-
 	return p
+}
+
+func telemetryResource(cfg Config, serviceName string) *resource.Resource {
+	return resource.NewSchemaless(
+		attribute.String("service.name", serviceName),
+		attribute.String("service.version", cfg.ServiceVersion),
+		attribute.String("deployment.environment.name", cfg.Environment),
+	)
+}
+
+func newMeterProvider(res *resource.Resource, readers ...sdkmetric.Reader) *sdkmetric.MeterProvider {
+	options := []sdkmetric.Option{sdkmetric.WithResource(res)}
+	for _, reader := range readers {
+		options = append(options, sdkmetric.WithReader(reader))
+	}
+	return sdkmetric.NewMeterProvider(options...)
 }
 
 // GetMetrics returns the metrics collector.
@@ -249,7 +303,7 @@ func (p *Provider) TracerProvider() trace.TracerProvider {
 	return p.tracerProvider
 }
 
-// MeterProvider returns the configured OTLP meter provider, or nil when OTLP is disabled or failed to initialize.
+// MeterProvider returns the configured application meter provider, or nil when telemetry is disabled.
 func (p *Provider) MeterProvider() metric.MeterProvider {
 	if p.meterProvider == nil {
 		return nil
@@ -298,12 +352,7 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.shutdownErr
 }
 
-func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktrace.TracerProvider, *sdkmetric.MeterProvider, *sdklog.LoggerProvider, error) {
-	res := resource.NewSchemaless(
-		attribute.String("service.name", serviceName),
-		attribute.String("service.version", cfg.ServiceVersion),
-		attribute.String("deployment.environment.name", cfg.Environment),
-	)
+func configureOTLP(ctx context.Context, cfg Config, res *resource.Resource, readers ...sdkmetric.Reader) (*sdktrace.TracerProvider, *sdkmetric.MeterProvider, *sdklog.LoggerProvider, error) {
 
 	protocol := strings.ToLower(strings.TrimSpace(cfg.OTLPProtocol))
 	if protocol == "" {
@@ -362,10 +411,8 @@ func configureOTLP(ctx context.Context, cfg Config, serviceName string) (*sdktra
 	}
 
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter), sdktrace.WithResource(res))
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
-		sdkmetric.WithResource(res),
-	)
+	readers = append(readers, sdkmetric.NewPeriodicReader(metricExporter))
+	meterProvider := newMeterProvider(res, readers...)
 	loggerProvider := sdklog.NewLoggerProvider(
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
 		sdklog.WithResource(res),
@@ -422,6 +469,11 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	if len(m.HTTPRequestDurations) > 1000 {
 		m.HTTPRequestDurations = m.HTTPRequestDurations[len(m.HTTPRequestDurations)-1000:]
 	}
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.httpRequests.Add(ctx, 1, metric.WithAttributes(attribute.String("key", key)))
+		m.otel.httpRequestDuration.Record(ctx, durSec)
+	}
 }
 
 // --- Deployment Metrics ---
@@ -433,6 +485,9 @@ func (m *Metrics) RecordDeployment(service, environment, status string) {
 
 	key := fmt.Sprintf("%s:%s:%s", service, environment, status)
 	m.DeploymentsTotal[key]++
+	if m.otel != nil {
+		m.otel.deployments.Add(context.Background(), 1, metric.WithAttributes(attribute.String("key", key)))
+	}
 }
 
 // RecordDriftDetected increments the drift detection counter.
@@ -440,6 +495,9 @@ func (m *Metrics) RecordDriftDetected() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.DriftDetectedTotal++
+	if m.otel != nil {
+		m.otel.driftDetected.Add(context.Background(), 1)
+	}
 }
 
 // RecordHygieneScan counts a hygiene dry-run scan issued to a worker.
@@ -447,6 +505,9 @@ func (m *Metrics) RecordHygieneScan() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.HygieneScansTotal++
+	if m.otel != nil {
+		m.otel.hygieneScans.Add(context.Background(), 1)
+	}
 }
 
 // RecordHygieneCandidates counts scan candidates by class.
@@ -454,6 +515,9 @@ func (m *Metrics) RecordHygieneCandidates(class string, count int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.HygieneCandidatesTotal[class] += int64(count)
+	if m.otel != nil {
+		m.otel.hygieneCandidates.Add(context.Background(), int64(count), metric.WithAttributes(attribute.String("class", class)))
+	}
 }
 
 // RecordHygieneAction counts a maintenance intent by method and status.
@@ -461,6 +525,9 @@ func (m *Metrics) RecordHygieneAction(method, status string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.HygieneActionsTotal[method+":"+status]++
+	if m.otel != nil {
+		m.otel.hygieneActions.Add(context.Background(), 1, metric.WithAttributes(attribute.String("method", method), attribute.String("status", status)))
+	}
 }
 
 // RecordHygienePressureBreach counts a pressure-threshold breach.
@@ -468,6 +535,9 @@ func (m *Metrics) RecordHygienePressureBreach() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.HygienePressureBreachesTotal++
+	if m.otel != nil {
+		m.otel.hygienePressureBreaches.Add(context.Background(), 1)
+	}
 }
 
 var fleetHealthDomains = []string{"worker", "service", "runtime"}
@@ -505,6 +575,9 @@ func (m *Metrics) SetFleetHealthEntities(domain, status string, count int64) {
 	}
 	status = normalizeFleetHealthStatus(status)
 	m.FleetHealthEntities[domain+":"+status] = count
+	if m.otel != nil {
+		m.otel.fleetHealthEntities.Record(context.Background(), count, metric.WithAttributes(attribute.String("domain", domain), attribute.String("status", status)))
+	}
 }
 
 // RecordAdoptionScan records an adoption scan operation. It stores only
@@ -522,6 +595,14 @@ func (m *Metrics) RecordAdoptionScan(targets, candidates, redactedKeys int, dura
 	m.AdoptionCandidatesTotal += int64(candidates)
 	m.AdoptionRedactedKeysTotal += int64(redactedKeys)
 	m.AdoptionScanDurations = appendBounded(m.AdoptionScanDurations, duration.Seconds(), 1000)
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.adoptionScans.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))
+		m.otel.adoptionTargetsScanned.Add(ctx, int64(targets))
+		m.otel.adoptionCandidates.Add(ctx, int64(candidates))
+		m.otel.adoptionRedactedKeys.Add(ctx, int64(redactedKeys))
+		m.otel.adoptionScanDuration.Record(ctx, duration.Seconds())
+	}
 }
 
 // RecordAdoptionImport records an adoption import batch. It stores aggregate
@@ -543,6 +624,15 @@ func (m *Metrics) RecordAdoptionImport(candidates, successCount, failureCount, r
 	m.AdoptionImportFailureTotal += int64(failureCount)
 	m.AdoptionRedactedKeysTotal += int64(redactedKeys)
 	m.AdoptionImportDurations = appendBounded(m.AdoptionImportDurations, duration.Seconds(), 1000)
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.adoptionImports.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))
+		m.otel.adoptionCandidates.Add(ctx, int64(candidates))
+		m.otel.adoptionImportSuccess.Add(ctx, int64(successCount))
+		m.otel.adoptionImportFailure.Add(ctx, int64(failureCount))
+		m.otel.adoptionRedactedKeys.Add(ctx, int64(redactedKeys))
+		m.otel.adoptionImportDuration.Record(ctx, duration.Seconds())
+	}
 }
 
 // RecordRuntimeAction records direct runtime action latency and outcome.
@@ -559,6 +649,11 @@ func (m *Metrics) RecordRuntimeAction(action, status string, duration time.Durat
 	key := fmt.Sprintf("%s:%s", action, status)
 	m.RuntimeActionsTotal[key]++
 	m.RuntimeActionDurations = appendBounded(m.RuntimeActionDurations, duration.Seconds(), 1000)
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.runtimeActions.Add(ctx, 1, metric.WithAttributes(attribute.String("key", key)))
+		m.otel.runtimeActionDuration.Record(ctx, duration.Seconds())
+	}
 }
 
 // --- Reconciliation Metrics ---
@@ -575,6 +670,12 @@ func (m *Metrics) RecordReconcile(duration time.Duration, statesChecked int) {
 	if len(m.ReconcileDurations) > 100 {
 		m.ReconcileDurations = m.ReconcileDurations[len(m.ReconcileDurations)-100:]
 	}
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.reconcileTotal.Add(ctx, 1)
+		m.otel.reconcileStatesChecked.Record(ctx, int64(statesChecked))
+		m.otel.reconcileDuration.Record(ctx, duration.Seconds())
+	}
 }
 
 // RecordControlPlaneDispatch records a bounded outbound ContextVM or Loom dispatch outcome.
@@ -582,6 +683,9 @@ func (m *Metrics) RecordControlPlaneDispatch(kind, outcome string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ControlPlaneDispatches[kind+":"+outcome]++
+	if m.otel != nil {
+		m.otel.controlPlaneDispatch.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind), attribute.String("outcome", outcome)))
+	}
 }
 
 // RecordReleaseOutcome records a bounded promotion or rollback outcome.
@@ -589,6 +693,9 @@ func (m *Metrics) RecordReleaseOutcome(operation, outcome string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ReleaseOutcomes[operation+":"+outcome]++
+	if m.otel != nil {
+		m.otel.releaseOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("outcome", outcome)))
+	}
 }
 
 // --- Nostr Metrics ---
@@ -598,6 +705,9 @@ func (m *Metrics) RecordNostrPublished(kind string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.NostrEventsPublished[kind]++
+	if m.otel != nil {
+		m.otel.nostrEventsPublished.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
+	}
 }
 
 // RecordNostrReceived increments the received event counter for a kind.
@@ -605,6 +715,9 @@ func (m *Metrics) RecordNostrReceived(kind string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.NostrEventsReceived[kind]++
+	if m.otel != nil {
+		m.otel.nostrEventsReceived.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
+	}
 }
 
 // RecordAudit4903Anomaly records a rejected or contradictory audit event.
@@ -612,6 +725,9 @@ func (m *Metrics) RecordAudit4903Anomaly() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Audit4903AnomaliesTotal++
+	if m.otel != nil {
+		m.otel.audit4903Anomalies.Add(context.Background(), 1)
+	}
 }
 
 // RecordAuthorizationRejection records a rejection using a bounded reason.
@@ -624,6 +740,9 @@ func (m *Metrics) RecordAuthorizationRejection(reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.AuthorizationRejections[reason]++
+	if m.otel != nil {
+		m.otel.authorizationRejections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", reason)))
+	}
 }
 
 // RecordTierRejection records a request rejected by Bahia's active tier.
@@ -635,6 +754,9 @@ func (m *Metrics) RecordTierRejection(requestedTier int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.TierRejections[tier]++
+	if m.otel != nil {
+		m.otel.tierRejections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("tier", tier)))
+	}
 }
 
 // RecordNostrEOSE records the latency from subscription start to EOSE receipt.
@@ -645,6 +767,9 @@ func (m *Metrics) RecordNostrEOSE(latency time.Duration) {
 	// Keep only last 1000 samples for memory efficiency
 	if len(m.NostrEOSELatencies) > 1000 {
 		m.NostrEOSELatencies = m.NostrEOSELatencies[len(m.NostrEOSELatencies)-1000:]
+	}
+	if m.otel != nil {
+		m.otel.nostrEOSELatency.Record(context.Background(), latency.Seconds())
 	}
 }
 
@@ -658,6 +783,11 @@ func (m *Metrics) RecordNostrPublishOK(relayURL string, latency time.Duration) {
 	if len(m.NostrPublishLatencies) > 1000 {
 		m.NostrPublishLatencies = m.NostrPublishLatencies[len(m.NostrPublishLatencies)-1000:]
 	}
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.nostrPublishOK.Add(ctx, 1, metric.WithAttributes(attribute.String("relay", relayURL)))
+		m.otel.nostrPublishLatency.Record(ctx, latency.Seconds())
+	}
 }
 
 // RecordNostrPublishFailed records a failed publish to a relay with reason.
@@ -667,6 +797,9 @@ func (m *Metrics) RecordNostrPublishFailed(relayURL, reason string) {
 	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s:%s", relayURL, reason)
 	m.NostrPublishFailed[key]++
+	if m.otel != nil {
+		m.otel.nostrPublishFailed.Add(context.Background(), 1, metric.WithAttributes(attribute.String("key", key)))
+	}
 }
 
 // RecordNostrReconnect records a reconnection attempt to a relay.
@@ -674,6 +807,9 @@ func (m *Metrics) RecordNostrReconnect(relayURL string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.NostrReconnects[relayURL]++
+	if m.otel != nil {
+		m.otel.nostrReconnects.Add(context.Background(), 1, metric.WithAttributes(attribute.String("relay", relayURL)))
+	}
 }
 
 // RecordNostrBackoff records a backoff duration before reconnection.
@@ -685,6 +821,9 @@ func (m *Metrics) RecordNostrBackoff(duration time.Duration) {
 	if len(m.NostrBackoffDurations) > 500 {
 		m.NostrBackoffDurations = m.NostrBackoffDurations[len(m.NostrBackoffDurations)-500:]
 	}
+	if m.otel != nil {
+		m.otel.nostrBackoff.Record(context.Background(), duration.Seconds())
+	}
 }
 
 // SetNostrRelayHealth updates the health status for a relay.
@@ -695,15 +834,47 @@ func (m *Metrics) SetNostrRelayHealth(relayURL string, healthy, degraded bool, s
 	m.NostrRelayHealthy[relayURL] = healthy
 	m.NostrRelayDegraded[relayURL] = degraded
 	m.NostrRelaySuccessRate[relayURL] = successRate
+	if m.otel != nil {
+		attrs := metric.WithAttributes(attribute.String("relay", relayURL))
+		m.otel.nostrRelayHealthy.Record(context.Background(), boolMetricValue(healthy), attrs)
+		m.otel.nostrRelayDegraded.Record(context.Background(), boolMetricValue(degraded), attrs)
+		m.otel.nostrRelaySuccessRate.Record(context.Background(), successRate, attrs)
+		var healthyCount, degradedCount, unhealthyCount int64
+		for relay, isHealthy := range m.NostrRelayHealthy {
+			switch {
+			case isHealthy:
+				healthyCount++
+			case m.NostrRelayDegraded[relay]:
+				degradedCount++
+			default:
+				unhealthyCount++
+			}
+		}
+		m.otel.nostrRelaysHealthy.Record(context.Background(), healthyCount)
+		m.otel.nostrRelaysDegraded.Record(context.Background(), degradedCount)
+		m.otel.nostrRelaysUnhealthy.Record(context.Background(), unhealthyCount)
+	}
 }
 
 // SetNostrRelayTransportHealth updates relay protocol recovery counters from a health snapshot.
 func (m *Metrics) SetNostrRelayTransportHealth(relayURL string, closedReasons map[string]int64, reREQAttempts, reconnectAttempts int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previousReasons := m.NostrRelayClosedReasons[relayURL]
 	copiedReasons := make(map[string]int64, len(closedReasons))
 	for reason, count := range closedReasons {
 		copiedReasons[reason] = count
+		if m.otel != nil && count > previousReasons[reason] {
+			m.otel.nostrRelayClosed.Add(context.Background(), count-previousReasons[reason], metric.WithAttributes(attribute.String("relay", relayURL), attribute.String("reason", reason)))
+		}
+	}
+	if m.otel != nil {
+		if delta := reREQAttempts - m.NostrRelayReREQAttempts[relayURL]; delta > 0 {
+			m.otel.nostrRelayReREQAttempts.Add(context.Background(), delta, metric.WithAttributes(attribute.String("relay", relayURL)))
+		}
+		if delta := reconnectAttempts - m.NostrRelayReconnectAttempts[relayURL]; delta > 0 {
+			m.otel.nostrRelayReconnects.Add(context.Background(), delta, metric.WithAttributes(attribute.String("relay", relayURL)))
+		}
 	}
 	m.NostrRelayClosedReasons[relayURL] = copiedReasons
 	m.NostrRelayReREQAttempts[relayURL] = reREQAttempts
@@ -718,6 +889,9 @@ func (m *Metrics) SetNostrOutboxDepth(depth int64) {
 		depth = 0
 	}
 	m.NostrOutboxDepth = depth
+	if m.otel != nil {
+		m.otel.nostrOutboxDepth.Record(context.Background(), depth)
+	}
 }
 
 // SetNostrEventStorage records catalog-backed event-store lifecycle gauges.
@@ -733,6 +907,19 @@ func (m *Metrics) SetNostrEventStorage(totalBytes, heapBytes, indexBytes, liveRo
 	for _, status := range []string{"claimed", "exported", "protected", "pruned"} {
 		m.NostrArchiveBatches[status] = batches[status]
 	}
+	if m.otel != nil {
+		ctx := context.Background()
+		for component, value := range map[string]int64{"total": totalBytes, "heap": heapBytes, "indexes": indexBytes} {
+			m.otel.nostrEventStoreBytes.Record(ctx, value, metric.WithAttributes(attribute.String("component", component)))
+		}
+		for state, value := range map[string]int64{"live": liveRows, "dead": deadRows} {
+			m.otel.nostrEventStoreRows.Record(ctx, value, metric.WithAttributes(attribute.String("state", state)))
+		}
+		m.otel.nostrEventStoreOldest.Record(ctx, oldestUnix)
+		for _, status := range []string{"claimed", "exported", "protected", "pruned"} {
+			m.otel.nostrArchiveBatches.Record(ctx, batches[status], metric.WithAttributes(attribute.String("status", status)))
+		}
+	}
 }
 
 // --- Worker Metrics ---
@@ -742,6 +929,9 @@ func (m *Metrics) SetWorkersActive(n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.WorkersActive = n
+	if m.otel != nil {
+		m.otel.workersActive.Record(context.Background(), n)
+	}
 }
 
 // SetWorkersTotal sets the total known workers.
@@ -749,6 +939,9 @@ func (m *Metrics) SetWorkersTotal(n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.WorkersTotal = n
+	if m.otel != nil {
+		m.otel.workersTotal.Record(context.Background(), n)
+	}
 }
 
 // SetLoomJobsInflight sets the in-flight jobs gauge.
@@ -756,6 +949,9 @@ func (m *Metrics) SetLoomJobsInflight(n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.LoomJobsInflight = n
+	if m.otel != nil {
+		m.otel.loomJobsInflight.Record(context.Background(), n)
+	}
 }
 
 // RecordLoomJob records a Loom job completion.
@@ -763,6 +959,9 @@ func (m *Metrics) RecordLoomJob(status string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.LoomJobsTotal[status]++
+	if m.otel != nil {
+		m.otel.loomJobs.Add(context.Background(), 1, metric.WithAttributes(attribute.String("status", status)))
+	}
 }
 
 // --- Cashu Payment Metrics ---
@@ -775,6 +974,13 @@ func (m *Metrics) RecordCashuPayment(status string, amountSats int64) {
 	if status == "sent" || status == "redeemed" {
 		m.CashuPaymentsSats += amountSats
 	}
+	if m.otel != nil {
+		ctx := context.Background()
+		m.otel.cashuPayments.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))
+		if status == "sent" || status == "redeemed" {
+			m.otel.cashuPaymentsSats.Add(ctx, amountSats)
+		}
+	}
 }
 
 // SetCashuWalletBalance sets the wallet balance for a mint.
@@ -782,6 +988,16 @@ func (m *Metrics) SetCashuWalletBalance(mintURL string, balance int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.CashuWalletBalance[mintURL] = balance
+	if m.otel != nil {
+		m.otel.cashuWalletBalance.Record(context.Background(), balance, metric.WithAttributes(attribute.String("mint", mintURL)))
+	}
+}
+
+func boolMetricValue(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // --- Prometheus Export ---
@@ -807,6 +1023,22 @@ func (w *prometheusWriter) printf(format string, args ...interface{}) {
 
 // MetricsHandler returns an HTTP handler that serves Prometheus-compatible metrics.
 func (p *Provider) MetricsHandler() http.HandlerFunc {
+	if p.prometheusHandler == nil {
+		return p.legacyMetricsHandler()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.prometheusHandler.ServeHTTP(w, r)
+		writer := &prometheusWriter{writer: w}
+		renderFleetHealthMetrics(writer, p.fleetHealthSnapshot(r.Context(), p.now().UTC()))
+		renderNostrFleetHealthMetrics(writer, p.nostrFleetHealth.snapshot(p.now().UTC()))
+		if writer.err != nil {
+			return
+		}
+		p.appendOpenClawSagaMetrics(r.Context(), w, writer)
+	}
+}
+
+func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fleetHealth := p.fleetHealthSnapshot(r.Context(), p.now().UTC())
 		nostrFleetHealth := p.nostrFleetHealth.snapshot(p.now().UTC())
@@ -1203,14 +1435,18 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 			return
 		}
 
-		p.openClawSagaMu.RLock()
-		export := p.openClawSaga
-		p.openClawSagaMu.RUnlock()
-		if export != nil {
-			if err := export(r.Context(), w); err != nil {
-				p.logger.Error("exporting OpenClaw saga metrics", zap.Error(err))
-				writer.println("# OpenClaw saga metrics unavailable")
-			}
+		p.appendOpenClawSagaMetrics(r.Context(), w, writer)
+	}
+}
+
+func (p *Provider) appendOpenClawSagaMetrics(ctx context.Context, w io.Writer, writer *prometheusWriter) {
+	p.openClawSagaMu.RLock()
+	export := p.openClawSaga
+	p.openClawSagaMu.RUnlock()
+	if export != nil {
+		if err := export(ctx, w); err != nil {
+			p.logger.Error("exporting OpenClaw saga metrics", zap.Error(err))
+			writer.println("# OpenClaw saga metrics unavailable")
 		}
 	}
 }

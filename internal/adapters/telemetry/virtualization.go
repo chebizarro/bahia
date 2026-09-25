@@ -33,9 +33,26 @@ type virtualizationInstrument struct {
 	histogram metric.Float64Histogram
 }
 
-var virtualizationInstruments = newVirtualizationInstruments()
+var virtualizationInstruments = defaultVirtualizationInstruments()
 
-func newVirtualizationInstruments() map[string]virtualizationInstrument {
+func defaultVirtualizationInstruments() map[string]virtualizationInstrument {
+	instruments, err := newVirtualizationInstruments(otel.GetMeterProvider())
+	if err != nil {
+		panic(err)
+	}
+	return instruments
+}
+
+func configureVirtualizationMeterProvider(provider metric.MeterProvider) error {
+	instruments, err := newVirtualizationInstruments(provider)
+	if err != nil {
+		return err
+	}
+	virtualizationInstruments = instruments
+	return nil
+}
+
+func newVirtualizationInstruments(provider metric.MeterProvider) (map[string]virtualizationInstrument, error) {
 	definitions := map[string][2]string{
 		"observation_timestamp_seconds": {"gauge", "s"},
 		"quota_headroom":                {"gauge", "1"},
@@ -49,21 +66,25 @@ func newVirtualizationInstruments() map[string]virtualizationInstrument {
 		"checkpoints_total": {"counter", "{operation}"}, "checkpoint_duration_seconds": {"histogram", "s"}, "checkpoint_bytes": {"gauge", "By"}, "checkpoint_age_seconds": {"gauge", "s"}, "checkpoint_verification_failures_total": {"counter", "{failure}"},
 		"orphans": {"gauge", "{resource}"}, "plane_probes_total": {"counter", "{probe}"}, "plane_probe_freshness_seconds": {"gauge", "s"}, "plane_drift": {"gauge", "{plane}"}, "plane_capabilities": {"gauge", "{capability}"}, "plane_capability_retractions_total": {"counter", "{capability}"},
 	}
-	meter := otel.Meter("github.com/openagentsinc/bahia/virtualization")
+	meter := provider.Meter("github.com/openagentsinc/bahia/virtualization")
 	out := make(map[string]virtualizationInstrument, len(definitions))
 	for name, d := range definitions {
 		v := virtualizationInstrument{mode: d[0], unit: d[1]}
+		var err error
 		switch v.mode {
 		case "gauge":
-			v.gauge, _ = meter.Float64Gauge("bahia.virtualization."+name, metric.WithUnit(v.unit))
+			v.gauge, err = meter.Float64Gauge("bahia.virtualization."+name, metric.WithUnit(v.unit))
 		case "counter":
-			v.counter, _ = meter.Float64Counter("bahia.virtualization."+name, metric.WithUnit(v.unit))
+			v.counter, err = meter.Float64Counter("bahia.virtualization."+name, metric.WithUnit(v.unit))
 		case "histogram":
-			v.histogram, _ = meter.Float64Histogram("bahia.virtualization."+name, metric.WithUnit(v.unit))
+			v.histogram, err = meter.Float64Histogram("bahia.virtualization."+name, metric.WithUnit(v.unit))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("creating virtualization instrument %s: %w", name, err)
 		}
 		out[name] = v
 	}
-	return out
+	return out, nil
 }
 
 type VirtualizationLabels struct {

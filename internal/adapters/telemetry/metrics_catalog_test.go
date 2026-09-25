@@ -16,13 +16,15 @@ const catalogRelPath = "../../../deploy/observability/metrics-catalog.txt"
 const alertsRelPath = "../../../deploy/observability/bahia-alerts.yml"
 
 var (
-	helpDeclaration = regexp.MustCompile(`#\s*HELP\s+(bahia_[a-z0-9_]+)`)
-	metricReference = regexp.MustCompile(`\bbahia_[a-z0-9_]+`)
+	helpDeclaration           = regexp.MustCompile(`#\s*HELP\s+(bahia_[a-z0-9_]+)`)
+	otelMetricDeclaration     = regexp.MustCompile(`b\.(?:int64Counter|int64Gauge|float64Gauge|secondsHistogram)\("(bahia_[a-z0-9_]+)"`)
+	controlPlaneDeclaration   = regexp.MustCompile(`"(bahia\.controlplane\.[a-z.]+)"`)
+	virtualizationDeclaration = regexp.MustCompile(`"([a-z0-9_]+)":\s*\{"(?:gauge|counter|histogram)"`)
+	metricReference           = regexp.MustCompile(`\bbahia_[a-z0-9_]+`)
 )
 
-// declaredMetrics returns every bahia_ metric family this package declares a
-// HELP line for. HELP is the authoritative declaration: a metric emitted
-// without one is invisible to this catalog and to anyone reading /metrics.
+// declaredMetrics returns every bahia_ metric family this package exposes through
+// either the legacy HELP declarations or the configured OTel Prometheus reader.
 func declaredMetrics(t *testing.T) []string {
 	t.Helper()
 	// Scoped to this package on purpose: the catalog's bahia_ section documents
@@ -44,6 +46,19 @@ func declaredMetrics(t *testing.T) []string {
 		}
 		for _, match := range helpDeclaration.FindAllStringSubmatch(string(data), -1) {
 			set[match[1]] = struct{}{}
+		}
+		for _, match := range otelMetricDeclaration.FindAllStringSubmatch(string(data), -1) {
+			set[match[1]] = struct{}{}
+		}
+		if name == "controlplane.go" {
+			for _, match := range controlPlaneDeclaration.FindAllStringSubmatch(string(data), -1) {
+				set[strings.ReplaceAll(match[1], ".", "_")] = struct{}{}
+			}
+		}
+		if name == "virtualization.go" {
+			for _, match := range virtualizationDeclaration.FindAllStringSubmatch(string(data), -1) {
+				set["bahia_virtualization_"+match[1]] = struct{}{}
+			}
 		}
 	}
 	out := make([]string, 0, len(set))
