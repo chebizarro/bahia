@@ -15,21 +15,11 @@ import (
 	"fiatjaf.com/nostr/nip59"
 )
 
-func TestConcordRotationRefoundingRollsRootAndRedistributes(t *testing.T) {
-	fixture := newConcordRotationFixture(t, 4)
-	first := newFakeSigner(t)
-	second := newFakeSigner(t)
-
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  []string{first.pubkey, strings.ToUpper(second.pubkey), first.pubkey},
-		Reason:      "banned a compromised operator",
-	})
-	if err != nil {
-		t.Fatalf("Rotate() error = %v", err)
-	}
-
+// Refounding planning is retained as a mechanics test, not a supported Rotate path.
+func TestConcordRefoundingPlanRollsRootAndPreservesFields(t *testing.T) {
+	fixture := newConcordRotationFixture(t, 0)
+	plan, _, _ := concordTestRefoundingPlan(t, fixture)
+	receipt := plan.receipt
 	if !receipt.Refounded || receipt.PrevRootEpoch != 3 || receipt.RootEpoch != 4 {
 		t.Fatalf("receipt epochs = %d -> %d (refounded=%v)", receipt.PrevRootEpoch, receipt.RootEpoch, receipt.Refounded)
 	}
@@ -40,14 +30,7 @@ func TestConcordRotationRefoundingRollsRootAndRedistributes(t *testing.T) {
 	if receipt.RootPrevCommit != expectedCommit {
 		t.Fatalf("receipt root prevcommit = %s, want %s", receipt.RootPrevCommit, expectedCommit)
 	}
-	if len(receipt.Recipients) != 2 || receipt.Recipients[0] != first.pubkey || receipt.Recipients[1] != second.pubkey {
-		t.Fatalf("receipt recipients = %#v", receipt.Recipients)
-	}
-
-	record, err := fixture.custody.Load(t.Context())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
+	record := concordCustodyRecord{Bundle: plan.bundle, ControlRoot: plan.controlRoot}
 	var rotated concordInviteBundle
 	if err := json.Unmarshal(record.Bundle, &rotated); err != nil {
 		t.Fatalf("decode rotated bundle: %v", err)
@@ -110,38 +93,9 @@ func TestConcordRotationRefoundingRollsRootAndRedistributes(t *testing.T) {
 		t.Fatalf("unknown channel field lost: %s", fields["channels"])
 	}
 
-	// CORD-06 §3's order: the base rotation's Rekey Blobs go out first, the
-	// compaction follows only after that root roll is published, the Guestbook
-	// snapshot is the best-effort final step, and both survivors then receive
-	// the rotated material as a CORD-05 direct invite.
-	if len(fixture.endpoint.published) != 4 {
-		t.Fatalf("published events = %d, want a rekey chunk, a snapshot chunk, and one invite per survivor", len(fixture.endpoint.published))
-	}
-	// This fixture's prior Control Plane carries no editions, so the compaction
-	// re-wraps nothing — an empty plane folds reliably, which is not the same as
-	// a plane that could not be folded (that aborts, see the Refounding tests).
-	if receipt.Compaction == nil || receipt.Compaction.Entities != 0 || receipt.Compaction.Epoch != 4 {
-		t.Fatalf("receipt compaction = %#v", receipt.Compaction)
-	}
-	if receipt.Compaction.Address != rotated.ControlPK {
-		t.Fatalf("compaction address = %s, want the rotated control_pk %s", receipt.Compaction.Address, rotated.ControlPK)
-	}
-	if receipt.GuestbookSnapshot == nil || receipt.GuestbookSnapshot.Chunks != 1 ||
-		receipt.GuestbookSnapshot.Members != 2 || receipt.GuestbookSnapshot.Error != "" {
-		t.Fatalf("receipt guestbook snapshot = %#v", receipt.GuestbookSnapshot)
-	}
-	if len(receipt.Rekeys) != 1 || receipt.Rekeys[0].Scope != strings.Repeat("0", 64) || receipt.Rekeys[0].Chunks != 1 {
-		t.Fatalf("receipt rekeys = %#v", receipt.Rekeys)
-	}
-	if fixture.endpoint.published[0].Kind != nostr.KindGiftWrap ||
-		fixture.endpoint.published[0].PubKey.Hex() != receipt.Rekeys[0].Address {
-		t.Fatalf("first published event is not the rekey wrap: %+v", fixture.endpoint.published[0])
-	}
-	for i, recipient := range []fakeSigner{first, second} {
-		delivered := concordUnwrapInvite(t, fixture.endpoint.published[i+2], recipient)
-		if delivered != string(record.Bundle) {
-			t.Fatalf("recipient %d received stale material", i)
-		}
+	fixture.assertUnrotated(t)
+	if len(fixture.endpoint.published) != 0 {
+		t.Fatal("planning must not publish")
 	}
 }
 
@@ -282,19 +236,18 @@ func TestConcordRotationRejectsMalformedRequests(t *testing.T) {
 
 func TestConcordRotationDoesNotPublishWhenCustodyStoreFails(t *testing.T) {
 	fixture := newConcordRotationFixture(t, 1)
-	fixture.membership.signer = fakeConcordSigner{fakeSigner: fixture.staff.fakeSigner, decryptErr: errors.New("bunker denied nip44_decrypt")}
-	// Custody keeps the working signer, so the current material still loads and
-	// only the verify-before-replace step fails.
-	fixture.custody.signer = fakeConcordSigner{fakeSigner: fixture.staff.fakeSigner, decryptErr: errors.New("bunker denied nip44_decrypt")}
+	custody := &concordCountingCustody{concordBundleCustody: fixture.custody, storeErr: errors.New("custody write denied")}
+	fixture.membership.communities[0].custody = custody
 
 	_, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 		CommunityID: fixture.communityID,
-		Refound:     true,
+		ChannelIDs:  []string{fixture.privateChannelID},
 		Recipients:  []string{newFakeSigner(t).pubkey},
 	})
-	if err == nil {
-		t.Fatal("Rotate() succeeded with unusable custody")
+	if err == nil || !strings.Contains(err.Error(), "custody write denied") || custody.stores != 1 {
+		t.Fatalf("Store calls=%d, error=%v", custody.stores, err)
 	}
+	fixture.assertUnrotated(t)
 	if len(fixture.endpoint.published) != 0 {
 		t.Fatal("Rotate() published material it could not persist")
 	}
@@ -306,7 +259,7 @@ func TestConcordRotationFailsClosedWhenMintingFails(t *testing.T) {
 
 	_, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 		CommunityID: fixture.communityID,
-		Refound:     true,
+		ChannelIDs:  []string{fixture.privateChannelID},
 		Recipients:  []string{newFakeSigner(t).pubkey},
 	})
 	if err == nil || !strings.Contains(err.Error(), "entropy source unavailable") {
@@ -319,12 +272,10 @@ func TestConcordRotationFailsClosedWhenMintingFails(t *testing.T) {
 }
 
 func TestConcordRotationReceiptCarriesNoKeyMaterial(t *testing.T) {
-	// A base rekey chunk, a private-channel rekey chunk, the Guestbook snapshot
-	// chunk, and the survivor's direct invite.
-	fixture := newConcordRotationFixture(t, 4)
+	// A private-channel rekey chunk and the survivor's direct invite.
+	fixture := newConcordRotationFixture(t, 2)
 	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 		CommunityID: fixture.communityID,
-		Refound:     true,
 		ChannelIDs:  []string{fixture.privateChannelID},
 		Recipients:  []string{newFakeSigner(t).pubkey},
 		Reason:      "post-removal secrecy",
@@ -364,7 +315,7 @@ func TestConcordAssignDeliversRotatedMaterialWithoutRestart(t *testing.T) {
 
 	if _, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 		CommunityID: fixture.communityID,
-		Refound:     true,
+		ChannelIDs:  []string{fixture.privateChannelID},
 		Recipients:  []string{survivor.pubkey},
 	}); err != nil {
 		t.Fatalf("Rotate() error = %v", err)
@@ -386,15 +337,14 @@ func TestConcordAssignDeliversRotatedMaterialWithoutRestart(t *testing.T) {
 	if delivered != string(record.Bundle) {
 		t.Fatal("Assign() delivered pre-rotation material")
 	}
-	if strings.Contains(delivered, fixture.priorRoot) {
-		t.Fatal("Assign() delivered the severed community_root")
+	if strings.Contains(delivered, fixture.priorPrivateKey) {
+		t.Fatal("Assign() delivered the severed private-channel key")
 	}
 }
 
 func TestConcordConcurrentRotationsAdvanceEpochsWithoutLosingOne(t *testing.T) {
-	// Per rotation: a base rekey chunk, a Guestbook snapshot chunk, and the
-	// survivor's direct invite.
-	fixture := newConcordRotationFixture(t, 6)
+	// Per rotation: a private-channel rekey chunk and the survivor's invite.
+	fixture := newConcordRotationFixture(t, 4)
 	first := newFakeSigner(t)
 	second := newFakeSigner(t)
 
@@ -407,12 +357,12 @@ func TestConcordConcurrentRotationsAdvanceEpochsWithoutLosingOne(t *testing.T) {
 			defer wait.Done()
 			receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
 				CommunityID: fixture.communityID,
-				Refound:     true,
+				ChannelIDs:  []string{fixture.privateChannelID},
 				Recipients:  []string{recipient.pubkey},
 			})
 			errs[i] = err
 			if receipt != nil {
-				epochs[i] = receipt.RootEpoch
+				epochs[i] = receipt.Channels[0].NewEpoch
 			}
 		}()
 	}
@@ -424,12 +374,12 @@ func TestConcordConcurrentRotationsAdvanceEpochsWithoutLosingOne(t *testing.T) {
 		}
 	}
 	// Each rotation must read the other's committed material: one lands at
-	// epoch 4 and the other at 5, never both at 4.
+	// epoch 6 and the other at 7, never both at 6.
 	if epochs[0] == epochs[1] {
 		t.Fatalf("concurrent rotations both minted epoch %d", epochs[0])
 	}
-	if epochs[0]+epochs[1] != 9 {
-		t.Fatalf("rotation epochs = %v, want 4 and 5", epochs)
+	if epochs[0]+epochs[1] != 13 {
+		t.Fatalf("rotation epochs = %v, want 6 and 7", epochs)
 	}
 	record, err := fixture.custody.Load(t.Context())
 	if err != nil {
@@ -439,8 +389,8 @@ func TestConcordConcurrentRotationsAdvanceEpochsWithoutLosingOne(t *testing.T) {
 	if err := json.Unmarshal(record.Bundle, &rotated); err != nil {
 		t.Fatalf("decode rotated bundle: %v", err)
 	}
-	if rotated.RootEpoch != 5 {
-		t.Fatalf("custody root_epoch = %d, want the later rotation", rotated.RootEpoch)
+	if concordChannelByID(t, rotated, fixture.privateChannelID).Epoch != 7 {
+		t.Fatal("custody must hold the later private-channel epoch")
 	}
 }
 
@@ -467,13 +417,12 @@ func newConcordRotationFixture(t *testing.T, publishes int) *concordRotationFixt
 	// The fleet-provisioned case: Soul Factory's Signet-held staff key minted
 	// the Community, so it rotates as the owner — whose authority the
 	// community_id itself proves — and CORD-04 §1 leaves the `vac` citation
-	// absent. newConcordRotationFixtureOwnedBy covers the Rotator who must cite.
+	// absent. newConcordRotationFixtureOwnedBy covers refused non-owner rotations.
 	return newConcordRotationFixtureOwnedBy(t, publishes, "")
 }
 
 // newConcordRotationFixtureOwnedBy names an owner other than the staff key. A
-// Rotator who is not the owner must cite the Grant it acts under (CORD-06 §3),
-// resolved from the folded Control Plane at the community's control_pk. The
+// Rotator who is not the owner is refused until CORD-04 authority is resolved. The
 // empty string keeps the staff-is-owner default.
 func newConcordRotationFixtureOwnedBy(t *testing.T, publishes int, ownerHex string) *concordRotationFixture {
 	t.Helper()

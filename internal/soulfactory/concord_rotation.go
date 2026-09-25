@@ -71,8 +71,9 @@ type ConcordRotationReceipt struct {
 	RotatedAt         time.Time                 `json:"rotated_at"`
 }
 
-// concordFoldIsCompactable enforces CORD-06 §3's abort rule: if the Refounder
-// cannot reliably fold all Control events, the Refounding must be aborted.
+// concordFoldIsCompactable checks only the structural part of CORD-06 §3's
+// abort rule. It does not prove authority; Rotate refuses every Refounding
+// until that evidence can also be resolved.
 //
 // A suspended entity is exactly that failure. Its chain forked, so no head is
 // trustworthy — and a compaction that silently omitted it would prune the
@@ -168,14 +169,20 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, err
 	}
 
-	// CORD-06 §3 Authority: the Grant this rotation acts under is resolved from
-	// the *current* epoch's folded Control Plane before anything is minted, so
-	// an unauthorized Rotator never reaches custody, and — per CORD-06 §3's
-	// failure rule — the state being rotated is acquired in full before the
-	// first publish.
-	// A Refounding additionally *needs* the fold: CORD-06 §3 has it compact the
-	// current Control Plane and republish it at the new epoch, and aborts the
-	// Refounding outright if it cannot reliably fold all Control events.
+	// Stage 1 containment (bahia-185t0): source.resolve validated the owner's
+	// binding to community_id. Only that owner's channel-only rekey needs no
+	// roster evidence. The structural fold below proves neither a delegate's
+	// authority nor the eligibility of the heads a Refounding would copy.
+	// Refuse before even fetching that fold, and before planning mints keys.
+	if rotation.Refound {
+		return nil, fmt.Errorf("concord Refounding for %s refused: CORD-04 authority unresolved for the complete Control Plane; owner-rooted Roles/Grants and exact cited Grant editions are not verified for all candidates, so CORD-06 compaction cannot be trusted even for the owner; see docs/soul-factory.md#cord-04-authority-containment", communityID)
+	}
+	if !strings.EqualFold(bundle.Owner, staffPK.Hex()) {
+		return nil, fmt.Errorf("concord rotation for %s refused: CORD-04 authority unresolved for non-owner %s; owner-rooted Roles/Grants, exact cited Grant editions, requested channel permissions and rank over removed targets are not verified; a Grant-coordinate head is not proof; see docs/soul-factory.md#cord-04-authority-containment", communityID, staffPK.Hex())
+	}
+
+	// The owner channel-only path returns an absent citation without a fetch.
+	// The remaining refounding machinery is not enabled by a structural fold.
 	citation, fold, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, rotation.Refound)
 	if err != nil {
 		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)

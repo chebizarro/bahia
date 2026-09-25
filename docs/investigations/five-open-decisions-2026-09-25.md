@@ -397,6 +397,127 @@ editions are excluded. Simply changing tie handling, emitting a warning, or
 filtering immediately before publication **after custody has changed** is not a
 safe interim.
 
+### Stage 1 findings
+
+Implemented and investigated on 2026-09-25 in `fix/concord-authority`, based on
+local `master` `5495a884` (intentionally ahead of origin). B2 and the preceding
+analysis remain the established interpretation; this section adds containment
+and a concrete evidence-availability witness, not a full authority resolver.
+Earlier line references describe the earlier snapshot; references below describe
+this stage 1 tree. No deployed community history was inspected.
+
+**Containment boundary and cost.** `concord_rotation.go:159-196` resolves and
+validates current custody, decodes that validated bundle, identifies the Signet
+signer, then refuses **every Refounding** and **every non-owner rotation** before
+calling the old structural authority helper or the planner. The planner's minting,
+custody `Store` (`:210`), rekey publication (`:223`), compaction (`:233`) and Direct
+Invites are all downstream. A validated-owner channel-only rekey remains supported
+without a Control-plane query or citation. Owner binding is checked against the
+configured self-certified identity (`concord_invite.go:330-340`), not inferred from
+a Grant or asserted by the caller. Operator errors name the missing evidence and
+link to the [refusal inventory and escalation procedure](../soul-factory.md#cord-04-authority-containment).
+
+This intentionally removes non-owner incident-response rotation: non-owner staff
+cannot rotate a compromised member out, and a community without owner access loses
+its usable rotation path. All community-wide removal/root rollover, Public-to-Private
+conversion and legacy-upgrade Refoundings are unavailable even to the owner.
+An owner can cut named Private Channels only. **The interim does not make a
+compromised community safe.** It prevents this API from minting/persisting keys or
+propagating unproved heads; it does not certify the untouched invite/removal paths.
+
+**What a fresh joiner needs.** For each candidate it will enforce, the joiner needs:
+
+- The validated owner/`community_id` trust anchor and current epoch read material.
+- The actor-signed plaintext seal and unchanged rumor/content bytes, with entity,
+  type, version and hash; wrap provenance alone is not authority.
+- For a non-owner actor, the **exact** `vac` Grant edition identified by coordinate,
+  version and content hash, with a valid seal, correct Grant type/member/derived
+  coordinate, and authentic signer. A version counter or matching predecessor hash
+  does not replace these bytes and their signature.
+- The current owner-rooted Role/Grant roster needed to judge that actor's permissions,
+  scopes and rank over targets, including superseding demotions/revocations, plus the
+  recursively required exact citations for its non-owner-signed dependencies.
+  This dependency closure must terminate at the owner; unresolved/forked or cyclic
+  evidence cannot become authority. Exact historical evidence is not grandfathered
+  permission.
+
+This follows the existing exact-pin and current-roster requirements, not a new
+history-replay requirement: [CORD-04 §1 and §5](https://github.com/concord-protocol/concord/blob/main/04.md#1-editions)
+(lines 49–50, 72–76, 91–93, 134–141 in the source read on this date) allow a fresh
+joiner's authority-verified baseline to have a dangling `prev`; they do **not**
+explicitly waive `vac` hash verification. Unrelated `ep` ancestors need not all be
+retained for a fresh joiner, whereas a tracking client has stricter chain-gap rules.
+Current-head compaction is prescribed by [CORD-06 §3](https://github.com/concord-protocol/concord/blob/main/06.md#3-refounding)
+(lines 80–91); a claim that signature preservation alone guarantees joiner authority
+would skip the citation dependency. Any proposed exception needs a protocol-level
+clarification, not an invented Bahia fallback.
+
+**Current output cannot supply this in general — executable witness.**
+`TestConcordCompactionOmitsExactAuthorityCitationEvidence`
+(`internal/soulfactory/concord_compaction_evidence_test.go:15-116`) constructs two
+owner-signed Role definitions, an owner-signed delegate Grant v1 (with real pairwise
+staff-key delivery), the same assignment at v2 (no demotion), and a delegate-signed
+member Grant whose `vac` pins v1. It proves:
+
+1. The exact v1 signed seal is present and parseable before folding (`:32-61`).
+2. Five input editions become four structural heads (`:62-65`); compaction publishes
+   only those four (`:66-75`).
+3. The delegated action retains its original signed content/signature and v1 citation
+   (`:76-84`), but the delegate Grant is only v2 (`:85-88`). Every emitted seal is
+   examined to prove v1 is absent from the **output**, not just another lossy fold
+   (`:89-109`). Even v2's `prev == hash(v1)` supplies neither v1's payload nor seal.
+4. Old wraps do not become available when folded using only the new epoch's address
+   and key (`:110-114`).
+
+This is a structural evidence-availability test, not a declaration that a new
+resolver authorizes the fixtures. It directly invokes the retained compaction
+primitive; production `Rotate` cannot reach it under stage 1 containment.
+Self-contained inputs (for example, owner-signed heads with no missing dependencies)
+may supply enough evidence; the demonstrated omission defeats a **general** guarantee.
+
+The source accounts for the loss: `concordControlFold` stores heads and a numeric
+edition **count**, not history (`concord_control.go:107-115`); the temporary candidate
+map is discarded on return (`:187-240`). `republishConcordCompaction` enumerates only
+`fold.heads`, preserving seals verbatim (`concord_compaction.go:88,108-135`). The
+normal fetch queries only the held current address/key (`concord_control.go:395-426`).
+The invite schema provides current root/epoch/address, not prior epoch keys or a
+citation archive (`concord_invite.go:110-123`); custody stores bundle/control-root
+material, not editions (`concord_custody.go:24-38,113-158`). Unknown bundle fields are
+preserved but no authority-history consumer is implemented by these paths.
+
+Nothing here proves old relay events were deleted: this is omission from the next
+epoch's published evidence. A tracking client or secure archive might retain exact
+seals; old relay ciphertext might still exist if the old address and decrypting
+material are recoverable. A fresh joiner with only its new invite cannot assume
+any of those sources, and hashes cannot reconstruct missing signed bytes.
+
+**Stage 2 scope gate.** Parsing and roster resolution remain necessary, but are not
+sufficient. Stage 2 must preserve an exact-citation candidate/history index **before**
+head selection, resolve dependency closure and current permission, and establish an
+authority-evidence retention/retrieval contract across compaction. Validate it with
+new-epoch-only and already-compacted fixtures, including lost exact Grants and
+transitive dependencies. Decide how required original signed evidence reaches a new
+reader without leaking old keys or mistaking historical evidence for a current head;
+reconcile that contract with CORD-06's head-only compaction text. Existing tracking
+clients/archives are possible recovery inputs, not currently implemented guarantees.
+Where the exact evidence is no longer recoverable, parsing cannot fix the community:
+the affected action stays unresolved, and Refounding stays refused rather than
+compacting a silently reduced "authorized" subset. Do not scope stage 2 as just a
+parser/tie-break patch or promise migration of every previously compacted community.
+
+**Containment tests and verification.**
+`TestConcordRotationUnresolvedAuthorityHasNoSideEffects` covers 20 combinations of
+owner/non-owner, Refounding/channel scopes, and empty/owner-Grant/equal-version/
+higher-version planes. Each asserts no minted keys, no custody `Store`, byte-identical
+sealed custody, no relay AUTH/query/publication and no receipt. Against the unmodified
+production code it failed with `minted=2, custody writes=1` for owner Refounding and
+reported changed custody/publication; with the boundary it passes. The unbound-owner
+regression also rejects a forged owner field. Owner rekey/citation-absence, actual
+custody-write failure and concurrent private-channel epoch advancement remain tested.
+Refounding planning, rekey encoding and compaction tests are explicitly primitive
+mechanics tests, not claims of supported end-to-end refounding. Gate outcomes are
+recorded in `pstf/features/bahia-185t0/verification_report.md`.
+
 ### Verification performed
 
 - Three narrow read-only explore probes covered typed payload parsing/dependencies,

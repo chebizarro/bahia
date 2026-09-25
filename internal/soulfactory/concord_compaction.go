@@ -67,9 +67,10 @@ type ConcordGuestbookSnapshot struct {
 //
 // The heads are not rebuilt, they are *re-wrapped*. Control Plane seals are
 // plaintext (CORD-02 §5) precisely so this re-encryption preserves the original
-// authors' signatures, which is what lets a fresh joiner verify authority it was
-// never present for. The head's `prev` will cite an edition that no longer
-// exists here; CORD-04 §1 resets the floor for exactly this reason.
+// authors' signatures. This alone does not supply authority: exact non-head
+// Grant citations can be lost. Rotate refuses Refounding until that evidence
+// and candidate eligibility are reliable (bahia-185t0). CORD-04 §1's fresh-joiner
+// exception permits a dangling `prev`, not unchecked authority.
 //
 // Publication is idempotent in CORD-06 §3's resumable sense: re-running
 // re-wraps the same signed heads in the same order, so a crashed Refounder

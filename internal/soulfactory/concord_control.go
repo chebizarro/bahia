@@ -100,11 +100,10 @@ type concordEdition struct {
 
 // concordControlFold is a folded Control Plane: one head per entity.
 //
-// Bahia folds to *cite* and to *compact*, never to adjudicate. It deliberately
-// does not resolve the CORD-04 Roster: a `vac` is a citation of the Grant the
-// actor holds, and every receiver resolves rank against its own current roster
-// before honoring anything (CORD-04 §5). Folding rank here would duplicate that
-// judgment without being able to bind it.
+// This is a structural fold, not an authorized CORD-04 projection. It does not
+// resolve the owner-rooted Roster or retain exact non-head citation evidence.
+// Rotate refuses operations that would rely on it (bahia-185t0); receiver-side
+// validation cannot justify minting keys or compacting these unverified heads.
 type concordControlFold struct {
 	// heads maps an entity coordinate to its current edition.
 	heads map[[32]byte]concordEdition
@@ -251,13 +250,11 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 // dangling `prev` as a gap to refetch. A held pair that *does* adjoin and does
 // not link is a fork, and the entity is suspended rather than guessed at.
 //
-// Two editions tying on version break by the lower rumor id. CORD-04 §1 breaks
-// that tie by authority first; Bahia does not resolve rank (see
-// concordControlFold), so a same-version tie it settles by id alone may differ
-// from a rank-resolving client's. The consequence is bounded and named: a
-// rotation citing the losing twin parks at its receivers until Bahia re-folds,
-// which is exactly the block-until-synced behavior of any unresolved citation
-// (CORD-04 §5), never a forged one.
+// Two editions tying on version break by the lower rumor id. CORD-04 eligibility
+// must filter ALL candidates before this selection, not just ties: a signed
+// higher version is not necessarily authorized either. This structural helper
+// does not implement that filter and its output must not authorize rotation or
+// seed a production compaction until the full evidence is resolved.
 func foldConcordEntity(editions []concordEdition) (concordEdition, bool) {
 	sort.Slice(editions, func(i, j int) bool {
 		if editions[i].version != editions[j].version {
@@ -429,20 +426,12 @@ func (m *concordMembership) fetchConcordControlPlane(
 	return foldConcordControlPlane(events, address, read.ConversationKey)
 }
 
-// resolveConcordRotationAuthority resolves the `vac` a rotation acts under
-// (CORD-06 §3 Authority).
-//
-// A rotation cites the Grant it acts under like any authority action, so a
-// just-demoted admin's rotation is never honored by a lagging client. Two
-// outcomes are correct and a third is not:
-//
-//   - The Rotator is the owner. CORD-04 §1 leaves the tag absent, because the
-//     owner's rank comes from the community_id itself rather than any Grant.
-//   - The Rotator holds a Grant on the folded plane. It cites that head, by
-//     coordinate, version, and hash.
-//   - The Rotator holds neither. The rotation is refused. Minting keys under a
-//     citation nobody can resolve — or under none at all — spends the community's
-//     epoch on a rotation every conformant receiver drops.
+// resolveConcordRotationAuthority is the legacy structural citation lookup,
+// not an authority verifier. Rotate permits only its owner/channel-only fast
+// path: the validated owner needs no citation (CORD-04 §1). The other branches
+// cannot prove a Grant's type, member, Roles, current rank or scoped permission,
+// and must remain behind the stage 1 refusal until those checks and the full
+// compaction evidence are implemented (bahia-185t0).
 func (m *concordMembership) resolveConcordRotationAuthority(
 	ctx context.Context,
 	community validatedConcordCommunity,

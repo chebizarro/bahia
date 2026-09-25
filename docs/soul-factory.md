@@ -157,14 +157,59 @@ Configure every relay declared in each bundle in `soul_factory.relays` or `addit
 { "version": 1, "invite_bundle": { "community_id": "…" }, "control_root": "<64-char-hex>" }
 ```
 
-`control_root` is the CORD-02 §2 staff write secret. It is minted by a Refounding, is never placed in an invite, and never leaves custody. A file sealed with a bare `CommunityInvite` is also accepted, and the first Refounding upgrades it to the document form. Writes are verified before they land: Bahia re-opens the fresh payload through Signet and requires it to match before atomically replacing the file at mode `0600`, so custody is never overwritten with material the bunker cannot reopen. `invite_bundle_env` and `invite_bundle_file` remain supported but are read-only, and rotation refuses to run against them.
+`control_root` is the CORD-02 §2 staff write secret. It is minted by a Refounding, is never placed in an invite, and never leaves custody. A file sealed with a bare `CommunityInvite` is also accepted, and a supported custody write upgrades it to the document form; Refounding is currently refused as described below. Writes are verified before they land: Bahia re-opens the fresh payload through Signet and requires it to match before atomically replacing the file at mode `0600`, so custody is never overwritten with material the bunker cannot reopen. `invite_bundle_env` and `invite_bundle_file` remain supported but are read-only, and rotation refuses to run against them.
+
+### CORD-04 authority containment
+
+`bahia-185t0` stage 1 deliberately limits `RotateConcordCommunity` until Bahia can
+prove owner-rooted authority and preserve the evidence needed by fresh joiners.
+The error includes `CORD-04 authority unresolved`, the community, the missing
+proof, and a link to this section.
+
+| Requested operation | Interim behavior |
+|---|---|
+| Validated owner, named Private Channels only | Preserved: normal bundle/custody/scope validation, rekey blobs and Direct Invites; no roster fetch or `vac` is needed. |
+| Non-owner, any channel rekey | Refused even if a signed Grant exists at the actor's coordinate. Exact Grant citations, owner-rooted Roles/Grants, scope permissions and rank over removed targets are not verified. |
+| Any Refounding, including by the owner, with or without channel rekeys | Refused. The full candidate set is not authority-resolved, and compaction can omit cited historical evidence; the owner's right to refound cannot authorize other signers' heads. |
+| Public-Channel-only rekey | Still invalid: Public Channels require Refounding, which is refused. |
+
+The authority refusal happens after reading and validating current custody and
+identifying the Signet signer, but **before Control-plane relay AUTH/query,
+rotation planning, key minting, custody writes, or any publication**. It returns
+no rotation receipt; current keys, epochs and sealed custody bytes stay unchanged.
+This is not a retryable relay outage, and retrying does not supply the missing proof.
+
+**Accepted availability/security cost:** non-owner staff cannot rotate a compromised
+member out during this interim. A community without owner access loses its usable
+rotation path. Even the owner cannot perform community-wide cryptographic removal,
+roll leaked community/control roots, convert Public to Private, or perform the
+legacy split upgrade through Refounding. Owner Private-Channel rekeys cut only the
+named channels; they do not revoke access to the community or its other planes.
+This containment prevents Bahia from acting on unproved authority; it does **not**
+make an already compromised community safe or certify other invitation/removal paths.
+
+**Operator escalation:**
+
+1. Record the community ID, operation/scopes, signer pubkey and full refusal reason
+   (never roots, channel keys, decrypted bundles, or `control_wrap` plaintext).
+2. For a channel-only incident, contact the community owner and the Signet/custody
+   operator to use the existing owner-authorized lane. Do not change bundle `owner`
+   or `community_id` to impersonate that lane, and do not patch out the guard.
+3. If the owner is unavailable, or community-wide removal/root rollover is required,
+   escalate to the community's incident-response owner and Bahia maintainer under
+   `bahia-185t0`. Stop sending new sensitive material to the affected scopes while
+   they arrange a separately verified recovery/migration. A ban/kick alone, merely
+   dropping unresolved heads, or retrying a refused Refounding is not a key revocation.
+4. Preserve existing signed Control evidence and tracking-client history through
+   approved secure incident handling; do not prune or compact it during recovery.
+   Recovery is not guaranteed: see the [stage 1 investigation](investigations/five-open-decisions-2026-09-25.md#stage-1-findings).
 
 ### CORD-06 rekeys and refoundings
 
-`FullProvisioner.RotateConcordCommunity` performs an explicit [CORD-06](https://github.com/concord-protocol/concord/blob/main/06.md) rotation after a membership change or an accidental disclosure. A rotation names its scope and its **surviving** members; the caller supplies that membership, and anyone omitted is severed from the rotated scope.
+`FullProvisioner.RotateConcordCommunity` exposes an explicit [CORD-06](https://github.com/concord-protocol/concord/blob/main/06.md) rotation after a membership change or an accidental disclosure. **Currently only a validated-owner Private-Channel rekey is supported; all non-owner rotations and all Refoundings are refused.** The mechanics below describe the wire formats, not permission to bypass this containment. A supported rotation names its scope and its **surviving** members; the caller supplies that membership, and anyone omitted is severed from the rotated scope.
 
 - A **Rekey** (`ChannelIDs`) mints a fresh key for each named Private Channel and bumps only that channel's epoch. A Public Channel derives from the `community_root` (CORD-03), so requesting one alone is refused.
-- A **Refounding** (`Refound: true`) rolls the `community_root`, bumps `root_epoch`, mints a fresh `control_root` beside it, and republishes `control_pk` as `group_key("concord/control-signer", control_root, community_id, new_epoch).pk` — the CORD-06 §3 split upgrade. Public Channels follow the base for free; Private Channels rotate only when named.
+- A **Refounding** (`Refound: true`, **currently refused, including for the owner**) would roll the `community_root`, bumps `root_epoch`, mints a fresh `control_root` beside it, and republishes `control_pk` as `group_key("concord/control-signer", control_root, community_id, new_epoch).pk` — the CORD-06 §3 split upgrade. Public Channels follow the base for free; Private Channels rotate only when named.
 
 The derivations are the frozen CORD-02 Appendix A shapes (HKDF-SHA256 with `info = utf8(label) || 0x00 || id[32] || epoch_be[8]`, `scalar_normalize`, and the A.5 epoch-key commitment). Bahia builds the rotated bundle in full before writing anything, round-trips unknown bundle and channel fields verbatim, revalidates its own minted bundle against the relay bus, seals it into custody, and only then redistributes it to the survivors as CORD-05 §6 Direct Invites. A rotation is resumable rather than atomic: if redistribution fails partway, custody already holds the new material and the receipt is returned alongside the error so delivery can be re-run idempotently.
 
