@@ -521,11 +521,15 @@ type PackageBackendConfig struct {
 	SecretRefs         map[string]string `koanf:"secret_refs" secret:"true"`
 
 	// Nexus-specific settings forwarded to the Nexus raw-repository adapter.
+	// NexusAPIVersion opts into the documented REST v1 checksum API; empty disables drift verification.
+	NexusAPIVersion                         string `koanf:"nexus_api_version" yaml:"nexus_api_version" secret:"false"`
 	NexusBlobStoreName                      string `koanf:"nexus_blob_store_name" yaml:"nexus_blob_store_name" secret:"false"`
 	NexusDisableStrictContentTypeValidation bool   `koanf:"nexus_disable_strict_content_type_validation" yaml:"nexus_disable_strict_content_type_validation" secret:"false"`
 	NexusWritePolicy                        string `koanf:"nexus_write_policy" yaml:"nexus_write_policy" secret:"false"`
 
 	// Pulp-specific settings forwarded to the Pulp file-plugin adapter.
+	// PulpAPIVersion opts into the documented REST v3 file checksum API; empty disables drift verification.
+	PulpAPIVersion              string        `koanf:"pulp_api_version" yaml:"pulp_api_version" secret:"false"`
 	PulpEnableCustomMutationAPI bool          `koanf:"pulp_enable_custom_mutation_api" yaml:"pulp_enable_custom_mutation_api" secret:"false"`
 	PulpTaskInterval            time.Duration `koanf:"pulp_task_interval" yaml:"pulp_task_interval" secret:"false"`
 	PulpConfirmationTimeout     time.Duration `koanf:"pulp_confirmation_timeout" yaml:"pulp_confirmation_timeout" secret:"false"`

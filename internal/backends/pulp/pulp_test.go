@@ -142,25 +142,18 @@ func TestPulpCapabilitiesFailClosedWithoutVerifiedCustomAPI(t *testing.T) {
 	}
 }
 
-func TestPulpObserveArtifactDoesNotReuseExpectedChecksumAsObserved(t *testing.T) {
+func TestPulpObserveArtifactRequiresConfiguredChecksumAPI(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/pulp/content/file-npm/scope/pkg/1.0.0/pkg.tgz" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
-		}
-		w.Header().Set("Content-Length", "8")
-		writeTestResponse(t, w, "artifact")
+		t.Error("unsupported checksum API must not make requests")
 	}))
 	defer server.Close()
 	backend, err := New(Config{BaseURL: server.URL})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatal(err)
 	}
 	obs, err := backend.ObserveArtifact(context.Background(), testRepo(), domain.PackageArtifact{BackendPath: "scope/pkg/1.0.0/pkg.tgz", SHA256: strings.Repeat("a", 64)})
-	if err != nil {
-		t.Fatalf("ObserveArtifact: %v", err)
-	}
-	if !obs.Exists || obs.SHA256 != "" || backend.Capabilities().CanObserveDrift {
-		t.Fatalf("unexpected observation %#v caps=%#v", obs, backend.Capabilities())
+	if !errors.Is(err, packagebackend.ErrChecksumUnavailable) || obs.Exists || obs.SHA256 != "" || backend.Capabilities().CanObserveDrift {
+		t.Fatalf("observation=%#v error=%v", obs, err)
 	}
 }
 
@@ -174,8 +167,8 @@ func TestPulpArtifactNotFoundUsesTypedSentinel(t *testing.T) {
 		t.Fatalf("GetArtifact error = %v, want ErrArtifactNotFound", err)
 	}
 	obs, err := backend.ObserveArtifact(context.Background(), testRepo(), artifact)
-	if err != nil || obs.Exists {
-		t.Fatalf("ObserveArtifact = %#v, %v; want absent without error", obs, err)
+	if !errors.Is(err, packagebackend.ErrChecksumUnavailable) || obs.Exists {
+		t.Fatalf("ObserveArtifact = %#v, %v; want unsupported checksum error", obs, err)
 	}
 }
 

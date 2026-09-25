@@ -3,7 +3,6 @@ package nexus
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,11 +19,14 @@ import (
 // repositories so Bahia stays a control plane and does not serve ecosystem
 // package-manager protocols itself.
 type Config struct {
+	// APIVersion is the REST API contract, not the product release version.
+	APIVersion    string
 	BaseURL       string
 	PublicBaseURL string
 	HTTPClient    *http.Client
 	Auth          packagebackend.AuthConfig
 	Secrets       map[string]string
+	Redactions    []string
 
 	// BlobStoreName is required before repository creation can be advertised or
 	// attempted. There is no portable Nexus blob-store default.
@@ -38,13 +40,14 @@ type Config struct {
 // Backend implements packagebackend.Backend for Nexus raw repositories.
 type Backend struct {
 	*packagebackend.Requester
+	checksumAPI                 bool
 	publicBaseURL               string
 	blobStoreName               string
 	strictContentTypeValidation bool
 	writePolicy                 string
 }
 
-func New(cfg Config) (*Backend, error) {
+func New(cfg Config) (backend *Backend, err error) {
 	base, err := packagebackend.ValidateEndpoint(cfg.BaseURL, "nexus base url")
 	if err != nil {
 		return nil, err
@@ -56,6 +59,8 @@ func New(cfg Config) (*Backend, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	requester := packagebackend.NewRequester(base, client, cfg.Auth, cfg.Secrets, cfg.Redactions...)
+	defer requester.ScrubError(&err)
 	publicBase := strings.TrimSpace(cfg.PublicBaseURL)
 	if publicBase == "" {
 		publicBase = base
@@ -74,8 +79,12 @@ func New(cfg Config) (*Backend, error) {
 	default:
 		return nil, fmt.Errorf("invalid nexus write policy %q", cfg.WritePolicy)
 	}
+	if err := requester.CheckPublic(base, publicBase); err != nil {
+		return nil, err
+	}
 	return &Backend{
-		Requester:                   packagebackend.NewRequester(base, client, cfg.Auth, cfg.Secrets),
+		checksumAPI:                 cfg.APIVersion == "v1",
+		Requester:                   requester,
 		publicBaseURL:               publicBase,
 		blobStoreName:               strings.TrimSpace(cfg.BlobStoreName),
 		strictContentTypeValidation: !cfg.DisableStrictContentTypeValidation,
@@ -89,11 +98,12 @@ func (b *Backend) Capabilities() packagebackend.Capabilities {
 	caps := packagebackend.CommonCapabilities()
 	// Repository creation is unsafe until an operator selects an existing blob store.
 	caps.CanCreateRepository = b.blobStoreName != ""
-	caps.CanObserveDrift = true
+	caps.CanObserveDrift = b.checksumAPI
 	return caps
 }
 
-func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepository) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	if name == "" {
 		return packagebackend.RepositoryObservation{}, fmt.Errorf("external repository name is required")
@@ -214,7 +224,8 @@ func (b *Backend) verifyRepository(repository repositoryConfiguration, name stri
 	return nil
 }
 
-func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	if name == "" {
 		return packagebackend.RepositoryObservation{}, fmt.Errorf("external repository name is required")
@@ -239,7 +250,8 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 	return packagebackend.RepositoryObservation{}, packagebackend.ResponseError(resp, "delete nexus repository")
 }
 
-func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepository) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	resp, err := b.Do(ctx, http.MethodGet, "/service/rest/v1/repositories/"+url.PathEscape(name), nil, "")
 	if err != nil {
@@ -255,7 +267,8 @@ func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepo
 	return packagebackend.RepositoryObservation{}, packagebackend.ResponseError(resp, "observe nexus repository")
 }
 
-func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageRepository, req packagebackend.StoreArtifactRequest) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageRepository, req packagebackend.StoreArtifactRequest) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err)
 	if req.Reader == nil {
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("artifact reader is required")
 	}
@@ -275,10 +288,10 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 	return packagebackend.ArtifactObservation{}, packagebackend.ResponseError(resp, "upload nexus artifact")
 }
 
-func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactStream, error) {
+func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (result packagebackend.ArtifactStream, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -301,12 +314,14 @@ func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository
 	return packagebackend.ArtifactStream{ReadCloser: resp.Body, ContentType: resp.Header.Get("Content-Type"), SHA256: artifact.SHA256, SizeBytes: resp.ContentLength, BackendPath: relPath}, nil
 }
 
-func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageRepository) ([]packagebackend.ArtifactObservation, error) {
+func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageRepository) (result []packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	return b.listAssets(ctx, "/service/rest/v1/search/assets?repository="+url.QueryEscape(name), "list nexus assets")
 }
 
-func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err)
 	stream, err := b.GetArtifact(ctx, sourceRepo, artifact)
 	if err != nil {
 		return packagebackend.ArtifactObservation{}, err
@@ -315,10 +330,10 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 	return b.StoreArtifact(ctx, targetRepo, packagebackend.StoreArtifactRequest{Namespace: artifact.Namespace, PackageName: artifact.PackageName, Version: artifact.Version, Filename: artifact.Filename, ContentType: artifact.ContentType, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes, Metadata: req.Metadata, Reader: stream.ReadCloser})
 }
 
-func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact, reason string) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact, reason string) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err)
 	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -336,10 +351,16 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 	return packagebackend.ArtifactObservation{}, packagebackend.ResponseError(resp, "yank nexus artifact")
 }
 
-func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err)
+	if !b.checksumAPI {
+		return result, packagebackend.ErrChecksumUnavailable
+	}
+	if !packagebackend.ValidSHA256(artifact.SHA256) {
+		return result, fmt.Errorf("artifact has no valid expected SHA-256 for comparison")
+	}
 	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -361,9 +382,9 @@ func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageReposi
 		matched = &assets[i]
 	}
 	if matched == nil {
-		return packagebackend.ArtifactObservation{Exists: false, DownloadURL: artifact.DownloadURL, BackendPath: relPath}, nil
+		return packagebackend.ArtifactObservation{Exists: false, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath}, nil
 	}
-	if !validSHA256(matched.SHA256) {
+	if !packagebackend.ValidSHA256(matched.SHA256) {
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("nexus asset %q did not provide a valid backend SHA-256", relPath)
 	}
 	return *matched, nil
@@ -379,38 +400,44 @@ func (b *Backend) listAssets(ctx context.Context, firstPath, action string) ([]p
 	err := b.GetPages(ctx, firstPath, action, func(body io.Reader) (string, error) {
 		var payload struct {
 			Items []struct {
-				Path        string `json:"path"`
-				DownloadURL string `json:"downloadUrl"`
-				Checksum    struct {
+				Repository string `json:"repository"`
+				Path       string `json:"path"`
+				Checksum   struct {
 					SHA256 string `json:"sha256"`
 				} `json:"checksum"`
 				FileSize int64 `json:"fileSize"`
 			} `json:"items"`
-			ContinuationToken string `json:"continuationToken"`
+			ContinuationToken json.RawMessage `json:"continuationToken"`
 		}
-		if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		if err := packagebackend.DecodeJSON(body, &payload); err != nil {
 			return "", fmt.Errorf("decode nexus assets: %w", err)
 		}
-		for _, item := range payload.Items {
-			out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: item.DownloadURL, BackendPath: item.Path, SHA256: strings.ToLower(item.Checksum.SHA256), SizeBytes: item.FileSize})
+		if payload.Items == nil || len(payload.ContinuationToken) == 0 {
+			return "", fmt.Errorf("nexus assets response omitted items or continuationToken")
 		}
-		if strings.TrimSpace(payload.ContinuationToken) == "" {
+		var token string
+		if err := json.Unmarshal(payload.ContinuationToken, &token); err != nil || (token != "" && strings.TrimSpace(token) == "") {
+			return "", fmt.Errorf("nexus assets response has an invalid continuationToken")
+		}
+		for _, item := range payload.Items {
+			if item.Repository != requestURL.Query().Get("repository") || item.Path == "" {
+				return "", fmt.Errorf("nexus asset has invalid repository or path")
+			}
+			if err := b.CheckPublic(item.Path, item.Checksum.SHA256); err != nil {
+				return "", err
+			}
+			// Construct public URLs from trusted configuration, never signed or
+			// credential-bearing downloadUrl values supplied by the server.
+			out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(item.Repository, item.Path), BackendPath: item.Path, SHA256: strings.ToLower(item.Checksum.SHA256), SizeBytes: item.FileSize})
+		}
+		if token == "" {
 			return "", nil
 		}
 		query := requestURL.Query()
-		query.Set("continuationToken", payload.ContinuationToken)
+		query.Set("continuationToken", token)
 		return (&url.URL{Path: requestURL.Path, RawQuery: query.Encode()}).String(), nil
 	})
 	return out, err
-}
-
-func validSHA256(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
 }
 
 func (b *Backend) repositoryURL(name string) string {

@@ -165,19 +165,19 @@ func TestBuildBackendWithSecretsReturnsClearErrors(t *testing.T) {
 			name: "missing auth ref",
 			cfg:  config.PackageBackendConfig{Type: "nexus", BaseURL: "https://nexus.example.com", AuthSecretRef: "missing"},
 			res:  mapResolver{},
-			want: `resolve auth_secret_ref "missing"`,
+			want: `resolve auth_secret_ref`,
 		},
 		{
 			name: "invalid auth payload",
 			cfg:  config.PackageBackendConfig{Type: "nexus", BaseURL: "https://nexus.example.com", AuthSecretRef: "bad"},
 			res:  mapResolver{"bad": `{"username":"admin"}`},
-			want: `invalid auth_secret_ref "bad"`,
+			want: `invalid auth_secret_ref`,
 		},
 		{
 			name: "invalid tls payload",
 			cfg:  config.PackageBackendConfig{Type: "nexus", BaseURL: "https://nexus.example.com", TLSSecretRef: "bad-tls"},
 			res:  mapResolver{"bad-tls": `{"ca_cert":"not pem"}`},
-			want: `invalid tls_secret_ref "bad-tls"`,
+			want: `invalid tls_secret_ref`,
 		},
 	}
 	for _, tt := range tests {
@@ -203,8 +203,8 @@ func TestFactoryForwardsNexusConfig(t *testing.T) {
 		if caps.CanCreateRepository {
 			t.Fatal("CanCreateRepository must be false when BlobStoreName is not configured")
 		}
-		if !caps.CanObserveDrift {
-			t.Fatal("CanObserveDrift must be true regardless of BlobStoreName")
+		if caps.CanObserveDrift {
+			t.Fatal("CanObserveDrift must be false without a configured API version")
 		}
 	})
 
@@ -213,11 +213,11 @@ func TestFactoryForwardsNexusConfig(t *testing.T) {
 		defer server.Close()
 
 		backend, err := BuildBackend(config.PackageBackendConfig{
-			Type:                                  "nexus",
-			BaseURL:                               server.URL,
-			NexusBlobStoreName:                    "packages",
+			Type:                                    "nexus",
+			BaseURL:                                 server.URL,
+			NexusBlobStoreName:                      "packages",
 			NexusDisableStrictContentTypeValidation: true,
-			NexusWritePolicy:                      "ALLOW",
+			NexusWritePolicy:                        "ALLOW",
 		})
 		if err != nil {
 			t.Fatalf("BuildBackend: %v", err)
@@ -259,11 +259,11 @@ func TestFactoryForwardsPulpConfig(t *testing.T) {
 		defer server.Close()
 
 		backend, err := BuildBackend(config.PackageBackendConfig{
-			Type:                      "pulp",
-			BaseURL:                   server.URL,
+			Type:                        "pulp",
+			BaseURL:                     server.URL,
 			PulpEnableCustomMutationAPI: true,
-			PulpTaskInterval:          50 * time.Millisecond,
-			PulpConfirmationTimeout:   10 * time.Second,
+			PulpTaskInterval:            50 * time.Millisecond,
+			PulpConfirmationTimeout:     10 * time.Second,
 		})
 		if err != nil {
 			t.Fatalf("BuildBackend: %v", err)

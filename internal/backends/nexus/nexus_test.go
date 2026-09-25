@@ -102,10 +102,10 @@ func TestNexusObserveArtifactUsesBackendChecksum(t *testing.T) {
 		if r.URL.Path != "/service/rest/v1/search/assets" || r.URL.Query().Get("repository") != "raw-npm" || r.URL.Query().Get("name") != "scope/pkg/1.0.0/pkg.tgz" {
 			t.Fatalf("unexpected request %s", r.URL.String())
 		}
-		writeTestResponse(t, w, `{"items":[{"path":"scope/pkg/1.0.0/pkg.tgz","downloadUrl":"https://nexus.example/repository/raw-npm/scope/pkg/1.0.0/pkg.tgz","checksum":{"sha256":"`+backendHash+`"},"fileSize":8}],"continuationToken":null}`)
+		writeTestResponse(t, w, `{"items":[{"repository":"raw-npm","path":"scope/pkg/1.0.0/pkg.tgz","downloadUrl":"https://nexus.example/repository/raw-npm/scope/pkg/1.0.0/pkg.tgz","checksum":{"sha256":"`+backendHash+`"},"fileSize":8}],"continuationToken":null}`)
 	}))
 	defer server.Close()
-	backend, err := New(Config{BaseURL: server.URL})
+	backend, err := New(Config{BaseURL: server.URL, APIVersion: "v1"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -123,10 +123,10 @@ func TestNexusListArtifactsPagination(t *testing.T) {
 	t.Run("assembles pages", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("continuationToken") == "" {
-				writeTestResponse(t, w, `{"items":[{"path":"a.tgz","checksum":{"sha256":"aa"}}],"continuationToken":"next"}`)
+				writeTestResponse(t, w, `{"items":[{"repository":"raw-npm","path":"a.tgz","checksum":{"sha256":"aa"}}],"continuationToken":"next"}`)
 				return
 			}
-			writeTestResponse(t, w, `{"items":[{"path":"b.tgz","checksum":{"sha256":"bb"}}],"continuationToken":null}`)
+			writeTestResponse(t, w, `{"items":[{"repository":"raw-npm","path":"b.tgz","checksum":{"sha256":"bb"}}],"continuationToken":null}`)
 		}))
 		defer server.Close()
 		backend, _ := New(Config{BaseURL: server.URL})
