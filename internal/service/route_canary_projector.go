@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/redact"
 )
 
 const (
@@ -162,10 +163,10 @@ func newRouteCanaryObservation(eventType events.EventType, transition domain.Rou
 	}
 	// Evidence is sanitized upstream; sanitize again at the publication
 	// boundary because relays are a wider audience than the database.
-	state.FailureReason = domain.SanitizeEvidence(state.FailureReason)
+	state.FailureReason = redactRouteCanaryEvidence(state.FailureReason)
 	lineage := payload.Event
-	lineage.Reason = domain.SanitizeEvidence(lineage.Reason)
-	lineage.Evidence = domain.SanitizeEvidence(lineage.Evidence)
+	lineage.Reason = redactRouteCanaryEvidence(lineage.Reason)
+	lineage.Evidence = redactRouteCanaryEvidence(lineage.Evidence)
 	return routeCanaryObservation{
 		eventType:      eventType,
 		transition:     transition,
@@ -174,9 +175,15 @@ func newRouteCanaryObservation(eventType events.EventType, transition domain.Rou
 		lineage:        lineage,
 		instanceStatus: instanceStatus,
 		severity:       payload.Severity,
-		reason:         domain.SanitizeEvidence(payload.Reason),
+		reason:         redactRouteCanaryEvidence(payload.Reason),
 		occurredAt:     occurredAt,
 	}, nil
+}
+
+// Keep stored/operator evidence intact; only the relay projection loses network
+// addresses. Redact before length capping so truncation cannot expose a partial IP.
+func redactRouteCanaryEvidence(evidence string) string {
+	return domain.SanitizeEvidence(redact.NetworkAddresses(evidence))
 }
 
 // RouteCanaryFleetStatus maps durable route state to the bounded fleet-health

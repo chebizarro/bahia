@@ -1,18 +1,17 @@
 package config
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/url"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/openagentsinc/bahia/internal/redact"
 )
 
-const redactedValue = "[REDACTED]"
+const redactedValue = redact.Value
 
 // Redacted returns a diagnostic view of the configuration in which protected
 // values are replaced while non-secret settings remain available for incident
@@ -65,6 +64,15 @@ func buildRedactedValue(value reflect.Value, tagName string) any {
 			case "url":
 				result[name] = buildProtectedURL(fieldValue)
 				continue
+			case "false":
+				// Explicitly reviewed non-secret leaf.
+			default:
+				// Unknown tags and new unclassified leaves fail closed. Only
+				// structural containers recurse to independently classified fields.
+				if !isConfigContainer(fieldType.Type) {
+					result[name] = buildProtectedValue(fieldValue)
+					continue
+				}
 			}
 			result[name] = buildRedactedValue(fieldValue, tagName)
 		}
@@ -91,6 +99,13 @@ func buildRedactedValue(value reflect.Value, tagName string) any {
 	default:
 		return value.Interface()
 	}
+}
+
+func isConfigContainer(typ reflect.Type) bool {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array || typ.Kind() == reflect.Map {
+		typ = typ.Elem()
+	}
+	return typ.Kind() == reflect.Struct
 }
 
 func redactedFieldName(field reflect.StructField, tagName string) (string, bool) {
@@ -216,82 +231,14 @@ func marshalRedactedYAML(value any) (any, error) {
 	return buildRedactedValue(reflect.ValueOf(value), "yaml"), nil
 }
 
-// RedactError removes raw and commonly encoded secret representations from an
-// error. It intentionally returns a new opaque error so callers cannot unwrap
-// back to credential-bearing text.
+// RedactError removes credentials from an error without retaining a raw cause.
 func RedactError(err error, secrets ...string) error {
-	if err == nil {
-		return nil
-	}
-	message := err.Error()
-	variants := make(map[string]struct{})
-	for _, secret := range secrets {
-		if secret == "" {
-			continue
-		}
-		for _, variant := range secretRepresentations(secret) {
-			if variant != "" {
-				variants[variant] = struct{}{}
-			}
-		}
-	}
-	ordered := make([]string, 0, len(variants))
-	for variant := range variants {
-		ordered = append(ordered, variant)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
-	for _, variant := range ordered {
-		message = strings.ReplaceAll(message, variant, redactedValue)
-	}
-	return fmt.Errorf("%s", message)
+	return redact.Error(err, secrets...)
 }
 
-// RedactError removes the configured database credential from parse,
-// construction, and connectivity errors while retaining useful endpoint and
-// failure details.
+// RedactError removes the database password from parse and connection errors.
 func (c DBConfig) RedactError(err error) error {
-	return RedactError(err, c.Password)
-}
-
-func secretRepresentations(secret string) []string {
-	queryEscaped := url.QueryEscape(secret)
-	pathEscaped := url.PathEscape(secret)
-	userinfo := strings.TrimPrefix(url.UserPassword("_", secret).String(), "_:")
-	variants := []string{
-		secret,
-		queryEscaped,
-		pathEscaped,
-		userinfo,
-		html.EscapeString(secret),
-		base64.StdEncoding.EncodeToString([]byte(secret)),
-		base64.RawStdEncoding.EncodeToString([]byte(secret)),
-	}
-	if encoded, err := json.Marshal(secret); err == nil && len(encoded) >= 2 {
-		variants = append(variants, string(encoded[1:len(encoded)-1]))
-	}
-	if quoted := strconv.Quote(secret); len(quoted) >= 2 {
-		variants = append(variants, quoted[1:len(quoted)-1])
-	}
-	for _, encoded := range []string{queryEscaped, pathEscaped, userinfo} {
-		variants = append(variants, lowerPercentEscapes(encoded))
-	}
-	return variants
-}
-
-func lowerPercentEscapes(value string) string {
-	bytes := []byte(value)
-	for i := 0; i+2 < len(bytes); i++ {
-		if bytes[i] != '%' {
-			continue
-		}
-		for j := i + 1; j <= i+2; j++ {
-			if bytes[j] >= 'A' && bytes[j] <= 'F' {
-				bytes[j] += 'a' - 'A'
-			}
-		}
-		i += 2
-	}
-	return string(bytes)
+	return redact.Error(err, c.Password)
 }
 
 func (c Config) String() string {
@@ -757,3 +704,15 @@ func (n NotificationsConfig) MarshalJSON() ([]byte, error) {
 func (n NotificationsConfig) MarshalYAML() (any, error) {
 	return marshalRedactedYAML(n)
 }
+
+func (c HiveCIDependencyGiteaConfig) String() string { return stringRedactedConfig(c) }
+func (c HiveCIDependencyGiteaConfig) Format(state fmt.State, verb rune) {
+	formatRedactedConfig(state, verb, c)
+}
+func (c HiveCIDependencyGiteaConfig) MarshalJSON() ([]byte, error) { return marshalRedactedJSON(c) }
+func (c HiveCIDependencyGiteaConfig) MarshalYAML() (any, error)    { return marshalRedactedYAML(c) }
+
+func (c HiveCIPolicyConfig) String() string                    { return stringRedactedConfig(c) }
+func (c HiveCIPolicyConfig) Format(state fmt.State, verb rune) { formatRedactedConfig(state, verb, c) }
+func (c HiveCIPolicyConfig) MarshalJSON() ([]byte, error)      { return marshalRedactedJSON(c) }
+func (c HiveCIPolicyConfig) MarshalYAML() (any, error)         { return marshalRedactedYAML(c) }

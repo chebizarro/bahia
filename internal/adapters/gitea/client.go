@@ -13,15 +13,15 @@ package gitea
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/redact"
 )
 
 // APIClient is a minimal fleet Gitea API client covering private-mirror
@@ -100,13 +100,13 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return 0, fmt.Errorf("encode gitea request body: %w", scrubSecrets(err, secretsToScrub...))
+			return 0, fmt.Errorf("encode gitea request body: %w", redact.Error(err, secretsToScrub...))
 		}
 		reader = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return 0, scrubSecrets(err, secretsToScrub...)
+		return 0, redact.Error(err, secretsToScrub...)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -117,7 +117,7 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, scrubSecrets(err, append([]string{c.adminToken}, secretsToScrub...)...)
+		return 0, redact.Error(err, append([]string{c.adminToken}, secretsToScrub...)...)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -135,7 +135,7 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, out a
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("decode gitea %s %s response: %w", method, path, scrubSecrets(err, secretsToScrub...))
+			return resp.StatusCode, fmt.Errorf("decode gitea %s %s response: %w", method, path, redact.Error(err, secretsToScrub...))
 		}
 	}
 	return resp.StatusCode, nil
@@ -308,50 +308,13 @@ func isFullCommitSHA(v string) bool {
 	return true
 }
 
-// scrubSecrets removes secret material from error text so credential values
-// can never leak through error propagation into logs or Nostr responses.
+// scrubSecrets shares the same opaque error boundary as database diagnostics.
 func scrubSecrets(err error, secrets ...string) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	scrubbed := scrubSecretText(msg, secrets...)
-	if scrubbed == msg {
-		return err
-	}
-	return fmt.Errorf("%s", scrubbed)
-}
-
-func scrubSecretText(value string, secrets ...string) string {
-	scrubbed := value
-	for _, secret := range secrets {
-		if secret == "" {
-			continue
-		}
-		variants := []string{
-			secret,
-			url.QueryEscape(secret),
-			url.PathEscape(secret),
-			html.EscapeString(secret),
-			base64.StdEncoding.EncodeToString([]byte(secret)),
-			base64.RawStdEncoding.EncodeToString([]byte(secret)),
-		}
-		userinfo := url.UserPassword("_", secret).String()
-		variants = append(variants, strings.TrimPrefix(userinfo, "_:"))
-		if encoded, err := json.Marshal(secret); err == nil && len(encoded) >= 2 {
-			variants = append(variants, string(encoded[1:len(encoded)-1]))
-		}
-		for _, variant := range variants {
-			if variant != "" {
-				scrubbed = strings.ReplaceAll(scrubbed, variant, "[redacted]")
-			}
-		}
-	}
-	return scrubbed
+	return redact.Error(err, secrets...)
 }
 
 func giteaResponseExcerpt(data []byte, secrets ...string) string {
-	excerpt := strings.Join(strings.Fields(scrubSecretText(string(data), secrets...)), " ")
+	excerpt := strings.Join(strings.Fields(redact.Text(string(data), secrets...)), " ")
 	runes := []rune(excerpt)
 	if len(runes) > maxGiteaErrorExcerptRunes {
 		excerpt = string(runes[:maxGiteaErrorExcerptRunes]) + "..."

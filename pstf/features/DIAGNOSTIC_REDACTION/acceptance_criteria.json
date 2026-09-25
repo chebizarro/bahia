@@ -1,0 +1,10 @@
+{
+  "feature_id": "DIAGNOSTIC_REDACTION",
+  "issues": ["bahia-h2o2y", "bahia-7bjpw"],
+  "intent": "Keep operational credentials out of diagnostic rendering and internal network addresses out of route-canary relay projections without changing operational configuration or REST evidence.",
+  "criteria": [
+    {"id": "R1", "requirement": "Every config leaf is explicitly classified; new unclassified leaves fail closed and fail the schema guard; all protected subtrees redact JSON, YAML, fmt, Zap and slog.", "tests": ["TestConfigSchemaRequiresRedactionClassification", "TestEveryProtectedConfigSubtreeRedactsAllRenderers", "TestUnclassifiedFieldsFailClosed", "TestDependencyGiteaTokenIsRedacted"]},
+    {"id": "R2", "requirement": "Database parse errors and Gitea diagnostics share encoded-secret redaction without retaining unsafe error causes.", "tests": ["TestMalformedDSNCannotLeakPasswordThroughErrorOrLog", "TestConnectRedactsCredentialRepresentationsFromParseErrors", "TestDBConfigDSNRoundTripsThroughPGX", "TestTextRedactsEncodedAndOverlappingSecrets", "TestErrorDoesNotRetainUnsafeCause"]},
+    {"id": "R3", "requirement": "All three canary relay event kinds redact network endpoints while preserving diagnostic meaning and original REST/persistence payloads.", "tests": ["TestRouteCanaryProjectorRedactsInternalLANAddressesOnlyOnRelay", "TestNetworkAddresses"]}
+  ]
+}
