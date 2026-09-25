@@ -137,6 +137,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 		}
 		req.Runtime.RuntimePubkey = firstNonEmpty(req.Runtime.RuntimePubkey, content.Runtime.RuntimePubkey)
 		req.Runtime.CapabilityRef = firstNonEmpty(req.Runtime.CapabilityRef, content.Runtime.CapabilityRef)
+		req.Runtime.RuntimeReleaseID = strings.TrimSpace(content.Runtime.RuntimeReleaseID)
 		req.Runtime.RuntimeBinding = firstNonEmpty(req.Runtime.RuntimeBinding, content.Runtime.RuntimeBinding)
 		req.Runtime.State = firstNonEmpty(req.Runtime.State, content.Runtime.State)
 		req.Brief = strings.TrimSpace(content.Brief)

@@ -101,6 +101,8 @@ When `environment/update` includes `deployment_units`, the array is the authorit
 
 Soul Factory clients should submit new mutation intent through `soul-factory/provision` and `soul-factory/action`. Bahia validates those requests through the existing Soul Factory domain parsers and preserves the original `25910` event id as the correlation id while the staged reactor continues to emit its established lifecycle events. The JSON-RPC response is acceptance only. ContextVM provisioning progress and terminal outcomes are also projected to `30900` coordinates named `soul-factory:provisioning:<request-event-id>` with matching `4903` audit facts; lifecycle action projection remains staged work.
 
+Saga recovery uses `soul-factory/saga/{inspect,retry,reconcile,safe-abort}` with the original `request_id` and `dry_run` (default true). All four require the fail-closed fleet operator gate; no new Nostr kinds are introduced. See [operator contract](runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery).
+
 ## Example: Deploy Service
 
 Inner ContextVM request:

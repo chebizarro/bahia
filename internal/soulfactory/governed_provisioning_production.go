@@ -64,8 +64,9 @@ func (p *ProductionGovernedProvisioner) ProvisioningMonitor(instance, build stri
 
 // ownsTerminalFailureProjection tells Reactor that governed reconciliation
 // durably publishes its own failed/rolled-back provisioning result. Success is
-// intentionally still published by Reactor after StageRunning is confirmed.
+// delivered separately after StageRunning is confirmed.
 func (*ProductionGovernedProvisioner) ownsTerminalFailureProjection() {}
+func (*ProductionGovernedProvisioner) ownsTerminalSuccessProjection() {}
 
 // NewProductionGovernedProvisioner creates the durable production engine. The
 // release and deployment-unit dependencies may be nil during database-degraded
@@ -96,46 +97,16 @@ func (p *ProductionGovernedProvisioner) Provision(ctx context.Context, req *doma
 	if req == nil || run == nil {
 		return nil, fmt.Errorf("governed provisioning requires request and run")
 	}
-	resolved, err := p.full.resolveProvisioningSpec(ctx, req)
+	unlock, err := p.states.lockRequest(ctx, run.RequestID)
 	if err != nil {
 		return nil, err
 	}
-	if resolved.Runtime.Target != domain.RuntimeTargetOpenClaw && resolved.Runtime.Target != domain.RuntimeTargetMetiq {
-		return nil, fmt.Errorf("governed provisioning requires openclaw or metiq runtime, got %q", resolved.Runtime.Target)
+	defer unlock()
+	state, err := p.prepareRequest(ctx, req, run)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := uuid.Parse(strings.TrimSpace(resolved.Runtime.RuntimeReleaseID)); err != nil {
-		return nil, fmt.Errorf("governed provisioning requires a valid verified runtime_release_id: %w", err)
-	}
-	run.AgentID = resolved.AgentID
-	run.DraftRef = resolved.DraftRef
-	run.DraftEventID = resolved.DraftEventID
-	run.SpecHash = resolved.SpecHash
-
-	if prior, loadErr := p.states.load(ctx, run.RequestID); loadErr == nil {
-		if prior.AgentID != resolved.AgentID || prior.SpecHash != resolved.SpecHash || prior.Runtime != resolved.Runtime.Target {
-			return nil, fmt.Errorf("%w: durable production request differs from replay", saga.ErrConflict)
-		}
-		priorRunID, parseErr := uuid.Parse(prior.RunID)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid durable governed run id: %w", parseErr)
-		}
-		run.ID = priorRunID
-	} else if !errors.Is(loadErr, errProductionStateNotFound) {
-		return nil, loadErr
-	}
-
-	request := GovernedProvisioningRequest{
-		RequestID: run.RequestID,
-		RunID:     run.ID.String(),
-		AgentID:   resolved.AgentID,
-		SpecHash:  resolved.SpecHash,
-		Runtime:   resolved.Runtime.Target,
-	}
-	port := &productionProvisioningPort{
-		engine: p, request: req, resolved: resolved, run: run,
-	}
-	projection := productionProjectionPort{steps: port}
-	governed, err := NewGovernedProvisioner(p.store, request, port, projection)
+	governed, err := p.governedForState(state)
 	if err != nil {
 		return nil, err
 	}
@@ -149,12 +120,15 @@ func (p *ProductionGovernedProvisioner) Provision(ctx context.Context, req *doma
 	if report.Stage != saga.StageRunning {
 		return nil, fmt.Errorf("governed provisioning stopped at stage %s", report.Stage)
 	}
-	state, err := p.states.load(ctx, run.RequestID)
+	state, err = p.states.load(ctx, run.RequestID)
 	if err != nil {
 		return nil, err
 	}
 	if state.Soul.Status != domain.SoulStatusActive || !state.ActiveSoulPublished {
 		return nil, fmt.Errorf("governed provisioning reached running without an active Soul projection")
+	}
+	if err := p.deliverSuccess(ctx, state); err != nil {
+		return nil, err
 	}
 	run.SoulID = &state.Soul.ID
 	return cloneProductionSoul(&state.Soul), nil
@@ -166,6 +140,13 @@ type productionStepState struct {
 }
 
 type productionProvisioningState struct {
+	// Inputs are captured before Start and before any external effect. They are
+	// the public resolved request, not credentials or runtime result payloads.
+	SuccessResult       *nostr.Event                        `json:"success_result,omitempty"`
+	SuccessDelivered    bool                                `json:"success_delivered,omitempty"`
+	RequestMethod       string                              `json:"request_method,omitempty"`
+	Request             *domain.ProvisioningRequest         `json:"request,omitempty"`
+	Resolved            *resolvedProvisioningSpec           `json:"resolved,omitempty"`
 	Schema              string                              `json:"schema"`
 	RequestID           string                              `json:"request_id"`
 	RunID               string                              `json:"run_id"`
@@ -347,6 +328,18 @@ func (p *productionProvisioningPort) Observe(ctx context.Context, spec Provision
 		if err != nil || reservation == nil {
 			return nil, err
 		}
+		if reservation.SpecHash == spec.SpecHash && reservation.RequestID == spec.RequestID {
+			state, err := p.engine.states.load(ctx, spec.RequestID)
+			if errors.Is(err, errProductionStateNotFound) {
+				return nil, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !state.Prepared {
+				return nil, nil
+			}
+		}
 		return []ObservedResource{{
 			Kind: "identity_reservation", ExternalID: "identity:" + spec.AgentID,
 			Ownership: saga.OwnershipAdopted, SpecHash: reservation.SpecHash,
@@ -455,7 +448,7 @@ func (p *productionProvisioningPort) observeProjection(ctx context.Context, spec
 	if state.TerminalResultStage != terminalStage {
 		return nil, nil
 	}
-	requestEvent, err := productionRequestEvent(p.run)
+	requestEvent, err := productionRequestEvent(p.run, state.RequestMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +487,7 @@ func (p *productionProvisioningPort) Publish(ctx context.Context, spec Provision
 		state.ActiveSoulPublished = true
 		return p.engine.states.save(ctx, state)
 	}
-	requestEvent, err := productionRequestEvent(p.run)
+	requestEvent, err := productionRequestEvent(p.run, state.RequestMethod)
 	if err != nil {
 		return err
 	}
@@ -530,11 +523,11 @@ func (p productionProjectionPort) Remove(ctx context.Context, spec ProvisioningS
 }
 
 func (p *productionProvisioningPort) ensureReservation(ctx context.Context, spec ProvisioningSpec) error {
-	reservation, created, err := p.engine.states.reservation(ctx, spec, true)
+	reservation, _, err := p.engine.states.reservation(ctx, spec, true)
 	if err != nil {
 		return err
 	}
-	if reservation.SpecHash != spec.SpecHash {
+	if reservation.SpecHash != spec.SpecHash || reservation.RequestID != spec.RequestID {
 		return &saga.SafeError{Code: "ownership_conflict", Retryable: false}
 	}
 	state, err := p.engine.states.load(ctx, spec.RequestID)
@@ -571,9 +564,6 @@ func (p *productionProvisioningPort) ensureReservation(ctx context.Context, spec
 		Ownership: saga.OwnershipAdopted, SpecHash: spec.SpecHash, CorrelationID: spec.RequestID,
 	}
 	state.Steps[StepReserveIdentity] = productionStepState{Complete: true, Resources: []ObservedResource{resource}}
-	if !created {
-		state.Steps[StepReserveIdentity] = productionStepState{Complete: true, Resources: []ObservedResource{resource}}
-	}
 	return p.engine.states.save(ctx, state)
 }
 
@@ -1150,7 +1140,7 @@ func validHexPublicKey(value string) bool {
 	return err == nil
 }
 
-func productionRequestEvent(run *domain.ProvisioningRun) (*nostr.Event, error) {
+func productionRequestEvent(run *domain.ProvisioningRun, method string) (*nostr.Event, error) {
 	if run == nil {
 		return nil, fmt.Errorf("provisioning run is required")
 	}
@@ -1162,7 +1152,11 @@ func productionRequestEvent(run *domain.ProvisioningRun) (*nostr.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &nostr.Event{ID: id, PubKey: pubkey, Kind: nostr.Kind(kinds.SoulFactoryProvisioningRequest)}, nil
+	event := &nostr.Event{ID: id, PubKey: pubkey, Kind: nostr.Kind(kinds.SoulFactoryProvisioningRequest)}
+	if method == ContextVMMethodProvision {
+		event.Tags = nostr.Tags{{"method", method}}
+	}
+	return event, nil
 }
 
 func cloneProductionSoul(in *domain.AgentSoul) *domain.AgentSoul {

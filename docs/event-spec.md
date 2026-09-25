@@ -163,6 +163,8 @@ Complete-set `environment/update` intent includes `deployment_units` plus requir
 
 `soul-factory/provision` and `soul-factory/action` are the canonical mutation entry points for new Soul Factory clients. During the staged migration Bahia adapts each verified request into the existing event-driven Soul Factory reactor, retaining the original `25910` event id for correlation. The response acknowledges acceptance only. Provisioning progress and terminal outcomes produce canonical `30900` state (`d=soul-factory:provisioning:<request-event-id>`, schema `bahia.state.soul-factory-provisioning.v1`) plus append-only `4903` audit facts. Action projection remains staged.
 
+Saga recovery uses `soul-factory/saga/{inspect,retry,reconcile,safe-abort}` with the original `request_id` and `dry_run` (default true). All four require the fail-closed fleet operator gate; no new Nostr kinds are introduced. See [operator contract](runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery).
+
 JSON-RPC responses acknowledge request handling. Long-running completion comes from canonical observable events.
 
 ## Canonical State Projection — Kind `30900`

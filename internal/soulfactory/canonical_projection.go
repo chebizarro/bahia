@@ -28,7 +28,9 @@ func (r *Reactor) publishCanonicalProvisioningObservable(ctx context.Context, re
 	if status == "" {
 		return fmt.Errorf("canonical Soul Factory provisioning projection requires status")
 	}
-	now := time.Now().UTC()
+	// Derive projection time from the signed source so replay after a lost OK
+	// preserves event IDs, including the append-only audit fact.
+	now := time.Unix(int64(resultEvent.CreatedAt), 0).UTC()
 	dTag := canonicalProvisioningCoordinatePrefix + requestID
 	stateBody := map[string]any{
 		"schema":           canonicalProvisioningStateSchema,
@@ -55,7 +57,7 @@ func (r *Reactor) publishCanonicalProvisioningObservable(ctx context.Context, re
 	}
 	state := &nostr.Event{
 		Kind:      nostr.Kind(cascadia.CAS_CP_STATE),
-		CreatedAt: nostr.Now(),
+		CreatedAt: resultEvent.CreatedAt,
 		Tags: nostr.Tags{
 			{"d", dTag},
 			{"domain", canonicalSoulFactoryDomain},
@@ -95,7 +97,7 @@ func (r *Reactor) publishCanonicalProvisioningObservable(ctx context.Context, re
 	}
 	audit := &nostr.Event{
 		Kind:      nostr.Kind(cascadia.CAS_AUDIT),
-		CreatedAt: nostr.Now(),
+		CreatedAt: resultEvent.CreatedAt,
 		Tags: nostr.Tags{
 			{"domain", canonicalSoulFactoryDomain},
 			{"entity", canonicalProvisioningEntity},

@@ -1688,6 +1688,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate)
 		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
+		soulfactory.RegisterSagaContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime), fleetOperatorGate)
 		// ContextVM carries the canonical mutation plane, so it must remain
 		// available in the minimum production control-plane tier.
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier1))
