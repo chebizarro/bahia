@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/redact"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 	"gopkg.in/yaml.v3"
@@ -181,9 +182,7 @@ func configWithSecretSentinels() Config {
 
 func assertSecretAbsent(t *testing.T, outputName, output, secret string) {
 	t.Helper()
-	for _, variant := range secretRepresentations(secret) {
-		if variant != "" && strings.Contains(output, variant) {
-			t.Fatalf("%s leaked protected representation %q", outputName, variant)
-		}
+	if redact.Text(output, secret) != output {
+		t.Fatalf("%s leaked a protected representation", outputName)
 	}
 }

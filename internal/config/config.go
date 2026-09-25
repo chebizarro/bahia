@@ -27,8 +27,8 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Mode            string                    `koanf:"mode" yaml:"mode"`
-	DevMode         bool                      `koanf:"dev_mode" yaml:"dev_mode"`
+	Mode            string                    `koanf:"mode" yaml:"mode" secret:"false"`
+	DevMode         bool                      `koanf:"dev_mode" yaml:"dev_mode" secret:"false"`
 	Server          ServerConfig              `koanf:"server"`
 	DB              DBConfig                  `koanf:"db"`
 	Harbor          HarborConfig              `koanf:"harbor"`
@@ -73,8 +73,8 @@ type SBOMConfig struct {
 
 // SBOMCdxgenConfig controls the optional external cdxgen generator.
 type SBOMCdxgenConfig struct {
-	Enabled    bool   `koanf:"enabled" yaml:"enabled"`
-	BinaryPath string `koanf:"binary_path" yaml:"binary_path"`
+	Enabled    bool   `koanf:"enabled" yaml:"enabled" secret:"false"`
+	BinaryPath string `koanf:"binary_path" yaml:"binary_path" secret:"false"`
 }
 
 // WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
@@ -82,94 +82,94 @@ type SBOMCdxgenConfig struct {
 // The policy document itself is a versioned JSON file validated against
 // schemas/hygiene_policy.json.
 type HygieneConfig struct {
-	Enabled    bool          `koanf:"enabled" yaml:"enabled"`
-	PolicyPath string        `koanf:"policy_path" yaml:"policy_path"`
-	Interval   time.Duration `koanf:"interval" yaml:"interval"`
+	Enabled    bool          `koanf:"enabled" yaml:"enabled" secret:"false"`
+	PolicyPath string        `koanf:"policy_path" yaml:"policy_path" secret:"false"`
+	Interval   time.Duration `koanf:"interval" yaml:"interval" secret:"false"`
 	// Workers lists maintenance-driver worker pubkeys to reconcile when
 	// the policy document does not itself target specific workers.
-	Workers []string `koanf:"workers" yaml:"workers"`
+	Workers []string `koanf:"workers" yaml:"workers" secret:"false"`
 }
 
 type WorkerPressureConfig struct {
-	MemoryWarningMinGB  int     `koanf:"memory_warning_min_gb" yaml:"memory_warning_min_gb"`
-	MemoryWarningRatio  float64 `koanf:"memory_warning_min_ratio" yaml:"memory_warning_min_ratio"`
-	MemoryCriticalMinGB int     `koanf:"memory_critical_min_gb" yaml:"memory_critical_min_gb"`
-	MemoryCriticalRatio float64 `koanf:"memory_critical_min_ratio" yaml:"memory_critical_min_ratio"`
-	DiskWarningMinGB    int     `koanf:"disk_warning_min_gb" yaml:"disk_warning_min_gb"`
-	DiskWarningRatio    float64 `koanf:"disk_warning_min_ratio" yaml:"disk_warning_min_ratio"`
-	DiskCriticalMinGB   int     `koanf:"disk_critical_min_gb" yaml:"disk_critical_min_gb"`
-	DiskCriticalRatio   float64 `koanf:"disk_critical_min_ratio" yaml:"disk_critical_min_ratio"`
-	VRAMWarningMinGB    int     `koanf:"vram_warning_min_gb" yaml:"vram_warning_min_gb"`
-	VRAMWarningRatio    float64 `koanf:"vram_warning_min_ratio" yaml:"vram_warning_min_ratio"`
-	VRAMCriticalMinGB   int     `koanf:"vram_critical_min_gb" yaml:"vram_critical_min_gb"`
-	VRAMCriticalRatio   float64 `koanf:"vram_critical_min_ratio" yaml:"vram_critical_min_ratio"`
-	ThermalWarningC     float64 `koanf:"thermal_warning_c" yaml:"thermal_warning_c"`
-	ThermalCriticalC    float64 `koanf:"thermal_critical_c" yaml:"thermal_critical_c"`
-	QueueWarningRatio   float64 `koanf:"queue_warning_ratio" yaml:"queue_warning_ratio"`
-	QueueCriticalRatio  float64 `koanf:"queue_critical_ratio" yaml:"queue_critical_ratio"`
+	MemoryWarningMinGB  int     `koanf:"memory_warning_min_gb" yaml:"memory_warning_min_gb" secret:"false"`
+	MemoryWarningRatio  float64 `koanf:"memory_warning_min_ratio" yaml:"memory_warning_min_ratio" secret:"false"`
+	MemoryCriticalMinGB int     `koanf:"memory_critical_min_gb" yaml:"memory_critical_min_gb" secret:"false"`
+	MemoryCriticalRatio float64 `koanf:"memory_critical_min_ratio" yaml:"memory_critical_min_ratio" secret:"false"`
+	DiskWarningMinGB    int     `koanf:"disk_warning_min_gb" yaml:"disk_warning_min_gb" secret:"false"`
+	DiskWarningRatio    float64 `koanf:"disk_warning_min_ratio" yaml:"disk_warning_min_ratio" secret:"false"`
+	DiskCriticalMinGB   int     `koanf:"disk_critical_min_gb" yaml:"disk_critical_min_gb" secret:"false"`
+	DiskCriticalRatio   float64 `koanf:"disk_critical_min_ratio" yaml:"disk_critical_min_ratio" secret:"false"`
+	VRAMWarningMinGB    int     `koanf:"vram_warning_min_gb" yaml:"vram_warning_min_gb" secret:"false"`
+	VRAMWarningRatio    float64 `koanf:"vram_warning_min_ratio" yaml:"vram_warning_min_ratio" secret:"false"`
+	VRAMCriticalMinGB   int     `koanf:"vram_critical_min_gb" yaml:"vram_critical_min_gb" secret:"false"`
+	VRAMCriticalRatio   float64 `koanf:"vram_critical_min_ratio" yaml:"vram_critical_min_ratio" secret:"false"`
+	ThermalWarningC     float64 `koanf:"thermal_warning_c" yaml:"thermal_warning_c" secret:"false"`
+	ThermalCriticalC    float64 `koanf:"thermal_critical_c" yaml:"thermal_critical_c" secret:"false"`
+	QueueWarningRatio   float64 `koanf:"queue_warning_ratio" yaml:"queue_warning_ratio" secret:"false"`
+	QueueCriticalRatio  float64 `koanf:"queue_critical_ratio" yaml:"queue_critical_ratio" secret:"false"`
 }
 
 // WorkerCleanupConfig controls pressure-triggered worker cleanup orchestration.
 type WorkerCleanupConfig struct {
-	Mode             string        `koanf:"mode" yaml:"mode"`
-	Cooldown         time.Duration `koanf:"cooldown" yaml:"cooldown"`
-	TargetFreeGB     int           `koanf:"target_free_gb" yaml:"target_free_gb"`
+	Mode             string        `koanf:"mode" yaml:"mode" secret:"false"`
+	Cooldown         time.Duration `koanf:"cooldown" yaml:"cooldown" secret:"false"`
+	TargetFreeGB     int           `koanf:"target_free_gb" yaml:"target_free_gb" secret:"false"`
 	PaymentToken     string        `koanf:"payment_token" yaml:"payment_token" secret:"true"`
-	RequiredSoftware []string      `koanf:"required_software" yaml:"required_software"`
+	RequiredSoftware []string      `koanf:"required_software" yaml:"required_software" secret:"false"`
 }
 
 // FIPSConfig controls FIPS overlay advert ingestion.
 type FIPSConfig struct {
-	Enabled              bool     `koanf:"enabled"`
-	RelayURLs            []string `koanf:"relay_urls"`
-	AppNamespace         string   `koanf:"app_namespace"`
-	AutoRegisterWorkers  bool     `koanf:"auto_register_workers"`
-	AllowedNpubs         []string `koanf:"allowed_npubs"`
-	OverlayAddressPrefix string   `koanf:"overlay_address_prefix"`
+	Enabled              bool     `koanf:"enabled" secret:"false"`
+	RelayURLs            []string `koanf:"relay_urls" secret:"false"`
+	AppNamespace         string   `koanf:"app_namespace" secret:"false"`
+	AutoRegisterWorkers  bool     `koanf:"auto_register_workers" secret:"false"`
+	AllowedNpubs         []string `koanf:"allowed_npubs" secret:"false"`
+	OverlayAddressPrefix string   `koanf:"overlay_address_prefix" secret:"false"`
 }
 
 // EdgeRoutingConfig controls signed public hostname provisioning through a managed provider.
 type EdgeRoutingConfig struct {
-	Enabled        bool                      `koanf:"enabled" yaml:"enabled"`
-	Provider       string                    `koanf:"provider" yaml:"provider"`
-	BackendRef     string                    `koanf:"backend_ref" yaml:"backend_ref"`
-	APIBaseURL     string                    `koanf:"api_base_url" yaml:"api_base_url"`
+	Enabled        bool                      `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Provider       string                    `koanf:"provider" yaml:"provider" secret:"false"`
+	BackendRef     string                    `koanf:"backend_ref" yaml:"backend_ref" secret:"false"`
+	APIBaseURL     string                    `koanf:"api_base_url" yaml:"api_base_url" secret:"false"`
 	APITokenRef    string                    `koanf:"api_token_ref" yaml:"api_token_ref" secret:"true"`
-	AccountID      string                    `koanf:"account_id" yaml:"account_id"`
-	TunnelID       string                    `koanf:"tunnel_id" yaml:"tunnel_id"`
-	VerifyTimeout  time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout"`
-	VerifyResolver string                    `koanf:"verify_resolver" yaml:"verify_resolver"`
+	AccountID      string                    `koanf:"account_id" yaml:"account_id" secret:"false"`
+	TunnelID       string                    `koanf:"tunnel_id" yaml:"tunnel_id" secret:"false"`
+	VerifyTimeout  time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout" secret:"false"`
+	VerifyResolver string                    `koanf:"verify_resolver" yaml:"verify_resolver" secret:"false"`
 	Zones          []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
 	Origins        []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
 }
 
 type EdgeRoutingZoneConfig struct {
-	Name          string   `koanf:"name" yaml:"name"`
-	ZoneID        string   `koanf:"zone_id" yaml:"zone_id"`
-	AllowedOrgIDs []string `koanf:"allowed_org_ids" yaml:"allowed_org_ids"`
-	Protected     bool     `koanf:"protected" yaml:"protected"`
-	TTL           int      `koanf:"ttl" yaml:"ttl"`
+	Name          string   `koanf:"name" yaml:"name" secret:"false"`
+	ZoneID        string   `koanf:"zone_id" yaml:"zone_id" secret:"false"`
+	AllowedOrgIDs []string `koanf:"allowed_org_ids" yaml:"allowed_org_ids" secret:"false"`
+	Protected     bool     `koanf:"protected" yaml:"protected" secret:"false"`
+	TTL           int      `koanf:"ttl" yaml:"ttl" secret:"false"`
 }
 
 type EdgeRoutingOriginConfig struct {
-	DeploymentUnitID string `koanf:"deployment_unit_id" yaml:"deployment_unit_id"`
-	Host             string `koanf:"host" yaml:"host"`
-	AllowedPorts     []int  `koanf:"allowed_ports" yaml:"allowed_ports"`
+	DeploymentUnitID string `koanf:"deployment_unit_id" yaml:"deployment_unit_id" secret:"false"`
+	Host             string `koanf:"host" yaml:"host" secret:"false"`
+	AllowedPorts     []int  `koanf:"allowed_ports" yaml:"allowed_ports" secret:"false"`
 }
 
 // InternalRoutingConfig controls an optional Bahia-owned nginx vhost for LAN
 // HTTPS access to the same upstream approved by the public route plan.
 type InternalRoutingConfig struct {
-	Enabled       bool     `koanf:"enabled" yaml:"enabled"`
-	Provider      string   `koanf:"provider" yaml:"provider"`
-	IncludeDir    string   `koanf:"include_dir" yaml:"include_dir"`
-	FilePrefix    string   `koanf:"file_prefix" yaml:"file_prefix"`
-	TestCommand   []string `koanf:"test_command" yaml:"test_command"`
-	ReloadCommand []string `koanf:"reload_command" yaml:"reload_command"`
+	Enabled       bool     `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Provider      string   `koanf:"provider" yaml:"provider" secret:"false"`
+	IncludeDir    string   `koanf:"include_dir" yaml:"include_dir" secret:"false"`
+	FilePrefix    string   `koanf:"file_prefix" yaml:"file_prefix" secret:"false"`
+	TestCommand   []string `koanf:"test_command" yaml:"test_command" secret:"false"`
+	ReloadCommand []string `koanf:"reload_command" yaml:"reload_command" secret:"false"`
 	CommandEnv    []string `koanf:"command_env" yaml:"command_env" secret:"env_values"`
-	CertFile      string   `koanf:"cert_file" yaml:"cert_file"`
-	KeyFile       string   `koanf:"key_file" yaml:"key_file"`
-	Zones         []string `koanf:"zones" yaml:"zones"`
+	CertFile      string   `koanf:"cert_file" yaml:"cert_file" secret:"false"`
+	KeyFile       string   `koanf:"key_file" yaml:"key_file" secret:"false"`
+	Zones         []string `koanf:"zones" yaml:"zones" secret:"false"`
 }
 
 // RouteCanaryConfig controls end-to-end verification of Bahia-managed routes.
@@ -178,52 +178,52 @@ type InternalRoutingConfig struct {
 // canaries prove the route actually serves traffic, from the public edge and,
 // where configured, from the LAN under split DNS.
 type RouteCanaryConfig struct {
-	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	Enabled bool `koanf:"enabled" yaml:"enabled" secret:"false"`
 	// Interval is how often a managed route is re-probed, unless its override
 	// sets a per-route interval.
-	Interval time.Duration `koanf:"interval" yaml:"interval"`
+	Interval time.Duration `koanf:"interval" yaml:"interval" secret:"false"`
 	// ProbeTimeout bounds a single probe.
-	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout" secret:"false"`
 	// GateTimeout bounds post-deploy verification, including retries while the
 	// route propagates.
-	GateTimeout time.Duration `koanf:"gate_timeout" yaml:"gate_timeout"`
+	GateTimeout time.Duration `koanf:"gate_timeout" yaml:"gate_timeout" secret:"false"`
 	// GateRetryInterval is the delay between post-deploy verification attempts.
-	GateRetryInterval time.Duration `koanf:"gate_retry_interval" yaml:"gate_retry_interval"`
+	GateRetryInterval time.Duration `koanf:"gate_retry_interval" yaml:"gate_retry_interval" secret:"false"`
 	// GateEnabled blocks and rolls back a deployment whose route fails
 	// verification. Disabling it keeps detection while removing enforcement.
-	GateEnabled bool `koanf:"gate_enabled" yaml:"gate_enabled"`
+	GateEnabled bool `koanf:"gate_enabled" yaml:"gate_enabled" secret:"false"`
 	// FailureThreshold is how many consecutive failing observations open an
 	// outage during periodic probing.
-	FailureThreshold int `koanf:"failure_threshold" yaml:"failure_threshold"`
+	FailureThreshold int `koanf:"failure_threshold" yaml:"failure_threshold" secret:"false"`
 	// SuccessThreshold is how many consecutive healthy observations clear one.
-	SuccessThreshold int `koanf:"success_threshold" yaml:"success_threshold"`
+	SuccessThreshold int `koanf:"success_threshold" yaml:"success_threshold" secret:"false"`
 	// ExpectedStatusMin and ExpectedStatusMax bound an acceptable response.
-	ExpectedStatusMin int `koanf:"expected_status_min" yaml:"expected_status_min"`
-	ExpectedStatusMax int `koanf:"expected_status_max" yaml:"expected_status_max"`
+	ExpectedStatusMin int `koanf:"expected_status_min" yaml:"expected_status_min" secret:"false"`
+	ExpectedStatusMax int `koanf:"expected_status_max" yaml:"expected_status_max" secret:"false"`
 	// ExpectedBodyContains, when set, must appear in the bounded response body.
-	ExpectedBodyContains string `koanf:"expected_body_contains" yaml:"expected_body_contains"`
+	ExpectedBodyContains string `koanf:"expected_body_contains" yaml:"expected_body_contains" secret:"false"`
 	// ExpectedBodyRegex, when set, is an RE2 pattern that must match the whole
 	// bounded response body, as if written \A(?:pattern)\z. It is bounded in
 	// length and compiled size and validated at startup.
-	ExpectedBodyRegex string `koanf:"expected_body_regex" yaml:"expected_body_regex"`
+	ExpectedBodyRegex string `koanf:"expected_body_regex" yaml:"expected_body_regex" secret:"false"`
 	// TLSMinDaysRemaining warns when a leaf certificate expires sooner than this.
 	// Zero disables the warning; chain validity is always required.
-	TLSMinDaysRemaining int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
+	TLSMinDaysRemaining int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining" secret:"false"`
 	// DetectCatchAll also requests a deliberately bogus control path on each
 	// probe. If the health path answers identically, the health check is
 	// proving nothing and that is reported rather than passing silently.
-	DetectCatchAll bool `koanf:"detect_catch_all" yaml:"detect_catch_all"`
+	DetectCatchAll bool `koanf:"detect_catch_all" yaml:"detect_catch_all" secret:"false"`
 	// RequireDiscriminatingHealthPath promotes a non-discriminating health path
 	// from a warning to a failure, which makes it block deployments. Requires
 	// detect_catch_all.
-	RequireDiscriminatingHealthPath bool `koanf:"require_discriminating_health_path" yaml:"require_discriminating_health_path"`
+	RequireDiscriminatingHealthPath bool `koanf:"require_discriminating_health_path" yaml:"require_discriminating_health_path" secret:"false"`
 	// PublicResolver is the DNS server used for public-edge checks, so an edge
 	// check cannot be satisfied by split-horizon LAN DNS. "system" or empty uses
 	// the host resolver.
-	PublicResolver string `koanf:"public_resolver" yaml:"public_resolver"`
+	PublicResolver string `koanf:"public_resolver" yaml:"public_resolver" secret:"false"`
 	// InternalDialAddresses maps a DNS zone to the LAN IP that serves its
 	// hostnames, enabling the internal split-DNS perspective for that zone.
-	InternalDialAddresses map[string]string `koanf:"internal_dial_addresses" yaml:"internal_dial_addresses"`
+	InternalDialAddresses map[string]string `koanf:"internal_dial_addresses" yaml:"internal_dial_addresses" secret:"false"`
 	// Overrides tunes individual managed routes, keyed by route hostname. Each
 	// field set in an override replaces that fleet-wide value for that route
 	// only; unset fields inherit. Overrides are control-plane policy and never
@@ -236,26 +236,26 @@ type RouteCanaryConfig struct {
 // zero value such as an empty body marker or a disabled expiry warning.
 type RouteCanaryOverrideConfig struct {
 	// Interval replaces the periodic probe interval for this route.
-	Interval time.Duration `koanf:"interval" yaml:"interval"`
+	Interval time.Duration `koanf:"interval" yaml:"interval" secret:"false"`
 	// ProbeTimeout replaces the per-probe timeout for this route.
-	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
+	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout" secret:"false"`
 	// ExpectedStatusMin and ExpectedStatusMax replace either bound of the
 	// accepted status range for this route.
-	ExpectedStatusMin *int `koanf:"expected_status_min" yaml:"expected_status_min"`
-	ExpectedStatusMax *int `koanf:"expected_status_max" yaml:"expected_status_max"`
+	ExpectedStatusMin *int `koanf:"expected_status_min" yaml:"expected_status_min" secret:"false"`
+	ExpectedStatusMax *int `koanf:"expected_status_max" yaml:"expected_status_max" secret:"false"`
 	// ExpectedBodyContains replaces the substring assertion; "" removes it.
-	ExpectedBodyContains *string `koanf:"expected_body_contains" yaml:"expected_body_contains"`
+	ExpectedBodyContains *string `koanf:"expected_body_contains" yaml:"expected_body_contains" secret:"false"`
 	// ExpectedBodyRegex replaces the anchored regex assertion; "" removes it.
-	ExpectedBodyRegex *string `koanf:"expected_body_regex" yaml:"expected_body_regex"`
+	ExpectedBodyRegex *string `koanf:"expected_body_regex" yaml:"expected_body_regex" secret:"false"`
 	// TLSMinDaysRemaining replaces the expiry warning window; 0 disables it.
-	TLSMinDaysRemaining *int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining"`
+	TLSMinDaysRemaining *int `koanf:"tls_min_days_remaining" yaml:"tls_min_days_remaining" secret:"false"`
 }
 
 // DNSConfig controls DNS orchestration projection and backend settings.
 type DNSConfig struct {
-	Enabled           bool                        `koanf:"enabled"`
-	DefaultTTL        int                         `koanf:"default_ttl"`
-	ReconcileInterval time.Duration               `koanf:"reconcile_interval"`
+	Enabled           bool                        `koanf:"enabled" secret:"false"`
+	DefaultTTL        int                         `koanf:"default_ttl" secret:"false"`
+	ReconcileInterval time.Duration               `koanf:"reconcile_interval" secret:"false"`
 	Zones             []DNSZoneConfig             `koanf:"zones"`
 	Backends          map[string]DNSBackendConfig `koanf:"backends"`
 	Projection        DNSProjectionConfig         `koanf:"projection"`
@@ -263,104 +263,104 @@ type DNSConfig struct {
 
 // DNSZoneConfig binds a managed DNS zone to a configured backend.
 type DNSZoneConfig struct {
-	Name                    string `koanf:"name"`
-	Visibility              string `koanf:"visibility"`
-	Backend                 string `koanf:"backend"`
-	TTL                     int    `koanf:"ttl"`
-	Authoritative           bool   `koanf:"authoritative"`
-	AllowEmptyAuthoritative bool   `koanf:"allow_empty_authoritative"`
+	Name                    string `koanf:"name" secret:"false"`
+	Visibility              string `koanf:"visibility" secret:"false"`
+	Backend                 string `koanf:"backend" secret:"false"`
+	TTL                     int    `koanf:"ttl" secret:"false"`
+	Authoritative           bool   `koanf:"authoritative" secret:"false"`
+	AllowEmptyAuthoritative bool   `koanf:"allow_empty_authoritative" secret:"false"`
 }
 
 // DNSBackendConfig describes one DNS backend connector.
 type DNSBackendConfig struct {
-	Type                      string        `koanf:"type"`
-	RootDir                   string        `koanf:"root_dir"`
-	EtcdEndpoints             []string      `koanf:"etcd_endpoints"`
-	EtcdPrefix                string        `koanf:"etcd_prefix"`
-	EtcdDialTimeout           time.Duration `koanf:"etcd_dial_timeout"`
-	PowerDNSAPIURL            string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
+	Type                      string        `koanf:"type" secret:"false"`
+	RootDir                   string        `koanf:"root_dir" secret:"false"`
+	EtcdEndpoints             []string      `koanf:"etcd_endpoints" secret:"false"`
+	EtcdPrefix                string        `koanf:"etcd_prefix" secret:"false"`
+	EtcdDialTimeout           time.Duration `koanf:"etcd_dial_timeout" secret:"false"`
+	PowerDNSAPIURL            string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url" secret:"false"`
 	PowerDNSAPIKey            string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key" secret:"true"`
-	PowerDNSServerID          string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
-	PowerDNSAllowInsecureHTTP bool          `koanf:"powerdns_allow_insecure_http" yaml:"powerdns_allow_insecure_http"`
-	DnsmasqConfigDir          string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
-	DnsmasqReloadCommand      string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
-	DnsmasqFilePrefix         string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
-	AgentPubkey               string        `koanf:"agent_pubkey" yaml:"agent_pubkey"`
-	AgentRelays               []string      `koanf:"agent_relays" yaml:"agent_relays"`
-	AgentEncrypted            bool          `koanf:"agent_encrypted" yaml:"agent_encrypted"`
-	AgentTimeout              time.Duration `koanf:"agent_timeout" yaml:"agent_timeout"`
-	AgentRetries              *int          `koanf:"agent_retries" yaml:"agent_retries"`
+	PowerDNSServerID          string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id" secret:"false"`
+	PowerDNSAllowInsecureHTTP bool          `koanf:"powerdns_allow_insecure_http" yaml:"powerdns_allow_insecure_http" secret:"false"`
+	DnsmasqConfigDir          string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir" secret:"false"`
+	DnsmasqReloadCommand      string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command" secret:"false"`
+	DnsmasqFilePrefix         string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix" secret:"false"`
+	AgentPubkey               string        `koanf:"agent_pubkey" yaml:"agent_pubkey" secret:"false"`
+	AgentRelays               []string      `koanf:"agent_relays" yaml:"agent_relays" secret:"false"`
+	AgentEncrypted            bool          `koanf:"agent_encrypted" yaml:"agent_encrypted" secret:"false"`
+	AgentTimeout              time.Duration `koanf:"agent_timeout" yaml:"agent_timeout" secret:"false"`
+	AgentRetries              *int          `koanf:"agent_retries" yaml:"agent_retries" secret:"false"`
 	agentEncryptedConfigured  bool
-	HostsPath                 string `koanf:"hosts_path" yaml:"hosts_path"`
+	HostsPath                 string `koanf:"hosts_path" yaml:"hosts_path" secret:"false"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
 type DNSProjectionConfig struct {
-	Services          bool              `koanf:"services"`
-	LLMRoutes         bool              `koanf:"llm_routes"`
-	MLEndpoints       bool              `koanf:"ml_endpoints"`
-	Workers           bool              `koanf:"workers"`
-	MeshEndpoints     bool              `koanf:"mesh_endpoints"`
-	CapabilityAliases bool              `koanf:"capability_aliases"`
-	EnvironmentZones  map[string]string `koanf:"environment_zones"`
-	HostOverrides     map[string]string `koanf:"host_overrides"`
-	WorkerZone        string            `koanf:"worker_zone"`
-	MeshZone          string            `koanf:"mesh_zone"`
+	Services          bool              `koanf:"services" secret:"false"`
+	LLMRoutes         bool              `koanf:"llm_routes" secret:"false"`
+	MLEndpoints       bool              `koanf:"ml_endpoints" secret:"false"`
+	Workers           bool              `koanf:"workers" secret:"false"`
+	MeshEndpoints     bool              `koanf:"mesh_endpoints" secret:"false"`
+	CapabilityAliases bool              `koanf:"capability_aliases" secret:"false"`
+	EnvironmentZones  map[string]string `koanf:"environment_zones" secret:"false"`
+	HostOverrides     map[string]string `koanf:"host_overrides" secret:"false"`
+	WorkerZone        string            `koanf:"worker_zone" secret:"false"`
+	MeshZone          string            `koanf:"mesh_zone" secret:"false"`
 }
 
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
-	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	Enabled bool `koanf:"enabled" yaml:"enabled" secret:"false"`
 	// ProvisioningStateDir contains durable governed-saga checkpoints and the
 	// secret-free production adapter ledger.
-	ProvisioningStateDir string `koanf:"provisioning_state_dir" yaml:"provisioning_state_dir"`
+	ProvisioningStateDir string `koanf:"provisioning_state_dir" yaml:"provisioning_state_dir" secret:"false"`
 	// OrganizationID is the tenant that owns Soul Factory services,
 	// environments, release bindings, and release-backed deployment intents.
-	OrganizationID string `koanf:"organization_id" yaml:"organization_id"`
+	OrganizationID string `koanf:"organization_id" yaml:"organization_id" secret:"false"`
 	// AgentEnvironmentID optionally pins an existing tenant environment. When
 	// empty, the production adapter idempotently ensures the "agents" environment.
-	AgentEnvironmentID string `koanf:"agent_environment_id" yaml:"agent_environment_id"`
+	AgentEnvironmentID string `koanf:"agent_environment_id" yaml:"agent_environment_id" secret:"false"`
 	// AgentRuntimes is the validated list of administratively enabled
 	// SoulFactory agent runtime targets (for example openclaw, metiq).
 	// When unset it defaults to [openclaw] to preserve prior behavior.
-	AgentRuntimes []string `koanf:"agent_runtimes" yaml:"agent_runtimes"`
+	AgentRuntimes []string `koanf:"agent_runtimes" yaml:"agent_runtimes" secret:"false"`
 	// RuntimePubkeys pins each enabled runtime target to the exact signing
 	// identities whose kind:30317 capabilities Bahia may trust.
-	RuntimePubkeys                  map[string][]string    `koanf:"runtime_pubkeys" yaml:"runtime_pubkeys"`
-	Relays                          []string               `koanf:"relays" yaml:"relays"`
-	AdditionalRelays                []string               `koanf:"additional_relays" yaml:"additional_relays"`
-	NIP05Relays                     []string               `koanf:"nip05_relays" yaml:"nip05_relays"`
+	RuntimePubkeys                  map[string][]string    `koanf:"runtime_pubkeys" yaml:"runtime_pubkeys" secret:"false"`
+	Relays                          []string               `koanf:"relays" yaml:"relays" secret:"false"`
+	AdditionalRelays                []string               `koanf:"additional_relays" yaml:"additional_relays" secret:"false"`
+	NIP05Relays                     []string               `koanf:"nip05_relays" yaml:"nip05_relays" secret:"false"`
 	NIP29Groups                     []NIP29Group           `koanf:"nip29_groups" yaml:"nip29_groups"`
 	CommunikeysCommunities          []CommunikeysCommunity `koanf:"communikeys_communities" yaml:"communikeys_communities"`
 	ConcordCommunities              []ConcordCommunity     `koanf:"concord_communities" yaml:"concord_communities"`
-	AuthorizedPubkeys               []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
-	SoulFactoryPubkey               string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey"`
+	AuthorizedPubkeys               []string               `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys" secret:"false"`
+	SoulFactoryPubkey               string                 `koanf:"soul_factory_pubkey" yaml:"soul_factory_pubkey" secret:"false"`
 	SignetBunkerURI                 string                 `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetClientSecretKey           string                 `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key" secret:"true"`
-	StartupTimeout                  time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout"`
-	LLMBaseURL                      string                 `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel                        string                 `koanf:"llm_model" yaml:"llm_model"`
+	StartupTimeout                  time.Duration          `koanf:"startup_timeout" yaml:"startup_timeout" secret:"false"`
+	LLMBaseURL                      string                 `koanf:"llm_base_url" yaml:"llm_base_url" secret:"false"`
+	LLMModel                        string                 `koanf:"llm_model" yaml:"llm_model" secret:"false"`
 	LLMAPIKey                       string                 `koanf:"llm_api_key" yaml:"llm_api_key" secret:"true"`
-	LLMTimeout                      time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout"`
-	WorkspaceGiteaURL               string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url"`
-	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir"`
+	LLMTimeout                      time.Duration          `koanf:"llm_timeout" yaml:"llm_timeout" secret:"false"`
+	WorkspaceGiteaURL               string                 `koanf:"workspace_gitea_url" yaml:"workspace_gitea_url" secret:"false"`
+	WorkspaceTemplateDir            string                 `koanf:"workspace_template_dir" yaml:"workspace_template_dir" secret:"false"`
 	WorkspacePrivateKeyRef          string                 `koanf:"workspace_private_key_ref" yaml:"workspace_private_key_ref" secret:"true"`
 	WorkspaceAgentMemoryMCPURLRef   string                 `koanf:"workspace_agent_memory_mcp_url_ref" yaml:"workspace_agent_memory_mcp_url_ref" secret:"true"`
-	AgentMemoryTaskIDFile           string                 `koanf:"agent_memory_task_id_file" yaml:"agent_memory_task_id_file"`
-	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port"`
-	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled"`
-	OpenClawSignetStateDir          string                 `koanf:"openclaw_signet_state_dir" yaml:"openclaw_signet_state_dir"`
-	OpenClawSignetClientKeyDir      string                 `koanf:"openclaw_signet_client_key_dir" yaml:"openclaw_signet_client_key_dir"`
-	OpenClawSignetContainer         string                 `koanf:"openclaw_signet_container" yaml:"openclaw_signet_container"`
-	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path"`
-	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file"`
-	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey"`
+	AgentMemoryTaskIDFile           string                 `koanf:"agent_memory_task_id_file" yaml:"agent_memory_task_id_file" secret:"false"`
+	WorkspaceGatewayPort            int                    `koanf:"workspace_gateway_port" yaml:"workspace_gateway_port" secret:"false"`
+	OpenClawSignetEnabled           bool                   `koanf:"openclaw_signet_enabled" yaml:"openclaw_signet_enabled" secret:"false"`
+	OpenClawSignetStateDir          string                 `koanf:"openclaw_signet_state_dir" yaml:"openclaw_signet_state_dir" secret:"false"`
+	OpenClawSignetClientKeyDir      string                 `koanf:"openclaw_signet_client_key_dir" yaml:"openclaw_signet_client_key_dir" secret:"false"`
+	OpenClawSignetContainer         string                 `koanf:"openclaw_signet_container" yaml:"openclaw_signet_container" secret:"false"`
+	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path" secret:"false"`
+	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file" secret:"false"`
+	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey" secret:"false"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
 type NIP29Group struct {
-	Relay string `koanf:"relay" yaml:"relay"`
-	ID    string `koanf:"id" yaml:"id"`
+	Relay string `koanf:"relay" yaml:"relay" secret:"false"`
+	ID    string `koanf:"id" yaml:"id" secret:"false"`
 }
 
 // CommunikeysCommunity identifies one exact Communikeys V2 community branch
@@ -370,16 +370,16 @@ type NIP29Group struct {
 // meaning, and the profile lists are authored by a delegated real signer.
 type CommunikeysCommunity struct {
 	// DefinitionAddress is the exact branch "32222:<owner-pubkey>:<community-id>".
-	DefinitionAddress string `koanf:"definition_address" yaml:"definition_address"`
+	DefinitionAddress string `koanf:"definition_address" yaml:"definition_address" secret:"false"`
 	// ListAuthor is the delegated signer that authors the section profile
 	// lists; it must match the configured Signet/controller signing identity.
-	ListAuthor string `koanf:"list_author" yaml:"list_author"`
+	ListAuthor string `koanf:"list_author" yaml:"list_author" secret:"false"`
 	// Purposes are lowercase section-purpose tokens such as "general" or
 	// "room-creator"; they are not display names.
-	Purposes []string `koanf:"purposes" yaml:"purposes"`
+	Purposes []string `koanf:"purposes" yaml:"purposes" secret:"false"`
 	// Shard selects which shard of each purpose to write: 0/1 is the unsharded
 	// base coordinate, >=2 appends ".<shard>" to the identifier.
-	Shard int `koanf:"shard" yaml:"shard"`
+	Shard int `koanf:"shard" yaml:"shard" secret:"false"`
 }
 
 // ConcordCommunity identifies CORD-05 invite material for a fleet community.
@@ -388,26 +388,26 @@ type CommunikeysCommunity struct {
 // NIP-44 payload sealed to the staff key, and it is the only source CORD-06
 // rotation can write fresh material back to.
 type ConcordCommunity struct {
-	CommunityID            string `koanf:"community_id" yaml:"community_id"`
-	InviteBundleEnv        string `koanf:"invite_bundle_env" yaml:"invite_bundle_env"`
-	InviteBundleFile       string `koanf:"invite_bundle_file" yaml:"invite_bundle_file"`
-	InviteBundleSealedFile string `koanf:"invite_bundle_sealed_file" yaml:"invite_bundle_sealed_file"`
+	CommunityID            string `koanf:"community_id" yaml:"community_id" secret:"false"`
+	InviteBundleEnv        string `koanf:"invite_bundle_env" yaml:"invite_bundle_env" secret:"false"`
+	InviteBundleFile       string `koanf:"invite_bundle_file" yaml:"invite_bundle_file" secret:"false"`
+	InviteBundleSealedFile string `koanf:"invite_bundle_sealed_file" yaml:"invite_bundle_sealed_file" secret:"false"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
 type AssistantConfig struct {
-	Enabled    bool   `koanf:"enabled" yaml:"enabled"`
-	LLMBaseURL string `koanf:"llm_base_url" yaml:"llm_base_url"`
-	LLMModel   string `koanf:"llm_model" yaml:"llm_model"`
+	Enabled    bool   `koanf:"enabled" yaml:"enabled" secret:"false"`
+	LLMBaseURL string `koanf:"llm_base_url" yaml:"llm_base_url" secret:"false"`
+	LLMModel   string `koanf:"llm_model" yaml:"llm_model" secret:"false"`
 	LLMAPIKey  string `koanf:"llm_api_key" yaml:"llm_api_key" secret:"true"`
 	// LLMStreaming controls whether the legacy planner uses streaming chat completions.
 	// When false (the default), the legacy planner uses non-streaming chat completions;
 	// some OpenAI-compatible providers do not emit delta.content for streamed
 	// response_format (json_schema) outputs, so streaming is opt-in per provider.
-	LLMStreaming         bool                       `koanf:"llm_streaming" yaml:"llm_streaming"`
+	LLMStreaming         bool                       `koanf:"llm_streaming" yaml:"llm_streaming" secret:"false"`
 	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
-	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock"`
-	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
+	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock" secret:"false"`
+	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout" secret:"false"`
 	Agentic              AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
 	Permissions          AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
 	MCP                  AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
@@ -424,8 +424,8 @@ type AssistantConfig struct {
 // Paths must not contain parent traversal so an operator cannot point the loader
 // outside an intended tree.
 type AssistantExtensionSourceConfig struct {
-	Enabled bool     `koanf:"enabled" yaml:"enabled"`
-	Paths   []string `koanf:"paths" yaml:"paths"`
+	Enabled bool     `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Paths   []string `koanf:"paths" yaml:"paths" secret:"false"`
 }
 
 const (
@@ -438,21 +438,21 @@ const (
 // prompted mode is available for instruction-tuned OpenAI-compatible endpoints
 // that do not implement native function-calling.
 type AssistantAgenticConfig struct {
-	Enabled                    bool          `koanf:"enabled" yaml:"enabled"`
-	Provider                   string        `koanf:"provider" yaml:"provider"`
-	ToolMode                   string        `koanf:"tool_mode" yaml:"tool_mode"`
-	BaseURL                    string        `koanf:"base_url" yaml:"base_url"`
-	Model                      string        `koanf:"model" yaml:"model"`
+	Enabled                    bool          `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Provider                   string        `koanf:"provider" yaml:"provider" secret:"false"`
+	ToolMode                   string        `koanf:"tool_mode" yaml:"tool_mode" secret:"false"`
+	BaseURL                    string        `koanf:"base_url" yaml:"base_url" secret:"false"`
+	Model                      string        `koanf:"model" yaml:"model" secret:"false"`
 	APIKey                     string        `koanf:"api_key" yaml:"api_key" secret:"true"`
-	MaxIterations              int           `koanf:"max_iterations" yaml:"max_iterations"`
-	MaxConsecutiveToolFailures int           `koanf:"max_consecutive_tool_failures" yaml:"max_consecutive_tool_failures"`
-	RequestTimeout             time.Duration `koanf:"request_timeout" yaml:"request_timeout"`
+	MaxIterations              int           `koanf:"max_iterations" yaml:"max_iterations" secret:"false"`
+	MaxConsecutiveToolFailures int           `koanf:"max_consecutive_tool_failures" yaml:"max_consecutive_tool_failures" secret:"false"`
+	RequestTimeout             time.Duration `koanf:"request_timeout" yaml:"request_timeout" secret:"false"`
 }
 
 // AssistantPermissionsConfig configures the assistant permission posture. The
 // engine implementation lands later; this config owns the canonical default.
 type AssistantPermissionsConfig struct {
-	Mode domain.AssistantPermissionMode `koanf:"mode" yaml:"mode"`
+	Mode domain.AssistantPermissionMode `koanf:"mode" yaml:"mode" secret:"false"`
 }
 
 // AssistantMCPConfig holds assistant-specific MCP runtime settings.
@@ -463,45 +463,45 @@ type AssistantMCPConfig struct {
 
 // AssistantMCPAsyncObservationConfig bounds event-native async tool observation.
 type AssistantMCPAsyncObservationConfig struct {
-	MaxWait       time.Duration `koanf:"max_wait" yaml:"max_wait"`
-	BackfillLimit int           `koanf:"backfill_limit" yaml:"backfill_limit"`
+	MaxWait       time.Duration `koanf:"max_wait" yaml:"max_wait" secret:"false"`
+	BackfillLimit int           `koanf:"backfill_limit" yaml:"backfill_limit" secret:"false"`
 }
 
 // AssistantExternalMCPServerConfig describes one opt-in external MCP server.
 // Servers are disabled by default and only enabled entries are contacted.
 type AssistantExternalMCPServerConfig struct {
-	Enabled       bool                                   `koanf:"enabled" yaml:"enabled"`
-	Name          string                                 `koanf:"name" yaml:"name"`
-	URL           string                                 `koanf:"url" yaml:"url"`
-	ToolPrefix    string                                 `koanf:"tool_prefix" yaml:"tool_prefix"`
-	Timeout       time.Duration                          `koanf:"timeout" yaml:"timeout"`
+	Enabled       bool                                   `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Name          string                                 `koanf:"name" yaml:"name" secret:"false"`
+	URL           string                                 `koanf:"url" yaml:"url" secret:"false"`
+	ToolPrefix    string                                 `koanf:"tool_prefix" yaml:"tool_prefix" secret:"false"`
+	Timeout       time.Duration                          `koanf:"timeout" yaml:"timeout" secret:"false"`
 	AuthHeaders   map[string]string                      `koanf:"auth_headers" yaml:"auth_headers" secret:"true"`
-	DefaultEffect domain.AssistantToolEffect             `koanf:"default_effect" yaml:"default_effect"`
-	DefaultRisk   domain.AssistantToolRisk               `koanf:"default_risk" yaml:"default_risk"`
-	ResourceTypes []string                               `koanf:"resource_types" yaml:"resource_types"`
+	DefaultEffect domain.AssistantToolEffect             `koanf:"default_effect" yaml:"default_effect" secret:"false"`
+	DefaultRisk   domain.AssistantToolRisk               `koanf:"default_risk" yaml:"default_risk" secret:"false"`
+	ResourceTypes []string                               `koanf:"resource_types" yaml:"resource_types" secret:"false"`
 	Permissions   []AssistantExternalMCPPermissionConfig `koanf:"permissions" yaml:"permissions"`
 }
 
 // AssistantExternalMCPPermissionConfig is converted into an assistant
 // permission rule scoped to the server's prefixed tool names.
 type AssistantExternalMCPPermissionConfig struct {
-	ID             string                              `koanf:"id" yaml:"id"`
-	Decision       domain.AssistantPermissionDecision  `koanf:"decision" yaml:"decision"`
-	ToolNames      []string                            `koanf:"tool_names" yaml:"tool_names"`
-	ToolPrefixes   []string                            `koanf:"tool_prefixes" yaml:"tool_prefixes"`
-	Effects        []domain.AssistantToolEffect        `koanf:"effects" yaml:"effects"`
-	Risks          []domain.AssistantToolRisk          `koanf:"risks" yaml:"risks"`
-	ExecutionModes []domain.AssistantToolExecutionMode `koanf:"execution_modes" yaml:"execution_modes"`
-	ResourceTypes  []string                            `koanf:"resource_types" yaml:"resource_types"`
-	Reason         string                              `koanf:"reason" yaml:"reason"`
+	ID             string                              `koanf:"id" yaml:"id" secret:"false"`
+	Decision       domain.AssistantPermissionDecision  `koanf:"decision" yaml:"decision" secret:"false"`
+	ToolNames      []string                            `koanf:"tool_names" yaml:"tool_names" secret:"false"`
+	ToolPrefixes   []string                            `koanf:"tool_prefixes" yaml:"tool_prefixes" secret:"false"`
+	Effects        []domain.AssistantToolEffect        `koanf:"effects" yaml:"effects" secret:"false"`
+	Risks          []domain.AssistantToolRisk          `koanf:"risks" yaml:"risks" secret:"false"`
+	ExecutionModes []domain.AssistantToolExecutionMode `koanf:"execution_modes" yaml:"execution_modes" secret:"false"`
+	ResourceTypes  []string                            `koanf:"resource_types" yaml:"resource_types" secret:"false"`
+	Reason         string                              `koanf:"reason" yaml:"reason" secret:"false"`
 }
 
 // PackageControlplaneConfig registers package repository backends and source-fetch guardrails.
 type PackageControlplaneConfig struct {
-	Enabled            bool                            `koanf:"enabled"`
-	AllowedSourceHosts []string                        `koanf:"allowed_source_hosts"`
-	AllowHTTPSource    bool                            `koanf:"allow_http_source"`
-	AllowFileSource    bool                            `koanf:"allow_file_source"`
+	Enabled            bool                            `koanf:"enabled" secret:"false"`
+	AllowedSourceHosts []string                        `koanf:"allowed_source_hosts" secret:"false"`
+	AllowHTTPSource    bool                            `koanf:"allow_http_source" secret:"false"`
+	AllowFileSource    bool                            `koanf:"allow_file_source" secret:"false"`
 	Backends           map[string]PackageBackendConfig `koanf:"backends"`
 }
 
@@ -510,77 +510,77 @@ type PackageControlplaneConfig struct {
 // inline passwords, tokens, or private key material are intentionally not part
 // of this config shape.
 type PackageBackendConfig struct {
-	Type               string            `koanf:"type"`
-	BaseURL            string            `koanf:"base_url"`
-	RootDir            string            `koanf:"root_dir"`
-	PublicBaseURL      string            `koanf:"public_base_url"`
-	Timeout            time.Duration     `koanf:"timeout"`
-	InsecureSkipVerify bool              `koanf:"insecure_skip_verify"`
+	Type               string            `koanf:"type" secret:"false"`
+	BaseURL            string            `koanf:"base_url" secret:"false"`
+	RootDir            string            `koanf:"root_dir" secret:"false"`
+	PublicBaseURL      string            `koanf:"public_base_url" secret:"false"`
+	Timeout            time.Duration     `koanf:"timeout" secret:"false"`
+	InsecureSkipVerify bool              `koanf:"insecure_skip_verify" secret:"false"`
 	AuthSecretRef      string            `koanf:"auth_secret_ref" secret:"true"`
 	TLSSecretRef       string            `koanf:"tls_secret_ref" secret:"true"`
 	SecretRefs         map[string]string `koanf:"secret_refs" secret:"true"`
 
 	// Nexus-specific settings forwarded to the Nexus raw-repository adapter.
-	NexusBlobStoreName                      string `koanf:"nexus_blob_store_name" yaml:"nexus_blob_store_name"`
-	NexusDisableStrictContentTypeValidation bool   `koanf:"nexus_disable_strict_content_type_validation" yaml:"nexus_disable_strict_content_type_validation"`
-	NexusWritePolicy                        string `koanf:"nexus_write_policy" yaml:"nexus_write_policy"`
+	NexusBlobStoreName                      string `koanf:"nexus_blob_store_name" yaml:"nexus_blob_store_name" secret:"false"`
+	NexusDisableStrictContentTypeValidation bool   `koanf:"nexus_disable_strict_content_type_validation" yaml:"nexus_disable_strict_content_type_validation" secret:"false"`
+	NexusWritePolicy                        string `koanf:"nexus_write_policy" yaml:"nexus_write_policy" secret:"false"`
 
 	// Pulp-specific settings forwarded to the Pulp file-plugin adapter.
-	PulpEnableCustomMutationAPI bool          `koanf:"pulp_enable_custom_mutation_api" yaml:"pulp_enable_custom_mutation_api"`
-	PulpTaskInterval            time.Duration `koanf:"pulp_task_interval" yaml:"pulp_task_interval"`
-	PulpConfirmationTimeout     time.Duration `koanf:"pulp_confirmation_timeout" yaml:"pulp_confirmation_timeout"`
+	PulpEnableCustomMutationAPI bool          `koanf:"pulp_enable_custom_mutation_api" yaml:"pulp_enable_custom_mutation_api" secret:"false"`
+	PulpTaskInterval            time.Duration `koanf:"pulp_task_interval" yaml:"pulp_task_interval" secret:"false"`
+	PulpConfirmationTimeout     time.Duration `koanf:"pulp_confirmation_timeout" yaml:"pulp_confirmation_timeout" secret:"false"`
 }
 
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
 type LLMControlplaneConfig struct {
-	Enabled              bool                                `koanf:"enabled"`
-	AllowOperationalREST bool                                `koanf:"allow_operational_rest"`
-	DefaultGatewayRef    string                              `koanf:"default_gateway_ref"`
-	RecoveryPollInterval time.Duration                       `koanf:"recovery_poll_interval"`
-	StaleRunTimeout      time.Duration                       `koanf:"stale_run_timeout"`
-	ReconcileInterval    time.Duration                       `koanf:"reconcile_interval"`
+	Enabled              bool                                `koanf:"enabled" secret:"false"`
+	AllowOperationalREST bool                                `koanf:"allow_operational_rest" secret:"false"`
+	DefaultGatewayRef    string                              `koanf:"default_gateway_ref" secret:"false"`
+	RecoveryPollInterval time.Duration                       `koanf:"recovery_poll_interval" secret:"false"`
+	StaleRunTimeout      time.Duration                       `koanf:"stale_run_timeout" secret:"false"`
+	ReconcileInterval    time.Duration                       `koanf:"reconcile_interval" secret:"false"`
 	Gateways             map[string]LLMGatewayEndpointConfig `koanf:"gateways"`
 	OperatorAccessConfig `koanf:",squash"`
 }
 
 // LLMGatewayEndpointConfig describes one inference gateway admin endpoint.
 type LLMGatewayEndpointConfig struct {
-	Type          string        `koanf:"type"`
-	BaseURL       string        `koanf:"base_url"`
+	Type          string        `koanf:"type" secret:"false"`
+	BaseURL       string        `koanf:"base_url" secret:"false"`
 	AuthToken     string        `koanf:"auth_token" secret:"true"`
-	AuthTokenFile string        `koanf:"auth_token_file"`
-	Timeout       time.Duration `koanf:"timeout"`
+	AuthTokenFile string        `koanf:"auth_token_file" secret:"false"`
+	Timeout       time.Duration `koanf:"timeout" secret:"false"`
 }
 
 // RegistryAdapterConfig holds OCI registry adapter settings for multi-registry support.
 // When configured, this supersedes HarborConfig for image verification.
 type RegistryAdapterConfig struct {
-	Type     string `koanf:"type"`                   // ghcr, dockerhub, harbor, oci (auto-detected from URL if empty)
-	URL      string `koanf:"url"`                    // registry base URL (required for harbor/oci)
-	Username string `koanf:"username"`               // credentials (optional for public repos)
-	Password string `koanf:"password" secret:"true"` // password or PAT
+	Type     string `koanf:"type" secret:"false"`     // ghcr, dockerhub, harbor, oci (auto-detected from URL if empty)
+	URL      string `koanf:"url" secret:"false"`      // registry base URL (required for harbor/oci)
+	Username string `koanf:"username" secret:"false"` // credentials (optional for public repos)
+	Password string `koanf:"password" secret:"true"`  // password or PAT
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Host            string        `koanf:"host"`
-	Port            int           `koanf:"port"`
-	ReadTimeout     time.Duration `koanf:"read_timeout"`
-	WriteTimeout    time.Duration `koanf:"write_timeout"`
-	ShutdownTimeout time.Duration `koanf:"shutdown_timeout"`
+	Host            string        `koanf:"host" secret:"false"`
+	Port            int           `koanf:"port" secret:"false"`
+	ReadTimeout     time.Duration `koanf:"read_timeout" secret:"false"`
+	WriteTimeout    time.Duration `koanf:"write_timeout" secret:"false"`
+	ShutdownTimeout time.Duration `koanf:"shutdown_timeout" secret:"false"`
 }
 
 // DBConfig holds PostgreSQL connection settings.
 type DBConfig struct {
-	Host            string        `koanf:"host"`
-	Port            int           `koanf:"port"`
-	User            string        `koanf:"user"`
+	Host            string        `koanf:"host" secret:"false"`
+	Port            int           `koanf:"port" secret:"false"`
+	User            string        `koanf:"user" secret:"false"`
 	Password        string        `koanf:"password" secret:"true"`
-	Name            string        `koanf:"name"`
-	SSLMode         string        `koanf:"sslmode"`
-	MaxOpenConns    int           `koanf:"max_open_conns"`
-	MaxIdleConns    int           `koanf:"max_idle_conns"`
-	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime"`
+	Name            string        `koanf:"name" secret:"false"`
+	SSLMode         string        `koanf:"sslmode" secret:"false"`
+	MaxOpenConns    int           `koanf:"max_open_conns" secret:"false"`
+	MaxIdleConns    int           `koanf:"max_idle_conns" secret:"false"`
+	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime" secret:"false"`
 }
 
 // DSN returns a PostgreSQL connection string with properly escaped components.
@@ -599,29 +599,29 @@ func (c DBConfig) DSN() string {
 
 // HarborConfig holds Harbor registry settings.
 type HarborConfig struct {
-	URL      string `koanf:"url"`
-	Username string `koanf:"username"`
+	URL      string `koanf:"url" secret:"false"`
+	Username string `koanf:"username" secret:"false"`
 	Password string `koanf:"password" secret:"true"`
-	Insecure bool   `koanf:"insecure"`
-	Enabled  bool   `koanf:"enabled"`
+	Insecure bool   `koanf:"insecure" secret:"false"`
+	Enabled  bool   `koanf:"enabled" secret:"false"`
 }
 
 // LoomConfig holds Loom worker integration settings.
 type LoomConfig struct {
-	Relays              []string                      `koanf:"relays"`
-	JobTimeout          time.Duration                 `koanf:"job_timeout"`
+	Relays              []string                      `koanf:"relays" secret:"false"`
+	JobTimeout          time.Duration                 `koanf:"job_timeout" secret:"false"`
 	CanonicalProjection LoomCanonicalProjectionConfig `koanf:"canonical_projection" yaml:"canonical_projection"`
-	AuthorizedPubkeys   []string                      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys"`
+	AuthorizedPubkeys   []string                      `koanf:"authorized_pubkeys" yaml:"authorized_pubkeys" secret:"false"`
 }
 
 // LoomCanonicalProjectionConfig controls projection of Loom-native status/result
 // events into canonical CAS 30900 state and 4903 audit events.
 type LoomCanonicalProjectionConfig struct {
-	Enabled               bool          `koanf:"enabled" yaml:"enabled"`
+	Enabled               bool          `koanf:"enabled" yaml:"enabled" secret:"false"`
 	SignetBunkerURI       string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetClientSecretKey string        `koanf:"signet_client_secret_key" yaml:"signet_client_secret_key" secret:"true"`
-	SignetConnectTimeout  time.Duration `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout"`
-	AllowRawKeyDev        bool          `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev"`
+	SignetConnectTimeout  time.Duration `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout" secret:"false"`
+	AllowRawKeyDev        bool          `koanf:"allow_raw_key_dev" yaml:"allow_raw_key_dev" secret:"false"`
 	RawPrivateKey         string        `koanf:"raw_private_key" yaml:"raw_private_key" secret:"true"`
 }
 
@@ -630,15 +630,15 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
 	PrivateKey    string   `koanf:"private_key" secret:"true"`
-	Relays        []string `koanf:"relays"`
-	ServiceRelays []string `koanf:"service_relays"`
-	BrowserRelays []string `koanf:"browser_relays"`
+	Relays        []string `koanf:"relays" secret:"false"`
+	ServiceRelays []string `koanf:"service_relays" secret:"false"`
+	BrowserRelays []string `koanf:"browser_relays" secret:"false"`
 	// ContextVMRelays are direct request-subscription and response-publication
 	// destinations. When the sidecar is enabled, its backend/public URL is added
 	// to this policy rather than replacing it. BrowserRelays remain the fallback.
-	ContextVMRelays            []string                  `koanf:"contextvm_relays"`
-	NIP34Relays                []string                  `koanf:"nip34_relays" yaml:"nip34_relays"`
-	TrustedRelayMonitorPubkeys []string                  `koanf:"trusted_relay_monitor_pubkeys" yaml:"trusted_relay_monitor_pubkeys"`
+	ContextVMRelays            []string                  `koanf:"contextvm_relays" secret:"false"`
+	NIP34Relays                []string                  `koanf:"nip34_relays" yaml:"nip34_relays" secret:"false"`
+	TrustedRelayMonitorPubkeys []string                  `koanf:"trusted_relay_monitor_pubkeys" yaml:"trusted_relay_monitor_pubkeys" secret:"false"`
 	DMRelayLists               []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
 	RelayAdministration        RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
 
@@ -647,24 +647,24 @@ type NostrConfig struct {
 	// must exclude that relay, surface the CLOSED/OK reason in health/error
 	// metadata, and fail deterministically if the remaining relays cannot satisfy
 	// the operation's read/publish success rule.
-	RelayAuthUnavailablePolicy string `koanf:"relay_auth_unavailable" yaml:"relay_auth_unavailable"`
+	RelayAuthUnavailablePolicy string `koanf:"relay_auth_unavailable" yaml:"relay_auth_unavailable" secret:"false"`
 
 	// PrivateRelays and PrivateBrowserRelays are internal mirrors for runtime
 	// callers that have not moved to the canonical field names yet. They are not
 	// loaded from config; nostr.private_relays and nostr.private_browser_relays
 	// are rejected in Load.
-	PrivateRelays        []string `koanf:"-"`
-	PrivateBrowserRelays []string `koanf:"-"`
+	PrivateRelays        []string `koanf:"-" secret:"false"`
+	PrivateBrowserRelays []string `koanf:"-" secret:"false"`
 
-	AuthorizedPubkeys []string `koanf:"authorized_pubkeys"`
-	PublishEnabled    bool     `koanf:"publish_enabled"`
+	AuthorizedPubkeys []string `koanf:"authorized_pubkeys" secret:"false"`
+	PublishEnabled    bool     `koanf:"publish_enabled" secret:"false"`
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
-	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after"`
+	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
 	// LegacyRelayBackfill explicitly enables startup reads of retired Bahia
 	// request kinds from an external migration relay. The hardened Bahia
 	// sidecar intentionally refuses those reads, so this must remain opt-in.
-	LegacyRelayBackfill bool               `koanf:"legacy_relay_backfill" yaml:"legacy_relay_backfill"`
+	LegacyRelayBackfill bool               `koanf:"legacy_relay_backfill" yaml:"legacy_relay_backfill" secret:"false"`
 	RelayQuorum         RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar             RelaySidecarConfig `koanf:"sidecar"`
 }
@@ -677,37 +677,37 @@ const (
 // DMRelayListConfig configures an explicit NIP-51 kind 10050 receive relay list.
 // It is never inferred from browser, service, or ContextVM relay policies.
 type DMRelayListConfig struct {
-	Enabled  bool     `koanf:"enabled" yaml:"enabled"`
-	Feature  string   `koanf:"feature" yaml:"feature"`
-	Identity string   `koanf:"identity" yaml:"identity"`
-	Relays   []string `koanf:"relays" yaml:"relays"`
+	Enabled  bool     `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Feature  string   `koanf:"feature" yaml:"feature" secret:"false"`
+	Identity string   `koanf:"identity" yaml:"identity" secret:"false"`
+	Relays   []string `koanf:"relays" yaml:"relays" secret:"false"`
 }
 
 // RelayQuorumConfig holds readiness quorum thresholds by operating mode.
 type RelayQuorumConfig struct {
-	FullMinHealthy      int `koanf:"full_min_healthy" yaml:"full_min_healthy"`
-	DegradedMinHealthy  int `koanf:"degraded_min_healthy" yaml:"degraded_min_healthy"`
-	EmergencyMinHealthy int `koanf:"emergency_min_healthy" yaml:"emergency_min_healthy"`
+	FullMinHealthy      int `koanf:"full_min_healthy" yaml:"full_min_healthy" secret:"false"`
+	DegradedMinHealthy  int `koanf:"degraded_min_healthy" yaml:"degraded_min_healthy" secret:"false"`
+	EmergencyMinHealthy int `koanf:"emergency_min_healthy" yaml:"emergency_min_healthy" secret:"false"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
 type RelaySidecarConfig struct {
-	Enabled              bool          `koanf:"enabled"`
-	ListenAddr           string        `koanf:"listen_addr"`
-	PublicURL            string        `koanf:"public_url"`
-	BackendURL           string        `koanf:"backend_url"`
-	DataDir              string        `koanf:"data_dir"`
-	MirrorExternal       bool          `koanf:"mirror_external"`
-	EventRetention       time.Duration `koanf:"event_retention"`
-	RequestRetention     time.Duration `koanf:"request_retention"`
+	Enabled              bool          `koanf:"enabled" secret:"false"`
+	ListenAddr           string        `koanf:"listen_addr" secret:"false"`
+	PublicURL            string        `koanf:"public_url" secret:"false"`
+	BackendURL           string        `koanf:"backend_url" secret:"false"`
+	DataDir              string        `koanf:"data_dir" secret:"false"`
+	MirrorExternal       bool          `koanf:"mirror_external" secret:"false"`
+	EventRetention       time.Duration `koanf:"event_retention" secret:"false"`
+	RequestRetention     time.Duration `koanf:"request_retention" secret:"false"`
 	AuthPrivateKey       string        `koanf:"auth_private_key" secret:"true"`
-	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys"`
-	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys"`
-	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path"`
-	ConfigProjectionPath string        `koanf:"config_projection_path" yaml:"config_projection_path"`
-	ServiceID            string        `koanf:"service_id" yaml:"service_id"`
-	Scope                string        `koanf:"scope" yaml:"scope"`
-	MaxQueryLimit        int           `koanf:"max_query_limit"`
+	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys" secret:"false"`
+	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys" secret:"false"`
+	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path" secret:"false"`
+	ConfigProjectionPath string        `koanf:"config_projection_path" yaml:"config_projection_path" secret:"false"`
+	ServiceID            string        `koanf:"service_id" yaml:"service_id" secret:"false"`
+	Scope                string        `koanf:"scope" yaml:"scope" secret:"false"`
+	MaxQueryLimit        int           `koanf:"max_query_limit" secret:"false"`
 }
 
 // RelayAdministrationAuthorization values declare why a NIP-86 target is in
@@ -723,7 +723,7 @@ const (
 // settings. It is disabled by default and intentionally separate from NIP-42
 // websocket AUTH and ContextVM application/control-plane mutation transport.
 type RelayAdministrationConfig struct {
-	Enabled                    bool                        `koanf:"enabled" yaml:"enabled"`
+	Enabled                    bool                        `koanf:"enabled" yaml:"enabled" secret:"false"`
 	AdministratorPrivateKeyRef string                      `koanf:"administrator_private_key_ref" yaml:"administrator_private_key_ref" secret:"true"`
 	Targets                    []RelayAdministrationTarget `koanf:"targets" yaml:"targets"`
 }
@@ -733,30 +733,30 @@ type RelayAdministrationConfig struct {
 // be set when the relay's HTTP management endpoint differs from the ws/wss URL
 // converted to http/https.
 type RelayAdministrationTarget struct {
-	Ref                  string   `koanf:"ref" yaml:"ref"`
-	RelayURL             string   `koanf:"relay_url" yaml:"relay_url"`
-	HTTPURL              string   `koanf:"http_url" yaml:"http_url"`
-	Authorization        string   `koanf:"authorization" yaml:"authorization"`
-	AdministratorPubkeys []string `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys"`
+	Ref                  string   `koanf:"ref" yaml:"ref" secret:"false"`
+	RelayURL             string   `koanf:"relay_url" yaml:"relay_url" secret:"false"`
+	HTTPURL              string   `koanf:"http_url" yaml:"http_url" secret:"false"`
+	Authorization        string   `koanf:"authorization" yaml:"authorization" secret:"false"`
+	AdministratorPubkeys []string `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys" secret:"false"`
 }
 
 // ReconcileConfig holds reconciliation loop settings.
 type ReconcileConfig struct {
-	Interval time.Duration `koanf:"interval"`
-	Enabled  bool          `koanf:"enabled"`
+	Interval time.Duration `koanf:"interval" secret:"false"`
+	Enabled  bool          `koanf:"enabled" secret:"false"`
 }
 
 // RuntimeTargetConfig holds the connection settings for one runtime target.
 type RuntimeTargetConfig struct {
-	Type          string `koanf:"type"`
-	DockerHost    string `koanf:"docker_host"`
-	EndpointRef   string `koanf:"endpoint_ref"`
-	ComposeDir    string `koanf:"compose_dir"`
-	BahiaOwned    *bool  `koanf:"bahia_owned"`
-	ExecutionMode string `koanf:"execution_mode"`
-	KubeContext   string `koanf:"kube_context"`
-	KubeNamespace string `koanf:"kube_namespace"`
-	KubeConfig    string `koanf:"kube_config"`
+	Type          string `koanf:"type" secret:"false"`
+	DockerHost    string `koanf:"docker_host" secret:"false"`
+	EndpointRef   string `koanf:"endpoint_ref" secret:"false"`
+	ComposeDir    string `koanf:"compose_dir" secret:"false"`
+	BahiaOwned    *bool  `koanf:"bahia_owned" secret:"false"`
+	ExecutionMode string `koanf:"execution_mode" secret:"false"`
+	KubeContext   string `koanf:"kube_context" secret:"false"`
+	KubeNamespace string `koanf:"kube_namespace" secret:"false"`
+	KubeConfig    string `koanf:"kube_config" secret:"false"`
 
 	// VM holds settings for the vm-firecracker and vm-qemu runtime types.
 	VM RuntimeVMConfig `koanf:"vm"`
@@ -770,22 +770,22 @@ type RuntimeTargetConfig struct {
 type RuntimeVMConfig struct {
 	// StateDir is the host directory holding per-instance VM state
 	// (pidfiles, API sockets, metadata.json, overlays).
-	StateDir string `koanf:"state_dir"`
+	StateDir string `koanf:"state_dir" secret:"false"`
 	// ImageRoot is the host directory containing VM image release channels
 	// (each channel a hash-pinned release dir with manifest.json and an
 	// atomic "current" symlink).
-	ImageRoot string `koanf:"image_root"`
+	ImageRoot string `koanf:"image_root" secret:"false"`
 	// LibvirtURI is the libvirt connection URI (vm-qemu only).
-	LibvirtURI string `koanf:"libvirt_uri"`
+	LibvirtURI string `koanf:"libvirt_uri" secret:"false"`
 	// VsockGuestPort is the guest agent vsock port used for ping/metrics.
-	VsockGuestPort int `koanf:"vsock_guest_port"`
+	VsockGuestPort int `koanf:"vsock_guest_port" secret:"false"`
 	// VCPUs is the default vCPU count for instances without an explicit spec.
-	VCPUs int `koanf:"vcpus"`
+	VCPUs int `koanf:"vcpus" secret:"false"`
 	// MemoryMB is the default memory size (MiB) for instances without an
 	// explicit spec.
-	MemoryMB int `koanf:"memory_mb"`
+	MemoryMB int `koanf:"memory_mb" secret:"false"`
 	// NetworkProfile names the host network profile applied to instances.
-	NetworkProfile string `koanf:"network_profile"`
+	NetworkProfile string `koanf:"network_profile" secret:"false"`
 }
 
 // Empty reports whether no VM runtime settings are configured.
@@ -801,12 +801,12 @@ func (c RuntimeVMConfig) Empty() bool {
 
 // RuntimeEndpointConfig holds server-managed Docker endpoint transport settings.
 type RuntimeEndpointConfig struct {
-	Ref                string `koanf:"-"`
-	DockerHost         string `koanf:"docker_host"`
-	CACertFile         string `koanf:"ca_cert_file"`
-	ClientCertFile     string `koanf:"client_cert_file"`
-	ClientKeyFile      string `koanf:"client_key_file"`
-	InsecureSkipVerify bool   `koanf:"insecure_skip_verify"`
+	Ref                string `koanf:"-" secret:"false"`
+	DockerHost         string `koanf:"docker_host" secret:"false"`
+	CACertFile         string `koanf:"ca_cert_file" secret:"false"`
+	ClientCertFile     string `koanf:"client_cert_file" secret:"false"`
+	ClientKeyFile      string `koanf:"client_key_file" secret:"false"`
+	InsecureSkipVerify bool   `koanf:"insecure_skip_verify" secret:"false"`
 }
 
 // Empty reports whether no endpoint transport settings are configured.
@@ -829,14 +829,14 @@ func (c RuntimeEndpointConfig) Empty() bool {
 // BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/prod.
 type RuntimeConfig struct {
 	// Legacy flat fields.
-	Type          string          `koanf:"type"`
-	DockerHost    string          `koanf:"docker_host"`
-	ComposeDir    string          `koanf:"compose_dir"`
-	BahiaOwned    *bool           `koanf:"bahia_owned"`
-	ExecutionMode string          `koanf:"execution_mode"`
-	KubeContext   string          `koanf:"kube_context"`
-	KubeNamespace string          `koanf:"kube_namespace"`
-	KubeConfig    string          `koanf:"kube_config"`
+	Type          string          `koanf:"type" secret:"false"`
+	DockerHost    string          `koanf:"docker_host" secret:"false"`
+	ComposeDir    string          `koanf:"compose_dir" secret:"false"`
+	BahiaOwned    *bool           `koanf:"bahia_owned" secret:"false"`
+	ExecutionMode string          `koanf:"execution_mode" secret:"false"`
+	KubeContext   string          `koanf:"kube_context" secret:"false"`
+	KubeNamespace string          `koanf:"kube_namespace" secret:"false"`
+	KubeConfig    string          `koanf:"kube_config" secret:"false"`
 	VM            RuntimeVMConfig `koanf:"vm"`
 
 	// Environment-targeted fields.
@@ -847,22 +847,22 @@ type RuntimeConfig struct {
 
 // LogConfig holds logging settings.
 type LogConfig struct {
-	Level  string `koanf:"level"`
-	Format string `koanf:"format"`
+	Level  string `koanf:"level" secret:"false"`
+	Format string `koanf:"format" secret:"false"`
 }
 
 // AuthConfig holds authentication settings.
 // When enabled, protected HTTP routes require NIP-98 Authorization headers.
 type AuthConfig struct {
-	Enabled               bool     `koanf:"enabled"`
-	BootstrapOwnerPubkeys []string `koanf:"bootstrap_owner_pubkeys"`
+	Enabled               bool     `koanf:"enabled" secret:"false"`
+	BootstrapOwnerPubkeys []string `koanf:"bootstrap_owner_pubkeys" secret:"false"`
 }
 
 // OperatorAccessConfig holds system-operator allowlists for privileged API routes.
 type OperatorAccessConfig struct {
-	AllowedSubjects []string `koanf:"allowed_subjects"`
-	AllowedPubkeys  []string `koanf:"allowed_pubkeys"`
-	AllowedEmails   []string `koanf:"allowed_emails"`
+	AllowedSubjects []string `koanf:"allowed_subjects" secret:"false"`
+	AllowedPubkeys  []string `koanf:"allowed_pubkeys" secret:"false"`
+	AllowedEmails   []string `koanf:"allowed_emails" secret:"false"`
 }
 
 // Empty reports whether no operator identities are configured.
@@ -890,15 +890,15 @@ func validateSignerFirstOperatorAllowlist(surface string, access *OperatorAccess
 
 // AdoptionConfig holds privileged adoption route settings.
 type AdoptionConfig struct {
-	Enabled              bool `koanf:"enabled"`
-	AllowRawDockerHosts  bool `koanf:"allow_raw_docker_hosts"`
-	AllowComposeTakeover bool `koanf:"allow_compose_takeover"`
+	Enabled              bool `koanf:"enabled" secret:"false"`
+	AllowRawDockerHosts  bool `koanf:"allow_raw_docker_hosts" secret:"false"`
+	AllowComposeTakeover bool `koanf:"allow_compose_takeover" secret:"false"`
 	OperatorAccessConfig `koanf:",squash"`
 }
 
 // DirectRuntimeConfig holds privileged direct runtime action route settings.
 type DirectRuntimeConfig struct {
-	Enabled              bool `koanf:"enabled"`
+	Enabled              bool `koanf:"enabled" secret:"false"`
 	OperatorAccessConfig `koanf:",squash"`
 }
 
@@ -907,52 +907,52 @@ type CORSConfig struct {
 	// AllowedOrigins is the list of origins allowed to make cross-origin requests.
 	// If empty, no origins are allowed (secure default).
 	// Use ["*"] only for development.
-	AllowedOrigins []string `koanf:"allowed_origins"`
+	AllowedOrigins []string `koanf:"allowed_origins" secret:"false"`
 }
 
 // BlossomConfig holds Blossom media/blob storage settings.
 type BlossomConfig struct {
-	Enabled      bool          `koanf:"enabled"`
-	URL          string        `koanf:"url"`
-	Servers      []string      `koanf:"servers"`
-	Timeout      time.Duration `koanf:"timeout"`
-	MaxRetries   int           `koanf:"max_retries"`
-	RetryDelay   time.Duration `koanf:"retry_delay"`
+	Enabled      bool          `koanf:"enabled" secret:"false"`
+	URL          string        `koanf:"url" secret:"false"`
+	Servers      []string      `koanf:"servers" secret:"false"`
+	Timeout      time.Duration `koanf:"timeout" secret:"false"`
+	MaxRetries   int           `koanf:"max_retries" secret:"false"`
+	RetryDelay   time.Duration `koanf:"retry_delay" secret:"false"`
 	PrivateKey   string        `koanf:"private_key" secret:"true"`
-	StorageClass string        `koanf:"storage_class"`
+	StorageClass string        `koanf:"storage_class" secret:"false"`
 }
 
 // OCIServerConfig holds server-side OCI registry settings.
 type OCIServerConfig struct {
-	Enabled                 bool                      `koanf:"enabled"`
-	PublicHost              string                    `koanf:"public_host"`
-	SpoolDir                string                    `koanf:"spool_dir"`
-	UploadExpiry            time.Duration             `koanf:"upload_expiry"`
-	AllowAnonymousPullCIDRs []string                  `koanf:"allow_anonymous_pull_cidrs"`
-	TrustedProxyCIDRs       []string                  `koanf:"trusted_proxy_cidrs"`
-	AuthorizedPushPubkeys   []string                  `koanf:"authorized_push_pubkeys"`
+	Enabled                 bool                      `koanf:"enabled" secret:"false"`
+	PublicHost              string                    `koanf:"public_host" secret:"false"`
+	SpoolDir                string                    `koanf:"spool_dir" secret:"false"`
+	UploadExpiry            time.Duration             `koanf:"upload_expiry" secret:"false"`
+	AllowAnonymousPullCIDRs []string                  `koanf:"allow_anonymous_pull_cidrs" secret:"false"`
+	TrustedProxyCIDRs       []string                  `koanf:"trusted_proxy_cidrs" secret:"false"`
+	AuthorizedPushPubkeys   []string                  `koanf:"authorized_push_pubkeys" secret:"false"`
 	ServiceAccounts         []OCIServiceAccountConfig `koanf:"service_accounts"`
 }
 
 // OCIServiceAccountConfig defines a basic-auth service account for OCI token/auth flows.
 type OCIServiceAccountConfig struct {
-	Username     string   `koanf:"username"`
+	Username     string   `koanf:"username" secret:"false"`
 	PasswordHash string   `koanf:"password_hash" secret:"true"`
-	Permissions  []string `koanf:"permissions"`   // pull, push
-	RepoPrefixes []string `koanf:"repo_prefixes"` // e.g. cascadia/
+	Permissions  []string `koanf:"permissions" secret:"false"`   // pull, push
+	RepoPrefixes []string `koanf:"repo_prefixes" secret:"false"` // e.g. cascadia/
 }
 
 // HiveCIPolicyConfig declares a pipeline policy to ensure exists at startup.
 // Policies are matched by (repo_coordinate, workflow_path, service_name,
 // environment_name); if a matching row already exists it is left untouched.
 type HiveCIPolicyConfig struct {
-	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate"`
-	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path"`
-	BranchPattern     string                        `koanf:"branch_pattern" yaml:"branch_pattern"`
-	ServiceName       string                        `koanf:"service_name" yaml:"service_name"`
-	EnvironmentName   string                        `koanf:"environment_name" yaml:"environment_name"`
-	Enabled           *bool                         `koanf:"enabled" yaml:"enabled"`
-	Metadata          map[string]any                `koanf:"metadata" yaml:"metadata"`
+	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate" secret:"false"`
+	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path" secret:"false"`
+	BranchPattern     string                        `koanf:"branch_pattern" yaml:"branch_pattern" secret:"false"`
+	ServiceName       string                        `koanf:"service_name" yaml:"service_name" secret:"false"`
+	EnvironmentName   string                        `koanf:"environment_name" yaml:"environment_name" secret:"false"`
+	Enabled           *bool                         `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Metadata          map[string]any                `koanf:"metadata" yaml:"metadata" secret:"true"`
 	BuildDependencies []HiveCIBuildDependencyConfig `koanf:"build_dependencies" yaml:"build_dependencies"`
 }
 
@@ -960,62 +960,62 @@ type HiveCIPolicyConfig struct {
 // The repository's default-branch head is resolved to an immutable commit at
 // dispatch time; repository-controlled workflow input never selects dependencies.
 type HiveCIBuildDependencyConfig struct {
-	Name     string `koanf:"name" yaml:"name"`
-	CloneURL string `koanf:"clone_url" yaml:"clone_url"`
+	Name     string `koanf:"name" yaml:"name" secret:"false"`
+	CloneURL string `koanf:"clone_url" yaml:"clone_url" secret:"false"`
 }
 
 // HiveCIDependencyGiteaConfig configures read-only fleet Gitea access for
 // resolving authorized build dependencies. When omitted, the existing private
 // mirror initiator endpoint is reused.
 type HiveCIDependencyGiteaConfig struct {
-	BaseURL string `koanf:"base_url" yaml:"base_url"`
-	Token   string `koanf:"token" yaml:"token"`
+	BaseURL string `koanf:"base_url" yaml:"base_url" secret:"false"`
+	Token   string `koanf:"token" yaml:"token" secret:"true"`
 }
 
 // HiveCIInitiatorConfig configures the fleet Gitea private-mirror and Hive-CI
 // build initiation adapter. The source credential is never configured here —
 // it is resolved per request from an opaque server-side secret reference.
 type HiveCIInitiatorConfig struct {
-	Enabled bool `koanf:"enabled"`
+	Enabled bool `koanf:"enabled" secret:"false"`
 	// GiteaBaseURL is the fleet Gitea API base URL, e.g. https://git.fleet.internal
-	GiteaBaseURL string `koanf:"gitea_base_url"`
+	GiteaBaseURL string `koanf:"gitea_base_url" secret:"false"`
 	// GiteaToken is the fleet Gitea admin token used for mirror provisioning.
 	GiteaToken string `koanf:"gitea_token" secret:"true"`
 	// MirrorOwner is the Gitea org/user that owns private mirrors.
-	MirrorOwner string `koanf:"mirror_owner"`
+	MirrorOwner string `koanf:"mirror_owner" secret:"false"`
 	// WorkflowPath is the Hive-CI workflow file invoked for builds.
-	WorkflowPath string `koanf:"workflow_path"`
+	WorkflowPath string `koanf:"workflow_path" secret:"false"`
 	// SourceProvider explicitly selects github or gitea; it is never inferred.
-	SourceProvider string `koanf:"source_provider"`
+	SourceProvider string `koanf:"source_provider" secret:"false"`
 	// SourceCloneURL optionally overrides GitHub and is required for Gitea.
-	SourceCloneURL string `koanf:"source_clone_url"`
+	SourceCloneURL string `koanf:"source_clone_url" secret:"false"`
 	// SourceAuthUsername is the non-secret username for Gitea password/token auth.
-	SourceAuthUsername string `koanf:"source_auth_username"`
+	SourceAuthUsername string `koanf:"source_auth_username" secret:"false"`
 	// MirrorReadUsername is a dedicated read-only fleet Gitea clone identity.
-	MirrorReadUsername string `koanf:"mirror_read_username"`
+	MirrorReadUsername string `koanf:"mirror_read_username" secret:"false"`
 	// MirrorReadCredentialRef is its opaque service-secret UUID.
-	MirrorReadCredentialRef string `koanf:"mirror_read_credential_ref"`
+	MirrorReadCredentialRef string `koanf:"mirror_read_credential_ref" secret:"true"`
 	// RepoAnnouncementAddr carries the NIP-34 30617 address of the mirror.
-	RepoAnnouncementAddr string `koanf:"repo_announcement_addr"`
+	RepoAnnouncementAddr string `koanf:"repo_announcement_addr" secret:"false"`
 	// RelayHint is attached to published run-request/evidence events.
-	RelayHint string `koanf:"relay_hint"`
+	RelayHint string `koanf:"relay_hint" secret:"false"`
 }
 
 // HiveCIConfig holds Hive-CI integration settings.
 type HiveCIConfig struct {
-	Enabled                         bool     `koanf:"enabled"`
-	TrustedCIPubkeys                []string `koanf:"trusted_ci_pubkeys"`
-	TrustedLoomWorkerPubkeys        []string `koanf:"trusted_loom_worker_pubkeys"`
-	TrustedReleaseAttestors         []string `koanf:"trusted_release_attestors"`
-	AutoRegisterBuilds              bool     `koanf:"auto_register_builds"`
-	AllowManualArtifactRegistration bool     `koanf:"allow_manual_artifact_registration"`
+	Enabled                         bool     `koanf:"enabled" secret:"false"`
+	TrustedCIPubkeys                []string `koanf:"trusted_ci_pubkeys" secret:"false"`
+	TrustedLoomWorkerPubkeys        []string `koanf:"trusted_loom_worker_pubkeys" secret:"false"`
+	TrustedReleaseAttestors         []string `koanf:"trusted_release_attestors" secret:"false"`
+	AutoRegisterBuilds              bool     `koanf:"auto_register_builds" secret:"false"`
+	AllowManualArtifactRegistration bool     `koanf:"allow_manual_artifact_registration" secret:"false"`
 	// AllowLiveArtifactImport permits authorized operators to import an
 	// already-running, observation-verified image as governed build/artifact
 	// lineage. It exists so bridging live reality never requires direct
 	// database mutation; CI-attested registration remains the norm.
-	AllowLiveArtifactImport bool                        `koanf:"allow_live_artifact_import"`
-	RetryInterval           time.Duration               `koanf:"retry_interval"`
-	MaxRetries              int                         `koanf:"max_retries"`
+	AllowLiveArtifactImport bool                        `koanf:"allow_live_artifact_import" secret:"false"`
+	RetryInterval           time.Duration               `koanf:"retry_interval" secret:"false"`
+	MaxRetries              int                         `koanf:"max_retries" secret:"false"`
 	Policies                []HiveCIPolicyConfig        `koanf:"policies" yaml:"policies"`
 	DependencyGitea         HiveCIDependencyGiteaConfig `koanf:"dependency_gitea" yaml:"dependency_gitea"`
 	Initiator               HiveCIInitiatorConfig       `koanf:"initiator" yaml:"initiator"`
@@ -1121,33 +1121,33 @@ func hiveCIDependencyCloneOrigin(raw string) (string, error) {
 
 // CashuConfig holds Cashu ecash payment integration settings.
 type CashuConfig struct {
-	Enabled  bool   `koanf:"enabled"`
-	MintURL  string `koanf:"mint_url"`
-	WalletDB string `koanf:"wallet_db"` // path to wallet database
+	Enabled  bool   `koanf:"enabled" secret:"false"`
+	MintURL  string `koanf:"mint_url" secret:"false"`
+	WalletDB string `koanf:"wallet_db" secret:"false"` // path to wallet database
 }
 
 // QdrantConfig holds vector database settings.
 type QdrantConfig struct {
-	URL                       string        `koanf:"url"`
-	Timeout                   time.Duration `koanf:"timeout"`
+	URL                       string        `koanf:"url" secret:"false"`
+	Timeout                   time.Duration `koanf:"timeout" secret:"false"`
 	APIKey                    string        `koanf:"api_key" secret:"true"`
-	AuthHeaderName            string        `koanf:"auth_header_name"`
-	AllowUnauthenticatedLocal bool          `koanf:"allow_unauthenticated_local"`
+	AuthHeaderName            string        `koanf:"auth_header_name" secret:"false"`
+	AllowUnauthenticatedLocal bool          `koanf:"allow_unauthenticated_local" secret:"false"`
 }
 
 // TelemetryConfig holds observability / metrics settings.
 type TelemetryConfig struct {
-	Enabled      bool   `koanf:"enabled"`
-	ServiceName  string `koanf:"service_name"`
-	OTLPEndpoint string `koanf:"otlp_endpoint"` // OpenTelemetry collector endpoint
+	Enabled      bool   `koanf:"enabled" secret:"false"`
+	ServiceName  string `koanf:"service_name" secret:"false"`
+	OTLPEndpoint string `koanf:"otlp_endpoint" secret:"false"` // OpenTelemetry collector endpoint
 }
 
 // NotificationsConfig holds notification dispatcher settings.
 type NotificationsConfig struct {
-	Enabled    bool     `koanf:"enabled"`
+	Enabled    bool     `koanf:"enabled" secret:"false"`
 	WebhookURL string   `koanf:"webhook_url" secret:"url"`
-	NostrDM    bool     `koanf:"nostr_dm"` // send DMs to subscribed pubkeys
-	Kinds      []string `koanf:"kinds"`    // event kinds to notify on (e.g. "deployment.completed")
+	NostrDM    bool     `koanf:"nostr_dm" secret:"false"` // send DMs to subscribed pubkeys
+	Kinds      []string `koanf:"kinds" secret:"false"`    // event kinds to notify on (e.g. "deployment.completed")
 }
 
 func defaultWorkerPressureConfig() WorkerPressureConfig {
@@ -1173,32 +1173,32 @@ func defaultWorkerPressureConfig() WorkerPressureConfig {
 
 // SupervisionConfig controls local managed-instance health checks and recovery.
 type SupervisionConfig struct {
-	Enabled            bool                        `koanf:"enabled" yaml:"enabled"`
-	ObserveOnly        bool                        `koanf:"observe_only" yaml:"observe_only"`
-	Interval           time.Duration               `koanf:"interval" yaml:"interval"`
-	ObservationTimeout time.Duration               `koanf:"observation_timeout" yaml:"observation_timeout"`
-	MemoryThreshold    float64                     `koanf:"memory_threshold" yaml:"memory_threshold"`
+	Enabled            bool                        `koanf:"enabled" yaml:"enabled" secret:"false"`
+	ObserveOnly        bool                        `koanf:"observe_only" yaml:"observe_only" secret:"false"`
+	Interval           time.Duration               `koanf:"interval" yaml:"interval" secret:"false"`
+	ObservationTimeout time.Duration               `koanf:"observation_timeout" yaml:"observation_timeout" secret:"false"`
+	MemoryThreshold    float64                     `koanf:"memory_threshold" yaml:"memory_threshold" secret:"false"`
 	Instances          []SupervisionInstanceConfig `koanf:"instances" yaml:"instances"`
 }
 
 // SupervisionInstanceConfig identifies one explicitly configured managed instance.
 type SupervisionInstanceConfig struct {
-	ServiceID          string        `koanf:"service_id" yaml:"service_id"`
-	EnvironmentID      string        `koanf:"environment_id" yaml:"environment_id"`
-	DeploymentUnitID   string        `koanf:"deployment_unit_id" yaml:"deployment_unit_id"`
-	RuntimeTargetName  string        `koanf:"runtime_target_name" yaml:"runtime_target_name"`
-	Host               string        `koanf:"host" yaml:"host"`
-	SupervisorType     string        `koanf:"supervisor_type" yaml:"supervisor_type"`
-	DesiredRunning     bool          `koanf:"desired_running" yaml:"desired_running"`
-	DockerHost         string        `koanf:"docker_host" yaml:"docker_host"`
-	ComposeDir         string        `koanf:"compose_dir" yaml:"compose_dir"`
-	ProbeURL           string        `koanf:"probe_url" yaml:"probe_url"`
-	ProbeTimeout       time.Duration `koanf:"probe_timeout" yaml:"probe_timeout"`
-	RestartMaxAttempts int           `koanf:"restart_max_attempts" yaml:"restart_max_attempts"`
-	RestartWindow      time.Duration `koanf:"restart_window" yaml:"restart_window"`
-	BackoffBase        time.Duration `koanf:"backoff_base" yaml:"backoff_base"`
-	BackoffCap         time.Duration `koanf:"backoff_cap" yaml:"backoff_cap"`
-	WarningMinInterval time.Duration `koanf:"warning_min_interval" yaml:"warning_min_interval"`
+	ServiceID          string        `koanf:"service_id" yaml:"service_id" secret:"false"`
+	EnvironmentID      string        `koanf:"environment_id" yaml:"environment_id" secret:"false"`
+	DeploymentUnitID   string        `koanf:"deployment_unit_id" yaml:"deployment_unit_id" secret:"false"`
+	RuntimeTargetName  string        `koanf:"runtime_target_name" yaml:"runtime_target_name" secret:"false"`
+	Host               string        `koanf:"host" yaml:"host" secret:"false"`
+	SupervisorType     string        `koanf:"supervisor_type" yaml:"supervisor_type" secret:"false"`
+	DesiredRunning     bool          `koanf:"desired_running" yaml:"desired_running" secret:"false"`
+	DockerHost         string        `koanf:"docker_host" yaml:"docker_host" secret:"false"`
+	ComposeDir         string        `koanf:"compose_dir" yaml:"compose_dir" secret:"false"`
+	ProbeURL           string        `koanf:"probe_url" yaml:"probe_url" secret:"false"`
+	ProbeTimeout       time.Duration `koanf:"probe_timeout" yaml:"probe_timeout" secret:"false"`
+	RestartMaxAttempts int           `koanf:"restart_max_attempts" yaml:"restart_max_attempts" secret:"false"`
+	RestartWindow      time.Duration `koanf:"restart_window" yaml:"restart_window" secret:"false"`
+	BackoffBase        time.Duration `koanf:"backoff_base" yaml:"backoff_base" secret:"false"`
+	BackoffCap         time.Duration `koanf:"backoff_cap" yaml:"backoff_cap" secret:"false"`
+	WarningMinInterval time.Duration `koanf:"warning_min_interval" yaml:"warning_min_interval" secret:"false"`
 }
 
 // Defaults returns a Config with sensible default values.

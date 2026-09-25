@@ -294,3 +294,26 @@ endpoints. Portable verification does not establish live-host readiness.
 ### Managed-instance supervision
 
 `supervision.enabled` starts local runtime health checks. Recovery is safe by default: `supervision.observe_only` defaults to `true`. Configure `interval`, `memory_threshold`, and explicit `instances`; Bahia-managed desired deployment units are also discovered from durable environment-service state. Each explicit instance identifies its service, environment, deployment unit, exact runtime target, supervisor type, desired-running intent, probe, restart budget, backoff, and warning interval.
+
+### Safe configuration diagnostics
+
+JSON/YAML serialization and Go formatting of configuration structs are diagnostic
+views, not configuration backups: credentials, private keys, complete NIP-46 bunker
+URIs, auth headers, and opaque policy metadata are masked. Configuration loading
+and credential access used by adapters are unchanged. Do not save a diagnostic
+view over the operational configuration, or log individual credential fields or
+raw database connection strings.
+
+Config leaves declare a `secret` classification. New or unclassified leaves are
+masked by default; schema tests require an explicit classification and exercise
+all protected subtrees through JSON, YAML, Go formatting, Zap, and slog. Public
+values must be deliberately classified `secret:"false"`; credential values use
+`secret:"true"`. Environment arrays and webhook URLs have restricted diagnostic
+views via `env_values` and `url`. New secret-bearing subtrees must also pass the
+direct-rendering tests.
+
+Route-canary relay diagnostics additionally replace IP literals and host:port
+endpoints with `[REDACTED_ADDRESS]`. For example, an internal-LAN failure becomes
+`dial tcp [REDACTED_ADDRESS]: connection refused`. The public route, perspective,
+classification, and failure remain visible; REST/operator evidence retains the
+original address detail. This redaction does not change event kinds or schemas.

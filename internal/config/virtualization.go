@@ -13,40 +13,40 @@ import (
 // VirtualizationConfig is installation authority, not caller-supplied desired state.
 // Zero configuration leaves both mutation surfaces unavailable.
 type VirtualizationConfig struct {
-	OperatorPubkeys []string                       `koanf:"operator_pubkeys"`
-	ReconcilePubkey string                         `koanf:"reconcile_pubkey"`
+	OperatorPubkeys []string                       `koanf:"operator_pubkeys" secret:"false"`
+	ReconcilePubkey string                         `koanf:"reconcile_pubkey" secret:"false"`
 	Hosts           []VirtualizationHostPolicy     `koanf:"hosts"`
 	PersistentVM    PersistentVMConfig             `koanf:"persistent_vm"`
 	PlaneEndpoints  []ExecutionPlaneEndpointConfig `koanf:"plane_endpoints"`
 }
 type VirtualizationHostPolicy struct {
-	OrgID          uuid.UUID               `koanf:"org_id"`
-	HostID         uuid.UUID               `koanf:"host_id"`
-	TrustPolicyRef uuid.UUID               `koanf:"trust_policy_ref"`
-	TrustedSigners []string                `koanf:"trusted_signers"`
+	OrgID          uuid.UUID               `koanf:"org_id" secret:"false"`
+	HostID         uuid.UUID               `koanf:"host_id" secret:"false"`
+	TrustPolicyRef uuid.UUID               `koanf:"trust_policy_ref" secret:"false"`
+	TrustedSigners []string                `koanf:"trusted_signers" secret:"false"`
 	Networks       []VirtualizationNetwork `koanf:"networks"`
 	// Secret UUIDs must also resolve to a service in this host's organization.
-	PlaneSecretRefs []uuid.UUID `koanf:"plane_secret_refs"`
+	PlaneSecretRefs []uuid.UUID `koanf:"plane_secret_refs" secret:"false"`
 }
 type VirtualizationNetwork struct {
-	Ref  uuid.UUID            `koanf:"ref"`
-	Mode domain.VMNetworkMode `koanf:"mode"`
-	Name string               `koanf:"name"`
+	Ref  uuid.UUID            `koanf:"ref" secret:"false"`
+	Mode domain.VMNetworkMode `koanf:"mode" secret:"false"`
+	Name string               `koanf:"name" secret:"false"`
 }
 type PersistentVMConfig struct {
-	Enabled           bool      `koanf:"enabled"`
-	HostID            uuid.UUID `koanf:"host_id"`
-	StoragePoolRef    uuid.UUID `koanf:"storage_pool_ref"`
-	StateDir          string    `koanf:"state_dir"`
-	ImageRoot         string    `koanf:"image_root"`
-	LibvirtURI        string    `koanf:"libvirt_uri"`
-	EventSocket       string    `koanf:"event_socket"`
-	FirecrackerBinary string    `koanf:"firecracker_binary"`
+	Enabled           bool      `koanf:"enabled" secret:"false"`
+	HostID            uuid.UUID `koanf:"host_id" secret:"false"`
+	StoragePoolRef    uuid.UUID `koanf:"storage_pool_ref" secret:"false"`
+	StateDir          string    `koanf:"state_dir" secret:"false"`
+	ImageRoot         string    `koanf:"image_root" secret:"false"`
+	LibvirtURI        string    `koanf:"libvirt_uri" secret:"false"`
+	EventSocket       string    `koanf:"event_socket" secret:"false"`
+	FirecrackerBinary string    `koanf:"firecracker_binary" secret:"false"`
 }
 type ExecutionPlaneEndpointConfig struct {
-	HostID      uuid.UUID `koanf:"host_id"`
-	EndpointRef uuid.UUID `koanf:"endpoint_ref"`
-	Author      string    `koanf:"author"`
+	HostID      uuid.UUID `koanf:"host_id" secret:"false"`
+	EndpointRef uuid.UUID `koanf:"endpoint_ref" secret:"false"`
+	Author      string    `koanf:"author" secret:"false"`
 }
 
 func (c VirtualizationConfig) Validate() error {
