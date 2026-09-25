@@ -54,6 +54,15 @@ func (a AuthConfig) Validate() error {
 	if token != "" && (username != "" || password != "") {
 		return fmt.Errorf("backend auth must use either bearer token or username/password, not both")
 	}
+	if strings.ContainsAny(a.Username+a.Password, "\r\n") || strings.Contains(a.Username, ":") {
+		return fmt.Errorf("backend basic credentials contain invalid characters")
+	}
+	for _, char := range a.BearerToken {
+		valid := char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("-._~+/=", char)
+		if !valid {
+			return fmt.Errorf("backend bearer token contains invalid characters")
+		}
+	}
 	if (username == "") != (password == "") {
 		return fmt.Errorf("backend auth username and password must both be set")
 	}
@@ -69,7 +78,7 @@ func ValidateEndpoint(raw, name string) (string, error) {
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("invalid %s: %w", name, err)
+		return "", fmt.Errorf("invalid %s", name)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("invalid %s: scheme must be http or https", name)

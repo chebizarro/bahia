@@ -22,11 +22,14 @@ var ErrCustomMutationAPIUnavailable = errors.New("pulp custom mutation API is no
 // Config configures a Pulp file-plugin adapter. The concrete endpoints are kept
 // isolated here so package control-plane core logic remains backend-agnostic.
 type Config struct {
+	// APIVersion is the REST API contract, not the product release version.
+	APIVersion          string
 	BaseURL             string
 	PublicBaseURL       string
 	HTTPClient          *http.Client
 	Auth                packagebackend.AuthConfig
 	Secrets             map[string]string
+	Redactions          []string
 	TaskInterval        time.Duration
 	ConfirmationTimeout time.Duration
 	// EnableCustomMutationAPI explicitly opts into the non-standard repository
@@ -38,13 +41,14 @@ type Config struct {
 // Backend implements packagebackend.Backend for Pulp file repositories.
 type Backend struct {
 	*packagebackend.Requester
+	checksumAPI         bool
 	publicBaseURL       string
 	taskInterval        time.Duration
 	confirmationTimeout time.Duration
 	customMutationAPI   bool
 }
 
-func New(cfg Config) (*Backend, error) {
+func New(cfg Config) (backend *Backend, err error) {
 	base, err := packagebackend.ValidateEndpoint(cfg.BaseURL, "pulp base url")
 	if err != nil {
 		return nil, err
@@ -64,6 +68,8 @@ func New(cfg Config) (*Backend, error) {
 	if confirmationTimeout <= 0 {
 		confirmationTimeout = 5 * time.Second
 	}
+	requester := packagebackend.NewRequester(base, client, cfg.Auth, cfg.Secrets, cfg.Redactions...)
+	defer requester.ScrubError(&err)
 	publicBase := strings.TrimSpace(cfg.PublicBaseURL)
 	if publicBase == "" {
 		publicBase = base + "/pulp/content"
@@ -73,7 +79,10 @@ func New(cfg Config) (*Backend, error) {
 			return nil, err
 		}
 	}
-	return &Backend{Requester: packagebackend.NewRequester(base, client, cfg.Auth, cfg.Secrets), publicBaseURL: publicBase, taskInterval: interval, confirmationTimeout: confirmationTimeout, customMutationAPI: cfg.EnableCustomMutationAPI}, nil
+	if err := requester.CheckPublic(base, publicBase); err != nil {
+		return nil, err
+	}
+	return &Backend{checksumAPI: cfg.APIVersion == "v3", Requester: requester, publicBaseURL: publicBase, taskInterval: interval, confirmationTimeout: confirmationTimeout, customMutationAPI: cfg.EnableCustomMutationAPI}, nil
 }
 
 func (b *Backend) Type() domain.PackageBackendType { return domain.PackageBackendPulp }
@@ -86,13 +95,12 @@ func (b *Backend) Capabilities() packagebackend.Capabilities {
 	caps.CanListArtifacts = b.customMutationAPI
 	caps.CanPromoteArtifact = b.customMutationAPI
 	caps.CanYankArtifact = b.customMutationAPI
-	// Pulp's standard APIs still need repository-version/content traversal plus
-	// artifact-detail lookup before an independent SHA-256 can be advertised.
-	caps.CanObserveDrift = false
+	caps.CanObserveDrift = b.checksumAPI
 	return caps
 }
 
-func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepository) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
 	}
@@ -127,7 +135,8 @@ func (b *Backend) EnsureRepository(ctx context.Context, repo domain.PackageRepos
 	return packagebackend.RepositoryObservation{Exists: true, PublicURL: b.repositoryURL(name), Metadata: map[string]string{"repository_href": repoHref}}, nil
 }
 
-func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepository, force bool) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return packagebackend.RepositoryObservation{}, ErrCustomMutationAPIUnavailable
 	}
@@ -155,7 +164,8 @@ func (b *Backend) DeleteRepository(ctx context.Context, repo domain.PackageRepos
 	return packagebackend.RepositoryObservation{Exists: false, PublicURL: b.repositoryURL(name)}, nil
 }
 
-func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepository) (packagebackend.RepositoryObservation, error) {
+func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepository) (result packagebackend.RepositoryObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	name := packagebackend.BackendRepoName(repo)
 	exists, href, err := b.findRepository(ctx, name)
 	if err != nil {
@@ -164,7 +174,8 @@ func (b *Backend) ObserveRepository(ctx context.Context, repo domain.PackageRepo
 	return packagebackend.RepositoryObservation{Exists: exists, PublicURL: b.repositoryURL(name), Metadata: map[string]string{"repository_href": href}}, nil
 }
 
-func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageRepository, req packagebackend.StoreArtifactRequest) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageRepository, req packagebackend.StoreArtifactRequest) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
 	}
@@ -186,10 +197,10 @@ func (b *Backend) StoreArtifact(ctx context.Context, repo domain.PackageReposito
 	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, SHA256: req.SHA256, SizeBytes: req.SizeBytes}, nil
 }
 
-func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactStream, error) {
+func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (result packagebackend.ArtifactStream, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -212,13 +223,14 @@ func (b *Backend) GetArtifact(ctx context.Context, repo domain.PackageRepository
 	return packagebackend.ArtifactStream{ReadCloser: resp.Body, ContentType: resp.Header.Get("Content-Type"), SHA256: artifact.SHA256, SizeBytes: resp.ContentLength, BackendPath: relPath}, nil
 }
 
-func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageRepository) ([]packagebackend.ArtifactObservation, error) {
+func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageRepository) (result []packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return nil, ErrCustomMutationAPIUnavailable
 	}
 	name := packagebackend.BackendRepoName(repo)
 	out := []packagebackend.ArtifactObservation{}
-	err := b.GetPages(ctx, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/", "list pulp artifacts", func(body io.Reader) (string, error) {
+	err = b.GetPages(ctx, "/pulp/api/v3/repositories/file/file/"+url.PathEscape(name)+"/artifacts/", "list pulp artifacts", func(body io.Reader) (string, error) {
 		var payload struct {
 			Next    string `json:"next"`
 			Results []struct {
@@ -236,6 +248,9 @@ func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageReposito
 			if p == "" {
 				p = item.Path
 			}
+			if err := b.CheckPublic(p, item.Digest); err != nil {
+				return "", err
+			}
 			out = append(out, packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, p), BackendPath: p, SHA256: item.Digest, SizeBytes: item.Size})
 		}
 		return payload.Next, nil
@@ -243,13 +258,13 @@ func (b *Backend) ListArtifacts(ctx context.Context, repo domain.PackageReposito
 	return out, err
 }
 
-func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.PackageRepository, targetRepo domain.PackageRepository, artifact domain.PackageArtifact, req packagebackend.PromoteArtifactRequest) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
 	}
 	name := packagebackend.BackendRepoName(targetRepo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -267,13 +282,13 @@ func (b *Backend) PromoteArtifact(ctx context.Context, sourceRepo domain.Package
 	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes}, nil
 }
 
-func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact, reason string) (packagebackend.ArtifactObservation, error) {
+func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact, reason string) (result packagebackend.ArtifactObservation, err error) {
+	defer b.ScrubError(&err, ErrCustomMutationAPIUnavailable)
 	if !b.customMutationAPI {
 		return packagebackend.ArtifactObservation{}, ErrCustomMutationAPIUnavailable
 	}
 	name := packagebackend.BackendRepoName(repo)
 	relPath := strings.TrimSpace(artifact.BackendPath)
-	var err error
 	if relPath == "" {
 		relPath, err = packagebackend.ArtifactPath(artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
 		if err != nil {
@@ -292,21 +307,6 @@ func (b *Backend) YankArtifact(ctx context.Context, repo domain.PackageRepositor
 		return packagebackend.ArtifactObservation{}, err
 	}
 	return packagebackend.ArtifactObservation{Exists: false, DownloadURL: b.artifactURL(name, relPath), BackendPath: relPath, Yanked: true}, nil
-}
-
-func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (packagebackend.ArtifactObservation, error) {
-	stream, err := b.GetArtifact(ctx, repo, artifact)
-	if err != nil {
-		if errors.Is(err, packagebackend.ErrArtifactNotFound) {
-			return packagebackend.ArtifactObservation{Exists: false, DownloadURL: artifact.DownloadURL, BackendPath: artifact.BackendPath}, nil
-		}
-		return packagebackend.ArtifactObservation{}, err
-	}
-	defer func() { _ = stream.ReadCloser.Close() }()
-	// Existence and size are server-observed. SHA-256 is deliberately omitted:
-	// GetArtifact only has the control-plane's expected hash, not an independent
-	// Pulp checksum, so Capabilities.CanObserveDrift remains false.
-	return packagebackend.ArtifactObservation{Exists: true, DownloadURL: artifact.DownloadURL, BackendPath: stream.BackendPath, SizeBytes: stream.SizeBytes}, nil
 }
 
 func (b *Backend) findRepository(ctx context.Context, name string) (bool, string, error) {
