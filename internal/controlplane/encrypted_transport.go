@@ -390,6 +390,7 @@ type EncryptedRequestTransport struct {
 	authorizedPubkeys      []string
 	handlers               map[string]EncryptedRequestHandler
 	contextVMHandlers      map[string]ContextVMHandler
+	contextVMOperatorGates map[string]*FleetOperatorGate
 	contextVMDedup         *contextVMDedupCache
 	contextVMResponseStore repository.ContextVMResponseStore
 	contextVMResponseTTL   time.Duration
@@ -435,18 +436,19 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 		logger = zap.NewNop()
 	}
 	transport := &EncryptedRequestTransport{
-		subscriber:           subscriber,
-		responder:            responder,
-		authorizedPubkeys:    append([]string(nil), authorizedPubkeys...),
-		handlers:             make(map[string]EncryptedRequestHandler),
-		contextVMHandlers:    make(map[string]ContextVMHandler),
-		contextVMDedup:       newContextVMDedupCache(contextVMDedupDefaultLimit),
-		contextVMResponseTTL: contextVMResponseDefaultTTL,
-		contextVMResultRetry: defaultContextVMResultRetryConfig(),
-		contextVMRetrySlots:  make(chan struct{}, contextVMResultMaxInFlight),
-		responseHandlers:     make(map[uint64]ContextVMResponseHandler),
-		dedup:                nostrpool.NewEventDeduplicator(10000),
-		logger:               logger.Named("encrypted-request-result-events"),
+		subscriber:             subscriber,
+		responder:              responder,
+		authorizedPubkeys:      append([]string(nil), authorizedPubkeys...),
+		handlers:               make(map[string]EncryptedRequestHandler),
+		contextVMHandlers:      make(map[string]ContextVMHandler),
+		contextVMOperatorGates: make(map[string]*FleetOperatorGate),
+		contextVMDedup:         newContextVMDedupCache(contextVMDedupDefaultLimit),
+		contextVMResponseTTL:   contextVMResponseDefaultTTL,
+		contextVMResultRetry:   defaultContextVMResultRetryConfig(),
+		contextVMRetrySlots:    make(chan struct{}, contextVMResultMaxInFlight),
+		responseHandlers:       make(map[uint64]ContextVMResponseHandler),
+		dedup:                  nostrpool.NewEventDeduplicator(10000),
+		logger:                 logger.Named("encrypted-request-result-events"),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -491,6 +493,19 @@ func (t *EncryptedRequestTransport) RegisterContextVMHandler(method string, hand
 		return
 	}
 	t.contextVMHandlers[method] = handler
+	delete(t.contextVMOperatorGates, method)
+}
+
+// RegisterOperatorContextVMHandler classifies a method as fleet-scoped. Its gate
+// runs before replay storage or progress publication, as well as at dispatch.
+// Tenant-RBAC and requester-owned methods use RegisterContextVMHandler instead.
+func (t *EncryptedRequestTransport) RegisterOperatorContextVMHandler(method string, handler ContextVMHandler, gate *FleetOperatorGate) {
+	method = strings.TrimSpace(method)
+	if method == "" || handler == nil {
+		return
+	}
+	t.RegisterContextVMHandler(method, gate.wrap(handler))
+	t.contextVMOperatorGates[method] = gate
 }
 
 func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
@@ -719,6 +734,17 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request"), method)
 		return
 	}
+	handler := t.contextVMHandlers[rpc.Method]
+	if handler == nil {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found"), rpc.Method)
+		return
+	}
+	if gate, operatorMethod := t.contextVMOperatorGates[rpc.Method]; operatorMethod {
+		if err := gate.authorize(ContextVMRequest{Event: inner}); err != nil {
+			t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, -32001, err.Error()), rpc.Method)
+			return
+		}
+	}
 	progressToken, err := contextVMIdempotencyKey(rpc.Params)
 	if err != nil {
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, err.Error()), rpc.Method)
@@ -748,16 +774,6 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		return
 	}
 	t.dedup.MarkSeen(innerID)
-	handler := t.contextVMHandlers[rpc.Method]
-	if handler == nil {
-		t.logger.Warn("ContextVM method not found", zap.String("event_id", innerID), zap.String("method", rpc.Method))
-		response := cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.MethodNotFoundCode, "method not found")
-		if t.cacheContextVMResponse(innerPubkey, rpc.Method, progressToken, requestFingerprint, response) {
-			response = cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters")
-		}
-		t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
-		return
-	}
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
 	// A progress notification is best-effort protocol sugar. Start it before
 	// the handler, but do not synchronously gate the requested mutation on

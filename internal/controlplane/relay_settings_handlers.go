@@ -194,11 +194,11 @@ func (h *RelaySettingsHandlers) Register(transport *EncryptedRequestTransport) {
 		h.signer = transport.responder.signer
 	}
 	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyGet, h.GetPolicy)
-	transport.RegisterContextVMHandler(ContextVMMethodRelayPolicyApply, h.fleetOperatorGate.wrap(h.ApplyPolicy))
-	transport.RegisterContextVMHandler(ContextVMMethodRelayAdminCall, h.fleetOperatorGate.wrap(h.CallRelayAdmin))
-	transport.RegisterContextVMHandler(ContextVMMethodConfigReconcile, h.fleetOperatorGate.wrap(h.ConfigReconcile))
-	transport.RegisterContextVMHandler(ContextVMMethodConfigStatus, h.ConfigStatus)
-	transport.RegisterContextVMHandler(ContextVMMethodConfigReload, h.fleetOperatorGate.wrap(h.ConfigReload))
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodRelayPolicyApply, h.ApplyPolicy, h.fleetOperatorGate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodRelayAdminCall, h.CallRelayAdmin, h.fleetOperatorGate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodConfigReconcile, h.ConfigReconcile, h.fleetOperatorGate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodConfigStatus, h.ConfigStatus, h.fleetOperatorGate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodConfigReload, h.ConfigReload, h.fleetOperatorGate)
 }
 
 func (h *RelaySettingsHandlers) GetPolicy(ctx context.Context, req ContextVMRequest) (any, error) {

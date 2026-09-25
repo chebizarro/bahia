@@ -25,16 +25,23 @@ func NewFleetOperatorGate(authorizedPubkeys []string) *FleetOperatorGate {
 
 func (g *FleetOperatorGate) wrap(next ContextVMHandler) ContextVMHandler {
 	return func(ctx context.Context, request ContextVMRequest) (any, error) {
-		if g == nil || len(g.authorizedPubkeys) == 0 {
-			return nil, errors.New(fleetOperatorNotConfiguredError)
-		}
-		requester := ""
-		if request.Event != nil {
-			requester = strings.TrimSpace(request.Event.PubKey.Hex())
-		}
-		if requester == "" || !slices.Contains(g.authorizedPubkeys, requester) {
-			return nil, errors.New(fleetOperatorUnauthorizedError)
+		if err := g.authorize(request); err != nil {
+			return nil, err
 		}
 		return next(ctx, request)
 	}
+}
+
+func (g *FleetOperatorGate) authorize(request ContextVMRequest) error {
+	if g == nil || len(g.authorizedPubkeys) == 0 {
+		return errors.New(fleetOperatorNotConfiguredError)
+	}
+	requester := ""
+	if request.Event != nil {
+		requester = strings.TrimSpace(request.Event.PubKey.Hex())
+	}
+	if requester == "" || !slices.Contains(g.authorizedPubkeys, requester) {
+		return errors.New(fleetOperatorUnauthorizedError)
+	}
+	return nil
 }

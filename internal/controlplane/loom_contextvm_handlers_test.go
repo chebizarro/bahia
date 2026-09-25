@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	loomadapter "github.com/openagentsinc/bahia/internal/adapters/loom"
+	"go.uber.org/zap"
 )
 
 var (
@@ -98,7 +99,7 @@ func makeContextVMRequest(pubkeyHex string, method string, params json.RawMessag
 
 func TestSubmitRecordsSubmitterFromVerifiedEvent(t *testing.T) {
 	client := &mockLoomClient{projectionReady: true}
-	h := loomContextVMHandlers{client: client, fleetOperatorPubkeys: nil}
+	h := loomContextVMHandlers{client: client, servicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}
 
 	req := makeContextVMRequest(testSubmitterPub, ContextVMMethodLoomSubmit, makeParams(loomSubmitContextVMPayload{
 		Image:       "alpine",
@@ -120,7 +121,7 @@ func TestSubmitRecordsSubmitterFromVerifiedEvent(t *testing.T) {
 
 func TestSubmitterNotSpoofableViaPayload(t *testing.T) {
 	client := &mockLoomClient{projectionReady: true}
-	h := loomContextVMHandlers{client: client, fleetOperatorPubkeys: nil}
+	h := loomContextVMHandlers{client: client, servicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}
 
 	payload := map[string]string{
 		"image":       "alpine",
@@ -145,7 +146,7 @@ func TestSubmitterNotSpoofableViaPayload(t *testing.T) {
 
 func TestOriginalSubmitterCanCancel(t *testing.T) {
 	client := &mockLoomClient{projectionReady: true}
-	h := loomContextVMHandlers{client: client, fleetOperatorPubkeys: nil}
+	h := loomContextVMHandlers{client: client, servicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}
 
 	submitReq := makeContextVMRequest(testSubmitterPub, ContextVMMethodLoomSubmit, makeParams(loomSubmitContextVMPayload{
 		Image:       "alpine",
@@ -175,6 +176,7 @@ func TestOperatorCanCancel(t *testing.T) {
 	h := loomContextVMHandlers{
 		client:               client,
 		fleetOperatorPubkeys: []string{testOperatorPub},
+		servicePubkey:        testNostrPubKeyHexFromPrivateKey(t, testServiceKey),
 	}
 
 	submitReq := makeContextVMRequest(testSubmitterPub, ContextVMMethodLoomSubmit, makeParams(loomSubmitContextVMPayload{
@@ -205,6 +207,7 @@ func TestUnrelatedCallerDeniedCancel(t *testing.T) {
 	h := loomContextVMHandlers{
 		client:               client,
 		fleetOperatorPubkeys: []string{testOperatorPub},
+		servicePubkey:        testNostrPubKeyHexFromPrivateKey(t, testServiceKey),
 	}
 
 	submitReq := makeContextVMRequest(testSubmitterPub, ContextVMMethodLoomSubmit, makeParams(loomSubmitContextVMPayload{
@@ -238,6 +241,7 @@ func TestJobWithoutSubmitterNotCancellable(t *testing.T) {
 	h := loomContextVMHandlers{
 		client:               client,
 		fleetOperatorPubkeys: []string{testOperatorPub},
+		servicePubkey:        testNostrPubKeyHexFromPrivateKey(t, testServiceKey),
 	}
 
 	cancelReq := makeContextVMRequest(testOperatorPub, ContextVMMethodLoomCancel, makeParams(loomCancelContextVMPayload{
@@ -383,5 +387,88 @@ func TestValidateLoomSubmitPayloadAllowsNonSecretExecutionMetadata(t *testing.T)
 	})
 	if err != nil {
 		t.Fatalf("non-secret payload rejected: %v", err)
+	}
+}
+
+func TestLoomServiceSignerCannotSubmitOrCancel(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	for _, method := range []string{ContextVMMethodLoomSubmit, ContextVMMethodLoomCancel} {
+		t.Run(method, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), authzTestTransportAuthors(t), zap.NewNop())
+			// Even explicit allowlisting cannot promote the transport signer to
+			// an original submitter. No Loom client call may happen on this path.
+			RegisterLoomContextVMHandlers(transport, &untouchedOperatorDependencies{}, []string{servicePubkey}, NewFleetOperatorGate([]string{servicePubkey}))
+			transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testServiceKey, method, map[string]any{
+				"job_event_id": "job", "image": "alpine", "submitter": testSubmitterPub,
+			}))
+			response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+			if response.Error == nil || !strings.Contains(response.Error.Message, "service signer cannot supply Loom requester") {
+				t.Fatalf("service signer obtained Loom authority: %+v", response)
+			}
+		})
+	}
+}
+
+func TestLoomRegisteredSubmitAndCancelUseVerifiedOwner(t *testing.T) {
+	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	other := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
+	client := &mockLoomClient{projectionReady: true}
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), authzTestTransportAuthors(t), zap.NewNop())
+	RegisterLoomContextVMHandlers(transport, client, nil, NewFleetOperatorGate([]string{requester}))
+	transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodLoomSubmit, map[string]any{
+		"image": "alpine", "submitter": other, "requester_pubkey": other,
+	}))
+	if owner := client.JobSubmitter("mock-job-event-id"); owner != requester {
+		t.Fatalf("recorded submitter = %s, want verified signer %s", owner, requester)
+	}
+	// Re-register with an empty operator list: only server-recorded ownership
+	// can authorize cancellation, not caller-supplied requester/submitter data.
+	RegisterLoomContextVMHandlers(transport, client, nil, nil)
+	transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testOtherKey, ContextVMMethodLoomCancel, map[string]any{
+		"job_event_id": "mock-job-event-id", "submitter": requester, "requester_pubkey": requester,
+	}))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error == nil || client.lastCancelJobID != "" {
+		t.Fatalf("forged owner obtained cancel authority: %+v", response)
+	}
+	transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodLoomCancel, map[string]any{
+		"job_event_id": "mock-job-event-id",
+	}))
+	response = contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error != nil || client.lastCancelJobID != "mock-job-event-id" {
+		t.Fatalf("recorded owner could not cancel: %+v", response)
+	}
+}
+
+func TestLoomMissingRequesterFailsBeforeClientAccess(t *testing.T) {
+	h := loomContextVMHandlers{client: &untouchedOperatorDependencies{}, servicePubkey: testNostrPubKeyHexFromPrivateKey(t, testServiceKey)}
+	for _, event := range []*nostr.Event{nil, {}} {
+		for _, handler := range []ContextVMHandler{h.submit, h.cancel} {
+			if _, err := handler(t.Context(), ContextVMRequest{Event: event}); err == nil {
+				t.Fatal("missing requester accepted")
+			}
+		}
+	}
+}
+
+func TestLoomCancelRequiresScopedOperatorNotJustTransportAdmission(t *testing.T) {
+	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	operator := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
+	for _, scopedOperators := range [][]string{nil, {operator}} {
+		client := &mockLoomClient{submitters: map[string]string{"job": requester}}
+		publisher := &mockEncryptedPublisher{}
+		transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), authzTestTransportAuthors(t), zap.NewNop())
+		RegisterLoomContextVMHandlers(transport, client, scopedOperators, NewFleetOperatorGate(authzTestTransportAuthors(t)))
+		transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testOtherKey, ContextVMMethodLoomCancel, map[string]any{"job_event_id": "job"}))
+		response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+		if len(scopedOperators) == 0 {
+			if response.Error == nil || client.lastCancelJobID != "" {
+				t.Fatal("global transport admission incorrectly granted Loom cancellation")
+			}
+		} else if response.Error != nil || client.lastCancelJobID != "job" {
+			t.Fatalf("explicit Loom operator could not cancel: %+v", response.Error)
+		}
 	}
 }

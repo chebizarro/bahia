@@ -1653,8 +1653,8 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC)
-		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate)
+		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
@@ -1667,7 +1667,7 @@ func New(cfg *config.Config) (*App, error) {
 			ConfigFabric:      configFabricSvc,
 			FleetOperatorGate: fleetOperatorGate,
 		})
-		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator)
+		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator, fleetOperatorGate)
 		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, nostrEventRepo)
 		releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
