@@ -262,6 +262,17 @@ The Bahia sidecar relay accepts every valid Nostr event kind without a numerical
 
 ## Provisioning recovery
 
+Provisioning persists its resolved request and saga checkpoints under
+`soul_factory.provisioning_state_dir`; `/metrics` reads that same store. Inline
+requests must include `runtime.runtime_release_id` for a verified Bahia release.
+Fleet operators can use `soul-factory/saga/inspect`, `/retry`, `/reconcile`, and
+`/safe-abort` (all under the `soul-factory/saga` prefix). Each takes the original
+`request_id` and optional `dry_run` (defaults to true). All four fail closed unless
+the signed requester is in `nostr.authorized_pubkeys`; mutations require explicit
+`dry_run:false`. See [authenticated saga recovery](../../runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery)
+for restart behavior, legacy ledgers, and non-destructive compensation limits.
+
+
 On restart, the Soul Factory reactor backfills one globally newest provisioning request and one globally newest lifecycle action, not every workflow missed during downtime, then keeps its subscription open for new events. Terminal results are checked idempotently so those replays do not duplicate completed work.
 
 The same startup subscription backfills up to 100 runtime-control results and continues following new results. A late successful result can complete the public projection from a persisted checkpoint without repeating Signet identity creation, avatar generation, memory/workspace setup, or runtime provisioning. Recovery checkpoints do not expose the Signet bunker URI or raw signing material. Operators should not treat the one-request/one-action backfill as exhaustive recovery for multiple concurrent missed workflows.

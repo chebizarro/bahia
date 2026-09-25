@@ -545,7 +545,7 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	r.mu.Unlock()
 
 	// Run provisioning workflow
-	result, err := r.provisioner.Provision(ctx, req, run)
+	result, err := r.provisioner.Provision(context.WithValue(ctx, provisioningRequestMethodKey{}, tagValue(event.Tags, "method")), req, run)
 	if err != nil {
 		logger.Error("provisioning failed", "error", err, "step", run.CurrentStep)
 		run.Status = domain.ProvisioningStatusFailed
@@ -570,10 +570,12 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		"service_id", result.BahiaServiceID,
 	)
 
-	if err := r.publishResult(ctx, event, result); err != nil {
-		logger.Error("failed to publish provisioning result", "error", err)
-		run.Status = domain.ProvisioningStatusFailed
-		run.Error = fmt.Sprintf("publish provisioning result: %v", err)
+	if _, governed := r.provisioner.(interface{ ownsTerminalSuccessProjection() }); !governed {
+		if err := r.publishResult(ctx, event, result); err != nil {
+			logger.Error("failed to publish provisioning result", "error", err)
+			run.Status = domain.ProvisioningStatusFailed
+			run.Error = fmt.Sprintf("publish provisioning result: %v", err)
+		}
 	}
 }
 

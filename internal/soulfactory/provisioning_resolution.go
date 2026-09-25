@@ -36,7 +36,7 @@ type resolvedProvisioningSpec struct {
 	RelayPolicy    domain.SoulRelayPolicySpec
 	Workspace      domain.SoulWorkspaceSpec
 	Assets         domain.SoulAssetRefs
-	SignetIdentity *OpenClawSignetIdentityContract
+	SignetIdentity *OpenClawSignetIdentityContract `json:"-"`
 	FleetConfig    *FleetConfigSnapshot
 }
 

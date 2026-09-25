@@ -100,6 +100,8 @@ Because this interoperable tag-only event has no build-argument field, a private
 
 SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API. New mutation clients publish ContextVM `25910` requests using `soul-factory/provision` or `soul-factory/action`; Bahia retains the original request event id as the lifecycle correlation id.
 
+Saga recovery uses `soul-factory/saga/{inspect,retry,reconcile,safe-abort}` with the original `request_id` and `dry_run` (default true). All four require the fail-closed fleet operator gate; no new Nostr kinds are introduced. See [operator contract](../runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery).
+
 1. Trusted operators may publish a signed `31953` fleet OpenClaw template; the reactor pins the latest trusted snapshot for subsequent provisions.
 2. Operators publish signed `31952` Soul drafts.
 3. Operators publish signed `25910` `soul-factory/provision` requests whose params contain the existing provisioning schema. Bahia validates them with the SoulFactory parser and adapts them into the staged reactor without changing their correlation identity. Existing signed `5950` requests remain lifecycle interop during contraction.

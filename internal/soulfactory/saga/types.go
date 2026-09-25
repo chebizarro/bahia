@@ -302,8 +302,8 @@ func hasTerminalProjection(resources []Resource, run *Run, stage Stage) bool {
 		soul = soul || resource.Kind == ResourceAgentSoul
 	}
 	// The active Soul is the StageRunning commit point. The correlated success
-	// result is published by the request reactor after the provisioning engine
-	// returns, which permits a crash-safe replay: an accepted Soul can be
+	// result is delivered by the production provisioner after StageRunning
+	// (or by the compatibility reactor), permitting crash-safe replay: a Soul can be
 	// observed and the missing result republished without repeating any stage.
 	// Failure/rollback terminals never publish kind-31951; their durable public
 	// projection is the correlated error result only.

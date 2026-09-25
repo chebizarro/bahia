@@ -163,6 +163,64 @@
         "OCS-07"
       ],
       "test": "TestTerminalDriverErrorsAreRedactedFromOperator"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-09"
+      ],
+      "test": "TestNormalProvisioningPopulatesSagaMetricsAndStuckAlert"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-07",
+        "OCS-10"
+      ],
+      "test": "TestProductionOperatorRestartRetryAndSafeAbort"
+    },
+    {
+      "criteria": [
+        "OCS-03",
+        "OCS-05",
+        "OCS-10"
+      ],
+      "test": "TestProductionOperatorRefusesIdentityDriftAndConcurrentWork"
+    },
+    {
+      "criteria": [
+        "OCS-01",
+        "OCS-03"
+      ],
+      "test": "TestProductionReplayUsesImmutableResolvedInputs"
+    },
+    {
+      "criteria": [
+        "OCS-10"
+      ],
+      "test": "TestSagaContextVMFleetAuthorization"
+    },
+    {
+      "criteria": [
+        "OCS-07",
+        "OCS-10"
+      ],
+      "test": "TestSagaContextVMExplicitMutationAndValidation"
+    },
+    {
+      "criteria": [
+        "OCS-02",
+        "OCS-06",
+        "OCS-10"
+      ],
+      "test": "TestProductionSuccessDeliveryReplaysStableEvents"
+    },
+    {
+      "criteria": [
+        "OCS-03",
+        "OCS-04"
+      ],
+      "test": "TestProductionUnpreparedReservationStillRejectsOtherRequest"
     }
   ]
 }

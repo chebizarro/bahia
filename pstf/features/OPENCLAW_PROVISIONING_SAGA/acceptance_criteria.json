@@ -8,6 +8,8 @@
     {"id":"OCS-05","text":"Optimistic versions prevent an old error from overwriting newer success."},
     {"id":"OCS-06","text":"Running requires correlated Bahia terminal-projection lineage covering authoritative 7950/31951 inspection."},
     {"id":"OCS-07","text":"Operators can inspect, retry, reconcile, and safe-abort with non-mutating dry-run reports."},
-    {"id":"OCS-08","text":"Expired failed and rolled-back state is purged by explicit retention while successful state remains."}
+    {"id":"OCS-08","text":"Expired failed and rolled-back state is purged by explicit retention while successful state remains."},
+    {"id":"OCS-09","text":"Normal provisioning populates the monitored FileStore and a stuck recoverable run supplies the unchanged alert predicate."},
+    {"id":"OCS-10","text":"All four ContextVM operator methods fail closed behind FleetOperatorGate and use persisted immutable inputs after restart."}
   ]
 }
