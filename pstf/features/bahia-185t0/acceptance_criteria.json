@@ -1,0 +1,39 @@
+{
+  "feature_id": "bahia-185t0",
+  "stage": 1,
+  "criteria": [
+    {
+      "id": "S1-AC1",
+      "statement": "Only a validated owner may perform a channel-only rekey; all non-owner rotations and all Refoundings are refused before planning, key minting, custody writes or publication.",
+      "tests": [
+        "TestConcordRotationUnresolvedAuthorityHasNoSideEffects",
+        "TestConcordRotationOwnerMustBeBoundToConfiguredCommunity",
+        "TestConcordRotationRekeysOnlyTheNamedPrivateChannel",
+        "TestConcordOwnerRotationCitesNothing"
+      ]
+    },
+    {
+      "id": "S1-AC2",
+      "statement": "Refusals explain missing authority/compaction evidence and leave custody bytes and epochs unchanged, with no receipt, key mint, Store, relay AUTH/query or publish.",
+      "tests": [
+        "TestConcordRotationUnresolvedAuthorityHasNoSideEffects"
+      ]
+    },
+    {
+      "id": "S1-AC3",
+      "statement": "Demonstrate whether new-epoch compaction output contains the exact signed Grant pinned by a surviving delegated action, independently of authority-resolution implementation.",
+      "tests": [
+        "TestConcordCompactionOmitsExactAuthorityCitationEvidence"
+      ]
+    },
+    {
+      "id": "S1-AC4",
+      "statement": "Document refused operations, accepted compromised-community availability cost, operator escalation and stage 2 evidence-availability scope.",
+      "evidence": [
+        "docs/soul-factory.md#cord-04-authority-containment",
+        "docs/user-guide/features/souls.md",
+        "docs/investigations/five-open-decisions-2026-09-25.md#stage-1-findings"
+      ]
+    }
+  ]
+}

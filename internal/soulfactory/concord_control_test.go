@@ -323,7 +323,7 @@ func (f *concordControlPlaneFixture) rumor(actor fakeSigner, entity [32]byte, ve
 }
 
 // edition publishes one signed edition onto the fixture's plane.
-func (f *concordControlPlaneFixture) edition(t *testing.T, actor fakeSigner, entity [32]byte, version uint64, prev, content string) concordTestEdition {
+func (f *concordControlPlaneFixture) edition(t *testing.T, actor fakeSigner, entity [32]byte, version uint64, prev, content string, extraTags ...nostr.Tag) concordTestEdition {
 	t.Helper()
 	rumor := f.rumor(actor, entity, version, prev, content)
 	seal := nostr.Event{Kind: concordControlSealKind, CreatedAt: rumor.CreatedAt, Tags: nostr.Tags{}, Content: rumor.String()}
@@ -383,89 +383,6 @@ func mustConcordPubKey(t *testing.T, hexKey string) nostr.PubKey {
 }
 
 // --- CORD-06 §3 Authority: the rotation's citation ------------------------
-
-// TestConcordRotationCitesTheFoldedGrant is the acceptance path for CORD-06
-// §3's Authority rule. A Rotator who is not the owner cites the Grant it acts
-// under, resolved from the Control Plane it just folded, so a lagging client
-// can block until it holds that Grant and then judge the Rotator's rank for
-// itself (CORD-04 §5).
-func TestConcordRotationCitesTheFoldedGrant(t *testing.T) {
-	owner := newFakeSigner(t)
-	fixture := newConcordRotationFixtureOwnedBy(t, 2, owner.pubkey)
-	survivor := newFakeSigner(t)
-
-	// The owner grants Soul Factory's staff key its Roles. Version 2 supersedes
-	// version 1, and the citation must name the head rather than the first.
-	first := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 1, "")
-	head := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 2, first.hash)
-
-	// The Control Plane fetch comes first, then the survivor's inbox lookup.
-	queueConcordInboxLookup(fixture.endpoint, first.wrap, head.wrap)
-	queueConcordInboxLookup(fixture.endpoint)
-
-	if _, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		ChannelIDs:  []string{fixture.privateChannelID},
-		Recipients:  []string{survivor.pubkey},
-		Reason:      "removed a tester",
-	}); err != nil {
-		t.Fatalf("Rotate() error = %v", err)
-	}
-
-	address := concordTestRekeyAddress(t, fixture.priorRoot, concordLabelRekeyPseudonym, fixture.privateChannelID, 6)
-	rumor := concordUnwrapStream(t, address, fixture.endpoint.published[0], fixture.staff.pubkey)
-	// Coordinate, version, and content hash — the three-part pin of CORD-04 §5.
-	// A citation whose hash does not match the edition the verifier holds at
-	// that version parks exactly like an unsynced one, so all three are exact.
-	assertConcordTag(t, rumor, "vac", concordTestGrantEID(t, fixture.communityID, fixture.staff.pubkey), "2", head.hash)
-
-	// The citation is a rotation-wide fact, so every chunk of every scope
-	// repeats it; here that is the one chunk the rotation minted.
-	if got := len(fixture.endpoint.published); got != 2 {
-		t.Fatalf("published = %d, want the rekey chunk and the direct invite", got)
-	}
-}
-
-// TestConcordRotationRefusesWithoutAGrant covers the bead's core rule: a
-// citation must name a real Grant, and minting a fabricated one — or omitting
-// the tag and spending the epoch on a rotation conformant receivers drop —
-// is worse than refusing.
-func TestConcordRotationRefusesWithoutAGrant(t *testing.T) {
-	owner := newFakeSigner(t)
-	fixture := newConcordRotationFixtureOwnedBy(t, 0, owner.pubkey)
-	survivor := newFakeSigner(t)
-
-	t.Run("empty plane", func(t *testing.T) {
-		queueConcordInboxLookup(fixture.endpoint)
-		_, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-			CommunityID: fixture.communityID,
-			ChannelIDs:  []string{fixture.privateChannelID},
-			Recipients:  []string{survivor.pubkey},
-		})
-		if err == nil || !strings.Contains(err.Error(), "holds no Grant") {
-			t.Fatalf("Rotate() error = %v, want a refusal to rotate uncited", err)
-		}
-		fixture.assertUnrotated(t)
-	})
-
-	t.Run("grant for somebody else", func(t *testing.T) {
-		// A Grant at another member's coordinate is not this Rotator's, and
-		// the coordinate is derived rather than claimed, so it cannot be
-		// borrowed.
-		stranger := newFakeSigner(t)
-		grant := concordTestGrantEdition(t, fixture, owner, stranger.pubkey, 1, "")
-		queueConcordInboxLookup(fixture.endpoint, grant.wrap)
-		_, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-			CommunityID: fixture.communityID,
-			ChannelIDs:  []string{fixture.privateChannelID},
-			Recipients:  []string{survivor.pubkey},
-		})
-		if err == nil || !strings.Contains(err.Error(), "holds no Grant") {
-			t.Fatalf("Rotate() error = %v, want a refusal", err)
-		}
-		fixture.assertUnrotated(t)
-	})
-}
 
 // TestConcordOwnerRotationCitesNothing covers CORD-04 §1's exception: the
 // owner's rank comes from the community_id itself, so their rotation carries no
@@ -549,12 +466,17 @@ func concordTestGrantEdition(t *testing.T, fixture *concordRotationFixture, gran
 
 // concordTestControlEdition publishes one signed edition at an arbitrary
 // coordinate onto the fixture's Control Plane.
-func concordTestControlEdition(t *testing.T, fixture *concordRotationFixture, actor fakeSigner, eid [32]byte, version uint64, prev, content string) concordTestEdition {
+func concordTestControlEdition(t *testing.T, fixture *concordRotationFixture, actor fakeSigner, eid [32]byte, version uint64, prev, content string, extraTags ...nostr.Tag) concordTestEdition {
+	t.Helper()
+	return concordTestTypedControlEdition(t, fixture, actor, 3, eid, version, prev, content, extraTags...)
+}
+
+func concordTestTypedControlEdition(t *testing.T, fixture *concordRotationFixture, actor fakeSigner, vsk uint64, eid [32]byte, version uint64, prev, content string, extraTags ...nostr.Tag) concordTestEdition {
 	t.Helper()
 	eidHex := hex.EncodeToString(eid[:])
 	granter := actor
 
-	tags := nostr.Tags{{"vsk", "3"}, {"eid", eidHex}, {"ev", concordDecimal(version)}}
+	tags := nostr.Tags{{"vsk", concordDecimal(vsk)}, {"eid", eidHex}, {"ev", concordDecimal(version)}}
 	var prevBytes []byte
 	if prev != "" {
 		tags = append(tags, nostr.Tag{"ep", prev})
@@ -564,6 +486,7 @@ func concordTestControlEdition(t *testing.T, fixture *concordRotationFixture, ac
 		}
 		prevBytes = decoded
 	}
+	tags = append(tags, extraTags...)
 	rumor := nostr.Event{
 		Kind:      concordControlEditionKind,
 		PubKey:    mustConcordPubKey(t, granter.pubkey),

@@ -140,30 +140,24 @@ func TestConcordRekeyLocatorMatchesTheFrozenDerivation(t *testing.T) {
 	}
 }
 
-// TestConcordRotationPublishesRekeyBlobs is the CORD-06 acceptance path: a
-// survivor who receives no Direct Invite converges on the new epoch from the
-// blobs alone, and a staff survivor additionally receives the control_root.
-func TestConcordRotationPublishesRekeyBlobs(t *testing.T) {
-	fixture := newConcordRotationFixture(t, 3)
+// Base rekey wire mechanics remain tested independently of the refused Refounding.
+func TestConcordBaseRekeyPublicationWireForms(t *testing.T) {
+	fixture := newConcordRotationFixture(t, 1)
 	member := newFakeSigner(t)
 	staff := newFakeSigner(t)
-
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  []string{member.pubkey, staff.pubkey},
-		Staff:       []string{strings.ToUpper(staff.pubkey)},
-		// Only the staff survivor is reachable by the fleet's invite lane.
-		DirectInvites: []string{staff.pubkey},
-		Reason:        "banned a compromised operator",
-	})
+	plan, next, rotated := concordTestRefoundingPlan(t, fixture)
+	recipients, err := concordRekeyRecipients([]string{member.pubkey, staff.pubkey}, []string{staff.pubkey})
 	if err != nil {
-		t.Fatalf("Rotate() error = %v", err)
+		t.Fatal(err)
 	}
-	if len(receipt.Recipients) != 2 || len(receipt.DirectInvites) != 1 ||
-		receipt.DirectInvites[0] != staff.pubkey || len(receipt.Staff) != 1 {
-		t.Fatalf("receipt lanes = %#v / %#v / %#v", receipt.Recipients, receipt.DirectInvites, receipt.Staff)
+	rekeys, err := fixture.membership.publishConcordRekeys(t.Context(), next,
+		mustConcordPubKey(t, fixture.staff.pubkey), plan.priorRoot, plan.scopes, recipients, concordAuthorityCitation{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	receipt := plan.receipt
+	receipt.Rekeys = rekeys
+	record := concordCustodyRecord{Bundle: plan.bundle, ControlRoot: plan.controlRoot}
 	if len(receipt.Rekeys) != 1 {
 		t.Fatalf("receipt rekeys = %#v", receipt.Rekeys)
 	}
@@ -174,15 +168,6 @@ func TestConcordRotationPublishesRekeyBlobs(t *testing.T) {
 	}
 	if rekey.PrevCommit != receipt.RootPrevCommit {
 		t.Fatalf("rekey prevcommit = %s, want the receipt's %s", rekey.PrevCommit, receipt.RootPrevCommit)
-	}
-
-	record, err := fixture.custody.Load(t.Context())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	var rotated concordInviteBundle
-	if err := json.Unmarshal(record.Bundle, &rotated); err != nil {
-		t.Fatalf("decode rotated bundle: %v", err)
 	}
 
 	// A member holding the *prior* root precomputes the next base rekey
@@ -262,12 +247,6 @@ func TestConcordRotationPublishesRekeyBlobs(t *testing.T) {
 		t.Fatal("the delivered control_root does not derive to the delivered control_pk")
 	}
 
-	// The blob-only survivor was never sent a Direct Invite.
-	for _, published := range fixture.endpoint.published[1:] {
-		if len(published.Tags) > 0 && published.Tags[0][0] == "p" && published.Tags[0][1] == member.pubkey {
-			t.Fatal("a DirectInvites-narrowed rotation still giftwrapped the blob-only survivor")
-		}
-	}
 }
 
 // TestConcordRekeyChunksAtTheBlobCap covers the CORD-06 §1 cap: at most 120
@@ -399,17 +378,18 @@ func TestConcordRekeyStaffChunksStayWithinTheNIP44Ceiling(t *testing.T) {
 		recipients = append(recipients, survivor.pubkey)
 	}
 
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  recipients,
-		// Every survivor is staff, so every blob is the widest form.
-		Staff:         recipients,
-		DirectInvites: []string{recipients[0]},
-	})
+	plan, next, _ := concordTestRefoundingPlan(t, fixture)
+	blobRecipients, err := concordRekeyRecipients(recipients, recipients)
 	if err != nil {
-		t.Fatalf("Rotate() error = %v", err)
+		t.Fatal(err)
 	}
+	rekeys, err := fixture.membership.publishConcordRekeys(t.Context(), next,
+		mustConcordPubKey(t, fixture.staff.pubkey), plan.priorRoot, plan.scopes, blobRecipients, concordAuthorityCitation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := plan.receipt
+	receipt.Rekeys = rekeys
 	if len(receipt.Rekeys) != 1 || receipt.Rekeys[0].Blobs != concordRekeyBlobsPerEvent {
 		t.Fatalf("receipt rekeys = %#v", receipt.Rekeys)
 	}

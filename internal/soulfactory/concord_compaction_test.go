@@ -9,36 +9,31 @@ import (
 	"fiatjaf.com/nostr"
 )
 
-// TestConcordRefoundingCompactsAndRepublishesTheControlPlane is the CORD-06 §3
-// acceptance path. A Refounding folds the prior epoch's Control Plane and
-// re-wraps each entity's head at the new epoch's Control address — signed by
-// the new control_root-derived signer, readable under the new community_root —
-// so a fresh joiner holding only the newest root has something to re-anchor on.
-func TestConcordRefoundingCompactsAndRepublishesTheControlPlane(t *testing.T) {
+// This tests structural compaction only. Rotate refuses refounding until authority
+// and cross-epoch evidence are reliable; a structural round trip is not permission.
+func TestConcordCompactionRewrapsStructuralHeads(t *testing.T) {
 	owner := newFakeSigner(t)
-	// A base rekey chunk, two compacted entities, the Guestbook snapshot chunk,
-	// and the survivor's direct invite.
-	fixture := newConcordRotationFixtureOwnedBy(t, 5, owner.pubkey)
-	survivor := newFakeSigner(t)
-
-	// The plane the Refounding will compact: the Rotator's own Grant at
-	// version 2, plus a second entity whose head sits above a pruned ancestor.
+	fixture := newConcordRotationFixtureOwnedBy(t, 2, owner.pubkey)
 	grantFirst := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 1, "")
 	grantHead := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 2, grantFirst.hash)
 	metadata := concordTestControlEdition(t, fixture, owner, concordTestBytes32(t, 0x5e), 7, strings.Repeat("cd", 32), `{"name":"Fleet Private"}`)
-
 	queueConcordInboxLookup(fixture.endpoint, grantFirst.wrap, grantHead.wrap, metadata.wrap)
-	queueConcordInboxLookup(fixture.endpoint)
-
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  []string{survivor.pubkey},
-		Reason:      "banned a compromised operator",
-	})
+	current, _, err := fixture.membership.communities[0].resolve(t.Context(), fixture.membership.bus)
 	if err != nil {
-		t.Fatalf("Rotate() error = %v", err)
+		t.Fatal(err)
 	}
+	fold, err := fixture.membership.fetchConcordControlPlane(t.Context(), current, concordRotatedBundle(t, fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, next, rotated := concordTestRefoundingPlan(t, fixture)
+	compaction, err := fixture.membership.republishConcordCompaction(t.Context(), next, fold,
+		plan.communityID32, plan.nextRoot[:], plan.nextControlRoot[:], plan.receipt.RootEpoch, plan.nextControlPK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := plan.receipt
+	receipt.Compaction = &compaction
 
 	// Three editions folded down to two heads: the compaction ratio a
 	// Refounding exists to restore.
@@ -49,23 +44,17 @@ func TestConcordRefoundingCompactsAndRepublishesTheControlPlane(t *testing.T) {
 		t.Fatalf("compaction epoch = %d, want the new root epoch", receipt.Compaction.Epoch)
 	}
 
-	rotated := concordRotatedBundle(t, fixture)
 	if receipt.Compaction.Address != rotated.ControlPK {
 		t.Fatalf("compaction address = %s, want the rotated control_pk %s", receipt.Compaction.Address, rotated.ControlPK)
 	}
 
-	// CORD-06 §3's order: the root roll is published first, and the compaction
-	// only after it. The snapshot and the direct invite follow.
-	if len(fixture.endpoint.published) != 5 {
-		t.Fatalf("published = %d events", len(fixture.endpoint.published))
-	}
-	if fixture.endpoint.published[0].PubKey.Hex() != receipt.Rekeys[0].Address {
-		t.Fatal("the compaction was published before the root roll")
+	if len(fixture.endpoint.published) != 2 {
+		t.Fatalf("published = %d, want only two structural heads", len(fixture.endpoint.published))
 	}
 
 	// Fold the compaction back the way a fresh joiner would: at the new
 	// address, under the new epoch's read key.
-	compacted := concordFoldRepublished(t, fixture, rotated, fixture.endpoint.published[1:3])
+	compacted := concordFoldRepublished(t, fixture, rotated, fixture.endpoint.published)
 	if compacted.editions != 2 {
 		t.Fatalf("republished editions = %d, want the two heads", compacted.editions)
 	}
@@ -107,73 +96,45 @@ func TestConcordRefoundingCompactsAndRepublishesTheControlPlane(t *testing.T) {
 	}
 }
 
-// TestConcordRefoundingAbortsOnAnUnfoldablePlane covers CORD-06 §3's abort
-// rule: if the Refounder cannot reliably fold all Control events, the
-// Refounding must be aborted rather than publishing a partial one. A forked
-// entity is exactly that — compacting without it would prune the ancestors
-// that still carried its state.
-func TestConcordRefoundingAbortsOnAnUnfoldablePlane(t *testing.T) {
-	owner := newFakeSigner(t)
-	fixture := newConcordRotationFixtureOwnedBy(t, 0, owner.pubkey)
-	survivor := newFakeSigner(t)
-
-	// The Rotator's Grant folds cleanly, so authority resolves; a second
-	// entity's chain forks, so the plane as a whole does not.
-	grant := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 1, "")
+// The structural guard still rejects forks; it is not an authority check.
+func TestConcordCompactabilityRejectsForkedChains(t *testing.T) {
+	fixture := newConcordRotationFixture(t, 0)
 	entity := concordTestBytes32(t, 0x5e)
-	first := concordTestControlEdition(t, fixture, owner, entity, 1, "", `{"v":1}`)
-	forged := concordTestControlEdition(t, fixture, owner, entity, 2, strings.Repeat("ab", 32), `{"v":2}`)
-	queueConcordInboxLookup(fixture.endpoint, grant.wrap, first.wrap, forged.wrap)
-
-	_, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  []string{survivor.pubkey},
+	fold := concordFoldRepublished(t, fixture, concordRotatedBundle(t, fixture), []nostr.Event{
+		*concordTestControlEdition(t, fixture, fixture.staff.fakeSigner, entity, 1, "", `{"v":1}`).wrap,
+		*concordTestControlEdition(t, fixture, fixture.staff.fakeSigner, entity, 2, strings.Repeat("ab", 32), `{"v":2}`).wrap,
 	})
-	if err == nil || !strings.Contains(err.Error(), "forked chains") {
-		t.Fatalf("Rotate() error = %v, want an aborted Refounding", err)
-	}
-	// Aborting before anything is minted is the point: the community keeps its
-	// epoch, its root, and its keys.
-	fixture.assertUnrotated(t)
-	if len(fixture.endpoint.published) != 0 {
-		t.Fatalf("an aborted Refounding published %d events", len(fixture.endpoint.published))
+	if err := concordFoldIsCompactable(fold); err == nil || !strings.Contains(err.Error(), "forked chains") {
+		t.Fatalf("compactability = %v, want fork refusal", err)
 	}
 }
 
-// TestConcordRefoundingSeedsTheGuestbookSnapshot covers CORD-02 §5's snapshot:
+// TestConcordGuestbookSnapshotPublication covers CORD-02 §5's snapshot:
 // present members only, chunked, one id and one created_at across the set,
 // published into the new epoch's Guestbook and signed by the Refounder.
-func TestConcordRefoundingSeedsTheGuestbookSnapshot(t *testing.T) {
+func TestConcordGuestbookSnapshotPublication(t *testing.T) {
 	fixture := newConcordRotationFixture(t, 4)
 	first := newFakeSigner(t)
 	second := newFakeSigner(t)
 
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID:   fixture.communityID,
-		Refound:       true,
-		Recipients:    []string{first.pubkey, second.pubkey},
-		DirectInvites: []string{first.pubkey},
-	})
-	if err != nil {
-		t.Fatalf("Rotate() error = %v", err)
-	}
-	snapshot := receipt.GuestbookSnapshot
-	if snapshot == nil || snapshot.Error != "" {
-		t.Fatalf("receipt guestbook snapshot = %#v", snapshot)
+	plan, next, rotated := concordTestRefoundingPlan(t, fixture)
+	snapshot := fixture.membership.seedConcordGuestbookSnapshot(t.Context(), next,
+		mustConcordPubKey(t, fixture.staff.pubkey), plan.communityID32, plan.nextRoot[:], 4,
+		[]string{first.pubkey, second.pubkey})
+	if snapshot.Error != "" {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	if snapshot.Members != 2 || snapshot.Chunks != 1 || snapshot.Epoch != 4 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 
-	rotated := concordRotatedBundle(t, fixture)
 	guestbook := concordTestGuestbookAddress(t, rotated.CommunityRoot, fixture.communityID, 4)
 	if snapshot.Address != guestbook.PubKey.Hex() {
 		t.Fatalf("snapshot address = %s, want the new epoch's guestbook_pk %s", snapshot.Address, guestbook.PubKey.Hex())
 	}
 
-	// Published after the compaction and before the direct invite.
-	wrap := fixture.endpoint.published[1]
+	// Exercise the snapshot publisher independently of the refused rotation.
+	wrap := fixture.endpoint.published[0]
 	if wrap.PubKey != guestbook.PubKey {
 		t.Fatalf("snapshot wrap author = %s, want the guestbook address", wrap.PubKey.Hex())
 	}
@@ -203,38 +164,18 @@ func TestConcordRefoundingSeedsTheGuestbookSnapshot(t *testing.T) {
 	}
 }
 
-// TestConcordGuestbookSnapshotIsBestEffort covers CORD-06 §3's final-step rule:
-// a Refounding succeeds with or without the snapshot. A member entering the new
-// epoch to find their own state absent simply publishes a fresh Join, so a
-// failed seeding is a blip that belongs on the receipt, never a rolled-back
-// rotation whose keys are already distributed.
-func TestConcordGuestbookSnapshotIsBestEffort(t *testing.T) {
+// Snapshot publication reports rejection without claiming a successful rotation.
+func TestConcordGuestbookSnapshotReportsPublicationFailure(t *testing.T) {
 	fixture := newConcordRotationFixture(t, 0)
-	survivor := newFakeSigner(t)
-	// The base rekey chunk, then the snapshot chunk the relay refuses, then
-	// the survivor's direct invite.
-	fixture.endpoint.publishResults = []RelayPublishResult{
-		{Accepted: true},
-		{Accepted: false, Reason: "blocked: snapshot too large"},
-		{Accepted: true},
+	fixture.endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: snapshot too large"}}
+	plan, next, _ := concordTestRefoundingPlan(t, fixture)
+	snapshot := fixture.membership.seedConcordGuestbookSnapshot(t.Context(), next,
+		mustConcordPubKey(t, fixture.staff.pubkey), plan.communityID32, plan.nextRoot[:], 4,
+		[]string{newFakeSigner(t).pubkey})
+	if snapshot.Chunks != 0 || !strings.Contains(snapshot.Error, "blocked") {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
-
-	receipt, err := fixture.membership.Rotate(t.Context(), ConcordRotation{
-		CommunityID: fixture.communityID,
-		Refound:     true,
-		Recipients:  []string{survivor.pubkey},
-	})
-	if err != nil {
-		t.Fatalf("Rotate() error = %v, want the Refounding to succeed without its snapshot", err)
-	}
-	if receipt.GuestbookSnapshot == nil || receipt.GuestbookSnapshot.Chunks != 0 ||
-		!strings.Contains(receipt.GuestbookSnapshot.Error, "blocked") {
-		t.Fatalf("receipt guestbook snapshot = %#v", receipt.GuestbookSnapshot)
-	}
-	// The epoch still rolled and the survivor still received their material.
-	if receipt.RootEpoch != 4 || len(receipt.DirectInvites) != 1 {
-		t.Fatalf("receipt = epoch %d, invites %#v", receipt.RootEpoch, receipt.DirectInvites)
-	}
+	fixture.assertUnrotated(t)
 }
 
 // TestConcordSnapshotChunkingMatchesTheFrozenCap pins CORD-02 §5's 400-member
@@ -338,4 +279,27 @@ func concordTestGuestbookAddress(t *testing.T, communityRootHex, communityIDHex 
 
 func concordTestMemberHex(index int) string {
 	return strings.Repeat("0", 60) + hex.EncodeToString([]byte{byte(index >> 8), byte(index)})
+}
+
+// concordTestRefoundingPlan exercises key/encoding mechanics only, without
+// writing custody or bypassing the production Rotate refusal boundary.
+func concordTestRefoundingPlan(t *testing.T, f *concordRotationFixture) (concordRotationPlan, validatedConcordCommunity, concordInviteBundle) {
+	t.Helper()
+	current, record, err := f.membership.communities[0].resolve(t.Context(), f.membership.bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := f.membership.planConcordRotation(current.bundle, record, ConcordRotation{Refound: true}, f.communityID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := validateConcordCommunity(plan.bundle, f.communityID, f.membership.bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle concordInviteBundle
+	if err := json.Unmarshal(plan.bundle, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	return plan, next, bundle
 }
