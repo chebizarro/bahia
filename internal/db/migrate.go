@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -14,10 +15,38 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// migrationLockKey is the big-endian int64 encoding of the ASCII bytes "bahia.db".
+// Keep it stable: every Bahia process must contend on the same migration lock.
+const migrationLockKey int64 = 0x62616869612e6462
+
 // Migrate runs all pending up migrations in order.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
+	// Session locks require exclusive ownership of one connection for the entire
+	// run, including the applied checks and every per-migration transaction.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring migration connection: %w", err)
+	}
+	defer conn.Release()
+	defer func() {
+		// Also attempt unlock if acquisition was canceled in flight. The server
+		// may have acquired the lock before the client received its response.
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			logger.Warn("releasing migration lock; discarding connection", zap.Error(err))
+			// Never return a potentially locked session to the pool.
+			if err := conn.Conn().Close(unlockCtx); err != nil {
+				logger.Warn("closing migration connection", zap.Error(err))
+			}
+		}
+	}()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("acquiring migration lock: %w", err)
+	}
+
 	// Ensure migrations tracking table exists.
-	if _, err := pool.Exec(ctx, `
+	if _, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -45,7 +74,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error 
 
 		// Check if already applied.
 		var count int
-		err := pool.QueryRow(ctx,
+		err := conn.QueryRow(ctx,
 			"SELECT COUNT(*) FROM schema_migrations WHERE version = $1", version,
 		).Scan(&count)
 		if err != nil {
@@ -62,7 +91,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error 
 			return fmt.Errorf("reading migration %s: %w", fname, err)
 		}
 
-		tx, err := pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("beginning transaction for %s: %w", version, err)
 		}
