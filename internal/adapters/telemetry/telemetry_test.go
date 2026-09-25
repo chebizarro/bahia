@@ -396,7 +396,7 @@ func TestProvider_MetricsHandler(t *testing.T) {
 		"bahia_drift_detected_total",
 		"bahia_workers_active 5",
 		"bahia_cashu_payments_total",
-		`bahia_nostr_relay_closed_total{relay="wss://relay.example",reason="auth-required"} 2`,
+		`bahia_nostr_relay_closed_total{reason="auth-required",relay="wss://relay.example"} 2`,
 		`bahia_nostr_relay_rereq_attempts_total{relay="wss://relay.example"} 3`,
 		`bahia_nostr_relay_reconnect_attempts_total{relay="wss://relay.example"} 4`,
 		"bahia_nostr_outbox_depth 5",

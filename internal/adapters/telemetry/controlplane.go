@@ -3,9 +3,11 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -21,27 +23,40 @@ import (
 
 const controlPlaneInstrumentationName = "github.com/openagentsinc/bahia/controlplane"
 
-var (
-	controlPlaneMeter = otel.Meter(controlPlaneInstrumentationName)
+type controlPlaneMetricInstruments struct {
+	drift            metric.Int64Counter
+	reconcileLatency metric.Float64Histogram
+	dispatch         metric.Int64Counter
+	promotion        metric.Int64Counter
+}
 
-	driftCounter, _ = controlPlaneMeter.Int64Counter(
-		"bahia.controlplane.drift",
-		metric.WithDescription("Drift detections observed by the Bahia reconciler"),
-	)
-	reconcileLatency, _ = controlPlaneMeter.Float64Histogram(
-		"bahia.controlplane.reconcile.duration",
-		metric.WithUnit("s"),
-		metric.WithDescription("Duration of Bahia reconciliation cycles"),
-	)
-	dispatchCounter, _ = controlPlaneMeter.Int64Counter(
-		"bahia.controlplane.dispatch",
-		metric.WithDescription("ContextVM and Loom dispatch outcomes"),
-	)
-	promotionCounter, _ = controlPlaneMeter.Int64Counter(
-		"bahia.controlplane.release.outcome",
-		metric.WithDescription("Release promotion and rollback outcomes"),
-	)
-)
+var activeControlPlaneMetrics atomic.Pointer[controlPlaneMetricInstruments]
+
+func configureControlPlaneMeterProvider(provider metric.MeterProvider) error {
+	meter := provider.Meter(controlPlaneInstrumentationName)
+	var errs []error
+	drift, err := meter.Int64Counter("bahia.controlplane.drift", metric.WithDescription("Drift detections observed by the Bahia reconciler"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	reconcileLatency, err := meter.Float64Histogram("bahia.controlplane.reconcile.duration", metric.WithUnit("s"), metric.WithDescription("Duration of Bahia reconciliation cycles"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	dispatch, err := meter.Int64Counter("bahia.controlplane.dispatch", metric.WithDescription("ContextVM and Loom dispatch outcomes"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	promotion, err := meter.Int64Counter("bahia.controlplane.release.outcome", metric.WithDescription("Release promotion and rollback outcomes"))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	activeControlPlaneMetrics.Store(&controlPlaneMetricInstruments{drift: drift, reconcileLatency: reconcileLatency, dispatch: dispatch, promotion: promotion})
+	return nil
+}
 
 // StartOperation starts a control-plane span with stable, low-cardinality attributes.
 func StartOperation(ctx context.Context, spanName string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
@@ -68,7 +83,9 @@ func EndOperation(ctx context.Context, span trace.Span, operation, outcome strin
 // Prometheus-compatible in-process metrics.
 func RecordReconcile(ctx context.Context, duration time.Duration, statesChecked int, outcome string) {
 	outcome = boundedOutcome(outcome, nil)
-	reconcileLatency.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.String("outcome", outcome)))
+	if instruments := activeControlPlaneMetrics.Load(); instruments != nil {
+		instruments.reconcileLatency.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
 	if metrics := activeMetrics.Load(); metrics != nil {
 		metrics.RecordReconcile(duration, statesChecked)
 	}
@@ -76,7 +93,9 @@ func RecordReconcile(ctx context.Context, duration time.Duration, statesChecked 
 
 // RecordDrift records one drift detection in both OTel and the existing metrics endpoint.
 func RecordDrift(ctx context.Context) {
-	driftCounter.Add(ctx, 1)
+	if instruments := activeControlPlaneMetrics.Load(); instruments != nil {
+		instruments.drift.Add(ctx, 1)
+	}
 	if metrics := activeMetrics.Load(); metrics != nil {
 		metrics.RecordDriftDetected()
 	}
@@ -86,10 +105,9 @@ func RecordDrift(ctx context.Context) {
 func RecordDispatch(ctx context.Context, kind int, outcome string) {
 	outcome = boundedOutcome(outcome, nil)
 	kindLabel := strconv.Itoa(kind)
-	dispatchCounter.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("nostr.kind", kindLabel),
-		attribute.String("outcome", outcome),
-	))
+	if instruments := activeControlPlaneMetrics.Load(); instruments != nil {
+		instruments.dispatch.Add(ctx, 1, metric.WithAttributes(attribute.String("nostr.kind", kindLabel), attribute.String("outcome", outcome)))
+	}
 	if metrics := activeMetrics.Load(); metrics != nil {
 		metrics.RecordControlPlaneDispatch(kindLabel, outcome)
 	}
@@ -105,10 +123,9 @@ func RecordDispatch(ctx context.Context, kind int, outcome string) {
 func RecordReleaseOutcome(ctx context.Context, operation, outcome string) {
 	operation = boundedOperation(operation)
 	outcome = boundedOutcome(outcome, nil)
-	promotionCounter.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("operation", operation),
-		attribute.String("outcome", outcome),
-	))
+	if instruments := activeControlPlaneMetrics.Load(); instruments != nil {
+		instruments.promotion.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("outcome", outcome)))
+	}
 	if metrics := activeMetrics.Load(); metrics != nil {
 		metrics.RecordReleaseOutcome(operation, outcome)
 	}
