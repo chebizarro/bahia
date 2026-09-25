@@ -91,6 +91,7 @@ func (f *buildTestStarter) StartHiveCIBuild(_ context.Context, request HiveCIBui
 	f.request = request
 	f.calls++
 	return &HiveCIBuildStartResult{
+		BuildID: request.BuildID,
 		GitSHA:  "0123456789abcdef0123456789abcdef01234567",
 		GitRef:  "refs/heads/main",
 		CIRunID: "hive-run-1",

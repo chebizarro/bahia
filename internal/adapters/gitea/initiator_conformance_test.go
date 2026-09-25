@@ -617,8 +617,8 @@ func TestConformanceUntrustedMirrorCloneURLFailsClosed(t *testing.T) {
 			if got := len(initiator.loom.(*capturingLoomSubmitter).jobs); got != 0 {
 				t.Fatalf("untrusted clone URL dispatched %d Loom jobs", got)
 			}
-			if len(publisher.events) != 1 {
-				t.Fatalf("expected accepted 5401 only and no Loom/evidence publish, got %d events", len(publisher.events))
+			if len(publisher.events) != 0 {
+				t.Fatalf("expected no run, Loom, or evidence publish for an untrusted clone URL, got %d events", len(publisher.events))
 			}
 		})
 	}

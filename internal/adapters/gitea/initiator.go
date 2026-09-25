@@ -45,51 +45,6 @@ type LoomJobSubmitter interface {
 	SubmitJob(ctx context.Context, job loomAdapter.JobRequest) (string, error)
 }
 
-// InitiationRecord captures a completed build initiation so that exact
-// request replay (same source event) is idempotent: the recorded result is
-// returned without re-mirroring or re-publishing.
-type InitiationRecord struct {
-	SourceEventID   string
-	Result          controlplane.HiveCIBuildStartResult
-	RunRequestID    string
-	EvidenceEventID string
-	LoomJobID       string
-	CreatedAt       time.Time
-}
-
-// InitiationStore persists initiation records keyed by source event ID.
-type InitiationStore interface {
-	Get(ctx context.Context, sourceEventID string) (*InitiationRecord, error)
-	Put(ctx context.Context, record InitiationRecord) error
-}
-
-// MemoryInitiationStore is a process-local InitiationStore.
-type MemoryInitiationStore struct {
-	mu      sync.Mutex
-	records map[string]InitiationRecord
-}
-
-func NewMemoryInitiationStore() *MemoryInitiationStore {
-	return &MemoryInitiationStore{records: make(map[string]InitiationRecord)}
-}
-
-func (s *MemoryInitiationStore) Get(_ context.Context, sourceEventID string) (*InitiationRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rec, ok := s.records[sourceEventID]; ok {
-		copied := rec
-		return &copied, nil
-	}
-	return nil, nil
-}
-
-func (s *MemoryInitiationStore) Put(_ context.Context, record InitiationRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records[record.SourceEventID] = record
-	return nil
-}
-
 // InitiatorConfig configures the fleet Gitea mirror / Hive-CI initiator.
 type InitiatorConfig struct {
 	// GiteaBaseURL is the trusted fleet Gitea origin. Mirror clone credentials
@@ -162,17 +117,17 @@ type sourceMirrorConfig struct {
 // Initiator implements controlplane.HiveCIBuildStarter against a fleet Gitea
 // private mirror and the fleet-local Hive-CI workflow-run boundary.
 type Initiator struct {
-	client    MirrorClient
-	secrets   SecretResolver
-	publisher EventPublisher
-	signer    nostr.Signer
-	store     InitiationStore
-	runLookup WorkflowRunLookup
-	cfg       InitiatorConfig
-	logger    *zap.Logger
-	loom      LoomJobSubmitter
-	now       func() time.Time
-	mu        sync.Mutex
+	client     MirrorClient
+	secrets    SecretResolver
+	publisher  EventPublisher
+	signer     nostr.Signer
+	store      InitiationStore
+	runLookup  WorkflowRunLookup
+	inspection PublicationInspector
+	cfg        InitiatorConfig
+	logger     *zap.Logger
+	loom       LoomJobSubmitter
+	mu         sync.Mutex
 }
 
 // ReloadMirrorReadCredentialRef atomically replaces the opaque secret reference
@@ -214,9 +169,6 @@ func WithLoomJobSubmitter(submitter LoomJobSubmitter) InitiatorOption {
 }
 
 func NewInitiator(client MirrorClient, secrets SecretResolver, publisher EventPublisher, signer nostr.Signer, store InitiationStore, cfg InitiatorConfig, logger *zap.Logger, opts ...InitiatorOption) *Initiator {
-	if store == nil {
-		store = NewMemoryInitiationStore()
-	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -229,7 +181,6 @@ func NewInitiator(client MirrorClient, secrets SecretResolver, publisher EventPu
 	initiator := &Initiator{
 		client: client, secrets: secrets, publisher: publisher, signer: signer,
 		store: store, cfg: cfg, logger: logger.Named("gitea-hiveci-initiator"),
-		now: func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(initiator)
@@ -245,7 +196,7 @@ var _ controlplane.HiveCIBuildStarter = (*Initiator)(nil)
 // commit/run correlation. Exact replay of the same source event returns the
 // original result without side effects.
 func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveCIBuildStartRequest) (*controlplane.HiveCIBuildStartResult, error) {
-	if i == nil || i.client == nil || i.secrets == nil || i.publisher == nil || i.signer == nil {
+	if i == nil || i.client == nil || i.secrets == nil || i.publisher == nil || i.signer == nil || i.store == nil {
 		return nil, fmt.Errorf("fleet Gitea mirror initiator is not fully configured")
 	}
 	if strings.TrimSpace(i.cfg.MirrorOwner) == "" || strings.TrimSpace(i.cfg.WorkflowPath) == "" || strings.TrimSpace(i.cfg.RepoAnnouncementAddr) == "" {
@@ -257,7 +208,7 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	if len(req.BuildArgs) > 0 {
 		return nil, fmt.Errorf("Hive-CI kind-5401 tag-only dispatch does not support build arguments")
 	}
-	owner, name, err := splitRepositoryCoordinate(req.RepositoryCoordinate)
+	_, _, err := splitRepositoryCoordinate(req.RepositoryCoordinate)
 	if err != nil {
 		return nil, err
 	}
@@ -266,29 +217,31 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 		return nil, fmt.Errorf("git_ref is required")
 	}
 
-	// Exact request replay must be idempotent: one source event maps to one
-	// mirror sync, one CI run request, and one recorded result.
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	idempotencyKey := strings.TrimSpace(req.SourceEventID)
-	if idempotencyKey == "" {
-		idempotencyKey = "build:" + req.BuildID.String()
+	record, _, err := i.store.Claim(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("claim build initiation: %w", err)
 	}
-	if rec, err := i.store.Get(ctx, idempotencyKey); err != nil {
-		return nil, fmt.Errorf("load build initiation record: %w", err)
-	} else if rec != nil {
-		result := rec.Result
-		i.logger.Info("replayed build initiation resolved idempotently",
-			zap.String("source_event_id", idempotencyKey),
-			zap.String("git_sha", result.GitSHA),
-			zap.String("ci_run_id", result.CIRunID),
-		)
-		return &result, nil
+	if record.Stage == StageClaimed {
+		if err := i.prepareInitiation(ctx, record); err != nil {
+			return nil, err
+		}
 	}
+	return i.resumeInitiation(ctx, record)
+}
 
+func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord) error {
+	req := rec.Request
+	owner, name, err := splitRepositoryCoordinate(req.RepositoryCoordinate)
+	if err != nil {
+		return err
+	}
+	gitRef := strings.TrimSpace(req.GitRef)
+	idempotencyKey := rec.SourceEventID
 	source, err := i.sourceMirrorConfig(owner, name)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Resolve the dedicated fleet-mirror read credential before any event is
@@ -300,11 +253,11 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	mirrorReadPassword := ""
 	if i.loom != nil {
 		if mirrorReadUsername == "" || strings.ContainsAny(mirrorReadUsername, "\x00\r\n") || mirrorReadCredentialRef == "" {
-			return nil, fmt.Errorf("loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
+			return fmt.Errorf("loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
 		}
 		mirrorReadSecretID, parseErr := uuid.Parse(mirrorReadCredentialRef)
 		if parseErr != nil || mirrorReadSecretID == uuid.Nil {
-			return nil, fmt.Errorf("loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
+			return fmt.Errorf("loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
 		}
 		var manifest domain.SecretAccessManifest
 		mirrorReadPassword, manifest, err = i.secrets.ResolveSecretWithAudit(ctx, mirrorReadCredentialRef, domain.SecretResolveOptions{
@@ -314,13 +267,13 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 			RequestID: idempotencyKey,
 		})
 		if err != nil {
-			return nil, scrubSecrets(fmt.Errorf("resolve mirror-read credential reference: %w", err), mirrorReadPassword)
+			return scrubSecrets(fmt.Errorf("resolve mirror-read credential reference: %w", err), mirrorReadPassword)
 		}
 		if strings.TrimSpace(mirrorReadPassword) == "" {
-			return nil, fmt.Errorf("mirror-read credential reference resolved to an empty credential")
+			return fmt.Errorf("mirror-read credential reference resolved to an empty credential")
 		}
 		if manifest.SecretID != mirrorReadSecretID || manifest.ServiceID != req.ServiceID {
-			return nil, scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), mirrorReadPassword)
+			return scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), mirrorReadPassword)
 		}
 	}
 
@@ -336,15 +289,15 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 	if err != nil {
 		// The resolver can surface errors after producing a value (e.g. audit
 		// persistence failures); scrub defensively.
-		return nil, scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token, mirrorReadPassword)
+		return scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token, mirrorReadPassword)
 	}
 	if strings.TrimSpace(token) == "" {
-		return nil, fmt.Errorf("repository credential reference resolved to an empty credential")
+		return fmt.Errorf("repository credential reference resolved to an empty credential")
 	}
 
 	repoInfo, err := i.client.GetRepo(ctx, i.cfg.MirrorOwner, name)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("check fleet mirror: %w", err), token, mirrorReadPassword)
+		return scrubSecrets(fmt.Errorf("check fleet mirror: %w", err), token, mirrorReadPassword)
 	}
 	if repoInfo == nil {
 		migration := MigrateMirrorRequest{
@@ -357,104 +310,62 @@ func (i *Initiator) StartHiveCIBuild(ctx context.Context, req controlplane.HiveC
 			migration.AuthToken = token
 		}
 		if err := i.client.MigrateMirror(ctx, migration); err != nil {
-			return nil, scrubSecrets(fmt.Errorf("create fleet private mirror: %w", err), token, mirrorReadPassword)
+			return scrubSecrets(fmt.Errorf("create fleet private mirror: %w", err), token, mirrorReadPassword)
 		}
 		// Re-fetch to validate the mirror we (or a concurrent initiation)
 		// created before trusting it.
 		repoInfo, err = i.client.GetRepo(ctx, i.cfg.MirrorOwner, name)
 		if err != nil || repoInfo == nil {
-			return nil, scrubSecrets(fmt.Errorf("fleet private mirror is unavailable after migration"), token, mirrorReadPassword)
+			return scrubSecrets(fmt.Errorf("fleet private mirror is unavailable after migration"), token, mirrorReadPassword)
 		}
 		if err := i.validateMirror(repoInfo, source.cloneURL); err != nil {
-			return nil, err
+			return err
 		}
 	} else {
 		// Never trust a pre-existing repository by name alone: it must be a
 		// private mirror of the expected upstream, or we fail closed.
 		if err := i.validateMirror(repoInfo, source.cloneURL); err != nil {
-			return nil, err
+			return err
 		}
 		if err := i.client.SyncMirror(ctx, i.cfg.MirrorOwner, name); err != nil {
-			return nil, scrubSecrets(fmt.Errorf("sync fleet private mirror: %w", err), token, mirrorReadPassword)
+			return scrubSecrets(fmt.Errorf("sync fleet private mirror: %w", err), token, mirrorReadPassword)
 		}
 	}
 
 	sha, err := i.resolveRefWithRetry(ctx, name, gitRef)
 	if err != nil {
-		return nil, scrubSecrets(err, token, mirrorReadPassword)
+		return scrubSecrets(err, token, mirrorReadPassword)
 	}
 	pinnedDependencies, err := i.resolveAuthorizedBuildDependencies(ctx, req.ServiceID)
 	if err != nil {
-		return nil, scrubSecrets(err, token, mirrorReadPassword)
+		return scrubSecrets(err, token, mirrorReadPassword)
 	}
 
-	// hive-ci-protocol identity: one (a, commit, workflow) tuple is one build.
-	// If a trusted producer (grasp-gitea on push, or an earlier Bahia request)
-	// already published the run, adopt it instead of racing it with a second
-	// 5401 and a second Loom job.
+	rec.Result.GitSHA, rec.Result.GitRef = sha, gitRef
+	rec.RunRequestID = "bahia:" + req.BuildID.String() + ":" + sha
+	rec.MirrorRepository = i.cfg.MirrorOwner + "/" + name
+	rec.MirrorReadCredentialRef = mirrorReadCredentialRef
+	rec.MirrorReadUsername = mirrorReadUsername
 	if existing, reuseErr := i.existingWorkflowRun(ctx, sha); reuseErr != nil {
-		return nil, scrubSecrets(reuseErr, token, mirrorReadPassword)
+		return scrubSecrets(reuseErr, token, mirrorReadPassword)
 	} else if existing != nil {
-		result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: existing.RunEventID}
-		runRequestID := "bahia:" + req.BuildID.String() + ":" + sha
-		evidenceEventID, evidenceErr := i.publishQueuedEvidence(ctx, req, name, result, runRequestID, "")
-		if evidenceErr != nil {
-			return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", evidenceErr), token, mirrorReadPassword)
-		}
-		if err := i.store.Put(ctx, InitiationRecord{
-			SourceEventID: idempotencyKey, Result: result,
-			RunRequestID: runRequestID, EvidenceEventID: evidenceEventID,
-			CreatedAt: i.now(),
-		}); err != nil {
-			return nil, scrubSecrets(fmt.Errorf("record build initiation: %w", err), token, mirrorReadPassword)
-		}
-		i.logger.Info("adopted existing Hive-CI workflow run for commit; no competing 5401 or Loom job published",
-			zap.String("reason", "workflow_run_reused"),
-			zap.String("ci_run_id", existing.RunEventID),
-			zap.String("run_publisher", existing.PublisherPubkey),
-			zap.String("git_sha", sha),
-			zap.String("workflow", i.cfg.WorkflowPath),
-		)
-		return &result, nil
+		rec.Result.CIRunID = existing.RunEventID
+		i.logger.Info("adopted existing Hive-CI workflow run",
+			zap.String("reason", "workflow_run_reused"), zap.String("ci_run_id", existing.RunEventID))
+		return i.advance(ctx, rec, StageRequestPublished)
 	}
-
-	runRequestID, runEventID, publisherNsec, err := i.publishWorkflowRunRequest(ctx, req, name, sha, gitRef)
+	rec.RunEvent, rec.PublisherNsec, err = i.prepareWorkflowRunRequest(ctx, req, name, sha, gitRef)
 	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("publish Hive-CI workflow run: %w", err), token, mirrorReadPassword)
+		return scrubSecrets(err, token, mirrorReadPassword)
 	}
-
-	result := controlplane.HiveCIBuildStartResult{GitSHA: sha, GitRef: gitRef, CIRunID: runEventID}
-	loomJobID := ""
+	rec.Result.CIRunID = rec.RunEvent.ID.Hex()
 	if i.loom != nil {
-		loomJobID, err = i.submitLoomWorkflowJob(ctx, repoInfo, req, name, gitRef, runEventID, publisherNsec, mirrorReadUsername, mirrorReadPassword, pinnedDependencies)
+		rec.LoomJob, err = i.prepareLoomWorkflowJob(repoInfo, req, name, gitRef, rec.Result.CIRunID, pinnedDependencies)
 		if err != nil {
-			return nil, scrubSecrets(fmt.Errorf("submit Hive-CI Loom job: %w", err), token, mirrorReadPassword, publisherNsec)
+			return scrubSecrets(err, token, mirrorReadPassword, rec.PublisherNsec)
 		}
 	}
-
-	evidenceEventID, err := i.publishQueuedEvidence(ctx, req, name, result, runRequestID, loomJobID)
-	if err != nil {
-		return nil, scrubSecrets(fmt.Errorf("publish queued build evidence: %w", err), token, mirrorReadPassword)
-	}
-
-	if err := i.store.Put(ctx, InitiationRecord{
-		SourceEventID: idempotencyKey, Result: result,
-		RunRequestID: runRequestID, EvidenceEventID: evidenceEventID, LoomJobID: loomJobID,
-		CreatedAt: i.now(),
-	}); err != nil {
-		return nil, fmt.Errorf("record build initiation: %w", err)
-	}
-
-	i.logger.Info("fleet gitea mirror build initiated",
-		zap.String("build_id", req.BuildID.String()),
-		zap.String("repo", i.cfg.MirrorOwner+"/"+name),
-		zap.String("git_ref", gitRef),
-		zap.String("git_sha", sha),
-		zap.String("ci_run_id", runEventID),
-		zap.String("loom_job_id", loomJobID),
-		zap.String("evidence_event_id", evidenceEventID),
-	)
-	return &result, nil
+	return i.advance(ctx, rec, StageRequestReady)
 }
 
 func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, error) {
@@ -491,25 +402,22 @@ func (i *Initiator) sourceMirrorConfig(owner, name string) (sourceMirrorConfig, 
 	return source, nil
 }
 
-// submitLoomWorkflowJob publishes the spec-shaped loom-protocol kind-5100 job:
+// prepareLoomWorkflowJob prepares the spec-shaped loom-protocol kind-5100 job:
 // cmd=loom-ci with argv, plus NIP-44 secret tags for the mirror credential and
 // the per-run kind-5401 publisher key. No non-spec selector tags are used.
-func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID, publisherNsec, mirrorReadUsername, mirrorReadPassword string, pinnedDependencies []PinnedBuildDependency) (string, error) {
+func (i *Initiator) prepareLoomWorkflowJob(repoInfo *RepoInfo, req controlplane.HiveCIBuildStartRequest, name, ref, runEventID string, pinnedDependencies []PinnedBuildDependency) (*loomAdapter.JobRequest, error) {
 	if len(i.cfg.TrustedLoomWorkerPubkeys) == 0 {
-		return "", fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
+		return nil, fmt.Errorf("trusted Loom worker pubkey allowlist is empty")
 	}
 	repository := ""
 	if repoInfo != nil {
 		repository = strings.TrimSpace(repoInfo.CloneURL)
 	}
 	if repository == "" {
-		return "", fmt.Errorf("fleet mirror clone URL is unavailable")
+		return nil, fmt.Errorf("fleet mirror clone URL is unavailable")
 	}
 	if err := validateFleetMirrorCloneURL(repository, i.cfg.GiteaBaseURL, i.cfg.MirrorOwner, name); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(publisherNsec) == "" {
-		return "", fmt.Errorf("Hive-CI workflow run publisher key is required for Loom dispatch")
+		return nil, err
 	}
 	dependencies := make([]loomAdapter.BuildDependency, 0, len(pinnedDependencies))
 	for _, dependency := range pinnedDependencies {
@@ -522,9 +430,9 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 		Actor: req.RequesterPubkey, RunEventID: runEventID, Dependencies: dependencies,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return i.loom.SubmitJob(ctx, loomAdapter.JobRequest{
+	return &loomAdapter.JobRequest{
 		ID:                   runEventID,
 		ReferencedEventID:    runEventID,
 		Type:                 "build",
@@ -532,12 +440,7 @@ func (i *Initiator) submitLoomWorkflowJob(ctx context.Context, repoInfo *RepoInf
 		Args:                 args,
 		RequiredSoftware:     []string{"git", "act", "docker", loomAdapter.LoomCICommand},
 		AllowedWorkerPubkeys: append([]string(nil), i.cfg.TrustedLoomWorkerPubkeys...),
-		Secrets: map[string]string{
-			hiveCIGitUsernameSecretKey:           mirrorReadUsername,
-			hiveCIGitPasswordSecretKey:           mirrorReadPassword,
-			loomAdapter.HiveCIPublisherSecretKey: publisherNsec,
-		},
-	})
+	}, nil
 }
 
 func (i *Initiator) resolveAuthorizedBuildDependencies(ctx context.Context, serviceID uuid.UUID) ([]PinnedBuildDependency, error) {
@@ -640,21 +543,21 @@ func (i *Initiator) resolveRefWithRetry(ctx context.Context, name, ref string) (
 	return "", fmt.Errorf("resolve ref %q on fleet mirror: %w", ref, lastErr)
 }
 
-// publishWorkflowRunRequest emits the fleet-local Hive-CI kind-5401 workflow
+// prepareWorkflowRunRequest signs the fleet-local Hive-CI kind-5401 workflow
 // run consumed by Hive-CI and by Bahia's own subscriber. It intentionally uses
 // the tag-only producer contract established by grasp-gitea; the inbound
 // ContextVM build/request command remains the mutation boundary.
-// It returns the run request id, the 5401 event id, and the nsec of the
+// It returns the signed event and the nsec of the
 // per-run ephemeral publisher key that must be delivered to the worker as
 // HIVE_CI_NSEC so the worker signs the 5402 with it (hive-ci-protocol).
-func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name, sha, branch string) (string, string, string, error) {
+func (i *Initiator) prepareWorkflowRunRequest(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name, sha, branch string) (*nostr.Event, string, error) {
 	issuer, err := i.signer.GetPublicKey(ctx)
 	if err != nil {
-		return "", "", "", fmt.Errorf("resolve Hive-CI workflow run issuer: %w", err)
+		return nil, "", fmt.Errorf("resolve Hive-CI workflow run issuer: %w", err)
 	}
 	issuerHex := issuer.Hex()
 	if issuerHex == strings.Repeat("0", 64) {
-		return "", "", "", fmt.Errorf("resolve Hive-CI workflow run issuer: signer returned an empty pubkey")
+		return nil, "", fmt.Errorf("resolve Hive-CI workflow run issuer: signer returned an empty pubkey")
 	}
 	ephemeral := nostr.Generate()
 	publisherHex := ephemeral.Public().Hex()
@@ -670,9 +573,8 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		TriggeredBy: triggeredBy,
 	}
 	if err := payload.Validate(); err != nil {
-		return "", "", "", fmt.Errorf("validate Hive-CI workflow run payload: %w", err)
+		return nil, "", fmt.Errorf("validate Hive-CI workflow run payload: %w", err)
 	}
-	requestID := "bahia:" + req.BuildID.String() + ":" + sha
 	if !containsPubkey(i.cfg.TrustedCIPubkeys, issuerHex) {
 		i.logger.Warn("self-issued Hive-CI workflow run will be ignored by Bahia's local subscriber",
 			zap.String("reason", "self_issued_run_untrusted"),
@@ -704,11 +606,10 @@ func (i *Initiator) publishWorkflowRunRequest(ctx context.Context, req controlpl
 		Tags:      tags,
 		Content:   "",
 	}
-	eventID, err := i.signAndPublish(ctx, ev)
-	if err != nil {
-		return "", "", "", err
+	if err := controlplane.SignGoNostrEvent(ctx, i.signer, ev); err != nil {
+		return nil, "", fmt.Errorf("sign workflow run: %w", err)
 	}
-	return requestID, eventID, publisherNsec, nil
+	return ev, publisherNsec, nil
 }
 
 // existingWorkflowRun returns an already-ingested trusted run for this
@@ -749,31 +650,32 @@ func containsPubkey(values []string, want string) bool {
 	return false
 }
 
-// publishQueuedEvidence publishes an addressed (kind 30900, latest-wins per
+// prepareQueuedEvidence signs an addressed (kind 30900, latest-wins per
 // d-tag) build-state projection so queued/running/success/failure evidence is
 // verifiable and replay-safe.
-func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.HiveCIBuildStartRequest, name string, result controlplane.HiveCIBuildStartResult, runRequestID, loomJobID string) (string, error) {
+func (i *Initiator) prepareQueuedEvidence(ctx context.Context, rec *InitiationRecord) (*nostr.Event, error) {
+	req, result := rec.Request, rec.Result
 	statePayload := map[string]any{
 		"schema":           "bahia.hiveci.build-state.v1",
 		"build_id":         req.BuildID.String(),
 		"service_id":       req.ServiceID.String(),
 		"status":           string(domain.BuildStatusQueued),
-		"repo":             i.cfg.MirrorOwner + "/" + name,
+		"repo":             rec.MirrorRepository,
 		"upstream_repo":    req.RepositoryCoordinate,
 		"git_ref":          result.GitRef,
 		"git_sha":          result.GitSHA,
 		"ci_run_id":        result.CIRunID,
-		"ci_run_request":   runRequestID,
-		"loom_job_id":      loomJobID,
+		"ci_run_request":   rec.RunRequestID,
+		"loom_job_id":      rec.LoomJobID,
 		"artifact_repo":    req.ArtifactRepo,
 		"request_event_id": req.SourceEventID,
 	}
-	if credentialRef := strings.TrimSpace(i.cfg.MirrorReadCredentialRef); credentialRef != "" {
+	if credentialRef := strings.TrimSpace(rec.MirrorReadCredentialRef); credentialRef != "" {
 		statePayload["mirror_read_credential_ref"] = credentialRef
 	}
 	content, err := json.Marshal(statePayload)
 	if err != nil {
-		return "", fmt.Errorf("marshal build-state evidence: %w", err)
+		return nil, fmt.Errorf("marshal build-state evidence: %w", err)
 	}
 	tags := nostr.Tags{
 		{kinds.CASControlStateTagD, "hiveci-build:" + req.BuildID.String()},
@@ -791,21 +693,10 @@ func (i *Initiator) publishQueuedEvidence(ctx context.Context, req controlplane.
 		Tags:      tags,
 		Content:   string(content),
 	}
-	return i.signAndPublish(ctx, ev)
-}
-
-func (i *Initiator) signAndPublish(ctx context.Context, ev *nostr.Event) (string, error) {
 	if err := controlplane.SignGoNostrEvent(ctx, i.signer, ev); err != nil {
-		return "", fmt.Errorf("sign event: %w", err)
+		return nil, fmt.Errorf("sign queued evidence: %w", err)
 	}
-	published, err := i.publisher.Publish(ctx, *ev)
-	if err != nil {
-		return "", err
-	}
-	if published == 0 {
-		return "", fmt.Errorf("no relay accepted the event; retry after relay reconnect")
-	}
-	return ev.ID.Hex(), nil
+	return ev, nil
 }
 
 func splitRepositoryCoordinate(coordinate string) (string, string, error) {
