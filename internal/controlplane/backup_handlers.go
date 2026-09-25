@@ -126,8 +126,7 @@ func (r *Reactor) authorizeBackupRequest(ctx context.Context, event *nostr.Event
 }
 
 func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
+	if event == nil {
 		return false
 	}
 	if tagValueNostr(event.Tags, "d") == "" {
@@ -139,22 +138,43 @@ func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nost
 		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
 		return false
 	}
-	if delegated {
-		if r.signer == nil {
-			r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer is not configured")
-			return false
-		}
-		issuer, err := r.signer.GetPublicKey(ctx)
-		if err != nil || normalizeEncryptedPubkey(issuer.Hex()) != authority.ServicePubkey {
-			r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", "backup delegation issuer does not match the configured service signer")
-			return false
-		}
+	if err := r.validateBackupIssuer(ctx, event, authority, delegated); err != nil {
+		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
+		return false
+	}
+	if !r.isAuthorized(authority.RequesterPubkey) {
+		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
+		return false
 	}
 	if r.backupRegistry == nil {
 		r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
 		return false
 	}
 	return true
+}
+
+func (r *Reactor) validateBackupIssuer(ctx context.Context, event *nostr.Event, authority backupDelegationRecord, delegated bool) error {
+	issuer := ""
+	if r.signer != nil {
+		pubkey, err := r.signer.GetPublicKey(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve backup delegation issuer: %w", err)
+		}
+		issuer = normalizeEncryptedPubkey(pubkey.Hex())
+	}
+	if delegated {
+		if issuer == "" || issuer != authority.ServicePubkey {
+			return fmt.Errorf("backup delegation issuer does not match the configured service signer")
+		}
+		if !event.CheckID() || !event.VerifySignature() {
+			return fmt.Errorf("backup delegation signature is invalid")
+		}
+	} else if authority.RequesterPubkey == issuer {
+		// The transport signer is an issuer, never the backup principal, even
+		// when Assistant wiring also places it in the reactor's author list.
+		return fmt.Errorf("service signer requires backup requester delegation")
+	}
+	return nil
 }
 
 func backupRequestAuthorityFromEvent(event *nostr.Event) (backupDelegationRecord, bool, error) {

@@ -14,13 +14,13 @@ import (
 // intents on the canonical ContextVM request transport. Durable assistant state
 // is emitted by the orchestrator as 30900/30315 observables; these handlers only
 // return the ContextVM JSON-RPC result payload for the initiating request.
-func RegisterAssistantContextVMHandlers(transport *EncryptedRequestTransport, orchestrator *service.AssistantOrchestrator) {
+func RegisterAssistantContextVMHandlers(transport *EncryptedRequestTransport, orchestrator *service.AssistantOrchestrator, gate *FleetOperatorGate) {
 	if transport == nil || orchestrator == nil {
 		return
 	}
 	adapter := assistantContextVMAdapter{orchestrator: orchestrator}
-	transport.RegisterContextVMHandler(domain.AssistantContextVMMethodPrompt, adapter.handlePrompt)
-	transport.RegisterContextVMHandler(domain.AssistantContextVMMethodApproval, adapter.handleApproval)
+	transport.RegisterOperatorContextVMHandler(domain.AssistantContextVMMethodPrompt, adapter.handlePrompt, gate)
+	transport.RegisterOperatorContextVMHandler(domain.AssistantContextVMMethodApproval, adapter.handleApproval, gate)
 }
 
 type assistantContextVMAdapter struct {

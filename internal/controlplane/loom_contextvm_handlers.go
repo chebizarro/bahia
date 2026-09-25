@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	loomadapter "github.com/openagentsinc/bahia/internal/adapters/loom"
 )
 
@@ -26,23 +27,26 @@ var _ loomJobClient = (*loomadapter.Client)(nil)
 // existing Loom client. Durable job visibility is emitted by the Loom projection
 // helpers as 30900 loom-job:<id> state plus 4903 audit events.
 //
-// fleetOperatorPubkeys authorizes cancel for operators in addition to the
-// original submitter. An empty list is fail-closed: only the submitter can cancel.
-func RegisterLoomContextVMHandlers(transport *EncryptedRequestTransport, client loomJobClient, fleetOperatorPubkeys []string) {
-	if transport == nil || client == nil {
+// Submission requires the global operator allowlist. Cancellation permits the
+// recorded submitter or an explicitly configured Loom operator; missing
+// ownership fails closed. Transport admission alone does not grant cancellation.
+func RegisterLoomContextVMHandlers(transport *EncryptedRequestTransport, client loomJobClient, fleetOperatorPubkeys []string, gate *FleetOperatorGate) {
+	if transport == nil || transport.responder == nil || client == nil {
 		return
 	}
 	h := loomContextVMHandlers{
 		client:               client,
-		fleetOperatorPubkeys: fleetOperatorPubkeys,
+		servicePubkey:        normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
+		fleetOperatorPubkeys: append([]string(nil), fleetOperatorPubkeys...),
 	}
-	transport.RegisterContextVMHandler(ContextVMMethodLoomSubmit, h.submit)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodLoomSubmit, h.submit, gate)
 	transport.RegisterContextVMHandler(ContextVMMethodLoomCancel, h.cancel)
 }
 
 type loomContextVMHandlers struct {
 	client               loomJobClient
 	fleetOperatorPubkeys []string
+	servicePubkey        string
 }
 
 type loomSubmitContextVMPayload struct {
@@ -74,6 +78,10 @@ type loomCancelContextVMPayload struct {
 }
 
 func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequest) (any, error) {
+	submitterPubkey, err := h.requester(request)
+	if err != nil {
+		return nil, err
+	}
 	if !h.client.CanonicalProjectionReady() {
 		return nil, fmt.Errorf("canonical Loom projection is not configured")
 	}
@@ -108,10 +116,8 @@ func (h loomContextVMHandlers) submit(ctx context.Context, request ContextVMRequ
 	if err != nil {
 		return nil, err
 	}
-	h.client.StartCanonicalProjection(jobID)
-
-	submitterPubkey := request.Event.PubKey.Hex()
 	h.client.RememberJobSubmitter(jobID, submitterPubkey)
+	h.client.StartCanonicalProjection(jobID)
 
 	return map[string]any{
 		"status":       "accepted",
@@ -151,6 +157,10 @@ func loomPayloadContainsBunkerURL(payload loomSubmitContextVMPayload) bool {
 }
 
 func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequest) (any, error) {
+	callerPubkey, err := h.requester(request)
+	if err != nil {
+		return nil, err
+	}
 	var payload loomCancelContextVMPayload
 	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid loom cancel params: %w", err)
@@ -163,7 +173,6 @@ func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequ
 		return nil, fmt.Errorf("job_event_id is required")
 	}
 
-	callerPubkey := request.Event.PubKey.Hex()
 	submitterPubkey := h.client.JobSubmitter(jobID)
 	if !authorizedForLoomCancel(callerPubkey, submitterPubkey, h.fleetOperatorPubkeys) {
 		return nil, fmt.Errorf("caller not authorized to cancel loom job")
@@ -179,6 +188,20 @@ func (h loomContextVMHandlers) cancel(ctx context.Context, request ContextVMRequ
 		"job_event_id": jobID,
 		"state_d_tag":  "loom-job:" + jobID,
 	}, nil
+}
+
+func (h loomContextVMHandlers) requester(request ContextVMRequest) (string, error) {
+	if request.Event == nil || request.Event.PubKey == (nostr.PubKey{}) {
+		return "", fmt.Errorf("signed Loom requester is required")
+	}
+	if h.servicePubkey == "" {
+		return "", fmt.Errorf("loom service identity is not configured")
+	}
+	requester := request.Event.PubKey.Hex()
+	if requester == h.servicePubkey {
+		return "", fmt.Errorf("service signer cannot supply Loom requester authority")
+	}
+	return requester, nil
 }
 
 func authorizedForLoomCancel(callerPubkey, jobSubmitter string, fleetOperatorPubkeys []string) bool {

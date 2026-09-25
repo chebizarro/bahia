@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestBackupContextVMAuthorizedRequesterCarriesAuditableDelegation(t *testing
 	rbac := backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, rbac)
+	RegisterBackupAliasContextVMHandlers(transport, rbac, NewFleetOperatorGate([]string{requesterPubkey}))
 
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id":       tenantID.String(),
@@ -159,7 +160,7 @@ func TestBackupContextVMRequesterAuthorityFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey, otherPubkey, servicePubkey}, zap.NewNop())
-			RegisterBackupAliasContextVMHandlers(transport, tc.rbac)
+			RegisterBackupAliasContextVMHandlers(transport, tc.rbac, NewFleetOperatorGate([]string{requesterPubkey, otherPubkey, servicePubkey}))
 			request := backupAuthorityRequest(t, tc.requestKey, ContextVMMethodBackupRun, tc.params)
 
 			transport.HandleEvent(context.Background(), request)
@@ -180,7 +181,7 @@ func TestBackupContextVMReplayDoesNotRepublishDelegatedCommand(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
 
 	params := map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "backup-authority-replay",
@@ -214,7 +215,7 @@ func TestBackupContextVMAmbiguousTenantRequiresExplicitBinding(t *testing.T) {
 	}}
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(members))
+	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(members), NewFleetOperatorGate([]string{requesterPubkey}))
 
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"recipe_id": uuid.NewString(), "idempotency_key": "ambiguous-tenant",
@@ -235,7 +236,7 @@ func TestBackupRequestAuthorityRejectsTamperedSignedDelegation(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "tamper",
 	}))
@@ -268,7 +269,7 @@ func TestBackupRequestAuthorityRejectsDuplicateTags(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "duplicate-tag",
 	}))
@@ -292,7 +293,7 @@ func TestDelegatedBackupCommandUsesRequesterForDurableAttribution(t *testing.T) 
 	registry, recipe := newBackupRequestRegistryFixture()
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": recipe.ID.String(), "idempotency_key": "durable-attribution",
 	})
@@ -304,7 +305,7 @@ func TestDelegatedBackupCommandUsesRequesterForDurableAttribution(t *testing.T) 
 		t.Fatalf("service signer: %v", err)
 	}
 	executor := &recordingBackupExecutor{calls: make(chan uuid.UUID, 1)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{servicePubkey}}, nil, nil, signer, zap.NewNop())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requesterPubkey}}, nil, nil, signer, zap.NewNop())
 	reactor.backupRegistry = registry
 	reactor.backupExecutor = executor
 	reactor.handleBackupRunRequest(context.Background(), &command)
@@ -332,7 +333,7 @@ func TestDelegatedBackupCommandRejectsUnexpectedIssuer(t *testing.T) {
 	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "issuer-mismatch",
 	}))
@@ -347,6 +348,124 @@ func TestDelegatedBackupCommandRejectsUnexpectedIssuer(t *testing.T) {
 	reactor.backupRegistry = registry
 	if reactor.authorizeBackupCommandRequest(context.Background(), &command, "backup_run", KindBackupRunResult) {
 		t.Fatal("delegated command from an unexpected issuer was authorized")
+	}
+}
+
+func TestBackupConsumerAuthorizesRequesterNotServiceSigner(t *testing.T) {
+	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	command := delegatedBackupCommand(t)
+	signer, err := NewPrivateKeySigner(testServiceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []int{
+		KindBackupRepositoryRegister, KindBackupPolicyApply, KindBackupRecipeApply, KindBackupDefinitionApply,
+		KindBackupRunRequest, KindBackupVerificationRequest, KindBackupRestoreRequest,
+		KindBackupRetentionEnforce, KindBackupRestoreApproval, KindBackupRepositoryProbe,
+	} {
+		for _, tc := range []struct {
+			name  string
+			allow []string
+			want  bool
+		}{
+			{"service only", []string{servicePubkey}, false},
+			{"empty", nil, false},
+			{"explicit requester", []string{requester}, true},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", kind, tc.name), func(t *testing.T) {
+				event := command
+				event.Kind = nostr.Kind(kind)
+				if err := event.Sign(testNostrSecretKey(t, testServiceKey)); err != nil {
+					t.Fatal(err)
+				}
+				reactor := NewReactor(Config{AuthorizedPubkeys: tc.allow}, nil, nil, signer, zap.NewNop())
+				reactor.backupRegistry = &backupRequestRegistry{}
+				if got := reactor.authorizeBackupCommandRequest(t.Context(), &event, "backup", KindBackupRunResult); got != tc.want {
+					t.Fatalf("backup authorized = %v, want %v; service identity must not confer requester authority", got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestBackupConsumerRejectsSubstitutedAuthority(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	other := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
+	signer, err := NewPrivateKeySigner(testServiceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, attack := range []string{"unsigned substitution", "foreign issuer", "service requester", "stripped delegation", "direct service command"} {
+		t.Run(attack, func(t *testing.T) {
+			event := delegatedBackupCommand(t)
+			var body map[string]any
+			if err := json.Unmarshal([]byte(event.Content), &body); err != nil {
+				t.Fatal(err)
+			}
+			authority := body["request_authority"].(map[string]any)
+			key := testServiceKey
+			switch attack {
+			case "unsigned substitution":
+				authority["requester_pubkey"] = other
+				setBackupAuthorityTag(&event, "requester", other)
+			case "foreign issuer":
+				authority["service_pubkey"] = other
+				key = testOtherKey
+			case "service requester":
+				authority["requester_pubkey"] = servicePubkey
+				setBackupAuthorityTag(&event, "requester", servicePubkey)
+			case "stripped delegation":
+				setBackupAuthorityTag(&event, "delegation", "")
+			case "direct service command":
+				event.Tags = nostr.Tags{{"d", "service-self-authorize"}}
+				body = map[string]any{"requester_pubkey": requester}
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event.Content = string(encoded)
+			if attack != "unsigned substitution" {
+				if err := event.Sign(testNostrSecretKey(t, key)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{servicePubkey, requester, other}}, nil, nil, signer, zap.NewNop())
+			reactor.backupRegistry = &backupRequestRegistry{}
+			if reactor.authorizeBackupCommandRequest(t.Context(), &event, "backup", KindBackupRunResult) {
+				t.Fatal("substituted authority was authorized")
+			}
+		})
+	}
+}
+
+func delegatedBackupCommand(t *testing.T) nostr.Event {
+	t.Helper()
+	tenant := uuid.New()
+	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), authzTestTransportAuthors(t), zap.NewNop())
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenant, requester, domain.RoleAdmin), NewFleetOperatorGate([]string{requester}))
+	transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
+		"tenant_id": tenant.String(), "recipe_id": uuid.NewString(),
+		"requester_pubkey":  testNostrPubKeyHexFromPrivateKey(t, testOtherKey),
+		"request_authority": map[string]any{"requester_pubkey": testNostrPubKeyHexFromPrivateKey(t, testOtherKey)},
+	}))
+	command := backupPublishedCommand(t, publisher.events, KindBackupRunRequest)
+	authority, _, err := backupRequestAuthorityFromEvent(&command)
+	if err != nil || authority.RequesterPubkey != requester {
+		t.Fatalf("caller-supplied provenance replaced verified requester: %+v, %v", authority, err)
+	}
+	return command
+}
+
+func setBackupAuthorityTag(event *nostr.Event, key, value string) {
+	for i, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == key {
+			event.Tags[i] = nostr.Tag{key, value}
+		}
 	}
 }
 

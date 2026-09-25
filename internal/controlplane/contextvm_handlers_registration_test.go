@@ -89,7 +89,7 @@ func TestBackupAliasContextVMHandlersDispatchWebAliases(t *testing.T) {
 			tc.params["tenant_id"] = tenantID.String()
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
-			RegisterBackupAliasContextVMHandlers(transport, encryptedAdminRBAC(t, tenantID))
+			RegisterBackupAliasContextVMHandlers(transport, encryptedAdminRBAC(t, tenantID), NewFleetOperatorGate(contextVMTestAuthorizedPubkeys(t)))
 
 			transport.HandleEvent(context.Background(), makeRouteRequest(t, tc.method, tc.params))
 			if len(publisher.events) != 3 {

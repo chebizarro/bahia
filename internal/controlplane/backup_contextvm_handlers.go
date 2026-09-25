@@ -41,7 +41,7 @@ const (
 // RegisterBackupAliasContextVMHandlers registers encrypted ContextVM method
 // aliases used by the web UI while preserving the canonical backup action
 // strings consumed by the backup control-plane handlers.
-func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, rbac *auth.RBAC) {
+func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, rbac *auth.RBAC, gate *FleetOperatorGate) {
 	if transport == nil || transport.responder == nil {
 		return
 	}
@@ -51,16 +51,16 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, 
 		servicePubkey: normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
 		authorizer:    encryptedTenantAuthorizer{rbac: rbac},
 	}
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRepositoryRegister, h.repositoryRegister)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupPolicyApply, h.policyApply)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRecipeApply, h.recipeApply)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupDefinitionApply, h.definitionApply)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, h.run)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupVerification, h.verification)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRestore, h.restore)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRetention, h.retention)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRestoreApprovalAlias, h.restoreApproval)
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRepositoryProbe, h.repositoryProbe)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRepositoryRegister, h.repositoryRegister, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupPolicyApply, h.policyApply, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRecipeApply, h.recipeApply, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupDefinitionApply, h.definitionApply, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRun, h.run, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupVerification, h.verification, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRestore, h.restore, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRetention, h.retention, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRestoreApprovalAlias, h.restoreApproval, gate)
+	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRepositoryProbe, h.repositoryProbe, gate)
 }
 
 type backupContextVMHandlers struct {
