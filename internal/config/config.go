@@ -410,6 +410,7 @@ type AssistantConfig struct {
 	// wins, then the session's persisted workflow, then this default. When
 	// unset it is derived from the deprecated Agentic.Enabled flag (true ->
 	// iterative, false -> batch). Both workflows run through the same executor.
+	// Batch is available only when LLMModel is set; a batch default requires it.
 	DefaultWorkflow      string                     `koanf:"default_workflow" yaml:"default_workflow" secret:"false"`
 	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock" secret:"false"`
@@ -1576,6 +1577,13 @@ const (
 	AssistantWorkflowIterative = "iterative"
 )
 
+// BatchWorkflowAvailable reports whether the batch proposer can be built: it
+// needs assistant.llm_model. The iterative proposer needs no such check here:
+// validation requires agentic.model, which falls back to llm_model.
+func (a AssistantConfig) BatchWorkflowAvailable() bool {
+	return strings.TrimSpace(a.LLMModel) != ""
+}
+
 // ResolvedDefaultWorkflow returns the configured default workflow, mapping the
 // deprecated agentic.enabled flag when default_workflow is unset.
 func (a AssistantConfig) ResolvedDefaultWorkflow() string {
@@ -2348,11 +2356,13 @@ func (c *Config) validateAssistant() error {
 	if !assistant.Enabled {
 		return nil
 	}
-	// Either workflow can be requested per prompt and both share one
-	// executor, runtime, permission engine and transcript stack, so both
-	// proposers' configuration is validated regardless of the default.
-	if assistant.LLMModel == "" {
-		return fmt.Errorf("config validation failed: assistant.llm_model (batch proposer) is required when assistant.enabled=true")
+	// assistant.llm_model is the batch proposer's model. It is required only
+	// when batch is the default workflow (explicitly, or via the deprecated
+	// agentic.enabled=false), exactly as before the unified executor. With an
+	// iterative default and no llm_model the batch workflow is unavailable:
+	// startup succeeds and batch requests are refused, never downgraded.
+	if assistant.LLMModel == "" && assistant.DefaultWorkflow == AssistantWorkflowBatch {
+		return fmt.Errorf("config validation failed: assistant.llm_model (batch proposer) is required when assistant.enabled=true and the default workflow is batch (assistant.default_workflow=batch, or assistant.agentic.enabled=false with default_workflow unset)")
 	}
 	parsed, err := url.Parse(assistant.LLMBaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {

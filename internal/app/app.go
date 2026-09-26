@@ -1357,11 +1357,16 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		userDocs := docs.New(docs.DefaultBasePath)
 		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, &userDocs, service.AssistantContextBuilderConfig{TranscriptHistory: transcriptStore})
-		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
-			BaseURL: cfg.Assistant.LLMBaseURL,
-			Model:   cfg.Assistant.LLMModel,
-			APIKey:  cfg.Assistant.LLMAPIKey,
-		}, slog.Default())
+		// The batch proposer's chat client exists only when assistant.llm_model
+		// is set; without it the batch workflow is unavailable (see wiring).
+		var chatClient service.AssistantChatClient
+		if cfg.Assistant.BatchWorkflowAvailable() {
+			chatClient = llmadapter.NewChatClient(llmadapter.ChatClientConfig{
+				BaseURL: cfg.Assistant.LLMBaseURL,
+				Model:   cfg.Assistant.LLMModel,
+				APIKey:  cfg.Assistant.LLMAPIKey,
+			}, slog.Default())
+		}
 		modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, slog.Default())
 		if modelClientErr != nil {
 			return nil, modelClientErr
@@ -1392,7 +1397,15 @@ func New(cfg *config.Config) (*App, error) {
 		assistantOrchestrator = assistantExecution.Orchestrator
 		bgManager.RegisterWithOptions(assistantExecution.Lifecycle, RunnerTier(Tier1), RunnerRequired(false))
 		bgManager.RegisterWithOptions(assistantExecution.Recovery, RunnerTier(Tier3), RunnerRequired(false))
-		logger.Info("operator assistant executor initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.String("default_workflow", string(assistantExecution.DefaultWorkflow)))
+		availableWorkflows := make([]string, 0, len(assistantExecution.AvailableWorkflows))
+		for _, workflow := range assistantExecution.AvailableWorkflows {
+			availableWorkflows = append(availableWorkflows, string(workflow))
+		}
+		logFields := []zap.Field{zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.String("default_workflow", string(assistantExecution.DefaultWorkflow)), zap.Strings("available_workflows", availableWorkflows)}
+		if assistantExecution.Batch == nil {
+			logFields = append(logFields, zap.String("batch_unavailable_reason", assistantBatchUnavailableReason))
+		}
+		logger.Info("operator assistant executor initialized", logFields...)
 	}
 
 	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, controlPlanePool, configFabricSigner)

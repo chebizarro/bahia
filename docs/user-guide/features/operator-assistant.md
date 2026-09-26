@@ -14,6 +14,15 @@ An edit creates a new revision and hash; a stale approval cannot execute.
 Action approval is scoped to one call and exact arguments, never just a tool
 name. `AllowedTools: null` is unrestricted, whereas `[]` permits no tools.
 
+The batch workflow needs `assistant.llm_model` (the batch proposer's model);
+the iterative workflow needs `assistant.agentic.model` or `llm_model`. A
+deployment whose default is iterative may omit `llm_model`; batch is then
+unavailable. A batch prompt, a prompt on a session whose persisted workflow is
+batch, and a batch approval are refused with `workflow_unavailable` rather than
+run as iterative. Rejecting a batch draft, **Stop run**, reconciliation and
+already-approved batch runs are unaffected. See
+[Getting Started](../getting-started.md#assistant-workflow-configuration-migration).
+
 Use **Stop run** to prevent new work. Submitted operations may still finish;
 no rollback is attempted. A run with an uncertain submitted effect needs an
 exact downstream request-event reference for reconciliation. Missing relay

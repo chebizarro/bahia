@@ -243,7 +243,7 @@ func TestAssistantExecutionWiringIsUnconditionalAndFlagOnlySelectsDefault(t *tes
 	for _, tc := range cases {
 		relay := newMemoryRelay()
 		wiring, _ := buildTestAssistantExecution(t, wiringConfig(t, tc.agentic, tc.explicit), relay)
-		if wiring.DefaultWorkflow != tc.want || wiring.Batch == nil || wiring.Iterative == nil || wiring.Engine == nil || wiring.Store == nil || wiring.Recovery == nil {
+		if wiring.DefaultWorkflow != tc.want || wiring.Batch == nil || wiring.Iterative == nil || wiring.Engine == nil || wiring.Store == nil || wiring.Recovery == nil || len(wiring.AvailableWorkflows) != 2 {
 			t.Fatalf("agentic=%v default=%q wiring=%+v", tc.agentic, tc.explicit, wiring)
 		}
 		batch, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("b"), domain.AssistantPromptRequest{ContractVersion: 2, Workflow: domain.AssistantWorkflowBatch, SessionID: "s-batch", TurnID: "t", Prompt: "deploy"})
@@ -261,12 +261,74 @@ func TestAssistantExecutionWiringIsUnconditionalAndFlagOnlySelectsDefault(t *tes
 	}
 }
 
+// wiringConfigWithoutBatch is the configuration deployed since agentic mode
+// became the default: an agentic model and no assistant.llm_model.
+func wiringConfigWithoutBatch(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := wiringConfig(t, true, "")
+	cfg.Assistant.LLMModel = ""
+	cfg.Assistant.Agentic.Model = "agent"
+	return cfg
+}
+
+// Without assistant.llm_model and with an iterative default, everything but
+// the batch proposer is constructed: batch requests are refused with
+// workflow_unavailable (never run as iterative) and iterative works.
+func TestAssistantExecutionWiringWithoutBatchModel(t *testing.T) {
+	relay := newMemoryRelay()
+	wiring, _ := buildTestAssistantExecution(t, wiringConfigWithoutBatch(t), relay)
+	if wiring.Batch != nil || wiring.Iterative == nil || wiring.Engine == nil || wiring.Store == nil || wiring.Recovery == nil || wiring.DefaultWorkflow != domain.AssistantWorkflowIterative {
+		t.Fatalf("wiring = %+v", wiring)
+	}
+	if len(wiring.AvailableWorkflows) != 1 || wiring.AvailableWorkflows[0] != domain.AssistantWorkflowIterative {
+		t.Fatalf("available workflows = %v", wiring.AvailableWorkflows)
+	}
+	batch, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("b"), domain.AssistantPromptRequest{ContractVersion: 2, Workflow: domain.AssistantWorkflowBatch, SessionID: "s-batch", TurnID: "t", Prompt: "deploy"})
+	if err != nil || batch["status"] != "failed" || batch["step"] != service.AssistantRefusalWorkflowUnavailable || !strings.Contains(batch["error"].(string), "assistant.llm_model") {
+		t.Fatalf("batch prompt = %#v err=%v", batch, err)
+	}
+	if _, ok := wiring.Engine.Snapshot("s-batch"); ok {
+		t.Fatal("refused batch prompt created a run")
+	}
+	defaulted, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("d"), domain.AssistantPromptRequest{ContractVersion: 2, SessionID: "s-default", TurnID: "t", Prompt: "question"})
+	if err != nil || defaulted["status"] != "accepted" || defaulted["workflow"] != string(domain.AssistantWorkflowIterative) || defaulted["phase"] != string(domain.AssistantExecutionCompleted) {
+		t.Fatalf("default prompt = %#v err=%v", defaulted, err)
+	}
+}
+
+// A batch default is never wired without its proposer model.
+func TestAssistantExecutionWiringRejectsBatchDefaultWithoutModel(t *testing.T) {
+	cfg := wiringConfigWithoutBatch(t)
+	cfg.Assistant.DefaultWorkflow = "batch"
+	relay := newMemoryRelay()
+	secret, err := nostr.SecretKeyFromHex(cfg.Nostr.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := keyer.NewPlainKeySigner([32]byte(secret))
+	keys, err := assistantTranscriptKeyProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: keys})
+	_, err = buildAssistantExecution(assistantExecutionDeps{Config: cfg, MCPServer: mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{}), ModelClient: wiringAgent{}, Publisher: relay, Subscriber: relay, Signer: signer, Transcript: transcript, KeyProvider: keys})
+	if err == nil || !strings.Contains(err.Error(), "assistant.llm_model") {
+		t.Fatalf("build error = %v, want batch default rejected", err)
+	}
+}
+
 // Startup recovery is wired to the engine and store: an in-flight run found
 // on the relay is resumed (its receipt observed and the run completed), not
-// parked.
+// parked. An already-approved batch run resumes even when the deployment no
+// longer offers the batch workflow: continuing it needs no model call.
 func TestAssistantExecutionWiringStartupRecoveryResumes(t *testing.T) {
+	t.Run("batch available", func(t *testing.T) { assertStartupRecoveryResumesApprovedBatch(t, wiringConfig(t, true, "")) })
+	t.Run("batch unavailable", func(t *testing.T) { assertStartupRecoveryResumesApprovedBatch(t, wiringConfigWithoutBatch(t)) })
+}
+
+func assertStartupRecoveryResumesApprovedBatch(t *testing.T, cfg *config.Config) {
+	t.Helper()
 	relay := newMemoryRelay()
-	cfg := wiringConfig(t, true, "")
 	wiring, signer := buildTestAssistantExecution(t, cfg, relay)
 
 	args := map[string]any{"service_id": "00000000-0000-0000-0000-000000000001", "environment_id": "00000000-0000-0000-0000-000000000002", "artifact_id": "00000000-0000-0000-0000-000000000003"}

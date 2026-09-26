@@ -26,6 +26,10 @@ var (
 	ErrAssistantNotAwaitingApproval           = errors.New("not_awaiting_approval")
 	ErrAssistantOperatorMismatch              = errors.New("operator_mismatch")
 	ErrAssistantReconciliationRejected        = errors.New("reconciliation_rejected")
+	// ErrAssistantWorkflowUnavailable refuses a request that would start new
+	// work in a workflow whose proposer this deployment did not construct. It
+	// is never answered by running a different workflow.
+	ErrAssistantWorkflowUnavailable = errors.New("workflow_unavailable")
 )
 
 const defaultAssistantExecutionMaxWorkItems = 48
@@ -303,6 +307,12 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 		s.mu.Unlock()
 		return result, nil
 	}
+	if !e.workflowAvailable(workflow) {
+		// Refused before any checkpoint: an explicit, persisted or default
+		// workflow is honoured or refused, never swapped for the other one.
+		s.mu.Unlock()
+		return AssistantTurnResult{}, assistantWorkflowUnavailableError(workflow)
+	}
 	if err := e.healLocked(s); err != nil {
 		s.mu.Unlock()
 		return AssistantTurnResult{}, err
@@ -347,13 +357,10 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 	proposalReq := AssistantProposalRequest{SessionID: x.SessionID, RunID: runID, TurnID: x.TurnID, Prompt: prompt.Prompt, Scope: scope}
 	var proposal AssistantProposal
 	var proposeErr error
-	switch {
-	case workflow == domain.AssistantWorkflowBatch && e.cfg.Batch != nil:
+	if workflow == domain.AssistantWorkflowBatch {
 		proposal, proposeErr = e.cfg.Batch.ProposeBatch(modelCtx, proposalReq)
-	case workflow == domain.AssistantWorkflowIterative && e.cfg.Iterative != nil:
+	} else {
 		proposal, proposeErr = e.cfg.Iterative.ProposeIterative(modelCtx, proposalReq)
-	default:
-		proposeErr = fmt.Errorf("assistant %s proposer is not configured", workflow)
 	}
 	cancel()
 
@@ -372,6 +379,26 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 		e.kickLocked(s)
 	}
 	return e.resultLocked(s, ack), nil
+}
+
+// workflowAvailable reports whether this deployment constructed the proposer
+// of workflow. The executor, runtime and recovery are shared and always
+// present; only proposing (and approving a batch draft) needs availability.
+func (e *AssistantExecutionEngine) workflowAvailable(workflow domain.AssistantWorkflow) bool {
+	switch workflow {
+	case domain.AssistantWorkflowBatch:
+		return e.cfg.Batch != nil
+	case domain.AssistantWorkflowIterative:
+		return e.cfg.Iterative != nil
+	}
+	return false
+}
+
+func assistantWorkflowUnavailableError(workflow domain.AssistantWorkflow) error {
+	if workflow == domain.AssistantWorkflowBatch {
+		return fmt.Errorf("%w: the batch workflow is not available on this deployment because it requires assistant.llm_model (the batch proposer model); request workflow iterative or configure assistant.llm_model", ErrAssistantWorkflowUnavailable)
+	}
+	return fmt.Errorf("%w: the %s workflow is not available on this deployment", ErrAssistantWorkflowUnavailable, workflow)
 }
 
 // applyProposal converts a proposer outcome into the next execution. Invalid
@@ -516,6 +543,13 @@ func (e *AssistantExecutionEngine) Decide(ctx context.Context, req AssistantTurn
 				return AssistantTurnResult{}, err
 			}
 			return e.resultLocked(s, "plan_rejected"), nil
+		}
+		if !e.workflowAvailable(domain.AssistantWorkflowBatch) {
+			// Approval grants new batch authority, so it needs the batch
+			// workflow. Rejection (above), cancellation, reconciliation and
+			// the continuation of an already-approved run do not.
+			s.mu.Unlock()
+			return AssistantTurnResult{}, assistantWorkflowUnavailableError(domain.AssistantWorkflowBatch)
 		}
 		return e.approveBatch(s, req)
 	}

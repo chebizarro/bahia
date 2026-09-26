@@ -41,6 +41,10 @@ const (
 	AssistantRefusalUnknownSession          = "unknown_session"
 	AssistantRefusalPlanValidation          = "plan_validation_error"
 	AssistantRefusalExecution               = "execution_error"
+	// AssistantRefusalWorkflowUnavailable refuses a new turn or batch approval
+	// in a workflow this deployment does not offer (batch without
+	// assistant.llm_model). The request is never run in another workflow.
+	AssistantRefusalWorkflowUnavailable = "workflow_unavailable"
 )
 
 // AssistantEventPublisher publishes signed assistant events to relays.
@@ -474,6 +478,8 @@ func assistantRefusalFromEngineError(err error) (string, string) {
 		return AssistantRefusalUnauthorized, "requester is not a participant in this assistant session"
 	case errors.Is(err, ErrAssistantReconciliationRejected):
 		return AssistantRefusalReconciliation, err.Error()
+	case errors.Is(err, ErrAssistantWorkflowUnavailable):
+		return AssistantRefusalWorkflowUnavailable, err.Error()
 	case errors.As(err, &denial):
 		return AssistantRefusalApprovalDenied, err.Error()
 	case strings.HasPrefix(err.Error(), "modified plan invalid"):

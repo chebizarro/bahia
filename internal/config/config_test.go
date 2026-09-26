@@ -709,6 +709,102 @@ func TestAssistantDefaultWorkflowSelection(t *testing.T) {
 	})
 }
 
+// assistant.llm_model (the batch proposer's model) is required exactly when the
+// effective default workflow is batch, as before the unified executor. An
+// iterative default without it starts with the batch workflow unavailable.
+func TestAssistantBatchProposerModelRequirement(t *testing.T) {
+	cases := []struct {
+		name            string
+		defaultWorkflow string
+		agentic         bool
+		llmModel        string
+		agenticModel    string
+		wantDefault     string
+		wantErr         string
+		wantBatch       bool
+	}{
+		{name: "explicit batch default with llm_model", defaultWorkflow: "batch", agentic: true, llmModel: "planner-model", wantDefault: "batch", wantBatch: true},
+		{name: "explicit batch default without llm_model", defaultWorkflow: "batch", agentic: true, agenticModel: "agentic-model", wantErr: "assistant.llm_model (batch proposer) is required"},
+		{name: "deprecated agentic=false default with llm_model", agentic: false, llmModel: "planner-model", wantDefault: "batch", wantBatch: true},
+		{name: "deprecated agentic=false default without llm_model", agentic: false, agenticModel: "agentic-model", wantErr: "assistant.llm_model (batch proposer) is required"},
+		{name: "iterative default with llm_model", agentic: true, llmModel: "planner-model", wantDefault: "iterative", wantBatch: true},
+		{name: "iterative default without llm_model", agentic: true, agenticModel: "agentic-model", wantDefault: "iterative", wantBatch: false},
+		{name: "explicit iterative default without llm_model", defaultWorkflow: "iterative", agentic: false, agenticModel: "agentic-model", wantDefault: "iterative", wantBatch: false},
+		{name: "iterative default without any model", agentic: true, wantErr: "assistant.agentic.model or assistant.llm_model (iterative proposer) is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Assistant.Enabled = true
+			cfg.Assistant.DefaultWorkflow = tc.defaultWorkflow
+			cfg.Assistant.Agentic.Enabled = tc.agentic
+			cfg.Assistant.LLMModel = tc.llmModel
+			cfg.Assistant.Agentic.Model = tc.agenticModel
+			cfg.Nostr.PrivateKey = "test-secret-key"
+			err := cfg.validate()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("validate() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate() error = %v", err)
+			}
+			if cfg.Assistant.DefaultWorkflow != tc.wantDefault || cfg.Assistant.BatchWorkflowAvailable() != tc.wantBatch {
+				t.Fatalf("default=%q batch available=%v, want %q/%v", cfg.Assistant.DefaultWorkflow, cfg.Assistant.BatchWorkflowAvailable(), tc.wantDefault, tc.wantBatch)
+			}
+			if cfg.Assistant.Agentic.Model == "" {
+				t.Fatal("iterative proposer model not resolved")
+			}
+		})
+	}
+}
+
+// The configuration deployed on master since agentic mode became the default
+// (assistant enabled, agentic model, no llm_model) keeps starting after the
+// unified executor lands, with the batch workflow unavailable.
+func TestLoadMasterEraAgenticOnlyAssistantConfig(t *testing.T) {
+	assertAgenticOnly := func(t *testing.T, cfg *Config) {
+		t.Helper()
+		if !cfg.Assistant.Enabled || cfg.Assistant.LLMModel != "" || cfg.Assistant.Agentic.Model != "agentic-model" {
+			t.Fatalf("assistant config = %+v", cfg.Assistant)
+		}
+		if cfg.Assistant.DefaultWorkflow != AssistantWorkflowIterative || cfg.Assistant.BatchWorkflowAvailable() {
+			t.Fatalf("default=%q batch available=%v, want iterative/false", cfg.Assistant.DefaultWorkflow, cfg.Assistant.BatchWorkflowAvailable())
+		}
+	}
+	t.Run("yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		content := []byte(`assistant:
+  enabled: true
+  agentic:
+    enabled: true
+    model: "agentic-model"
+nostr:
+  private_key: "test-secret-key"
+`)
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		assertAgenticOnly(t, cfg)
+	})
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("BAHIA_ASSISTANT_ENABLED", "true")
+		t.Setenv("BAHIA_ASSISTANT_AGENTIC_MODEL", "agentic-model")
+		t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "test-secret-key")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		assertAgenticOnly(t, cfg)
+	})
+}
+
 func TestAssistantAgenticDefaults(t *testing.T) {
 	cfg := Defaults()
 	if !cfg.Assistant.Agentic.Enabled {
@@ -839,20 +935,6 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("legacy assistant config should validate with agentic disabled: %v", err)
-		}
-	})
-
-	t.Run("assistant requires batch planner model whatever the default", func(t *testing.T) {
-		for _, agentic := range []bool{true, false} {
-			cfg := Defaults()
-			cfg.Assistant.Enabled = true
-			cfg.Assistant.Agentic.Enabled = agentic
-			cfg.Assistant.Agentic.Model = "agentic-model"
-			cfg.Nostr.PrivateKey = "test-secret-key"
-			err := cfg.validate()
-			if err == nil || !strings.Contains(err.Error(), "assistant.llm_model (batch proposer)") {
-				t.Fatalf("agentic=%v validate() error = %v, want planner model requirement", agentic, err)
-			}
 		}
 	})
 

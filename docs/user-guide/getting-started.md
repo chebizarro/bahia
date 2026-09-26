@@ -118,6 +118,8 @@ soul_factory:
 assistant:
   # The assistant uses the multi-step agentic loop by default in audited permission mode.
   # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
+  # llm_model is also the batch proposer's model: required when the default workflow
+  # is batch; without it only the iterative workflow is available.
   llm_base_url: "https://api.openai.com"
   llm_model: "<assistant-model>"
   llm_api_key: "<provider-api-key>"
@@ -134,7 +136,7 @@ assistant:
     # api_key: "<agentic-api-key>"
   permissions:
     mode: "audited"
-  # Legacy planner escape hatch:
+  # Batch default (requires llm_model); prefer default_workflow: batch over this flag:
   # agentic:
   #   enabled: false
   # Disabled by default. Enable only for legacy planner providers that emit delta.content
@@ -332,9 +334,22 @@ The flag no longer selects an engine or gates what is constructed. Changing
 config never silently changes an existing session. Batch plan editing remains
 supported.
 
-Because either workflow can be requested per prompt, both proposers are
-validated whenever `assistant.enabled=true`: `assistant.llm_model` (batch
-planner) is required, and the `assistant.agentic.*` provider, model (falling
-back to `llm_model`), base URL and limits must be valid even when the default
-is `batch`. `nostr.private_key` is required for the encrypted transcript and
+`assistant.llm_model` is the batch proposer's model. It is required only when
+the effective default workflow is `batch` (`default_workflow: batch`, or
+`agentic.enabled: false` with `default_workflow` unset), the same rule as
+before the unified executor. With an iterative default and no `llm_model` the
+assistant starts with only the iterative workflow available, and the startup
+log line `operator assistant executor initialized` reports
+`available_workflows=[iterative]` and a `batch_unavailable_reason`. On such a
+deployment a prompt that requests `workflow: batch`, a prompt on a session
+whose persisted workflow is batch, and the approval of a batch draft are
+refused with `{status:"failed", step:"workflow_unavailable"}`; they are never
+run as iterative. Rejecting a batch draft, cancelling, reconciling and
+finishing an already-approved batch run still work, because none of them calls
+the proposer. Set `llm_model` to offer both workflows whatever the default.
+
+The iterative proposer is always validated when `assistant.enabled=true`: the
+`assistant.agentic.*` provider, model (falling back to `llm_model`; one of the
+two is required), base URL and limits must be valid even when the default is
+`batch`. `nostr.private_key` is required for the encrypted transcript and
 execution checkpoints. See [Operator Assistant](features/operator-assistant.md).
