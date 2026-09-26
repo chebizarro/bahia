@@ -32,6 +32,21 @@ async function installAssistantAgenticHarness(page) {
     const KIND_SESSION = 30900;
     const KIND_STATUS = 30315;
     const KIND_TRANSCRIPT = 30316;
+    const SESSION_SCHEMA_V2 = 'bahia.assistant-session.v2';
+    const SESSION_SCHEMA_V1 = 'bahia.assistant-session.v1';
+    // The service owns one current run per session and publishes replaceable
+    // v2 projections with strictly increasing created_at (NIP-01 ordering).
+    const runs = {};
+    const revisions = {};
+    let projectionClock = Math.floor(Date.now() / 1000);
+    function nextProjectionTime() {
+      projectionClock = Math.max(projectionClock + 1, Math.floor(Date.now() / 1000));
+      return projectionClock;
+    }
+    function startRun(sessionId) {
+      runs[sessionId] = `run-${Object.keys(runs).length + 1}-${Date.now()}`;
+      return runs[sessionId];
+    }
 
     function decodeRequest(event) {
       const content = String(event.content || '');
@@ -69,12 +84,15 @@ async function installAssistantAgenticHarness(page) {
           payload: { session_id: sessionId, turn_id: `turn-${Date.now()}`, prompt }
         };
       }
+      // Gift-wrapped requests are opaque to this harness; the decision is
+      // inferred here. Payload shape is covered by the store unit tests.
       const decision = window.__BAHIA_E2E_NEXT_ACTION_DECISION || { decision: 'approve', reason: '' };
       window.__BAHIA_E2E_NEXT_ACTION_DECISION = null;
       return {
         envelope: { id: event.id, method: 'assistant/approval' },
         operation: 'assistant/approval',
-        payload: { session_id: sessionId, action_id: 'action-rollback-1', decision: decision.decision || 'approve', reason: decision.reason || '' }
+        payload: { contract_version: 2, session_id: sessionId, run_id: runs[sessionId] || '', workflow: 'iterative',
+          action_id: 'action-rollback-1', decision: decision.decision || 'approve', reason: decision.reason || '' }
       };
     }
 
@@ -90,16 +108,16 @@ async function installAssistantAgenticHarness(page) {
       window.__bahiaPushNostrEvent?.(event);
     }
 
-    function assistantEvent({ id, kind, sessionId, status = '', tags = [], content = {} }) {
+    function assistantEvent({ id, kind, sessionId, status = '', tags = [], content = {}, schema = '', createdAt = 0 }) {
       const now = Math.floor(Date.now() / 1000);
       return {
         id,
         kind,
         pubkey: servicePubkey,
-        created_at: now,
+        created_at: createdAt || now,
         tags: [
           ['domain', 'assistant'],
-          ['schema', kind === KIND_SESSION ? 'bahia.assistant-session.v1' : kind === KIND_STATUS ? 'bahia.assistant-status.v1' : 'bahia.assistant-transcript.v1'],
+          ['schema', schema || (kind === KIND_SESSION ? SESSION_SCHEMA_V2 : kind === KIND_STATUS ? 'bahia.assistant-status.v1' : 'bahia.assistant-transcript.v1')],
           ['session', sessionId],
           ['p', operatorPubkey, '', 'operator'],
           ...(status ? [['status', status]] : []),
@@ -110,22 +128,56 @@ async function installAssistantAgenticHarness(page) {
       };
     }
 
-    function publishSession(sessionId, state) {
+    function publishSession(sessionId, phase, { pendingApprovals = [], submittedEffects = 0 } = {}) {
+      revisions[sessionId] = (revisions[sessionId] || 0) + 1;
       push(assistantEvent({
-        id: `session-${sessionId}-${state}-${Date.now()}`,
+        id: `session-${sessionId}-${phase}-${revisions[sessionId]}`,
+        kind: KIND_SESSION,
+        sessionId,
+        status: phase,
+        schema: SESSION_SCHEMA_V2,
+        createdAt: nextProjectionTime(),
+        tags: [['d', `${SESSION_SCHEMA_V2}:${sessionId}`], ['agent', 'bahia-assistant']],
+        content: {
+          schema: SESSION_SCHEMA_V2,
+          session_id: sessionId,
+          state: phase,
+          operator_pubkey: operatorPubkey,
+          participants: [operatorPubkey],
+          assistant_id: 'bahia-assistant',
+          assistant_pubkey: servicePubkey,
+          execution_version: 2,
+          workflow: 'iterative',
+          current_run_id: runs[sessionId],
+          execution_revision: revisions[sessionId],
+          phase,
+          scope: { allowed_tools: null },
+          pending_approvals: pendingApprovals,
+          submitted_effects: submittedEffects,
+          uncertain_effects: 0
+        }
+      }));
+    }
+
+    // Relay history left by a pre-v2 backend: readable, never actionable.
+    function publishLegacySession(sessionId, state) {
+      push(assistantEvent({
+        id: `legacy-session-${sessionId}-${state}-${Date.now()}`,
         kind: KIND_SESSION,
         sessionId,
         status: state,
-        tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['agent', 'bahia-assistant']],
+        schema: SESSION_SCHEMA_V1,
+        tags: [['d', `${SESSION_SCHEMA_V1}:${sessionId}`], ['agent', 'bahia-assistant']],
         content: {
-          schema: 'bahia.assistant-session.v1',
+          schema: SESSION_SCHEMA_V1,
           session_id: sessionId,
           state,
           operator_pubkey: operatorPubkey,
           participants: [operatorPubkey],
           assistant_id: 'bahia-assistant',
           assistant_pubkey: servicePubkey,
-          metadata: { agent_loop: { state } }
+          last_plan_hash: 'legacy-plan-hash',
+          metadata: { agent_loop: { state }, deferred_actions: { 'action-legacy-1': { action_id: 'action-legacy-1', tool_name: 'bahia_assistant_llm_rollback' } } }
         }
       }));
     }
@@ -140,6 +192,7 @@ async function installAssistantAgenticHarness(page) {
         content: {
           schema: 'bahia.assistant-status.v1',
           session_id: sessionId,
+          run_id: runs[sessionId] || '',
           status,
           ...fields
         }
@@ -214,7 +267,6 @@ async function installAssistantAgenticHarness(page) {
     }
 
     function requireRollbackApproval(sessionId) {
-      publishSession(sessionId, 'awaiting_approval');
       publishStatus(sessionId, 'awaiting_approval', {
         phase: 'approval_required',
         message: 'High-risk rollback requires operator approval',
@@ -225,7 +277,25 @@ async function installAssistantAgenticHarness(page) {
         args_preview: { route_id: 'llm-route-prod', environment_id: 'prod' },
         permission: { risk: 'high', decision: 'ask' }
       });
+      publishSession(sessionId, 'awaiting_approval', { pendingApprovals: ['action-rollback-1'] });
       return { session_id: sessionId, status: 'awaiting_approval', suspended: true, action_id: 'action-rollback-1', summary: 'High-risk rollback requires operator approval' };
+    }
+
+    function legacyApprovalHistory(sessionId) {
+      publishLegacySession(sessionId, 'awaiting_approval');
+      publishStatus(sessionId, 'awaiting_approval', {
+        phase: 'approval_required',
+        message: 'Legacy rollback approval recorded by a v1 backend',
+        approval_prompt: 'Legacy rollback approval recorded by a v1 backend',
+        action_id: 'action-legacy-1',
+        tool_call_id: 'tool-call-legacy-1',
+        tool_name: 'bahia_assistant_llm_rollback',
+        run_id: 'legacy-run',
+        permission: { risk: 'high', decision: 'ask' }
+      });
+      publishStatus(sessionId, 'planned', { message: 'Legacy plan ready', plan_hash: 'legacy-plan-hash',
+        plan: { summary: 'Legacy plan', steps: [{ step_id: 'legacy-1', title: 'Legacy step', tool_name: 'bahia_assistant_llm_rollback', tool_args: {} }] } });
+      return { session_id: sessionId, status: 'awaiting_approval', summary: 'Legacy history' };
     }
 
     function blockedThenRecovered(sessionId) {
@@ -265,6 +335,9 @@ async function installAssistantAgenticHarness(page) {
       const sessionId = payload.session_id;
       const turnId = payload.turn_id || 'turn-1';
       const prompt = String(payload.prompt || '').toLowerCase();
+      if (prompt.includes('legacy')) return legacyApprovalHistory(sessionId);
+      startRun(sessionId);
+      publishSession(sessionId, 'proposing');
       if (prompt.includes('low-risk')) return completeLowRisk(sessionId);
       if (prompt.includes('rollback')) return requireRollbackApproval(sessionId);
       if (prompt.includes('relay close')) return blockedThenRecovered(sessionId);
@@ -274,7 +347,16 @@ async function installAssistantAgenticHarness(page) {
     function handleApproval(payload) {
       window.__BAHIA_E2E_ASSISTANT_APPROVALS.push(payload);
       const sessionId = payload.session_id;
-      publishSession(sessionId, 'executing');
+      // The ContextVM result only acknowledges the decision. The action is
+      // consumed when the next canonical projection says so; a spec can hold it.
+      const consume = () => consumeApprovedRollback(sessionId, payload);
+      if (window.__BAHIA_E2E_HOLD_APPROVAL_CONSUMPTION) window.__BAHIA_E2E_RELEASE_APPROVAL = consume;
+      else consume();
+      return { session_id: sessionId, run_id: runs[sessionId], status: 'accepted', action_id: payload.action_id, decision: payload.decision };
+    }
+
+    function consumeApprovedRollback(sessionId, payload) {
+      publishSession(sessionId, 'executing', { submittedEffects: 1 });
       publishStatus(sessionId, 'executing', {
         phase: 'tool_submitted',
         message: 'Approved rollback action submitted',
@@ -292,8 +374,7 @@ async function installAssistantAgenticHarness(page) {
         downstream_request: 'downstream-rollback-1'
       });
       publishStatus(sessionId, 'completed', { phase: 'loop_completed', message: 'High-risk rollback executed after approval.', action_id: payload.action_id });
-      publishSession(sessionId, 'completed');
-      return { session_id: sessionId, status: 'completed', action_id: payload.action_id, decision: payload.decision, summary: 'High-risk rollback executed after approval.' };
+      publishSession(sessionId, 'completed', { submittedEffects: 1 });
     }
 
     window.__BAHIA_E2E_ASSISTANT_APPROVALS = [];
@@ -326,9 +407,12 @@ async function installAssistantAgenticHarness(page) {
 
 async function openAssistant(page) {
   await page.goto('/');
+  // The bubble's click handler attaches after hydration; clicking earlier is lost.
+  await page.locator('button.assistant-bubble[data-toggle-attached="true"]').waitFor();
   await page.getByRole('button', { name: 'Open assistant chat' }).click();
-  const panel = page.locator('[role="dialog"]');
+  const panel = page.getByRole('dialog', { name: 'Assistant chat' });
   await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-state', 'open');
   await expect(panel).toContainText('live');
   return panel;
 }
@@ -381,13 +465,28 @@ test.describe('assistant agentic frontend enablement', () => {
     await expect(panel).toContainText('High-risk rollback requires operator approval');
     await expect(panel).toContainText('bahia_assistant_llm_rollback');
     await expect(panel).not.toContainText('High-risk rollback executed after approval.');
+    // The card comes from the current v2 run's pending_approvals, not the status row.
+    const card = panel.locator('.action-card[data-action-id="action-rollback-1"]');
+    await expect(card).toHaveCount(1);
+    await expect(card).toHaveAttribute('data-run-id', /^run-/);
+    await expect(panel.locator('[aria-label="Current assistant execution"]')).toHaveAttribute('data-phase', 'awaiting_approval');
 
     await page.evaluate(() => {
+      window.__BAHIA_E2E_HOLD_APPROVAL_CONSUMPTION = true;
       window.__BAHIA_E2E_NEXT_ACTION_DECISION = { decision: 'approve', reason: 'approved in E2E' };
-      document.querySelector('button.approve')?.click();
     });
+    await card.getByRole('button', { name: 'Approve action' }).click();
 
+    // Acknowledged but not yet consumed: the card stays, locked, until canonical state moves.
+    await expect(card).toContainText('Decision sent (approve)');
+    await expect(card.locator('button.approve')).toBeDisabled();
+    await expect(card).toHaveCount(1);
+    await expect(panel).not.toContainText('High-risk rollback executed after approval.');
+
+    await page.evaluate(() => window.__BAHIA_E2E_RELEASE_APPROVAL());
     await expect(panel).toContainText('High-risk rollback executed after approval.');
+    await expect(card).toHaveCount(0);
+    await expect(panel.locator('[aria-label="Current assistant execution"]')).toHaveAttribute('data-phase', 'completed');
     const approvals = await page.evaluate(() => window.__BAHIA_E2E_ASSISTANT_APPROVALS);
     expect(approvals).toEqual([expect.objectContaining({
       session_id: expect.any(String),
@@ -395,6 +494,22 @@ test.describe('assistant agentic frontend enablement', () => {
       decision: 'approve',
       reason: 'approved in E2E'
     })]);
+    await assertNoRuntimeErrors();
+  });
+
+  test('v1 approval history stays read-only and never surfaces approval controls', async ({ page }) => {
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const panel = await openAssistant(page);
+
+    await submitAssistantPrompt(page, 'legacy approval history');
+
+    await expect(panel).toContainText('Legacy rollback approval recorded by a v1 backend');
+    await expect(panel).toContainText('Historical plan record');
+    await expect(panel).toContainText('This v1 session is read-only history');
+    await expect(panel.locator('.action-card')).toHaveCount(0);
+    await expect(panel.locator('.plan-card')).toHaveCount(0);
+    await expect(panel.locator('button.cancel')).toHaveCount(0);
+    await expect(panel.getByPlaceholder('Ask the Bahia assistant…')).toBeDisabled();
     await assertNoRuntimeErrors();
   });
 

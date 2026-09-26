@@ -19,6 +19,7 @@
     {#each assistantSessions as session}
       <button
         type="button"
+        data-session-id={session.sessionId}
         class:active={session.sessionId === activeSessionId}
         onclick={() => selectSession(session.sessionId)}
       >

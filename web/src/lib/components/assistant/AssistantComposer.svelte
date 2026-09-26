@@ -1,9 +1,16 @@
 <script>
   import {
     assistantConnection,
+    assistantUi,
+    pendingAssistantRequests,
     publishAssistantPrompt,
-    publishAssistantApproval
+    publishAssistantCancellation
   } from '$lib/stores/assistant.svelte.js';
+  import {
+    ASSISTANT_EXECUTION_CANCELLABLE_PHASES,
+    ASSISTANT_EXECUTION_TERMINAL_PHASES,
+    describeAssistantRequestError
+  } from '$lib/nostr/assistant.js';
   import { mergeAssistantRefs } from './assistant-refs.js';
 
   let {
@@ -15,14 +22,29 @@
   } = $props();
 
   let prompt = $state('');
-  let submitting = $state(false);
-  let error = $state('');
+  // Prompt submission and cancellation are independent: a run can be cancelled
+  // while the prompt request that started it is still pending.
+  let promptSubmitting = $state(false);
+  let cancelSubmitting = $state(''); // '' | 'run' | 'session'
+  let workflow = $state('');
+  let promptError = $state('');
+  let cancelError = $state('');
   let dismissedRefs = $state([]);
   let textarea;
 
+  const WORKFLOW_LABELS = { batch: 'Batch plan', iterative: 'Iterative' };
   const visibleSelectedRefs = $derived(mergeAssistantRefs({ selectedRefs, defaultSelectedRefs, dismissedRefs }));
-  const canCancel = $derived(session?.state === 'executing' || session?.state === 'blocked');
-  const disabled = $derived(submitting || assistantConnection.status === 'waiting_auth');
+  const isHistory = $derived(session?.executionVersion === 1);
+  const runActive = $derived(session?.executionVersion === 2 && !ASSISTANT_EXECUTION_TERMINAL_PHASES.includes(session?.phase));
+  // Cancellation needs only the canonical run identity, never a plan hash.
+  const canCancel = $derived(Boolean(session?.authoritative && session?.executionVersion === 2 && session?.currentRunId &&
+    ASSISTANT_EXECUTION_CANCELLABLE_PHASES.includes(session?.phase)));
+  const pendingPrompt = $derived(Object.values(pendingAssistantRequests).some((request) => request.sessionId === (session?.sessionId || assistantUi.activeSessionId)));
+  const disabled = $derived(promptSubmitting || pendingPrompt || runActive || isHistory || assistantConnection.status === 'waiting_auth');
+  const workflowLocked = $derived(Boolean(session?.uncertainEffects));
+  const blockedReason = $derived(runActive
+    ? 'A run is active in this session. Wait for it to finish or cancel it before sending another prompt.'
+    : pendingPrompt && !promptSubmitting ? 'A prompt for this session is still pending.' : '');
 
   $effect(() => {
     if (panelOpen && textarea) textarea.focus();
@@ -31,21 +53,22 @@
   async function submitPrompt(event) {
     event.preventDefault();
     const value = prompt.trim();
-    if (!value || submitting) return;
-    submitting = true;
-    error = '';
+    if (!value || disabled) return;
+    promptSubmitting = true;
+    promptError = '';
     prompt = '';
     try {
       await publishAssistantPrompt({
         prompt: value,
+        workflow,
         sessionId: session?.sessionId,
         routeContext,
         selectedRefs: visibleSelectedRefs.map((ref) => ref.ref)
       });
     } catch (err) {
-      error = err?.message || String(err);
+      promptError = describeAssistantRequestError(err).message;
     } finally {
-      submitting = false;
+      promptSubmitting = false;
     }
   }
 
@@ -60,28 +83,32 @@
     }
   }
 
-  async function cancelSession() {
-    if (!session?.sessionId || submitting) return;
-    const planHash = session.lastPlanHash || session.currentPlan?.plan_hash || '';
-    if (!planHash) return;
-    submitting = true;
-    error = '';
+  async function cancel(scope) {
+    if (!canCancel || cancelSubmitting) return;
+    cancelSubmitting = scope;
+    cancelError = '';
     try {
-      await publishAssistantApproval({ sessionId: session.sessionId, planHash, decision: 'cancel' });
+      await publishAssistantCancellation({ sessionId: session.sessionId, runId: session.currentRunId, scope });
     } catch (err) {
-      error = err?.message || String(err);
+      cancelError = describeAssistantRequestError(err, 'Cancellation request').message;
     } finally {
-      submitting = false;
+      cancelSubmitting = '';
     }
   }
 </script>
 
 {#if canCancel}
-  <button class="cancel" type="button" disabled={submitting} onclick={cancelSession}>Cancel session</button>
+  <div class="run-controls" aria-label="Current run controls">
+    <button class="cancel" type="button" disabled={Boolean(cancelSubmitting)} onclick={() => cancel('run')}>{cancelSubmitting === 'run' ? 'Cancelling…' : 'Cancel run'}</button>
+    <button class="cancel close-session" type="button" disabled={Boolean(cancelSubmitting)} title="Cancel the current run and close this session to new turns" onclick={() => cancel('session')}>{cancelSubmitting === 'session' ? 'Closing…' : 'Close session'}</button>
+  </div>
 {/if}
 
-{#if error}
-  <p class="error">{error}</p>
+{#if cancelError}
+  <p class="error cancel-error">{cancelError}</p>
+{/if}
+{#if promptError}
+  <p class="error prompt-error">{promptError}</p>
 {/if}
 
 {#if visibleSelectedRefs.length}
@@ -103,6 +130,19 @@
   </div>
 {/if}
 
+{#if isHistory}
+  <p class="history-note">This v1 session is read-only history. Start a new session to continue.</p>
+{:else if !runActive}
+  <label class="workflow-selector">Workflow
+    <select bind:value={workflow} aria-label="Assistant workflow" disabled={workflowLocked || promptSubmitting}>
+      <option value="">{session?.workflow ? `Keep ${WORKFLOW_LABELS[session.workflow] || session.workflow}` : 'Service default'}</option>
+      <option value="batch">Batch plan</option>
+      <option value="iterative">Iterative</option>
+    </select>
+  </label>
+  {#if workflowLocked}<p class="history-note">Resolve uncertain operations before changing the workflow.</p>{/if}
+{/if}
+{#if blockedReason}<p class="history-note blocked-reason">{blockedReason}</p>{/if}
 <form class="composer" onsubmit={submitPrompt}>
   <textarea
     bind:this={textarea}
@@ -112,7 +152,7 @@
     disabled={disabled}
     onkeydown={handleKeydown}
   ></textarea>
-  <button type="submit" disabled={!prompt.trim() || submitting}>{submitting ? 'Sending…' : 'Send'}</button>
+  <button type="submit" disabled={!prompt.trim() || disabled}>{promptSubmitting ? 'Sending…' : 'Send'}</button>
 </form>
 
 <style>
@@ -199,6 +239,10 @@
     font-weight: 700;
   }
   .composer button:disabled, .cancel:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cancel { margin: 0 0.75rem; background: var(--warning); color: #111827; }
+  .run-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0.75rem; }
+  .cancel { background: var(--warning); color: #111827; }
+  .close-session { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); }
+  .workflow-selector, .history-note { margin: 0.5rem 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
+  select { margin-left: 0.5rem; }
   .error { color: var(--error); font-size: 0.875rem; margin: 0 0.75rem; }
 </style>
