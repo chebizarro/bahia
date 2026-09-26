@@ -1,0 +1,12 @@
+{
+  "feature_id": "BAHIA_RELAY_ENDPOINT_RECONNECT",
+  "title": "Recover backend subscriptions after a relay endpoint restart",
+  "intent": "Bahia must reconnect a stale relay transport and reissue the same scoped subscriptions after an endpoint loss and recovery without restarting Bahia.",
+  "constraints": [
+    "Use the shared relay pool rather than consumer-specific polling.",
+    "Preserve the original filters and event deduplication semantics.",
+    "Treat the underlying relay transport as authoritative connection state.",
+    "Report disconnected readiness until a replacement transport is connected.",
+    "Preserve CLOSED and AUTH handling."
+  ]
+}

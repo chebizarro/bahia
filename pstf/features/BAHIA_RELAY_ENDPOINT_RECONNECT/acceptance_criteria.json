@@ -1,0 +1,21 @@
+{
+  "feature_id": "BAHIA_RELAY_ENDPOINT_RECONNECT",
+  "criteria": [
+    {
+      "id": "BRER-AC-001",
+      "statement": "A cached connected flag cannot cause Bahia to reuse a disconnected relay transport."
+    },
+    {
+      "id": "BRER-AC-002",
+      "statement": "Subscription recovery reconnects the endpoint and reissues every original scoped filter without a Bahia restart."
+    },
+    {
+      "id": "BRER-AC-003",
+      "statement": "A failed replacement connection leaves relay health and readiness disconnected and exposes the connection error."
+    },
+    {
+      "id": "BRER-AC-004",
+      "statement": "Repository-native tests, race tests, and a production-shaped endpoint restart prove recovery and subscription continuity."
+    }
+  ]
+}

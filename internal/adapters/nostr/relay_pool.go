@@ -38,6 +38,7 @@ type RelayPool struct {
 	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner          nostr.Signer
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
+	isRelayConnected    func(*nostr.Relay) bool
 
 	// connectedMu guards relay (re)connection listeners. It is never held
 	// while calling out, and notification never blocks the pool.
@@ -98,6 +99,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		ctx:                 ctx,
 		cancel:              cancel,
 		connectRelay:        nostr.RelayConnect,
+		isRelayConnected:    func(relay *nostr.Relay) bool { return relay != nil && relay.IsConnected() },
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -197,7 +199,7 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 	for _, url := range addedURLs {
 		mr := addedRelays[url]
 		p.connectOne(ctx, mr)
-		ready[url] = managedRelayConnected(mr)
+		ready[url] = p.managedRelayConnected(mr)
 		if !ready[url] {
 			result.MigrationErrors = append(result.MigrationErrors, fmt.Sprintf("connect %s", url))
 		}
@@ -228,13 +230,20 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 	return result
 }
 
-func managedRelayConnected(mr *managedRelay) bool {
+func (p *RelayPool) managedRelayConnected(mr *managedRelay) bool {
 	if mr == nil {
 		return false
 	}
 	mr.mu.Lock()
-	defer mr.mu.Unlock()
-	return mr.connected && mr.relay != nil
+	connected := mr.connected && mr.relay != nil && p.isRelayConnected(mr.relay)
+	if mr.connected && !connected {
+		mr.connected = false
+	}
+	mr.mu.Unlock()
+	if !connected {
+		p.recordRelayConnectionState(mr.url, false)
+	}
+	return connected
 }
 
 func normalizeRelayURLs(urls []string) []string {
@@ -304,9 +313,17 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 
-	if mr.connected && mr.relay != nil {
+	if mr.connected && mr.relay != nil && p.isRelayConnected(mr.relay) {
 		return
 	}
+	if mr.relay != nil {
+		if err := mr.relay.Close(); err != nil {
+			p.logger.Debug("close stale relay connection failed", zap.String("relay", mr.url), zap.Error(err))
+		}
+		mr.relay = nil
+	}
+	mr.connected = false
+	p.recordRelayConnectionState(mr.url, false)
 
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -321,6 +338,14 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 		p.recordRelayConnectionState(mr.url, false)
 		p.recordRelayError(mr.url, err.Error())
 		p.logger.Warn("failed to connect to relay", zap.String("relay", mr.url), zap.Error(err))
+		return
+	}
+	if relay == nil || !p.isRelayConnected(relay) {
+		mr.connected = false
+		mr.lastErr = fmt.Errorf("relay connector returned a disconnected transport")
+		p.recordRelayConnectionState(mr.url, false)
+		p.recordRelayError(mr.url, mr.lastErr.Error())
+		p.logger.Warn("relay connector returned a disconnected transport", zap.String("relay", mr.url))
 		return
 	}
 
@@ -1239,7 +1264,7 @@ func (p *RelayPool) subscribeInitialManagedRelay(authCtx, parentCtx context.Cont
 		}
 	}()
 
-	if !managedRelayConnected(mr) {
+	if !p.managedRelayConnected(mr) {
 		p.recordRelayReconnect(mr.url)
 		p.connectOne(authCtx, mr)
 	}
@@ -1257,7 +1282,9 @@ func (p *RelayPool) subscribeInitialManagedRelay(authCtx, parentCtx context.Cont
 func (p *RelayPool) subscribeConnectedRelay(authCtx, subscriptionCtx context.Context, mr *managedRelay, filters []nostr.Filter) ([]relaySubscription, error) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
-	if !mr.connected || mr.relay == nil {
+	if !mr.connected || mr.relay == nil || !p.isRelayConnected(mr.relay) {
+		mr.connected = false
+		p.recordRelayConnectionState(mr.url, false)
 		return nil, fmt.Errorf("relay %s is not connected", mr.url)
 	}
 
@@ -1573,9 +1600,7 @@ func (p *RelayPool) HealthSnapshot() RelayHealthSnapshot {
 	}
 
 	for _, mr := range p.orderedRelaysLocked() {
-		mr.mu.Lock()
-		connected := mr.connected
-		mr.mu.Unlock()
+		connected := p.managedRelayConnected(mr)
 		addStatus(mr.url, connected)
 	}
 	for _, url := range p.urls {

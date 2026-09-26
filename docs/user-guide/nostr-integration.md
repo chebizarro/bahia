@@ -827,6 +827,14 @@ Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6
 3. **Check OK responses** — Verify publish success
 4. **Deduplicate events** — By event ID
 5. **Handle reconnects** — Re-subscribe after disconnect
+
+Bahia's shared backend relay pool verifies the underlying WebSocket transport,
+not only its cached connection flag. When a relay endpoint disappears and later
+returns, the next subscription recovery attempt retires the stale transport,
+reconnects with the pool's bounded backoff, and reissues the original scoped
+filters. Readiness reports the relay disconnected until a real replacement
+transport is established; operators do not need to restart Bahia to recover the
+subscription.
 6. **Verify signatures** — Don't trust unsigned events
 
 ## Troubleshooting
