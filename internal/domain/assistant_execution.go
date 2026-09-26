@@ -30,6 +30,17 @@ const (
 	AssistantContextVMMethodCancel     = "assistant/cancel"
 	AssistantContextVMMethodReconcile  = "assistant/reconcile"
 
+	// AssistantReconciliationEvidence (or an empty resolution) attaches the
+	// exact downstream request event to uncertain work.
+	AssistantReconciliationEvidence = "evidence"
+	// AssistantReconciliationAbandon is the operator's attested decision that
+	// uncertain work cannot be reconciled. It is not a completion: it closes
+	// the item's accounting and states that its outcome is unknown.
+	AssistantReconciliationAbandon = "abandon"
+	// AssistantAbandonmentAttestation is the exact statement an abandonment
+	// request must carry; it is recorded verbatim in the checkpoint.
+	AssistantAbandonmentAttestation = "outcome_unknown_cannot_reconcile"
+
 	AssistantCheckpointTypeExecution = "execution-checkpoint"
 	AssistantCheckpointTagDomain     = "domain"
 	AssistantCheckpointTagType       = "type"
@@ -115,13 +126,17 @@ const (
 	AssistantWorkDenied           AssistantWorkState = "denied"
 	AssistantWorkSkipped          AssistantWorkState = "skipped"
 	AssistantWorkUncertain        AssistantWorkState = "uncertain"
+	// AssistantWorkAbandoned is terminal: an operator attested that uncertain
+	// work cannot be reconciled. It claims neither success nor failure of the
+	// side effect, only that its outcome is unknown and no longer tracked.
+	AssistantWorkAbandoned AssistantWorkState = "abandoned"
 )
 
 func (s AssistantWorkState) Valid() bool {
 	switch s {
 	case AssistantWorkPending, AssistantWorkAwaitingApproval, AssistantWorkReady, AssistantWorkDispatching,
 		AssistantWorkWaitingAsync, AssistantWorkObserved, AssistantWorkSucceeded, AssistantWorkFailed,
-		AssistantWorkDenied, AssistantWorkSkipped, AssistantWorkUncertain:
+		AssistantWorkDenied, AssistantWorkSkipped, AssistantWorkUncertain, AssistantWorkAbandoned:
 		return true
 	}
 	return false
@@ -209,6 +224,37 @@ type AssistantWorkItem struct {
 	State           AssistantWorkState             `json:"state"`
 	Receipt         *AsyncToolReceipt              `json:"receipt,omitempty"`
 	Observation     *AssistantToolObservation      `json:"observation,omitempty"`
+	Redispatches    []AssistantWorkRedispatch      `json:"redispatches,omitempty"`
+	Abandonment     *AssistantWorkAbandonment      `json:"abandonment,omitempty"`
+}
+
+// Automatic re-dispatch actions recorded on a read-only synchronous item
+// whose dispatch outcome a restart lost.
+const (
+	AssistantWorkRedispatchReleased  = "redispatch"
+	AssistantWorkRedispatchDiscarded = "discard"
+)
+
+// AssistantWorkRedispatch records that a restart found a read-only,
+// synchronous item dispatching with no known outcome and, instead of making
+// it uncertain, released it to run again (or, in a cancelled run, discarded
+// it). The earlier invocation may have run; it had no effect to account for.
+type AssistantWorkRedispatch struct {
+	Attempt    int       `json:"attempt"`
+	Action     string    `json:"action"`
+	Reason     string    `json:"reason"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// AssistantWorkAbandonment is the audit record of an operator's attested
+// decision to stop accounting for uncertain work: who (operator and request
+// event), when, why, and the exact attestation.
+type AssistantWorkAbandonment struct {
+	OperatorPubkey string    `json:"operator_pubkey"`
+	RequestID      string    `json:"request_id"`
+	Reason         string    `json:"reason"`
+	Attestation    string    `json:"attestation"`
+	RecordedAt     time.Time `json:"recorded_at"`
 }
 
 type AssistantExecutionCancellation struct {
@@ -288,6 +334,7 @@ type AssistantSessionV2 struct {
 	Scope             AssistantApprovalScope     `json:"scope"`
 	Proposal          *AssistantProposalRevision `json:"proposal,omitempty"`
 	PendingApprovals  []string                   `json:"pending_approvals,omitempty"`
+	AbandonedEffects  int                        `json:"abandoned_effects,omitempty"`
 	SubmittedEffects  int                        `json:"submitted_effects"`
 	UncertainEffects  int                        `json:"uncertain_effects"`
 	CheckpointEventID string                     `json:"checkpoint_event_id,omitempty"`
@@ -308,14 +355,21 @@ type AssistantCancellationRequest struct {
 	Reason          string `json:"reason,omitempty"`
 }
 
-// AssistantReconciliationRequest names one exact submitted request event;
-// absence of evidence never authorizes a replay or a synthetic failure.
+// AssistantReconciliationRequest resolves one uncertain work item. The
+// evidence resolution names one exact submitted request event; absence of
+// evidence never authorizes a replay or a synthetic failure. The abandon
+// resolution carries no event: it requires a reason and the exact
+// AssistantAbandonmentAttestation, and is refused for work that is not
+// uncertain.
 type AssistantReconciliationRequest struct {
 	ContractVersion int    `json:"contract_version"`
 	SessionID       string `json:"session_id"`
 	RunID           string `json:"run_id"`
 	WorkID          string `json:"work_id"`
-	RequestEventID  string `json:"request_event_id"`
+	RequestEventID  string `json:"request_event_id,omitempty"`
+	Resolution      string `json:"resolution,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	Attestation     string `json:"attestation,omitempty"`
 }
 
 // AssistantBatchApprovalHashInput is the complete v2 hash envelope. The

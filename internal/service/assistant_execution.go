@@ -26,6 +26,11 @@ var (
 	ErrAssistantNotAwaitingApproval           = errors.New("not_awaiting_approval")
 	ErrAssistantOperatorMismatch              = errors.New("operator_mismatch")
 	ErrAssistantReconciliationRejected        = errors.New("reconciliation_rejected")
+	// ErrAssistantAbandonmentRefused refuses an abandonment that is not an
+	// attested decision about uncertain work: the item is not uncertain, or
+	// the reason or exact attestation is missing. It is never a way to mark
+	// other work complete.
+	ErrAssistantAbandonmentRefused = errors.New("abandonment_refused")
 	// ErrAssistantWorkflowUnavailable refuses a new turn in a workflow whose
 	// proposer this deployment did not construct. It is never answered by
 	// running a different workflow.
@@ -33,6 +38,12 @@ var (
 )
 
 const defaultAssistantExecutionMaxWorkItems = 48
+
+// assistantMaxAutomaticRedispatches bounds automatic re-dispatch of one
+// read-only synchronous item across restarts, so a call that keeps killing
+// the process ends up uncertain (and resolvable by an operator) instead of
+// looping.
+const assistantMaxAutomaticRedispatches = 3
 
 // AssistantExecutionScopeResolver derives trusted command scope before a model
 // sees tools. A command-aware installation must supply one; browser metadata is
@@ -54,6 +65,9 @@ type AssistantRequestEvidenceResolver interface {
 type AssistantWorkRuntime interface {
 	PrepareWork(context.Context, domain.AssistantExecution, domain.AssistantWorkItem) (AssistantPreparedWork, error)
 	DispatchPreparedWork(context.Context, AssistantPreparedWork) (*domain.AssistantToolObservation, *domain.AsyncToolReceipt, error)
+	// ReplaySafeTool is the read-only synchronous classification that also
+	// restricts subagent children. It must not perform I/O.
+	ReplaySafeTool(name string) bool
 }
 
 // AssistantExecutionTranscript appends a logical transcript message at most
@@ -871,7 +885,10 @@ func (e *AssistantExecutionEngine) Reconcile(ctx context.Context, req AssistantT
 		return AssistantTurnResult{}, err
 	}
 	q := req.Reconciliation
-	if q.ContractVersion != domain.AssistantExecutionVersion || q.SessionID == "" || q.RunID == "" || q.WorkID == "" || q.RequestEventID == "" || req.OperatorPubkey == "" {
+	if q.Resolution == domain.AssistantReconciliationAbandon {
+		return e.abandon(ctx, req)
+	}
+	if (q.Resolution != "" && q.Resolution != domain.AssistantReconciliationEvidence) || q.ContractVersion != domain.AssistantExecutionVersion || q.SessionID == "" || q.RunID == "" || q.WorkID == "" || q.RequestEventID == "" || req.OperatorPubkey == "" {
 		return AssistantTurnResult{}, errors.New("invalid assistant reconciliation")
 	}
 	s := e.session(q.SessionID)
@@ -941,6 +958,77 @@ func (e *AssistantExecutionEngine) Reconcile(ctx context.Context, req AssistantT
 	}
 	e.startObserverLocked(s, next.RunID, w.WorkID, w.Receipt)
 	return e.resultLocked(s, "reconciled"), nil
+}
+
+// abandon records an operator's attested decision that one uncertain work
+// item cannot be reconciled. The item becomes abandoned, which is terminal
+// and claims nothing about whether its side effect happened; the attestation
+// (who, when, why) is part of the committed checkpoint. A cancelled run can
+// then finish; in a run that was not cancelled no successor runs after work
+// whose outcome is unknown, so the run ends failed. Anything but uncertain
+// work is refused: this is never a way to complete other work.
+func (e *AssistantExecutionEngine) abandon(ctx context.Context, req AssistantTurnReconciliationRequest) (AssistantTurnResult, error) {
+	q := req.Reconciliation
+	if q.ContractVersion != domain.AssistantExecutionVersion || q.SessionID == "" || q.RunID == "" || q.WorkID == "" || req.OperatorPubkey == "" || req.RequestEventID == "" {
+		return AssistantTurnResult{}, errors.New("invalid assistant abandonment")
+	}
+	reason := strings.TrimSpace(q.Reason)
+	switch {
+	case reason == "":
+		return AssistantTurnResult{}, fmt.Errorf("%w: a reason is required", ErrAssistantAbandonmentRefused)
+	case q.Attestation != domain.AssistantAbandonmentAttestation:
+		return AssistantTurnResult{}, fmt.Errorf("%w: attestation %q is required", ErrAssistantAbandonmentRefused, domain.AssistantAbandonmentAttestation)
+	case q.RequestEventID != "":
+		return AssistantTurnResult{}, fmt.Errorf("%w: work with a known request event must be reconciled with evidence", ErrAssistantAbandonmentRefused)
+	}
+	s := e.session(q.SessionID)
+	e.ensureProjectionClock(ctx, s)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx := assistantWorkIndex(s.execution, q.WorkID); idx >= 0 && s.execution.RunID == q.RunID {
+		if a := s.execution.Work[idx].Abandonment; a != nil && a.RequestID == req.RequestEventID {
+			return e.resultLocked(s, "already_abandoned"), nil
+		}
+	}
+	if err := e.healLocked(s); err != nil {
+		return AssistantTurnResult{}, err
+	}
+	x := s.execution
+	if x.RunID == "" || q.RunID != x.RunID {
+		return AssistantTurnResult{}, ErrAssistantStaleTarget
+	}
+	if !assistantProjectionAuthorizes(s.projection, req.OperatorPubkey) {
+		return AssistantTurnResult{}, ErrAssistantOperatorMismatch
+	}
+	idx := assistantWorkIndex(x, q.WorkID)
+	if idx < 0 {
+		return AssistantTurnResult{}, fmt.Errorf("%w: work item %s is not part of run %s", ErrAssistantAbandonmentRefused, q.WorkID, x.RunID)
+	}
+	if state := x.Work[idx].State; state != domain.AssistantWorkUncertain {
+		return AssistantTurnResult{}, fmt.Errorf("%w: work item is %s; only uncertain work can be abandoned", ErrAssistantAbandonmentRefused, state)
+	}
+	next, err := x.Clone()
+	if err != nil {
+		return AssistantTurnResult{}, err
+	}
+	w := &next.Work[idx]
+	w.State = domain.AssistantWorkAbandoned
+	w.Abandonment = &domain.AssistantWorkAbandonment{OperatorPubkey: req.OperatorPubkey, RequestID: req.RequestEventID, Reason: reason, Attestation: q.Attestation, RecordedAt: e.cfg.Now().UTC()}
+	if next.Cancellation == nil {
+		for i := range next.Work {
+			switch next.Work[i].State {
+			case domain.AssistantWorkPending, domain.AssistantWorkReady, domain.AssistantWorkAwaitingApproval:
+				next.Work[i].State = domain.AssistantWorkSkipped
+			}
+		}
+	}
+	next.Phase = assistantDerivePhase(next)
+	if err = e.commitLocked(s, next); err != nil {
+		return AssistantTurnResult{}, err
+	}
+	e.logger.Warn("assistant uncertain work abandoned by operator attestation", "session_id", next.SessionID, "run_id", next.RunID, "work_id", q.WorkID, "tool", w.ToolName, "operator", req.OperatorPubkey, "request_event_id", req.RequestEventID, "attestation", q.Attestation, "phase", next.Phase)
+	e.kickLocked(s)
+	return e.resultLocked(s, "abandoned"), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1603,6 +1691,18 @@ func (e *AssistantExecutionEngine) normalizeInFlightLocked(s *assistantEngineSes
 			}
 		case known:
 			applyAssistantDispatchResult(w, v)
+		case !assistantAccountingOnly(next) && e.cfg.Runtime.ReplaySafeTool(w.ToolName) && len(w.Redispatches) < assistantMaxAutomaticRedispatches:
+			// The outcome was lost, but the tool is read-only and synchronous:
+			// there is no side effect to duplicate or account for. Release it
+			// for a fresh reservation (the driver re-prepares it under current
+			// policy) and record that in the chain; a cancelled run discards it.
+			// Accounting-only runs never dispatch, so they keep it uncertain.
+			action, state := domain.AssistantWorkRedispatchReleased, domain.AssistantWorkReady
+			if next.Cancellation != nil {
+				action, state = domain.AssistantWorkRedispatchDiscarded, domain.AssistantWorkSkipped
+			}
+			w.Redispatches = append(w.Redispatches, domain.AssistantWorkRedispatch{Attempt: len(w.Redispatches) + 1, Action: action, Reason: "read-only synchronous dispatch outcome lost at restart", RecordedAt: e.cfg.Now().UTC()})
+			w.State = state
 		default:
 			// No durable receipt and no in-process knowledge: the request may
 			// have been submitted. Block successors pending reconciliation.
@@ -1673,12 +1773,15 @@ func projectAssistantExecution(x domain.AssistantExecution, id string, p domain.
 	p.PendingApprovals = nil
 	p.SubmittedEffects = 0
 	p.UncertainEffects = 0
+	p.AbandonedEffects = 0
 	for _, w := range x.Work {
 		switch w.State {
 		case domain.AssistantWorkWaitingAsync, domain.AssistantWorkObserved:
 			p.SubmittedEffects++
 		case domain.AssistantWorkUncertain, domain.AssistantWorkDispatching:
 			p.UncertainEffects++
+		case domain.AssistantWorkAbandoned:
+			p.AbandonedEffects++
 		case domain.AssistantWorkAwaitingApproval:
 			p.PendingApprovals = append(p.PendingApprovals, w.WorkID)
 		}
@@ -1862,7 +1965,7 @@ func assistantPhaseFinished(p domain.AssistantExecutionPhase) bool {
 
 func assistantWorkFinished(s domain.AssistantWorkState) bool {
 	switch s {
-	case domain.AssistantWorkSucceeded, domain.AssistantWorkFailed, domain.AssistantWorkDenied, domain.AssistantWorkSkipped:
+	case domain.AssistantWorkSucceeded, domain.AssistantWorkFailed, domain.AssistantWorkDenied, domain.AssistantWorkSkipped, domain.AssistantWorkAbandoned:
 		return true
 	}
 	return false
@@ -1905,7 +2008,7 @@ func assistantAccountingOnly(x domain.AssistantExecution) bool {
 // until no submitted or uncertain work remains.
 func assistantDerivePhase(x domain.AssistantExecution) domain.AssistantExecutionPhase {
 	inFlight, uncertain, awaiting := 0, 0, 0
-	failed := false
+	failed, abandoned := false, false
 	for _, w := range x.Work {
 		switch w.State {
 		case domain.AssistantWorkDispatching, domain.AssistantWorkWaitingAsync, domain.AssistantWorkObserved:
@@ -1916,6 +2019,8 @@ func assistantDerivePhase(x domain.AssistantExecution) domain.AssistantExecution
 			awaiting++
 		case domain.AssistantWorkFailed, domain.AssistantWorkDenied:
 			failed = true
+		case domain.AssistantWorkAbandoned:
+			abandoned = true
 		}
 	}
 	if x.Cancellation != nil {
@@ -1939,6 +2044,11 @@ func assistantDerivePhase(x domain.AssistantExecution) domain.AssistantExecution
 		default:
 			return domain.AssistantExecutionExecuting
 		}
+	}
+	if abandoned {
+		// A run whose work has an unknown outcome neither completes nor
+		// reasons further.
+		return domain.AssistantExecutionFailed
 	}
 	if x.Workflow == domain.AssistantWorkflowBatch {
 		if failed {
@@ -2015,8 +2125,9 @@ var assistantWorkTransitions = map[domain.AssistantWorkState][]domain.AssistantW
 	// reservation was never used.
 	domain.AssistantWorkDispatching:  {domain.AssistantWorkWaitingAsync, domain.AssistantWorkObserved, domain.AssistantWorkUncertain, domain.AssistantWorkReady, domain.AssistantWorkSkipped},
 	domain.AssistantWorkWaitingAsync: {domain.AssistantWorkObserved},
-	domain.AssistantWorkUncertain:    {domain.AssistantWorkWaitingAsync},
-	domain.AssistantWorkObserved:     {domain.AssistantWorkSucceeded, domain.AssistantWorkFailed, domain.AssistantWorkDenied, domain.AssistantWorkSkipped},
+	// uncertain -> abandoned only by an operator's attested decision.
+	domain.AssistantWorkUncertain: {domain.AssistantWorkWaitingAsync, domain.AssistantWorkAbandoned},
+	domain.AssistantWorkObserved:  {domain.AssistantWorkSucceeded, domain.AssistantWorkFailed, domain.AssistantWorkDenied, domain.AssistantWorkSkipped},
 }
 
 func assistantWorkTransitionAllowed(from, to domain.AssistantWorkState) bool {
@@ -2087,11 +2198,48 @@ func validateAssistantExecutionTransition(prev, next domain.AssistantExecution) 
 		if pw.Authorization != nil && (nw.Authorization == nil || nw.Authorization.DecisionRequestID != pw.Authorization.DecisionRequestID) {
 			return fmt.Errorf("work %s approval binding changed", pw.WorkID)
 		}
+		if err := validateAssistantWorkRecords(pw, nw); err != nil {
+			return err
+		}
 	}
 	for _, w := range next.Work[len(prev.Work):] {
 		if w.State != domain.AssistantWorkReady {
 			return fmt.Errorf("appended work %s must start ready", w.WorkID)
 		}
+	}
+	return nil
+}
+
+// validateAssistantWorkRecords keeps re-dispatch and abandonment records
+// append-only and binds each to the transition it explains.
+func validateAssistantWorkRecords(pw, nw domain.AssistantWorkItem) error {
+	if len(nw.Redispatches) < len(pw.Redispatches) {
+		return fmt.Errorf("work %s re-dispatch records removed", pw.WorkID)
+	}
+	for i, a := range pw.Redispatches {
+		if b := nw.Redispatches[i]; a.Attempt != b.Attempt || a.Action != b.Action || a.Reason != b.Reason || !a.RecordedAt.Equal(b.RecordedAt) {
+			return fmt.Errorf("work %s re-dispatch record changed", pw.WorkID)
+		}
+	}
+	if grown := len(nw.Redispatches) - len(pw.Redispatches); grown > 0 {
+		if grown != 1 || pw.State != domain.AssistantWorkDispatching || (nw.State != domain.AssistantWorkReady && nw.State != domain.AssistantWorkSkipped) {
+			return fmt.Errorf("work %s re-dispatch record without a released reservation", pw.WorkID)
+		}
+	}
+	if a := pw.Abandonment; a != nil {
+		b := nw.Abandonment
+		if b == nil || a.OperatorPubkey != b.OperatorPubkey || a.RequestID != b.RequestID || a.Reason != b.Reason || a.Attestation != b.Attestation || !a.RecordedAt.Equal(b.RecordedAt) {
+			return fmt.Errorf("work %s abandonment record changed", pw.WorkID)
+		}
+		return nil
+	}
+	if nw.State == domain.AssistantWorkAbandoned {
+		a := nw.Abandonment
+		if a == nil || a.OperatorPubkey == "" || a.RequestID == "" || strings.TrimSpace(a.Reason) == "" || a.Attestation != domain.AssistantAbandonmentAttestation {
+			return fmt.Errorf("work %s abandoned without an attested record", pw.WorkID)
+		}
+	} else if nw.Abandonment != nil {
+		return fmt.Errorf("work %s carries an abandonment record without being abandoned", pw.WorkID)
 	}
 	return nil
 }

@@ -524,3 +524,36 @@ export function parseAssistantResultEvent(event) {
     event
   };
 }
+
+// Abandonment is an operator's attested decision that uncertain work cannot
+// be reconciled. It rides assistant/reconcile with resolution "abandon",
+// carries a reason and the exact attestation, and the service refuses it
+// (`abandonment_refused`) for work that is not uncertain. It never marks work
+// complete and claims nothing about whether the effect happened.
+export const ASSISTANT_ABANDONMENT_ATTESTATION = 'outcome_unknown_cannot_reconcile';
+const ASSISTANT_ABANDONMENT_TIMEOUT_MS = 180000;
+
+export function buildAssistantAbandonmentRequest({ session, workId, reason, attested } = {}) {
+  const { INVALID, STALE } = ASSISTANT_REQUEST_ERROR_KINDS;
+  const cleanWorkId = String(workId || '').trim();
+  const cleanReason = String(reason || '').trim();
+  if (!cleanWorkId || !cleanReason) throw assistantRequestError(INVALID, 'Work ID and a reason are required to abandon uncertain work');
+  if (attested !== true) throw assistantRequestError(INVALID, 'Abandoning uncertain work requires attesting that its outcome is unknown');
+  if (!session?.authoritative || session.executionVersion !== 2 || !session.currentRunId) {
+    throw assistantRequestError(STALE, 'Current v2 run required; reload the session', 'run_not_current');
+  }
+  if (!(Number(session.uncertainEffects) > 0)) throw assistantRequestError(STALE, 'No uncertain work in this run', 'no_uncertain_work');
+  return {
+    operation: 'assistant/reconcile',
+    payload: { contract_version: 2, session_id: session.sessionId, run_id: session.currentRunId, work_id: cleanWorkId,
+      resolution: 'abandon', reason: cleanReason, attestation: ASSISTANT_ABANDONMENT_ATTESTATION },
+    tags: [['session', session.sessionId], ['run', session.currentRunId]]
+  };
+}
+
+// `request` is the encrypted ContextVM transport (requestEncryptedResult).
+export async function publishAssistantAbandonment({ request, signal, timeoutMs = ASSISTANT_ABANDONMENT_TIMEOUT_MS, ...input } = {}) {
+  if (typeof request !== 'function') throw new Error('An encrypted request transport is required');
+  const built = buildAssistantAbandonmentRequest(input);
+  return assertAssistantRequestAccepted(await request({ ...built, signal, timeoutMs }));
+}

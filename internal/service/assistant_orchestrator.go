@@ -45,6 +45,10 @@ const (
 	// whose proposer this deployment does not construct (batch without
 	// assistant.llm_model). The request is never run in another workflow.
 	AssistantRefusalWorkflowUnavailable = "workflow_unavailable"
+	// AssistantRefusalAbandonmentRefused refuses misuse of the attested
+	// abandon resolution: the target is not uncertain work, or the reason or
+	// exact attestation is missing. Nothing is recorded.
+	AssistantRefusalAbandonmentRefused = "abandonment_refused"
 )
 
 // AssistantEventPublisher publishes signed assistant events to relays.
@@ -242,20 +246,49 @@ func (o *AssistantOrchestrator) HandleCancellationRequest(ctx context.Context, s
 	return o.engineResult(event, req.SessionID, result, err), nil
 }
 
-// HandleReconciliationRequest attaches verified evidence for uncertain work.
+// HandleReconciliationRequest resolves uncertain work: it attaches verified
+// evidence, or records an operator's attested abandonment.
 func (o *AssistantOrchestrator) HandleReconciliationRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantReconciliationRequest) (AssistantOperationResult, error) {
 	event, source, err := o.normalizeSource(source)
 	if err != nil {
 		return nil, err
 	}
-	if req.ContractVersion != domain.AssistantExecutionVersion || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.WorkID) == "" || strings.TrimSpace(req.RequestEventID) == "" {
-		return o.refusal(event, req.SessionID, AssistantRefusalValidation, "reconciliation requires contract_version 2, session_id, run_id, work_id and request_event_id", nil), nil
+	if code, message := ValidateAssistantReconciliationRequest(req); code != "" {
+		return o.refusal(event, req.SessionID, code, message, nil), nil
 	}
 	if o.engine == nil {
 		return o.refusal(event, req.SessionID, AssistantRefusalUnavailable, "assistant executor is not configured", nil), nil
 	}
 	result, err := o.engine.Reconcile(ctx, AssistantTurnReconciliationRequest{Reconciliation: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: source.RequestID})
 	return o.engineResult(event, req.SessionID, result, err), nil
+}
+
+// ValidateAssistantReconciliationRequest checks the request shape of both
+// resolutions and returns a stable refusal code and message, or "" when the
+// request may be routed. Abandonment misuse is refused with
+// abandonment_refused so it can never be mistaken for evidence.
+func ValidateAssistantReconciliationRequest(req domain.AssistantReconciliationRequest) (string, string) {
+	if req.ContractVersion != domain.AssistantExecutionVersion || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.WorkID) == "" {
+		return AssistantRefusalValidation, "reconciliation requires contract_version 2, session_id, run_id and work_id"
+	}
+	switch req.Resolution {
+	case "", domain.AssistantReconciliationEvidence:
+		if strings.TrimSpace(req.RequestEventID) == "" {
+			return AssistantRefusalValidation, "evidence reconciliation requires request_event_id"
+		}
+	case domain.AssistantReconciliationAbandon:
+		switch {
+		case strings.TrimSpace(req.Reason) == "":
+			return AssistantRefusalAbandonmentRefused, "abandoning uncertain work requires a reason"
+		case req.Attestation != domain.AssistantAbandonmentAttestation:
+			return AssistantRefusalAbandonmentRefused, "abandoning uncertain work requires the attestation " + domain.AssistantAbandonmentAttestation
+		case strings.TrimSpace(req.RequestEventID) != "":
+			return AssistantRefusalAbandonmentRefused, "work with a known request event must be reconciled with evidence, not abandoned"
+		}
+	default:
+		return AssistantRefusalValidation, fmt.Sprintf("unsupported reconciliation resolution %q", req.Resolution)
+	}
+	return "", ""
 }
 
 // ExecutionSnapshot returns the engine's confirmed execution for a session.
@@ -478,6 +511,8 @@ func assistantRefusalFromEngineError(err error) (string, string) {
 		return AssistantRefusalUnauthorized, "requester is not a participant in this assistant session"
 	case errors.Is(err, ErrAssistantReconciliationRejected):
 		return AssistantRefusalReconciliation, err.Error()
+	case errors.Is(err, ErrAssistantAbandonmentRefused):
+		return AssistantRefusalAbandonmentRefused, err.Error()
 	case errors.Is(err, ErrAssistantWorkflowUnavailable):
 		return AssistantRefusalWorkflowUnavailable, err.Error()
 	case errors.As(err, &denial):

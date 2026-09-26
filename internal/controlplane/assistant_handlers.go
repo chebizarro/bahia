@@ -126,8 +126,9 @@ func (a assistantContextVMAdapter) handleReconcile(ctx context.Context, request 
 	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid assistant reconcile params: %w", err)
 	}
-	if payload.ContractVersion != domain.AssistantExecutionVersion || strings.TrimSpace(payload.SessionID) == "" || strings.TrimSpace(payload.RunID) == "" || strings.TrimSpace(payload.WorkID) == "" || strings.TrimSpace(payload.RequestEventID) == "" {
-		return assistantRefusal(payload.SessionID, service.AssistantRefusalValidation, "reconcile requires contract_version 2, session_id, run_id, work_id and request_event_id"), nil
+	payload.Resolution = strings.ToLower(strings.TrimSpace(payload.Resolution))
+	if code, message := service.ValidateAssistantReconciliationRequest(payload); code != "" {
+		return assistantRefusal(payload.SessionID, code, message), nil
 	}
 	if !a.participant(payload.SessionID, request) {
 		return assistantRefusal(payload.SessionID, service.AssistantRefusalUnauthorized, "requester is not a participant in this assistant session"), nil

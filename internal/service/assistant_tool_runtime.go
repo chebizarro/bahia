@@ -598,17 +598,15 @@ func (r *AssistantToolRuntime) ExecuteSubagentTool(ctx context.Context, parent A
 		return deny("assistant tool runtime is not configured")
 	}
 	name := strings.TrimSpace(call.Name)
-	if _, internal := r.internalTool(name); internal {
+	descriptor, class := r.classifyReadOnlySync(name)
+	switch class {
+	case assistantToolInternal:
 		return deny(fmt.Sprintf("internal tool %q is unavailable to subagents", name))
-	}
-	descriptor, ok := r.lookupDescriptor(name)
-	if !ok {
+	case assistantToolUnregistered:
 		return deny(fmt.Sprintf("tool %q is not registered for agent use", name))
-	}
-	if descriptor.ExecutionMode != domain.AssistantToolExecutionModeSync {
+	case assistantToolAsync:
 		return deny(fmt.Sprintf("subagents cannot execute async tool %q; it must run in the parent turn", name))
-	}
-	if descriptor.Effect != domain.AssistantToolEffectRead {
+	case assistantToolMutation:
 		return deny(fmt.Sprintf("subagents cannot execute mutation tool %q; it must run in the parent turn", name))
 	}
 	args := call.Arguments
@@ -641,6 +639,50 @@ func (r *AssistantToolRuntime) ExecuteSubagentTool(ctx context.Context, parent A
 		return r.failedObservation(call, descriptor, prepared.Permission, err.Error())
 	}
 	return obs
+}
+
+// assistantToolClass is the outcome of the one classification that decides
+// which tools may run without an individually accounted side effect.
+type assistantToolClass int
+
+const (
+	assistantToolReadOnlySync assistantToolClass = iota
+	assistantToolInternal
+	assistantToolUnregistered
+	assistantToolAsync
+	assistantToolMutation
+)
+
+// classifyReadOnlySync is the single classification of read-only synchronous
+// tools: registered for agent use, not a service-owned internal tool,
+// synchronous and read-effect. Subagent children may call only such tools,
+// and the executor may re-dispatch only such tools after a restart lost the
+// outcome of their dispatch. It is a registry lookup and performs no I/O.
+func (r *AssistantToolRuntime) classifyReadOnlySync(name string) (AssistantToolRuntimeToolDescriptor, assistantToolClass) {
+	if _, internal := r.internalTool(name); internal {
+		return AssistantToolRuntimeToolDescriptor{}, assistantToolInternal
+	}
+	descriptor, ok := r.lookupDescriptor(name)
+	switch {
+	case !ok:
+		return descriptor, assistantToolUnregistered
+	case descriptor.ExecutionMode != domain.AssistantToolExecutionModeSync:
+		return descriptor, assistantToolAsync
+	case descriptor.Effect != domain.AssistantToolEffectRead:
+		return descriptor, assistantToolMutation
+	}
+	return descriptor, assistantToolReadOnlySync
+}
+
+// ReplaySafeTool reports whether a tool is in the read-only synchronous
+// classification that restricts subagent children, and so has no side effect
+// that an automatic re-dispatch could duplicate.
+func (r *AssistantToolRuntime) ReplaySafeTool(name string) bool {
+	if r == nil {
+		return false
+	}
+	_, class := r.classifyReadOnlySync(strings.TrimSpace(name))
+	return class == assistantToolReadOnlySync
 }
 
 // InternalToolNames lists the registered service-owned internal tools.

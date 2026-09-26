@@ -565,7 +565,8 @@ describe('assistant components', () => {
     const target = renderComponent(AssistantExecutionReconciliation, { session: { sessionId: 's10', currentRunId: 'r10', uncertainEffects: 1 } });
     const [workInput, eventInput] = target.querySelectorAll('input');
     expect(eventInput.getAttribute('pattern')).toBe('[0-9a-f]{64}');
-    expect(Array.from(target.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Submit evidence']);
+    // Evidence and the attested abandonment are the only resolutions; there is no "mark complete" control.
+    expect(Array.from(target.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Submit evidence', 'Abandon with attestation']);
     workInput.value = 'work-1';
     workInput.dispatchEvent(new Event('input', { bubbles: true }));
     eventInput.value = 'A'.repeat(64);
