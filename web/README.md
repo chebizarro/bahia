@@ -87,6 +87,24 @@ pnpm run build
 
 The lint gate runs SvelteKit sync followed by `svelte-check --tsconfig ./tsconfig.json`.
 
+### Joined assistant E2E (opt-in)
+
+`tests/e2e/assistant-unified-execution.spec.js` drives the assistant panel
+against a real backend. The normal `pnpm run test:e2e` skips it. To run it:
+
+```bash
+pnpm run test:e2e:joined            # extra args go to `playwright test`
+```
+
+This needs Go, Docker (for PostgreSQL) and a real `node_modules`, not a
+symlinked one. The command builds `cmd/server`,
+`cmd/bahia-assistant-e2e-provider` and the dashboard. It then starts
+PostgreSQL, `bahia-test-relay`, the deterministic model provider, the backend
+and the static dashboard on loopback, runs `playwright.joined.config.js`, and
+tears everything down. Harness logs go to
+`test-results/assistant-joined-harness/`. Set
+`BAHIA_ASSISTANT_E2E_SKIP_DASHBOARD_BUILD=1` to reuse an existing `build/`.
+
 ## Svelte 5 Rune Architecture
 
 The dashboard runs with global Svelte 5 rune mode enabled. Components and routes use `$state`, `$derived`, `$effect`, callback props such as `onClose`/`onConfirm`, and DOM event props such as `onclick`.

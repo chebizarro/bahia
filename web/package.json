@@ -19,7 +19,8 @@
     "test:e2e": "playwright test",
     "test:e2e:prod": "playwright test --config playwright.prod.config.js",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:joined": "node tests/e2e/harnesses/run-assistant-joined.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
