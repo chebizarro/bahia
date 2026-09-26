@@ -542,6 +542,7 @@ type assistantStackOptions struct {
 }
 
 type assistantStack struct {
+	relay      *assistantTestRelay
 	engine     *AssistantExecutionEngine
 	store      *AssistantExecutionStore
 	transcript *AssistantTranscriptStore
@@ -561,7 +562,7 @@ func newAssistantStack(t *testing.T, relay *assistantTestRelay, signer nostr.Sig
 	}
 	keys := StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}
 	lifecycle, cancel := context.WithCancel(context.Background())
-	st := &assistantStack{cancel: cancel, pubkey: pk.Hex(), reissue: make(chan struct{})}
+	st := &assistantStack{relay: relay, cancel: cancel, pubkey: pk.Hex(), reissue: make(chan struct{})}
 	var checkpointPublisher AssistantEventPublisher = relay
 	if opts.checkpointPublisher != nil {
 		checkpointPublisher = opts.checkpointPublisher
@@ -622,22 +623,62 @@ func (st *assistantStack) snapshot(sessionID string) domain.AssistantExecution {
 	return x
 }
 
+// startBatch accepts a batch turn and waits for its asynchronous proposal.
 func (st *assistantStack) startBatch(t *testing.T, sessionID string) AssistantTurnResult {
 	t.Helper()
 	res, err := st.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: sessionID, TurnID: "turn-1", Prompt: "do it"}, OperatorPubkey: "operator", RequestEventID: "prompt-" + sessionID, DefaultWorkflow: domain.AssistantWorkflowBatch})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return res
+	if res.Session.Phase != domain.AssistantExecutionProposing || res.Acknowledgment != string(domain.AssistantExecutionProposing) {
+		t.Fatalf("StartTurn did not return at the checkpointed turn start: %+v", res)
+	}
+	return st.waitSettled(t, sessionID)
 }
 
+// startIterative accepts an iterative turn and waits for its asynchronous
+// initial proposal.
 func (st *assistantStack) startIterative(t *testing.T, sessionID string) AssistantTurnResult {
 	t.Helper()
 	res, err := st.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: sessionID, TurnID: "turn-1", Prompt: "act"}, OperatorPubkey: "operator", RequestEventID: "prompt-" + sessionID, DefaultWorkflow: domain.AssistantWorkflowIterative})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return res
+	if res.Session.Phase != domain.AssistantExecutionProposing {
+		t.Fatalf("StartTurn did not return at the checkpointed turn start: %+v", res)
+	}
+	return st.waitSettled(t, sessionID)
+}
+
+// waitSettled waits until the session's current run has left proposing and
+// no model call is active, and returns the result a caller would observe.
+func (st *assistantStack) waitSettled(t *testing.T, sessionID string) AssistantTurnResult {
+	t.Helper()
+	s := st.engine.session(sessionID)
+	for {
+		s.mu.Lock()
+		var done chan struct{}
+		if s.active != nil {
+			done = s.active.done
+		}
+		s.mu.Unlock()
+		if done == nil {
+			break
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for the model call to end")
+		}
+	}
+	st.relay.waitFor(t, "proposal settled", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.execution.RunID != "" && s.execution.Phase != domain.AssistantExecutionProposing && s.active == nil
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return st.engine.resultLocked(s, string(s.execution.Phase))
 }
 
 func assistantApproveUnchanged(sessionID string, res AssistantTurnResult, requestID string) AssistantTurnDecisionRequest {

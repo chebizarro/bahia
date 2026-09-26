@@ -144,13 +144,44 @@ type assistantEngineSession struct {
 	fault              *assistantCheckpointFault
 	volatile           map[string]assistantVolatileDispatch
 	observationBlocked map[string]string
-	activeCancel       context.CancelFunc
 	observing          map[string]context.CancelFunc
 	driving            bool
 	redrive            bool
+	// active is the cancellable model call of the current run (initial
+	// proposal or iterative continuation). Cancel, a fence and shutdown
+	// cancel it; it is cleared only by the call that set it.
+	active *assistantActiveCall
 	// healing is guarded by its own lock, not mu: mu is held across the heal
 	// publication itself.
 	healing assistantHealFlight
+}
+
+// assistantActiveCall identifies one in-flight model call so a late-finishing
+// call never clears the handle of a newer one.
+type assistantActiveCall struct {
+	runID  string
+	cancel context.CancelFunc
+	done   chan struct{} // closed when the call has ended and been applied or discarded
+}
+
+func (s *assistantEngineSession) beginActiveLocked(runID string, cancel context.CancelFunc) *assistantActiveCall {
+	s.active = &assistantActiveCall{runID: runID, cancel: cancel, done: make(chan struct{})}
+	return s.active
+}
+
+// endActiveLocked ends call exactly once; it clears the session handle only
+// if no newer call replaced it.
+func (s *assistantEngineSession) endActiveLocked(call *assistantActiveCall) {
+	if s.active == call {
+		s.active = nil
+	}
+	close(call.done)
+}
+
+func (s *assistantEngineSession) cancelActiveLocked() {
+	if s.active != nil {
+		s.active.cancel()
+	}
 }
 
 // assistantHealFlight makes relay-driven healing single-flight per session. A
@@ -324,9 +355,15 @@ func (e *AssistantExecutionEngine) ready() error {
 // ---------------------------------------------------------------------------
 // StartTurn
 
+// StartTurn accepts a turn once its start (phase proposing) is checkpointed
+// and returns without waiting for the model: the proposal runs asynchronously
+// (startProposalLocked) and its outcome is observed through the projection.
 func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantTurnStartRequest) (AssistantTurnResult, error) {
 	if err := e.ready(); err != nil {
 		return AssistantTurnResult{}, err
+	}
+	if e.cfg.Lifecycle.Err() != nil {
+		return AssistantTurnResult{}, errors.New("assistant executor is shutting down")
 	}
 	prompt := req.Prompt
 	if prompt.SessionID == "" || prompt.TurnID == "" || strings.TrimSpace(prompt.Prompt) == "" || req.OperatorPubkey == "" || req.RequestEventID == "" {
@@ -403,36 +440,57 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 		s.mu.Unlock()
 		return AssistantTurnResult{}, err
 	}
-	token := s.execution.Revision
-	modelCtx, cancel := context.WithCancel(assistantOperatorContext(e.cfg.Lifecycle, x.OperatorPubkey))
-	s.activeCancel = cancel
+	// The checkpointed turn start is the acceptance. The proposal runs off the
+	// request path so no ContextVM request (assistant/cancel included) queues
+	// behind a model call; its outcome is published through the checkpointed
+	// projection like every other transition.
+	e.startProposalLocked(s, AssistantProposalRequest{SessionID: x.SessionID, RunID: runID, TurnID: x.TurnID, Prompt: prompt.Prompt, Scope: scope})
+	result := e.resultLocked(s, string(domain.AssistantExecutionProposing))
 	s.mu.Unlock()
+	return result, nil
+}
 
-	proposalReq := AssistantProposalRequest{SessionID: x.SessionID, RunID: runID, TurnID: x.TurnID, Prompt: prompt.Prompt, Scope: scope}
-	var proposal AssistantProposal
-	var proposeErr error
-	if workflow == domain.AssistantWorkflowBatch {
-		proposal, proposeErr = e.cfg.Batch.ProposeBatch(modelCtx, proposalReq)
-	} else {
-		proposal, proposeErr = e.cfg.Iterative.ProposeIterative(modelCtx, proposalReq)
-	}
-	cancel()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.activeCancel = nil
-	if s.fault != nil || s.execution.RunID != runID || s.execution.Revision != token || s.execution.Cancellation != nil {
-		// A cancellation or fault won the race; the late proposal is discarded.
-		return e.resultLocked(s, "proposal_discarded"), nil
-	}
-	next, ack := e.applyProposal(s.execution, proposal, proposeErr)
-	if err = e.commitLocked(s, next); err != nil {
-		return e.resultLocked(s, ack), err
-	}
-	if next.Phase == domain.AssistantExecutionExecuting {
-		e.kickLocked(s)
-	}
-	return e.resultLocked(s, ack), nil
+// startProposalLocked runs the initial proposal of the run just checkpointed
+// in s. It runs under the run's active call, so Cancel, a fence or shutdown
+// interrupt it; engine Wait covers it. The outcome is applied only if the run
+// is still at the revision that started it and neither cancelled nor fenced:
+// a late proposal is discarded, never applied over a newer state. Shutdown
+// records nothing, so recovery classifies the interrupted proposal.
+func (e *AssistantExecutionEngine) startProposalLocked(s *assistantEngineSession, req AssistantProposalRequest) {
+	x := s.execution
+	token := x.Revision
+	modelCtx, cancel := context.WithCancel(assistantOperatorContext(e.cfg.Lifecycle, x.OperatorPubkey))
+	call := s.beginActiveLocked(x.RunID, cancel)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		defer cancel()
+		var proposal AssistantProposal
+		var proposeErr error
+		if x.Workflow == domain.AssistantWorkflowBatch {
+			proposal, proposeErr = e.cfg.Batch.ProposeBatch(modelCtx, req)
+		} else {
+			proposal, proposeErr = e.cfg.Iterative.ProposeIterative(modelCtx, req)
+		}
+		cancel()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.endActiveLocked(call)
+		if e.cfg.Lifecycle.Err() != nil {
+			return
+		}
+		if s.fault != nil || s.execution.RunID != x.RunID || s.execution.Revision != token || s.execution.Cancellation != nil {
+			e.logger.Info("assistant late proposal discarded", "session_id", x.SessionID, "run_id", x.RunID)
+			return
+		}
+		next, _ := e.applyProposal(s.execution, proposal, proposeErr)
+		if err := e.commitLocked(s, next); err != nil {
+			return
+		}
+		if next.Phase == domain.AssistantExecutionExecuting {
+			e.kickLocked(s)
+		}
+	}()
 }
 
 // workflowAvailable reports whether this deployment constructed the proposer
@@ -470,7 +528,11 @@ func (e *AssistantExecutionEngine) applyProposal(current domain.AssistantExecuti
 		return next, "proposal_blocked: " + reason
 	}
 	if proposeErr != nil {
-		return block(proposeErr.Error())
+		// The proposer (model) failed. Nothing was dispatched, so the run
+		// ends failed rather than blocking the session.
+		next.Phase = domain.AssistantExecutionFailed
+		e.logger.Warn("assistant proposal failed", "session_id", next.SessionID, "run_id", next.RunID, "error", proposeErr)
+		return next, "proposal_failed: " + proposeErr.Error()
 	}
 	switch proposal.Kind {
 	case AssistantProposalBatch:
@@ -868,9 +930,7 @@ func (e *AssistantExecutionEngine) Cancel(ctx context.Context, req AssistantTurn
 	if err = e.commitLocked(s, next); err != nil {
 		return AssistantTurnResult{}, err
 	}
-	if s.activeCancel != nil {
-		s.activeCancel()
-	}
+	s.cancelActiveLocked()
 	// Already-submitted work keeps being observed for accounting; any
 	// observed-but-unconsumed item is finalized by the driver.
 	e.kickLocked(s)
@@ -1463,7 +1523,7 @@ func (e *AssistantExecutionEngine) continueIterative(s *assistantEngineSession) 
 	token := s.execution.Revision
 	// Prompt-time hooks may call read-only MCP tools as the requester.
 	ctx, cancel := context.WithCancel(assistantOperatorContext(e.cfg.Lifecycle, x.OperatorPubkey))
-	s.activeCancel = cancel
+	call := s.beginActiveLocked(x.RunID, cancel)
 	scope, err := x.Scope.Clone()
 	s.mu.Unlock()
 	var proposal AssistantProposal
@@ -1474,7 +1534,7 @@ func (e *AssistantExecutionEngine) continueIterative(s *assistantEngineSession) 
 	cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.activeCancel = nil
+	s.endActiveLocked(call)
 	if s.fault != nil || e.cfg.Lifecycle.Err() != nil || s.execution.RunID != x.RunID || s.execution.Revision != token || s.execution.Cancellation != nil {
 		return false // late model response discarded
 	}
@@ -1623,9 +1683,7 @@ func (e *AssistantExecutionEngine) commitLocked(s *assistantEngineSession, next 
 			return fmt.Errorf("%w: %v", ErrAssistantCheckpointUnconfirmed, err)
 		}
 		s.fault = &assistantCheckpointFault{err: err, pending: snapshot, previous: previous}
-		if s.activeCancel != nil {
-			s.activeCancel()
-		}
+		s.cancelActiveLocked()
 		return fmt.Errorf("%w: %v", ErrAssistantCheckpointUnconfirmed, err)
 	}
 	e.adoptLocked(s, snapshot, id)
@@ -1712,13 +1770,17 @@ func (e *AssistantExecutionEngine) normalizeInFlightLocked(s *assistantEngineSes
 		delete(s.volatile, w.WorkID)
 		changed = true
 	}
-	if next.Phase == domain.AssistantExecutionProposing {
-		// Interrupted model work. A continuation can be re-requested because
-		// every prior call is consumed; an initial proposal cannot, because the
-		// prompt is not part of the execution record.
-		if next.Workflow == domain.AssistantWorkflowIterative && len(next.Work) > 0 && assistantFirstUnfinished(next.Work) == len(next.Work) && next.Cancellation == nil {
+	if next.Phase == domain.AssistantExecutionProposing && (s.active == nil || s.active.runID != next.RunID) {
+		// Interrupted model work (a live call in this process is left alone).
+		// A continuation can be re-requested because every prior call is
+		// consumed. An initial proposal cannot, because the prompt is not part
+		// of the execution record; having dispatched nothing, it failed.
+		switch {
+		case next.Workflow == domain.AssistantWorkflowIterative && len(next.Work) > 0 && assistantFirstUnfinished(next.Work) == len(next.Work) && next.Cancellation == nil:
 			next.Phase = domain.AssistantExecutionExecuting
-		} else {
+		case len(next.Work) == 0:
+			next.Phase = domain.AssistantExecutionFailed
+		default:
 			next.Phase = domain.AssistantExecutionBlocked
 		}
 		changed = true

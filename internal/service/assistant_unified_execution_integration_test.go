@@ -253,6 +253,22 @@ func assistantJoinedAccepted(t *testing.T, res AssistantOperationResult, err err
 	return requireAccepted(t, res)
 }
 
+// acceptSettled checks a prompt was accepted at its checkpointed turn start
+// and waits for the asynchronous proposal to settle.
+func (st *assistantJoinedStack) acceptSettled(t *testing.T, relay *assistantTestRelay, res AssistantOperationResult, err error) domain.AssistantSessionV2 {
+	t.Helper()
+	started := assistantJoinedAccepted(t, res, err)
+	if started.Phase != domain.AssistantExecutionProposing {
+		t.Fatalf("prompt accepted at phase %s, want proposing", started.Phase)
+	}
+	relay.waitFor(t, "proposal settled", func() bool {
+		x, _ := st.engine.Snapshot(started.SessionID)
+		return x.Phase != domain.AssistantExecutionProposing
+	})
+	p, _ := st.engine.Projection(started.SessionID)
+	return p
+}
+
 func (st *assistantJoinedStack) settle(t *testing.T, relay *assistantTestRelay, sessionID string, want domain.AssistantExecutionPhase) domain.AssistantExecution {
 	t.Helper()
 	var x domain.AssistantExecution
@@ -307,7 +323,7 @@ func TestAssistantUnifiedExecutionJoinedBatchEditApproveRestart(t *testing.T) {
 	first := newAssistantJoinedStack(t, relay, signer, tools, provider, domain.AssistantWorkflowIterative, assistantJoinedOptions{})
 	client := &assistantJoinedClient{router: first.router}
 	res, err := first.router.HandlePromptRequest(context.Background(), client.source(), domain.AssistantPromptRequest{ContractVersion: 2, Workflow: domain.AssistantWorkflowBatch, SessionID: "s-joined-batch", TurnID: "turn-1", Prompt: "change zone a safely"})
-	draft := assistantJoinedAccepted(t, res, err)
+	draft := first.acceptSettled(t, relay, res, err)
 	if draft.Workflow != domain.AssistantWorkflowBatch || draft.Phase != domain.AssistantExecutionAwaitingApproval || draft.Proposal == nil || draft.Proposal.Revision != 1 || len(draft.Proposal.Plan.Steps) != 3 {
 		t.Fatalf("draft = %+v", draft)
 	}
@@ -496,7 +512,7 @@ func TestAssistantUnifiedExecutionJoinedApprovalCannotBypassChangedPolicy(t *tes
 	first := newAssistantJoinedStack(t, relay, signer, tools, provider, domain.AssistantWorkflowBatch, assistantJoinedOptions{})
 	client := &assistantJoinedClient{router: first.router}
 	res, err := first.router.HandlePromptRequest(context.Background(), client.source(), domain.AssistantPromptRequest{ContractVersion: 2, SessionID: "s-policy", TurnID: "t", Prompt: "change zone a"})
-	draft := assistantJoinedAccepted(t, res, err)
+	draft := first.acceptSettled(t, relay, res, err)
 	first.crash()
 
 	readonly := newAssistantJoinedStack(t, relay, signer, tools, provider, domain.AssistantWorkflowBatch, assistantJoinedOptions{permissions: config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReadonly}})
@@ -530,7 +546,7 @@ func TestAssistantUnifiedExecutionJoinedApprovalCannotBypassCommandScope(t *test
 	client := &assistantJoinedClient{router: st.router}
 
 	res, err := st.router.HandlePromptRequest(context.Background(), client.source(), domain.AssistantPromptRequest{ContractVersion: 2, SessionID: "s-scope", TurnID: "t", Prompt: "/inspect zone a"})
-	draft := assistantJoinedAccepted(t, res, err)
+	draft := st.acceptSettled(t, relay, res, err)
 	if draft.Scope.CommandName != "inspect" || len(draft.Scope.AllowedTools) != 1 || draft.Scope.ArgumentsDigest == "" {
 		t.Fatalf("persisted scope commitment = %+v", draft.Scope)
 	}

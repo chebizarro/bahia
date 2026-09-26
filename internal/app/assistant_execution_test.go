@@ -231,6 +231,22 @@ func buildTestAssistantExecutionWith(t *testing.T, cfg *config.Config, relay *me
 	return wiring, signer
 }
 
+// settledPrompt checks a prompt was accepted at its checkpointed turn start
+// (phase proposing) and waits for the asynchronous proposal to settle.
+func settledPrompt(t *testing.T, wiring *assistantExecutionWiring, relay *memoryRelay, res service.AssistantOperationResult, err error) domain.AssistantExecution {
+	t.Helper()
+	if err != nil || res["status"] != "accepted" || res["phase"] != string(domain.AssistantExecutionProposing) {
+		t.Fatalf("prompt = %#v err=%v, want accepted at proposing", res, err)
+	}
+	sessionID, _ := res["session_id"].(string)
+	var x domain.AssistantExecution
+	relay.waitFor(t, "proposal settled", func() bool {
+		x, _ = wiring.Engine.Snapshot(sessionID)
+		return x.RunID != "" && x.Phase != domain.AssistantExecutionProposing
+	})
+	return x
+}
+
 func wiringSource(label string) service.AssistantRequestSource {
 	var id nostr.ID
 	copy(id[:], []byte(strings.Repeat(label, 32)))
@@ -256,12 +272,12 @@ func TestAssistantExecutionWiringIsUnconditionalAndFlagOnlySelectsDefault(t *tes
 			t.Fatalf("agentic=%v default=%q wiring=%+v", tc.agentic, tc.explicit, wiring)
 		}
 		batch, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("b"), domain.AssistantPromptRequest{ContractVersion: 2, Workflow: domain.AssistantWorkflowBatch, SessionID: "s-batch", TurnID: "t", Prompt: "deploy"})
-		if err != nil || batch["status"] != "accepted" || batch["phase"] != string(domain.AssistantExecutionAwaitingApproval) {
-			t.Fatalf("agentic=%v batch prompt = %#v err=%v", tc.agentic, batch, err)
+		if x := settledPrompt(t, wiring, relay, batch, err); x.Phase != domain.AssistantExecutionAwaitingApproval {
+			t.Fatalf("agentic=%v batch prompt settled at %s", tc.agentic, x.Phase)
 		}
 		iterative, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("i"), domain.AssistantPromptRequest{ContractVersion: 2, Workflow: domain.AssistantWorkflowIterative, SessionID: "s-iter", TurnID: "t", Prompt: "question"})
-		if err != nil || iterative["status"] != "accepted" || iterative["phase"] != string(domain.AssistantExecutionCompleted) {
-			t.Fatalf("agentic=%v iterative prompt = %#v err=%v", tc.agentic, iterative, err)
+		if x := settledPrompt(t, wiring, relay, iterative, err); x.Phase != domain.AssistantExecutionCompleted {
+			t.Fatalf("agentic=%v iterative prompt settled at %s", tc.agentic, x.Phase)
 		}
 		defaulted, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("d"), domain.AssistantPromptRequest{ContractVersion: 2, SessionID: "s-default", TurnID: "t", Prompt: "deploy"})
 		if err != nil || defaulted["workflow"] != string(tc.want) {
@@ -300,8 +316,8 @@ func TestAssistantExecutionWiringWithoutBatchModel(t *testing.T) {
 		t.Fatal("refused batch prompt created a run")
 	}
 	defaulted, err := wiring.Orchestrator.HandlePromptRequest(context.Background(), wiringSource("d"), domain.AssistantPromptRequest{ContractVersion: 2, SessionID: "s-default", TurnID: "t", Prompt: "question"})
-	if err != nil || defaulted["status"] != "accepted" || defaulted["workflow"] != string(domain.AssistantWorkflowIterative) || defaulted["phase"] != string(domain.AssistantExecutionCompleted) {
-		t.Fatalf("default prompt = %#v err=%v", defaulted, err)
+	if x := settledPrompt(t, wiring, relay, defaulted, err); defaulted["workflow"] != string(domain.AssistantWorkflowIterative) || x.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("default prompt = %#v settled at %s", defaulted, x.Phase)
 	}
 }
 

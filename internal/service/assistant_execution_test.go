@@ -291,6 +291,7 @@ func TestAssistantExecutionProjectionCreatedAtStrictlyIncreasesAcrossRestart(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	res = second.waitSettled(t, "s-clock")
 	p := res.Session.Proposal
 	if _, err = second.engine.Decide(context.Background(), AssistantTurnDecisionRequest{Approval: domain.AssistantApprovalRequest{ContractVersion: 2, SessionID: "s-clock", RunID: res.Session.CurrentRunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: p.ProposalID, BaseRevision: p.Revision, BasePlanHash: p.Hash, Decision: "reject"}, OperatorPubkey: "operator", RequestEventID: "reject-2"}); err != nil {
 		t.Fatal(err)
@@ -308,6 +309,7 @@ func TestAssistantExecutionProjectionCreatedAtStrictlyIncreasesAcrossRestart(t *
 	if _, err = third.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: "s-clock", TurnID: "turn-3", Prompt: "third"}, OperatorPubkey: "operator", RequestEventID: "prompt-3", DefaultWorkflow: domain.AssistantWorkflowBatch}); err != nil {
 		t.Fatal(err)
 	}
+	third.waitSettled(t, "s-clock")
 	evs = projections()
 	if len(evs) <= before {
 		t.Fatal("no projection after unhydrated restart")

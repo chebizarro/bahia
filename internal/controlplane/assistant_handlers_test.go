@@ -458,6 +458,8 @@ func TestAssistantHandlerNativeRunsRequireV2Contracts(t *testing.T) {
 	if err != nil || started["status"] != "accepted" {
 		t.Fatalf("native prompt = %#v err=%v", started, err)
 	}
+	// The proposal settles asynchronously after the accepted turn start.
+	f.store.waitFor(t, "draft proposed", func() bool { return f.snapshot(t, "s-native").Phase == domain.AssistantExecutionAwaitingApproval })
 	draft := f.snapshot(t, "s-native")
 	legacyHash := domain.ComputePlanHash(draft.Proposal.Plan, "s-native")
 	for _, params := range []map[string]any{

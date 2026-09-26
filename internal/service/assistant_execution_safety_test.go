@@ -270,6 +270,15 @@ func runAssistantCheckpointBoundary(t *testing.T, failRev uint64) int {
 			}
 		}
 	}
+	// The proposal is asynchronous; its checkpoint may be the rejected one.
+	store.waitFor(t, "proposal settled", func() bool {
+		x, _ := engine.Snapshot("s")
+		hit, _, _ := store.state()
+		return x.Phase != domain.AssistantExecutionProposing || (hit && !healed)
+	})
+	if hit, _, _ := store.state(); hit && !healed {
+		heal()
+	}
 	if x, _ := engine.Snapshot("s"); x.Phase == domain.AssistantExecutionAwaitingApproval {
 		p := x.Proposal
 		_, err := engine.Decide(ctx, AssistantTurnDecisionRequest{Approval: domain.AssistantApprovalRequest{ContractVersion: 2, SessionID: "s", RunID: x.RunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: p.ProposalID, BaseRevision: p.Revision, BasePlanHash: p.Hash, ApprovedRevision: p.Revision, ApprovedPlanHash: p.Hash, Decision: "approve"}, OperatorPubkey: "operator", RequestEventID: "approve"})
@@ -372,34 +381,26 @@ func TestAssistantExecutionCancellationDuringModelWorkDiscardsLateProposal(t *te
 	server := newAssistantTestToolServer(relay.touch)
 	proposer := &assistantScriptedProposer{responses: []AssistantProposal{{Kind: AssistantProposalCalls, Calls: []domain.AssistantAgentToolCall{{ID: "c", Name: "read-one", Arguments: map[string]any{}}}}}, gate: make(chan struct{}), entered: make(chan struct{}, 1)}
 	st := newAssistantStack(t, relay, testAssistantSigner(t), server, assistantStackOptions{iterative: proposer})
-	type startResult struct {
-		res AssistantTurnResult
-		err error
+	// StartTurn returns at the checkpointed turn start while the model call
+	// is still held.
+	res, err := st.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: "s-model", TurnID: "t", Prompt: "act"}, OperatorPubkey: "operator", RequestEventID: "prompt", DefaultWorkflow: domain.AssistantWorkflowIterative})
+	if err != nil || res.Session.Phase != domain.AssistantExecutionProposing {
+		t.Fatalf("start=%+v err=%v", res.Session.Phase, err)
 	}
-	done := make(chan startResult, 1)
-	go func() {
-		res, err := st.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: "s-model", TurnID: "t", Prompt: "act"}, OperatorPubkey: "operator", RequestEventID: "prompt", DefaultWorkflow: domain.AssistantWorkflowIterative})
-		done <- startResult{res, err}
-	}()
 	select {
 	case <-proposer.entered:
 	case <-time.After(10 * time.Second):
 		t.Fatal("model call not started")
 	}
 	x := st.snapshot("s-model")
-	res, err := st.engine.Cancel(context.Background(), assistantCancelRequest("s-model", x.RunID, "cancel"))
+	res, err = st.engine.Cancel(context.Background(), assistantCancelRequest("s-model", x.RunID, "cancel"))
 	if err != nil || res.Session.Phase != domain.AssistantExecutionCancelled {
 		t.Fatalf("cancel=%+v err=%v", res.Session.Phase, err)
 	}
 	close(proposer.gate)
-	var got startResult
-	select {
-	case got = <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("StartTurn did not return")
-	}
-	if got.err != nil || got.res.Acknowledgment != "proposal_discarded" {
-		t.Fatalf("late proposal: %+v %v", got.res.Acknowledgment, got.err)
+	st.waitSettled(t, "s-model")
+	if x := st.snapshot("s-model"); x.Phase != domain.AssistantExecutionCancelled || x.Revision != res.ExecutionRevision {
+		t.Fatalf("late proposal applied: phase=%s rev=%d->%d", x.Phase, res.ExecutionRevision, x.Revision)
 	}
 	st.crash()
 	if server.total() != 0 || len(st.snapshot("s-model").Work) != 0 {
@@ -481,6 +482,7 @@ func TestAssistantExecutionCancellationScopesAndStaleTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	next = st.waitSettled(t, "s-scope")
 	close := assistantCancelRequest("s-scope", next.Session.CurrentRunID, "close")
 	close.Cancellation.Scope = "session"
 	if _, err = st.engine.Cancel(context.Background(), close); err != nil {

@@ -45,6 +45,17 @@ func (f *assistantRouterFixture) prompt(t *testing.T, sessionID string, workflow
 	if err != nil {
 		t.Fatal(err)
 	}
+	if res["status"] != "accepted" {
+		return res
+	}
+	// Acceptance is the checkpointed turn start; the proposal settles
+	// asynchronously and the result then reports the settled session.
+	if res["phase"] != string(domain.AssistantExecutionProposing) {
+		t.Fatalf("prompt accepted at phase %v, want proposing", res["phase"])
+	}
+	settled := f.stack.waitSettled(t, sessionID)
+	res["phase"] = string(settled.Session.Phase)
+	res["session"] = settled.Session
 	return res
 }
 
