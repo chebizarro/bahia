@@ -3697,7 +3697,11 @@ func (a assistantMCPRuntimeAdapter) InvokeAssistantAsyncTool(ctx context.Context
 	if a.server == nil {
 		return nil, fmt.Errorf("assistant MCP server is not configured")
 	}
-	return a.server.InvokeAssistantAsyncTool(ctx, name, args)
+	receipt, err := a.server.InvokeAssistantAsyncTool(ctx, name, args)
+	if errors.Is(err, mcp.ErrToolCallUnauthorized) {
+		return nil, fmt.Errorf("%w: %v", service.ErrAssistantToolCallRefused, err)
+	}
+	return receipt, err
 }
 
 type assistantToolRegistryAdapter struct {

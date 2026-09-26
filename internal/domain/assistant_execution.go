@@ -289,6 +289,10 @@ type AssistantExecution struct {
 	Scope        AssistantCommandScope           `json:"scope"`
 	Cancellation *AssistantExecutionCancellation `json:"cancellation,omitempty"`
 	Migration    *AssistantExecutionMigration    `json:"migration,omitempty"`
+	// OperatorPubkey is the operator who requested the turn. The assistant
+	// acts as this operator for work no approval binds; approval-bound work
+	// acts as the approving operator (AssistantAuthorizationBinding).
+	OperatorPubkey string `json:"operator_pubkey,omitempty"`
 }
 
 // AssistantExecutionCheckpoint is encrypted before publication. Public 4903

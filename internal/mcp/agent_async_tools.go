@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -9,6 +10,10 @@ import (
 )
 
 const assistantAgentID = "bahia-operator-assistant"
+
+// ErrToolCallUnauthorized means the caller's principal was refused before the
+// tool did anything, so nothing was submitted.
+var ErrToolCallUnauthorized = errors.New("MCP tool call not authorized")
 
 func assistantAsyncToolDefinitions() []Tool {
 	return []Tool{
@@ -24,14 +29,29 @@ func assistantAsyncToolDefinitions() []Tool {
 }
 
 func (s *Server) handleAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error) {
-	receipt, err := s.InvokeAssistantAsyncTool(ctx, name, args)
+	receipt, err := s.invokeAssistantAsyncTool(ctx, name, args) // CallTool already authorized
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
 	return jsonResult(receipt)
 }
 
+// InvokeAssistantAsyncTool is the executor's direct entry for async assistant
+// tools. It applies the same operator authorization as CallTool, so the
+// assistant can do exactly what the principal in ctx could do directly. A
+// refusal wraps ErrToolCallUnauthorized and happens before any publication.
 func (s *Server) InvokeAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error) {
+	if denied := s.authorizeToolCall(ctx, name); denied != nil {
+		reason := "access denied"
+		if len(denied.Content) > 0 {
+			reason = denied.Content[0].Text
+		}
+		return nil, fmt.Errorf("%w: %s", ErrToolCallUnauthorized, reason)
+	}
+	return s.invokeAssistantAsyncTool(ctx, name, args)
+}
+
+func (s *Server) invokeAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error) {
 	key, _ := args["idempotency_key"].(string)
 	if key == "" {
 		return nil, fmt.Errorf("idempotency_key is required")

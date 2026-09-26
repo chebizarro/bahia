@@ -89,6 +89,9 @@ type AssistantInternalToolCall struct {
 	WorkID    string
 	Scope     domain.AssistantCommandScope
 	ToolCall  domain.AssistantAgentToolCall
+	// OperatorPubkey is the operator the parent work acts as; subagent
+	// children act as the same operator.
+	OperatorPubkey string
 }
 
 // AssistantInternalTool is a service-owned tool registration. Internal tools are
@@ -387,6 +390,8 @@ func (r *AssistantToolRuntime) PrepareWork(ctx context.Context, execution domain
 	if work.IdempotencyKey == "" {
 		work.IdempotencyKey = assistantExecutionIdempotencyKey(execution, work)
 	}
+	// PreToolUse hooks may call read-only MCP tools as this work's operator.
+	ctx = assistantOperatorContext(ctx, assistantWorkOperator(execution, work))
 	if err := validateAssistantWorkSchema(descriptor.InputSchema, assistantSchemaArgs(descriptor, args, work.IdempotencyKey)); err != nil {
 		return AssistantPreparedWork{}, denyAssistantWork("input schema: %v", err)
 	}
@@ -506,6 +511,12 @@ func (r *AssistantToolRuntime) DispatchPreparedWork(ctx context.Context, prepare
 	work := prepared.Work
 	call := domain.AssistantAgentToolCall{ID: work.OriginID, Name: work.ToolName, Arguments: work.Arguments}
 	descriptor := prepared.Descriptor
+	// The one place tool calls get their principal: the operator this work
+	// acts as, from the persisted execution (so recovery and re-dispatch use
+	// the same operator). It covers the provider call, PostToolUse hooks,
+	// internal tools and their subagent children.
+	operator := assistantWorkOperator(prepared.Execution, work)
+	ctx = assistantOperatorContext(ctx, operator)
 	var obs *domain.AssistantToolObservation
 	var receipt *domain.AsyncToolReceipt
 	if tool, internal := r.internalTool(work.ToolName); internal {
@@ -518,7 +529,7 @@ func (r *AssistantToolRuntime) DispatchPreparedWork(ctx context.Context, prepare
 			return nil, nil, err
 		}
 		call.Arguments = args
-		obs, err = tool.Handler(ctx, AssistantInternalToolCall{SessionID: prepared.Execution.SessionID, RunID: prepared.Execution.RunID, TurnID: prepared.Execution.TurnID, WorkID: work.WorkID, Scope: scope, ToolCall: call})
+		obs, err = tool.Handler(ctx, AssistantInternalToolCall{SessionID: prepared.Execution.SessionID, RunID: prepared.Execution.RunID, TurnID: prepared.Execution.TurnID, WorkID: work.WorkID, Scope: scope, ToolCall: call, OperatorPubkey: operator})
 		if err != nil {
 			// Internal tools are read-only toward the control plane, so a
 			// handler error is a definite failure, never an ambiguous submit.
@@ -542,6 +553,10 @@ func (r *AssistantToolRuntime) DispatchPreparedWork(ctx context.Context, prepare
 		args["idempotency_key"] = work.IdempotencyKey
 		var err error
 		receipt, err = r.mcpServer.InvokeAssistantAsyncTool(ctx, work.ToolName, args)
+		if errors.Is(err, ErrAssistantToolCallRefused) {
+			// Refused before submission: a definite failure, not uncertainty.
+			return r.postToolUse(ctx, prepared, r.failedObservation(call, descriptor, prepared.Permission, err.Error())), nil, nil
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -617,7 +632,7 @@ func (r *AssistantToolRuntime) ExecuteSubagentTool(ctx context.Context, parent A
 	if err != nil {
 		return deny("parent command scope is invalid")
 	}
-	child := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: childSessionID, RunID: parent.RunID, TurnID: parent.TurnID, Workflow: domain.AssistantWorkflowIterative, Scope: scope}
+	child := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: childSessionID, RunID: parent.RunID, TurnID: parent.TurnID, Workflow: domain.AssistantWorkflowIterative, Scope: scope, OperatorPubkey: parent.OperatorPubkey}
 	work := domain.AssistantWorkItem{WorkID: parent.WorkID + ":" + call.ID, OriginID: call.ID, ToolName: name, Arguments: args}
 	prepared, err := r.PrepareWork(ctx, child, work)
 	var denial *AssistantWorkDenial

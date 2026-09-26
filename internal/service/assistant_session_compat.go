@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -141,7 +142,7 @@ func classifyLegacyBatch(source AssistantLegacySessionSource, s domain.Assistant
 		return park("invalid batch plan: " + err.Error())
 	}
 	runID := legacyRunID(source.EventID, s.SessionID, s.CurrentTurnID)
-	e := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: s.SessionID, RunID: runID, TurnID: s.CurrentTurnID, RequestID: s.CurrentRequestID, Workflow: domain.AssistantWorkflowBatch, Revision: 1,
+	e := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: s.SessionID, RunID: runID, TurnID: s.CurrentTurnID, RequestID: s.CurrentRequestID, OperatorPubkey: legacyOperator(s), Workflow: domain.AssistantWorkflowBatch, Revision: 1,
 		Migration: &domain.AssistantExecutionMigration{SourceSchema: source.Schema, SourceEventID: source.EventID, LegacyPlanHash: s.LastPlanHash}}
 	if s.State == domain.AssistantSessionStateAwaitingApproval {
 		if len(s.PendingSteps) != 0 || len(receipts) != 0 {
@@ -222,7 +223,7 @@ func classifyLegacyIterative(source AssistantLegacySessionSource, s domain.Assis
 	if loop.RunID == "" || loop.State == "" {
 		return park("missing iterative run/state identity")
 	}
-	e := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: s.SessionID, RunID: loop.RunID, TurnID: s.CurrentTurnID, RequestID: s.CurrentRequestID, Workflow: domain.AssistantWorkflowIterative, Revision: 1,
+	e := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: s.SessionID, RunID: loop.RunID, TurnID: s.CurrentTurnID, RequestID: s.CurrentRequestID, OperatorPubkey: legacyOperator(s), Workflow: domain.AssistantWorkflowIterative, Revision: 1,
 		Scope: domain.AssistantCommandScope{AllowedTools: loop.AllowedTools}, Migration: &domain.AssistantExecutionMigration{SourceSchema: source.Schema, SourceEventID: source.EventID}}
 	var err error
 	e.Scope, err = e.Scope.Clone()
@@ -401,6 +402,18 @@ func legacyReceipts(metadata map[string]any) (map[string]domain.AsyncToolReceipt
 
 func validLegacyReceipt(r domain.AsyncToolReceipt, tool, key string) bool {
 	return tool != "" && key != "" && r.ToolName == tool && r.IdempotencyKey == key && r.RequestEventID != "" && r.RequestKind > 0 && len(r.ResultKinds) > 0
+}
+
+// legacyOperator is the v1 session's operator; converted work acts as this
+// operator unless an approval binds it to another.
+func legacyOperator(s domain.AssistantSession) string {
+	if op := strings.TrimSpace(s.OperatorPubkey); op != "" {
+		return op
+	}
+	if len(s.Participants) > 0 {
+		return strings.TrimSpace(s.Participants[0])
+	}
+	return ""
 }
 
 func legacyRunID(eventID, sessionID, turnID string) string {

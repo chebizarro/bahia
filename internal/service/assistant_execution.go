@@ -384,7 +384,7 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 		return AssistantTurnResult{}, ErrAssistantSessionClosed
 	}
 	runID := e.cfg.NewID("run")
-	x := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: prompt.SessionID, RunID: runID, TurnID: prompt.TurnID, RequestID: req.RequestEventID, Workflow: workflow, Phase: domain.AssistantExecutionProposing, Scope: scope, Work: []domain.AssistantWorkItem{}}
+	x := domain.AssistantExecution{Version: domain.AssistantExecutionVersion, SessionID: prompt.SessionID, RunID: runID, TurnID: prompt.TurnID, RequestID: req.RequestEventID, OperatorPubkey: req.OperatorPubkey, Workflow: workflow, Phase: domain.AssistantExecutionProposing, Scope: scope, Work: []domain.AssistantWorkItem{}}
 	if s.projection.SessionID != prompt.SessionID {
 		s.projection = domain.AssistantSessionV2{SessionID: prompt.SessionID, OperatorPubkey: req.OperatorPubkey, AssistantID: e.cfg.Identity.AgentID, AssistantPubkey: e.cfg.Identity.Pubkey}
 		if req.ExistingSession != nil {
@@ -404,7 +404,7 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 		return AssistantTurnResult{}, err
 	}
 	token := s.execution.Revision
-	modelCtx, cancel := context.WithCancel(e.cfg.Lifecycle)
+	modelCtx, cancel := context.WithCancel(assistantOperatorContext(e.cfg.Lifecycle, x.OperatorPubkey))
 	s.activeCancel = cancel
 	s.mu.Unlock()
 
@@ -1461,7 +1461,8 @@ func (e *AssistantExecutionEngine) continueIterative(s *assistantEngineSession) 
 		return false
 	}
 	token := s.execution.Revision
-	ctx, cancel := context.WithCancel(e.cfg.Lifecycle)
+	// Prompt-time hooks may call read-only MCP tools as the requester.
+	ctx, cancel := context.WithCancel(assistantOperatorContext(e.cfg.Lifecycle, x.OperatorPubkey))
 	s.activeCancel = cancel
 	scope, err := x.Scope.Clone()
 	s.mu.Unlock()
@@ -2146,7 +2147,7 @@ func assistantWorkTransitionAllowed(from, to domain.AssistantWorkState) bool {
 // identities are immutable, work is append-only, per-item states only move
 // forward, and dispatched input, keys, receipts and observations never change.
 func validateAssistantExecutionTransition(prev, next domain.AssistantExecution) error {
-	if prev.SessionID != next.SessionID || prev.RunID != next.RunID || prev.TurnID != next.TurnID || prev.RequestID != next.RequestID || prev.Workflow != next.Workflow {
+	if prev.SessionID != next.SessionID || prev.RunID != next.RunID || prev.TurnID != next.TurnID || prev.RequestID != next.RequestID || prev.OperatorPubkey != next.OperatorPubkey || prev.Workflow != next.Workflow {
 		return errors.New("execution identity changed")
 	}
 	if !next.Phase.Valid() {
