@@ -42,12 +42,14 @@ For local development without Docker:
 # Install Go dependencies
 make deps
 
-# Set up PostgreSQL (example with psql)
+# Set up PostgreSQL and a valid Bahia config (db.host, db.user, db.password,
+# db.name, and db.sslmode must point to that database).
 createdb bahia
-export DATABASE_URL="postgres://localhost/bahia?sslmode=disable"
 
-# Run database migrations
-make migrate
+# Run SQL migrations only; this does not start the server.
+make migrate MIGRATE_CONFIG=/path/to/valid-config.yaml
+# CI can check for pending migrations without writing to the database:
+make migrate MIGRATE_CONFIG=/path/to/valid-config.yaml MIGRATE_ACTION=status
 
 # Start the development server
 make run-dev

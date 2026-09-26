@@ -4,8 +4,6 @@ import (
 	"context"
 	"embed"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,23 +17,21 @@ var migrationsFS embed.FS
 // Keep it stable: every Bahia process must contend on the same migration lock.
 const migrationLockKey int64 = 0x62616869612e6462
 
-// Migrate runs all pending up migrations in order.
-func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
-	// Session locks require exclusive ownership of one connection for the entire
-	// run, including the applied checks and every per-migration transaction.
+// withMigrationLock pins one pool connection for the entire operation. PostgreSQL
+// advisory locks belong to sessions, not transactions or pools.
+func withMigrationLock(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger, run func(*pgxpool.Conn) error) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring migration connection: %w", err)
 	}
 	defer conn.Release()
 	defer func() {
-		// Also attempt unlock if acquisition was canceled in flight. The server
-		// may have acquired the lock before the client received its response.
+		// Acquisition can succeed on the server even if cancellation obscures its
+		// response. Always attempt unlock before returning the session to the pool.
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
 			logger.Warn("releasing migration lock; discarding connection", zap.Error(err))
-			// Never return a potentially locked session to the pool.
 			if err := conn.Conn().Close(unlockCtx); err != nil {
 				logger.Warn("closing migration connection", zap.Error(err))
 			}
@@ -44,7 +40,17 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error 
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return fmt.Errorf("acquiring migration lock: %w", err)
 	}
+	return run(conn)
+}
 
+// Migrate runs all pending up migrations in order.
+func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
+	return withMigrationLock(ctx, pool, logger, func(conn *pgxpool.Conn) error {
+		return migrateUp(ctx, conn, logger)
+	})
+}
+
+func migrateUp(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) error {
 	// Ensure migrations tracking table exists.
 	if _, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -55,22 +61,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error 
 		return fmt.Errorf("creating schema_migrations table: %w", err)
 	}
 
-	// Read available migration files.
-	entries, err := migrationsFS.ReadDir("migrations")
+	versions, err := availableMigrations(migrationsFS)
 	if err != nil {
-		return fmt.Errorf("reading migrations directory: %w", err)
+		return err
 	}
-
-	var upFiles []string
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".up.sql") {
-			upFiles = append(upFiles, e.Name())
-		}
-	}
-	sort.Strings(upFiles)
-
-	for _, fname := range upFiles {
-		version := strings.TrimSuffix(fname, ".up.sql")
+	for _, version := range versions {
+		fname := version + ".up.sql"
 
 		// Check if already applied.
 		var count int
