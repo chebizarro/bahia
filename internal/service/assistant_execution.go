@@ -26,9 +26,9 @@ var (
 	ErrAssistantNotAwaitingApproval           = errors.New("not_awaiting_approval")
 	ErrAssistantOperatorMismatch              = errors.New("operator_mismatch")
 	ErrAssistantReconciliationRejected        = errors.New("reconciliation_rejected")
-	// ErrAssistantWorkflowUnavailable refuses a request that would start new
-	// work in a workflow whose proposer this deployment did not construct. It
-	// is never answered by running a different workflow.
+	// ErrAssistantWorkflowUnavailable refuses a new turn in a workflow whose
+	// proposer this deployment did not construct. It is never answered by
+	// running a different workflow.
 	ErrAssistantWorkflowUnavailable = errors.New("workflow_unavailable")
 )
 
@@ -383,7 +383,9 @@ func (e *AssistantExecutionEngine) StartTurn(ctx context.Context, req AssistantT
 
 // workflowAvailable reports whether this deployment constructed the proposer
 // of workflow. The executor, runtime and recovery are shared and always
-// present; only proposing (and approving a batch draft) needs availability.
+// present; only starting a new turn (proposing) needs availability. Approving
+// or rejecting an existing draft, cancelling, reconciling and finishing an
+// approved run never call a proposer.
 func (e *AssistantExecutionEngine) workflowAvailable(workflow domain.AssistantWorkflow) bool {
 	switch workflow {
 	case domain.AssistantWorkflowBatch:
@@ -544,13 +546,8 @@ func (e *AssistantExecutionEngine) Decide(ctx context.Context, req AssistantTurn
 			}
 			return e.resultLocked(s, "plan_rejected"), nil
 		}
-		if !e.workflowAvailable(domain.AssistantWorkflowBatch) {
-			// Approval grants new batch authority, so it needs the batch
-			// workflow. Rejection (above), cancellation, reconciliation and
-			// the continuation of an already-approved run do not.
-			s.mu.Unlock()
-			return AssistantTurnResult{}, assistantWorkflowUnavailableError(domain.AssistantWorkflowBatch)
-		}
+		// Approval needs no proposer: an existing draft is approved and run
+		// through the runtime even when the batch workflow is unavailable.
 		return e.approveBatch(s, req)
 	}
 	idx := assistantWorkIndex(x, a.ActionID)

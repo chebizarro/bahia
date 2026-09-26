@@ -39,7 +39,8 @@ type assistantExecutionDeps struct {
 // store and executor; assistant.agentic.enabled only feeds the default
 // workflow and never decides what is constructed. The batch proposer is the
 // one optional part: it is built only when assistant.llm_model is set (Batch
-// is nil otherwise and batch requests are refused with workflow_unavailable).
+// is nil otherwise and new batch turns are refused with workflow_unavailable;
+// existing batch drafts can still be approved or rejected).
 type assistantExecutionWiring struct {
 	Orchestrator       *service.AssistantOrchestrator
 	Engine             *service.AssistantExecutionEngine
@@ -55,7 +56,7 @@ type assistantExecutionWiring struct {
 
 // assistantBatchUnavailableReason is logged at startup when the batch
 // proposer is not constructed.
-const assistantBatchUnavailableReason = "assistant.llm_model (batch proposer model) is not set; batch prompts and batch approvals are refused with workflow_unavailable, while already-approved batch runs still finish"
+const assistantBatchUnavailableReason = "assistant.llm_model (batch proposer model) is not set; new batch turns are refused with workflow_unavailable; existing batch drafts can still be approved or rejected and approved batch runs still finish"
 
 func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWiring, error) {
 	cfg := deps.Config

@@ -12,9 +12,11 @@ import (
 )
 
 // These tests cover a deployment whose batch proposer is not constructed
-// (assistant.llm_model unset with an iterative default). Batch requests that
-// would start new batch work are refused with workflow_unavailable, never run
-// as iterative; history stays readable; already-approved work still finishes.
+// (assistant.llm_model unset with an iterative default). A new turn that
+// resolves to batch is refused with workflow_unavailable, never run as
+// iterative. Everything that needs no proposer still works: history stays
+// readable, existing drafts can be approved or rejected, approved work
+// finishes.
 
 func assistantReadOnlyPlan() domain.AssistantPlan {
 	return domain.AssistantPlan{Summary: "read", Steps: []domain.AssistantPlanStep{{StepID: "one", ToolName: "read-one", ToolArgs: map[string]any{}}}}
@@ -124,36 +126,77 @@ func TestAssistantBatchUnavailablePersistedBatchSessionRefused(t *testing.T) {
 }
 
 // A batch draft awaiting approval when the deployment loses the batch
-// workflow cannot be approved (approval grants new batch authority), but it
-// can be rejected, which closes the run without dispatch.
-func TestAssistantBatchUnavailablePendingDraftApprovalRefusedRejectAllowed(t *testing.T) {
-	f := newAssistantRouterFixture(t, domain.AssistantWorkflowBatch, assistantStackOptions{batch: assistantTestBatchProposer{plan: assistantReadOnlyPlan()}})
+// workflow can still be approved: approval needs no proposer. The approval
+// safeguards are unchanged (an edit is bound to its new revision and hash; a
+// mismatched hash is stale), the approved plan runs exactly once with no
+// proposer call, and a new batch turn on the session is still refused. A
+// draft can equally be rejected without dispatch.
+func TestAssistantBatchUnavailablePendingDraftApprovalExecutes(t *testing.T) {
+	plan := domain.AssistantPlan{Summary: "reads", Steps: []domain.AssistantPlanStep{
+		{StepID: "one", ToolName: "read-one", ToolArgs: map[string]any{}},
+		{StepID: "two", ToolName: "read-two", ToolArgs: map[string]any{}},
+	}}
+	f := newAssistantRouterFixture(t, domain.AssistantWorkflowBatch, assistantStackOptions{batch: assistantTestBatchProposer{plan: plan}})
 	draft := requireAccepted(t, f.prompt(t, "s-draft", domain.AssistantWorkflowBatch))
-	if draft.Phase != domain.AssistantExecutionAwaitingApproval {
-		t.Fatalf("draft = %+v", draft)
+	other := requireAccepted(t, f.prompt(t, "s-reject", domain.AssistantWorkflowBatch))
+	if draft.Phase != domain.AssistantExecutionAwaitingApproval || other.Phase != domain.AssistantExecutionAwaitingApproval {
+		t.Fatalf("drafts = %+v / %+v", draft, other)
 	}
 
 	iterative := &assistantScriptedProposer{}
 	f.restart(t, domain.AssistantWorkflowIterative, assistantStackOptions{iterative: iterative})
-	checkpoints := assistantCheckpointCount(f.relay)
 
-	requireWorkflowUnavailable(t, f.decideDraft(t, "s-draft", draft, "approve"))
-	if f.server.total() != 0 || iterative.calls() != 0 || assistantCheckpointCount(f.relay) != checkpoints || f.stack.snapshot("s-draft").Phase != domain.AssistantExecutionAwaitingApproval {
-		t.Fatalf("refused approval acted: calls=%d proposals=%d phase=%s", f.server.total(), iterative.calls(), f.stack.snapshot("s-draft").Phase)
-	}
+	// A new turn resolving to batch through the session is still refused.
 	requireWorkflowUnavailable(t, f.prompt(t, "s-draft", ""))
 
-	if requireAccepted(t, f.decideDraft(t, "s-draft", draft, "reject")).Phase != domain.AssistantExecutionCancelled || f.server.total() != 0 {
-		t.Fatal("plan rejection was not accepted without dispatch")
+	// The operator's reviewed edit: drop step one.
+	edited := draft.Proposal.Plan
+	edited.Steps = []domain.AssistantPlanStep{edited.Steps[1]}
+	editedHash, err := domain.ComputeAssistantBatchApprovalHash(domain.AssistantBatchApprovalHashInput{Version: 2, SessionID: "s-draft", RunID: draft.CurrentRunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: draft.Proposal.ProposalID, Revision: 2, Scope: draft.Scope, Plan: edited})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if requireAccepted(t, f.prompt(t, "s-draft", domain.AssistantWorkflowIterative)).Workflow != domain.AssistantWorkflowIterative {
-		t.Fatal("explicit iterative turn after rejection was not accepted")
+	approval := func(hash string) domain.AssistantApprovalRequest {
+		return domain.AssistantApprovalRequest{ContractVersion: 2, SessionID: "s-draft", RunID: draft.CurrentRunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: draft.Proposal.ProposalID, BaseRevision: 1, BasePlanHash: draft.Proposal.Hash, ApprovedRevision: 2, ApprovedPlanHash: hash, Decision: "approve", ModifiedPlan: &edited}
+	}
+	stale, err := f.router.HandleApprovalRequest(context.Background(), f.source("stale"), approval(draft.Proposal.Hash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRefusal(t, stale, AssistantRefusalStaleApproval)
+	if f.server.total() != 0 {
+		t.Fatal("stale approval dispatched")
+	}
+
+	res, err := f.router.HandleApprovalRequest(context.Background(), f.source("approve"), approval(editedHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccepted(t, res)
+	f.relay.waitFor(t, "approved draft completed without the batch proposer", func() bool {
+		return f.stack.snapshot("s-draft").Phase == domain.AssistantExecutionCompleted
+	})
+	x := f.stack.snapshot("s-draft")
+	if f.server.count("read-one") != 0 || f.server.count("read-two") != 1 || iterative.calls() != 0 {
+		t.Fatalf("read-one=%d read-two=%d proposals=%d", f.server.count("read-one"), f.server.count("read-two"), iterative.calls())
+	}
+	if x.Workflow != domain.AssistantWorkflowBatch || x.Proposal == nil || x.Proposal.Revision != 2 || x.Proposal.Hash != editedHash {
+		t.Fatalf("approved run = %+v", x)
+	}
+	requireWorkflowUnavailable(t, f.prompt(t, "s-draft", ""))
+	if f.server.total() != 1 || iterative.calls() != 0 {
+		t.Fatalf("refused turn after completion acted: calls=%d proposals=%d", f.server.total(), iterative.calls())
+	}
+
+	if requireAccepted(t, f.decideDraft(t, "s-reject", other, "reject")).Phase != domain.AssistantExecutionCancelled || f.server.total() != 1 {
+		t.Fatal("plan rejection was not accepted without dispatch")
 	}
 }
 
-// A v1 batch draft migrated on a deployment without the batch workflow stays
-// awaiting approval; its approval is refused the same way and nothing runs.
-func TestAssistantBatchUnavailableMigratedV1DraftApprovalRefused(t *testing.T) {
+// A v1 batch draft migrated on a deployment without the batch workflow is
+// approved and executed exactly once through the common executor, with no
+// proposer call; a new batch turn on the migrated session is still refused.
+func TestAssistantBatchUnavailableMigratedV1DraftApprovalExecutes(t *testing.T) {
 	relay := newAssistantTestRelay()
 	signer := testAssistantSigner(t)
 	server := newAssistantTestToolServer(relay.touch)
@@ -161,19 +204,29 @@ func TestAssistantBatchUnavailableMigratedV1DraftApprovalRefused(t *testing.T) {
 	session := domain.AssistantSession{SessionID: "s-v1-draft", State: domain.AssistantSessionStateAwaitingApproval, OperatorPubkey: "operator", CurrentTurnID: "turn-1", CurrentRequestID: "request-1", CurrentPlan: &plan, LastPlanHash: domain.ComputePlanHash(plan, "s-v1-draft")}
 	publishAssistantSessionEvent(t, relay, signer, domain.AssistantSessionSchema, "s-v1-draft", session, nostr.Timestamp(assistantTestClock().Unix()-60))
 
-	st := newAssistantStack(t, relay, signer, server, assistantStackOptions{iterative: &assistantScriptedProposer{}})
+	iterative := &assistantScriptedProposer{}
+	st := newAssistantStack(t, relay, signer, server, assistantStackOptions{iterative: iterative})
 	st.recover(t, relay)
 	x := st.snapshot("s-v1-draft")
 	if x.Phase != domain.AssistantExecutionAwaitingApproval || x.Workflow != domain.AssistantWorkflowBatch || x.Proposal == nil {
 		t.Fatalf("draft conversion=%+v", x)
 	}
 	p := x.Proposal
-	_, err := st.engine.Decide(context.Background(), AssistantTurnDecisionRequest{Approval: domain.AssistantApprovalRequest{ContractVersion: 2, SessionID: "s-v1-draft", RunID: x.RunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: p.ProposalID, BaseRevision: p.Revision, BasePlanHash: p.Hash, ApprovedRevision: p.Revision, ApprovedPlanHash: p.Hash, Decision: "approve"}, OperatorPubkey: "operator", RequestEventID: "approval-v2"})
-	if !errors.Is(err, ErrAssistantWorkflowUnavailable) {
-		t.Fatalf("approve err = %v, want workflow_unavailable", err)
+	if _, err := st.engine.Decide(context.Background(), AssistantTurnDecisionRequest{Approval: domain.AssistantApprovalRequest{ContractVersion: 2, SessionID: "s-v1-draft", RunID: x.RunID, Workflow: domain.AssistantWorkflowBatch, ProposalID: p.ProposalID, BaseRevision: p.Revision, BasePlanHash: p.Hash, ApprovedRevision: p.Revision, ApprovedPlanHash: p.Hash, Decision: "approve"}, OperatorPubkey: "operator", RequestEventID: "approval-v2"}); err != nil {
+		t.Fatal(err)
 	}
-	if server.total() != 0 || st.snapshot("s-v1-draft").Phase != domain.AssistantExecutionAwaitingApproval {
-		t.Fatalf("refused migrated approval acted: calls=%d phase=%s", server.total(), st.snapshot("s-v1-draft").Phase)
+	relay.waitFor(t, "migrated draft completed", func() bool { return st.snapshot("s-v1-draft").Phase == domain.AssistantExecutionCompleted })
+	if server.count("read-one") != 1 || iterative.calls() != 0 {
+		t.Fatalf("read-one=%d proposals=%d", server.count("read-one"), iterative.calls())
+	}
+
+	projection, ok := st.engine.Projection("s-v1-draft")
+	if !ok || projection.Workflow != domain.AssistantWorkflowBatch {
+		t.Fatalf("migrated projection = %+v ok=%v", projection, ok)
+	}
+	_, err := st.engine.StartTurn(context.Background(), AssistantTurnStartRequest{Prompt: domain.AssistantPromptRequest{SessionID: "s-v1-draft", TurnID: "turn-2", Prompt: "again"}, OperatorPubkey: "operator", RequestEventID: "prompt-2", ExistingSession: &projection, DefaultWorkflow: domain.AssistantWorkflowIterative})
+	if !errors.Is(err, ErrAssistantWorkflowUnavailable) || server.total() != 1 || iterative.calls() != 0 {
+		t.Fatalf("new turn on migrated batch session err=%v calls=%d proposals=%d", err, server.total(), iterative.calls())
 	}
 }
 

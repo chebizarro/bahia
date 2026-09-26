@@ -269,10 +269,10 @@ the runtime, permission engine, transcript and checkpoint stores, observer,
 evidence resolver, iterative proposer and the engine when the assistant is
 enabled. The batch proposer is built only when `assistant.llm_model` is set,
 which config validation requires when the default workflow is batch. Without
-it, new batch turns and batch approvals are refused with
-`workflow_unavailable` and never downgraded; rejection, cancellation,
-reconciliation and continuation of approved batch runs need no proposer. The
-engine runs under an application-lifetime context owned by a background
+it, a new turn resolving to batch is refused with `workflow_unavailable` and
+never downgraded; approving or rejecting an existing batch draft,
+cancellation, reconciliation and continuation of approved batch runs need no
+proposer and are unaffected. The engine runs under an application-lifetime context owned by a background
 runner. Startup recovery receives the engine and store and
 resumes runs. A finished run's checkpoint chain is loaded before the next
 turn on that session so a recorded session-scope cancellation stays enforced

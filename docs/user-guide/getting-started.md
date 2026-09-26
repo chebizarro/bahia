@@ -119,7 +119,7 @@ assistant:
   # The assistant uses the multi-step agentic loop by default in audited permission mode.
   # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
   # llm_model is also the batch proposer's model: required when the default workflow
-  # is batch; without it only the iterative workflow is available.
+  # is batch; without it new batch turns are refused (existing drafts can still be approved).
   llm_base_url: "https://api.openai.com"
   llm_model: "<assistant-model>"
   llm_api_key: "<provider-api-key>"
@@ -341,12 +341,14 @@ before the unified executor. With an iterative default and no `llm_model` the
 assistant starts with only the iterative workflow available, and the startup
 log line `operator assistant executor initialized` reports
 `available_workflows=[iterative]` and a `batch_unavailable_reason`. On such a
-deployment a prompt that requests `workflow: batch`, a prompt on a session
-whose persisted workflow is batch, and the approval of a batch draft are
-refused with `{status:"failed", step:"workflow_unavailable"}`; they are never
-run as iterative. Rejecting a batch draft, cancelling, reconciling and
-finishing an already-approved batch run still work, because none of them calls
-the proposer. Set `llm_model` to offer both workflows whatever the default.
+deployment a new turn that resolves to batch (a prompt requesting
+`workflow: batch`, or a prompt on a session whose persisted workflow is batch)
+is refused with `{status:"failed", step:"workflow_unavailable"}`; it is never
+run as iterative. Everything that needs no proposer still works: approving
+(including an edited, revision-bound approval) or rejecting an existing batch
+draft, cancelling, reconciling and finishing an approved batch run, with the
+usual revision/hash binding, permission policy and command scope. Set
+`llm_model` to offer both workflows whatever the default.
 
 The iterative proposer is always validated when `assistant.enabled=true`: the
 `assistant.agentic.*` provider, model (falling back to `llm_model`; one of the

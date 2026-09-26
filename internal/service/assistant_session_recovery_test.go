@@ -83,10 +83,7 @@ func TestAssistantRecoveryConvertsV1BatchDraftForV2Approval(t *testing.T) {
 	session := domain.AssistantSession{SessionID: "s-draft", State: domain.AssistantSessionStateAwaitingApproval, OperatorPubkey: "operator", CurrentTurnID: "turn-1", CurrentRequestID: "request-1", CurrentPlan: &plan, LastPlanHash: domain.ComputePlanHash(plan, "s-draft")}
 	publishAssistantSessionEvent(t, relay, signer, domain.AssistantSessionSchema, "s-draft", session, nostr.Timestamp(assistantTestClock().Unix()-60))
 
-	// A deployment offering the batch workflow; the proposer itself is never
-	// called for a migrated draft. Without it the approval is refused (see
-	// TestAssistantBatchUnavailableMigratedV1DraftApprovalRefused).
-	st := newAssistantStack(t, relay, signer, server, assistantStackOptions{batch: assistantTestBatchProposer{}})
+	st := newAssistantStack(t, relay, signer, server, assistantStackOptions{})
 	st.recover(t, relay)
 	x := st.snapshot("s-draft")
 	if x.Phase != domain.AssistantExecutionAwaitingApproval || x.Proposal == nil || x.Proposal.Hash == session.LastPlanHash || server.total() != 0 {
