@@ -170,29 +170,36 @@ func (s *assistantFlakyStore) waitFor(t *testing.T, what string, cond func() boo
 	}
 }
 
-// assistantGateObserver returns a terminal outcome only when the test sends it.
+// assistantGateObserver returns a terminal outcome only when the test releases
+// it. Each parked ObserveWork call owns a one-slot channel; release removes a
+// slot and fills it in one critical section, so pending reports exactly the
+// calls that can still take an outcome, the send never waits, and no call is
+// released twice.
 type assistantGateObserver struct {
-	mu      sync.Mutex
-	waiting int
-	release chan AssistantAsyncObservationOutcome
-	notify  func()
+	mu     sync.Mutex
+	parked []chan AssistantAsyncObservationOutcome
+	notify func()
 }
 
 func (o *assistantGateObserver) ObserveWork(ctx context.Context, _ AssistantWorkObservationRequest) (AssistantAsyncObservationOutcome, error) {
+	slot := make(chan AssistantAsyncObservationOutcome, 1)
 	o.mu.Lock()
-	o.waiting++
+	o.parked = append(o.parked, slot)
 	o.mu.Unlock()
 	o.notify()
-	defer func() {
-		o.mu.Lock()
-		o.waiting--
-		o.mu.Unlock()
-		o.notify()
-	}()
 	select {
-	case out := <-o.release:
+	case out := <-slot:
 		return out, nil
 	case <-ctx.Done():
+		o.mu.Lock()
+		for i, parked := range o.parked {
+			if parked == slot {
+				o.parked = append(o.parked[:i], o.parked[i+1:]...)
+				break
+			}
+		}
+		o.mu.Unlock()
+		o.notify()
 		return AssistantAsyncObservationOutcome{Status: "blocked"}, ctx.Err()
 	}
 }
@@ -200,7 +207,20 @@ func (o *assistantGateObserver) ObserveWork(ctx context.Context, _ AssistantWork
 func (o *assistantGateObserver) pending() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.waiting > 0
+	return len(o.parked) > 0
+}
+
+// release hands out to the oldest parked observation.
+func (o *assistantGateObserver) release(t *testing.T, out AssistantAsyncObservationOutcome) {
+	t.Helper()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.parked) == 0 {
+		t.Fatal("release with no parked observation")
+	}
+	slot := o.parked[0]
+	o.parked = o.parked[1:]
+	slot <- out
 }
 
 func runAssistantCheckpointBoundary(t *testing.T, failRev uint64) int {
@@ -209,7 +229,7 @@ func runAssistantCheckpointBoundary(t *testing.T, failRev uint64) int {
 	store := newAssistantFlakyStore(failRev, log)
 	server := newAssistantTestToolServer(store.touch)
 	server.onCall = func(tool string) { log.add(assistantEffectEntry{kind: "call", tool: tool}) }
-	observer := &assistantGateObserver{release: make(chan AssistantAsyncObservationOutcome), notify: store.touch}
+	observer := &assistantGateObserver{notify: store.touch}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	engine := NewAssistantExecutionEngine(AssistantExecutionEngineConfig{Store: store, Runtime: assistantTestRuntime(server, nil, nil), Observer: observer, Batch: assistantTestBatchProposer{plan: assistantSyncAsyncSyncPlan()}, Lifecycle: lifecycle, Now: assistantTestClock, NewID: func(prefix string) string { return prefix + "-fixed" }})
 	defer func() { cancel(); engine.Wait() }()
@@ -273,12 +293,17 @@ func runAssistantCheckpointBoundary(t *testing.T, failRev uint64) int {
 			heal()
 			continue
 		}
-		observer.release <- AssistantAsyncObservationOutcome{Status: "completed"}
+		// Reached only when the wait observed a parked call; only release
+		// removes one before shutdown, so the call is still parked.
+		observer.release(t, AssistantAsyncObservationOutcome{Status: "completed"})
 	}
 	for _, tool := range []string{"read-one", "mutate", "read-two"} {
 		if n := server.count(tool); n != 1 {
 			t.Fatalf("%s called %d times", tool, n)
 		}
+	}
+	if observer.pending() {
+		t.Fatal("completed run left an observation parked")
 	}
 	log.verify(t)
 	if hit, _, _ := store.state(); failRev > 0 && !hit {

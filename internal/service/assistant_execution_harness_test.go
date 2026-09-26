@@ -448,7 +448,10 @@ func (p *assistantScriptedProposer) ProposeIterative(ctx context.Context, req As
 	entered := p.entered
 	p.mu.Unlock()
 	if entered != nil {
-		entered <- struct{}{}
+		select {
+		case entered <- struct{}{}:
+		case <-ctx.Done():
+		}
 	}
 	if gate != nil {
 		select {
