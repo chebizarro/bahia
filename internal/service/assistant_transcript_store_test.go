@@ -312,3 +312,28 @@ func TestAssistantTranscriptLogicalObservationIdentityDedupesReplay(t *testing.T
 		t.Fatalf("replayed logical observations=%d", len(records))
 	}
 }
+
+func TestAssistantTranscriptAppendOnceIsIdempotentAndDedupeIsOrderIndependent(t *testing.T) {
+	relay := newAssistantTestRelay()
+	store := newTestAssistantTranscriptStore(t, relay, relay)
+	appendTranscriptForTest(t, store, "once", "turn", 0, domain.AssistantAgentMessageRoleUser, "hello")
+	req := AssistantTranscriptAppend{SessionID: "once", TurnID: "turn", RunID: "run", LogicalID: "run:work:observation", Message: textAssistantMessage(domain.AssistantAgentMessageRoleTool, "observed")}
+	first, err := store.AppendMessageOnce(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendMessageOnce(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Payload.Sequence != 1 || second.EventID != first.EventID || len(relay.published(nostr.Kind(domain.KindAssistantTranscript))) != 2 {
+		t.Fatalf("append once: first=%+v second=%+v", first.Payload.Sequence, second.EventID)
+	}
+	a := AssistantTranscriptRecord{EventID: "b", Payload: domain.AssistantTranscriptPayload{Sequence: 3, Metadata: map[string]any{"logical_id": "x"}}}
+	b := AssistantTranscriptRecord{EventID: "a", Payload: domain.AssistantTranscriptPayload{Sequence: 5, Metadata: map[string]any{"logical_id": "x"}}}
+	left := dedupeAssistantLogicalRecords([]AssistantTranscriptRecord{a, b})
+	right := dedupeAssistantLogicalRecords([]AssistantTranscriptRecord{b, a})
+	if len(left) != 1 || len(right) != 1 || left[0].EventID != right[0].EventID || left[0].Payload.Sequence != 3 {
+		t.Fatalf("dedupe depends on arrival order: %+v %+v", left, right)
+	}
+}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -18,11 +19,40 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+// ErrAssistantCheckpointNotFound means a complete EOSE-bounded backfill found
+// no checkpoint for the run. It is not evidence about downstream effects.
+var ErrAssistantCheckpointNotFound = errors.New("no assistant checkpoint")
+
+// ErrAssistantCheckpointConflict means a different logical checkpoint was
+// offered for a revision whose signed event is still unconfirmed. Publishing
+// it could fork the chain, so the caller must retry the pending event instead.
+var ErrAssistantCheckpointConflict = errors.New("assistant checkpoint conflicts with an unconfirmed pending checkpoint")
+
 // AssistantCheckpointStore is the append-only dispatch journal. A returned ID
 // means a relay accepted the exact signed event, not merely that it was queued.
+// Retrying Append with an identical execution and predecessor republishes the
+// same signed event rather than creating another logical checkpoint.
 type AssistantCheckpointStore interface {
-	Append(context.Context, domain.AssistantExecution, string) (string, error)
-	Load(context.Context, string, string) (domain.AssistantExecution, string, error)
+	Append(ctx context.Context, execution domain.AssistantExecution, previousEventID string) (string, error)
+	Load(ctx context.Context, sessionID, runID string) (AssistantCheckpointHead, error)
+}
+
+// AssistantCheckpointHead is the newest checkpoint of a single validated
+// predecessor chain. Chain lists event IDs from root to head.
+type AssistantCheckpointHead struct {
+	Execution domain.AssistantExecution
+	EventID   string
+	Chain     []string
+}
+
+// Contains reports whether an event ID is part of the validated chain.
+func (h AssistantCheckpointHead) Contains(eventID string) bool {
+	for _, id := range h.Chain {
+		if id == eventID {
+			return true
+		}
+	}
+	return false
 }
 
 type AssistantExecutionStoreConfig struct {
@@ -42,7 +72,15 @@ type AssistantExecutionStore struct {
 	servicePubkey string
 	now           func() time.Time
 	mu            sync.Mutex
-	pending       map[string]nostr.Event
+	pending       map[string]assistantPendingCheckpoint
+}
+
+// assistantPendingCheckpoint is a signed checkpoint whose acceptance has not
+// been confirmed. plaintext identifies the logical checkpoint for retries.
+type assistantPendingCheckpoint struct {
+	event     nostr.Event
+	plaintext []byte
+	revision  uint64
 }
 
 func NewAssistantExecutionStore(c AssistantExecutionStoreConfig) *AssistantExecutionStore {
@@ -50,7 +88,7 @@ func NewAssistantExecutionStore(c AssistantExecutionStoreConfig) *AssistantExecu
 	if now == nil {
 		now = time.Now
 	}
-	return &AssistantExecutionStore{publisher: c.Publisher, subscriber: c.Subscriber, signer: c.Signer, keys: c.KeyProvider, servicePubkey: strings.TrimSpace(c.ServicePubkey), now: now, pending: make(map[string]nostr.Event)}
+	return &AssistantExecutionStore{publisher: c.Publisher, subscriber: c.Subscriber, signer: c.Signer, keys: c.KeyProvider, servicePubkey: strings.TrimSpace(c.ServicePubkey), now: now, pending: make(map[string]assistantPendingCheckpoint)}
 }
 
 func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTranscriptKey) nostr.Tags {
@@ -84,68 +122,86 @@ func (s *AssistantExecutionStore) Append(ctx context.Context, execution domain.A
 	if (execution.Revision == 1) != (previous == "") {
 		return "", errors.New("assistant checkpoint predecessor/revision mismatch")
 	}
-	keyID := execution.SessionID + "\x00" + execution.RunID + "\x00" + strconv.FormatUint(execution.Revision, 10)
+	plaintext, err := json.Marshal(domain.AssistantExecutionCheckpoint{Execution: execution, PreviousEventID: previous})
+	if err != nil {
+		return "", err
+	}
+	runKey := execution.SessionID + "\x00" + execution.RunID
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ev, exists := s.pending[keyID]
-	if !exists {
-		key, err := s.keys.ActiveTranscriptKey(ctx)
-		if err != nil {
-			return "", err
+	pending, exists := s.pending[runKey]
+	switch {
+	case exists && pending.revision == execution.Revision:
+		// A failed or ambiguous publication may only be retried with the
+		// identical signed event; a different payload would fork the chain.
+		if !bytes.Equal(pending.plaintext, plaintext) {
+			return "", fmt.Errorf("%w: revision %d", ErrAssistantCheckpointConflict, execution.Revision)
 		}
-		key, err = validateAssistantTranscriptKey(key)
-		if err != nil {
-			return "", err
-		}
-		plaintext, err := json.Marshal(domain.AssistantExecutionCheckpoint{Execution: execution, PreviousEventID: previous})
-		if err != nil {
-			return "", err
-		}
-		aead, err := chacha20poly1305.NewX(key.Key)
-		if err != nil {
-			return "", err
-		}
-		nonce := make([]byte, chacha20poly1305.NonceSizeX)
-		if _, err = rand.Read(nonce); err != nil {
-			return "", err
-		}
-		ad := checkpointAD(execution, previous)
-		adBytes, err := json.Marshal(ad)
-		if err != nil {
-			return "", err
-		}
-		envelope := domain.AssistantExecutionCheckpointAEADEnvelope{Schema: domain.AssistantExecutionCheckpointSchema, Envelope: domain.AssistantTranscriptEnvelopeServiceHeldAEAD, Algorithm: domain.AssistantTranscriptAEADAlgorithmXChaCha20, KeyRef: key.Ref, KeyVersion: key.Version, Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(aead.Seal(nil, nonce, plaintext, adBytes)), AssociatedData: ad}
-		content, err := json.Marshal(envelope)
-		if err != nil {
-			return "", err
-		}
-		ev = nostr.Event{Kind: nostr.Kind(domain.AssistantExecutionCheckpointKind), CreatedAt: nostr.Timestamp(s.now().UTC().Unix()), Tags: checkpointTags(execution, previous, key), Content: string(content)}
-		if err = signGoNostrEvent(ctx, s.signer, &ev); err != nil {
-			return "", fmt.Errorf("sign assistant checkpoint: %w", err)
-		}
-		s.pending[keyID] = ev
-	} else {
-		// A failed/ambiguous publication can only retry the same signed event.
-		if tagValue(ev.Tags, domain.AssistantCheckpointTagPrevious) != previous {
-			return "", errors.New("checkpoint retry changed predecessor")
-		}
+	case exists && pending.revision+1 == execution.Revision && previous == pending.event.ID.Hex():
+		// The caller observed the pending event in the validated chain.
+		delete(s.pending, runKey)
+		exists = false
+	case exists:
+		return "", fmt.Errorf("%w: pending revision %d, offered %d", ErrAssistantCheckpointConflict, pending.revision, execution.Revision)
 	}
-	accepted, err := s.publisher.Publish(ctx, ev)
+	if !exists {
+		ev, signErr := s.sealCheckpoint(ctx, execution, previous, plaintext)
+		if signErr != nil {
+			return "", signErr
+		}
+		pending = assistantPendingCheckpoint{event: ev, plaintext: plaintext, revision: execution.Revision}
+		s.pending[runKey] = pending
+	}
+	accepted, err := s.publisher.Publish(ctx, pending.event)
 	if err != nil {
-		return "", fmt.Errorf("publish assistant checkpoint %s: %w", ev.ID.Hex(), err)
+		return "", fmt.Errorf("publish assistant checkpoint %s: %w", pending.event.ID.Hex(), err)
 	}
 	if accepted < 1 {
-		return "", fmt.Errorf("publish assistant checkpoint %s: no relay accepted event", ev.ID.Hex())
+		return "", fmt.Errorf("publish assistant checkpoint %s: no relay accepted event", pending.event.ID.Hex())
 	}
-	delete(s.pending, keyID)
-	return ev.ID.Hex(), nil
+	delete(s.pending, runKey)
+	return pending.event.ID.Hex(), nil
 }
 
-func (s *AssistantExecutionStore) decode(ctx context.Context, ev *nostr.Event, sessionID, runID string) (domain.AssistantExecutionCheckpoint, error) {
+func (s *AssistantExecutionStore) sealCheckpoint(ctx context.Context, execution domain.AssistantExecution, previous string, plaintext []byte) (nostr.Event, error) {
+	key, err := s.keys.ActiveTranscriptKey(ctx)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	key, err = validateAssistantTranscriptKey(key)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	aead, err := chacha20poly1305.NewX(key.Key)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
+	if _, err = rand.Read(nonce); err != nil {
+		return nostr.Event{}, err
+	}
+	ad := checkpointAD(execution, previous)
+	adBytes, err := json.Marshal(ad)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	envelope := domain.AssistantExecutionCheckpointAEADEnvelope{Schema: domain.AssistantExecutionCheckpointSchema, Envelope: domain.AssistantTranscriptEnvelopeServiceHeldAEAD, Algorithm: domain.AssistantTranscriptAEADAlgorithmXChaCha20, KeyRef: key.Ref, KeyVersion: key.Version, Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(aead.Seal(nil, nonce, plaintext, adBytes)), AssociatedData: ad}
+	content, err := json.Marshal(envelope)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	ev := nostr.Event{Kind: nostr.Kind(domain.AssistantExecutionCheckpointKind), CreatedAt: nostr.Timestamp(s.now().UTC().Unix()), Tags: checkpointTags(execution, previous, key), Content: string(content)}
+	if err = signGoNostrEvent(ctx, s.signer, &ev); err != nil {
+		return nostr.Event{}, fmt.Errorf("sign assistant checkpoint: %w", err)
+	}
+	return ev, nil
+}
+
+func (s *AssistantExecutionStore) decode(ctx context.Context, ev *nostr.Event, author nostr.PubKey, sessionID, runID string) (domain.AssistantExecutionCheckpoint, error) {
 	if ev == nil || ev.Kind != nostr.Kind(domain.AssistantExecutionCheckpointKind) || !ev.CheckID() || !ev.VerifySignature() {
 		return domain.AssistantExecutionCheckpoint{}, errors.New("invalid assistant checkpoint event signature or kind")
 	}
-	if s.servicePubkey != "" && ev.PubKey.Hex() != s.servicePubkey {
+	if ev.PubKey != author {
 		return domain.AssistantExecutionCheckpoint{}, errors.New("assistant checkpoint author mismatch")
 	}
 	if tagValue(ev.Tags, "d") != "" || tagValue(ev.Tags, domain.AssistantCheckpointTagDomain) != domain.AssistantDomain || tagValue(ev.Tags, domain.AssistantCheckpointTagType) != domain.AssistantCheckpointTypeExecution || tagValue(ev.Tags, domain.AssistantCheckpointTagSchema) != domain.AssistantExecutionCheckpointSchema || tagValue(ev.Tags, domain.AssistantCheckpointTagSession) != sessionID || tagValue(ev.Tags, domain.AssistantCheckpointTagRun) != runID {
@@ -216,9 +272,9 @@ type assistantCheckpointNode struct {
 
 // newestAssistantCheckpoint follows revision and predecessor links only. Neither
 // relay arrival order nor CreatedAt participates in the result.
-func newestAssistantCheckpoint(nodes []assistantCheckpointNode) (domain.AssistantExecution, string, error) {
+func newestAssistantCheckpoint(nodes []assistantCheckpointNode) (AssistantCheckpointHead, error) {
 	if len(nodes) == 0 {
-		return domain.AssistantExecution{}, "", errors.New("no assistant checkpoint")
+		return AssistantCheckpointHead{}, ErrAssistantCheckpointNotFound
 	}
 	byID := make(map[string]assistantCheckpointNode, len(nodes))
 	successors := map[string]string{}
@@ -229,52 +285,83 @@ func newestAssistantCheckpoint(nodes []assistantCheckpointNode) (domain.Assistan
 		byID[node.id] = node
 		pred := node.cp.PreviousEventID
 		if prior, ok := successors[pred]; ok && prior != node.id {
-			return domain.AssistantExecution{}, "", errors.New("conflicting assistant checkpoint successors")
+			return AssistantCheckpointHead{}, errors.New("conflicting assistant checkpoint successors")
 		}
 		successors[pred] = node.id
 	}
 	rootID := successors[""]
 	if rootID == "" {
-		return domain.AssistantExecution{}, "", errors.New("assistant checkpoint root missing")
+		return AssistantCheckpointHead{}, errors.New("assistant checkpoint root missing")
 	}
 	id := rootID
 	visited := map[string]bool{}
+	chain := []string{}
 	for {
 		if visited[id] {
-			return domain.AssistantExecution{}, "", errors.New("assistant checkpoint cycle")
+			return AssistantCheckpointHead{}, errors.New("assistant checkpoint cycle")
 		}
 		visited[id] = true
+		chain = append(chain, id)
 		node := byID[id]
 		if nextID, ok := successors[id]; ok {
 			next := byID[nextID]
 			if next.cp.Execution.Revision != node.cp.Execution.Revision+1 || next.cp.Execution.SessionID != node.cp.Execution.SessionID || next.cp.Execution.RunID != node.cp.Execution.RunID {
-				return domain.AssistantExecution{}, "", errors.New("assistant checkpoint revision gap")
+				return AssistantCheckpointHead{}, errors.New("assistant checkpoint revision gap")
 			}
 			id = nextID
 			continue
 		}
 		if len(visited) != len(byID) {
-			return domain.AssistantExecution{}, "", errors.New("assistant checkpoint disconnected chain")
+			return AssistantCheckpointHead{}, errors.New("assistant checkpoint disconnected chain")
 		}
-		return node.cp.Execution, id, nil
+		return AssistantCheckpointHead{Execution: node.cp.Execution, EventID: id, Chain: chain}, nil
 	}
 }
 
-func (s *AssistantExecutionStore) Load(ctx context.Context, sessionID, runID string) (domain.AssistantExecution, string, error) {
-	if s == nil || s.subscriber == nil || sessionID == "" || runID == "" {
-		return domain.AssistantExecution{}, "", errors.New("assistant checkpoint query not configured")
+// assistantEOSEReached reports whether EOSE is already readable. Adapters close
+// the event stream and EOSE together when a subscription finishes, so a
+// closed event channel observed first must not be mistaken for a stream that
+// ended before historical catch-up completed.
+func assistantEOSEReached(eose <-chan struct{}) bool {
+	if eose == nil {
+		return false
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.AssistantExecutionCheckpointKind)}, Tags: nostr.TagMap{domain.AssistantCheckpointTagDomain: []string{domain.AssistantDomain}, domain.AssistantCheckpointTagType: []string{domain.AssistantCheckpointTypeExecution}, domain.AssistantCheckpointTagSchema: []string{domain.AssistantExecutionCheckpointSchema}, domain.AssistantCheckpointTagSession: []string{sessionID}, domain.AssistantCheckpointTagRun: []string{runID}}}
+	select {
+	case <-eose:
+		return true
+	default:
+		return false
+	}
+}
+
+// author resolves the only pubkey whose checkpoints are trusted. Without an
+// explicit service pubkey the signing identity is used; checkpoints are never
+// loaded without an author constraint.
+func (s *AssistantExecutionStore) author(ctx context.Context) (nostr.PubKey, error) {
 	if s.servicePubkey != "" {
-		author, err := nostr.PubKeyFromHex(s.servicePubkey)
-		if err != nil {
-			return domain.AssistantExecution{}, "", err
-		}
-		filter.Authors = []nostr.PubKey{author}
+		return nostr.PubKeyFromHex(s.servicePubkey)
 	}
+	if s.signer == nil {
+		return nostr.PubKey{}, errors.New("assistant checkpoint author is not configured")
+	}
+	return s.signer.GetPublicKey(ctx)
+}
+
+// Load performs one scoped backfill through EOSE and returns the head of the
+// single valid chain. CLOSED, a stream ending before EOSE, any invalid event
+// or any fork parks the run instead of guessing at its history.
+func (s *AssistantExecutionStore) Load(ctx context.Context, sessionID, runID string) (AssistantCheckpointHead, error) {
+	if s == nil || s.subscriber == nil || sessionID == "" || runID == "" {
+		return AssistantCheckpointHead{}, errors.New("assistant checkpoint query not configured")
+	}
+	author, err := s.author(ctx)
+	if err != nil {
+		return AssistantCheckpointHead{}, err
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.AssistantExecutionCheckpointKind)}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{domain.AssistantCheckpointTagDomain: []string{domain.AssistantDomain}, domain.AssistantCheckpointTagType: []string{domain.AssistantCheckpointTypeExecution}, domain.AssistantCheckpointTagSchema: []string{domain.AssistantExecutionCheckpointSchema}, domain.AssistantCheckpointTagSession: []string{sessionID}, domain.AssistantCheckpointTagRun: []string{runID}}}
 	sub, err := s.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
-		return domain.AssistantExecution{}, "", err
+		return AssistantCheckpointHead{}, err
 	}
 	defer sub.Close()
 	events := sub.EventChan()
@@ -285,24 +372,27 @@ func (s *AssistantExecutionStore) Load(ctx context.Context, sessionID, runID str
 	for {
 		select {
 		case <-ctx.Done():
-			return domain.AssistantExecution{}, "", ctx.Err()
+			return AssistantCheckpointHead{}, ctx.Err()
 		case c, ok := <-closed:
 			if !ok {
 				closed = nil
 				continue
 			}
-			return domain.AssistantExecution{}, "", fmt.Errorf("assistant checkpoint subscription closed: %s %s", c.RelayURL, c.Reason)
+			return AssistantCheckpointHead{}, fmt.Errorf("assistant checkpoint subscription closed: %s %s", c.RelayURL, c.Reason)
 		case ev, ok := <-events:
 			if !ok {
-				return domain.AssistantExecution{}, "", errors.New("assistant checkpoint subscription ended before EOSE")
+				if assistantEOSEReached(eose) {
+					return newestAssistantCheckpoint(nodes)
+				}
+				return AssistantCheckpointHead{}, errors.New("assistant checkpoint subscription ended before EOSE")
 			}
 			if ev == nil || seen[ev.ID.Hex()] {
 				continue
 			}
 			seen[ev.ID.Hex()] = true
-			cp, err := s.decode(ctx, ev, sessionID, runID)
+			cp, err := s.decode(ctx, ev, author, sessionID, runID)
 			if err != nil {
-				return domain.AssistantExecution{}, "", fmt.Errorf("checkpoint %s: %w", ev.ID.Hex(), err)
+				return AssistantCheckpointHead{}, fmt.Errorf("checkpoint %s: %w", ev.ID.Hex(), err)
 			}
 			nodes = append(nodes, assistantCheckpointNode{id: ev.ID.Hex(), cp: cp})
 		case <-eose:

@@ -156,3 +156,71 @@ Stop old writers before enabling v2 mutations. Rollback disables assistant
 mutations and retains v2 history; never downgrade an approved v2 queue into
 v1 executable `PendingSteps`. Historical inventory is bounded by retained
 relay/archive evidence, not by startup hydration limits.
+
+## Item 2 implementation notes (`bahia-0th5g`)
+
+The executor is `AssistantExecutionEngine` (`internal/service/assistant_execution.go`),
+the only component that dispatches assistant work. Item 3 wires it; until then
+the v1 dispatchers remain reachable and recovery is parked (see below).
+
+**Commit before effect.** Every state change is committed by appending an
+encrypted kind-4903 checkpoint and adopting it only after a relay OK. The
+`dispatching` reservation (immutable arguments and executor-issued key) is
+committed before the provider is invoked. A checkpoint that is not confirmed
+fences the session: no later checkpoint and no side effect occur, and
+`Decide`/`Cancel`/`Reconcile`/`StartTurn`/`Recover` first retry the identical
+signed event (the store refuses a different payload at the same revision).
+Only on acceptance is the fence lifted; in-process knowledge then resolves the
+fenced item (never invoked -> `ready`, receipt or observation known -> recorded).
+After a restart that knowledge is gone and a receipt-less `dispatching` item
+becomes `uncertain`.
+
+**Cursor and phase.** The cursor is always the first unfinished work item.
+Phases after approval are derived from work states: any `uncertain` item
+blocks; cancellation stays `cancelling` while any item is `dispatching`,
+`waiting_async`, `observed` or `uncertain`; a failed or denied batch step skips
+undispatched successors. A journal transition validator enforces append-only
+work, forward-only states, and immutable dispatched input, keys, receipts and
+observations.
+
+**Observation.** One backfill-plus-live subscription per receipt, keyed by
+run/work/request. EOSE completes backfill only. CLOSED/AUTH or a stream end
+shows the session projection as `blocked` while the journal stays
+`waiting_async` (loss of relay visibility is not execution state and must not
+fence the journal); the subscription is reissued after reconnect backoff and
+the projection returns to `waiting_async` after the fresh EOSE. A terminal
+event is checkpointed as `observed` before the transcript append; the append
+is idempotent by logical ID (`<run>:<work>:observation`), so replays after a
+crash never duplicate transcript entries or advance the cursor twice.
+
+**Ambiguous dispatch.** `uncertain` work is never redispatched. `Reconcile`
+accepts only an operator-named request event that
+`AssistantContextVMRequestEvidenceResolver` fetches by ID through EOSE and
+proves: command-signer author, kind 25910, `d` equal to the executor key, a
+method the tool publishes (`mcp.AssistantAsyncToolRequestMethods`) and params
+equal to the effective arguments. Absence at EOSE stays unresolved.
+
+**Migrated runs.** Accounting classifications (`batch_accounting`,
+`iterative_accounting`, `terminal_accounting`) only observe correlated receipts
+and accept reconciliation; they never dispatch or resume reasoning, and remain
+`blocked` until the operator cancels. `batch_draft` and `iterative_action`
+continue through the common executor.
+
+**Projection clock.** The v2 projection is replaceable and NIP-01 resolves
+equal `created_at` by lowest event ID, so the engine stamps
+`created_at = max(now, last + 1)` per session. The clock is recovered from the
+latest published projection (recovery hydration, or a scoped EOSE lookup before
+the first operation on a session in a process), so it stays monotonic across
+restarts. Bursts run ahead of wall-clock by one second per extra projection;
+that is intended.
+
+**Iteration guards.** The engine blocks an iterative run after
+`MaxConsecutiveToolFailures` trailing failed/denied observations or
+`MaxWorkItems` work items. Counting model calls needs model history, which the
+execution record does not hold; that bound belongs to the iterative proposer.
+
+**Recovery.** `AssistantSessionRecoveryRunner` has one path: validate
+service-signed projections (NIP-01 latest; v2 preferred over v1), classify v1
+through `ClassifyAssistantLegacySession`, append the conversion root once
+(conversion run IDs are deterministic), hydrate identity, then call `Recover`.
+Without an engine and store it logs and parks every session.

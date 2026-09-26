@@ -1379,7 +1379,6 @@ func New(cfg *config.Config) (*App, error) {
 			StreamingEnabled: cfg.Assistant.LLMStreaming,
 			Logger:           slog.Default(),
 		})
-		var assistantAgentLoop service.AssistantAgentLoopController
 		if cfg.Assistant.Agentic.Enabled {
 			externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, slog.Default())
 			if externalErr != nil {
@@ -1455,10 +1454,9 @@ func New(cfg *config.Config) (*App, error) {
 				Commands:       assistantCommands,
 				Hooks:          assistantHooks,
 			})
-			assistantAgentLoop = agentLoop
 			assistantOrchestrator.SetAgentLoop(agentLoop)
 		}
-		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3), RunnerRequired(false))
+		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}), RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.Bool("agentic_enabled", cfg.Assistant.Agentic.Enabled))
 	}
 

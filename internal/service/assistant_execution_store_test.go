@@ -36,12 +36,12 @@ func TestAssistantExecutionStoreEncryptedChainIgnoresArrivalAndTimestamp(t *test
 		}
 	}
 	store.subscriber = newReplayTranscriptSubscriber([]nostr.Event{events[2], events[0], events[1], events[2]})
-	latest, id, err := store.Load(context.Background(), "session-chain", "run-chain")
+	head, err := store.Load(context.Background(), "session-chain", "run-chain")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.Revision != 3 || id != events[2].ID.Hex() {
-		t.Fatalf("latest=%d id=%s", latest.Revision, id)
+	if head.Execution.Revision != 3 || head.EventID != events[2].ID.Hex() || len(head.Chain) != 3 || !head.Contains(events[0].ID.Hex()) || head.Contains("unknown") {
+		t.Fatalf("head=%d id=%s chain=%v", head.Execution.Revision, head.EventID, head.Chain)
 	}
 }
 
@@ -57,7 +57,7 @@ func TestAssistantCheckpointChainRejectsForkGapAndDisconnectedRoot(t *testing.T)
 	}
 	for name, nodes := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := newestAssistantCheckpoint(nodes); err == nil {
+			if _, err := newestAssistantCheckpoint(nodes); err == nil {
 				t.Fatal("accepted ambiguous chain")
 			}
 		})
@@ -91,5 +91,68 @@ func TestAssistantCheckpointPublicationRetriesSameSignedEvent(t *testing.T) {
 	}
 	if len(pub.events) != 2 || pub.events[0].ID != pub.events[1].ID || id != pub.events[0].ID.Hex() {
 		t.Fatal("retry did not use the same signed event")
+	}
+}
+
+func TestAssistantCheckpointRetryWithDifferentPayloadIsRefused(t *testing.T) {
+	pub := &assistantRejectingCheckpointPublisher{reject: true}
+	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: pub, Signer: testAssistantSigner(t), KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+	x := checkpointTestExecution(1)
+	if _, err := store.Append(context.Background(), x, ""); err == nil {
+		t.Fatal("rejected checkpoint was committed")
+	}
+	pub.reject = false
+	different := checkpointTestExecution(1)
+	different.Phase = domain.AssistantExecutionCancelled
+	if _, err := store.Append(context.Background(), different, ""); !errors.Is(err, ErrAssistantCheckpointConflict) {
+		t.Fatalf("a different logical checkpoint replaced an unconfirmed one: %v", err)
+	}
+	if len(pub.events) != 1 {
+		t.Fatalf("conflicting checkpoint was published: %d", len(pub.events))
+	}
+	if _, err := store.Append(context.Background(), x, ""); err != nil {
+		t.Fatalf("identical retry refused: %v", err)
+	}
+}
+
+func TestAssistantCheckpointLoadNotFoundAndForgedAuthor(t *testing.T) {
+	signer := testAssistantSigner(t)
+	pub := &assistantTestPublisher{}
+	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: pub, Signer: signer, KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+	store.subscriber = newReplayTranscriptSubscriber(nil)
+	if _, err := store.Load(context.Background(), "session-chain", "run-chain"); !errors.Is(err, ErrAssistantCheckpointNotFound) {
+		t.Fatalf("empty backfill: %v", err)
+	}
+	// A checkpoint signed by another key with identical tags parks the run.
+	forger := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: pub, Signer: testAssistantSigner(t), KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+	if _, err := forger.Append(context.Background(), checkpointTestExecution(1), ""); err != nil {
+		t.Fatal(err)
+	}
+	store.subscriber = newReplayTranscriptSubscriber(pub.eventsOfKind(domain.AssistantExecutionCheckpointKind))
+	if _, err := store.Load(context.Background(), "session-chain", "run-chain"); err == nil || !strings.Contains(err.Error(), "author") {
+		t.Fatalf("forged checkpoint accepted: %v", err)
+	}
+}
+
+func TestAssistantCheckpointPreservesNilVersusEmptyAllowedTools(t *testing.T) {
+	for name, allowed := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			pub := &assistantTestPublisher{}
+			store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: pub, Signer: testAssistantSigner(t), KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+			x := checkpointTestExecution(1)
+			x.Scope.AllowedTools = allowed
+			if _, err := store.Append(context.Background(), x, ""); err != nil {
+				t.Fatal(err)
+			}
+			store.subscriber = newReplayTranscriptSubscriber(pub.eventsOfKind(domain.AssistantExecutionCheckpointKind))
+			head, err := store.Load(context.Background(), "session-chain", "run-chain")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := head.Execution.Scope.AllowedTools
+			if (allowed == nil) != (got == nil) || len(got) != 0 {
+				t.Fatalf("allowed_tools %v round-tripped as %#v", allowed, got)
+			}
+		})
 	}
 }

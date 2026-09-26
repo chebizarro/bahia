@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -185,56 +184,6 @@ func TestAssistantToolRuntimeDenyReturnsDeniedObservation(t *testing.T) {
 	}
 }
 
-func TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync(t *testing.T) {
-	session := assistantRuntimeSession("session-restart")
-	session.State = domain.AssistantSessionStateExecuting
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-restart", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-restart", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-restart")})
-	loop := &assistantFakeAgentLoop{asyncResult: &AssistantAgentLoopResult{RunID: "run-restart", TurnID: "turn-1", Iteration: 2, State: domain.AssistantAgentLoopStateCompleted, SessionState: domain.AssistantSessionStateCompleted, Completed: true}}
-	orchestrator := newTestAssistantOrchestrator(t, &assistantTestPublisher{}, &assistantTestToolInvoker{}, nil, nil, nil)
-	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{AgentLoop: loop, Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
-
-	runner.recoverSession(context.Background(), session)
-
-	stored := orchestrator.session("session-restart")
-	if stored == nil {
-		t.Fatal("recovered session was not loaded into orchestrator")
-	}
-	if loop.asyncCalls != 1 {
-		t.Fatalf("ResumeAfterAsyncObservation calls = %d, want 1", loop.asyncCalls)
-	}
-	if loop.lastAsync.Session == nil || loop.lastAsync.Session.SessionID != "session-restart" {
-		t.Fatalf("loop received wrong session: %#v", loop.lastAsync.Session)
-	}
-}
-
-func TestAssistantSessionRecoveryWaitingAsyncWithoutRuntimeBlocks(t *testing.T) {
-	session := assistantRuntimeSession("session-no-runtime")
-	session.State = domain.AssistantSessionStateExecuting
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-no-runtime", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-no-runtime", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-no-runtime")})
-	publisher := &assistantTestPublisher{}
-	orchestrator := newTestAssistantOrchestrator(t, publisher, &assistantTestToolInvoker{}, nil, nil, nil)
-	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
-
-	runner.recoverSession(context.Background(), session)
-
-	stored := orchestrator.session("session-no-runtime")
-	if stored == nil || stored.State != domain.AssistantSessionStateBlocked {
-		t.Fatalf("stored session = %#v", stored)
-	}
-	if metadata := assistantAgentLoopMetadata(stored); metadata.State != domain.AssistantAgentLoopStateBlocked {
-		t.Fatalf("metadata = %#v", metadata)
-	}
-	statusEvents := publisher.eventsOfKind(domain.KindAssistantStatus)
-	if len(statusEvents) == 0 {
-		t.Fatal("expected blocked status event")
-	}
-	var status map[string]any
-	mustUnmarshalEventContent(t, lastAssistantEvent(t, statusEvents), &status)
-	if status["status"] != "blocked" || status["phase"] != "tool_observation_blocked" {
-		t.Fatalf("status = %#v", status)
-	}
-}
-
 func TestAssistantToolRuntimeDuplicateWaitingReceiptDoesNotInvokeAgain(t *testing.T) {
 	session := assistantRuntimeSession("session-duplicate")
 	server := &assistantRuntimeMCPServer{asyncReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-dup")}
@@ -410,14 +359,6 @@ func waitRuntimeObservation(t *testing.T, ch <-chan *domain.AssistantToolObserva
 	}
 }
 
-type testingWriter struct{ t *testing.T }
-
-func (w testingWriter) Write(p []byte) (int, error) {
-	w.t.Helper()
-	w.t.Log(strings.TrimSpace(string(p)))
-	return len(p), nil
-}
-
 var _ AssistantAsyncResultObserver = (*assistantRuntimeObserver)(nil)
 
 func TestAssistantRuntimeWorkScopedBatchApprovalCannotBeBypassed(t *testing.T) {
@@ -465,5 +406,60 @@ func TestAssistantRuntimeChangedApprovedArgumentsBlock(t *testing.T) {
 	prepared, err := r.PrepareWork(context.Background(), x, work)
 	if !errors.Is(err, ErrAssistantApprovedInputChanged) || prepared.Work.Arguments["target"] != "different" || work.Arguments["target"] != "original" {
 		t.Fatalf("approved input change=%v prepared=%+v work=%+v", err, prepared.Work, work)
+	}
+}
+
+func TestAssistantRuntimeHooksTightenButNeverLoosen(t *testing.T) {
+	evaluator := &assistantMutableHookEvaluator{}
+	hooks := newAssistantTestHooks(t, evaluator)
+	askMutate := []AssistantPermissionRule{{ID: "ask", Decision: domain.AssistantPermissionDecisionAsk, ToolNames: []string{"mutate"}}}
+	r := assistantTestRuntime(&assistantRuntimeMCPServer{}, hooks, askMutate)
+	x := domain.AssistantExecution{Version: 2, SessionID: "s", RunID: "r", Workflow: domain.AssistantWorkflowIterative}
+	work := domain.AssistantWorkItem{WorkID: "r:c", OriginID: "c", ToolName: "mutate", Arguments: map[string]any{}}
+
+	evaluator.set(AssistantHookOutcome{Decision: AssistantHookDecisionAllow})
+	if _, err := r.PrepareWork(context.Background(), x, work); !errors.Is(err, ErrAssistantApprovalRequired) {
+		t.Fatalf("hook allow loosened ask: %v", err)
+	}
+	evaluator.set(AssistantHookOutcome{Decision: AssistantHookDecisionDeny, Reason: "change freeze"})
+	work.ToolName = "read-one"
+	var denial *AssistantWorkDenial
+	if _, err := r.PrepareWork(context.Background(), x, work); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "change freeze") {
+		t.Fatalf("hook deny did not tighten an allow: %v", err)
+	}
+}
+
+func TestAssistantRuntimeApprovalBindsExactIterativeWorkAndBatchNeedsApproval(t *testing.T) {
+	r := assistantTestRuntime(&assistantRuntimeMCPServer{}, nil, nil)
+	x := domain.AssistantExecution{Version: 2, SessionID: "s", RunID: "r", Workflow: domain.AssistantWorkflowIterative}
+	args := map[string]any{"zone": "z"}
+	digest, err := domain.ComputeAssistantArgumentsDigest(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Audited mode lets this iterative mutation run autonomously...
+	autonomous := domain.AssistantWorkItem{WorkID: "r:a", OriginID: "a", ToolName: "mutate", Arguments: args}
+	if _, err := r.PrepareWork(context.Background(), x, autonomous); err != nil {
+		t.Fatalf("iterative autonomy changed: %v", err)
+	}
+	// ...but the same call in a batch still requires plan approval.
+	batch := x
+	batch.Workflow = domain.AssistantWorkflowBatch
+	batch.Proposal = &domain.AssistantProposalRevision{ProposalID: "p", Revision: 1, Hash: "h"}
+	if _, err := r.PrepareWork(context.Background(), batch, autonomous); !errors.Is(err, ErrAssistantApprovalRequired) {
+		t.Fatalf("batch approval bypassed: %v", err)
+	}
+	// An action binding for another work item never authorizes this one.
+	bound := autonomous
+	bound.ArgumentsDigest = digest
+	bound.Authorization = &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "d", ActionID: "r:other", ArgumentsDigest: digest}
+	var denial *AssistantWorkDenial
+	if _, err := r.PrepareWork(context.Background(), x, bound); !errors.As(err, &denial) {
+		t.Fatalf("foreign action binding accepted: %v", err)
+	}
+	bound.Authorization.ActionID = "r:a"
+	prepared, err := r.PrepareWork(context.Background(), x, bound)
+	if err != nil || prepared.Work.IdempotencyKey != "assistant-agent:s:r:a" {
+		t.Fatalf("exact binding: key=%q err=%v", prepared.Work.IdempotencyKey, err)
 	}
 }

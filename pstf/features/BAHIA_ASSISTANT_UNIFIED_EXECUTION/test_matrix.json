@@ -17,12 +17,31 @@
     ]
   },
   "item_2": {
-    "planned": [
-      "checkpoint publish/replay and conflict tests",
-      "sync-async-sync restart",
-      "uncertain dispatch",
-      "EVENT/EOSE/CLOSED/AUTH observer",
-      "race-controlled cancellation"
+    "executor": [
+      "go test ./internal/service -run 'TestAssistantExecution' -count=1"
+    ],
+    "store": [
+      "go test ./internal/service -run 'TestAssistantCheckpoint|TestAssistantExecutionStore' -count=1"
+    ],
+    "observer": [
+      "go test ./internal/service -run 'TestAssistantExecutionObserver' -count=1"
+    ],
+    "recovery": [
+      "go test ./internal/service -run 'TestAssistantRecovery' -count=1"
+    ],
+    "runtime_and_evidence": [
+      "go test ./internal/service -run 'TestAssistantRuntime|TestAssistantRequestEvidence|TestAssistantTranscript' -count=1",
+      "go test ./internal/mcp -run TestAssistantAsyncToolRequestMethods -count=1"
+    ],
+    "race": [
+      "go test -race ./internal/service -run 'TestAssistantExecution|TestAssistantRecovery|TestAssistantCheckpoint|TestAssistantTranscript' -count=25",
+      "GOFLAGS=-p=1 go test -race ./..."
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
     ]
   },
   "item_3": {

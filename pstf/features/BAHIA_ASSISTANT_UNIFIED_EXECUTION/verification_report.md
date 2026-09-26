@@ -35,3 +35,28 @@ Final rerun after checkpoint-envelope, strict I-JSON, and migrated-hash fixes:
 `go build ./...` and `go vet ./...` passed; `go test ./...` passed all 90
 reported packages; uncapped `golangci-lint` again reported only the same known
 `handleStandbyNodeDefinition` finding. No router exclusion was needed.
+
+## Item 2 gate evidence (2026-09-26, macOS worktree `bahia-asst`)
+
+Item 2 (`bahia-0th5g`) delivers the executor, store, observer, runtime
+gateway, evidence resolver and single recovery path; production DI and the
+atomic switch remain item 3, so these results prove the executor through
+service-level seams (deterministic in-memory relay with OK/EOSE/CLOSED, real
+encrypted checkpoint store, real transcript store and observer), not live
+relays or the joined browser flow.
+
+- `go build ./...`, `go vet ./...` — pass.
+- `go test ./...` — pass, 83 packages including `internal/api/router`; the
+  `bahia-frj9d` hang did not occur, so no exclusion was used.
+- `GOFLAGS=-p=1 go test -race ./...` — pass, 83 packages, no data race.
+- `go test -race ./internal/service -run 'TestAssistantExecution|TestAssistantRecovery|TestAssistantCheckpoint|TestAssistantTranscript' -count=25` — pass (flake check).
+- `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0` — only the
+  known `handleStandbyNodeDefinition` finding.
+- Mutation checks: dispatching after a rejected reservation, and removing the
+  session fence, each make `TestAssistantExecutionCheckpointFailureAtEveryBoundaryBlocksSafely`
+  fail; the boundary matrix covers all 13 checkpoint revisions of a
+  sync -> async -> sync batch.
+
+Criteria A7-A14 map item 2 claims to tests. A5's
+`TestAssistantUnifiedExecutionIntegration` (joined provider -> approval ->
+restart) is still owed by item 3.

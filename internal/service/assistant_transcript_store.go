@@ -245,7 +245,6 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 	defer merged.Close()
 
 	seen := map[string]struct{}{}
-	seenLogical := map[string]struct{}{}
 	records := make([]AssistantTranscriptRecord, 0)
 	eventsCh := merged.EventChan()
 	closedCh := merged.ClosedChan()
@@ -262,7 +261,7 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 			return nil, fmt.Errorf("assistant transcript replay subscription closed: relay=%s reason=%s", closed.RelayURL, closed.Reason)
 		case ev, ok := <-eventsCh:
 			if !ok {
-				return truncateAssistantTranscriptRecords(records, query.Limit), nil
+				return truncateAssistantTranscriptRecords(dedupeAssistantLogicalRecords(records), query.Limit), nil
 			}
 			record, err := s.decryptEvent(ctx, ev, query)
 			if err != nil {
@@ -275,17 +274,78 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 				continue
 			}
 			seen[record.EventID] = struct{}{}
-			if logical, ok := record.Payload.Metadata["logical_id"].(string); ok && logical != "" {
-				if _, dup := seenLogical[logical]; dup {
-					continue
-				}
-				seenLogical[logical] = struct{}{}
-			}
 			records = append(records, *record)
 		case <-eoseCh:
-			return truncateAssistantTranscriptRecords(records, query.Limit), nil
+			return truncateAssistantTranscriptRecords(dedupeAssistantLogicalRecords(records), query.Limit), nil
 		}
 	}
+}
+
+// AppendMessageOnce publishes a logical transcript message at most once per
+// logical identity. It performs a scoped EOSE-bounded backfill for the
+// session; if the logical ID is already present the existing record is
+// returned, otherwise the message is appended at the next session sequence.
+// Replayed observations therefore never duplicate consumed transcript entries.
+func (s *AssistantTranscriptStore) AppendMessageOnce(ctx context.Context, appendReq AssistantTranscriptAppend) (*AssistantTranscriptRecord, error) {
+	if strings.TrimSpace(appendReq.LogicalID) == "" {
+		return nil, fmt.Errorf("assistant transcript logical_id is required for idempotent append")
+	}
+	records, err := s.Replay(ctx, AssistantTranscriptReplayQuery{SessionID: appendReq.SessionID})
+	if err != nil {
+		return nil, err
+	}
+	next := 0
+	for i := range records {
+		if assistantTranscriptLogicalID(records[i]) == appendReq.LogicalID {
+			existing := records[i]
+			return &existing, nil
+		}
+		if records[i].Payload.Sequence >= next {
+			next = records[i].Payload.Sequence + 1
+		}
+	}
+	appendReq.Sequence = next
+	return s.AppendMessage(ctx, appendReq)
+}
+
+func assistantTranscriptLogicalID(record AssistantTranscriptRecord) string {
+	logical, _ := record.Payload.Metadata["logical_id"].(string)
+	return logical
+}
+
+// dedupeAssistantLogicalRecords keeps one record per logical ID, choosing the
+// earliest by (sequence, created_at, event ID) so the result does not depend
+// on relay arrival order.
+func dedupeAssistantLogicalRecords(records []AssistantTranscriptRecord) []AssistantTranscriptRecord {
+	chosen := map[string]int{}
+	out := make([]AssistantTranscriptRecord, 0, len(records))
+	for _, record := range records {
+		logical := assistantTranscriptLogicalID(record)
+		if logical == "" {
+			out = append(out, record)
+			continue
+		}
+		idx, ok := chosen[logical]
+		if !ok {
+			chosen[logical] = len(out)
+			out = append(out, record)
+			continue
+		}
+		if assistantTranscriptRecordBefore(record, out[idx]) {
+			out[idx] = record
+		}
+	}
+	return out
+}
+
+func assistantTranscriptRecordBefore(a, b AssistantTranscriptRecord) bool {
+	if a.Payload.Sequence != b.Payload.Sequence {
+		return a.Payload.Sequence < b.Payload.Sequence
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.EventID < b.EventID
 }
 
 func (s *AssistantTranscriptStore) BuildModelHistory(ctx context.Context, sessionID string, limit int) ([]domain.AssistantAgentMessage, error) {
