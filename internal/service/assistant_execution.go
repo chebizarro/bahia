@@ -1583,6 +1583,16 @@ func projectAssistantExecution(x domain.AssistantExecution, id string, p domain.
 	if x.Phase == domain.AssistantExecutionAwaitingApproval && x.Workflow == domain.AssistantWorkflowBatch && x.Proposal != nil {
 		p.PendingApprovals = []string{x.Proposal.ProposalID}
 	}
+	// A session-scope cancellation closes the session to new turns (StartTurn
+	// refuses with session_closed); project it so readers need not probe.
+	p.Closed, p.ClosedAt = false, nil
+	if c := x.Cancellation; c != nil && c.Scope == "session" {
+		p.Closed = true
+		if !c.RecordedAt.IsZero() {
+			at := c.RecordedAt.UTC()
+			p.ClosedAt = &at
+		}
+	}
 	switch x.Phase {
 	case domain.AssistantExecutionProposing:
 		p.State = domain.AssistantSessionStatePlanning

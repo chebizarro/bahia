@@ -177,7 +177,7 @@ func (assistantFailingSubscriber) SubscribeAllWithEOSE(context.Context, []nostr.
 }
 
 // A session-scope cancellation recorded on a finished run stays enforced after
-// a restart even though the v2 projection has no "closed" field.
+// a restart, and the published v2 projection says the session is closed.
 func TestAssistantOrchestratorSessionCloseOnFinishedRunSurvivesRestart(t *testing.T) {
 	f := newAssistantRouterFixture(t, domain.AssistantWorkflowIterative, assistantStackOptions{iterative: &assistantScriptedProposer{}})
 	done := requireAccepted(t, f.prompt(t, "s-close", ""))
@@ -192,6 +192,9 @@ func TestAssistantOrchestratorSessionCloseOnFinishedRunSurvivesRestart(t *testin
 		t.Fatalf("session close result = %#v", res)
 	}
 	requireRefusal(t, f.prompt(t, "s-close", ""), AssistantRefusalSessionClosed)
+	if p := assistantJoinedLatestProjection(t, f.relay, "s-close"); !p.Closed || p.ClosedAt == nil || p.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("closed projection = closed:%v closed_at:%v phase:%s", p.Closed, p.ClosedAt, p.Phase)
+	}
 
 	f.stack.crash()
 	f.stack = newAssistantStack(t, f.relay, f.signer, f.server, assistantStackOptions{iterative: &assistantScriptedProposer{}})

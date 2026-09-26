@@ -1584,6 +1584,19 @@ func (a AssistantConfig) BatchWorkflowAvailable() bool {
 	return strings.TrimSpace(a.LLMModel) != ""
 }
 
+// AvailableWorkflows lists the workflows this deployment can start new turns
+// in. Iterative is always constructed when the assistant is enabled; batch only
+// when BatchWorkflowAvailable. The list is empty when the assistant is off.
+func (a AssistantConfig) AvailableWorkflows() []string {
+	if !a.Enabled {
+		return []string{}
+	}
+	if a.BatchWorkflowAvailable() {
+		return []string{AssistantWorkflowBatch, AssistantWorkflowIterative}
+	}
+	return []string{AssistantWorkflowIterative}
+}
+
 // ResolvedDefaultWorkflow returns the configured default workflow, mapping the
 // deprecated agentic.enabled flag when default_workflow is unset.
 func (a AssistantConfig) ResolvedDefaultWorkflow() string {

@@ -291,6 +291,12 @@ type AssistantSessionV2 struct {
 	SubmittedEffects  int                        `json:"submitted_effects"`
 	UncertainEffects  int                        `json:"uncertain_effects"`
 	CheckpointEventID string                     `json:"checkpoint_event_id,omitempty"`
+	// Closed reports that a session-scope cancellation closed the session to
+	// new turns; ClosedAt is when it was recorded. Both are additive to the v2
+	// schema (omitted when open). The cancellation reason is operator text kept
+	// only in the encrypted checkpoint and is deliberately not projected.
+	Closed   bool       `json:"closed,omitempty"`
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
 }
 
 // AssistantCancellationRequest is distinct from rejecting a draft or action.

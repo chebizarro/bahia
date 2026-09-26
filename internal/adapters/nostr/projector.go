@@ -2346,6 +2346,7 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 		"nostr": map[string]any{
 			"trusted_relay_monitor_pubkeys": cfg.Nostr.TrustedRelayMonitorPubkeys,
 		},
+		"assistant": discoveryAssistant(cfg.Assistant),
 		"features": map[string]bool{
 			"oci":                      cfg.OCI.Enabled,
 			"harbor":                   cfg.Harbor.Enabled,
@@ -2369,6 +2370,20 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 		return fmt.Errorf("marshal system discovery: %w", err)
 	}
 	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil)
+}
+
+// discoveryAssistant advertises which assistant workflows can start new turns
+// on this deployment. Batch is absent without assistant.llm_model; approving or
+// rejecting an existing batch draft does not depend on this list.
+func discoveryAssistant(cfg config.AssistantConfig) map[string]any {
+	assistant := map[string]any{
+		"enabled":             cfg.Enabled,
+		"available_workflows": cfg.AvailableWorkflows(),
+	}
+	if cfg.Enabled {
+		assistant["default_workflow"] = cfg.ResolvedDefaultWorkflow()
+	}
+	return assistant
 }
 
 func (p *Projector) publishSystemDiscovery(ctx context.Context) error {

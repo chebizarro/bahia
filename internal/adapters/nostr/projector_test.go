@@ -1340,6 +1340,51 @@ func TestProjectorPublishesDNSEndpointFIPSTagsWhenWorkerPubkeyPresent(t *testing
 	assertTag(t, endpointEvent, "mesh", "fips")
 }
 
+// The browser hides batch actions from the discovery assistant block: batch is
+// advertised only when assistant.llm_model builds the batch proposer.
+func TestProjectorSystemDiscoveryAdvertisesAssistantWorkflows(t *testing.T) {
+	cases := []struct {
+		name        string
+		enabled     bool
+		llmModel    string
+		agentic     bool
+		want        []any
+		wantDefault any
+	}{
+		{name: "disabled", want: []any{}},
+		{name: "batch and iterative", enabled: true, llmModel: "planner", want: []any{"batch", "iterative"}, wantDefault: "batch"},
+		{name: "iterative only without llm_model", enabled: true, agentic: true, want: []any{"iterative"}, wantDefault: "iterative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.Nostr.PrivateKey = projectorTestPrivateKey
+			cfg.Nostr.PublishEnabled = true
+			cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+			cfg.Assistant.Enabled = tc.enabled
+			cfg.Assistant.LLMModel = tc.llmModel
+			cfg.Assistant.Agentic.Enabled = tc.agentic
+			sink := &captureProjectionPublisher{}
+			projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+			if err := projector.RepublishSnapshot(context.Background()); err != nil {
+				t.Fatalf("republish snapshot: %v", err)
+			}
+			discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
+				t.Fatalf("unmarshal discovery: %v", err)
+			}
+			assistant, ok := payload["assistant"].(map[string]any)
+			if !ok {
+				t.Fatalf("assistant block missing: %#v", payload["assistant"])
+			}
+			if assistant["enabled"] != tc.enabled || !reflect.DeepEqual(assistant["available_workflows"], tc.want) || assistant["default_workflow"] != tc.wantDefault {
+				t.Fatalf("assistant discovery = %#v", assistant)
+			}
+		})
+	}
+}
+
 func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Defaults()
@@ -1571,7 +1616,7 @@ func assertSystemDiscoveryEnvelopeForBrowser(t *testing.T, ev gonostr.Event) {
 	if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
 		t.Fatalf("unmarshal discovery content: %v", err)
 	}
-	wantTopLevel := []string{"blossom", "control_plane", "features", "nostr", "observed_deployments", "oci", "registries", "runtime", "schema", "versions"}
+	wantTopLevel := []string{"assistant", "blossom", "control_plane", "features", "nostr", "observed_deployments", "oci", "registries", "runtime", "schema", "versions"}
 	if got := sortedDiscoveryPayloadKeys(payload); !reflect.DeepEqual(got, wantTopLevel) {
 		t.Fatalf("discovery top-level keys = %#v, want browser protocol envelope keys %#v", got, wantTopLevel)
 	}

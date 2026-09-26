@@ -115,7 +115,12 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 	})
 	status := service.NewAssistantStatusEventPublisher(deps.Publisher, deps.Signer, deps.Identity)
 	proposalContext := service.NewAssistantProposalContext(service.AssistantProposalContextConfig{Commands: commands, Hooks: hooks})
-	available := []domain.AssistantWorkflow{domain.AssistantWorkflowIterative}
+	// The same config helper feeds the system-discovery announcement, so the
+	// browser is told exactly the workflows constructed here.
+	available := make([]domain.AssistantWorkflow, 0, 2)
+	for _, workflow := range cfg.Assistant.AvailableWorkflows() {
+		available = append(available, domain.AssistantWorkflow(workflow))
+	}
 	// The engine's Batch must be a nil interface (not a typed nil pointer) when
 	// the batch proposer is absent, so it can refuse batch requests.
 	var batch *service.AssistantBatchPlanner
@@ -133,7 +138,6 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 			Logger:           slog.Default(),
 		})
 		batchProposer = batch
-		available = []domain.AssistantWorkflow{domain.AssistantWorkflowBatch, domain.AssistantWorkflowIterative}
 	}
 	iterative, err := service.NewAssistantAgentLoop(service.AssistantAgentLoopConfig{
 		ModelClient:    deps.ModelClient,
