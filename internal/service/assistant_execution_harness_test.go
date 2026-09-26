@@ -536,6 +536,9 @@ type assistantStackOptions struct {
 	evidence AssistantRequestEvidenceResolver
 	hooks    *AssistantHookRunner
 	rules    []AssistantPermissionRule
+	// checkpointPublisher replaces the relay as the checkpoint store's
+	// publisher only, so a test can hold or fail checkpoint publication.
+	checkpointPublisher AssistantEventPublisher
 }
 
 type assistantStack struct {
@@ -559,7 +562,11 @@ func newAssistantStack(t *testing.T, relay *assistantTestRelay, signer nostr.Sig
 	keys := StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	st := &assistantStack{cancel: cancel, pubkey: pk.Hex(), reissue: make(chan struct{})}
-	st.store = NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: keys, Now: assistantTestClock})
+	var checkpointPublisher AssistantEventPublisher = relay
+	if opts.checkpointPublisher != nil {
+		checkpointPublisher = opts.checkpointPublisher
+	}
+	st.store = NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: checkpointPublisher, Subscriber: relay, Signer: signer, KeyProvider: keys, Now: assistantTestClock})
 	st.transcript = NewAssistantTranscriptStore(AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, KeyProvider: keys, Now: assistantTestClock})
 	st.observer = &AssistantExecutionObserver{Subscriber: relay, ReissueWait: func(ctx context.Context, _ int) error {
 		select {

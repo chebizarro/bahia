@@ -117,13 +117,21 @@ func closedReasonCategory(reason string) string {
 
 // SetConnected updates the connection state.
 func (h *RelayHealth) SetConnected(connected bool) {
+	h.MarkConnected(connected)
+}
+
+// MarkConnected updates the connection state and reports whether this call
+// moved the relay from disconnected to connected.
+func (h *RelayHealth) MarkConnected(connected bool) (restored bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	restored = connected && !h.Connected
 	h.Connected = connected
 	if connected {
 		h.LastConnected = time.Now()
 	}
+	return restored
 }
 
 // recordLatency adds a latency sample to the sliding window (must hold lock).

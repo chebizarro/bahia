@@ -1376,20 +1376,21 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, externalErr
 		}
 		assistantExecution, err := buildAssistantExecution(assistantExecutionDeps{
-			Config:          cfg,
-			MCPServer:       mcpServer,
-			ContextBuilder:  contextBuilder,
-			ChatClient:      chatClient,
-			ModelClient:     modelClient,
-			Publisher:       assistantPublisher,
-			Subscriber:      assistantSubscriber,
-			Signer:          controlPlaneSigner,
-			Identity:        identity,
-			ServicePubkey:   servicePubkey,
-			Transcript:      transcriptStore,
-			KeyProvider:     transcriptKeys,
-			InitialSessions: loadAssistantSessions(ctx, nostrEventRepo, logger),
-			ExternalMCP:     externalMCP,
+			Config:           cfg,
+			MCPServer:        mcpServer,
+			ContextBuilder:   contextBuilder,
+			ChatClient:       chatClient,
+			ModelClient:      modelClient,
+			Publisher:        assistantPublisher,
+			Subscriber:       assistantSubscriber,
+			Signer:           controlPlaneSigner,
+			Identity:         identity,
+			ServicePubkey:    servicePubkey,
+			Transcript:       transcriptStore,
+			KeyProvider:      transcriptKeys,
+			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
+			ExternalMCP:      externalMCP,
+			RelayConnections: controlPlanePool,
 		})
 		if err != nil {
 			return nil, err
@@ -1397,6 +1398,9 @@ func New(cfg *config.Config) (*App, error) {
 		assistantOrchestrator = assistantExecution.Orchestrator
 		bgManager.RegisterWithOptions(assistantExecution.Lifecycle, RunnerTier(Tier1), RunnerRequired(false))
 		bgManager.RegisterWithOptions(assistantExecution.Recovery, RunnerTier(Tier3), RunnerRequired(false))
+		if assistantExecution.Healer != nil {
+			bgManager.RegisterWithOptions(assistantExecution.Healer, RunnerTier(Tier1), RunnerRequired(false))
+		}
 		availableWorkflows := make([]string, 0, len(assistantExecution.AvailableWorkflows))
 		for _, workflow := range assistantExecution.AvailableWorkflows {
 			availableWorkflows = append(availableWorkflows, string(workflow))

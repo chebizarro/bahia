@@ -134,6 +134,46 @@ type assistantEngineSession struct {
 	observing          map[string]context.CancelFunc
 	driving            bool
 	redrive            bool
+	// healing is guarded by its own lock, not mu: mu is held across the heal
+	// publication itself.
+	healing assistantHealFlight
+}
+
+// assistantHealFlight makes relay-driven healing single-flight per session. A
+// trigger that arrives while an attempt runs is not run concurrently; it asks
+// the running caller for one trailing attempt, so a reconnect that lands
+// while an attempt is failing is never lost and a reconnect storm never
+// queues more than one waiter.
+type assistantHealFlight struct {
+	mu      sync.Mutex
+	running bool
+	again   bool
+}
+
+// begin reports whether the caller owns the flight; otherwise it records a
+// request for a trailing attempt.
+func (f *assistantHealFlight) begin() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.running {
+		f.again = true
+		return false
+	}
+	f.running = true
+	return true
+}
+
+// end releases the flight unless a trailing attempt was requested, in which
+// case the caller keeps ownership and must attempt again.
+func (f *assistantHealFlight) end() (again bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.again {
+		f.again = false
+		return true
+	}
+	f.running = false
+	return false
 }
 
 // AssistantExecutionEngine is the single authoritative per-session v2 writer
@@ -972,6 +1012,69 @@ func (e *AssistantExecutionEngine) Recover(ctx context.Context, ref AssistantExe
 	}
 	e.kickLocked(s)
 	return nil
+}
+
+// HealFenced is the relay-reconnect entry point. Every session fenced by an
+// unconfirmed checkpoint is resumed through Recover, whose heal step retries
+// the identical pending signed checkpoint the store retained; nothing is
+// re-signed, and the fence lifts only when a relay accepts that event. Each
+// session heals single-flight. It returns the number of sessions healed.
+//
+// Reading a session's fence takes its lock, so a checkpoint commit that is
+// failing while the relay reconnects is waited for rather than missed.
+func (e *AssistantExecutionEngine) HealFenced(ctx context.Context) int {
+	if e.ready() != nil {
+		return 0
+	}
+	e.mu.Lock()
+	sessions := make([]*assistantEngineSession, 0, len(e.sessions))
+	for _, s := range e.sessions {
+		sessions = append(sessions, s)
+	}
+	e.mu.Unlock()
+	healed := 0
+	for _, s := range sessions {
+		if ctx.Err() != nil || e.cfg.Lifecycle.Err() != nil {
+			break
+		}
+		if e.healFencedSession(ctx, s) {
+			healed++
+		}
+	}
+	return healed
+}
+
+func (e *AssistantExecutionEngine) healFencedSession(ctx context.Context, s *assistantEngineSession) bool {
+	if !s.healing.begin() {
+		return false
+	}
+	healed := false
+	for {
+		if e.healFencedAttempt(ctx, s) {
+			healed = true
+		}
+		if !s.healing.end() {
+			return healed
+		}
+	}
+}
+
+func (e *AssistantExecutionEngine) healFencedAttempt(ctx context.Context, s *assistantEngineSession) bool {
+	s.mu.Lock()
+	var runID string
+	if s.fault != nil {
+		runID = s.fault.pending.RunID
+	}
+	s.mu.Unlock()
+	if runID == "" {
+		return false
+	}
+	if err := e.Recover(ctx, AssistantExecutionReference{SessionID: s.id, RunID: runID}); err != nil {
+		e.logger.Info("assistant fenced session not healed after relay reconnect", "session_id", s.id, "run_id", runID, "error", err)
+		return false
+	}
+	e.logger.Info("assistant fenced session healed after relay reconnect", "session_id", s.id, "run_id", runID)
+	return true
 }
 
 // ---------------------------------------------------------------------------

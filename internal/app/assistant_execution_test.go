@@ -190,6 +190,11 @@ func wiringConfig(t *testing.T, agentic bool, defaultWorkflow string) *config.Co
 
 func buildTestAssistantExecution(t *testing.T, cfg *config.Config, relay *memoryRelay) (*assistantExecutionWiring, nostr.Signer) {
 	t.Helper()
+	return buildTestAssistantExecutionWith(t, cfg, relay, nil)
+}
+
+func buildTestAssistantExecutionWith(t *testing.T, cfg *config.Config, relay *memoryRelay, customize func(*assistantExecutionDeps)) (*assistantExecutionWiring, nostr.Signer) {
+	t.Helper()
 	secret, err := nostr.SecretKeyFromHex(cfg.Nostr.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +206,7 @@ func buildTestAssistantExecution(t *testing.T, cfg *config.Config, relay *memory
 	}
 	identity := service.AssistantIdentity{AgentID: "assistant-wiring", Pubkey: secret.Public().Hex()}
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, Identity: identity, KeyProvider: keys, ServicePubkey: secret.Public().Hex()})
-	wiring, err := buildAssistantExecution(assistantExecutionDeps{
+	deps := assistantExecutionDeps{
 		Config:         cfg,
 		MCPServer:      mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{}),
 		ContextBuilder: service.NewAssistantContextBuilder(nil, nil, nil, nil, nil, nil, service.AssistantContextBuilderConfig{TranscriptHistory: transcript}),
@@ -214,7 +219,11 @@ func buildTestAssistantExecution(t *testing.T, cfg *config.Config, relay *memory
 		ServicePubkey:  secret.Public().Hex(),
 		Transcript:     transcript,
 		KeyProvider:    keys,
-	})
+	}
+	if customize != nil {
+		customize(&deps)
+	}
+	wiring, err := buildAssistantExecution(deps)
 	if err != nil {
 		t.Fatal(err)
 	}

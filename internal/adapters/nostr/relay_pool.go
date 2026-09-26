@@ -38,6 +38,12 @@ type RelayPool struct {
 	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner          nostr.Signer
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
+
+	// connectedMu guards relay (re)connection listeners. It is never held
+	// while calling out, and notification never blocks the pool.
+	connectedMu        sync.Mutex
+	connectedListeners map[uint64]chan struct{}
+	nextListenerID     uint64
 }
 
 type managedRelay struct {
@@ -1592,7 +1598,47 @@ func (p *RelayPool) recordRelayConnectionState(relayURL string, connected bool) 
 	if p.health == nil {
 		return
 	}
-	p.health.GetOrCreate(relayURL).SetConnected(connected)
+	if p.health.GetOrCreate(relayURL).MarkConnected(connected) {
+		p.signalRelayConnected()
+	}
+}
+
+// NotifyRelayConnected registers a wake-up for relay (re)connection. After
+// any relay of this pool moves from disconnected to connected, the returned
+// channel becomes readable. It has capacity one and the pool never blocks on
+// it, even though connection state is recorded under relay locks: a burst of
+// reconnects while a wake-up is pending coalesces into that one wake-up, so a
+// consumer re-checks the state it cares about instead of counting signals.
+// cancel unregisters the listener.
+func (p *RelayPool) NotifyRelayConnected() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	p.connectedMu.Lock()
+	if p.connectedListeners == nil {
+		p.connectedListeners = make(map[uint64]chan struct{})
+	}
+	p.nextListenerID++
+	id := p.nextListenerID
+	p.connectedListeners[id] = ch
+	p.connectedMu.Unlock()
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			p.connectedMu.Lock()
+			delete(p.connectedListeners, id)
+			p.connectedMu.Unlock()
+		})
+	}
+}
+
+func (p *RelayPool) signalRelayConnected() {
+	p.connectedMu.Lock()
+	defer p.connectedMu.Unlock()
+	for _, ch := range p.connectedListeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (p *RelayPool) recordRelayReconnect(relayURL string) {

@@ -32,6 +32,14 @@ type assistantExecutionDeps struct {
 	KeyProvider     service.AssistantTranscriptKeyProvider
 	InitialSessions []domain.AssistantSession
 	ExternalMCP     assistantExternalMCPRuntime
+	// RelayConnections signals relay (re)connection of the pool behind
+	// Publisher; fenced sessions are healed on each signal. Optional.
+	RelayConnections assistantRelayConnectionNotifier
+}
+
+// assistantRelayConnectionNotifier is implemented by *nostr.RelayPool.
+type assistantRelayConnectionNotifier interface {
+	NotifyRelayConnected() (<-chan struct{}, func())
 }
 
 // assistantExecutionWiring is the constructed assistant stack. Both workflows
@@ -50,6 +58,7 @@ type assistantExecutionWiring struct {
 	Iterative          *service.AssistantAgentLoop
 	Recovery           *service.AssistantSessionRecoveryRunner
 	Lifecycle          *assistantExecutorLifecycle
+	Healer             *assistantFenceHealer // nil without a relay connection signal
 	DefaultWorkflow    domain.AssistantWorkflow
 	AvailableWorkflows []domain.AssistantWorkflow
 }
@@ -187,7 +196,46 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Logger:          slog.Default(),
 	})
 	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber})
-	return &assistantExecutionWiring{Orchestrator: orchestrator, Engine: engine, Store: store, Runtime: runtime, Batch: batch, Iterative: iterative, Recovery: recovery, Lifecycle: lifecycle, DefaultWorkflow: defaultWorkflow, AvailableWorkflows: available}, nil
+	var healer *assistantFenceHealer
+	if deps.RelayConnections != nil {
+		healer = newAssistantFenceHealer(engine, deps.RelayConnections)
+	}
+	return &assistantExecutionWiring{Orchestrator: orchestrator, Engine: engine, Store: store, Runtime: runtime, Batch: batch, Iterative: iterative, Recovery: recovery, Lifecycle: lifecycle, Healer: healer, DefaultWorkflow: defaultWorkflow, AvailableWorkflows: available}, nil
+}
+
+// assistantFenceHealer heals sessions fenced by an unconfirmed checkpoint when
+// a relay reconnects. The listener is registered at construction so a
+// reconnect before Run is not lost; signals coalesce, and each wake-up makes
+// one pass that re-checks every session, so a storm costs at most one extra
+// pass. There is no timer: without a reconnect a fence heals only at the next
+// operation or Recover, as before.
+type assistantFenceHealer struct {
+	engine      assistantFencedSessionHealer
+	signal      <-chan struct{}
+	unsubscribe func()
+}
+
+type assistantFencedSessionHealer interface {
+	HealFenced(context.Context) int
+}
+
+func newAssistantFenceHealer(engine assistantFencedSessionHealer, relays assistantRelayConnectionNotifier) *assistantFenceHealer {
+	signal, unsubscribe := relays.NotifyRelayConnected()
+	return &assistantFenceHealer{engine: engine, signal: signal, unsubscribe: unsubscribe}
+}
+
+func (h *assistantFenceHealer) Name() string { return "assistant-fence-healer" }
+
+func (h *assistantFenceHealer) Run(ctx context.Context) error {
+	defer h.unsubscribe()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-h.signal:
+			h.engine.HealFenced(ctx)
+		}
+	}
 }
 
 // assistantExecutorLifecycle owns the executor's application-lifetime context.
