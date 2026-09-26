@@ -8,6 +8,7 @@ import {
   classifyAssistantRequestError,
   computeAssistantBatchApprovalHash,
   describeAssistantRequestError,
+  assistantDiscoveryWorkflows,
   parseAssistantArgumentObjectText,
   parseAssistantSessionEvent
 } from '../../../src/lib/nostr/assistant.js';
@@ -66,6 +67,37 @@ describe('assistant session version parsing', () => {
   });
 });
 
+describe('assistant v2 closed-session projection fields', () => {
+  function projection(schema, content) {
+    return { id: 'e'.repeat(64), kind: ASSISTANT_KINDS.SESSION, pubkey: 'f'.repeat(64), created_at: 10,
+      tags: [['schema', schema], ['session', 'session-1'], ['d', `${schema}:session-1`]], content: JSON.stringify(content) };
+  }
+  const base = { session_id: 'session-1', execution_version: 2, workflow: 'iterative', current_run_id: 'run-1',
+    execution_revision: 4, phase: 'completed', scope: { allowed_tools: null } };
+
+  it('reads the additive closed and closed_at fields under the unchanged v2 schema', () => {
+    const parsed = parseAssistantSessionEvent(projection('bahia.assistant-session.v2', { ...base, closed: true, closed_at: '2026-09-26T11:00:00Z' }));
+    expect(parsed).toMatchObject({ executionVersion: 2, phase: 'completed', closed: true, closedAt: '2026-09-26T11:00:00Z' });
+  });
+
+  it('treats projections without the field (older backends) as open', () => {
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v2', base))).toMatchObject({ closed: false, closedAt: '' });
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v2', { ...base, closed: 'yes' })).closed).toBe(false);
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v1', { state: 'completed', closed: true })).closed).toBe(false);
+  });
+});
+
+describe('assistant discovery workflows', () => {
+  it('returns advertised workflows, or null when discovery does not say', () => {
+    expect(assistantDiscoveryWorkflows(null)).toBeNull();
+    expect(assistantDiscoveryWorkflows({ features: {} })).toBeNull();
+    expect(assistantDiscoveryWorkflows({ assistant: { enabled: true } })).toBeNull();
+    expect(assistantDiscoveryWorkflows({ assistant: { available_workflows: ['iterative'] } })).toEqual(['iterative']);
+    expect(assistantDiscoveryWorkflows({ assistant: { available_workflows: ['iterative', 'batch', 'bogus'] } })).toEqual(['batch', 'iterative']);
+    expect(assistantDiscoveryWorkflows({ assistant: { enabled: false, available_workflows: [] } })).toEqual([]);
+  });
+});
+
 describe('assistant request outcome classification', () => {
   function thrown(fn) {
     try { fn(); } catch (err) { return err; }
@@ -93,6 +125,20 @@ describe('assistant request outcome classification', () => {
       const response = { result: { status } };
       expect(assertAssistantRequestAccepted(response)).toBe(response);
     }
+  });
+
+  it('describes session_closed and workflow_unavailable refusals specifically, still as rejections', () => {
+    const closed = describeAssistantRequestError(rejected({ status: 'failed', step: 'session_closed',
+      summary: 'assistant session was closed by a session-scope cancellation', error: 'assistant session was closed by a session-scope cancellation' }));
+    expect(closed).toMatchObject({ kind: 'rejected', code: 'session_closed', message: 'This session was closed. Start a new session to continue.' });
+    const unavailable = describeAssistantRequestError(rejected({ status: 'failed', step: 'workflow_unavailable',
+      error: 'workflow_unavailable: the batch workflow is not available on this deployment because it requires assistant.llm_model' }));
+    expect(unavailable).toMatchObject({ kind: 'rejected', code: 'workflow_unavailable' });
+    expect(unavailable.message).toContain('not available on this deployment');
+    expect(unavailable.message).not.toMatch(/rejected by the assistant service/);
+    // Other refusals keep the generic wording and carry no special code.
+    expect(describeAssistantRequestError(rejected({ status: 'failed', step: 'run_in_progress', error: 'busy' })))
+      .toMatchObject({ kind: 'rejected', message: 'Request rejected by the assistant service: run_in_progress: busy' });
   });
 
   it('reports interruptions as outcome unknown and never as failure', () => {

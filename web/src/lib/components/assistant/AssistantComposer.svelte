@@ -4,7 +4,10 @@
     assistantUi,
     pendingAssistantRequests,
     publishAssistantPrompt,
-    publishAssistantCancellation
+    publishAssistantCancellation,
+    assistantWorkflowAvailable,
+    createAssistantSessionId,
+    setActiveAssistantSession
   } from '$lib/stores/assistant.svelte.js';
   import {
     ASSISTANT_EXECUTION_CANCELLABLE_PHASES,
@@ -35,13 +38,28 @@
   const WORKFLOW_LABELS = { batch: 'Batch plan', iterative: 'Iterative' };
   const visibleSelectedRefs = $derived(mergeAssistantRefs({ selectedRefs, defaultSelectedRefs, dismissedRefs }));
   const isHistory = $derived(session?.executionVersion === 1);
+  // A session-scope cancellation closed this session to new turns for good.
+  const closed = $derived(Boolean(session?.closed));
   const runActive = $derived(session?.executionVersion === 2 && !ASSISTANT_EXECUTION_TERMINAL_PHASES.includes(session?.phase));
   // Cancellation needs only the canonical run identity, never a plan hash.
-  const canCancel = $derived(Boolean(session?.authoritative && session?.executionVersion === 2 && session?.currentRunId &&
+  // A closed session already carries its (session-scope) cancellation.
+  const canCancel = $derived(Boolean(!closed && session?.authoritative && session?.executionVersion === 2 && session?.currentRunId &&
     ASSISTANT_EXECUTION_CANCELLABLE_PHASES.includes(session?.phase)));
   const pendingPrompt = $derived(Object.values(pendingAssistantRequests).some((request) => request.sessionId === (session?.sessionId || assistantUi.activeSessionId)));
-  const disabled = $derived(promptSubmitting || pendingPrompt || runActive || isHistory || assistantConnection.status === 'waiting_auth');
+  const disabled = $derived(promptSubmitting || pendingPrompt || runActive || isHistory || closed || assistantConnection.status === 'waiting_auth');
   const workflowLocked = $derived(Boolean(session?.uncertainEffects));
+  // Batch needs the deployment's batch proposer. When it is missing the batch
+  // option is disabled; approving or rejecting an existing batch draft is not
+  // affected (that never starts a new turn).
+  const batchAvailable = $derived(assistantWorkflowAvailable('batch'));
+  // "Keep" a persisted workflow the deployment can no longer start would be
+  // refused, so the effective request falls back to iterative.
+  const keptWorkflowUnavailable = $derived(Boolean(session?.workflow && !assistantWorkflowAvailable(session.workflow)));
+  const requestWorkflow = $derived(workflow || (keptWorkflowUnavailable ? 'iterative' : ''));
+
+  $effect(() => {
+    if (workflow && !assistantWorkflowAvailable(workflow)) workflow = '';
+  });
   const blockedReason = $derived(runActive
     ? 'A run is active in this session. Wait for it to finish or cancel it before sending another prompt.'
     : pendingPrompt && !promptSubmitting ? 'A prompt for this session is still pending.' : '');
@@ -60,7 +78,7 @@
     try {
       await publishAssistantPrompt({
         prompt: value,
-        workflow,
+        workflow: requestWorkflow,
         sessionId: session?.sessionId,
         routeContext,
         selectedRefs: visibleSelectedRefs.map((ref) => ref.ref)
@@ -81,6 +99,11 @@
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
     }
+  }
+
+  function startNewSession() {
+    promptError = '';
+    setActiveAssistantSession(createAssistantSessionId());
   }
 
   async function cancel(scope) {
@@ -132,14 +155,23 @@
 
 {#if isHistory}
   <p class="history-note">This v1 session is read-only history. Start a new session to continue.</p>
+{:else if closed}
+  <div class="session-closed" role="status" data-closed-at={session?.closedAt || undefined}>
+    <strong>Session closed</strong>
+    <span>This session was closed to new turns. Its history stays available.</span>
+    <button type="button" onclick={startNewSession}>Start a new session</button>
+  </div>
 {:else if !runActive}
   <label class="workflow-selector">Workflow
     <select bind:value={workflow} aria-label="Assistant workflow" disabled={workflowLocked || promptSubmitting}>
-      <option value="">{session?.workflow ? `Keep ${WORKFLOW_LABELS[session.workflow] || session.workflow}` : 'Service default'}</option>
-      <option value="batch">Batch plan</option>
+      <option value="">{keptWorkflowUnavailable ? WORKFLOW_LABELS.iterative : session?.workflow ? `Keep ${WORKFLOW_LABELS[session.workflow] || session.workflow}` : 'Service default'}</option>
+      <option value="batch" disabled={!batchAvailable}>{batchAvailable ? 'Batch plan' : 'Batch plan (not available)'}</option>
       <option value="iterative">Iterative</option>
     </select>
   </label>
+  {#if !batchAvailable}
+    <p class="history-note workflow-unavailable">Batch plans are not available on this deployment{keptWorkflowUnavailable ? '; new turns in this session use Iterative' : ''}.</p>
+  {/if}
   {#if workflowLocked}<p class="history-note">Resolve uncertain operations before changing the workflow.</p>{/if}
 {/if}
 {#if blockedReason}<p class="history-note blocked-reason">{blockedReason}</p>{/if}
@@ -147,7 +179,7 @@
   <textarea
     bind:this={textarea}
     bind:value={prompt}
-    placeholder="Ask the Bahia assistant…"
+    placeholder={closed ? 'This session is closed' : 'Ask the Bahia assistant…'}
     rows="1"
     disabled={disabled}
     onkeydown={handleKeydown}
@@ -245,4 +277,28 @@
   .workflow-selector, .history-note { margin: 0.5rem 0.75rem; color: var(--text-muted); font-size: 0.8rem; }
   select { margin-left: 0.5rem; }
   .error { color: var(--error); font-size: 0.875rem; margin: 0 0.75rem; }
+  .session-closed {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.5rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--hover-bg);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .session-closed strong { color: var(--text-primary); }
+  .session-closed button {
+    margin-left: auto;
+    background: var(--primary);
+    color: white;
+    border: 0;
+    border-radius: 8px;
+    padding: 0.4rem 0.7rem;
+    cursor: pointer;
+    font-weight: 700;
+  }
 </style>

@@ -20,11 +20,12 @@
       <button
         type="button"
         data-session-id={session.sessionId}
+        data-closed={session.closed ? 'true' : undefined}
         class:active={session.sessionId === activeSessionId}
         onclick={() => selectSession(session.sessionId)}
       >
         <span>{session.transcriptSummary || session.sessionId}</span>
-        <small>{session.state}</small>
+        <small>{session.closed ? 'closed' : session.state}</small>
       </button>
     {/each}
   {/if}

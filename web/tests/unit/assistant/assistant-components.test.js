@@ -25,6 +25,7 @@ const assistantStoreMock = vi.hoisted(() => ({
   publishAssistantPrompt: vi.fn(),
   publishAssistantCancellation: vi.fn(),
   publishAssistantReconciliation: vi.fn(),
+  assistantWorkflowAvailable: vi.fn(() => true),
   downstreamRequestsForTurn: (item) => item?.downstreamRequestId ? [item.downstreamRequestId] : []
 }));
 
@@ -111,6 +112,9 @@ describe('assistant components', () => {
     assistantStoreMock.bootstrapAssistant.mockReset();
     assistantStoreMock.activeAssistantSession.mockReset();
     assistantStoreMock.activeAssistantSession.mockReturnValue(null);
+    assistantStoreMock.assistantWorkflowAvailable.mockReset();
+    assistantStoreMock.assistantWorkflowAvailable.mockReturnValue(true);
+    assistantStoreMock.setActiveAssistantSession.mockReset();
     assistantStoreMock.publishAssistantActionDecision.mockResolvedValue({ ok: true });
     assistantStoreMock.publishAssistantApproval.mockResolvedValue({ ok: true });
     assistantStoreMock.publishAssistantPrompt.mockResolvedValue({ ok: true });
@@ -756,5 +760,101 @@ describe('assistant panel: controls come only from eligible v2 state', () => {
     const target = renderPanel(batchSession({ phase: 'executing', pendingApprovals: [] }));
     expect(textOf(target)).toContain('Reconnecting to assistant relays. Request outcomes stay unknown until canonical state arrives.');
     expect(textOf(target)).not.toMatch(/\bfailed\b/i);
+  });
+});
+
+describe('assistant closed sessions and deployment workflows', () => {
+  const batchUnavailable = (workflow) => workflow !== 'batch';
+
+  beforeEach(() => {
+    assistantStoreMock.publishAssistantPrompt.mockReset();
+    assistantStoreMock.publishAssistantPrompt.mockResolvedValue({ ok: true });
+    assistantStoreMock.publishAssistantApproval.mockReset();
+    assistantStoreMock.publishAssistantApproval.mockResolvedValue({ ok: true });
+    assistantStoreMock.assistantWorkflowAvailable.mockReset();
+    assistantStoreMock.assistantWorkflowAvailable.mockReturnValue(true);
+    assistantStoreMock.setActiveAssistantSession.mockReset();
+    assistantStoreMock.activeAssistantSession.mockReset();
+    assistantStoreMock.assistantConnection.status = 'live';
+    for (const key of Object.keys(assistantStoreMock.pendingAssistantRequests)) delete assistantStoreMock.pendingAssistantRequests[key];
+  });
+
+  it('renders a closed session as closed: no prompt input, no run controls, a way to start over', async () => {
+    const target = renderComponent(AssistantComposer, { session: { sessionId: 'closed', executionVersion: 2, authoritative: true,
+      workflow: 'iterative', phase: 'cancelling', currentRunId: 'r1', closed: true, closedAt: '2026-09-26T11:00:00Z' } });
+    const status = target.querySelector('.session-closed[role="status"]');
+    expect(status?.textContent).toContain('Session closed');
+    expect(status.getAttribute('data-closed-at')).toBe('2026-09-26T11:00:00Z');
+    expect(target.querySelector('textarea').disabled).toBe(true);
+    expect(target.querySelector('textarea').placeholder).toBe('This session is closed');
+    expect(target.querySelector('button[type="submit"]').disabled).toBe(true);
+    expect(target.querySelector('button.cancel')).toBeNull();
+    expect(target.querySelector('select')).toBeNull();
+    status.querySelector('button').click();
+    await flush();
+    expect(assistantStoreMock.setActiveAssistantSession).toHaveBeenCalledWith('assistant-new');
+  });
+
+  it('keeps an open session writable', () => {
+    const target = renderComponent(AssistantComposer, { session: { sessionId: 'open', executionVersion: 2, authoritative: true,
+      workflow: 'iterative', phase: 'completed', currentRunId: 'r1', closed: false } });
+    expect(target.querySelector('.session-closed')).toBeNull();
+    expect(target.querySelector('textarea').disabled).toBe(false);
+  });
+
+  it('disables the batch workflow when the deployment has no batch proposer', () => {
+    assistantStoreMock.assistantWorkflowAvailable.mockImplementation(batchUnavailable);
+    const target = renderComponent(AssistantComposer, { session: null });
+    const select = target.querySelector('select[aria-label="Assistant workflow"]');
+    const batch = Array.from(select.options).find((option) => option.value === 'batch');
+    expect(batch.disabled).toBe(true);
+    expect(batch.textContent).toBe('Batch plan (not available)');
+    expect(target.querySelector('.workflow-unavailable')?.textContent).toContain('Batch plans are not available on this deployment');
+  });
+
+  it('continues a batch session in iterative when batch is unavailable instead of sending a refused turn', async () => {
+    assistantStoreMock.assistantWorkflowAvailable.mockImplementation(batchUnavailable);
+    const target = renderComponent(AssistantComposer, { session: { sessionId: 'was-batch', executionVersion: 2, authoritative: true,
+      workflow: 'batch', phase: 'completed', currentRunId: 'r1', uncertainEffects: 0 } });
+    const select = target.querySelector('select[aria-label="Assistant workflow"]');
+    expect(select.options[0].textContent).toBe('Iterative');
+    expect(textOf(target)).toContain('new turns in this session use Iterative');
+    await setTextAreaValue(target, 'next step');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'was-batch', workflow: 'iterative' }));
+  });
+
+  it('shows a specific message for a workflow_unavailable refusal', async () => {
+    assistantStoreMock.publishAssistantPrompt.mockRejectedValueOnce(serviceRejection('workflow_unavailable',
+      'workflow_unavailable: the batch workflow is not available on this deployment because it requires assistant.llm_model'));
+    const target = renderComponent(AssistantComposer, { session: null });
+    await setTextAreaValue(target, 'plan it');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    const error = target.querySelector('.prompt-error')?.textContent || '';
+    expect(error).toContain('That workflow is not available on this deployment');
+    expect(error).not.toContain('rejected by the assistant service');
+  });
+
+  it('shows a specific message for a session_closed refusal', async () => {
+    assistantStoreMock.publishAssistantPrompt.mockRejectedValueOnce(serviceRejection('session_closed',
+      'assistant session was closed by a session-scope cancellation'));
+    const target = renderComponent(AssistantComposer, { session: { sessionId: 's', executionVersion: 2, authoritative: true,
+      workflow: 'iterative', phase: 'completed', currentRunId: 'r1' } });
+    await setTextAreaValue(target, 'again');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(target.querySelector('.prompt-error')?.textContent).toBe('This session was closed. Start a new session to continue.');
+  });
+
+  it('still offers approve and reject for an existing batch draft when batch is unavailable', async () => {
+    assistantStoreMock.assistantWorkflowAvailable.mockImplementation(batchUnavailable);
+    assistantStoreMock.activeAssistantSession.mockReturnValue(batchSession());
+    const target = renderComponent(AssistantPanel, {});
+    expect(target.querySelector('.plan-card')).toBeTruthy();
+    const approve = target.querySelector('button.approve');
+    expect(approve.disabled).toBe(false);
+    expect(target.querySelector('button.reject').disabled).toBe(false);
   });
 });

@@ -19,11 +19,11 @@ const systemInfo = {
   }
 };
 
-async function installAssistantAgenticHarness(page) {
+async function installAssistantAgenticHarness(page, { discovery = systemInfo } = {}) {
   await installE2EMocks(page, {
     authenticated: true,
     extension: true,
-    systemInfo,
+    systemInfo: discovery,
     nostrEvents: []
   });
 
@@ -128,7 +128,7 @@ async function installAssistantAgenticHarness(page) {
       };
     }
 
-    function publishSession(sessionId, phase, { pendingApprovals = [], submittedEffects = 0 } = {}) {
+    function publishSession(sessionId, phase, { pendingApprovals = [], submittedEffects = 0, closed = false } = {}) {
       revisions[sessionId] = (revisions[sessionId] || 0) + 1;
       push(assistantEvent({
         id: `session-${sessionId}-${phase}-${revisions[sessionId]}`,
@@ -154,7 +154,9 @@ async function installAssistantAgenticHarness(page) {
           scope: { allowed_tools: null },
           pending_approvals: pendingApprovals,
           submitted_effects: submittedEffects,
-          uncertain_effects: 0
+          uncertain_effects: 0,
+          // Additive v2 field: present only once a session-scope cancel closed it.
+          ...(closed ? { closed: true, closed_at: new Date().toISOString() } : {})
         }
       }));
     }
@@ -336,11 +338,21 @@ async function installAssistantAgenticHarness(page) {
       const turnId = payload.turn_id || 'turn-1';
       const prompt = String(payload.prompt || '').toLowerCase();
       if (prompt.includes('legacy')) return legacyApprovalHistory(sessionId);
+      // A backend that predates the projection field only refuses the next turn.
+      if (prompt.includes('refused as closed')) {
+        const error = 'assistant session was closed by a session-scope cancellation';
+        return { session_id: sessionId, status: 'failed', step: 'session_closed', summary: error, error };
+      }
       startRun(sessionId);
       publishSession(sessionId, 'proposing');
       if (prompt.includes('low-risk')) return completeLowRisk(sessionId);
       if (prompt.includes('rollback')) return requireRollbackApproval(sessionId);
       if (prompt.includes('relay close')) return blockedThenRecovered(sessionId);
+      if (prompt.includes('then close the session')) {
+        const result = completeReadOnly(sessionId, turnId);
+        publishSession(sessionId, 'completed', { closed: true });
+        return result;
+      }
       return completeReadOnly(sessionId, turnId);
     }
 
@@ -523,6 +535,54 @@ test.describe('assistant agentic frontend enablement', () => {
     await expect(panel).toContainText('relay closed before terminal result');
     await expect(panel).toContainText('Recovery resumed and observed the downstream result');
     await expect(panel).toContainText('Recovery resumed and completed.');
+    await assertNoRuntimeErrors();
+  });
+});
+
+test.describe('assistant closed sessions and deployment workflows', () => {
+  test('a projected closed session disables the prompt and offers a new session', async ({ page }) => {
+    await installAssistantAgenticHarness(page);
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const panel = await openAssistant(page);
+
+    await submitAssistantPrompt(page, 'read-only question then close the session');
+
+    const closed = panel.locator('.session-closed[role="status"]');
+    await expect(closed).toContainText('Session closed');
+    await expect(panel.getByPlaceholder('This session is closed')).toBeDisabled();
+    await expect(panel.locator('button.cancel')).toHaveCount(0);
+    await expect(panel.locator('nav[aria-label="Assistant sessions"] button[data-closed="true"]')).toHaveCount(1);
+
+    await closed.getByRole('button', { name: 'Start a new session' }).click();
+    await expect(panel.getByPlaceholder('Ask the Bahia assistant…')).toBeEnabled();
+    await assertNoRuntimeErrors();
+  });
+
+  test('a session_closed refusal closes the session for backends without the projection field', async ({ page }) => {
+    await installAssistantAgenticHarness(page);
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const panel = await openAssistant(page);
+
+    await submitAssistantPrompt(page, 'prompt refused as closed');
+
+    await expect(panel.locator('.prompt-error')).toHaveText('This session was closed. Start a new session to continue.');
+    await expect(panel.locator('.session-closed[role="status"]')).toContainText('Session closed');
+    await expect(panel.getByPlaceholder('This session is closed')).toBeDisabled();
+    await assertNoRuntimeErrors();
+  });
+
+  test('batch is disabled when discovery advertises only the iterative workflow', async ({ page }) => {
+    await installAssistantAgenticHarness(page, {
+      discovery: { ...systemInfo, assistant: { enabled: true, available_workflows: ['iterative'], default_workflow: 'iterative' } }
+    });
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const panel = await openAssistant(page);
+
+    const workflow = panel.getByRole('combobox', { name: 'Assistant workflow' });
+    // Discovery arrives asynchronously after bootstrap; the option follows it.
+    await expect(workflow.locator('option[value="batch"]')).toHaveJSProperty('disabled', true);
+    await expect(workflow.locator('option[value="iterative"]')).toHaveJSProperty('disabled', false);
+    await expect(panel.locator('.workflow-unavailable')).toContainText('Batch plans are not available on this deployment');
     await assertNoRuntimeErrors();
   });
 });

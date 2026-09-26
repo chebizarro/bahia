@@ -98,14 +98,16 @@ describe('assistant store', () => {
 
   function v2Event({ sessionId = 'v2-session', id = 'v2-projection', createdAt = 100,
     workflow = 'batch', phase = 'awaiting_approval', revision = 1, proposal = null,
-    pendingApprovals = [], uncertainEffects = 0, submittedEffects = 0, runId = 'run-1', scope = { allowed_tools: null } } = {}) {
+    pendingApprovals = [], uncertainEffects = 0, submittedEffects = 0, runId = 'run-1', scope = { allowed_tools: null },
+    closed = undefined, closedAt = undefined } = {}) {
     return event({ id, kind: ASSISTANT_KINDS.SESSION,
       pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: createdAt,
       tags: [['d', `bahia.assistant-session.v2:${sessionId}`], ['schema', 'bahia.assistant-session.v2'],
         ['session', sessionId], ['p', authMock.authState.pubkey, '', 'operator']],
       content: { execution_version: 2, session_id: sessionId, state: phase, workflow,
         current_run_id: runId, execution_revision: revision, phase, scope, proposal,
-        pending_approvals: pendingApprovals, submitted_effects: submittedEffects, uncertain_effects: uncertainEffects } });
+        pending_approvals: pendingApprovals, submitted_effects: submittedEffects, uncertain_effects: uncertainEffects,
+        ...(closed === undefined ? {} : { closed }), ...(closedAt === undefined ? {} : { closed_at: closedAt }) } });
   }
 
   async function emitV2(options = {}) {
@@ -323,6 +325,82 @@ describe('assistant store', () => {
       summary: 'Assistant service rejected the request', error: 'run_in_progress: a run is already active' }));
     expect(transcript.some((item) => item.status === 'outcome_unknown' || item.failed || item.status === 'request_acknowledged')).toBe(false);
     expect(Object.keys(store.pendingAssistantRequests)).toHaveLength(0);
+  });
+
+  it('renders a projected closed session as closed and refuses new turns locally', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    await emitV2({ sessionId: 'closed-1', workflow: 'iterative', phase: 'completed', closed: true, closedAt: '2026-09-26T11:00:00Z' });
+    expect(sessionById('closed-1')).toMatchObject({ closed: true, closedAt: '2026-09-26T11:00:00Z' });
+    encryptedControlplaneMock.requestEncryptedResult.mockClear();
+    await expect(store.publishAssistantPrompt({ prompt: 'again', sessionId: 'closed-1' })).rejects.toThrow('session was closed');
+    expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
+    // Open sessions and projections from backends without the field stay open.
+    await emitV2({ sessionId: 'open-1', id: 'open-1-projection', workflow: 'iterative', phase: 'completed' });
+    expect(sessionById('open-1').closed).toBe(false);
+  });
+
+  it('treats a session_closed refusal as closing the session for backends without the projection field', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    await emitV2({ sessionId: 'legacy-close', workflow: 'iterative', phase: 'completed' });
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({ requestEventId: 'req', result: {
+      session_id: 'legacy-close', status: 'failed', step: 'session_closed',
+      summary: 'assistant session was closed by a session-scope cancellation', error: 'assistant session was closed by a session-scope cancellation' } });
+    await expect(store.publishAssistantPrompt({ prompt: 'go', sessionId: 'legacy-close' })).rejects.toThrow('session_closed');
+    const session = sessionById('legacy-close');
+    expect(session.closed).toBe(true);
+    expect(session.transcript).toContainEqual(expect.objectContaining({ type: 'result', status: 'request_rejected',
+      summary: 'This session was closed. Start a new session to continue.' }));
+    // A later projection that predates the field does not reopen the session.
+    await emitV2({ sessionId: 'legacy-close', id: 'legacy-close-2', createdAt: 150, workflow: 'iterative', phase: 'completed' });
+    expect(sessionById('legacy-close').closed).toBe(true);
+    encryptedControlplaneMock.requestEncryptedResult.mockClear();
+    await expect(store.publishAssistantPrompt({ prompt: 'again', sessionId: 'legacy-close' })).rejects.toThrow('session was closed');
+    expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
+  });
+
+  it('offers only the workflows system discovery advertises, and every workflow when it says nothing', async () => {
+    const { discoveryState } = await import('../../../src/lib/stores/discovery.svelte.js');
+    discoveryState.info = null;
+    expect(store.assistantAvailableWorkflows()).toEqual(['batch', 'iterative']);
+    discoveryState.info = { assistant: { enabled: true, available_workflows: ['iterative'], default_workflow: 'iterative' } };
+    expect(store.assistantWorkflowAvailable('batch')).toBe(false);
+    expect(store.assistantWorkflowAvailable('iterative')).toBe(true);
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    encryptedControlplaneMock.requestEncryptedResult.mockClear();
+    await expect(store.publishAssistantPrompt({ prompt: 'plan it', sessionId: 'wf-1', workflow: 'batch' })).rejects.toThrow('batch workflow is not available');
+    expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
+    discoveryState.info = null;
+  });
+
+  it('learns an unavailable workflow from a workflow_unavailable refusal and says why', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({ requestEventId: 'req', result: {
+      session_id: 'wf-2', status: 'failed', step: 'workflow_unavailable',
+      error: 'workflow_unavailable: the batch workflow is not available on this deployment because it requires assistant.llm_model' } });
+    await expect(store.publishAssistantPrompt({ prompt: 'plan it', sessionId: 'wf-2', workflow: 'batch' })).rejects.toThrow('workflow_unavailable');
+    expect(store.assistantWorkflowAvailable('batch')).toBe(false);
+    expect(store.assistantWorkflowAvailable('iterative')).toBe(true);
+    const transcript = sessionById('wf-2').transcript;
+    expect(transcript).toContainEqual(expect.objectContaining({ type: 'result', status: 'request_rejected',
+      summary: expect.stringContaining('not available on this deployment') }));
+    expect(transcript.some((item) => item.summary === 'Assistant service rejected the request')).toBe(false);
+    store.resetAssistantStore();
+    expect(store.assistantWorkflowAvailable('batch')).toBe(true);
+  });
+
+  it('still approves and rejects an existing batch draft when the batch workflow is unavailable', async () => {
+    const { discoveryState } = await import('../../../src/lib/stores/discovery.svelte.js');
+    discoveryState.info = { assistant: { enabled: true, available_workflows: ['iterative'] } };
+    const { base } = await batchFixture('batch-unavailable', [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
+    await store.publishAssistantApproval({ sessionId: 'batch-unavailable', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0]).toMatchObject({
+      operation: 'assistant/approval', payload: { workflow: 'batch', decision: 'approve' } });
+    await store.publishAssistantApproval({ sessionId: 'batch-unavailable', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'reject' });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0].payload).toMatchObject({ decision: 'reject' });
+    discoveryState.info = null;
   });
 
   it('never records private command-scope arguments from transcript metadata', async () => {

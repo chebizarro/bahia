@@ -222,8 +222,39 @@ export function classifyAssistantRequestError(error) {
   return { kind: ASSISTANT_REQUEST_ERROR_KINDS.UNKNOWN, detail };
 }
 
+// Refusal codes the browser renders specifically rather than as a generic
+// rejection (internal/service/assistant_orchestrator.go).
+export const ASSISTANT_REFUSAL_CODES = Object.freeze({
+  SESSION_CLOSED: 'session_closed',
+  WORKFLOW_UNAVAILABLE: 'workflow_unavailable'
+});
+
+export const ASSISTANT_WORKFLOWS = Object.freeze(['batch', 'iterative']);
+
+// The service's refusal code of a `{status:"failed", step}` result, or ''.
+export function assistantRefusalCode(error) {
+  if (!error?.serviceResult) return '';
+  return String(error.serviceResult.step || error.code || '');
+}
+
+// Workflows the deployment advertises in system discovery
+// (`assistant.available_workflows`), or null when it does not say: older
+// backends predate the field, and unknown must not hide anything.
+export function assistantDiscoveryWorkflows(info) {
+  const advertised = info?.assistant?.available_workflows;
+  if (!Array.isArray(advertised)) return null;
+  return ASSISTANT_WORKFLOWS.filter((workflow) => advertised.includes(workflow));
+}
+
+const ASSISTANT_REFUSAL_MESSAGES = Object.freeze({
+  [ASSISTANT_REFUSAL_CODES.SESSION_CLOSED]: 'This session was closed. Start a new session to continue.',
+  [ASSISTANT_REFUSAL_CODES.WORKFLOW_UNAVAILABLE]: 'That workflow is not available on this deployment. Choose Iterative, or ask an administrator to configure assistant.llm_model for batch plans.'
+});
+
 export function describeAssistantRequestError(error, subject = 'Request') {
   const { kind, detail } = classifyAssistantRequestError(error);
+  const code = assistantRefusalCode(error);
+  if (ASSISTANT_REFUSAL_MESSAGES[code]) return { kind, detail, code, message: ASSISTANT_REFUSAL_MESSAGES[code] };
   if (kind === ASSISTANT_REQUEST_ERROR_KINDS.UNKNOWN) return { kind, detail, message: `${subject} outcome unknown / reconnecting: ${detail}` };
   if (kind === ASSISTANT_REQUEST_ERROR_KINDS.REJECTED) return { kind, detail, message: `${subject} rejected by the assistant service: ${detail}` };
   if (kind === ASSISTANT_REQUEST_ERROR_KINDS.STALE) return { kind, detail, message: `${subject} refers to superseded state: ${detail}` };
@@ -328,6 +359,9 @@ export function parseAssistantSessionEvent(event) {
     submittedEffects: v2 ? Number(content.submitted_effects || 0) : 0,
     uncertainEffects: v2 ? Number(content.uncertain_effects || 0) : 0,
     checkpointEventId: v2 ? content.checkpoint_event_id || '' : '',
+    // Additive v2 fields; absent (open) on backends that predate them.
+    closed: v2 ? content.closed === true : false,
+    closedAt: v2 && content.closed === true ? content.closed_at || '' : '',
     state,
     operatorPubkey: getTaggedPubkeyRef(event, 'operator') || content.operator_pubkey || participants[0] || '',
     participants,

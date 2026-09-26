@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { authState } from './auth.js';
 import { controlplaneConnection, bootstrapControlplane } from './controlplane.svelte.js';
 import { requestEncryptedResult } from '../nostr/encrypted-controlplane.js';
+import { discoveryState } from './discovery.svelte.js';
 import {
   nostr,
   ASSISTANT_KINDS,
@@ -18,6 +19,11 @@ import {
   assertAssistantRequestAccepted,
   classifyAssistantRequestError,
   ASSISTANT_REQUEST_ERROR_KINDS,
+  ASSISTANT_REFUSAL_CODES,
+  ASSISTANT_WORKFLOWS,
+  assistantRefusalCode,
+  assistantDiscoveryWorkflows,
+  describeAssistantRequestError,
   ASSISTANT_EXECUTION_TERMINAL_PHASES as TERMINAL_PHASES,
   ASSISTANT_EXECUTION_CANCELLABLE_PHASES as CANCELLABLE_PHASES
 } from '../nostr/client.js';
@@ -55,6 +61,23 @@ export const assistantUi = $state({
 
 export const assistantSessions = $state([]);
 export const pendingAssistantRequests = $state({});
+
+// Workflows the service refused with workflow_unavailable in this browser
+// session. They stay hidden even if a (possibly cached) discovery document
+// still advertises them, and cover backends that do not advertise at all.
+export const assistantWorkflowRefusals = $state({ workflows: [] });
+
+// Workflows a new turn may request. Discovery's assistant.available_workflows
+// is authoritative when present; without it every workflow is offered and the
+// service's workflow_unavailable refusal is what narrows the list.
+export function assistantAvailableWorkflows() {
+  const advertised = assistantDiscoveryWorkflows(discoveryState.info) ?? ASSISTANT_WORKFLOWS;
+  return advertised.filter((workflow) => !assistantWorkflowRefusals.workflows.includes(workflow));
+}
+
+export function assistantWorkflowAvailable(workflow) {
+  return assistantAvailableWorkflows().includes(workflow);
+}
 
 export function activeAssistantSession() {
   return assistantUi.activeSessionId ? assistantSessions.find((session) => session.sessionId === assistantUi.activeSessionId) || null : assistantSessions[0] || null;
@@ -102,12 +125,12 @@ function serializableSession(session) {
     currentTurnId, currentRequestId, transcriptSummary, lastResultId, updatedAt,
     executionVersion, workflow, currentRunId, executionRevision, phase, scope,
     proposal, pendingApprovals, submittedEffects, uncertainEffects, checkpointEventId,
-    sessionEvent } = session;
+    closed, closedAt, sessionEvent } = session;
   return { sessionId, state, operatorPubkey, participants, assistantId, assistantPubkey,
     currentTurnId, currentRequestId, transcriptSummary, lastResultId, updatedAt,
     executionVersion, workflow, currentRunId, executionRevision, phase, scope,
     proposal, pendingApprovals, submittedEffects, uncertainEffects, checkpointEventId,
-    sessionEvent: sessionEvent ? { id: sessionEvent.id, createdAt: sessionEvent.createdAt,
+    closed: Boolean(closed), closedAt: closedAt || '', sessionEvent: sessionEvent ? { id: sessionEvent.id, createdAt: sessionEvent.createdAt,
       event: { id: sessionEvent.id, created_at: sessionEvent.createdAt } } : null };
 }
 
@@ -245,6 +268,8 @@ function emptySession(sessionId) {
     pendingApprovals: [],
     submittedEffects: 0,
     uncertainEffects: 0,
+    closed: false,
+    closedAt: '',
     authoritative: false,
     currentPlan: null,
     pendingSteps: [],
@@ -357,6 +382,10 @@ function applySessionEvent(event) {
     phase: parsed.phase, scope: parsed.scope, proposal: parsed.proposal,
     pendingApprovals: parsed.pendingApprovals, submittedEffects: parsed.submittedEffects,
     uncertainEffects: parsed.uncertainEffects, checkpointEventId: parsed.checkpointEventId,
+    // A session never reopens, so closure is sticky: a session_closed refusal
+    // (backends without the projection field) is not undone by a projection
+    // that does not carry `closed`.
+    closed: parsed.closed || Boolean(session.closed), closedAt: parsed.closedAt || session.closedAt || '',
     metadata: {}, authoritative: parsed.executionVersion === 2,
     updatedAt: Math.max(session.updatedAt || 0, parsed.createdAt || 0),
     sessionEvent: { id: parsed.id, createdAt: parsed.createdAt,
@@ -493,7 +522,10 @@ function assistantRequestOutcomeItem(error, { sessionId, turnId }) {
   const { kind, detail } = classifyAssistantRequestError(error);
   const rejected = kind === REJECTED || kind === STALE;
   const status = rejected ? 'request_rejected' : 'outcome_unknown';
-  const summary = rejected ? 'Assistant service rejected the request' : 'Request outcome unknown / reconnecting';
+  // Refusals with a known code (session_closed, workflow_unavailable) get a
+  // specific summary instead of the generic rejection.
+  const described = describeAssistantRequestError(error);
+  const summary = described.code ? described.message : rejected ? 'Assistant service rejected the request' : 'Request outcome unknown / reconnecting';
   return {
     type: 'result',
     id: `assistant-${rejected ? 'rejected' : 'unknown'}:${sessionId}:${turnId}:${Date.now()}`,
@@ -584,6 +616,7 @@ export function resetAssistantStore() {
   pendingMap.clear();
   seenEventIds.clear();
   assistantSessions.length = 0;
+  assistantWorkflowRefusals.workflows = [];
   syncPendingRequests();
   assistantConnection.status = 'idle';
   assistantConnection.ready = false;
@@ -703,12 +736,16 @@ export async function publishAssistantPrompt({ prompt, sessionId, workflow = '',
   const resolvedSessionId = sessionId || assistantUi.activeSessionId || activeAssistantSession()?.sessionId || createAssistantSessionId();
   const existing = sessionMap.get(resolvedSessionId);
   if (existing?.executionVersion === 1) throw assistantRequestError(INVALID, 'Historical v1 sessions are read-only; start a new session');
+  if (existing?.closed) throw assistantRequestError(INVALID, 'This session was closed. Start a new session to continue.', ASSISTANT_REFUSAL_CODES.SESSION_CLOSED);
   if (existing?.executionVersion === 2 && !TERMINAL_PHASES.includes(existing.phase)) throw assistantRequestError(INVALID, 'An assistant run is already active');
   if (Array.from(pendingMap.values()).some((value) => value.sessionId === resolvedSessionId)) throw assistantRequestError(INVALID, 'An assistant request is already pending');
   if (workflow && !['batch', 'iterative'].includes(workflow)) throw assistantRequestError(INVALID, 'Invalid assistant workflow');
   if (existing?.workflow && workflow && workflow !== existing.workflow &&
       (!TERMINAL_PHASES.includes(existing.phase) || existing.uncertainEffects)) throw assistantRequestError(INVALID, 'Workflow change requires a finished run with no unresolved effects');
   const selectedWorkflow = workflow || existing?.workflow || '';
+  if (selectedWorkflow && !assistantWorkflowAvailable(selectedWorkflow)) {
+    throw assistantRequestError(INVALID, `The ${selectedWorkflow} workflow is not available on this deployment; choose another workflow.`, ASSISTANT_REFUSAL_CODES.WORKFLOW_UNAVAILABLE);
+  }
   const turnId = globalThis.crypto?.randomUUID?.() || `${Date.now()}`;
   const content = {
     contract_version: 2,
@@ -762,8 +799,22 @@ export async function publishAssistantPrompt({ prompt, sessionId, workflow = '',
     pendingMap.delete(pendingItem.id);
     syncPendingRequests();
     removeLocalAssistantItem(pendingItem.id);
+    noteAssistantRefusal(err, { sessionId: resolvedSessionId, workflow: selectedWorkflow });
     applyLocalAssistantItem(assistantRequestOutcomeItem(err, { sessionId: resolvedSessionId, turnId }));
     throw err;
+  }
+}
+
+// Service refusals that describe durable state are remembered locally so the
+// UI stops offering what the service will refuse again.
+function noteAssistantRefusal(error, { sessionId, workflow }) {
+  const code = assistantRefusalCode(error);
+  if (code === ASSISTANT_REFUSAL_CODES.SESSION_CLOSED) {
+    const session = sessionMap.get(sessionId);
+    if (session && !session.closed) session.closed = true;
+  } else if (code === ASSISTANT_REFUSAL_CODES.WORKFLOW_UNAVAILABLE && workflow &&
+      !assistantWorkflowRefusals.workflows.includes(workflow)) {
+    assistantWorkflowRefusals.workflows = [...assistantWorkflowRefusals.workflows, workflow];
   }
 }
 
