@@ -60,3 +60,28 @@ relays or the joined browser flow.
 Criteria A7-A14 map item 2 claims to tests. A5's
 `TestAssistantUnifiedExecutionIntegration` (joined provider -> approval ->
 restart) is still owed by item 3.
+
+## Item 3 gate evidence (2026-09-26, macOS worktree `bahia-asst`)
+
+Item 3 (`bahia-oknmu`) is the atomic switch: routing, proposers, config, DI and
+removal of the v1 dispatchers. A5 now names the joined tests
+(`TestAssistantUnifiedExecutionJoined*`); A15-A20 map the item 3 claims.
+The joined tests run real service wiring end to end (production `ChatClient`
+and `OpenAIAgentClient` against an `httptest` provider, real transcript and
+checkpoint stores, observer, runtime, permission engine, both proposers,
+engine, orchestrator and recovery runner) with only the relay and the tool
+provider as deterministic boundaries, and rebuild every service on restart.
+
+- `go build ./...`, `go vet ./...` — pass.
+- `go test ./...` — pass, 83 packages including `internal/api/router`; the
+  `bahia-frj9d` hang did not occur, so no exclusion was used.
+- `GOFLAGS=-p=1 go test -race ./...` — pass, 83 packages, no data race; after
+  three final `internal/service`-only edits, `GOFLAGS=-p=1 go test -race` of
+  `internal/service`, `internal/controlplane`, `internal/app` and
+  `internal/config` passed again.
+- `go test -race ./internal/service -run 'TestAssistantUnifiedExecutionJoined|TestAssistantOrchestrator|TestAssistantIterative|TestAssistantRuntime' -count=10` — pass (flake check).
+- `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0` — only the
+  known `handleStandbyNodeDefinition` finding.
+
+Not proven here: live relays, the browser-connected E2E (item 4's skipped
+spec) and live migration inventory.

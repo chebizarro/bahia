@@ -45,10 +45,28 @@
     ]
   },
   "item_3": {
-    "planned": [
-      "batch edit to common executor integration",
-      "workflow default/override persistence",
-      "real provider adapter and full sequence"
+    "routing_and_proposers": [
+      "go test ./internal/service -run 'TestAssistantOrchestrator|TestAssistantIterative|TestAssistantRuntime|TestAssistantDispatchHasOneBoundary' -count=1"
+    ],
+    "joined_integration": [
+      "go test ./internal/service -run TestAssistantUnifiedExecutionJoined -count=1"
+    ],
+    "transport_compat": [
+      "go test ./internal/controlplane -run 'TestTranslateLegacyAssistantApproval|TestAssistantHandler' -count=1"
+    ],
+    "config_and_wiring": [
+      "go test ./internal/config -run 'TestAssistantDefaultWorkflowSelection|TestAssistantAgenticValidation' -count=1",
+      "go test ./internal/app -run TestAssistantExecutionWiring -count=1"
+    ],
+    "race": [
+      "go test -race ./internal/service -run 'TestAssistantUnifiedExecutionJoined|TestAssistantOrchestrator|TestAssistantIterative' -count=10",
+      "GOFLAGS=-p=1 go test -race ./..."
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
     ]
   },
   "item_4": {

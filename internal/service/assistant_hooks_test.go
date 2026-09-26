@@ -42,24 +42,21 @@ func TestParseAssistantHookDocumentRejectsUnsupported(t *testing.T) {
 	}
 }
 
-func TestAssistantAgentLoopPreToolUseHookDeniesTool(t *testing.T) {
-	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"total":1}`}}}}
+func TestAssistantIterativePreToolUseHookDeniesTool(t *testing.T) {
+	relay := newAssistantTestRelay()
+	server := &assistantRuntimeMCPServer{}
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
-		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-read", Name: "bahia_list_services"}}, StopReason: llm.AgentStopReasonToolCalls},
+		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-read", Name: "bahia_list_services", Arguments: map[string]any{}}}, StopReason: llm.AgentStopReasonToolCalls},
 		{Content: textBlocks("I could not read services"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
 	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{
 		AssistantHookEventPreToolUse: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "gate"}}}},
 	}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"gate": {{Decision: AssistantHookDecisionDeny, Reason: "reads are disabled by policy"}}}})
-	loop, _ := newAssistantExtLoop(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Hooks: hooks})
-	session := assistantRuntimeSession("session-hook-deny")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), hooks: hooks, permMode: domain.AssistantPermissionModeReview})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-hook-deny", Prompt: "read services"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Completed {
-		t.Fatalf("result = %#v", res)
+	x := st.runIterative(t, relay, "session-hook-deny", "read services")
+	if x.Phase != domain.AssistantExecutionCompleted || assistantWorkState(x, 0) != domain.AssistantWorkDenied {
+		t.Fatalf("hook deny outcome phase=%s work=%+v", x.Phase, x.Work)
 	}
 	if server.callCount() != 0 {
 		t.Fatalf("hook deny should block execution, server calls = %d", server.callCount())
@@ -69,30 +66,28 @@ func TestAssistantAgentLoopPreToolUseHookDeniesTool(t *testing.T) {
 	}
 }
 
-func TestAssistantAgentLoopPreToolUseHookAsksForApproval(t *testing.T) {
-	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"total":1}`}}}}
+func TestAssistantIterativePreToolUseHookAsksForApproval(t *testing.T) {
+	relay := newAssistantTestRelay()
+	server := &assistantRuntimeMCPServer{}
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
-		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-read", Name: "bahia_list_services"}}, StopReason: llm.AgentStopReasonToolCalls},
+		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-read", Name: "bahia_list_services", Arguments: map[string]any{}}}, StopReason: llm.AgentStopReasonToolCalls},
 	}}
 	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{
 		AssistantHookEventPreToolUse: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "gate"}}}},
 	}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"gate": {{Decision: AssistantHookDecisionAsk, Reason: "confirm read"}}}})
-	loop, _ := newAssistantExtLoop(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeAudited, AssistantAgentLoopConfig{Hooks: hooks})
-	session := assistantRuntimeSession("session-hook-ask")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), hooks: hooks})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-hook-ask", Prompt: "read services"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Suspended || res.DeferredAction == nil || res.State != domain.AssistantAgentLoopStateAwaitingApproval {
-		t.Fatalf("hook ask should defer for approval: %#v", res)
+	x := st.runIterative(t, relay, "session-hook-ask", "read services")
+	if x.Phase != domain.AssistantExecutionAwaitingApproval || assistantWorkState(x, 0) != domain.AssistantWorkAwaitingApproval {
+		t.Fatalf("hook ask should await approval: phase=%s work=%+v", x.Phase, x.Work)
 	}
 	if server.callCount() != 0 {
 		t.Fatalf("hook ask should not execute, server calls = %d", server.callCount())
 	}
 }
 
-func TestAssistantAgentLoopStopHookBlocksThenCompletes(t *testing.T) {
+func TestAssistantIterativeStopHookBlocksThenCompletes(t *testing.T) {
+	relay := newAssistantTestRelay()
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{Content: textBlocks("first attempt"), StopReason: llm.AgentStopReasonEndTurn},
 		{Content: textBlocks("second attempt after being told to continue"), StopReason: llm.AgentStopReasonEndTurn},
@@ -100,26 +95,26 @@ func TestAssistantAgentLoopStopHookBlocksThenCompletes(t *testing.T) {
 	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{
 		AssistantHookEventStop: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "check"}}}},
 	}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"check": {{Decision: AssistantHookDecisionBlock, Reason: "keep going"}, {Decision: AssistantHookDecisionAllow}}}})
-	loop, persister := newAssistantExtLoopWithPersister(t, model, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Hooks: hooks})
-	session := assistantRuntimeSession("session-stop-block")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), &assistantRuntimeMCPServer{}, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(), hooks: hooks, permMode: domain.AssistantPermissionModeReview})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-stop-block", Prompt: "do the task"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Completed {
-		t.Fatalf("loop should complete after the stop block clears: %#v", res)
+	x := st.runIterative(t, relay, "session-stop-block", "do the task")
+	if x.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("run should complete after the stop block clears: %s", x.Phase)
 	}
 	if model.callCount() != 2 {
 		t.Fatalf("stop block should force a second model turn, model calls = %d", model.callCount())
 	}
-	if !persister.hasStatusPhase("stop_hook_blocked") {
-		t.Fatalf("expected a stop_hook_blocked status, got %#v", persister.statuses)
+	if st.status.phase("stop_hook_blocked") == nil {
+		t.Fatalf("expected a stop_hook_blocked status, got %#v", st.status.statuses)
+	}
+	if !requestHasText(model.request(1), "Stop hook blocked completion: keep going") {
+		t.Fatalf("second model turn did not see the stop-hook nudge: %#v", model.request(1).Messages)
 	}
 }
 
-func TestAssistantAgentLoopPreToolUseHookCannotRewriteArgsToEscapeAsk(t *testing.T) {
-	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"ok":true}`}}}}
+func TestAssistantIterativePreToolUseHookCannotRewriteArgsToEscapeAsk(t *testing.T) {
+	relay := newAssistantTestRelay()
+	server := &assistantRuntimeMCPServer{}
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-danger", Name: "bahia_danger", Arguments: map[string]any{"target": "delete prod"}}}, StopReason: llm.AgentStopReasonToolCalls},
 	}}
@@ -128,16 +123,12 @@ func TestAssistantAgentLoopPreToolUseHookCannotRewriteArgsToEscapeAsk(t *testing
 	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{
 		AssistantHookEventPreToolUse: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "sanitize"}}}},
 	}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"sanitize": {{UpdatedInput: map[string]any{"target": "read"}}}}})
-	descriptor := AssistantToolRuntimeToolDescriptor{Name: "bahia_danger", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow}
-	loop, _ := newAssistantExtLoop(t, model, server, assistantRuntimeRegistryWith(descriptor), domain.AssistantPermissionModeAudited, AssistantAgentLoopConfig{Hooks: hooks})
-	session := assistantRuntimeSession("session-hook-escape")
+	descriptor := AssistantToolRuntimeToolDescriptor{Name: "bahia_danger", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(descriptor), hooks: hooks})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-hook-escape", Prompt: "do danger"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Suspended || res.DeferredAction == nil || res.State != domain.AssistantAgentLoopStateAwaitingApproval {
-		t.Fatalf("hook arg rewrite must not escape the ask decision: %#v", res)
+	x := st.runIterative(t, relay, "session-hook-escape", "do danger")
+	if x.Phase != domain.AssistantExecutionAwaitingApproval || assistantWorkState(x, 0) != domain.AssistantWorkAwaitingApproval {
+		t.Fatalf("hook arg rewrite must not escape the ask decision: phase=%s work=%+v", x.Phase, x.Work)
 	}
 	if server.callCount() != 0 {
 		t.Fatalf("tool must not execute, server calls = %d", server.callCount())
@@ -190,12 +181,6 @@ func hookRunnerWith(byEvent map[AssistantHookEvent][]AssistantHookMatcher, evalu
 	return NewAssistantHookRunner(AssistantHookRunnerConfig{Set: AssistantHookSet{byEvent: byEvent}, Prompt: evaluator})
 }
 
-func newAssistantExtLoopWithPersister(t *testing.T, model *assistantLoopModel, server *assistantRuntimeMCPServer, registry assistantRuntimeRegistry, mode domain.AssistantPermissionMode, cfg AssistantAgentLoopConfig) (*AssistantAgentLoop, *assistantLoopPersister) {
-	t.Helper()
-	loop, _ := newAssistantExtLoop(t, model, server, registry, mode, cfg)
-	return loop, loop.sessions.(*assistantLoopPersister)
-}
-
 type scriptedHookEvaluator struct {
 	outcomes map[string][]AssistantHookOutcome
 }
@@ -210,15 +195,4 @@ func (s *scriptedHookEvaluator) EvaluateHookPrompt(_ context.Context, req Assist
 		s.outcomes[req.Prompt] = list[1:]
 	}
 	return out, nil
-}
-
-func (p *assistantLoopPersister) hasStatusPhase(phase string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, status := range p.statuses {
-		if status["phase"] == phase {
-			return true
-		}
-	}
-	return false
 }

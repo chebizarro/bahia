@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,30 +17,31 @@ import (
 
 const defaultAssistantAgentID = "bahia-operator-assistant"
 
+const assistantPublishTimeout = 10 * time.Second
+
+// Stable refusal codes returned as {status:"failed", step:<code>} results. The
+// browser classifies these as refusals of the request, never as downstream
+// execution outcomes.
 const (
-	assistantPublishTimeout = 10 * time.Second
-	assistantContextTimeout = 20 * time.Second
-	assistantLLMTimeout     = 110 * time.Second
+	AssistantRefusalValidation              = "validation_error"
+	AssistantRefusalUnauthorized            = "unauthorized_participant"
+	AssistantRefusalUnavailable             = "assistant_unavailable"
+	AssistantRefusalRunInProgress           = "run_in_progress"
+	AssistantRefusalSessionClosed           = "session_closed"
+	AssistantRefusalCheckpointUnconfirmed   = "checkpoint_unconfirmed"
+	AssistantRefusalProposalChanged         = "proposal_changed_requires_review"
+	AssistantRefusalStaleApproval           = "stale_approval"
+	AssistantRefusalStaleTarget             = "stale_target"
+	AssistantRefusalInvalidState            = "invalid_state"
+	AssistantRefusalApprovalDenied          = "approval_denied"
+	AssistantRefusalReconciliation          = "reconciliation_rejected"
+	AssistantRefusalContractUpgradeRequired = "approval_contract_upgrade_required"
+	AssistantRefusalLegacyReadOnly          = "legacy_session_read_only"
+	AssistantRefusalSessionLookup           = "session_lookup_unavailable"
+	AssistantRefusalUnknownSession          = "unknown_session"
+	AssistantRefusalPlanValidation          = "plan_validation_error"
+	AssistantRefusalExecution               = "execution_error"
 )
-
-// AssistantChatClient is the LLM planner surface used by the orchestrator.
-type AssistantChatClient interface {
-	PlanFromPrompt(ctx context.Context, systemPrompt string, userPrompt string) (*domain.AssistantPlan, error)
-}
-
-type AssistantStreamingChatClient interface {
-	PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error)
-}
-
-// AssistantContextProvider assembles bounded operational context for planning.
-type AssistantContextProvider interface {
-	BuildContext(ctx context.Context, routeContext map[string]string, selectedRefs []string, transcriptSummary string) (string, error)
-}
-
-// AssistantAsyncToolInvoker invokes assistant-safe event-native MCP tools.
-type AssistantAsyncToolInvoker interface {
-	InvokeAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error)
-}
 
 // AssistantEventPublisher publishes signed assistant events to relays.
 type AssistantEventPublisher interface {
@@ -80,60 +81,53 @@ type AssistantRequestSource struct {
 }
 
 // AssistantOperationResult is returned as the ContextVM JSON-RPC result payload
-// for prompt/approval operations.
+// for prompt/approval/cancel/reconcile operations.
 type AssistantOperationResult map[string]any
 
-// AssistantAgentLoopController is the agentic loop surface consumed by the
-// orchestrator and startup recovery. The concrete AssistantAgentLoop implements
-// it; tests can supply a deterministic loop without reaching a real model.
-type AssistantAgentLoopController interface {
-	StartTurn(ctx context.Context, req AssistantAgentTurnRequest) (*AssistantAgentLoopResult, error)
-	ResumeAfterAsyncObservation(ctx context.Context, req AssistantAgentResumeAsyncRequest) (*AssistantAgentLoopResult, error)
-	ResumeAfterActionDecision(ctx context.Context, req AssistantAgentActionDecisionRequest) (*AssistantAgentLoopResult, error)
+// AssistantExecutionReader exposes engine-owned read models. The concrete
+// AssistantExecutionEngine implements it.
+type AssistantExecutionReader interface {
+	Snapshot(sessionID string) (domain.AssistantExecution, bool)
+	Projection(sessionID string) (domain.AssistantSessionV2, bool)
 }
 
 // AssistantOrchestratorConfig contains dependencies and startup state.
 type AssistantOrchestratorConfig struct {
-	ChatClient       AssistantChatClient
-	ContextBuilder   AssistantContextProvider
-	ToolInvoker      AssistantAsyncToolInvoker
-	Publisher        AssistantEventPublisher
-	Subscriber       AssistantRelaySubscriber
-	Signer           nostr.Signer
-	Identity         AssistantIdentity
-	AllowedToolNames []string
-	InitialSessions  []domain.AssistantSession
-	AgenticEnabled   bool
-	StreamingEnabled bool
-	AgentLoop        AssistantAgentLoopController
-	Logger           *slog.Logger
+	// Engine is the only execution owner. The orchestrator routes requests to
+	// it and never dispatches, observes or persists execution itself.
+	Engine AssistantTurnEngine
+	// Executions defaults to Engine when the engine implements it.
+	Executions      AssistantExecutionReader
+	DefaultWorkflow domain.AssistantWorkflow
+	Publisher       AssistantEventPublisher
+	Subscriber      AssistantRelaySubscriber
+	Signer          nostr.Signer
+	Identity        AssistantIdentity
+	// InitialSessions is the bounded startup cache of historical v1 sessions.
+	// v1 history is read-only: it answers participant checks and refuses new
+	// turns; it never authorizes an unknown session as new.
+	InitialSessions []domain.AssistantSession
+	Logger          *slog.Logger
 }
 
-// AssistantOrchestrator coordinates assistant prompt planning and approval dispatch.
+// AssistantOrchestrator is request routing for the operator assistant: it
+// validates requests, selects the workflow inputs and delegates every
+// execution decision to the unified executor.
 type AssistantOrchestrator struct {
-	chatClient       AssistantChatClient
-	contextBuilder   AssistantContextProvider
-	toolInvoker      AssistantAsyncToolInvoker
-	publisher        AssistantEventPublisher
-	subscriber       AssistantRelaySubscriber
-	signer           nostr.Signer
-	identity         AssistantIdentity
-	allowedTools     map[string]struct{}
-	logger           *slog.Logger
-	agenticEnabled   bool
-	streamingEnabled bool
-	agentLoop        AssistantAgentLoopController
+	engine          AssistantTurnEngine
+	executions      AssistantExecutionReader
+	defaultWorkflow domain.AssistantWorkflow
+	subscriber      AssistantRelaySubscriber
+	signer          nostr.Signer
+	identity        AssistantIdentity
+	status          *AssistantStatusEventPublisher
+	logger          *slog.Logger
 
-	mu                 sync.Mutex
-	sessions           map[string]*domain.AssistantSession
-	sessionLocks       map[string]*sync.Mutex
-	processedTurns     map[string]AssistantOperationResult
-	processedApprovals map[string]AssistantOperationResult
-	submittedPlans     map[string]struct{}
-	activeObservers    map[string]context.CancelFunc
+	mu     sync.Mutex
+	legacy map[string]domain.AssistantSession
 }
 
-// NewAssistantOrchestrator creates a prompt/approval orchestrator.
+// NewAssistantOrchestrator creates the request router.
 func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrchestrator {
 	logger := config.Logger
 	if logger == nil {
@@ -143,745 +137,429 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 	if strings.TrimSpace(identity.AgentID) == "" {
 		identity.AgentID = defaultAssistantAgentID
 	}
-	allowed := make(map[string]struct{}, len(config.AllowedToolNames))
-	for _, name := range config.AllowedToolNames {
-		if name = strings.TrimSpace(name); name != "" {
-			allowed[name] = struct{}{}
-		}
+	executions := config.Executions
+	if executions == nil {
+		executions, _ = config.Engine.(AssistantExecutionReader)
 	}
 	o := &AssistantOrchestrator{
-		chatClient:         config.ChatClient,
-		contextBuilder:     config.ContextBuilder,
-		toolInvoker:        config.ToolInvoker,
-		publisher:          config.Publisher,
-		subscriber:         config.Subscriber,
-		signer:             config.Signer,
-		identity:           identity,
-		allowedTools:       allowed,
-		logger:             logger.With("component", "assistant_orchestrator"),
-		agenticEnabled:     config.AgenticEnabled,
-		streamingEnabled:   config.StreamingEnabled,
-		agentLoop:          config.AgentLoop,
-		sessions:           make(map[string]*domain.AssistantSession),
-		sessionLocks:       make(map[string]*sync.Mutex),
-		processedTurns:     make(map[string]AssistantOperationResult),
-		processedApprovals: make(map[string]AssistantOperationResult),
-		submittedPlans:     make(map[string]struct{}),
-		activeObservers:    make(map[string]context.CancelFunc),
+		engine:          config.Engine,
+		executions:      executions,
+		defaultWorkflow: config.DefaultWorkflow,
+		subscriber:      config.Subscriber,
+		signer:          config.Signer,
+		identity:        identity,
+		status:          NewAssistantStatusEventPublisher(config.Publisher, config.Signer, identity),
+		logger:          logger.With("component", "assistant_orchestrator"),
+		legacy:          make(map[string]domain.AssistantSession),
 	}
 	for _, session := range config.InitialSessions {
 		copySession := session
 		normalizeSessionParticipants(&copySession)
 		if copySession.SessionID != "" {
-			o.sessions[copySession.SessionID] = &copySession
+			o.legacy[copySession.SessionID] = copySession
 		}
 	}
 	return o
 }
 
-// SetAgentLoop installs the concrete agent loop after the orchestrator exists.
-// The app uses this to resolve the runtime/orchestrator DI cycle: the runtime
-// needs the orchestrator as its session persister and async observer, while the
-// orchestrator needs the loop for agentic turns.
-func (o *AssistantOrchestrator) SetAgentLoop(loop AssistantAgentLoopController) {
-	if o == nil {
-		return
-	}
-	o.mu.Lock()
-	o.agentLoop = loop
-	o.mu.Unlock()
-}
-
-// HandlePromptRequest processes a ContextVM assistant prompt request into an
-// approved-or-clarifying assistant result payload.
+// HandlePromptRequest starts a turn. Workflow selection: an explicit
+// per-request workflow wins, then the session's persisted workflow, then the
+// configured default. A second prompt against an unfinished run is refused
+// with run_in_progress by the engine.
 func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantPromptRequest) (AssistantOperationResult, error) {
-	event := source.Event
-	if event == nil {
-		return nil, fmt.Errorf("assistant prompt event is nil")
-	}
-	if strings.TrimSpace(source.OperatorPubkey) == "" {
-		source.OperatorPubkey = event.PubKey.Hex()
-	}
-	if strings.TrimSpace(source.RequestID) == "" {
-		source.RequestID = event.ID.Hex()
-	}
-	if strings.TrimSpace(source.DedupKey) == "" {
-		source.DedupKey = source.RequestID
+	event, source, err := o.normalizeSource(source)
+	if err != nil {
+		return nil, err
 	}
 	if err := validatePromptRequest(req); err != nil {
-		return o.failureResult(req.SessionID, "validation_error", err.Error()), nil
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, err.Error(), nil), nil
 	}
-
-	lock := o.lockForSession(req.SessionID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	dedupKey := source.DedupKey
-	if dedupKey != "" {
-		o.mu.Lock()
-		processed := o.processedTurns[dedupKey]
-		o.mu.Unlock()
-		if processed != nil {
-			return processed, nil
+	if req.ContractVersion != 0 && req.ContractVersion != domain.AssistantExecutionVersion {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, fmt.Sprintf("unsupported assistant contract_version %d", req.ContractVersion), nil), nil
+	}
+	if req.Workflow != "" && !req.Workflow.Valid() {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, fmt.Sprintf("invalid assistant workflow %q", req.Workflow), nil), nil
+	}
+	if o.engine == nil {
+		return o.refusal(event, req.SessionID, AssistantRefusalUnavailable, "assistant executor is not configured", nil), nil
+	}
+	existing, code, err := o.resolveSession(ctx, req.SessionID, source.OperatorPubkey)
+	if code != "" {
+		msg := "assistant session cannot accept a new turn"
+		if err != nil {
+			msg = err.Error()
 		}
+		return o.refusal(event, req.SessionID, code, msg, nil), nil
 	}
-
-	session := o.loadOrCreateSession(req.SessionID, source.OperatorPubkey)
-	addSessionParticipant(session, source.OperatorPubkey)
-	session.State = domain.AssistantSessionStatePlanning
-	session.CurrentTurnID = req.TurnID
-	session.CurrentRequestID = event.ID.Hex()
-	o.logger.Info("assistant prompt started", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", event.ID.Hex(), "agentic", o.agenticEnabled)
-	if err := o.publishSession(ctx, session); err != nil {
-		return nil, err
-	}
-	if o.agenticEnabled {
-		return o.handleAgenticPromptRequest(ctx, event, dedupKey, source, req, session)
-	}
-	contextCtx, cancelContext := context.WithTimeout(ctx, assistantContextTimeout)
-	contextBlock, err := o.contextBuilder.BuildContext(contextCtx, routeContextStrings(req.RouteContext), req.SelectedRefs, session.TranscriptSummary)
-	cancelContext()
-	if err != nil {
-		session.State = domain.AssistantSessionStateIdle
-		_ = o.publishSession(ctx, session)
-		o.logger.Warn("assistant context build failed", "session_id", req.SessionID, "turn_id", req.TurnID, "error", err)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "context_error", map[string]any{"summary": "failed to build assistant context", "error": err.Error()}), nil)
-	}
-	o.logger.Info("assistant context built", "session_id", req.SessionID, "turn_id", req.TurnID, "context_bytes", len(contextBlock))
-	llmCtx, cancelLLM := context.WithTimeout(ctx, assistantLLMTimeout)
-	plan, err := o.planFromPrompt(llmCtx, event, req.SessionID, o.systemPrompt(), o.userPrompt(req, contextBlock))
-	cancelLLM()
-	if err != nil {
-		session.State = domain.AssistantSessionStateIdle
-		_ = o.publishSession(ctx, session)
-		o.logger.Warn("assistant planning failed", "session_id", req.SessionID, "turn_id", req.TurnID, "error", err)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "llm_error", map[string]any{"summary": "assistant planning failed", "error": err.Error()}), nil)
-	}
-	if plan == nil {
-		plan = &domain.AssistantPlan{Summary: "The assistant did not return a plan.", NeedsClarification: true, ClarifyingQuestion: "Please restate the request with explicit target resources and desired action.", RiskLevel: "low", Steps: []domain.AssistantPlanStep{}}
-	}
-	if err := o.validatePlan(*plan); err != nil {
-		session.State = domain.AssistantSessionStateIdle
-		_ = o.publishSession(ctx, session)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "plan_validation_error", map[string]any{"summary": "assistant plan failed validation", "error": err.Error(), "plan": plan}), nil)
-	}
-
-	if plan.NeedsClarification {
-		session.State = domain.AssistantSessionStateIdle
-		session.CurrentPlan = plan
-		if plan.ClarifyingQuestion != "" {
-			session.TranscriptSummary = appendTranscriptSummary(session.TranscriptSummary, "assistant asked: "+plan.ClarifyingQuestion)
-		}
-		_ = o.publishSession(ctx, session)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "needs_clarification", "needs_clarification", map[string]any{"summary": plan.Summary, "clarifying_question": plan.ClarifyingQuestion, "plan": plan}), nil)
-	}
-
-	planHash := domain.ComputePlanHash(*plan, req.SessionID)
-	if planHash == "" {
-		session.State = domain.AssistantSessionStateIdle
-		_ = o.publishSession(ctx, session)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "plan_hash_error", map[string]any{"summary": "assistant plan could not be hashed"}), nil)
-	}
-
-	session.CurrentPlan = plan
-	session.LastPlanHash = planHash
-	session.PendingSteps = append([]domain.AssistantPlanStep(nil), plan.Steps...)
-	session.TranscriptSummary = appendTranscriptSummary(session.TranscriptSummary, "operator: "+req.Prompt+"\nassistant plan: "+plan.Summary)
-	if len(plan.Steps) == 0 {
-		session.State = domain.AssistantSessionStateIdle
-		_ = o.publishSession(ctx, session)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "completed", "completed", map[string]any{"summary": plan.Summary, "plan": plan}), nil)
-	}
-
-	session.State = domain.AssistantSessionStateAwaitingApproval
-	if err := o.publishSession(ctx, session); err != nil {
-		return nil, err
-	}
-	return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "planned", "planned", map[string]any{"summary": plan.Summary, "plan_hash": planHash, "plan": plan}), nil)
+	o.logger.Info("assistant prompt received", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", source.RequestID, "workflow", string(req.Workflow))
+	result, err := o.engine.StartTurn(ctx, AssistantTurnStartRequest{Prompt: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: source.RequestID, ExistingSession: existing, DefaultWorkflow: o.defaultWorkflow})
+	return o.engineResult(event, req.SessionID, result, err), nil
 }
 
-// HandleApprovalRequest processes a ContextVM assistant approval/rejection/cancel request.
+// HandleApprovalRequest routes a v2 batch or action decision. Unversioned v1
+// requests are translated by the transport's compatibility decoder before
+// they reach this method; anything still unversioned is refused.
 func (o *AssistantOrchestrator) HandleApprovalRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantApprovalRequest) (AssistantOperationResult, error) {
-	event := source.Event
-	if event == nil {
-		return nil, fmt.Errorf("assistant approval event is nil")
-	}
-	if strings.TrimSpace(source.OperatorPubkey) == "" {
-		source.OperatorPubkey = event.PubKey.Hex()
-	}
-	if strings.TrimSpace(source.RequestID) == "" {
-		source.RequestID = event.ID.Hex()
-	}
-	if strings.TrimSpace(source.DedupKey) == "" {
-		source.DedupKey = source.RequestID
-	}
-	sessionID := strings.TrimSpace(req.SessionID)
-	planHash := strings.TrimSpace(req.PlanHash)
-	actionID := strings.TrimSpace(req.ActionID)
-	decision := strings.ToLower(strings.TrimSpace(req.Decision))
-	reason := firstNonEmptyString(strings.TrimSpace(req.Reason), strings.TrimSpace(req.Message))
-	if sessionID == "" || (planHash == "" && actionID == "") || decision == "" {
-		return o.failureResult(sessionID, "validation_error", "session_id, plan_hash or action_id, and decision are required"), nil
-	}
-	if decision != "approve" && decision != "reject" && decision != "cancel" {
-		return o.failureResult(sessionID, "validation_error", "decision must be approve, reject, or cancel"), nil
-	}
-	if actionID != "" && req.ModifiedPlan != nil {
-		return o.failureResult(sessionID, "validation_error", "modified_plan is only valid for legacy plan_hash approvals"), nil
-	}
-
-	lock := o.lockForSession(sessionID)
-	lock.Lock()
-
-	dedupKey := source.DedupKey
-	if dedupKey != "" {
-		o.mu.Lock()
-		processed, duplicate := o.processedApprovals[dedupKey]
-		o.mu.Unlock()
-		if duplicate {
-			lock.Unlock()
-			return processed, nil
-		}
-	}
-
-	session := o.session(sessionID)
-	if session == nil {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "unknown_session", map[string]any{"summary": "assistant session is not known"})
-	}
-	if !sessionHasParticipant(session, source.OperatorPubkey) {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "unauthorized_participant", map[string]any{"summary": "operator is not a participant in this assistant session"})
-	}
-	if actionID != "" {
-		result, err := o.handleAgenticActionDecision(ctx, event, dedupKey, source, session, actionID, decision, reason, req)
-		lock.Unlock()
-		return result, err
-	}
-	if decision == "cancel" {
-		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked && session.State != domain.AssistantSessionStateAwaitingApproval {
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_cancel", map[string]any{"summary": "cancel is only valid while executing, blocked, or awaiting approval"})
-		}
-		o.cancelObserver(sessionID)
-		o.clearSubmittedPlan(sessionID + ":" + planHash)
-		session.State = domain.AssistantSessionStateFailed
-		session.PendingSteps = nil
-		_ = o.publishSession(ctx, session)
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "cancelled", map[string]any{"summary": "assistant session cancelled by operator", "message": "operator cancel; no downstream rollback attempted", "reason": reason, "plan_hash": planHash})
-	}
-	if req.ModifiedPlan != nil && decision != "approve" {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "validation_error", map[string]any{"summary": "modified_plan is only valid for approve decisions", "plan_hash": planHash})
-	}
-	if req.ModifiedPlan != nil {
-		if session.CurrentPlan == nil || session.LastPlanHash == "" {
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
-		}
-		if err := o.validatePlan(*req.ModifiedPlan); err != nil {
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_validation_error", map[string]any{"summary": "modified assistant plan failed validation", "plan_hash": planHash, "error": err.Error()})
-		}
-		modifiedHash := domain.ComputePlanHash(*req.ModifiedPlan, sessionID)
-		if modifiedHash == "" {
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_hash_error", map[string]any{"summary": "modified assistant plan could not be hashed"})
-		}
-		if modifiedHash != planHash {
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "plan_hash_mismatch", map[string]any{"summary": "modified plan hash does not match approval tag", "plan_hash": planHash, "computed_plan_hash": modifiedHash})
-		}
-		session.CurrentPlan = req.ModifiedPlan
-		session.LastPlanHash = modifiedHash
-		session.PendingSteps = append([]domain.AssistantPlanStep(nil), req.ModifiedPlan.Steps...)
-		_ = o.publishSession(ctx, session)
-	} else if session.LastPlanHash != planHash || session.CurrentPlan == nil {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
-	}
-	if decision == "reject" {
-		session.State = domain.AssistantSessionStateIdle
-		session.PendingSteps = nil
-		_ = o.publishSession(ctx, session)
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "rejected", "rejected", map[string]any{"summary": "assistant plan rejected by operator", "reason": reason, "plan_hash": planHash})
-	}
-	planSubmissionKey := sessionID + ":" + planHash
-	o.mu.Lock()
-	_, alreadySubmitted := o.submittedPlans[planSubmissionKey]
-	if alreadySubmitted && session.State != domain.AssistantSessionStateExecuting {
-		delete(o.submittedPlans, planSubmissionKey)
-		alreadySubmitted = false
-	}
-	o.mu.Unlock()
-	if alreadySubmitted {
-		lock.Unlock()
-		return o.markApprovalProcessed(dedupKey, o.resultPayload(event, sessionID, "executing", "already_submitted", map[string]any{"summary": "assistant plan is already executing", "plan_hash": planHash}), nil)
-	}
-	if session.State != domain.AssistantSessionStateAwaitingApproval {
-		lock.Unlock()
-		return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "invalid_state", map[string]any{"summary": "assistant session is not awaiting approval", "state": session.State})
-	}
-	session.State = domain.AssistantSessionStateExecuting
-	_ = o.publishSession(ctx, session)
-	if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"message": "operator approved plan; submitting event-native commands", "plan_hash": planHash}); err != nil {
-		lock.Unlock()
+	event, source, err := o.normalizeSource(source)
+	if err != nil {
 		return nil, err
 	}
-
-	for i := range session.CurrentPlan.Steps {
-		step := session.CurrentPlan.Steps[i]
-		step.IdempotencyKey = fmt.Sprintf("assistant:%s:%s:%s", sessionID, planHash, step.StepID)
-		receipt := o.pendingReceipt(session, step.IdempotencyKey)
-		if receipt == nil {
-			args := cloneArgs(step.ToolArgs)
-			args["idempotency_key"] = step.IdempotencyKey
-			if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"phase": "executing", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "message": step.Title}); err != nil {
-				lock.Unlock()
-				return nil, err
-			}
-			var err error
-			receipt, err = o.toolInvoker.InvokeAssistantAsyncTool(ctx, step.ToolName, args)
-			if err != nil {
-				session.State = domain.AssistantSessionStateFailed
-				_ = o.publishSession(ctx, session)
-				lock.Unlock()
-				return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "tool_dispatch_error", map[string]any{"summary": "failed to dispatch assistant plan step", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "error": err.Error()})
-			}
-			o.storePendingReceipt(session, step, receipt)
-			_ = o.publishSession(ctx, session)
-		}
-		if receipt != nil {
-			if err := o.publishStatus(ctx, event, sessionID, "executing", map[string]any{"phase": "executing", "message": "downstream command submitted; awaiting event-native terminal result", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_request": receipt.RequestEventID, "receipt": receipt}); err != nil {
-				lock.Unlock()
-				return nil, err
-			}
-			o.markPlanSubmitted(planSubmissionKey)
-		}
-		lock.Unlock()
-		outcome, err := o.observeDownstreamResult(ctx, sessionID, step, receipt)
-		lock.Lock()
-		if session.State == domain.AssistantSessionStateFailed {
-			o.clearSubmittedPlan(planSubmissionKey)
-			lock.Unlock()
-			return o.markApprovalProcessed(dedupKey, nil, nil)
-		}
-		if err != nil || outcome.Status == "blocked" {
-			session.State = domain.AssistantSessionStateBlocked
-			o.clearSubmittedPlan(planSubmissionKey)
-			_ = o.publishSession(ctx, session)
-			lock.Unlock()
-			msg := "downstream observation blocked before terminal result"
-			if err != nil {
-				msg = err.Error()
-			}
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "blocked", "blocked", map[string]any{"summary": msg, "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName})
-		}
-		if outcome.Status == "failed" {
-			session.State = domain.AssistantSessionStateFailed
-			o.clearSubmittedPlan(planSubmissionKey)
-			_ = o.publishSession(ctx, session)
-			lock.Unlock()
-			return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed", "plan_hash": planHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
-		}
-		o.clearPendingReceipt(session, step.IdempotencyKey)
-		if len(session.PendingSteps) > 0 {
-			session.PendingSteps = session.PendingSteps[1:]
-		}
-		_ = o.publishSession(ctx, session)
+	if req.ContractVersion != domain.AssistantExecutionVersion {
+		return o.refusal(event, req.SessionID, AssistantRefusalContractUpgradeRequired, "assistant approvals require contract_version 2", nil), nil
 	}
-	session.State = domain.AssistantSessionStateCompleted
-	session.PendingSteps = nil
-	o.clearSubmittedPlan(planSubmissionKey)
-	_ = o.publishSession(ctx, session)
-	lock.Unlock()
-	return o.publishApprovalResult(ctx, dedupKey, event, sessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed", "plan_hash": planHash})
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.RunID) == "" || (req.Decision != "approve" && req.Decision != "reject") {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, "v2 approval requires session_id, run_id and decision approve or reject", nil), nil
+	}
+	if req.ModifiedPlan != nil && req.Decision != "approve" {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, "modified_plan is only valid for approve decisions", nil), nil
+	}
+	if o.engine == nil {
+		return o.refusal(event, req.SessionID, AssistantRefusalUnavailable, "assistant executor is not configured", nil), nil
+	}
+	requestID := firstNonEmptyString(strings.TrimSpace(req.RequestID), source.RequestID)
+	result, err := o.engine.Decide(ctx, AssistantTurnDecisionRequest{Approval: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: requestID})
+	return o.engineResult(event, req.SessionID, result, err), nil
 }
 
-func (o *AssistantOrchestrator) handleAgenticPromptRequest(ctx context.Context, event *nostr.Event, dedupKey string, source AssistantRequestSource, req domain.AssistantPromptRequest, session *domain.AssistantSession) (AssistantOperationResult, error) {
-	if o.agentLoop == nil {
-		session.State = domain.AssistantSessionStateFailed
-		_ = o.publishSession(ctx, session)
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "agent_loop_unavailable", map[string]any{"summary": "assistant agent loop is not configured", "agentic": true}), nil)
-	}
-	loopCtx, cancel := context.WithTimeout(ctx, assistantLLMTimeout)
-	defer cancel()
-	result, err := o.agentLoop.StartTurn(loopCtx, AssistantAgentTurnRequest{
-		Session:        session,
-		Prompt:         req.Prompt,
-		TurnID:         req.TurnID,
-		RouteContext:   routeContextStrings(req.RouteContext),
-		SelectedRefs:   append([]string(nil), req.SelectedRefs...),
-		OperatorPubkey: source.OperatorPubkey,
-	})
+// HandleCancellationRequest routes an explicit run or session cancellation.
+func (o *AssistantOrchestrator) HandleCancellationRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantCancellationRequest) (AssistantOperationResult, error) {
+	event, source, err := o.normalizeSource(source)
 	if err != nil {
-		session.State = domain.AssistantSessionStateFailed
-		_ = o.publishSession(ctx, session)
-		_ = o.publishStatus(ctx, event, session.SessionID, "failed", map[string]any{"phase": "agent_loop_error", "summary": "assistant agent loop failed", "error": err.Error()})
-		content := map[string]any{"summary": "assistant agent loop failed", "error": err.Error(), "agentic": true}
-		if result != nil {
-			mergeAgenticLoopResult(content, result)
-		}
-		return o.storePromptResult(ctx, dedupKey, o.resultPayload(event, req.SessionID, "failed", "agent_loop_error", content), nil)
+		return nil, err
 	}
-	return o.storePromptResult(ctx, dedupKey, o.agenticResultPayload(event, req.SessionID, result), nil)
+	if req.ContractVersion != domain.AssistantExecutionVersion || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.RunID) == "" || (req.Scope != "run" && req.Scope != "session") {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, "cancellation requires contract_version 2, session_id, run_id and scope run or session", nil), nil
+	}
+	if o.engine == nil {
+		return o.refusal(event, req.SessionID, AssistantRefusalUnavailable, "assistant executor is not configured", nil), nil
+	}
+	result, err := o.engine.Cancel(ctx, AssistantTurnCancellationRequest{Cancellation: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: source.RequestID})
+	return o.engineResult(event, req.SessionID, result, err), nil
 }
 
-func (o *AssistantOrchestrator) handleAgenticActionDecision(ctx context.Context, event *nostr.Event, dedupKey string, source AssistantRequestSource, session *domain.AssistantSession, actionID, decision, reason string, req domain.AssistantApprovalRequest) (AssistantOperationResult, error) {
-	if !o.agenticEnabled {
-		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "agentic_disabled", map[string]any{"summary": "assistant action approvals require assistant.agentic.enabled=true", "action_id": actionID, "agentic": false})
-	}
-	if o.agentLoop == nil {
-		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "agent_loop_unavailable", map[string]any{"summary": "assistant agent loop is not configured", "action_id": actionID, "agentic": true})
-	}
-	loopCtx, cancel := context.WithTimeout(ctx, assistantLLMTimeout)
-	defer cancel()
-	result, err := o.agentLoop.ResumeAfterActionDecision(loopCtx, AssistantAgentActionDecisionRequest{
-		Session:        session,
-		ActionID:       actionID,
-		Decision:       decision,
-		Reason:         reason,
-		RouteContext:   nil,
-		SelectedRefs:   nil,
-		OperatorPubkey: source.OperatorPubkey,
-	})
+// HandleReconciliationRequest attaches verified evidence for uncertain work.
+func (o *AssistantOrchestrator) HandleReconciliationRequest(ctx context.Context, source AssistantRequestSource, req domain.AssistantReconciliationRequest) (AssistantOperationResult, error) {
+	event, source, err := o.normalizeSource(source)
 	if err != nil {
-		session.State = domain.AssistantSessionStateFailed
-		_ = o.publishSession(ctx, session)
-		return o.publishApprovalResult(ctx, dedupKey, event, session.SessionID, "failed", "action_decision_error", map[string]any{"summary": "assistant action decision failed", "error": err.Error(), "action_id": actionID, "decision": decision, "agentic": true})
+		return nil, err
 	}
-	payload := o.agenticResultPayload(event, session.SessionID, result)
-	payload["action_id"] = actionID
-	payload["decision"] = decision
-	if req.PlanHash != "" {
-		payload["plan_hash"] = req.PlanHash
+	if req.ContractVersion != domain.AssistantExecutionVersion || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.WorkID) == "" || strings.TrimSpace(req.RequestEventID) == "" {
+		return o.refusal(event, req.SessionID, AssistantRefusalValidation, "reconciliation requires contract_version 2, session_id, run_id, work_id and request_event_id", nil), nil
 	}
-	return o.markApprovalProcessed(dedupKey, payload, nil)
+	if o.engine == nil {
+		return o.refusal(event, req.SessionID, AssistantRefusalUnavailable, "assistant executor is not configured", nil), nil
+	}
+	result, err := o.engine.Reconcile(ctx, AssistantTurnReconciliationRequest{Reconciliation: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: source.RequestID})
+	return o.engineResult(event, req.SessionID, result, err), nil
 }
 
-func (o *AssistantOrchestrator) agenticResultPayload(requestEvent *nostr.Event, sessionID string, result *AssistantAgentLoopResult) AssistantOperationResult {
-	status := string(domain.AssistantSessionStateFailed)
-	step := "agent_loop"
-	content := map[string]any{"summary": "assistant agent loop failed", "agentic": true}
-	if result != nil {
-		status = string(result.SessionState)
-		if status == "" {
-			status = agenticStatusFromLoopState(result.State)
-		}
-		step = string(result.State)
-		if step == "" {
-			step = "agent_loop"
-		}
-		content["summary"] = agenticSummary(result)
-		mergeAgenticLoopResult(content, result)
+// ExecutionSnapshot returns the engine's confirmed execution for a session.
+// The transport's v1 compatibility decoder uses it to recognize migrated
+// targets; it is a copy and grants no authority by itself.
+func (o *AssistantOrchestrator) ExecutionSnapshot(sessionID string) (domain.AssistantExecution, bool) {
+	if o == nil || o.executions == nil {
+		return domain.AssistantExecution{}, false
 	}
-	return o.resultPayload(requestEvent, sessionID, status, step, content)
+	return o.executions.Snapshot(sessionID)
 }
 
-func mergeAgenticLoopResult(content map[string]any, result *AssistantAgentLoopResult) {
-	if content == nil || result == nil {
-		return
-	}
-	content["run_id"] = result.RunID
-	content["turn_id"] = result.TurnID
-	content["iteration"] = result.Iteration
-	content["loop_state"] = string(result.State)
-	content["session_state"] = string(result.SessionState)
-	content["suspended"] = result.Suspended
-	content["completed"] = result.Completed
-	if result.StopReason != "" {
-		content["stop_reason"] = string(result.StopReason)
-	}
-	if result.Error != "" {
-		content["error"] = result.Error
-	}
-	if len(result.Observations) > 0 {
-		content["observations"] = result.Observations
-		last := result.Observations[len(result.Observations)-1]
-		if last != nil {
-			content["observation_id"] = last.ObservationID
-			content["observation_status"] = string(last.Status)
-			content["tool_call_id"] = last.ToolCallID
-			content["tool_name"] = last.ToolName
-			if last.Receipt != nil {
-				content["downstream_request"] = last.Receipt.RequestEventID
-			}
-		}
-	}
-	if result.DeferredAction != nil {
-		content["action_id"] = result.DeferredAction.ActionID
-		content["tool_call_id"] = result.DeferredAction.ToolCallID
-		content["tool_name"] = result.DeferredAction.ToolName
-		content["permission"] = result.DeferredAction.Permission
-		content["approval_prompt"] = result.DeferredAction.ApprovalPrompt
-	}
-}
-
-func agenticStatusFromLoopState(state domain.AssistantAgentLoopState) string {
-	switch state {
-	case domain.AssistantAgentLoopStateCompleted:
-		return string(domain.AssistantSessionStateCompleted)
-	case domain.AssistantAgentLoopStateBlocked:
-		return string(domain.AssistantSessionStateBlocked)
-	case domain.AssistantAgentLoopStateFailed:
-		return string(domain.AssistantSessionStateFailed)
-	case domain.AssistantAgentLoopStateAwaitingApproval:
-		return string(domain.AssistantSessionStateAwaitingApproval)
-	default:
-		return string(domain.AssistantSessionStateExecuting)
-	}
-}
-
-func agenticSummary(result *AssistantAgentLoopResult) string {
-	if result == nil {
-		return "assistant agent loop failed"
-	}
-	if result.Error != "" {
-		return result.Error
-	}
-	if result.DeferredAction != nil {
-		return "assistant action requires operator approval"
-	}
-	switch result.State {
-	case domain.AssistantAgentLoopStateCompleted:
-		return "assistant agent loop completed"
-	case domain.AssistantAgentLoopStateWaitingAsync:
-		return "assistant agent loop is waiting for an async tool observation"
-	case domain.AssistantAgentLoopStateAwaitingApproval:
-		return "assistant agent loop is awaiting action approval"
-	case domain.AssistantAgentLoopStateBlocked:
-		return "assistant agent loop blocked"
-	case domain.AssistantAgentLoopStateFailed:
-		return "assistant agent loop failed"
-	default:
-		return "assistant agent loop running"
-	}
-}
-
-type downstreamOutcome struct {
-	Status string
-	Event  *nostr.Event
-}
-
-func (o *AssistantOrchestrator) observeDownstreamResult(ctx context.Context, sessionID string, step domain.AssistantPlanStep, receipt *domain.AsyncToolReceipt) (downstreamOutcome, error) {
-	if receipt == nil || receipt.RequestEventID == "" || len(receipt.ResultKinds) == 0 {
-		return downstreamOutcome{Status: "blocked"}, fmt.Errorf("downstream receipt is missing observable result metadata")
-	}
-	if o.subscriber == nil {
-		return downstreamOutcome{Status: "blocked"}, fmt.Errorf("assistant relay subscriber is not configured")
-	}
-	observeCtx, cancel := context.WithCancel(ctx)
-	o.mu.Lock()
-	o.activeObservers[sessionID] = cancel
-	o.mu.Unlock()
-	defer func() {
-		cancel()
-		o.mu.Lock()
-		delete(o.activeObservers, sessionID)
-		o.mu.Unlock()
-	}()
-	resultKinds := make([]nostr.Kind, 0, len(receipt.ResultKinds))
-	for _, kind := range receipt.ResultKinds {
-		resultKinds = append(resultKinds, nostr.Kind(kind))
-	}
-	merged, err := o.subscriber.SubscribeAllWithEOSE(observeCtx, []nostr.Filter{{Kinds: resultKinds, Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
-	if err != nil {
-		return downstreamOutcome{Status: "blocked"}, err
-	}
-	defer merged.Close()
-	eventsCh := merged.EventChan()
-	closedCh := merged.ClosedChan()
-	seen := map[string]struct{}{}
-	for {
-		select {
-		case <-observeCtx.Done():
-			return downstreamOutcome{Status: "blocked"}, observeCtx.Err()
-		case closed, ok := <-closedCh:
-			if ok {
-				return downstreamOutcome{Status: "blocked"}, fmt.Errorf("relay subscription closed before terminal result: relay=%s reason=%s", closed.RelayURL, closed.Reason)
-			}
-		case ev, ok := <-eventsCh:
-			if !ok {
-				return downstreamOutcome{Status: "blocked"}, fmt.Errorf("downstream result subscription ended before terminal result")
-			}
-			if ev == nil {
-				continue
-			}
-			eventID := ev.ID.Hex()
-			if _, dup := seen[eventID]; dup {
-				continue
-			}
-			seen[eventID] = struct{}{}
-			if !downstreamResultMatchesReceipt(ev, receipt) {
-				continue
-			}
-			status := terminalStatus(ev)
-			if status == "completed" || status == "failed" {
-				return downstreamOutcome{Status: status, Event: ev}, nil
-			}
-		}
-	}
-}
-
-func (o *AssistantOrchestrator) cancelObserver(sessionID string) {
-	o.mu.Lock()
-	cancel := o.activeObservers[sessionID]
-	delete(o.activeObservers, sessionID)
-	o.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func downstreamResultMatchesReceipt(ev *nostr.Event, receipt *domain.AsyncToolReceipt) bool {
-	if ev == nil || receipt == nil || receipt.RequestEventID == "" {
-		return false
-	}
-	kindAllowed := false
-	for _, kind := range receipt.ResultKinds {
-		if ev.Kind == nostr.Kind(kind) {
-			kindAllowed = true
-			break
-		}
-	}
-	if !kindAllowed {
-		return false
-	}
-	if !tagContainsValue(ev.Tags, "e", receipt.RequestEventID) {
-		return false
-	}
-	if ev.CreatedAt == 0 || ev.CreatedAt > nostr.Now()+nostr.Timestamp((5*time.Minute)/time.Second) {
-		return false
-	}
-	if !ev.CheckID() || !ev.VerifySignature() {
-		return false
-	}
-	return true
-}
-
-func terminalStatus(ev *nostr.Event) string {
-	status := strings.ToLower(strings.TrimSpace(tagValue(ev.Tags, "status")))
-	if status == "" {
-		var content map[string]any
-		_ = json.Unmarshal([]byte(ev.Content), &content)
-		status = strings.ToLower(strings.TrimSpace(stringFromMap(content, "status")))
-	}
-	switch status {
-	case "success", "succeeded", "completed", "complete", "ok", "approved":
-		return "completed"
-	case "failed", "failure", "error", "rejected", "cancelled", "canceled":
-		return "failed"
-	default:
-		return ""
-	}
-}
-
-func (o *AssistantOrchestrator) pendingReceipt(session *domain.AssistantSession, key string) *domain.AsyncToolReceipt {
-	if session == nil || session.Metadata == nil || key == "" {
-		return nil
-	}
-	receipts, _ := session.Metadata["pending_receipts"].(map[string]any)
-	if receipts == nil {
-		return nil
-	}
-	raw := receipts[key]
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-	var receipt domain.AsyncToolReceipt
-	if err := json.Unmarshal(b, &receipt); err != nil || receipt.IdempotencyKey != key {
-		return nil
-	}
-	return &receipt
-}
-
-func (o *AssistantOrchestrator) storePendingReceipt(session *domain.AssistantSession, step domain.AssistantPlanStep, receipt *domain.AsyncToolReceipt) {
-	if session == nil || receipt == nil || receipt.IdempotencyKey == "" {
-		return
-	}
-	if session.Metadata == nil {
-		session.Metadata = map[string]any{}
-	}
-	receipts, _ := session.Metadata["pending_receipts"].(map[string]any)
-	if receipts == nil {
-		receipts = map[string]any{}
-		session.Metadata["pending_receipts"] = receipts
-	}
-	receipts[receipt.IdempotencyKey] = receipt
-	for i := range session.PendingSteps {
-		if session.PendingSteps[i].StepID == step.StepID {
-			session.PendingSteps[i].IdempotencyKey = receipt.IdempotencyKey
-			return
-		}
-	}
-}
-
-func (o *AssistantOrchestrator) clearPendingReceipt(session *domain.AssistantSession, key string) {
-	if session == nil || session.Metadata == nil || key == "" {
-		return
-	}
-	if receipts, _ := session.Metadata["pending_receipts"].(map[string]any); receipts != nil {
-		delete(receipts, key)
-		if len(receipts) == 0 {
-			delete(session.Metadata, "pending_receipts")
-		}
-	}
-}
-
-// PublishFailure publishes a canonical failure status for rejected/malformed requests.
-func (o *AssistantOrchestrator) PublishFailure(ctx context.Context, event *nostr.Event, sessionID, step, message string) error {
-	if sessionID == "" && event != nil {
-		sessionID = sessionFromEvent(event)
-	}
-	return o.publishStatus(ctx, event, sessionID, "failed", map[string]any{"step": step, "summary": message, "error": message})
-}
-
-func (o *AssistantOrchestrator) lockForSession(sessionID string) *sync.Mutex {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	lock := o.sessionLocks[sessionID]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		o.sessionLocks[sessionID] = lock
-	}
-	return lock
-}
-
-func (o *AssistantOrchestrator) loadOrCreateSession(sessionID, operator string) *domain.AssistantSession {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if s := o.sessions[sessionID]; s != nil {
-		return s
-	}
-	s := &domain.AssistantSession{SessionID: sessionID, State: domain.AssistantSessionStateIdle, OperatorPubkey: operator, Participants: []string{operator}, AssistantID: o.identity.AgentID, AssistantPubkey: o.identity.Pubkey, Metadata: map[string]any{"assistant_npub": o.identity.Npub}}
-	o.sessions[sessionID] = s
-	return s
-}
-
-func (o *AssistantOrchestrator) session(sessionID string) *domain.AssistantSession {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.sessions[sessionID]
-}
-
-// IsSessionParticipant reports whether operator may interact with an existing session.
-// Unknown sessions return true so callers can allow new-session creation.
+// IsSessionParticipant reports whether operator may interact with a known
+// session. Unknown sessions return true so a new session can be created; the
+// engine still authorizes every operation against the session projection.
 func (o *AssistantOrchestrator) IsSessionParticipant(sessionID, operator string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	operator = strings.ToLower(strings.TrimSpace(operator))
 	if sessionID == "" || operator == "" {
 		return false
 	}
+	if o.executions != nil {
+		if projection, ok := o.executions.Projection(sessionID); ok {
+			return assistantProjectionAuthorizes(projection, operator)
+		}
+	}
 	o.mu.Lock()
-	session := o.sessions[sessionID]
+	session, known := o.legacy[sessionID]
 	o.mu.Unlock()
-	if session == nil {
+	if !known {
 		return true
 	}
-	return sessionHasParticipant(session, operator)
+	return sessionHasParticipant(&session, operator)
+}
+
+// PublishAssistantStatus publishes an informational status event.
+func (o *AssistantOrchestrator) PublishAssistantStatus(ctx context.Context, sessionID, status string, content map[string]any) error {
+	return o.status.PublishAssistantStatus(ctx, sessionID, status, content)
+}
+
+// resolveSession returns the session's v2 projection when one exists. A
+// caller-supplied session ID unknown to this process is checked with a scoped
+// coordinate lookup through EOSE before it may be created: the startup cache
+// is bounded and cannot prove a session is new. v1-only history is read-only.
+func (o *AssistantOrchestrator) resolveSession(ctx context.Context, sessionID, operator string) (*domain.AssistantSessionV2, string, error) {
+	if o.executions != nil {
+		if projection, ok := o.executions.Projection(sessionID); ok {
+			return o.loadFinishedRun(ctx, projection, operator)
+		}
+	}
+	o.mu.Lock()
+	_, legacy := o.legacy[sessionID]
+	o.mu.Unlock()
+	if legacy {
+		return nil, AssistantRefusalLegacyReadOnly, errors.New("historical v1 assistant sessions are read-only; start a new session")
+	}
+	found, err := o.lookupSession(ctx, sessionID)
+	if err != nil {
+		return nil, AssistantRefusalSessionLookup, fmt.Errorf("assistant session lookup incomplete: %w", err)
+	}
+	switch {
+	case found.v2 != nil:
+		if hydrator, ok := o.engine.(AssistantExecutionProjectionHydrator); ok {
+			hydrator.HydrateProjection(*found.v2, found.v2At)
+		}
+		return o.loadFinishedRun(ctx, *found.v2, operator)
+	case found.v1 != nil:
+		o.mu.Lock()
+		o.legacy[sessionID] = *found.v1
+		o.mu.Unlock()
+		return nil, AssistantRefusalLegacyReadOnly, errors.New("historical v1 assistant sessions are read-only; start a new session")
+	}
+	return nil, "", nil
+}
+
+// loadFinishedRun makes the engine load a finished run's checkpoint chain the
+// first time this process starts a new turn after it. Startup recovery only
+// hydrates finished projections, and the projection has no "closed" field, so
+// a session-scope cancellation recorded on a finished run is only enforced
+// once its checkpoint is loaded.
+func (o *AssistantOrchestrator) loadFinishedRun(ctx context.Context, projection domain.AssistantSessionV2, operator string) (*domain.AssistantSessionV2, string, error) {
+	if !assistantProjectionAuthorizes(projection, operator) {
+		return nil, AssistantRefusalUnauthorized, errors.New("requester is not a participant in this assistant session")
+	}
+	if projection.CurrentRunID == "" || !assistantPhaseFinished(projection.Phase) {
+		return &projection, "", nil
+	}
+	if x, ok := o.ExecutionSnapshot(projection.SessionID); ok && x.RunID == projection.CurrentRunID {
+		return &projection, "", nil
+	}
+	if err := o.engine.Recover(ctx, AssistantExecutionReference{SessionID: projection.SessionID, RunID: projection.CurrentRunID, CheckpointEventID: projection.CheckpointEventID}); err != nil {
+		return nil, AssistantRefusalSessionLookup, fmt.Errorf("assistant session history could not be loaded: %w", err)
+	}
+	return &projection, "", nil
+}
+
+type assistantSessionLookup struct {
+	v2   *domain.AssistantSessionV2
+	v2At nostr.Timestamp
+	v1   *domain.AssistantSession
+}
+
+// lookupSession backfills this service's v1 and v2 projection coordinates for
+// one session. Only a complete backfill (EOSE) proves absence; CLOSED or a
+// stream ending early is an error.
+func (o *AssistantOrchestrator) lookupSession(ctx context.Context, sessionID string) (assistantSessionLookup, error) {
+	if o.subscriber == nil || o.signer == nil {
+		return assistantSessionLookup{}, errors.New("assistant relay subscriber or signer not configured")
+	}
+	author, err := o.signer.GetPublicKey(ctx)
+	if err != nil {
+		return assistantSessionLookup{}, err
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"d": []string{domain.AssistantSessionSchema + ":" + sessionID, domain.AssistantSessionSchemaV2 + ":" + sessionID}}}
+	sub, err := o.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return assistantSessionLookup{}, err
+	}
+	defer sub.Close()
+	var out assistantSessionLookup
+	var v1At nostr.Timestamp
+	events, closed, eose := sub.EventChan(), sub.ClosedChan(), sub.EOSEChan()
+	for {
+		select {
+		case <-ctx.Done():
+			return assistantSessionLookup{}, ctx.Err()
+		case c, ok := <-closed:
+			if !ok {
+				closed = nil
+				continue
+			}
+			return assistantSessionLookup{}, fmt.Errorf("closed by %s: %s", c.RelayURL, c.Reason)
+		case ev, ok := <-events:
+			if !ok {
+				if assistantEOSEReached(eose) {
+					return out, nil
+				}
+				return assistantSessionLookup{}, errors.New("session lookup ended before EOSE")
+			}
+			if ev == nil || ev.PubKey != author || !ev.CheckID() || !ev.VerifySignature() || tagValue(ev.Tags, "session") != sessionID {
+				continue
+			}
+			switch tagValue(ev.Tags, domain.AssistantSessionTagSchema) {
+			case domain.AssistantSessionSchemaV2:
+				var p domain.AssistantSessionV2
+				if json.Unmarshal([]byte(ev.Content), &p) != nil || p.SessionID != sessionID || ev.CreatedAt < out.v2At {
+					continue
+				}
+				out.v2, out.v2At = &p, ev.CreatedAt
+			case domain.AssistantSessionSchema:
+				var s domain.AssistantSession
+				if json.Unmarshal([]byte(ev.Content), &s) != nil || s.SessionID != sessionID || ev.CreatedAt < v1At {
+					continue
+				}
+				normalizeSessionParticipants(&s)
+				out.v1, v1At = &s, ev.CreatedAt
+			}
+		case <-eose:
+			return out, nil
+		}
+	}
+}
+
+func (o *AssistantOrchestrator) normalizeSource(source AssistantRequestSource) (*nostr.Event, AssistantRequestSource, error) {
+	event := source.Event
+	if event == nil {
+		return nil, source, fmt.Errorf("assistant request event is nil")
+	}
+	if strings.TrimSpace(source.OperatorPubkey) == "" {
+		source.OperatorPubkey = event.PubKey.Hex()
+	}
+	if strings.TrimSpace(source.RequestID) == "" {
+		source.RequestID = event.ID.Hex()
+	}
+	return event, source, nil
+}
+
+// engineResult maps an engine outcome onto the stable ContextVM result shape.
+// Accepted requests report status "accepted" plus the execution phase, so a
+// run that later fails is never mistaken for a refused request.
+func (o *AssistantOrchestrator) engineResult(event *nostr.Event, sessionID string, result AssistantTurnResult, err error) AssistantOperationResult {
+	if err != nil {
+		code, message := assistantRefusalFromEngineError(err)
+		var extra map[string]any
+		if result.Session.SessionID != "" {
+			extra = map[string]any{"run_id": result.Session.CurrentRunID, "phase": string(result.Session.Phase), "session": result.Session}
+		}
+		o.logger.Info("assistant request refused", "session_id", sessionID, "code", code, "error", err)
+		return o.refusal(event, sessionID, code, message, extra)
+	}
+	p := result.Session
+	return o.resultPayload(event, sessionID, "accepted", result.Acknowledgment, map[string]any{
+		"summary":            "assistant request accepted: " + result.Acknowledgment,
+		"acknowledgment":     result.Acknowledgment,
+		"run_id":             p.CurrentRunID,
+		"workflow":           string(p.Workflow),
+		"phase":              string(p.Phase),
+		"execution_revision": result.ExecutionRevision,
+		"pending_effects":    result.PendingEffects,
+		"session":            p,
+	})
+}
+
+func assistantRefusalFromEngineError(err error) (string, string) {
+	var denial *AssistantWorkDenial
+	switch {
+	case errors.Is(err, ErrAssistantRunInProgress):
+		return AssistantRefusalRunInProgress, "an assistant run is already in progress for this session"
+	case errors.Is(err, ErrAssistantSessionClosed):
+		return AssistantRefusalSessionClosed, "assistant session was closed by a session-scope cancellation"
+	case errors.Is(err, ErrAssistantCheckpointUnconfirmed):
+		return AssistantRefusalCheckpointUnconfirmed, err.Error()
+	case errors.Is(err, ErrAssistantProposalChangedRequiresReview):
+		return AssistantRefusalProposalChanged, "preparation changed the approved input; review the replacement proposal"
+	case errors.Is(err, ErrAssistantStaleTarget):
+		return AssistantRefusalStaleApproval, err.Error()
+	case errors.Is(err, ErrAssistantNotAwaitingApproval):
+		return AssistantRefusalInvalidState, "assistant run is not awaiting approval"
+	case errors.Is(err, ErrAssistantOperatorMismatch):
+		return AssistantRefusalUnauthorized, "requester is not a participant in this assistant session"
+	case errors.Is(err, ErrAssistantReconciliationRejected):
+		return AssistantRefusalReconciliation, err.Error()
+	case errors.As(err, &denial):
+		return AssistantRefusalApprovalDenied, err.Error()
+	case strings.HasPrefix(err.Error(), "modified plan invalid"):
+		return AssistantRefusalPlanValidation, err.Error()
+	default:
+		return AssistantRefusalExecution, err.Error()
+	}
+}
+
+func (o *AssistantOrchestrator) refusal(event *nostr.Event, sessionID, code, message string, extra map[string]any) AssistantOperationResult {
+	content := map[string]any{"summary": message, "error": message}
+	for k, v := range extra {
+		content[k] = v
+	}
+	return o.resultPayload(event, sessionID, "failed", code, content)
+}
+
+func (o *AssistantOrchestrator) resultPayload(requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) AssistantOperationResult {
+	payload := AssistantOperationResult{}
+	for k, v := range content {
+		payload[k] = v
+	}
+	payload["session_id"] = sessionID
+	payload["status"] = status
+	payload["agent"] = o.identity.AgentID
+	if step != "" {
+		payload["step"] = step
+	}
+	if requestEvent != nil {
+		payload["request_event_id"] = requestEvent.ID.Hex()
+	}
+	return payload
+}
+
+// AssistantStatusEventPublisher signs and publishes kind-30315 assistant status
+// events for operator visibility (planner stream, final answers).
+type AssistantStatusEventPublisher struct {
+	publisher AssistantEventPublisher
+	signer    nostr.Signer
+	identity  AssistantIdentity
+}
+
+var _ AssistantStatusPublisher = (*AssistantStatusEventPublisher)(nil)
+
+func NewAssistantStatusEventPublisher(publisher AssistantEventPublisher, signer nostr.Signer, identity AssistantIdentity) *AssistantStatusEventPublisher {
+	if strings.TrimSpace(identity.AgentID) == "" {
+		identity.AgentID = defaultAssistantAgentID
+	}
+	return &AssistantStatusEventPublisher{publisher: publisher, signer: signer, identity: identity}
+}
+
+func (p *AssistantStatusEventPublisher) PublishAssistantStatus(ctx context.Context, sessionID, status string, content map[string]any) error {
+	if p == nil || p.publisher == nil || p.signer == nil {
+		return fmt.Errorf("assistant status publisher is not configured")
+	}
+	body := map[string]any{}
+	for k, v := range content {
+		body[k] = v
+	}
+	body["status"] = status
+	contentJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal assistant status: %w", err)
+	}
+	dTag := fmt.Sprintf("%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, time.Now().UnixNano())
+	tags := nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}, {"session", sessionID}, {"agent", p.identity.AgentID}, {"status", status}}
+	if runID := stringFromMap(body, "run_id"); runID != "" {
+		tags = append(tags, nostr.Tag{"run", runID})
+	}
+	if streaming, _ := body["streaming"].(bool); streaming {
+		tags = append(tags, nostr.Tag{"streaming", "true"})
+	}
+	ev := &nostr.Event{Kind: domain.KindAssistantStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
+	if err := signGoNostrEvent(ctx, p.signer, ev); err != nil {
+		return fmt.Errorf("sign assistant status: %w", err)
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, assistantPublishTimeout)
+	defer cancel()
+	published, err := p.publisher.Publish(publishCtx, *ev)
+	if err != nil {
+		return fmt.Errorf("publish assistant status: %w", err)
+	}
+	if published == 0 {
+		return fmt.Errorf("publish assistant status: no relay accepted event")
+	}
+	return nil
 }
 
 func normalizeSessionParticipants(session *domain.AssistantSession) {
@@ -891,10 +569,9 @@ func normalizeSessionParticipants(session *domain.AssistantSession) {
 	if strings.TrimSpace(session.OperatorPubkey) == "" && len(session.Participants) > 0 {
 		session.OperatorPubkey = session.Participants[0]
 	}
-	addSessionParticipant(session, session.OperatorPubkey)
-	participants := make([]string, 0, len(session.Participants))
+	participants := make([]string, 0, len(session.Participants)+1)
 	seen := map[string]struct{}{}
-	for _, participant := range session.Participants {
+	for _, participant := range append([]string{session.OperatorPubkey}, session.Participants...) {
 		clean := strings.ToLower(strings.TrimSpace(participant))
 		if clean == "" {
 			continue
@@ -906,25 +583,6 @@ func normalizeSessionParticipants(session *domain.AssistantSession) {
 		participants = append(participants, clean)
 	}
 	session.Participants = participants
-}
-
-func addSessionParticipant(session *domain.AssistantSession, operator string) {
-	if session == nil {
-		return
-	}
-	operator = strings.ToLower(strings.TrimSpace(operator))
-	if operator == "" {
-		return
-	}
-	if strings.TrimSpace(session.OperatorPubkey) == "" {
-		session.OperatorPubkey = operator
-	}
-	for _, participant := range session.Participants {
-		if strings.ToLower(strings.TrimSpace(participant)) == operator {
-			return
-		}
-	}
-	session.Participants = append(session.Participants, operator)
 }
 
 func sessionHasParticipant(session *domain.AssistantSession, operator string) bool {
@@ -946,228 +604,6 @@ func sessionHasParticipant(session *domain.AssistantSession, operator string) bo
 	return false
 }
 
-func (o *AssistantOrchestrator) planFromPrompt(ctx context.Context, requestEvent *nostr.Event, sessionID, systemPrompt, userPrompt string) (*domain.AssistantPlan, error) {
-	if streamingClient, ok := o.chatClient.(AssistantStreamingChatClient); ok && o.streamingEnabled {
-		var pending strings.Builder
-		lastPublished := time.Now()
-		flush := func(force bool) {
-			chunk := pending.String()
-			if chunk == "" {
-				return
-			}
-			if !force && time.Since(lastPublished) < 200*time.Millisecond && len(chunk) < 50 {
-				return
-			}
-			pending.Reset()
-			lastPublished = time.Now()
-			if err := o.publishStatus(ctx, requestEvent, sessionID, "planning", map[string]any{"phase": "planning", "streaming": true, "chunk": chunk}); err != nil {
-				o.logger.Warn("failed to publish assistant planning stream chunk", "error", err)
-			}
-		}
-
-		plan, err := streamingClient.PlanFromPromptStreaming(ctx, systemPrompt, userPrompt, func(chunk string) {
-			pending.WriteString(chunk)
-			flush(false)
-		})
-		flush(true)
-		return plan, err
-	}
-
-	return o.chatClient.PlanFromPrompt(ctx, systemPrompt, userPrompt)
-}
-
-func (o *AssistantOrchestrator) validatePlan(plan domain.AssistantPlan) error {
-	if strings.TrimSpace(plan.Summary) == "" {
-		return fmt.Errorf("plan summary is required")
-	}
-	switch plan.RiskLevel {
-	case "", "low", "medium", "high":
-	default:
-		return fmt.Errorf("risk_level must be low, medium, or high")
-	}
-	if plan.NeedsClarification {
-		return nil
-	}
-	for _, step := range plan.Steps {
-		if strings.TrimSpace(step.StepID) == "" || strings.TrimSpace(step.ToolName) == "" {
-			return fmt.Errorf("each plan step requires step_id and tool_name")
-		}
-		if _, ok := o.allowedTools[step.ToolName]; !ok {
-			return fmt.Errorf("assistant tool %q is not allowlisted", step.ToolName)
-		}
-	}
-	return nil
-}
-
-func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *domain.AssistantSession) error {
-	normalizeSessionParticipants(session)
-	content, err := json.Marshal(session)
-	if err != nil {
-		return fmt.Errorf("marshal assistant session: %w", err)
-	}
-	tags := nostr.Tags{
-		{"d", domain.AssistantSessionSchema + ":" + session.SessionID},
-		{domain.AssistantSessionTagSchema, domain.AssistantSessionSchema},
-		{"domain", "assistant"},
-		{"entity", "session"},
-		{"session", session.SessionID},
-	}
-	for _, participant := range session.Participants {
-		tags = append(tags, nostr.Tag{"p", participant, "", "operator"})
-	}
-	tags = append(tags,
-		nostr.Tag{"agent", o.identity.AgentID},
-		nostr.Tag{"status", string(session.State)},
-	)
-	ev := &nostr.Event{Kind: domain.KindAssistantSessionState, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	return o.signAndPublish(ctx, ev)
-}
-
-func (o *AssistantOrchestrator) publishStatus(ctx context.Context, requestEvent *nostr.Event, sessionID, status string, content map[string]any) error {
-	if content == nil {
-		content = map[string]any{}
-	}
-	content["status"] = status
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("marshal assistant status: %w", err)
-	}
-	dTag := fmt.Sprintf("%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, time.Now().UnixNano())
-	if requestEvent != nil && requestEvent.ID != (nostr.ID{}) {
-		dTag = fmt.Sprintf("%s:%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, requestEvent.ID.Hex(), time.Now().UnixNano())
-	}
-	tags := append(nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}}, o.replyTags(requestEvent, sessionID, status)...)
-	if planHash := stringFromMap(content, "plan_hash"); planHash != "" {
-		tags = append(tags, nostr.Tag{"plan-hash", planHash})
-	}
-	if stepID := firstNonEmptyString(stringFromMap(content, "step_id"), stringFromMap(content, "step")); stepID != "" {
-		tags = append(tags, nostr.Tag{"step", stepID})
-	}
-	if downstream := stringFromMap(content, "downstream_request"); downstream != "" {
-		tags = append(tags, nostr.Tag{"downstream-request", downstream})
-	}
-	if streaming, _ := content["streaming"].(bool); streaming {
-		tags = append(tags, nostr.Tag{"streaming", "true"})
-	}
-	ev := &nostr.Event{Kind: domain.KindAssistantStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	return o.signAndPublish(ctx, ev)
-}
-
-func (o *AssistantOrchestrator) resultPayload(requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) AssistantOperationResult {
-	payload := AssistantOperationResult{}
-	for k, v := range content {
-		payload[k] = v
-	}
-	payload["session_id"] = sessionID
-	payload["status"] = status
-	payload["agent"] = o.identity.AgentID
-	if step != "" {
-		payload["step"] = step
-	}
-	if requestEvent != nil {
-		payload["request_event_id"] = requestEvent.ID.Hex()
-	}
-	return payload
-}
-
-func (o *AssistantOrchestrator) failureResult(sessionID, step, message string) AssistantOperationResult {
-	return o.resultPayload(nil, sessionID, "failed", step, map[string]any{"summary": message, "error": message})
-}
-
-func (o *AssistantOrchestrator) replyTags(requestEvent *nostr.Event, sessionID, status string) nostr.Tags {
-	tags := nostr.Tags{{"session", sessionID}, {"agent", o.identity.AgentID}, {"status", status}}
-	if requestEvent != nil {
-		tags = append(tags, nostr.Tag{"e", requestEvent.ID.Hex(), "", "reply"}, nostr.Tag{"p", requestEvent.PubKey.Hex()})
-	}
-	return tags
-}
-
-func (o *AssistantOrchestrator) signAndPublish(ctx context.Context, ev *nostr.Event) error {
-	if err := signGoNostrEvent(ctx, o.signer, ev); err != nil {
-		return fmt.Errorf("sign assistant event: %w", err)
-	}
-	if o.publisher == nil {
-		return fmt.Errorf("assistant publisher is not configured")
-	}
-	publishCtx, cancel := context.WithTimeout(ctx, assistantPublishTimeout)
-	defer cancel()
-	published, err := o.publisher.Publish(publishCtx, *ev)
-	if err != nil {
-		return fmt.Errorf("publish assistant event: %w", err)
-	}
-	if published == 0 {
-		return fmt.Errorf("publish assistant event: no relay accepted event")
-	}
-	return nil
-}
-
-func (o *AssistantOrchestrator) storePromptResult(_ context.Context, dedupKey string, result AssistantOperationResult, err error) (AssistantOperationResult, error) {
-	if err == nil && dedupKey != "" && result != nil {
-		o.mu.Lock()
-		o.processedTurns[dedupKey] = result
-		o.mu.Unlock()
-	}
-	return result, err
-}
-
-func (o *AssistantOrchestrator) publishApprovalResult(ctx context.Context, dedupKey string, requestEvent *nostr.Event, sessionID, status, step string, content map[string]any) (AssistantOperationResult, error) {
-	result := o.resultPayload(requestEvent, sessionID, status, step, content)
-	if err := o.publishStatus(ctx, requestEvent, sessionID, status, content); err != nil {
-		return result, err
-	}
-	return o.markApprovalProcessed(dedupKey, result, nil)
-}
-
-func (o *AssistantOrchestrator) markApprovalProcessed(dedupKey string, result AssistantOperationResult, err error) (AssistantOperationResult, error) {
-	if err == nil && dedupKey != "" && result != nil {
-		o.mu.Lock()
-		o.processedApprovals[dedupKey] = result
-		o.mu.Unlock()
-	}
-	return result, err
-}
-
-func (o *AssistantOrchestrator) markPlanSubmitted(planSubmissionKey string) {
-	if planSubmissionKey == "" {
-		return
-	}
-	o.mu.Lock()
-	o.submittedPlans[planSubmissionKey] = struct{}{}
-	o.mu.Unlock()
-}
-
-func (o *AssistantOrchestrator) clearSubmittedPlan(planSubmissionKey string) {
-	if planSubmissionKey == "" {
-		return
-	}
-	o.mu.Lock()
-	delete(o.submittedPlans, planSubmissionKey)
-	o.mu.Unlock()
-}
-
-func (o *AssistantOrchestrator) systemPrompt() string {
-	names := make([]string, 0, len(o.allowedTools))
-	for name := range o.allowedTools {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return "You are the Bahia Operator Assistant. Produce a conservative AssistantPlan JSON object. Address the operator directly with second-person pronouns (you/your) in summaries and clarification questions; never describe the operator in third person. Use only these assistant-safe event-native tools: " + strings.Join(names, ", ") + ".\n\n" +
-		"DNS intent mapping:\n" +
-		"- \"expose X internally only\" → bahia_assistant_dns_policy_apply with split-horizon visibility=internal\n" +
-		"- \"add DNS for X\" / \"create zone\" → bahia_assistant_dns_zone_create\n" +
-		"- \"override X to point to Y\" → bahia_assistant_dns_record_override\n" +
-		"- \"fix drift\" / \"remediate\" → bahia_assistant_dns_drift_remediate\n" +
-		"- \"show endpoints\" / \"list DNS\" → bahia_assistant_dns_list_endpoints\n" +
-		"- \"show drift\" → bahia_assistant_dns_list_drift\n" +
-		"When creating zones or policies, infer zone name from existing DNS Zones context. Generate a UUID v4 idempotency_key for each mutation tool call.\n\n" +
-		"If a target resource or intended action is ambiguous, set needs_clarification=true and produce no steps. Never include secrets."
-}
-
-func (o *AssistantOrchestrator) userPrompt(req domain.AssistantPromptRequest, contextBlock string) string {
-	payload, _ := json.MarshalIndent(map[string]any{"operator_prompt": req.Prompt, "route_context": req.RouteContext, "selected_refs": req.SelectedRefs, "operational_context": contextBlock}, "", "  ")
-	return string(payload)
-}
-
 func validatePromptRequest(req domain.AssistantPromptRequest) error {
 	if strings.TrimSpace(req.SessionID) == "" {
 		return fmt.Errorf("session_id is required")
@@ -1179,20 +615,6 @@ func validatePromptRequest(req domain.AssistantPromptRequest) error {
 		return fmt.Errorf("prompt is required")
 	}
 	return nil
-}
-
-func sessionFromEvent(event *nostr.Event) string {
-	if event == nil {
-		return ""
-	}
-	if s := tagValue(event.Tags, "session"); s != "" {
-		return s
-	}
-	var raw struct {
-		SessionID string `json:"session_id"`
-	}
-	_ = json.Unmarshal([]byte(event.Content), &raw)
-	return strings.TrimSpace(raw.SessionID)
 }
 
 func tagValue(tags nostr.Tags, key string) string {
@@ -1228,26 +650,6 @@ func routeContextStrings(routeContext map[string]any) map[string]string {
 		}
 	}
 	return out
-}
-
-func cloneArgs(args map[string]any) map[string]interface{} {
-	out := make(map[string]interface{}, len(args)+1)
-	for k, v := range args {
-		out[k] = v
-	}
-	return out
-}
-
-func appendTranscriptSummary(existing, addition string) string {
-	addition = strings.TrimSpace(addition)
-	if addition == "" {
-		return existing
-	}
-	combined := strings.TrimSpace(existing + "\n" + addition)
-	if len(combined) > 4000 {
-		return combined[len(combined)-4000:]
-	}
-	return combined
 }
 
 func stringFromMap(m map[string]any, key string) string {

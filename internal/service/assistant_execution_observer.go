@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,12 +52,6 @@ type AssistantExecutionObserver struct {
 }
 
 var _ AssistantWorkObserver = (*AssistantExecutionObserver)(nil)
-
-// ObserveAssistantAsyncResult adapts the observer to the legacy runtime
-// observer interface.
-func (o *AssistantExecutionObserver) ObserveAssistantAsyncResult(ctx context.Context, sessionID, toolCallID, toolName string, receipt *domain.AsyncToolReceipt) (AssistantAsyncObservationOutcome, error) {
-	return o.ObserveWork(ctx, AssistantWorkObservationRequest{SessionID: sessionID, WorkID: toolCallID, ToolName: toolName, Receipt: receipt})
-}
 
 func (o *AssistantExecutionObserver) ObserveWork(ctx context.Context, req AssistantWorkObservationRequest) (AssistantAsyncObservationOutcome, error) {
 	blocked := AssistantAsyncObservationOutcome{Status: "blocked"}
@@ -196,4 +191,48 @@ func assistantResultMatchesReceipt(ev *nostr.Event, receipt *domain.AsyncToolRec
 		return false
 	}
 	return true
+}
+
+// downstreamResultMatchesReceipt verifies that a terminal event answers the
+// receipt: an allowed result kind, e-tag correlation to the request event, a
+// sane timestamp and a valid ID/signature.
+func downstreamResultMatchesReceipt(ev *nostr.Event, receipt *domain.AsyncToolReceipt) bool {
+	if ev == nil || receipt == nil || receipt.RequestEventID == "" {
+		return false
+	}
+	kindAllowed := false
+	for _, kind := range receipt.ResultKinds {
+		if ev.Kind == nostr.Kind(kind) {
+			kindAllowed = true
+			break
+		}
+	}
+	if !kindAllowed {
+		return false
+	}
+	if !tagContainsValue(ev.Tags, "e", receipt.RequestEventID) {
+		return false
+	}
+	if ev.CreatedAt == 0 || ev.CreatedAt > nostr.Now()+nostr.Timestamp((5*time.Minute)/time.Second) {
+		return false
+	}
+	return ev.CheckID() && ev.VerifySignature()
+}
+
+// terminalStatus normalizes a downstream result's status tag or content.
+func terminalStatus(ev *nostr.Event) string {
+	status := strings.ToLower(strings.TrimSpace(tagValue(ev.Tags, "status")))
+	if status == "" {
+		var content map[string]any
+		_ = json.Unmarshal([]byte(ev.Content), &content)
+		status = strings.ToLower(strings.TrimSpace(stringFromMap(content, "status")))
+	}
+	switch status {
+	case "success", "succeeded", "completed", "complete", "ok", "approved":
+		return "completed"
+	case "failed", "failure", "error", "rejected", "cancelled", "canceled":
+		return "failed"
+	default:
+		return ""
+	}
 }

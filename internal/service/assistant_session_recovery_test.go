@@ -44,7 +44,7 @@ func TestAssistantRecoveryConvertsV1IterativeWaitingAsyncForAccountingOnly(t *te
 	server := newAssistantTestToolServer(relay.touch)
 	proposer := &assistantScriptedProposer{}
 	session := &domain.AssistantSession{SessionID: "s-v1", State: domain.AssistantSessionStateExecuting, OperatorPubkey: "operator", CurrentTurnID: "turn-1", CurrentRequestID: "request-1", Metadata: map[string]any{}}
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-legacy", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-1", WaitingReceipt: &domain.AsyncToolReceipt{ToolName: "mutate", RequestEventID: "legacy-request", RequestKind: 25910, ResultKinds: []int{7961}, IdempotencyKey: "assistant-agent:s-v1:run-legacy:call-1"}})
+	session.Metadata[assistantAgentLoopMetadataKey] = domain.AssistantAgentLoopMetadata{RunID: "run-legacy", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-1", WaitingReceipt: &domain.AsyncToolReceipt{ToolName: "mutate", RequestEventID: "legacy-request", RequestKind: 25910, ResultKinds: []int{7961}, IdempotencyKey: "assistant-agent:s-v1:run-legacy:call-1"}}
 	publishAssistantSessionEvent(t, relay, signer, domain.AssistantSessionSchema, "s-v1", session, nostr.Timestamp(assistantTestClock().Unix()-60))
 
 	first := newAssistantStack(t, relay, signer, server, assistantStackOptions{iterative: proposer})
@@ -107,7 +107,7 @@ func TestAssistantRecoveryParksAmbiguousHistory(t *testing.T) {
 	server := newAssistantTestToolServer(relay.touch)
 	plan := domain.AssistantPlan{Steps: []domain.AssistantPlanStep{{StepID: "one", ToolName: "read-one", ToolArgs: map[string]any{}}}}
 	mixed := &domain.AssistantSession{SessionID: "s-mixed", State: domain.AssistantSessionStateExecuting, OperatorPubkey: "operator", CurrentTurnID: "turn", CurrentRequestID: "request", CurrentPlan: &plan, LastPlanHash: domain.ComputePlanHash(plan, "s-mixed"), PendingSteps: plan.Steps, Metadata: map[string]any{}}
-	setAssistantAgentLoopMetadata(mixed, domain.AssistantAgentLoopMetadata{RunID: "run", State: domain.AssistantAgentLoopStateRunning})
+	mixed.Metadata[assistantAgentLoopMetadataKey] = domain.AssistantAgentLoopMetadata{RunID: "run", State: domain.AssistantAgentLoopStateRunning}
 	publishAssistantSessionEvent(t, relay, signer, domain.AssistantSessionSchema, "s-mixed", mixed, nostr.Timestamp(assistantTestClock().Unix()-60))
 	publishAssistantSessionEvent(t, relay, signer, domain.AssistantSessionSchemaV2, "s-gap", domain.AssistantSessionV2{Schema: domain.AssistantSessionSchemaV2, SessionID: "s-gap", OperatorPubkey: "operator", CurrentRunID: "run-gap", Phase: domain.AssistantExecutionExecuting, Workflow: domain.AssistantWorkflowBatch, ExecutionVersion: 2, CheckpointEventID: "0000000000000000000000000000000000000000000000000000000000000001"}, nostr.Timestamp(assistantTestClock().Unix()-60))
 

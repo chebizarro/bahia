@@ -19,7 +19,8 @@ workflow, then `assistant.default_workflow`; absent new config maps the old
 exists, current config never changes its behavior. Workflow switches require a
 finished prior run with no unresolved effects. A running, awaiting, blocked or
 accounting-pending run rejects an overlapping prompt with `run_in_progress`.
-The old flag stops being a constructor/authorization gate after item 3.
+The old flag is only a default-selection input; it is never a constructor or
+authorization gate (item 3, `bahia-oknmu`).
 
 `AssistantExecution` has one ordered work array and cursor, with exactly the
 phase/work-state enums in `internal/domain/assistant_execution.go`. Nil
@@ -160,8 +161,8 @@ relay/archive evidence, not by startup hydration limits.
 ## Item 2 implementation notes (`bahia-0th5g`)
 
 The executor is `AssistantExecutionEngine` (`internal/service/assistant_execution.go`),
-the only component that dispatches assistant work. Item 3 wires it; until then
-the v1 dispatchers remain reachable and recovery is parked (see below).
+the only component that dispatches assistant work. Item 3 (`bahia-oknmu`) wired
+it and removed the v1 dispatchers; see "Item 3 implementation notes" below.
 
 **Commit before effect.** Every state change is committed by appending an
 encrypted kind-4903 checkpoint and adopting it only after a relay OK. The
@@ -224,3 +225,50 @@ service-signed projections (NIP-01 latest; v2 preferred over v1), classify v1
 through `ClassifyAssistantLegacySession`, append the conversion root once
 (conversion run IDs are deterministic), hydrate identity, then call `Recover`.
 Without an engine and store it logs and parks every session.
+
+## Item 3 implementation notes (`bahia-oknmu`)
+
+**One dispatcher.** `AssistantOrchestrator` is request routing only: it
+validates requests, supplies workflow-selection inputs and maps engine
+outcomes onto the ContextVM result shape. It no longer plans, dispatches,
+observes or writes v1 session state; `submittedPlans`, the direct batch
+dispatch loop, `observeDownstreamResult`, the runtime session persister and
+`AssistantAgentLoop`'s `Execute`/`ExecuteWithHooks` dispatch are deleted.
+`AssistantToolRuntime.DispatchPreparedWork` is the only caller of
+`InvokeAssistantAsyncTool` for assistant work and is called only by the
+engine and by the gated subagent child path (sync-only); an AST guard test
+(`TestAssistantDispatchHasOneBoundary`) pins these call sites.
+
+**Proposers.** `AssistantBatchPlanner` (planner model, streaming status
+chunks, catalog validation) and `AssistantAgentLoop.ProposeIterative` (all
+calls of one model response; model-iteration cap derived from the durable
+transcript) produce proposals only. `AssistantProposalContext` is the shared
+command expansion and SessionStart/UserPromptSubmit hook preparation and is
+the engine's scope resolver, so the command scope is persisted in the run's
+root checkpoint before either proposer runs. Batch continuation never calls a
+model.
+
+**Internal tools.** Subagent delegation and skill loading keep a separate,
+service-owned registration (`AssistantToolRuntime.RegisterInternalTools`,
+never the MCP registry, never the batch catalog) and run as executor work
+items through the same registration/schema/scope/permission/hook gate.
+Subagent child calls use `ExecuteSubagentTool`: the parent's persisted scope
+and current policy apply, and only allowed synchronous MCP tools run.
+
+**Transport.** `assistant/prompt`, `assistant/approval`, `assistant/cancel`
+and `assistant/reconcile` are registered. Accepted requests answer
+`{status:"accepted", step:<acknowledgment>, phase, run_id, session}`;
+refusals keep `{status:"failed", step:<reason>, summary, error}`. Unversioned
+approvals pass the v1 compatibility decoder (Decision 6 rules) in
+`internal/controlplane/assistant_handlers.go`. A caller-supplied unknown
+session ID is created only after a scoped v1/v2 coordinate lookup through
+EOSE; v1-only history refuses new turns (`legacy_session_read_only`).
+
+**Wiring and recovery.** `internal/app/assistant_execution.go` always builds
+the runtime, permission engine, transcript and checkpoint stores, observer,
+evidence resolver, both proposers and the engine when the assistant is
+enabled; the engine runs under an application-lifetime context owned by a
+background runner. Startup recovery receives the engine and store and
+resumes runs. A finished run's checkpoint chain is loaded before the next
+turn on that session so a recorded session-scope cancellation stays enforced
+after restart.

@@ -1,14 +1,10 @@
 package service
 
 import (
-	"context"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
-	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -44,7 +40,8 @@ func TestParseAssistantSubagentInvalidFrontmatter(t *testing.T) {
 	}
 }
 
-func TestAssistantAgentLoopDelegatesSubagentReturningSyncObservation(t *testing.T) {
+func TestAssistantIterativeDelegatesSubagentThroughExecutor(t *testing.T) {
+	relay := newAssistantTestRelay()
 	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"services":[{"name":"api"}],"total":1}`}}}}
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-delegate", Name: assistantDelegateSubagentToolName, Arguments: map[string]any{"subagent": "researcher", "task": "list services"}}}, StopReason: llm.AgentStopReasonToolCalls},
@@ -53,18 +50,14 @@ func TestAssistantAgentLoopDelegatesSubagentReturningSyncObservation(t *testing.
 		{Content: textBlocks("delegation complete"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
 	subagents := mustSubagentLibrary(t, AssistantSubagentSpec{Name: "researcher", Description: "Investigate", Tools: []string{"bahia_list_services"}, SystemPrompt: "Research carefully."})
-	loop, _ := newAssistantExtLoop(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Subagents: subagents})
-	session := assistantRuntimeSession("session-delegate")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), agentic: AssistantAgentLoopConfig{Subagents: subagents}, permMode: domain.AssistantPermissionModeReview})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-delegate", Prompt: "delegate to researcher"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
+	x := st.runIterative(t, relay, "session-delegate", "delegate to researcher")
+	if x.Phase != domain.AssistantExecutionCompleted || len(x.Work) != 1 || x.Work[0].ToolName != assistantDelegateSubagentToolName || x.Work[0].State != domain.AssistantWorkSucceeded {
+		t.Fatalf("delegation must run as one executor work item: phase=%s work=%+v", x.Phase, x.Work)
 	}
-	if !res.Completed {
-		t.Fatalf("result = %#v", res)
-	}
-	if server.callCount() != 1 {
-		t.Fatalf("child read should have executed once, got %d", server.callCount())
+	if server.callCount() != 1 || server.invokeCount() != 0 {
+		t.Fatalf("child read should execute once through the gate: calls=%d invokes=%d", server.callCount(), server.invokeCount())
 	}
 	if model.callCount() != 4 {
 		t.Fatalf("model calls = %d, want 4", model.callCount())
@@ -74,8 +67,9 @@ func TestAssistantAgentLoopDelegatesSubagentReturningSyncObservation(t *testing.
 	}
 }
 
-func TestAssistantAgentLoopSubagentToolRestrictionIntersection(t *testing.T) {
-	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"ok":true}`}}}}
+func TestAssistantIterativeSubagentToolRestrictionIntersection(t *testing.T) {
+	relay := newAssistantTestRelay()
+	server := &assistantRuntimeMCPServer{}
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-delegate", Name: assistantDelegateSubagentToolName, Arguments: map[string]any{"subagent": "reader", "task": "peek"}}}, StopReason: llm.AgentStopReasonToolCalls},
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "child-forbidden", Name: "bahia_forbidden_tool"}}, StopReason: llm.AgentStopReasonToolCalls},
@@ -83,21 +77,39 @@ func TestAssistantAgentLoopSubagentToolRestrictionIntersection(t *testing.T) {
 		{Content: textBlocks("done"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
 	subagents := mustSubagentLibrary(t, AssistantSubagentSpec{Name: "reader", Description: "Reader", Tools: []string{"bahia_list_services"}, SystemPrompt: "Only read services."})
-	loop, _ := newAssistantExtLoop(t, model, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services"), syncDescriptor("bahia_forbidden_tool")), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Subagents: subagents})
-	session := assistantRuntimeSession("session-restrict")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services"), syncDescriptor("bahia_forbidden_tool")), agentic: AssistantAgentLoopConfig{Subagents: subagents}, permMode: domain.AssistantPermissionModeReview})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-restrict", Prompt: "delegate to reader"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Completed {
-		t.Fatalf("result = %#v", res)
+	x := st.runIterative(t, relay, "session-restrict", "delegate to reader")
+	if x.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("phase = %s", x.Phase)
 	}
 	if server.callCount() != 0 {
 		t.Fatalf("forbidden tool must not execute, server calls = %d", server.callCount())
 	}
 	if !requestHasToolObservation(model.request(3), "call-delegate", domain.AssistantToolObservationSucceeded) {
 		t.Fatalf("delegation should still return a sync observation: %#v", model.request(3).Messages)
+	}
+}
+
+// A command's allowed-tools scope also bounds delegation: the delegate tool is
+// not advertised or dispatchable unless the scope names it.
+func TestAssistantIterativeCommandScopeWithholdsSubagentDelegation(t *testing.T) {
+	relay := newAssistantTestRelay()
+	server := &assistantRuntimeMCPServer{}
+	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
+		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-delegate", Name: assistantDelegateSubagentToolName, Arguments: map[string]any{"subagent": "reader", "task": "peek"}}}, StopReason: llm.AgentStopReasonToolCalls},
+		{Content: textBlocks("delegation withheld"), StopReason: llm.AgentStopReasonEndTurn},
+	}}
+	subagents := mustSubagentLibrary(t, AssistantSubagentSpec{Name: "reader", Description: "Reader", SystemPrompt: "Only read services."})
+	commands := mustCommandLibrary(AssistantCommandSpec{Name: "inspect", Template: "Inspect services.", AllowedTools: []string{"bahia_list_services"}})
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), server, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), agentic: AssistantAgentLoopConfig{Subagents: subagents}, commands: commands})
+
+	x := st.runIterative(t, relay, "session-scope-delegate", "/inspect")
+	if x.Phase != domain.AssistantExecutionCompleted || assistantWorkState(x, 0) != domain.AssistantWorkDenied || model.callCount() != 2 {
+		t.Fatalf("out-of-scope delegation: phase=%s work=%+v model=%d", x.Phase, x.Work, model.callCount())
+	}
+	if requestToolNames(model.request(0))[assistantDelegateSubagentToolName] {
+		t.Fatal("delegate tool advertised outside the command scope")
 	}
 }
 
@@ -110,33 +122,3 @@ func mustSubagentLibrary(t *testing.T, specs ...AssistantSubagentSpec) *Assistan
 	}
 	return lib
 }
-
-// newAssistantExtLoop builds an agent loop wired with the item-10 extensibility
-// surface fields carried on cfg (Subagents/Skills/Commands/Hooks/Agentic) while
-// reusing the shared runtime/model/transcript test harness.
-func newAssistantExtLoop(t *testing.T, model *assistantLoopModel, server *assistantRuntimeMCPServer, registry assistantRuntimeRegistry, mode domain.AssistantPermissionMode, cfg AssistantAgentLoopConfig) (*AssistantAgentLoop, *assistantLoopTranscript) {
-	t.Helper()
-	transcript := &assistantLoopTranscript{history: map[string][]domain.AssistantAgentMessage{}}
-	persister := &assistantLoopPersister{}
-	runtime := newAssistantRuntimeForTest(t, server, registry, mode, nil, nil)
-	runtime.sessions = persister
-	ids := 0
-	loopCfg := AssistantAgentLoopConfig{
-		ModelClient:    model,
-		ToolRuntime:    runtime,
-		ContextBuilder: transcript,
-		ToolSchemas:    assistantLoopSchemas{schemas: schemasFromRuntimeRegistry(registry)},
-		Transcript:     transcript,
-		Sessions:       persister,
-		Agentic:        cfg.Agentic,
-		Subagents:      cfg.Subagents,
-		Skills:         cfg.Skills,
-		Commands:       cfg.Commands,
-		Hooks:          cfg.Hooks,
-		Now:            func() time.Time { return time.Unix(2000, 0).UTC() },
-		NewID:          func(prefix string) string { ids++; return prefix + "-ext-" + strconv.Itoa(ids) },
-	}
-	return NewAssistantAgentLoop(loopCfg), transcript
-}
-
-var _ = config.AssistantAgenticConfig{}

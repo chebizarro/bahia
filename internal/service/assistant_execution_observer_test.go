@@ -34,7 +34,7 @@ func TestAssistantExecutionObserverKeepsLiveSubscriptionAfterEOSE(t *testing.T) 
 	result := make(chan assistantObserverResult, 1)
 	receipt := &domain.AsyncToolReceipt{ToolName: "mutate", RequestEventID: "request-1", ResultKinds: []int{7961}}
 	go func() {
-		out, err := observer.ObserveAssistantAsyncResult(context.Background(), "session", "work", "mutate", receipt)
+		out, err := observer.ObserveWork(context.Background(), AssistantWorkObservationRequest{SessionID: "session", WorkID: "work", ToolName: "mutate", Receipt: receipt})
 		result <- assistantObserverResult{out, err}
 	}()
 	subscriber.waitForSubscription(t)

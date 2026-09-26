@@ -654,6 +654,61 @@ func TestAssistantLLMStreamingLoadsFromYAMLAndEnv(t *testing.T) {
 	})
 }
 
+func TestAssistantDefaultWorkflowSelection(t *testing.T) {
+	cases := []struct {
+		name     string
+		explicit string
+		agentic  bool
+		want     string
+	}{
+		{name: "deprecated flag true maps to iterative", agentic: true, want: "iterative"},
+		{name: "deprecated flag false maps to batch", agentic: false, want: "batch"},
+		{name: "explicit batch wins over flag", explicit: "batch", agentic: true, want: "batch"},
+		{name: "explicit iterative wins over flag", explicit: " Iterative ", agentic: false, want: "iterative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Assistant.DefaultWorkflow = tc.explicit
+			cfg.Assistant.Agentic.Enabled = tc.agentic
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("validate() error = %v", err)
+			}
+			if cfg.Assistant.DefaultWorkflow != tc.want {
+				t.Fatalf("default_workflow = %q, want %q", cfg.Assistant.DefaultWorkflow, tc.want)
+			}
+		})
+	}
+	t.Run("invalid default rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Assistant.DefaultWorkflow = "hybrid"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.default_workflow") {
+			t.Fatalf("validate() error = %v, want default_workflow rejection", err)
+		}
+	})
+	t.Run("loads from yaml and env", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("assistant:\n  default_workflow: batch\n"), 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.Assistant.DefaultWorkflow != "batch" {
+			t.Fatalf("yaml default_workflow = %q", cfg.Assistant.DefaultWorkflow)
+		}
+		t.Setenv("BAHIA_ASSISTANT_DEFAULT_WORKFLOW", "iterative")
+		cfg, err = Load("")
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.Assistant.DefaultWorkflow != "iterative" {
+			t.Fatalf("env default_workflow = %q", cfg.Assistant.DefaultWorkflow)
+		}
+	})
+}
+
 func TestAssistantAgenticDefaults(t *testing.T) {
 	cfg := Defaults()
 	if !cfg.Assistant.Agentic.Enabled {
@@ -787,13 +842,30 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("agentic requires effective model", func(t *testing.T) {
+	t.Run("assistant requires batch planner model whatever the default", func(t *testing.T) {
+		for _, agentic := range []bool{true, false} {
+			cfg := Defaults()
+			cfg.Assistant.Enabled = true
+			cfg.Assistant.Agentic.Enabled = agentic
+			cfg.Assistant.Agentic.Model = "agentic-model"
+			cfg.Nostr.PrivateKey = "test-secret-key"
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), "assistant.llm_model (batch proposer)") {
+				t.Fatalf("agentic=%v validate() error = %v, want planner model requirement", agentic, err)
+			}
+		}
+	})
+
+	t.Run("iterative stack validated even when the default is batch", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Assistant.Enabled = true
+		cfg.Assistant.Agentic.Enabled = false
+		cfg.Assistant.DefaultWorkflow = "batch"
+		cfg.Assistant.LLMModel = "planner-model"
+		cfg.Assistant.Agentic.Provider = "unknown"
 		cfg.Nostr.PrivateKey = "test-secret-key"
-		err := cfg.validate()
-		if err == nil || !strings.Contains(err.Error(), "assistant.agentic.model or assistant.llm_model") {
-			t.Fatalf("validate() error = %v, want effective model requirement", err)
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
+			t.Fatalf("validate() error = %v, want iterative provider validation regardless of default", err)
 		}
 	})
 
@@ -804,6 +876,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Provider = "anthropic"
 		cfg.Assistant.Agentic.BaseURL = ""
 		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate() error = %v", err)
@@ -819,6 +892,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Enabled = true
 		cfg.Assistant.Agentic.Provider = "unknown"
 		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
 			t.Fatalf("validate() error = %v, want provider rejection", err)
@@ -831,6 +905,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Enabled = true
 		cfg.Assistant.Agentic.ToolMode = " PROMPTED "
 		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate() error = %v", err)
@@ -846,6 +921,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Enabled = true
 		cfg.Assistant.Agentic.ToolMode = "native-jsonish"
 		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.tool_mode") {
 			t.Fatalf("validate() error = %v, want tool_mode rejection", err)
@@ -859,6 +935,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Provider = "anthropic"
 		cfg.Assistant.Agentic.ToolMode = AssistantAgenticToolModePrompted
 		cfg.Assistant.Agentic.Model = "agentic-model"
+		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "tool_mode=prompted requires") {
 			t.Fatalf("validate() error = %v, want provider/tool_mode rejection", err)

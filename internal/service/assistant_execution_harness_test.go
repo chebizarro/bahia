@@ -525,10 +525,14 @@ func newAssistantTestHooks(t *testing.T, evaluator *assistantMutableHookEvaluato
 type assistantStackOptions struct {
 	batch     AssistantBatchProposer
 	iterative AssistantIterativeProposer
-	scope     AssistantExecutionScopeResolver
-	evidence  AssistantRequestEvidenceResolver
-	hooks     *AssistantHookRunner
-	rules     []AssistantPermissionRule
+	// iterativeFactory builds a proposer over this stack's transcript store.
+	iterativeFactory func(*AssistantTranscriptStore) AssistantIterativeProposer
+	// runtime replaces the default test runtime (hooks/rules are then unused).
+	runtime  *AssistantToolRuntime
+	scope    AssistantExecutionScopeResolver
+	evidence AssistantRequestEvidenceResolver
+	hooks    *AssistantHookRunner
+	rules    []AssistantPermissionRule
 }
 
 type assistantStack struct {
@@ -562,7 +566,15 @@ func newAssistantStack(t *testing.T, relay *assistantTestRelay, signer nostr.Sig
 			return ctx.Err()
 		}
 	}}
-	st.engine = NewAssistantExecutionEngine(AssistantExecutionEngineConfig{Store: st.store, Runtime: assistantTestRuntime(server, opts.hooks, opts.rules), Observer: st.observer, Batch: opts.batch, Iterative: opts.iterative, Transcript: st.transcript, ScopeResolver: opts.scope, Evidence: opts.evidence, Publisher: relay, Signer: signer, Subscriber: relay, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, Lifecycle: lifecycle, Now: assistantTestClock})
+	runtime := opts.runtime
+	if runtime == nil {
+		runtime = assistantTestRuntime(server, opts.hooks, opts.rules)
+	}
+	iterative := opts.iterative
+	if opts.iterativeFactory != nil {
+		iterative = opts.iterativeFactory(st.transcript)
+	}
+	st.engine = NewAssistantExecutionEngine(AssistantExecutionEngineConfig{Store: st.store, Runtime: runtime, Observer: st.observer, Batch: opts.batch, Iterative: iterative, Transcript: st.transcript, ScopeResolver: opts.scope, Evidence: opts.evidence, Publisher: relay, Signer: signer, Subscriber: relay, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, Lifecycle: lifecycle, Now: assistantTestClock})
 	t.Cleanup(st.crash)
 	return st
 }

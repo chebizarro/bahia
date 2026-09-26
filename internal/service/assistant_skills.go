@@ -154,13 +154,13 @@ func parseAssistantSkillContent(content, root, manifestRel, sourcePath string) (
 }
 
 // buildSkillLoadTool constructs the internal, read-only skill-loading tool.
-func (l *AssistantAgentLoop) buildSkillLoadTool() *assistantInternalTool {
-	return &assistantInternalTool{
-		name:        assistantSkillLoadToolName,
-		description: "Load the full instructions for a named skill (progressive disclosure). Optionally read a supporting file within the skill directory via the path argument.",
-		effect:      domain.AssistantToolEffectRead,
-		risk:        domain.AssistantToolRiskLow,
-		inputSchema: map[string]any{
+func (l *AssistantAgentLoop) buildSkillLoadTool() AssistantInternalTool {
+	return AssistantInternalTool{
+		Name:        assistantSkillLoadToolName,
+		Description: "Load the full instructions for a named skill (progressive disclosure). Optionally read a supporting file within the skill directory via the path argument.",
+		Effect:      domain.AssistantToolEffectRead,
+		Risk:        domain.AssistantToolRiskLow,
+		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"skill": map[string]any{"type": "string", "description": "Name of the skill to load."},
@@ -168,11 +168,12 @@ func (l *AssistantAgentLoop) buildSkillLoadTool() *assistantInternalTool {
 			},
 			"required": []any{"skill"},
 		},
-		handler: l.runSkillLoad,
+		Handler: l.runSkillLoad,
 	}
 }
 
-func (l *AssistantAgentLoop) runSkillLoad(_ context.Context, _ assistantAgentLoopRun, call domain.AssistantAgentToolCall) (*domain.AssistantToolObservation, error) {
+func (l *AssistantAgentLoop) runSkillLoad(_ context.Context, invocation AssistantInternalToolCall) (*domain.AssistantToolObservation, error) {
+	call := invocation.ToolCall
 	name := strings.TrimSpace(stringFromAnyMapAny(call.Arguments, "skill"))
 	if name == "" {
 		return l.internalToolObservation(call, domain.AssistantToolObservationFailed, "skill_load requires a skill argument", nil), nil

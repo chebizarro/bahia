@@ -43,7 +43,8 @@
       "id": "A5",
       "claim": "Both workflows use one durable executor with fail-closed checkpoints and receipt accounting",
       "tests": [
-        "TestAssistantUnifiedExecutionIntegration",
+        "TestAssistantUnifiedExecutionJoinedBatchEditApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedIterativeApproveRestart",
         "TestAssistantExecutionStoreEncryptedChainIgnoresArrivalAndTimestamp",
         "TestAssistantCheckpointChainRejectsForkGapAndDisconnectedRoot",
         "TestAssistantCheckpointRetryWithDifferentPayloadIsRefused",
@@ -141,6 +142,75 @@
         "TestAssistantRecoveryParksAmbiguousHistory"
       ],
       "owner": "item_2"
+    },
+    {
+      "id": "A15",
+      "claim": "Only the unified executor dispatches assistant work: the orchestrator's direct batch dispatch and submittedPlans, AgentLoop Execute/ExecuteWithHooks dispatch, the runtime session persister/metadata writes and observeDownstreamResult are removed; subagent child calls are gated and synchronous-only",
+      "tests": [
+        "TestAssistantDispatchHasOneBoundary",
+        "TestAssistantRuntimeSubagentChildCallsAreGatedAndSyncOnly"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A16",
+      "claim": "Workflow selection is explicit request > persisted session > assistant.default_workflow (falling back to the deprecated agentic flag); the flag never gates construction; a second prompt against an awaiting, executing, waiting, cancelling-with-accounting or blocked run returns run_in_progress",
+      "tests": [
+        "TestAssistantOrchestratorWorkflowSelectionPrecedence",
+        "TestAssistantOrchestratorSecondPromptRefusedForEveryUnfinishedPhase",
+        "TestAssistantDefaultWorkflowSelection",
+        "TestAssistantAgenticValidation",
+        "TestAssistantExecutionWiringIsUnconditionalAndFlagOnlySelectsDefault"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A17",
+      "claim": "Joined real-service flow: batch proposal edited (reorder/delete/argument change) and approved with the revision-bound v2 hash executes exactly the approved sequence once across a full restart with no model request on continuation; approval cannot bypass a changed permission policy or the persisted command scope",
+      "tests": [
+        "TestAssistantUnifiedExecutionJoinedBatchEditApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedIterativeApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedApprovalCannotBypassChangedPolicy",
+        "TestAssistantUnifiedExecutionJoinedApprovalCannotBypassCommandScope"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A18",
+      "claim": "Unversioned v1 approvals follow Decision 6: unedited plan-hash approval only for the matching migrated awaiting draft, edited ModifiedPlan refused with approval_contract_upgrade_required without state change, action-ID only for the unique migrated pending action, plan-hash cancel only for the migrated current batch run, v2-native runs require v2 contracts",
+      "tests": [
+        "TestTranslateLegacyAssistantApprovalRules",
+        "TestAssistantHandlerLegacyBatchApprovalRunsThroughExecutor",
+        "TestAssistantHandlerLegacyActionAndCancelRules",
+        "TestAssistantHandlerNativeRunsRequireV2Contracts",
+        "TestAssistantOrchestratorRequiresVersionedContracts"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A19",
+      "claim": "Production wiring passes the engine and store to startup recovery, which resumes in-flight runs instead of parking them; unknown session IDs are proven new by a scoped EOSE lookup; v1-only history is read-only; a session-scope cancel on a finished run stays enforced after restart",
+      "tests": [
+        "TestAssistantExecutionWiringStartupRecoveryResumes",
+        "TestAssistantOrchestratorLegacyAndUnknownSessions",
+        "TestAssistantOrchestratorSessionCloseOnFinishedRunSurvivesRestart"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A20",
+      "claim": "Internal tools (subagents, skills) keep their service-owned registration outside the batch catalog and pass the common scope/schema/policy/hook gate as executor work; the iterative proposer returns whole responses and owns a restart-proof model-iteration cap; nil/empty/out-of-scope AllowedTools hold with the real proposer",
+      "tests": [
+        "TestAssistantRuntimeInternalToolsPassCommonGateAndStayOutOfBatch",
+        "TestAssistantIterativeDelegatesSubagentThroughExecutor",
+        "TestAssistantIterativeSubagentToolRestrictionIntersection",
+        "TestAssistantIterativeCommandScopeWithholdsSubagentDelegation",
+        "TestAssistantIterativeSkillLoadRunsThroughExecutor",
+        "TestAssistantIterativeProposerReturnsWholeResponseAndContinuesFromTranscript",
+        "TestAssistantIterativeProposerEnforcesIterationCapAcrossRestart",
+        "TestAssistantIterativeAllowedToolsNilEmptyAndOutOfScopeAcrossRestart"
+      ],
+      "owner": "item_3"
     }
   ]
 }

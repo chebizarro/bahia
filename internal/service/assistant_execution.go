@@ -193,6 +193,36 @@ func (e *AssistantExecutionEngine) Snapshot(sessionID string) (domain.AssistantE
 	return x, err == nil
 }
 
+// Projection returns a copy of the session's public v2 read model when this
+// process knows the session (from its own writes or hydration).
+func (e *AssistantExecutionEngine) Projection(sessionID string) (domain.AssistantSessionV2, bool) {
+	if e == nil || sessionID == "" {
+		return domain.AssistantSessionV2{}, false
+	}
+	e.mu.Lock()
+	s := e.sessions[sessionID]
+	e.mu.Unlock()
+	if s == nil {
+		return domain.AssistantSessionV2{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projection.SessionID == "" {
+		return domain.AssistantSessionV2{}, false
+	}
+	p := s.projection
+	p.Participants = append([]string(nil), p.Participants...)
+	p.PendingApprovals = append([]string(nil), p.PendingApprovals...)
+	if p.Proposal != nil {
+		proposal := *p.Proposal
+		if plan, err := domain.NormalizeAssistantExecutablePlan(proposal.Plan); err == nil {
+			proposal.Plan = plan
+		}
+		p.Proposal = &proposal
+	}
+	return p, true
+}
+
 // HydrateProjection supplies public identity fields (operator, participants,
 // assistant identity, summary) that are not duplicated in the encrypted
 // execution record. Callers must validate the projection's author first.

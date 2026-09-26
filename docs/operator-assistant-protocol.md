@@ -70,7 +70,7 @@ Content JSON contract inside kind `25910`:
 
 Author: operator browser key.
 
-Semantics: the `decision` parameter selects approve/reject (and historical cancel). The transport method is **one registered method**, `assistant/approval`; there are no registered `assistant/approve` or `assistant/reject` methods. V1 plan decisions use `plan_hash`; agentic approvals add `action_id`. V2 run/session cancellation uses the distinct `assistant/cancel` method after item 3 wires it.
+Semantics: the `decision` parameter selects approve/reject (and historical cancel). The transport method is **one registered method**, `assistant/approval`; there are no registered `assistant/approve` or `assistant/reject` methods. V2 decisions carry `contract_version: 2` with run/proposal-revision (batch) or run/action (iterative) identity. Unversioned v1 requests are accepted only for explicitly migrated v1 targets: an unedited `plan_hash` approve/reject matching the migrated awaiting draft, an `action_id` decision for the unique migrated pending action, or a `plan_hash` cancel of the migrated current batch run; an edited `modified_plan` from an old client is refused with `approval_contract_upgrade_required` and changes nothing. Run/session cancellation uses the distinct `assistant/cancel` method.
 
 Content JSON contract:
 

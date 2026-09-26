@@ -73,7 +73,8 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
-| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Current release: selects the agentic engine; after unified-executor activation this becomes only the fallback default workflow (`true` iterative, `false` batch) | `true` |
+| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Deprecated: only the fallback for `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` (`true` iterative, `false` batch); it never selects an engine | `true` |
+| `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` | Workflow for a new session when the prompt names none: `batch` or `iterative` | derived from `BAHIA_ASSISTANT_AGENTIC_ENABLED` |
 | `BAHIA_ASSISTANT_AGENTIC_TOOL_MODE` | Agentic OpenAI-compatible tool harness: `native` sends provider tool calls; `prompted` injects text tool instructions for models without native function-calling | `native` |
 | `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for batch proposal generation | `false` |
 
@@ -322,11 +323,18 @@ original address detail. This redaction does not change event kinds or schemas.
 
 ### Assistant workflow configuration migration
 
-The unified-execution contract adds `assistant.default_workflow: batch|iterative`
-when item 3 activates the common executor. Until then this key is not wired and
-`assistant.agentic.enabled` still selects the current production engine. After
-activation, an explicit per-request workflow wins for a new turn; otherwise
-the persisted session workflow wins; otherwise `default_workflow` wins; when
-that setting is absent, `agentic.enabled` maps to `iterative`/`batch`. Changing
+`assistant.default_workflow: batch|iterative` selects the workflow of a new
+session. Both workflows always run through the one unified executor, so an
+explicit per-request workflow wins for a new turn; otherwise the persisted
+session workflow wins; otherwise `default_workflow` wins; when that setting is
+absent, the deprecated `assistant.agentic.enabled` maps to `iterative`/`batch`.
+The flag no longer selects an engine or gates what is constructed. Changing
 config never silently changes an existing session. Batch plan editing remains
-supported. See [Operator Assistant](features/operator-assistant.md).
+supported.
+
+Because either workflow can be requested per prompt, both proposers are
+validated whenever `assistant.enabled=true`: `assistant.llm_model` (batch
+planner) is required, and the `assistant.agentic.*` provider, model (falling
+back to `llm_model`), base URL and limits must be valid even when the default
+is `batch`. `nostr.private_key` is required for the encrypted transcript and
+execution checkpoints. See [Operator Assistant](features/operator-assistant.md).

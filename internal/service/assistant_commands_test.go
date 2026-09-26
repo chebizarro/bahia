@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -68,23 +67,26 @@ func TestAssistantCommandExpandArguments(t *testing.T) {
 	}
 }
 
-func TestAssistantAgentLoopExpandsCommandIntoPrompt(t *testing.T) {
-	lib := mustCommandLibrary(AssistantCommandSpec{Name: "deploy", Template: "Deploy service $1 to $2 and report."})
+func TestAssistantIterativeExpandsCommandIntoPromptAndPersistsScope(t *testing.T) {
+	relay := newAssistantTestRelay()
+	lib := mustCommandLibrary(AssistantCommandSpec{Name: "deploy", Template: "Deploy service $1 to $2 and report.", AllowedTools: []string{"read-one"}})
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{Content: textBlocks("deployment plan ready"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
-	loop, _ := newAssistantExtLoop(t, model, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Commands: lib})
-	session := assistantRuntimeSession("session-command")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), &assistantRuntimeMCPServer{}, model, assistantLoopStackOptions{commands: lib})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-command", Prompt: "/deploy api prod"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Completed {
-		t.Fatalf("result = %#v", res)
+	x := st.runIterative(t, relay, "session-command", "/deploy api prod")
+	if x.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("phase = %s", x.Phase)
 	}
 	if !requestHasText(model.request(0), "Deploy service api to prod and report.") {
 		t.Fatalf("command was not expanded into the prompt: %#v", model.request(0).Messages)
+	}
+	if x.Scope.CommandName != "deploy" || len(x.Scope.AllowedTools) != 1 || x.Scope.AllowedTools[0] != "read-one" || x.Scope.Arguments["arguments"] != "api prod" {
+		t.Fatalf("persisted command scope = %+v", x.Scope)
+	}
+	if tools := requestToolNames(model.request(0)); len(tools) != 1 || !tools["read-one"] {
+		t.Fatalf("advertised tools outside command scope: %v", tools)
 	}
 }
 
