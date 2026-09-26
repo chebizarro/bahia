@@ -34,6 +34,36 @@ make build
 | `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for bootstrap discovery | unset |
 | `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow explicit HTTP compatibility fallback before any relay accepts the request | `false` |
 
+## Database migrations (operator command)
+
+`bahia-migrate` is a separate, database-local command. It loads Bahia's protected
+configuration (`--config`, default `config.yaml`) and never starts the server.
+Use a valid deployment configuration and back up the database before rollback.
+
+```bash
+bahia-migrate --config /etc/bahia/config.yaml status
+bahia-migrate --config /etc/bahia/config.yaml up
+bahia-migrate --config /etc/bahia/config.yaml --confirm down
+bahia-migrate --config /etc/bahia/config.yaml --confirm --to 000065_runtime_release_deployment_intents down
+# With a valid config, make migrate runs up; select another action explicitly:
+make migrate MIGRATE_CONFIG=/etc/bahia/config.yaml MIGRATE_ACTION=status
+```
+
+`status` only reads: it never creates `schema_migrations`, and prints each applied
+**full filename stem** with `applied_at` plus every pending stem. It exits 0 when
+nothing is pending, 2 when migrations are pending, and 1 on error. `up` applies
+pending migrations under the same advisory lock used by server startup.
+
+`down` requires `--confirm`. Without `--to`, it rolls back exactly the most
+recently applied migration. `--to <stem>` keeps that applied migration and rolls
+back newer applied migrations in reverse application order. By default the
+command also requires each removed migration to be the highest applied filename
+stem; `--force` overrides this ordering check, **not** SQL guards, confirmation,
+or missing-script errors. Each down script and its version-row deletion commit
+in one transaction. A missing `.down.sql` refuses the entire plan before any
+rollback. A failed SQL guard leaves its version row intact. Do not substitute a
+numeric prefix for a stem: seven historic prefixes have multiple migrations.
+
 ## Authentication
 
 The CLI does not implement interactive `login` commands. The only built-in auth helper is:
