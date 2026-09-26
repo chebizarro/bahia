@@ -73,9 +73,9 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
-| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Run the multi-step agentic assistant loop; set `false` to use the legacy plan/approve planner | `true` |
+| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Current release: selects the agentic engine; after unified-executor activation this becomes only the fallback default workflow (`true` iterative, `false` batch) | `true` |
 | `BAHIA_ASSISTANT_AGENTIC_TOOL_MODE` | Agentic OpenAI-compatible tool harness: `native` sends provider tool calls; `prompted` injects text tool instructions for models without native function-calling | `native` |
-| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for the legacy assistant planner provider | `false` |
+| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for batch proposal generation | `false` |
 
 ### Config File (bahia.yaml)
 
@@ -319,3 +319,14 @@ endpoints with `[REDACTED_ADDRESS]`. For example, an internal-LAN failure become
 `dial tcp [REDACTED_ADDRESS]: connection refused`. The public route, perspective,
 classification, and failure remain visible; REST/operator evidence retains the
 original address detail. This redaction does not change event kinds or schemas.
+
+### Assistant workflow configuration migration
+
+The unified-execution contract adds `assistant.default_workflow: batch|iterative`
+when item 3 activates the common executor. Until then this key is not wired and
+`assistant.agentic.enabled` still selects the current production engine. After
+activation, an explicit per-request workflow wins for a new turn; otherwise
+the persisted session workflow wins; otherwise `default_workflow` wins; when
+that setting is absent, `agentic.enabled` maps to `iterative`/`batch`. Changing
+config never silently changes an existing session. Batch plan editing remains
+supported. See [Operator Assistant](features/operator-assistant.md).

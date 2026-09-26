@@ -1,0 +1,42 @@
+{
+  "feature_id": "BAHIA_ASSISTANT_UNIFIED_EXECUTION",
+  "item_1": {
+    "domain": [
+      "go test ./internal/domain -run 'TestAssistant|TestDecode'",
+      "testdata/assistant/batch_approval_hash_vectors.json",
+      "go test ./internal/domain -run TestAssistantJCSRFC8785NumberSamples"
+    ],
+    "compat": [
+      "go test ./internal/service -run TestClassifyAssistantLegacy"
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
+    ]
+  },
+  "item_2": {
+    "planned": [
+      "checkpoint publish/replay and conflict tests",
+      "sync-async-sync restart",
+      "uncertain dispatch",
+      "EVENT/EOSE/CLOSED/AUTH observer",
+      "race-controlled cancellation"
+    ]
+  },
+  "item_3": {
+    "planned": [
+      "batch edit to common executor integration",
+      "workflow default/override persistence",
+      "real provider adapter and full sequence"
+    ]
+  },
+  "item_4": {
+    "planned": [
+      "shared golden vector test",
+      "cache and stale projection tests",
+      "browser-connected edit/cancel/restart E2E"
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "feature_id": "BAHIA_ASSISTANT_UNIFIED_EXECUTION",
+  "criteria": [
+    {
+      "id": "A1",
+      "claim": "Closed workflow, phase and work-state enums with v2 session and interface contracts",
+      "tests": [
+        "TestAssistantExecutionEnumsAndPlanValidation"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A2",
+      "claim": "Nil versus empty AllowedTools survives JSON and nested scope/work arguments cannot alias",
+      "tests": [
+        "TestAssistantAllowedToolsRoundTripAndDeepClone"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A3",
+      "claim": "Batch approval RFC 8785 bytes and SHA-256 match shared Go/browser vectors",
+      "tests": [
+        "TestAssistantBatchApprovalGoldenVectors",
+        "web/tests/unit/assistant/assistant-contract.test.js",
+        "TestAssistantJCSRFC8785NumberSamples",
+        "TestAssistantIJSONRejectsDuplicateKeysAndLoneSurrogates",
+        "TestAssistantApprovalScopeArgumentCommitmentVector"
+      ],
+      "owner": "item_1_and_4"
+    },
+    {
+      "id": "A4",
+      "claim": "Every historical class is deterministic and no single field grants executable authority",
+      "tests": [
+        "TestClassifyAssistantLegacySessionMatrix",
+        "TestClassifyAssistantLegacySessionRejectsSourceMismatch",
+        "TestClassifyAssistantLegacyBatchDraftKeepsSeparateHashes"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A5",
+      "claim": "Both workflows use one durable executor with fail-closed checkpoints and receipt accounting",
+      "tests": [
+        "TestAssistantUnifiedExecutionIntegration",
+        "TestAssistantExecutionStore"
+      ],
+      "owner": "items_2_and_3"
+    },
+    {
+      "id": "A6",
+      "claim": "Browser edits bind revision and hash, cancellation is run-bound, v1 controls are read-only",
+      "tests": [
+        "web/tests/unit/assistant/assistant-contract.test.js",
+        "web/tests/e2e/assistant-unified-execution.spec.js"
+      ],
+      "owner": "item_4"
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+# Assistant unified execution contract (item 1)
+
+Status: **contract and pure compatibility policy only**. Production still uses its
+v1 batch dispatcher and agent loop until items 2 and 3 switch both paths
+atomically. The browser changes are item 4. This document is the frozen
+cross-agent contract for `bahia-1qkfk`, with item 1 tracked as `bahia-rhevv`.
+
+## Decision 1: persisted workflow and lifecycle
+
+`domain.AssistantWorkflow` is closed to `batch` and `iterative`. New sessions use
+`bahia.assistant-session.v2` on kind 30900 at
+`d=bahia.assistant-session.v2:<session_id>`, with `execution_version=2`,
+workflow, run, revision, phase, public approval state and checkpoint reference.
+Existing `AssistantSession` and `ComputePlanHash` remain the v1 reader/hash.
+`AssistantPromptRequest` adds optional `contract_version` and `workflow`.
+Selection order for a new turn: explicit request workflow, persisted session
+workflow, then `assistant.default_workflow`; absent new config maps the old
+`assistant.agentic.enabled` (`true` = iterative, `false` = batch). Once a session
+exists, current config never changes its behavior. Workflow switches require a
+finished prior run with no unresolved effects. A running, awaiting, blocked or
+accounting-pending run rejects an overlapping prompt with `run_in_progress`.
+The old flag stops being a constructor/authorization gate after item 3.
+
+`AssistantExecution` has one ordered work array and cursor, with exactly the
+phase/work-state enums in `internal/domain/assistant_execution.go`. Nil
+`AllowedTools` means unrestricted; an empty non-nil slice denies every tool.
+JSON always emits `allowed_tools` so storage round trips preserve this boundary.
+Work arguments and private command scope are deeply copied, encrypted in
+checkpoints, and never handed to proposers as mutable authoritative pointers.
+
+## Decision 2: exact batch revision approval
+
+A v2 `assistant/approval` batch decision names session, run, workflow,
+proposal, base revision/hash, approved revision/hash and request identity.
+Unchanged approval uses the same revision; edited approval uses base + 1.
+The candidate preserves step order, requires unique nonempty IDs and object
+arguments, rejects unknown structural fields, and strips previews/model-supplied
+idempotency keys. Whole-batch preparation and policy validation precede approval.
+A hook changing effective arguments creates a new reviewable draft; it never
+executes under the stale approval. Zero steps is a valid no-op.
+
+The new hash is SHA-256(lowercase hex) of [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html) canonical JSON over the exact
+`AssistantBatchApprovalHashInput` envelope: `version=2`, session, run,
+`workflow=batch`, proposal ID, revision, **public approval-scope commitment**,
+and normalized plan. Scope includes command name, `allowed_tools`, selected
+refs, and an RFC 8785 SHA-256 digest of private command arguments where present.
+This binds the complete private scope without publishing those arguments in a
+public 30900 projection. Browser and Go byte-for-byte vectors are in
+`testdata/assistant/batch_approval_hash_vectors.json`; v1 `ComputePlanHash` is
+unchanged. The hash input does not include previews or dispatch keys.
+
+Iterative v2 approval names a single action and exact argument digest. A shared
+tool name does not authorize a different call. Rejection records a denied
+observation, not run cancellation.
+
+## Decision 3: one durable executor
+
+`service.AssistantTurnEngine` freezes `StartTurn`, `Decide`, `Cancel`, `Recover`
+and `Reconcile` plus request/result shapes. `AssistantBatchProposer` and
+`AssistantIterativeProposer` only propose; they do not dispatch or mutate the
+execution record. An iterative response's **entire** ordered call sequence must
+be checkpointed before its first call. Batch continuation advances that cursor
+without calling the model.
+
+The executor persists ready/dispatching, then invokes once, then persists a
+sync observation, async receipt, failure or `uncertain`. It persists an
+observation before transcript consumption. Checkpoint revision and predecessor
+ID provide an unambiguous chain; equal timestamps and conflicting successors
+must not select a winner by arrival order. A required checkpoint must have
+accepted relay publication before the next side effect. Retry the same signed
+event. This does not make provider submission transactional: a recovered
+`dispatching` item without a receipt is `uncertain`, never auto-replayed. An
+operator may reconcile only against a verified exact downstream request event;
+absence at EOSE is not proof of non-submission. Batch failure/denial skips
+successors; iterative observations may feed reasoning under the original guard.
+
+### Registry verdict for the checkpoint
+
+Checked `docs/nostr-event-implementation-guide.md` section 4 and
+`cascadia-nips/nips/NIP-CAS-0001.md` canonical kind/tag table. **4903 is
+CAS_AUDIT, a regular append-only kind**, not a replaceable state coordinate.
+Its required tags are `domain`, `type`, `schema`; `e` source correlation and
+`p` requesting actor are appropriate when known. Use
+`domain=assistant`, `type=execution-checkpoint`,
+`schema=bahia.audit.assistant-execution-checkpoint.v1`, plus `session` and `run`
+for scoped reads, `revision` and `prev` as untrusted lookup hints,
+optional `e`/`p`, and **no `d` tag**. The predecessor in authenticated
+plaintext is authoritative; public tag values never select a chain. Content must be the
+service-held authenticated encrypted envelope; never place work arguments,
+transcript text, approvals or secret scope values in public content or tags.
+Retention/archive and accepted-OK semantics still need item 2 implementation
+proof. No new kind number or SQL table is authorized by this design.
+
+## Decision 4: common authorization
+
+Both workflows pass registered descriptor/schema validation, persisted command
+scope, current permission policy, PreToolUse, revalidation after hook changes,
+exact approval binding, and PostToolUse through one tool runtime. A hard deny
+cannot be overridden by human approval. Hooks may tighten but not loosen.
+Batch review remains mandatory; iterative autonomy remains under existing
+permission modes. Internal tools and subagents keep their separate registration
+and no-parent-effects boundaries. An approved argument change blocks rather
+than silently substituting new content.
+
+## Decision 5: cancellation and accounting
+
+`assistant/cancel` is a new version-2 run/session operation; it is not
+`assistant/approval` with `decision=cancel`. It requires session, run and scope,
+rejects a stale run, persists stop intent, blocks new dispatch/model work and
+skips undispatched work. Already-submitted work remains observable; there is
+no rollback. The phase stays `cancelling` while known/uncertain effects remain.
+The executor uses short per-session reservations, no lock across model/provider
+I/O, and process-lifetime observation contexts. One active writer per service
+identity is required; active-active execution is outside this change.
+
+## Decision 6: explicit v1 classification
+
+`ClassifyAssistantLegacySession` is pure, consumes validated source event ID,
+v1 JSON and optional validated transcript evidence, and publishes/dispatches
+nothing. Its results are policy classifications, not dispatch authority.
+
+| Historical state | Conversion policy |
+| --- | --- |
+| Terminal with no unresolved effects/actions | Read-only; further work needs a new v2 session. |
+| Pure batch awaiting approval with matching plan/hash/turn/request and no dispatch evidence | V2 draft; approval still passes current common policy. |
+| Pure batch executing/blocked with exact ordered step/key/receipt correlation | Observe known receipts; unreceipted work is uncertain; park successors for renewed review. |
+| Pure iterative awaiting approval with matching run/turn/action/call and object arguments | V2 pending action; approval still passes current policy. |
+| Pure iterative waiting on exact run/call receipt | Accounting-only unless full ordered call sequence and consumed observations reconstruct; then continuation may resume. |
+| Iterative running without a complete checkpoint | Park. |
+| Active mixed, malformed, contradictory or orphan receipt | Park; never choose using current config or same-tool-name fallback. |
+| Terminal with unresolved effects | Preserve historical terminal outcome, create blocked accounting state when identities correlate; otherwise park accounting for reconciliation. |
+
+A migrated execution records source event/schema, deterministic migrated run
+ID and any original v1 plan hash. A migrated batch draft receives a freshly
+computed v2 proposal hash over normalized input; the v1 hash is retained only
+as `migration.legacy_plan_hash` for old unedited approval compatibility. Never
+put the historical hash into the v2 proposal `hash` field. Conversion checkpoints are item 2; original v1 events remain unchanged.
+Unversioned, unedited batch approval may bind only a migrated current draft.
+Unversioned edited `ModifiedPlan` must return `approval_contract_upgrade_required`.
+Old action approval requires unique matching run/turn/call; old plan-hash cancel
+maps only to the current migrated batch run. New runs require v2 contracts.
+
+Recovery must use the checkpoint chain, not the 500-event startup cache as a
+historical census. A caller-supplied unknown session ID needs scoped EOSE-aware
+coordinate lookup before creation. Receipt subscriptions validate event ID,
+signature, provenance, kind and request/resource correlation; EOSE ends
+backfill, not the operation. CLOSED/AUTH loss blocks observation and triggers
+reconnect/reissue, not synthetic failure.
+
+## Rollout and rollback
+
+Item 1 is additive and must not alter production execution. Item 2 implements
+the store/runtime/observer; item 3 switches routing, config and DI atomically
+with item 2; item 4 consumes these exact contracts and fixture vectors.
+Stop old writers before enabling v2 mutations. Rollback disables assistant
+mutations and retains v2 history; never downgrade an approved v2 queue into
+v1 executable `PendingSteps`. Historical inventory is bounded by retained
+relay/archive evidence, not by startup hydration limits.

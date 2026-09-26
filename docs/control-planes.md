@@ -542,3 +542,14 @@ empty configuration fails closed. Missing repositories produce configuration
 errors. Responses belong to the transport; canonical state publication failures
 are not acknowledged as success. Continuity, package and tool-approval gaps remain
 explicitly recorded in the ContextVM migration verification report.
+
+## Operator assistant execution boundary (v2 contract)
+
+Batch and iterative are proposal workflows over one durable execution owner,
+not separate dispatchers. ContextVM `assistant/prompt` selects a workflow for
+a new turn, `assistant/approval` decides a revision-bound plan or one exact
+action, and v2 `assistant/cancel`/`assistant/reconcile` stop or account for a
+run. The public 30900 `bahia.assistant-session.v2` projection is not the
+execution journal; kind 4903 encrypted immutable checkpoints are. Batch
+continuation never invokes the model. This is a frozen contract, not current
+production wiring; see [design](designs/assistant-unified-execution.md).

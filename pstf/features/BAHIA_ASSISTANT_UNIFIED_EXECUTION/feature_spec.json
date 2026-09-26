@@ -1,0 +1,9 @@
+{
+  "feature_id": "BAHIA_ASSISTANT_UNIFIED_EXECUTION",
+  "schema_version": 1,
+  "status": "item_1_contract_only",
+  "beads": {"epic": "bahia-1qkfk", "item_1": "bahia-rhevv"},
+  "owner_decisions": ["Keep batch plan review and editing", "One durable executor for batch and iterative proposals", "Persist workflow and select request then session then config default", "Never infer executable v1 state from one field"],
+  "scope": ["v2 domain and service interfaces", "RFC 8785 batch approval hash and shared vectors", "pure v1 compatibility classifier", "Nostr registry verdict and operator documentation"],
+  "out_of_scope": ["durable executor and publication", "production routing and config wiring", "browser changes", "live migration or deployment"]
+}

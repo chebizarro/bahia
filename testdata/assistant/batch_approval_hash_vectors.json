@@ -1,0 +1,227 @@
+{
+  "schema": "bahia.assistant-batch-approval-hash.v1",
+  "canonicalization": "RFC 8785",
+  "vectors": [
+    {
+      "name": "baseline",
+      "input": {
+        "version": 2,
+        "session_id": "session-α",
+        "run_id": "run-1",
+        "workflow": "batch",
+        "proposal_id": "proposal-1",
+        "revision": 1,
+        "scope": {
+          "allowed_tools": null
+        },
+        "plan": {
+          "summary": "Deploy safely",
+          "needs_clarification": false,
+          "risk_level": "medium",
+          "steps": [
+            {
+              "step_id": "s1",
+              "title": "First",
+              "description": "",
+              "tool_name": "tool.alpha",
+              "tool_args": {
+                "a": 1
+              }
+            },
+            {
+              "step_id": "s2",
+              "title": "Second",
+              "description": "",
+              "tool_name": "tool.beta",
+              "tool_args": {
+                "b": true
+              }
+            }
+          ]
+        }
+      },
+      "canonical": "{\"plan\":{\"needs_clarification\":false,\"risk_level\":\"medium\",\"steps\":[{\"description\":\"\",\"step_id\":\"s1\",\"title\":\"First\",\"tool_args\":{\"a\":1},\"tool_name\":\"tool.alpha\"},{\"description\":\"\",\"step_id\":\"s2\",\"title\":\"Second\",\"tool_args\":{\"b\":true},\"tool_name\":\"tool.beta\"}],\"summary\":\"Deploy safely\"},\"proposal_id\":\"proposal-1\",\"revision\":1,\"run_id\":\"run-1\",\"scope\":{\"allowed_tools\":null},\"session_id\":\"session-α\",\"version\":2,\"workflow\":\"batch\"}",
+      "sha256": "e9880fc8f642c34ff09153962de17a55f9c1b54a59eb2b0c3a52ca61dc2f4462"
+    },
+    {
+      "name": "reordered_steps",
+      "input": {
+        "version": 2,
+        "session_id": "session-α",
+        "run_id": "run-1",
+        "workflow": "batch",
+        "proposal_id": "proposal-1",
+        "revision": 1,
+        "scope": {
+          "allowed_tools": null
+        },
+        "plan": {
+          "summary": "Deploy safely",
+          "needs_clarification": false,
+          "risk_level": "medium",
+          "steps": [
+            {
+              "step_id": "s2",
+              "title": "Second",
+              "description": "",
+              "tool_name": "tool.beta",
+              "tool_args": {
+                "b": true
+              }
+            },
+            {
+              "step_id": "s1",
+              "title": "First",
+              "description": "",
+              "tool_name": "tool.alpha",
+              "tool_args": {
+                "a": 1
+              }
+            }
+          ]
+        }
+      },
+      "canonical": "{\"plan\":{\"needs_clarification\":false,\"risk_level\":\"medium\",\"steps\":[{\"description\":\"\",\"step_id\":\"s2\",\"title\":\"Second\",\"tool_args\":{\"b\":true},\"tool_name\":\"tool.beta\"},{\"description\":\"\",\"step_id\":\"s1\",\"title\":\"First\",\"tool_args\":{\"a\":1},\"tool_name\":\"tool.alpha\"}],\"summary\":\"Deploy safely\"},\"proposal_id\":\"proposal-1\",\"revision\":1,\"run_id\":\"run-1\",\"scope\":{\"allowed_tools\":null},\"session_id\":\"session-α\",\"version\":2,\"workflow\":\"batch\"}",
+      "sha256": "3244c34a782a9a2f309732521306869cbabe004e8a4a1dbeae46e2e968354761"
+    },
+    {
+      "name": "empty_arguments",
+      "input": {
+        "version": 2,
+        "session_id": "session-α",
+        "run_id": "run-1",
+        "workflow": "batch",
+        "proposal_id": "proposal-1",
+        "revision": 1,
+        "scope": {
+          "allowed_tools": null
+        },
+        "plan": {
+          "summary": "Deploy safely",
+          "needs_clarification": false,
+          "risk_level": "medium",
+          "steps": [
+            {
+              "step_id": "s1",
+              "title": "First",
+              "description": "",
+              "tool_name": "tool.alpha",
+              "tool_args": {}
+            },
+            {
+              "step_id": "s2",
+              "title": "Second",
+              "description": "",
+              "tool_name": "tool.beta",
+              "tool_args": {
+                "b": true
+              }
+            }
+          ]
+        }
+      },
+      "canonical": "{\"plan\":{\"needs_clarification\":false,\"risk_level\":\"medium\",\"steps\":[{\"description\":\"\",\"step_id\":\"s1\",\"title\":\"First\",\"tool_args\":{},\"tool_name\":\"tool.alpha\"},{\"description\":\"\",\"step_id\":\"s2\",\"title\":\"Second\",\"tool_args\":{\"b\":true},\"tool_name\":\"tool.beta\"}],\"summary\":\"Deploy safely\"},\"proposal_id\":\"proposal-1\",\"revision\":1,\"run_id\":\"run-1\",\"scope\":{\"allowed_tools\":null},\"session_id\":\"session-α\",\"version\":2,\"workflow\":\"batch\"}",
+      "sha256": "f42f8175df7a5fdd986872fc567f6dde313490770eabbd6e4bca36310a658977"
+    },
+    {
+      "name": "unicode_nested_empty_scope",
+      "input": {
+        "version": 2,
+        "session_id": "session-α",
+        "run_id": "run-1",
+        "workflow": "batch",
+        "proposal_id": "proposal-1",
+        "revision": 1,
+        "scope": {
+          "allowed_tools": [],
+          "arguments_digest": "f2d1b4c2a80d1b85efee54cf70cf78cb29caec31be5f5ff8d8252d253814f3db"
+        },
+        "plan": {
+          "summary": "Deploy safely",
+          "needs_clarification": false,
+          "risk_level": "medium",
+          "steps": [
+            {
+              "step_id": "s1",
+              "title": "First",
+              "description": "",
+              "tool_name": "tool.alpha",
+              "tool_args": {
+                "text": "résumé 😀",
+                "nested": {
+                  "z": [
+                    1,
+                    {
+                      "m": "ß"
+                    }
+                  ],
+                  "a": {
+                    "😀": 1,
+                    "": 2
+                  }
+                }
+              }
+            },
+            {
+              "step_id": "s2",
+              "title": "Second",
+              "description": "",
+              "tool_name": "tool.beta",
+              "tool_args": {
+                "b": true
+              }
+            }
+          ]
+        }
+      },
+      "canonical": "{\"plan\":{\"needs_clarification\":false,\"risk_level\":\"medium\",\"steps\":[{\"description\":\"\",\"step_id\":\"s1\",\"title\":\"First\",\"tool_args\":{\"nested\":{\"a\":{\"😀\":1,\"\":2},\"z\":[1,{\"m\":\"ß\"}]},\"text\":\"résumé 😀\"},\"tool_name\":\"tool.alpha\"},{\"description\":\"\",\"step_id\":\"s2\",\"title\":\"Second\",\"tool_args\":{\"b\":true},\"tool_name\":\"tool.beta\"}],\"summary\":\"Deploy safely\"},\"proposal_id\":\"proposal-1\",\"revision\":1,\"run_id\":\"run-1\",\"scope\":{\"allowed_tools\":[],\"arguments_digest\":\"f2d1b4c2a80d1b85efee54cf70cf78cb29caec31be5f5ff8d8252d253814f3db\"},\"session_id\":\"session-α\",\"version\":2,\"workflow\":\"batch\"}",
+      "sha256": "8f17d14168f625cb7d082389d6c2631199af6a14313f848990c033e44ad559a2"
+    },
+    {
+      "name": "numeric_boundaries",
+      "input": {
+        "version": 2,
+        "session_id": "session-α",
+        "run_id": "run-1",
+        "workflow": "batch",
+        "proposal_id": "proposal-1",
+        "revision": 1,
+        "scope": {
+          "allowed_tools": null
+        },
+        "plan": {
+          "summary": "Deploy safely",
+          "needs_clarification": false,
+          "risk_level": "medium",
+          "steps": [
+            {
+              "step_id": "s1",
+              "title": "First",
+              "description": "",
+              "tool_name": "tool.alpha",
+              "tool_args": {
+                "safe_max": 9007199254740991,
+                "micro": 0.000001,
+                "tiny": 1e-7,
+                "large_fixed": 100000000000000000000,
+                "large_exp": 1e+21,
+                "negative_zero": 0
+              }
+            },
+            {
+              "step_id": "s2",
+              "title": "Second",
+              "description": "",
+              "tool_name": "tool.beta",
+              "tool_args": {
+                "b": true
+              }
+            }
+          ]
+        }
+      },
+      "canonical": "{\"plan\":{\"needs_clarification\":false,\"risk_level\":\"medium\",\"steps\":[{\"description\":\"\",\"step_id\":\"s1\",\"title\":\"First\",\"tool_args\":{\"large_exp\":1e+21,\"large_fixed\":100000000000000000000,\"micro\":0.000001,\"negative_zero\":0,\"safe_max\":9007199254740991,\"tiny\":1e-7},\"tool_name\":\"tool.alpha\"},{\"description\":\"\",\"step_id\":\"s2\",\"title\":\"Second\",\"tool_args\":{\"b\":true},\"tool_name\":\"tool.beta\"}],\"summary\":\"Deploy safely\"},\"proposal_id\":\"proposal-1\",\"revision\":1,\"run_id\":\"run-1\",\"scope\":{\"allowed_tools\":null},\"session_id\":\"session-α\",\"version\":2,\"workflow\":\"batch\"}",
+      "sha256": "ee2100f4083084f0e32e52779aa56eaa8b0ce28c6e99eedfde571fdab728e3b9"
+    }
+  ]
+}

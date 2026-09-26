@@ -68,3 +68,27 @@ func TestAssistantTranscriptEnvelopeConstants(t *testing.T) {
 		t.Fatalf("transcript envelope does not expose symmetric-key metadata: %s", encoded)
 	}
 }
+
+func TestAssistantV2RequestFieldsRemainAdditive(t *testing.T) {
+	var oldPrompt AssistantPromptRequest
+	if err := json.Unmarshal([]byte(`{"session_id":"s","turn_id":"t","prompt":"hello"}`), &oldPrompt); err != nil {
+		t.Fatal(err)
+	}
+	if oldPrompt.ContractVersion != 0 || oldPrompt.Workflow != "" {
+		t.Fatalf("legacy prompt changed: %#v", oldPrompt)
+	}
+	var newPrompt AssistantPromptRequest
+	if err := json.Unmarshal([]byte(`{"contract_version":2,"workflow":"batch","session_id":"s","turn_id":"t","prompt":"hello"}`), &newPrompt); err != nil {
+		t.Fatal(err)
+	}
+	if newPrompt.ContractVersion != 2 || newPrompt.Workflow != AssistantWorkflowBatch {
+		t.Fatalf("v2 prompt lost fields: %#v", newPrompt)
+	}
+	var approval AssistantApprovalRequest
+	if err := json.Unmarshal([]byte(`{"contract_version":2,"request_id":"approval-1","session_id":"s","run_id":"r","workflow":"batch","proposal_id":"p","base_revision":1,"base_plan_hash":"base","approved_revision":2,"approved_plan_hash":"edited","decision":"approve"}`), &approval); err != nil {
+		t.Fatal(err)
+	}
+	if approval.ProposalID != "p" || approval.BaseRevision != 1 || approval.ApprovedRevision != 2 || approval.PlanHash != "" {
+		t.Fatalf("v2 approval lost fields: %#v", approval)
+	}
+}

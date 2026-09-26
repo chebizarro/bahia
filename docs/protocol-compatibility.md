@@ -264,3 +264,18 @@ output is canonical `30900` (`domain=policy`, `schema=bahia.cp-state.v1`,
 `d=<policy-id>`); retired policy command/registry kinds are not re-enabled.
 This does not claim the remaining continuity/package/tool-approval consumers
 are implemented; consult the ContextVM migration verification report.
+
+## Assistant v1/v2 read compatibility
+
+The v1 `bahia.assistant-session.v1` 30900 coordinate and `ComputePlanHash`
+remain historical inputs. V2 writes a distinct
+`d=bahia.assistant-session.v2:<session_id>` coordinate and uses an RFC 8785
+revision-bound approval hash. Migrated v1 batch drafts keep the old hash only
+as migration provenance and compute a new v2 proposal hash. Readers may display v1 history, but must not
+reactivate approval controls from transcript rows or a lone legacy field. A
+pure classifier admits only consistent plan/hash/turn/request or
+run/turn/call/receipt evidence; mixed or uncertain effects park. Unversioned
+edited `ModifiedPlan` approval requires a v2 client refresh. Old writers must
+be stopped before v2 mutation activation; rollback disables mutations rather
+than converting v2 work to executable v1 steps. Contract and vectors:
+[assistant design](designs/assistant-unified-execution.md).

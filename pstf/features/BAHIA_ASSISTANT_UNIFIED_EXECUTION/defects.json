@@ -1,0 +1,1 @@
+{"feature_id":"BAHIA_ASSISTANT_UNIFIED_EXECUTION","open_defects":[],"known_external":{"bahia-frj9d":"pre-existing internal/api/router test hang on macOS; excluded only if full go test stalls"}}
