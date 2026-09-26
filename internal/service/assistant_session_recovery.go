@@ -19,12 +19,16 @@ type AssistantSessionRecoveryConfig struct {
 	ServicePubkey string
 	Logger        *slog.Logger
 	AgentLoop     AssistantAgentLoopController
+	Engine        AssistantTurnEngine
+	Store         AssistantCheckpointStore
 }
 
 // AssistantSessionRecoveryRunner resumes observation of pending assistant steps after restart.
 type AssistantSessionRecoveryRunner struct {
 	orchestrator  *AssistantOrchestrator
 	agentLoop     AssistantAgentLoopController
+	engine        AssistantTurnEngine
+	store         AssistantCheckpointStore
 	limit         int
 	servicePubkey string
 	logger        *slog.Logger
@@ -44,7 +48,7 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 	if limit <= 0 {
 		limit = 500
 	}
-	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, agentLoop: cfg.AgentLoop, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
+	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, agentLoop: cfg.AgentLoop, engine: cfg.Engine, store: cfg.Store, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
 }
 
 func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-session-recovery" }
@@ -53,6 +57,9 @@ func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-sessi
 func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 	if r == nil || r.orchestrator == nil {
 		return nil
+	}
+	if r.engine != nil {
+		return r.runUnified(ctx)
 	}
 	o := r.orchestrator
 	if o.subscriber == nil {
@@ -355,4 +362,115 @@ func removePendingStep(session *domain.AssistantSession, stepID string) {
 		}
 	}
 	session.PendingSteps = session.PendingSteps[1:]
+}
+
+// runUnified replaces workflow-specific recovery once the engine is wired.
+// The bounded startup scan is hydration, not proof that older history is absent.
+func (r *AssistantSessionRecoveryRunner) runUnified(ctx context.Context) error {
+	if r.store == nil {
+		return fmt.Errorf("assistant checkpoint store is not configured for unified recovery")
+	}
+	o := r.orchestrator
+	if o.subscriber == nil {
+		return fmt.Errorf("assistant recovery subscriber is not configured")
+	}
+	servicePubkey := r.servicePubkey
+	if servicePubkey == "" {
+		servicePubkey = o.identity.Pubkey
+	}
+	author, err := nostr.PubKeyFromHex(servicePubkey)
+	if err != nil {
+		return err
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{domain.AssistantSessionTagSchema: []string{domain.AssistantSessionSchema, domain.AssistantSessionSchemaV2}}, Limit: r.limit}
+	sub, err := o.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	type source struct {
+		ev     *nostr.Event
+		schema string
+	}
+	latest := map[string]source{}
+	events := sub.EventChan()
+	closed := sub.ClosedChan()
+	eose := sub.EOSEChan()
+	collect := true
+	for collect {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case c, ok := <-closed:
+			if !ok {
+				closed = nil
+				continue
+			}
+			return fmt.Errorf("assistant recovery subscription closed: %s %s", c.RelayURL, c.Reason)
+		case ev, ok := <-events:
+			if !ok {
+				return fmt.Errorf("assistant recovery subscription ended before EOSE")
+			}
+			if ev == nil || !ev.CheckID() || !ev.VerifySignature() || ev.PubKey != author {
+				continue
+			}
+			schema := tagValue(ev.Tags, domain.AssistantSessionTagSchema)
+			if schema != domain.AssistantSessionSchema && schema != domain.AssistantSessionSchemaV2 {
+				continue
+			}
+			var header struct {
+				SessionID string `json:"session_id"`
+			}
+			if json.Unmarshal([]byte(ev.Content), &header) != nil || header.SessionID == "" || tagValue(ev.Tags, "session") != header.SessionID || tagValue(ev.Tags, "d") != schema+":"+header.SessionID {
+				continue
+			}
+			current, ok := latest[header.SessionID]
+			if !ok || (schema == domain.AssistantSessionSchemaV2 && current.schema != domain.AssistantSessionSchemaV2) || (schema == current.schema && (ev.CreatedAt > current.ev.CreatedAt || (ev.CreatedAt == current.ev.CreatedAt && ev.ID.Hex() > current.ev.ID.Hex()))) {
+				copyEvent := *ev
+				latest[header.SessionID] = source{ev: &copyEvent, schema: schema}
+			}
+		case <-eose:
+			collect = false
+		}
+	}
+	for _, src := range latest {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if src.schema == domain.AssistantSessionSchemaV2 {
+			var p domain.AssistantSessionV2
+			if json.Unmarshal([]byte(src.ev.Content), &p) != nil || p.Schema != domain.AssistantSessionSchemaV2 || p.SessionID == "" || p.CurrentRunID == "" || p.CheckpointEventID == "" {
+				continue
+			}
+			if hydrate, ok := r.engine.(interface {
+				HydrateProjection(domain.AssistantSessionV2)
+			}); ok {
+				hydrate.HydrateProjection(p)
+			}
+			if err := r.engine.Recover(ctx, AssistantExecutionReference{SessionID: p.SessionID, RunID: p.CurrentRunID, CheckpointEventID: p.CheckpointEventID}); err != nil {
+				r.logger.Error("assistant v2 recovery parked", "session_id", p.SessionID, "error", err)
+			}
+			continue
+		}
+		conversion := ClassifyAssistantLegacySession(AssistantLegacySessionSource{EventID: src.ev.ID.Hex(), Schema: src.schema, JSON: []byte(src.ev.Content)})
+		if conversion.Execution == nil {
+			r.logger.Info("assistant v1 history is not executable", "event_id", src.ev.ID.Hex(), "classification", conversion.Classification, "reason", conversion.Reason)
+			continue
+		}
+		x := *conversion.Execution
+		if _, _, err := r.store.Load(ctx, x.SessionID, x.RunID); err != nil {
+			if err.Error() != "no assistant checkpoint" {
+				r.logger.Error("assistant conversion checkpoint load failed", "session_id", x.SessionID, "error", err)
+				continue
+			}
+			if _, err = r.store.Append(ctx, x, ""); err != nil {
+				r.logger.Error("assistant conversion checkpoint publish failed", "session_id", x.SessionID, "error", err)
+				continue
+			}
+		}
+		if err := r.engine.Recover(ctx, AssistantExecutionReference{SessionID: x.SessionID, RunID: x.RunID, LegacySourceEventID: src.ev.ID.Hex()}); err != nil {
+			r.logger.Error("assistant v1 conversion recovery parked", "session_id", x.SessionID, "error", err)
+		}
+	}
+	return nil
 }

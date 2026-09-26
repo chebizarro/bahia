@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ type AssistantToolRuntimeToolDescriptor struct {
 	Effect        domain.AssistantToolEffect
 	DefaultRisk   domain.AssistantToolRisk
 	ResourceTypes []string
+	InputSchema   map[string]any
 }
 
 // AssistantToolRuntimeMCPServer is the MCP surface required by the agent tool
@@ -93,6 +95,7 @@ type AssistantToolRuntimeConfig struct {
 	MCPServer   AssistantToolRuntimeMCPServer
 	Registry    AssistantToolRuntimeRegistry
 	Permissions AssistantToolPermissionEvaluator
+	Hooks       *AssistantHookRunner
 	Sessions    AssistantToolRuntimeSessionPersister
 	Observer    AssistantAsyncResultObserver
 	Now         func() time.Time
@@ -106,6 +109,7 @@ type AssistantToolRuntime struct {
 	mcpServer   AssistantToolRuntimeMCPServer
 	registry    AssistantToolRuntimeRegistry
 	permissions AssistantToolPermissionEvaluator
+	hooks       *AssistantHookRunner
 	sessions    AssistantToolRuntimeSessionPersister
 	observer    AssistantAsyncResultObserver
 	now         func() time.Time
@@ -152,6 +156,7 @@ func NewAssistantToolRuntime(config AssistantToolRuntimeConfig) *AssistantToolRu
 		mcpServer:   config.MCPServer,
 		registry:    config.Registry,
 		permissions: config.Permissions,
+		hooks:       config.Hooks,
 		sessions:    config.Sessions,
 		observer:    config.Observer,
 		now:         now,
@@ -815,4 +820,267 @@ func randomAssistantRuntimeID(prefix string) string {
 		return fmt.Sprintf("%s_%d", strings.TrimSpace(prefix), time.Now().UnixNano())
 	}
 	return strings.TrimSpace(prefix) + "_" + hex.EncodeToString(buf[:])
+}
+
+var ErrAssistantApprovedInputChanged = fmt.Errorf("approved_input_changed")
+
+// AssistantPreparedWork is a checked immutable invocation. The executor must
+// checkpoint dispatching before calling DispatchPreparedWork.
+type AssistantPreparedWork struct {
+	Execution  domain.AssistantExecution
+	Work       domain.AssistantWorkItem
+	Descriptor AssistantToolRuntimeToolDescriptor
+	Permission domain.AssistantPermissionResult
+}
+
+// PrepareWork applies the same ordered authorization to batch and iterative
+// work. It does not call a tool or mutate a session.
+func (r *AssistantToolRuntime) PrepareWork(ctx context.Context, execution domain.AssistantExecution, work domain.AssistantWorkItem) (AssistantPreparedWork, error) {
+	if r == nil || r.registry == nil || r.permissions == nil {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant runtime authorization dependencies missing")
+	}
+	if work.ToolName == "" || work.WorkID == "" || work.Arguments == nil {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant work identity or arguments missing")
+	}
+	args, err := domain.DeepCopyAssistantJSONMap(work.Arguments)
+	if err != nil {
+		return AssistantPreparedWork{}, err
+	}
+	// Caller-supplied dispatch keys are not executable input.
+	delete(args, "idempotency_key")
+	descriptor, ok := r.lookupDescriptor(work.ToolName)
+	if !ok {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant tool %q is not registered", work.ToolName)
+	}
+	if work.IdempotencyKey == "" {
+		work.IdempotencyKey = assistantExecutionIdempotencyKey(execution, work)
+	}
+	if err := validateAssistantWorkSchema(descriptor.InputSchema, assistantSchemaArgs(descriptor, args, work.IdempotencyKey)); err != nil {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant tool input schema: %w", err)
+	}
+	if execution.Scope.AllowedTools != nil {
+		allowed := false
+		for _, name := range execution.Scope.AllowedTools {
+			if name == work.ToolName {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return AssistantPreparedWork{}, fmt.Errorf("assistant tool is outside the command's allowed-tools scope")
+		}
+	}
+	base := r.evaluatePermission(descriptor, args)
+	if base.Decision == domain.AssistantPermissionDecisionDeny {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant tool denied: %s", base.Reason)
+	}
+	hook := AssistantHookOutcome{}
+	if r.hooks != nil {
+		hook = r.hooks.Run(ctx, AssistantHookEventPreToolUse, AssistantHookInput{SessionID: execution.SessionID, ToolName: work.ToolName, ToolArgs: args})
+	}
+	if len(hook.UpdatedInput) > 0 {
+		if _, changesKey := hook.UpdatedInput["idempotency_key"]; changesKey {
+			return AssistantPreparedWork{}, fmt.Errorf("assistant hook cannot change executor idempotency key")
+		}
+		args = mergeAssistantToolArgs(args, hook.UpdatedInput)
+		if err = validateAssistantWorkSchema(descriptor.InputSchema, assistantSchemaArgs(descriptor, args, work.IdempotencyKey)); err != nil {
+			return AssistantPreparedWork{}, fmt.Errorf("assistant tool transformed input schema: %w", err)
+		}
+	}
+	current := r.evaluatePermission(descriptor, args)
+	if assistantPermissionRank(current.Decision) < assistantPermissionRank(base.Decision) {
+		current = base
+	}
+	current = applyAssistantHookDecision(current, hook)
+	if hook.Blocked || current.Decision == domain.AssistantPermissionDecisionDeny {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant tool denied by current policy or hook: %s", firstNonEmptyString(hook.Reason, current.Reason))
+	}
+	digest, err := domain.ComputeAssistantArgumentsDigest(args)
+	if err != nil {
+		return AssistantPreparedWork{}, err
+	}
+	if work.Authorization != nil {
+		if work.ArgumentsDigest != "" && work.ArgumentsDigest != digest {
+			work.Arguments = args
+			work.ArgumentsDigest = digest
+			return AssistantPreparedWork{Execution: execution, Work: work, Descriptor: descriptor, Permission: current}, ErrAssistantApprovedInputChanged
+		}
+		binding := work.Authorization
+		scope, err := execution.Scope.Clone()
+		if err != nil {
+			return AssistantPreparedWork{}, err
+		}
+		if binding.ArgumentsDigest != digest || !assistantScopesEqual(binding.Scope, scope) || binding.OperatorPubkey == "" || binding.DecisionRequestID == "" {
+			return AssistantPreparedWork{}, fmt.Errorf("assistant approval binding mismatch")
+		}
+		if execution.Workflow == domain.AssistantWorkflowBatch {
+			if execution.Proposal == nil || binding.ProposalID != execution.Proposal.ProposalID || binding.ProposalRevision != execution.Proposal.Revision {
+				return AssistantPreparedWork{}, fmt.Errorf("assistant batch proposal approval mismatch")
+			}
+		} else if binding.ActionID != "" && binding.ActionID != work.WorkID {
+			return AssistantPreparedWork{}, fmt.Errorf("assistant action approval mismatch")
+		}
+	} else if execution.Workflow == domain.AssistantWorkflowBatch || current.Decision == domain.AssistantPermissionDecisionAsk {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant work requires exact approval")
+	}
+	if current.Decision != domain.AssistantPermissionDecisionAllow && current.Decision != domain.AssistantPermissionDecisionAsk {
+		return AssistantPreparedWork{}, fmt.Errorf("assistant permission decision unsupported")
+	}
+	work.Arguments = args
+	work.ArgumentsDigest = digest
+	return AssistantPreparedWork{Execution: execution, Work: work, Descriptor: descriptor, Permission: current}, nil
+}
+
+func validateAssistantWorkSchema(schema map[string]any, args map[string]any) error {
+	if schema == nil {
+		return fmt.Errorf("registered tool schema is missing")
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return err
+	}
+	var document any
+	if err = json.Unmarshal(raw, &document); err != nil {
+		return err
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("https://bahia.local/assistant-tool.json", document); err != nil {
+		return err
+	}
+	compiled, err := compiler.Compile("https://bahia.local/assistant-tool.json")
+	if err != nil {
+		return err
+	}
+	return compiled.Validate(args)
+}
+
+// DispatchPreparedWork performs exactly one provider invocation. Any provider
+// error without a durable receipt is ambiguous for a mutation, not a denial.
+func (r *AssistantToolRuntime) DispatchPreparedWork(ctx context.Context, prepared AssistantPreparedWork) (*domain.AssistantToolObservation, *domain.AsyncToolReceipt, error) {
+	if r == nil || r.mcpServer == nil {
+		return nil, nil, fmt.Errorf("assistant MCP server is not configured")
+	}
+	work := prepared.Work
+	call := domain.AssistantAgentToolCall{ID: work.OriginID, Name: work.ToolName, Arguments: work.Arguments}
+	req := AssistantToolRuntimeRequest{RunID: prepared.Execution.RunID, TurnID: prepared.Execution.TurnID, ToolCall: call}
+	descriptor := prepared.Descriptor
+	var obs *domain.AssistantToolObservation
+	var receipt *domain.AsyncToolReceipt
+	if descriptor.ExecutionMode == domain.AssistantToolExecutionModeAsync {
+		if work.IdempotencyKey == "" {
+			return nil, nil, fmt.Errorf("assistant executor idempotency key missing")
+		}
+		args := cloneInterfaceArgs(work.Arguments)
+		args["idempotency_key"] = work.IdempotencyKey
+		var err error
+		receipt, err = r.mcpServer.InvokeAssistantAsyncTool(ctx, work.ToolName, args)
+		if err != nil {
+			return nil, nil, err
+		}
+		if receipt == nil || receipt.RequestEventID == "" || len(receipt.ResultKinds) == 0 || receipt.ToolName != work.ToolName || receipt.IdempotencyKey != work.IdempotencyKey {
+			return nil, nil, fmt.Errorf("assistant async receipt is missing or mismatched")
+		}
+		obs = r.waitingObservation(req, call, descriptor, prepared.Permission, receipt, "async tool submitted; waiting for downstream result")
+	} else if descriptor.ExecutionMode == domain.AssistantToolExecutionModeSync {
+		result, err := r.mcpServer.CallTool(ctx, work.ToolName, cloneInterfaceArgs(work.Arguments))
+		if err != nil {
+			return nil, nil, err
+		}
+		obs = r.observationFromMCPResult(req, call, descriptor, prepared.Permission, result)
+	} else {
+		return nil, nil, fmt.Errorf("assistant tool execution mode unsupported")
+	}
+	if r.hooks != nil && obs != nil {
+		post := r.hooks.Run(ctx, AssistantHookEventPostToolUse, AssistantHookInput{SessionID: prepared.Execution.SessionID, ToolName: work.ToolName, ToolArgs: work.Arguments, Text: obs.Summary})
+		if text := strings.TrimSpace(firstNonEmptyString(post.AdditionalContext, post.SystemMessage)); text != "" {
+			if obs.Metadata == nil {
+				obs.Metadata = map[string]any{}
+			}
+			obs.Metadata["post_tool_use_context"] = text
+		}
+	}
+	return obs, receipt, nil
+}
+
+func assistantScopesEqual(a, b domain.AssistantCommandScope) bool {
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(left) == string(right)
+}
+
+// ExecuteWithHooks preserves v1 caller behavior while placing its permission,
+// hook and schema ordering at the common runtime boundary. The v2 executor
+// uses PrepareWork and DispatchPreparedWork instead.
+func (r *AssistantToolRuntime) ExecuteWithHooks(ctx context.Context, req AssistantToolRuntimeRequest, hooks *AssistantHookRunner) (*domain.AssistantToolObservation, error) {
+	call := req.ToolCall
+	if r == nil || req.Session == nil {
+		return nil, fmt.Errorf("assistant tool runtime or session is not configured")
+	}
+	descriptor, found := r.lookupDescriptor(call.Name)
+	if !found {
+		return r.Execute(ctx, req)
+	}
+	if descriptor.InputSchema != nil {
+		if err := validateAssistantWorkSchema(descriptor.InputSchema, assistantSchemaArgs(descriptor, call.Arguments, assistantToolIdempotencyKey(req.Session.SessionID, req.RunID, call.ID))); err != nil {
+			return r.deniedObservation(req, call, domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Reason: err.Error()}), nil
+		}
+	}
+	base := r.evaluatePermission(descriptor, call.Arguments)
+	if base.Decision == domain.AssistantPermissionDecisionDeny {
+		req.PermissionOverride = &base
+		return r.Execute(ctx, req)
+	}
+	hook := AssistantHookOutcome{}
+	if hooks != nil {
+		hook = hooks.Run(ctx, AssistantHookEventPreToolUse, AssistantHookInput{SessionID: req.Session.SessionID, ToolName: call.Name, ToolArgs: call.Arguments})
+	}
+	final := base
+	if len(hook.UpdatedInput) > 0 {
+		call.Arguments = mergeAssistantToolArgs(call.Arguments, hook.UpdatedInput)
+		req.ToolCall = call
+		if descriptor.InputSchema != nil {
+			if err := validateAssistantWorkSchema(descriptor.InputSchema, assistantSchemaArgs(descriptor, call.Arguments, assistantToolIdempotencyKey(req.Session.SessionID, req.RunID, call.ID))); err != nil {
+				return r.deniedObservation(req, call, domain.AssistantPermissionResult{Decision: domain.AssistantPermissionDecisionDeny, Reason: err.Error()}), nil
+			}
+		}
+		current := r.evaluatePermission(descriptor, call.Arguments)
+		if assistantPermissionRank(current.Decision) >= assistantPermissionRank(base.Decision) {
+			final = current
+		}
+	}
+	final = applyAssistantHookDecision(final, hook)
+	req.PermissionOverride = &final
+	obs, err := r.Execute(ctx, req)
+	if err != nil || obs == nil {
+		return obs, err
+	}
+	if hooks != nil {
+		post := hooks.Run(ctx, AssistantHookEventPostToolUse, AssistantHookInput{SessionID: req.Session.SessionID, ToolName: call.Name, ToolArgs: call.Arguments, Text: obs.Summary})
+		if text := strings.TrimSpace(firstNonEmptyString(post.AdditionalContext, post.SystemMessage)); text != "" {
+			if obs.Metadata == nil {
+				obs.Metadata = map[string]any{}
+			}
+			obs.Metadata["post_tool_use_context"] = text
+		}
+	}
+	return obs, nil
+}
+
+func assistantExecutionIdempotencyKey(x domain.AssistantExecution, w domain.AssistantWorkItem) string {
+	if x.Workflow == domain.AssistantWorkflowBatch {
+		if x.Proposal == nil {
+			return ""
+		}
+		return fmt.Sprintf("assistant:%s:%s:%s", x.SessionID, x.Proposal.Hash, w.OriginID)
+	}
+	return fmt.Sprintf("assistant-agent:%s:%s:%s", x.SessionID, x.RunID, w.OriginID)
+}
+
+func assistantSchemaArgs(d AssistantToolRuntimeToolDescriptor, args map[string]any, key string) map[string]any {
+	if d.ExecutionMode != domain.AssistantToolExecutionModeAsync {
+		return args
+	}
+	out := cloneAnyArgs(args)
+	out["idempotency_key"] = key
+	return out
 }

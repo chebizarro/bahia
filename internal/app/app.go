@@ -3765,6 +3765,7 @@ func (a assistantToolRegistryAdapter) GetAgentTool(name string) (service.Assista
 		Effect:        descriptor.Effect,
 		DefaultRisk:   descriptor.DefaultRisk,
 		ResourceTypes: append([]string(nil), descriptor.ResourceTypes...),
+		InputSchema:   descriptor.Tool.InputSchema,
 	}, true
 }
 

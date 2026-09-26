@@ -419,3 +419,51 @@ func (w testingWriter) Write(p []byte) (int, error) {
 }
 
 var _ AssistantAsyncResultObserver = (*assistantRuntimeObserver)(nil)
+
+func TestAssistantRuntimeWorkScopedBatchApprovalCannotBeBypassed(t *testing.T) {
+	descriptor := AssistantToolRuntimeToolDescriptor{Name: "mutate", ExecutionMode: domain.AssistantToolExecutionModeAsync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"idempotency_key": map[string]any{"type": "string"}}, "required": []string{"idempotency_key"}}}
+	server := &assistantRuntimeMCPServer{}
+	r := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeAudited}, nil)})
+	x := domain.AssistantExecution{Version: 2, SessionID: "session", RunID: "run", Workflow: domain.AssistantWorkflowBatch, Proposal: &domain.AssistantProposalRevision{ProposalID: "proposal", Revision: 1, Hash: "hash"}}
+	work := domain.AssistantWorkItem{WorkID: "run:step", OriginID: "step", ToolName: "mutate", Arguments: map[string]any{}, State: domain.AssistantWorkReady}
+	if _, err := r.PrepareWork(context.Background(), x, work); err == nil {
+		t.Fatal("audited mode bypassed mandatory batch approval")
+	}
+	digest, err := domain.ComputeAssistantArgumentsDigest(work.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work.ArgumentsDigest = digest
+	work.Authorization = &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "decision", ProposalID: "proposal", ProposalRevision: 1, ArgumentsDigest: digest, Scope: x.Scope}
+	prepared, err := r.PrepareWork(context.Background(), x, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Work.IdempotencyKey != "assistant:session:hash:step" {
+		t.Fatalf("key=%q", prepared.Work.IdempotencyKey)
+	}
+	readonly := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReadonly}, nil)})
+	if _, err := readonly.PrepareWork(context.Background(), x, work); err == nil {
+		t.Fatal("approval bypassed readonly posture")
+	}
+	if server.invokeCount() != 0 {
+		t.Fatal("preparation dispatched tool")
+	}
+}
+
+func TestAssistantRuntimeChangedApprovedArgumentsBlock(t *testing.T) {
+	descriptor := AssistantToolRuntimeToolDescriptor{Name: "read", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectRead, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}
+	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{AssistantHookEventPreToolUse: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "change"}}}}}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"change": {{UpdatedInput: map[string]any{"target": "different"}}}}})
+	r := NewAssistantToolRuntime(AssistantToolRuntimeConfig{Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReview}, nil), Hooks: hooks})
+	x := domain.AssistantExecution{Version: 2, SessionID: "session", RunID: "run", Workflow: domain.AssistantWorkflowBatch, Proposal: &domain.AssistantProposalRevision{ProposalID: "proposal", Revision: 1, Hash: "hash"}}
+	args := map[string]any{"target": "original"}
+	digest, err := domain.ComputeAssistantArgumentsDigest(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := domain.AssistantWorkItem{WorkID: "run:step", OriginID: "step", ToolName: "read", Arguments: args, ArgumentsDigest: digest, Authorization: &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "decision", ProposalID: "proposal", ProposalRevision: 1, ArgumentsDigest: digest, Scope: x.Scope}}
+	prepared, err := r.PrepareWork(context.Background(), x, work)
+	if !errors.Is(err, ErrAssistantApprovedInputChanged) || prepared.Work.Arguments["target"] != "different" || work.Arguments["target"] != "original" {
+		t.Fatalf("approved input change=%v prepared=%+v work=%+v", err, prepared.Work, work)
+	}
+}

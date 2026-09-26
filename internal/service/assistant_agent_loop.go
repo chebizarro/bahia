@@ -522,42 +522,7 @@ func (l *AssistantAgentLoop) dispatchToolCall(ctx context.Context, run assistant
 	if tool, ok := l.internalTools[toolCall.Name]; ok {
 		return tool.handler(ctx, run, toolCall)
 	}
-	if l.hooks == nil {
-		return l.toolRuntime.Execute(ctx, baseReq)
-	}
-	basePerm, found := l.toolRuntime.EvaluateToolPermission(toolCall.Name, toolCall.Arguments)
-	if !found {
-		// Unknown tool: let the runtime emit the canonical not-registered denial.
-		return l.toolRuntime.Execute(ctx, baseReq)
-	}
-	outcome := l.hooks.Run(ctx, AssistantHookEventPreToolUse, AssistantHookInput{SessionID: run.session.SessionID, ToolName: toolCall.Name, ToolArgs: toolCall.Arguments})
-	finalPerm := basePerm
-	if len(outcome.UpdatedInput) > 0 {
-		toolCall.Arguments = mergeAssistantToolArgs(toolCall.Arguments, outcome.UpdatedInput)
-		baseReq.ToolCall = toolCall
-		// Re-evaluate permission on the hook-modified input, but never loosen the
-		// decision below the original: a hook must not rewrite arguments to escape
-		// a base deny/ask. Only an equally- or more-restrictive re-evaluation wins.
-		if reeval, ok := l.toolRuntime.EvaluateToolPermission(toolCall.Name, toolCall.Arguments); ok {
-			if assistantPermissionRank(reeval.Decision) >= assistantPermissionRank(basePerm.Decision) {
-				finalPerm = reeval
-			}
-		}
-	}
-	finalPerm = applyAssistantHookDecision(finalPerm, outcome)
-	baseReq.PermissionOverride = &finalPerm
-	obs, err := l.toolRuntime.Execute(ctx, baseReq)
-	if err != nil || obs == nil {
-		return obs, err
-	}
-	post := l.hooks.Run(ctx, AssistantHookEventPostToolUse, AssistantHookInput{SessionID: run.session.SessionID, ToolName: toolCall.Name, ToolArgs: toolCall.Arguments, Text: obs.Summary})
-	if text := strings.TrimSpace(firstNonEmptyString(post.AdditionalContext, post.SystemMessage)); text != "" {
-		if obs.Metadata == nil {
-			obs.Metadata = map[string]any{}
-		}
-		obs.Metadata["post_tool_use_context"] = text
-	}
-	return obs, nil
+	return l.toolRuntime.ExecuteWithHooks(ctx, baseReq, l.hooks)
 }
 
 func applyAssistantHookDecision(perm domain.AssistantPermissionResult, outcome AssistantHookOutcome) domain.AssistantPermissionResult {

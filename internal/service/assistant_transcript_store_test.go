@@ -288,3 +288,27 @@ func (f *assistantTranscriptHistoryFixture) BuildModelHistory(_ context.Context,
 	}
 	return out, nil
 }
+
+func TestAssistantTranscriptLogicalObservationIdentityDedupesReplay(t *testing.T) {
+	pub := &assistantTestPublisher{}
+	store := newTestAssistantTranscriptStore(t, pub, nil)
+	req := AssistantTranscriptAppend{SessionID: "logical-session", TurnID: "turn", RunID: "run", Sequence: 1, LogicalID: "run:work:observation", Message: textAssistantMessage(domain.AssistantAgentMessageRoleTool, "observed")}
+	if _, err := store.AppendMessage(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	events := pub.eventsOfKind(domain.KindAssistantTranscript)
+	if len(events) != 2 || tagValue(events[0].Tags, "d") != tagValue(events[1].Tags, "d") {
+		t.Fatal("logical identity was not stable")
+	}
+	replay := newTestAssistantTranscriptStore(t, nil, newReplayTranscriptSubscriber(events))
+	records, err := replay.Replay(context.Background(), AssistantTranscriptReplayQuery{SessionID: "logical-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("replayed logical observations=%d", len(records))
+	}
+}

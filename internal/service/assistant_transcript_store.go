@@ -70,6 +70,7 @@ func (p StaticAssistantTranscriptKeyProvider) TranscriptKey(_ context.Context, k
 // AssistantTranscriptAppend describes one append-only assistant transcript
 // message to encrypt and publish as kind 30316.
 type AssistantTranscriptAppend struct {
+	LogicalID      string
 	SessionID      string
 	TurnID         string
 	RunID          string
@@ -189,6 +190,12 @@ func (s *AssistantTranscriptStore) AppendMessage(ctx context.Context, appendReq 
 		Message:   appendReq.Message,
 		Metadata:  cloneAnyMap(appendReq.Metadata),
 	}
+	if appendReq.LogicalID != "" {
+		if payload.Metadata == nil {
+			payload.Metadata = map[string]any{}
+		}
+		payload.Metadata["logical_id"] = appendReq.LogicalID
+	}
 	ad := assistantTranscriptAssociatedData(payload, key)
 	envelope, err := encryptAssistantTranscriptPayload(ctx, key, payload, ad)
 	if err != nil {
@@ -238,6 +245,7 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 	defer merged.Close()
 
 	seen := map[string]struct{}{}
+	seenLogical := map[string]struct{}{}
 	records := make([]AssistantTranscriptRecord, 0)
 	eventsCh := merged.EventChan()
 	closedCh := merged.ClosedChan()
@@ -267,6 +275,12 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 				continue
 			}
 			seen[record.EventID] = struct{}{}
+			if logical, ok := record.Payload.Metadata["logical_id"].(string); ok && logical != "" {
+				if _, dup := seenLogical[logical]; dup {
+					continue
+				}
+				seenLogical[logical] = struct{}{}
+			}
 			records = append(records, *record)
 		case <-eoseCh:
 			return truncateAssistantTranscriptRecords(records, query.Limit), nil
@@ -499,7 +513,11 @@ func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key Assi
 	if payload.TurnID != "" {
 		dTagParts = append(dTagParts, payload.TurnID)
 	}
-	dTagParts = append(dTagParts, uuid.NewString())
+	if logicalID, ok := payload.Metadata["logical_id"].(string); ok && logicalID != "" {
+		dTagParts = append(dTagParts, logicalID)
+	} else {
+		dTagParts = append(dTagParts, uuid.NewString())
+	}
 	tags := nostr.Tags{
 		{"d", strings.Join(dTagParts, ":")},
 		{domain.AssistantTranscriptTagSchema, domain.AssistantTranscriptSchema},
