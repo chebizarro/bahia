@@ -170,6 +170,66 @@ export async function computeAssistantBatchApprovalHash(input) {
   return { canonical, hash: await sha256Hex(canonical) };
 }
 
+// Operator requests fail in four distinguishable ways. Only a JSON-RPC error
+// is a definitive service answer; a timeout, disconnect or abort leaves the
+// outcome unknown and must never be presented as an execution failure.
+export const ASSISTANT_REQUEST_ERROR_KINDS = Object.freeze({
+  STALE: 'stale', // acted on superseded run/proposal/action state
+  INVALID: 'invalid', // refused locally; nothing was sent
+  REJECTED: 'rejected', // the service answered with a JSON-RPC error
+  UNKNOWN: 'unknown' // transport interruption; outcome unknown
+});
+
+// Service reason codes meaning the operator acted on superseded run, proposal
+// or action state (e.g. `stale_approval`, `plan_hash_mismatch`,
+// `proposal_changed_requires_review`, `approval_contract_upgrade_required`).
+const ASSISTANT_STALE_REASON = /stale|proposal_changed|requires_review|approval_contract_upgrade_required|hash_mismatch|not_current|run_changed|superseded|invalid_state|invalid_cancel/;
+const ASSISTANT_REJECTED_RESULT_STATUSES = new Set(['failed', 'rejected', 'error']);
+
+export function assistantRequestError(kind, message, code = '') {
+  const error = new Error(message);
+  error.assistantErrorKind = kind;
+  if (code) error.code = code;
+  return error;
+}
+
+// Assistant handlers answer business refusals with a successful ContextVM
+// result `{status:"failed", step:"<reason>", error}`. That is the service's
+// verdict on the *request*; it never describes downstream execution.
+export function assertAssistantRequestAccepted(response) {
+  const result = response?.result;
+  const status = String(result?.status || '').toLowerCase();
+  if (!result || !ASSISTANT_REJECTED_RESULT_STATUSES.has(status)) return response;
+  const code = String(result.step || result.code || result.reason || status);
+  const detail = String(result.error || result.summary || result.message || code);
+  const error = new Error(detail.includes(code) ? detail : `${code}: ${detail}`);
+  error.serviceResult = result;
+  error.code = code;
+  error.data = result;
+  throw error;
+}
+
+export function classifyAssistantRequestError(error) {
+  const detail = error?.message || String(error || 'Assistant request failed');
+  if (Object.values(ASSISTANT_REQUEST_ERROR_KINDS).includes(error?.assistantErrorKind)) {
+    return { kind: error.assistantErrorKind, detail };
+  }
+  if (error?.rpcError || error?.serviceResult) {
+    const reasons = [error.code, error.data?.code, error.data?.reason, error.data?.step, detail]
+      .filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    return { kind: ASSISTANT_STALE_REASON.test(reasons) ? ASSISTANT_REQUEST_ERROR_KINDS.STALE : ASSISTANT_REQUEST_ERROR_KINDS.REJECTED, detail };
+  }
+  return { kind: ASSISTANT_REQUEST_ERROR_KINDS.UNKNOWN, detail };
+}
+
+export function describeAssistantRequestError(error, subject = 'Request') {
+  const { kind, detail } = classifyAssistantRequestError(error);
+  if (kind === ASSISTANT_REQUEST_ERROR_KINDS.UNKNOWN) return { kind, detail, message: `${subject} outcome unknown / reconnecting: ${detail}` };
+  if (kind === ASSISTANT_REQUEST_ERROR_KINDS.REJECTED) return { kind, detail, message: `${subject} rejected by the assistant service: ${detail}` };
+  if (kind === ASSISTANT_REQUEST_ERROR_KINDS.STALE) return { kind, detail, message: `${subject} refers to superseded state: ${detail}` };
+  return { kind, detail, message: `${subject} not sent: ${detail}` };
+}
+
 export const ASSISTANT_SESSION_SCHEMA_V1 = 'bahia.assistant-session.v1';
 export const ASSISTANT_SESSION_SCHEMA_V2 = 'bahia.assistant-session.v2';
 export const ASSISTANT_SESSION_SCHEMA = ASSISTANT_SESSION_SCHEMA_V1;
@@ -186,6 +246,10 @@ export const ASSISTANT_KINDS = {
 };
 
 export const ASSISTANT_EVENT_KINDS = [ASSISTANT_KINDS.SESSION, ASSISTANT_KINDS.STATUS, ASSISTANT_KINDS.TRANSCRIPT];
+
+// v2 execution phases (internal/domain/assistant_execution.go).
+export const ASSISTANT_EXECUTION_TERMINAL_PHASES = Object.freeze(['completed', 'failed', 'cancelled']);
+export const ASSISTANT_EXECUTION_CANCELLABLE_PHASES = Object.freeze(['proposing', 'awaiting_approval', 'executing', 'waiting_async', 'blocked']);
 
 export const ASSISTANT_SESSION_STATES = {
   IDLE: 'idle',

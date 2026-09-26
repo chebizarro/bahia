@@ -96,43 +96,114 @@ describe('assistant store', () => {
     store.resetAssistantStore();
   });
 
-  async function emitV2({ sessionId = 'v2-session', id = 'v2-projection', createdAt = 100,
+  function v2Event({ sessionId = 'v2-session', id = 'v2-projection', createdAt = 100,
     workflow = 'batch', phase = 'awaiting_approval', revision = 1, proposal = null,
-    pendingApprovals = [], uncertainEffects = 0, runId = 'run-1', scope = { allowed_tools: null } } = {}) {
-    if (!liveHandlers) await store.bootstrapAssistant({ force: true });
-    return liveHandlers.onEvent(event({ id, kind: ASSISTANT_KINDS.SESSION,
+    pendingApprovals = [], uncertainEffects = 0, submittedEffects = 0, runId = 'run-1', scope = { allowed_tools: null } } = {}) {
+    return event({ id, kind: ASSISTANT_KINDS.SESSION,
       pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: createdAt,
       tags: [['d', `bahia.assistant-session.v2:${sessionId}`], ['schema', 'bahia.assistant-session.v2'],
         ['session', sessionId], ['p', authMock.authState.pubkey, '', 'operator']],
       content: { execution_version: 2, session_id: sessionId, state: phase, workflow,
         current_run_id: runId, execution_revision: revision, phase, scope, proposal,
-        pending_approvals: pendingApprovals, uncertain_effects: uncertainEffects } }));
+        pending_approvals: pendingApprovals, submitted_effects: submittedEffects, uncertain_effects: uncertainEffects } });
   }
 
-  it('publishes revision-bound edited batches with the public scope digest only', async () => {
+  async function emitV2(options = {}) {
+    if (!liveHandlers) await store.bootstrapAssistant({ force: true });
+    return liveHandlers.onEvent(v2Event(options));
+  }
+
+  function statusEvent({ id, sessionId, createdAt = 150, content }) {
+    return event({ id, kind: ASSISTANT_KINDS.STATUS, pubkey: controlplaneMock.controlplaneConnection.servicePubkey,
+      created_at: createdAt, tags: [['schema', 'bahia.assistant-status.v1'], ['session', sessionId]],
+      content: { session_id: sessionId, ...content } });
+  }
+
+  function sessionById(sessionId) {
+    return store.assistantSessions.find((item) => item.sessionId === sessionId);
+  }
+
+  async function batchFixture(sessionId, steps) {
     const { computeAssistantBatchApprovalHash } = await import('../../../src/lib/nostr/client.js');
-    const plan = { summary: 'Deploy safely', needs_clarification: false, risk_level: 'medium', steps: [
+    const plan = { summary: 'Batch', needs_clarification: false, risk_level: 'low', steps };
+    const scope = { allowed_tools: steps.map((step) => step.tool_name), arguments_digest: 'c'.repeat(64) };
+    const base = await computeAssistantBatchApprovalHash({ sessionId, runId: 'run-1', proposalId: 'proposal-1', revision: 1, scope, plan });
+    await emitV2({ sessionId, proposal: { proposal_id: 'proposal-1', revision: 1, hash: base.hash, plan },
+      pendingApprovals: ['proposal-1'], scope });
+    return { plan, scope, base, computeAssistantBatchApprovalHash };
+  }
+
+  it('publishes revision-bound reordered, pruned and edited batches with the public scope digest only', async () => {
+    const { plan, scope, base, computeAssistantBatchApprovalHash } = await batchFixture('batch-1', [
       { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } },
-      { step_id: 's2', title: 'Second', description: '', tool_name: 'tool.beta', tool_args: { b: true } }
-    ] };
-    const scope = { allowed_tools: ['tool.alpha', 'tool.beta'], arguments_digest: 'a'.repeat(64) };
-    const base = await computeAssistantBatchApprovalHash({ sessionId: 'batch-1', runId: 'run-1',
-      proposalId: 'proposal-1', revision: 1, scope, plan });
-    await emitV2({ sessionId: 'batch-1', proposal: { proposal_id: 'proposal-1', revision: 1,
-      hash: base.hash, plan }, pendingApprovals: ['proposal-1'], scope });
-    const edited = { ...plan, steps: [plan.steps[1], { ...plan.steps[0], tool_args: {} }] };
+      { step_id: 's2', title: 'Second', description: '', tool_name: 'tool.beta', tool_args: { b: true } },
+      { step_id: 's3', title: 'Third', description: '', tool_name: 'tool.gamma', tool_args: { c: 'x' } }
+    ]);
+    // reorder s2 before s1, remove s3, edit s1 arguments; carry a stale preview that must not be hashed
+    const edited = { ...plan, steps: [plan.steps[1], { ...plan.steps[0], tool_args: {}, args_preview: { a: 1 } }] };
     await store.publishAssistantApproval({ sessionId: 'batch-1', runId: 'run-1', proposalId: 'proposal-1',
       baseRevision: 1, basePlanHash: base.hash, decision: 'approve', modifiedPlan: edited });
     const call = encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0];
     expect(call.operation).toBe('assistant/approval');
-    expect(call.payload).toMatchObject({ contract_version: 2, workflow: 'batch', run_id: 'run-1',
-      proposal_id: 'proposal-1', base_revision: 1, base_plan_hash: base.hash, approved_revision: 2,
-      modified_plan: { steps: [{ step_id: 's2' }, { step_id: 's1', tool_args: {} }] } });
+    expect(call.payload).toMatchObject({ contract_version: 2, workflow: 'batch', session_id: 'batch-1', run_id: 'run-1',
+      proposal_id: 'proposal-1', base_revision: 1, base_plan_hash: base.hash, approved_revision: 2, decision: 'approve' });
+    expect(call.payload.modified_plan.steps).toEqual([
+      { step_id: 's2', title: 'Second', description: '', tool_name: 'tool.beta', tool_args: { b: true } },
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: {} }
+    ]);
     const approved = await computeAssistantBatchApprovalHash({ sessionId: 'batch-1', runId: 'run-1',
-      proposalId: 'proposal-1', revision: 2, scope, plan: edited });
+      proposalId: 'proposal-1', revision: 2, scope, plan: call.payload.modified_plan });
     expect(call.payload.approved_plan_hash).toBe(approved.hash);
+    expect(call.payload.approved_plan_hash).not.toBe(base.hash);
+    expect(call.payload.request_id).toEqual(expect.any(String));
     expect(JSON.stringify(call.payload)).not.toContain('arguments":');
-    expect(store.assistantSessions.find((item) => item.sessionId === 'batch-1').pendingApprovals).toEqual(['proposal-1']);
+    // no optimistic consumption: canonical state still lists the proposal
+    expect(sessionById('batch-1').pendingApprovals).toEqual(['proposal-1']);
+  });
+
+  it('binds an unchanged approval or any rejection to the base revision and hash', async () => {
+    const { plan, base } = await batchFixture('batch-2', [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
+    await store.publishAssistantApproval({ sessionId: 'batch-2', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0].payload).toMatchObject({
+      approved_revision: 1, approved_plan_hash: base.hash });
+    await store.publishAssistantApproval({ sessionId: 'batch-2', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'reject', modifiedPlan: { ...plan, steps: [] } });
+    const reject = encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0].payload;
+    expect(reject).toMatchObject({ decision: 'reject', approved_revision: 1, approved_plan_hash: base.hash });
+    expect(reject).not.toHaveProperty('modified_plan');
+  });
+
+  it('refuses to send an approval when the public projection does not reproduce its hash', async () => {
+    const { plan } = await batchFixture('batch-3', [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
+    await emitV2({ sessionId: 'batch-3', id: 'batch-3-bad', createdAt: 101, proposal: { proposal_id: 'proposal-1', revision: 1,
+      hash: 'd'.repeat(64), plan }, pendingApprovals: ['proposal-1'], scope: { allowed_tools: ['tool.alpha'] } });
+    encryptedControlplaneMock.requestEncryptedResult.mockClear();
+    const error = await store.publishAssistantApproval({ sessionId: 'batch-3', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: 'd'.repeat(64), decision: 'approve' }).catch((err) => err);
+    const { classifyAssistantRequestError } = await import('../../../src/lib/nostr/client.js');
+    expect(classifyAssistantRequestError(error)).toMatchObject({ kind: 'stale' });
+    expect(error.code).toBe('proposal_hash_mismatch');
+    expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
+  });
+
+  it('classifies a service stale verdict as stale and a transport interruption as unknown without touching canonical state', async () => {
+    const { base } = await batchFixture('batch-4', [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
+    const { classifyAssistantRequestError } = await import('../../../src/lib/nostr/client.js');
+    const approve = () => store.publishAssistantApproval({ sessionId: 'batch-4', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' }).catch((err) => err);
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({ requestEventId: 'r', result: {
+      session_id: 'batch-4', status: 'failed', step: 'stale_approval', error: 'base revision superseded' } });
+    expect(classifyAssistantRequestError(await approve())).toMatchObject({ kind: 'stale' });
+    encryptedControlplaneMock.requestEncryptedResult.mockRejectedValueOnce(new Error('Encrypted controlplane disconnected'));
+    expect(classifyAssistantRequestError(await approve())).toMatchObject({ kind: 'unknown' });
+    const session = sessionById('batch-4');
+    expect(session).toMatchObject({ phase: 'awaiting_approval', pendingApprovals: ['proposal-1'] });
+    expect(session.transcript.some((item) => item.failed || item.status === 'failed')).toBe(false);
+    expect(session.transcript.some((item) => item.status === 'request_acknowledged')).toBe(false);
   });
 
   it('uses NIP-01 event order rather than execution revision, while v2 outranks v1 history', async () => {
@@ -165,8 +236,107 @@ describe('assistant store', () => {
     const session = store.assistantSessions[0];
     expect(session).toMatchObject({ sessionId: 'old', executionVersion: 1, authoritative: false, pendingActions: [] });
     await expect(store.publishAssistantApproval({ sessionId: 'old', decision: 'approve' })).rejects.toThrow('Current v2 run required');
+    await expect(store.publishAssistantPrompt({ prompt: 'continue', sessionId: 'old' })).rejects.toThrow('read-only');
     const newKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`;
     expect(localStorage.getItem(newKey)).not.toContain('DO-NOT-CACHE');
+    expect(JSON.parse(localStorage.getItem(newKey)).sessions[0]).toMatchObject({ sessionId: 'old', executionVersion: 1 });
+    expect(localStorage.getItem(legacyKey)).toBeNull();
+
+    // A v2 projection of the same session overrides the imported v1 view.
+    await emitV2({ sessionId: 'old', workflow: 'iterative', phase: 'executing', pendingApprovals: [] });
+    expect(sessionById('old')).toMatchObject({ executionVersion: 2, authoritative: true, workflow: 'iterative', phase: 'executing' });
+  });
+
+  it('keeps a restored v2 cache display-only until the relay re-delivers the projection', async () => {
+    const { base } = await batchFixture('cached-1', [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
+    const projection = v2Event({ sessionId: 'cached-1', proposal: sessionById('cached-1').proposal,
+      pendingApprovals: ['proposal-1'], scope: sessionById('cached-1').scope });
+    expect(sessionById('cached-1').authoritative).toBe(true);
+
+    store.resetAssistantStore();
+    let handlers = null;
+    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, h) => { handlers = h; return vi.fn(); });
+    await store.bootstrapAssistant({ force: true });
+    const cached = sessionById('cached-1');
+    expect(cached).toMatchObject({ executionVersion: 2, authoritative: false, currentRunId: 'run-1', pendingApprovals: ['proposal-1'] });
+    await expect(store.publishAssistantApproval({ sessionId: 'cached-1', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' })).rejects.toThrow('Current v2 run required');
+    await expect(store.publishAssistantCancellation({ sessionId: 'cached-1', runId: 'run-1' })).rejects.toThrow('Current v2 run required');
+
+    // An older projection for the coordinate cannot displace the cached newer one (NIP-01).
+    expect(handlers.onEvent(v2Event({ sessionId: 'cached-1', id: 'older', createdAt: 50, phase: 'proposing' }))).toBe(false);
+    expect(sessionById('cached-1').authoritative).toBe(false);
+    // The same event re-delivered by the relay restores authority.
+    expect(handlers.onEvent(projection)).toBe(true);
+    expect(sessionById('cached-1')).toMatchObject({ authoritative: true, phase: 'awaiting_approval' });
+    await store.publishAssistantApproval({ sessionId: 'cached-1', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0].operation).toBe('assistant/approval');
+  });
+
+  it('derives pending actions from the current run projection, whatever order details arrive in', async () => {
+    await store.bootstrapAssistant({ force: true });
+    // details arrive before the projection, plus a row from an older run with the same action id
+    liveHandlers.onEvent(statusEvent({ id: 'detail-run-1', sessionId: 'iter-1', createdAt: 90, content: {
+      status: 'awaiting_approval', phase: 'approval_required', run_id: 'run-1', action_id: 'action-1',
+      tool_name: 'tool.current', approval_prompt: 'Current approval', args_preview: { zone: 'a' } } }));
+    liveHandlers.onEvent(statusEvent({ id: 'detail-run-0', sessionId: 'iter-1', createdAt: 80, content: {
+      status: 'awaiting_approval', phase: 'approval_required', run_id: 'run-0', action_id: 'action-0', tool_name: 'tool.old' } }));
+    expect(sessionById('iter-1').pendingActions).toEqual([]);
+    await emitV2({ sessionId: 'iter-1', workflow: 'iterative', phase: 'awaiting_approval', pendingApprovals: ['action-1'] });
+    expect(sessionById('iter-1').pendingActions).toEqual([expect.objectContaining({ actionId: 'action-1', runId: 'run-1',
+      sessionId: 'iter-1', toolName: 'tool.current', approvalPrompt: 'Current approval', argsPreview: { zone: 'a' } })]);
+    // a newer run re-using the action id does not inherit the previous run's description
+    await emitV2({ sessionId: 'iter-1', id: 'iter-1-run-2', createdAt: 200, runId: 'run-2', workflow: 'iterative',
+      phase: 'awaiting_approval', pendingApprovals: ['action-1'] });
+    expect(sessionById('iter-1').pendingActions).toEqual([{ actionId: 'action-1', runId: 'run-2', sessionId: 'iter-1' }]);
+    // a stale approval_required row can never create authority on its own
+    await emitV2({ sessionId: 'iter-1', id: 'iter-1-done', createdAt: 300, runId: 'run-2', workflow: 'iterative', phase: 'completed' });
+    liveHandlers.onEvent(statusEvent({ id: 'late-detail', sessionId: 'iter-1', createdAt: 310, content: {
+      status: 'awaiting_approval', phase: 'approval_required', run_id: 'run-2', action_id: 'action-1' } }));
+    expect(sessionById('iter-1').pendingActions).toEqual([]);
+    await expect(store.publishAssistantActionDecision({ sessionId: 'iter-1', runId: 'run-2', actionId: 'action-1',
+      decision: 'approve' })).rejects.toThrow('Action changed');
+  });
+
+  it('blocks overlapping turns and workflow changes with unresolved effects', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    await emitV2({ sessionId: 'overlap-1', workflow: 'batch', phase: 'executing' });
+    await expect(store.publishAssistantPrompt({ prompt: 'again', sessionId: 'overlap-1' })).rejects.toThrow('already active');
+    await emitV2({ sessionId: 'overlap-1', id: 'overlap-done', createdAt: 150, workflow: 'batch', phase: 'completed', uncertainEffects: 1 });
+    await expect(store.publishAssistantPrompt({ prompt: 'again', sessionId: 'overlap-1', workflow: 'iterative' }))
+      .rejects.toThrow('Workflow change requires a finished run with no unresolved effects');
+    await emitV2({ sessionId: 'overlap-1', id: 'overlap-clean', createdAt: 160, workflow: 'batch', phase: 'completed' });
+    await store.publishAssistantPrompt({ prompt: 'switch', sessionId: 'overlap-1', workflow: 'iterative' });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0]).toMatchObject({
+      operation: 'assistant/prompt', payload: { contract_version: 2, session_id: 'overlap-1', workflow: 'iterative', prompt: 'switch' } });
+  });
+
+  it('records a service-refused prompt as a request rejection, never as an execution failure', async () => {
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({ requestEventId: 'req', result: {
+      session_id: 'refused-1', status: 'failed', step: 'run_in_progress', error: 'a run is already active' } });
+    await expect(store.publishAssistantPrompt({ prompt: 'go', sessionId: 'refused-1' })).rejects.toThrow('run_in_progress');
+    const transcript = sessionById('refused-1').transcript;
+    expect(transcript).toContainEqual(expect.objectContaining({ type: 'result', status: 'request_rejected',
+      summary: 'Assistant service rejected the request', error: 'run_in_progress: a run is already active' }));
+    expect(transcript.some((item) => item.status === 'outcome_unknown' || item.failed || item.status === 'request_acknowledged')).toBe(false);
+    expect(Object.keys(store.pendingAssistantRequests)).toHaveLength(0);
+  });
+
+  it('never records private command-scope arguments from transcript metadata', async () => {
+    await store.bootstrapAssistant({ force: true });
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    liveHandlers.onEvent(event({ id: 'transcript-private', kind: ASSISTANT_KINDS.TRANSCRIPT, pubkey: service, created_at: 140,
+      tags: [['schema', 'bahia.assistant-transcript.v1'], ['session', 'private-1'], ['domain', 'assistant']],
+      content: { session_id: 'private-1', seq: 1, message: { role: 'assistant', text: 'ok' },
+        metadata: { phase: 'x', command_scope: { arguments: { token: 'SECRET-ARG' } }, scope: { allowed_tools: null, arguments: { token: 'SECRET-ARG' } } } } }));
+    const item = sessionById('private-1').transcript[0];
+    expect(JSON.stringify(item)).not.toContain('SECRET-ARG');
+    expect(item.metadata.scope).toEqual({ allowed_tools: null });
+    const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${authMock.authState.pubkey}:${service}`;
+    expect(localStorage.getItem(cacheKey)).not.toContain('SECRET-ARG');
   });
 
   it('cancels a hashless run while its prompt RPC remains pending, without inventing failure', async () => {

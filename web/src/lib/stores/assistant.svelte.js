@@ -13,8 +13,16 @@ import {
   parseAssistantTranscriptEvent,
   computeAssistantBatchApprovalHash,
   normalizeAssistantExecutablePlan,
-  shouldAcceptReplaceableEvent
+  shouldAcceptReplaceableEvent,
+  assistantRequestError,
+  assertAssistantRequestAccepted,
+  classifyAssistantRequestError,
+  ASSISTANT_REQUEST_ERROR_KINDS,
+  ASSISTANT_EXECUTION_TERMINAL_PHASES as TERMINAL_PHASES,
+  ASSISTANT_EXECUTION_CANCELLABLE_PHASES as CANCELLABLE_PHASES
 } from '../nostr/client.js';
+
+const { STALE, INVALID, REJECTED } = ASSISTANT_REQUEST_ERROR_KINDS;
 
 const SIDEBAR_STORAGE_KEY = 'bahia_assistant_sidebar';
 const TRANSCRIPT_STORAGE_SCHEMA = 'bahia_assistant_transcript_v2';
@@ -103,10 +111,11 @@ function serializableSession(session) {
       event: { id: sessionEvent.id, created_at: sessionEvent.createdAt } } : null };
 }
 
-function rememberSeenEventIds(item) {
+// Session projections are deliberately not remembered here: a cached projection
+// is display-only, and the relay re-delivering it is what restores authority.
+function rememberSeenTranscriptIds(item) {
   if (item?.id) seenEventIds.add(item.id);
   if (item?.event?.id) seenEventIds.add(item.event.id);
-  if (item?.sessionEvent?.id) seenEventIds.add(item.sessionEvent.id);
 }
 
 function persistAssistantTranscriptCache() {
@@ -140,6 +149,7 @@ function restoreAssistantTranscriptCache(operatorPubkey, servicePubkey) {
     const legacyKey = assistantTranscriptStorageKey(operatorPubkey, servicePubkey, LEGACY_TRANSCRIPT_STORAGE_SCHEMA);
     const cached = current || JSON.parse(localStorage.getItem(legacyKey) || 'null');
     if (!cached || ![TRANSCRIPT_STORAGE_SCHEMA, LEGACY_TRANSCRIPT_STORAGE_SCHEMA].includes(cached.schema)) return false;
+    const fromLegacy = cached.schema === LEGACY_TRANSCRIPT_STORAGE_SCHEMA;
     if (cached.operatorPubkey && cached.operatorPubkey !== operatorPubkey) return false;
     if (cached.servicePubkey && servicePubkey && cached.servicePubkey !== servicePubkey) return false;
 
@@ -149,10 +159,9 @@ function restoreAssistantTranscriptCache(operatorPubkey, servicePubkey) {
       if (!sessionId) continue;
       const session = ensureSession(sessionId);
       Object.assign(session, { ...session, ...serializableSession(cachedSession), authoritative: false, transcript: [], pendingActions: [] });
-      if (cached.schema === LEGACY_TRANSCRIPT_STORAGE_SCHEMA) {
+      if (fromLegacy) {
         Object.assign(session, { executionVersion: 1, workflow: '', currentRunId: '', proposal: null, pendingApprovals: [], scope: null });
       }
-      rememberSeenEventIds(session);
       restored = true;
     }
 
@@ -162,14 +171,17 @@ function restoreAssistantTranscriptCache(operatorPubkey, servicePubkey) {
       if (!sessionId || !itemId || item?.pending) continue;
       const session = ensureSession(sessionId);
       const { event: _rawEvent, content: _rawContent, ...displayItem } = item;
-      eventMap.set(itemId, displayItem);
+      eventMap.set(itemId, withoutPrivateCommandScope(displayItem));
       session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || item.event?.created_at || 0);
-      rememberSeenEventIds(item);
+      rememberSeenTranscriptIds(item);
       restored = true;
     }
 
     if (typeof cached.activeSessionId === 'string') assistantUi.activeSessionId = cached.activeSessionId;
     if (restored) refreshSessions();
+    // Migration: once the history is re-written under the v2 key, drop the v1
+    // entry so it can never be re-imported with different semantics.
+    if (fromLegacy && persistAssistantTranscriptCache()) localStorage.removeItem(legacyKey);
     return restored;
   } catch (err) {
     console.warn('Unable to restore assistant transcript cache:', err);
@@ -234,7 +246,6 @@ function emptySession(sessionId) {
     submittedEffects: 0,
     uncertainEffects: 0,
     authoritative: false,
-    actionDetails: {},
     currentPlan: null,
     pendingSteps: [],
     transcriptSummary: '',
@@ -257,54 +268,37 @@ function eventSessionId(event, content = null) {
   return getTagValue(event, 'session', content?.session_id || content?.sessionId || '');
 }
 
-function normalizePendingAction(action = {}) {
-  const actionId = String(action.action_id || action.actionId || action.ActionID || '').trim();
-  if (!actionId) return null;
+// Status events only *describe* an action (tool, arguments preview, prompt).
+// Whether it is actionable is decided solely by the current v2 projection.
+function actionDetailsFromStatus(item) {
   return {
-    actionId,
-    sessionId: action.session_id || action.sessionId || action.SessionID || '',
-    runId: action.run_id || action.runId || action.RunID || '',
-    turnId: action.turn_id || action.turnId || action.TurnID || '',
-    toolCallId: action.tool_call_id || action.toolCallId || action.ToolCallID || '',
-    toolName: action.tool_name || action.toolName || action.ToolName || '',
-    argsPreview: action.args_preview || action.argsPreview || action.tool_args || action.toolArgs || action.ToolArgs || null,
-    approvalPrompt: action.approval_prompt || action.approvalPrompt || action.ApprovalPrompt || '',
-    permission: action.permission || action.Permission || null,
-    createdAt: action.created_at || action.createdAt || action.CreatedAt || ''
+    turnId: item.turnId || '',
+    toolCallId: item.toolCallId || '',
+    toolName: item.toolName || '',
+    argsPreview: item.argsPreview || null,
+    approvalPrompt: item.approvalPrompt || item.message || '',
+    permission: item.permission || null,
+    createdAt: item.createdAt || ''
   };
 }
 
-function pendingActionsFromMetadata(metadata = {}) {
-  const raw = metadata?.deferred_actions || metadata?.deferredActions || {};
-  const values = Array.isArray(raw) ? raw : Object.values(raw || {});
-  return values.map(normalizePendingAction).filter(Boolean);
+function currentActionDetails(session, actionId) {
+  const transcript = Array.isArray(session.transcript) ? session.transcript : [];
+  for (let index = transcript.length - 1; index >= 0; index--) {
+    const item = transcript[index];
+    if (item?.type === 'status' && item.phase === 'approval_required' && item.actionId === actionId &&
+        item.runId && item.runId === session.currentRunId) return actionDetailsFromStatus(item);
+  }
+  return {};
 }
 
-function pendingActionFromStatus(item) {
-  if (item?.type !== 'status' || item.phase !== 'approval_required' || !item.actionId) return null;
-  return normalizePendingAction({
-    action_id: item.actionId,
-    session_id: item.sessionId,
-    run_id: item.runId,
-    tool_call_id: item.toolCallId,
-    tool_name: item.toolName,
-    args_preview: item.argsPreview,
-    approval_prompt: item.approvalPrompt || item.message,
-    permission: item.permission,
-    created_at: item.createdAt
-  });
-}
-
-function upsertPendingAction(session, action) {
-  const normalized = normalizePendingAction(action);
-  if (!session || !normalized) return;
-  const existing = Array.isArray(session.pendingActions) ? session.pendingActions : [];
-  session.pendingActions = [normalized, ...existing.filter((item) => item.actionId !== normalized.actionId)];
-}
-
-function resolvePendingAction(session, actionId) {
-  if (!session || !actionId || !Array.isArray(session.pendingActions)) return;
-  session.pendingActions = session.pendingActions.filter((item) => item.actionId !== actionId);
+function currentPendingActions(session) {
+  if (!session.authoritative || session.executionVersion !== 2 || session.phase !== 'awaiting_approval' ||
+      session.workflow !== 'iterative' || !session.currentRunId) return [];
+  return (session.pendingApprovals || []).map((actionId) => ({
+    ...currentActionDetails(session, actionId),
+    actionId, runId: session.currentRunId, sessionId: session.sessionId
+  }));
 }
 
 function eventTimestamp(item) {
@@ -318,6 +312,7 @@ function sortTranscript(items) {
 function refreshSessions() {
   for (const session of sessionMap.values()) {
     session.transcript = sortTranscript(Array.from(eventMap.values()).filter((item) => item.sessionId === session.sessionId));
+    session.pendingActions = currentPendingActions(session);
   }
 
   const values = Array.from(sessionMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -328,13 +323,6 @@ function refreshSessions() {
   persistAssistantTranscriptCache();
 }
 
-function currentPendingActions(session) {
-  if (session.executionVersion !== 2 || session.phase !== 'awaiting_approval' || session.workflow !== 'iterative') return [];
-  return session.pendingApprovals.map((actionId) => ({
-    ...(session.actionDetails?.[`${session.currentRunId}:${actionId}`] || {}),
-    actionId, runId: session.currentRunId, sessionId: session.sessionId
-  }));
-}
 
 function applySessionEvent(event) {
   const parsed = parseAssistantSessionEvent(event);
@@ -346,10 +334,16 @@ function applySessionEvent(event) {
     if (participants.length === 0 && parsed.operatorPubkey && parsed.operatorPubkey !== assistantConnection.operatorPubkey) return false;
   }
   const session = ensureSession(parsed.sessionId);
+  // v1 and v2 use different coordinates; v2 always outranks v1 history.
   if (session.executionVersion === 2 && parsed.executionVersion !== 2) return false;
-  if (session.authoritative && session.executionVersion === parsed.executionVersion && session.sessionEvent?.event &&
-      !shouldAcceptReplaceableEvent(session.sessionEvent.event, event)) return false;
-  const actionDetails = session.actionDetails || {};
+  // Within one coordinate, plain NIP-01 replaceable ordering applies to every
+  // known projection, cached or live. Payload execution_revision never
+  // overrides it. The same event re-delivered by a relay confirms a cached view.
+  const known = session.executionVersion === parsed.executionVersion ? session.sessionEvent?.event : null;
+  if (known) {
+    const confirmsCachedView = known.id === event.id && !session.authoritative;
+    if (!confirmsCachedView && !shouldAcceptReplaceableEvent(known, event)) return false;
+  }
   Object.assign(session, {
     state: parsed.state, operatorPubkey: parsed.operatorPubkey, participants: parsed.participants,
     assistantId: parsed.assistantId, assistantPubkey: parsed.assistantPubkey,
@@ -363,12 +357,11 @@ function applySessionEvent(event) {
     phase: parsed.phase, scope: parsed.scope, proposal: parsed.proposal,
     pendingApprovals: parsed.pendingApprovals, submittedEffects: parsed.submittedEffects,
     uncertainEffects: parsed.uncertainEffects, checkpointEventId: parsed.checkpointEventId,
-    metadata: {}, actionDetails, authoritative: parsed.executionVersion === 2,
+    metadata: {}, authoritative: parsed.executionVersion === 2,
     updatedAt: Math.max(session.updatedAt || 0, parsed.createdAt || 0),
     sessionEvent: { id: parsed.id, createdAt: parsed.createdAt,
       event: { id: event.id, created_at: event.created_at, kind: event.kind, pubkey: event.pubkey, tags: event.tags } }
   });
-  session.pendingActions = currentPendingActions(session);
   return true;
 }
 
@@ -419,8 +412,7 @@ function withoutPrivateCommandScope(value) {
 
 function recordAssistantItem(item) {
   if (!item?.sessionId || !item.id) return false;
-  item = { ...item, content: withoutPrivateCommandScope(item.content),
-    event: item.event ? { ...item.event, content: '' } : null };
+  item = withoutPrivateCommandScope({ ...item, event: item.event ? { ...item.event, content: '' } : null });
   ensureSession(item.sessionId);
 
   if (item.type === 'status' && item.streaming) {
@@ -444,12 +436,10 @@ function recordAssistantItem(item) {
 
   const session = sessionMap.get(item.sessionId);
   session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || 0);
+  // v1 plan fields are kept only as read-only history; they never feed controls.
   if (session.executionVersion !== 2) {
     if ((item.type === 'status' || item.type === 'result') && item.planHash) session.lastPlanHash = item.planHash;
     if ((item.type === 'status' || item.type === 'result') && item.plan && !session.currentPlan) session.currentPlan = item.plan;
-  } else if (item.type === 'status' && item.phase === 'approval_required' && item.runId === session.currentRunId && item.actionId) {
-    session.actionDetails[`${item.runId}:${item.actionId}`] = pendingActionFromStatus(item);
-    session.pendingActions = currentPendingActions(session);
   }
   if (item.type === 'result' && item.id) session.lastResultId = item.id;
 
@@ -497,20 +487,25 @@ function assistantPendingItem({ sessionId, turnId, prompt }) {
   };
 }
 
-function assistantUnknownOutcomeItem(error, { sessionId, turnId }) {
-  const detail = error?.message || String(error || 'Assistant request failed');
+// A failed prompt RPC never becomes an execution failure: either the service
+// definitively rejected the request, or the outcome is unknown.
+function assistantRequestOutcomeItem(error, { sessionId, turnId }) {
+  const { kind, detail } = classifyAssistantRequestError(error);
+  const rejected = kind === REJECTED || kind === STALE;
+  const status = rejected ? 'request_rejected' : 'outcome_unknown';
+  const summary = rejected ? 'Assistant service rejected the request' : 'Request outcome unknown / reconnecting';
   return {
     type: 'result',
-    id: `assistant-unknown:${sessionId}:${turnId}:${Date.now()}`,
+    id: `assistant-${rejected ? 'rejected' : 'unknown'}:${sessionId}:${turnId}:${Date.now()}`,
     kind: ASSISTANT_KINDS.CONTEXTVM_RESULT,
     pubkey: assistantConnection.servicePubkey,
     createdAt: nowSeconds(),
     sessionId,
     turnId,
-    status: 'outcome_unknown',
-    summary: 'Request outcome unknown / reconnecting',
+    status,
+    summary,
     error: detail,
-    content: { status: 'outcome_unknown', summary: 'Request outcome unknown / reconnecting', error: detail },
+    content: { status, summary, error: detail },
     event: null
   };
 }
@@ -704,15 +699,15 @@ function assistantAcknowledgementItem(response, fallbackSessionId = '') {
 
 export async function publishAssistantPrompt({ prompt, sessionId, workflow = '', routeContext = null, selectedRefs = [], signal } = {}) {
   const cleanPrompt = String(prompt || '').trim();
-  if (!cleanPrompt) throw new Error('Prompt is required');
+  if (!cleanPrompt) throw assistantRequestError(INVALID, 'Prompt is required');
   const resolvedSessionId = sessionId || assistantUi.activeSessionId || activeAssistantSession()?.sessionId || createAssistantSessionId();
   const existing = sessionMap.get(resolvedSessionId);
-  if (existing?.executionVersion === 1) throw new Error('Historical v1 sessions are read-only; start a new session');
-  if (existing?.executionVersion === 2 && !['completed', 'failed', 'cancelled'].includes(existing.phase)) throw new Error('An assistant run is already active');
-  if (Array.from(pendingMap.values()).some((value) => value.sessionId === resolvedSessionId)) throw new Error('An assistant request is already pending');
-  if (workflow && !['batch', 'iterative'].includes(workflow)) throw new Error('Invalid assistant workflow');
+  if (existing?.executionVersion === 1) throw assistantRequestError(INVALID, 'Historical v1 sessions are read-only; start a new session');
+  if (existing?.executionVersion === 2 && !TERMINAL_PHASES.includes(existing.phase)) throw assistantRequestError(INVALID, 'An assistant run is already active');
+  if (Array.from(pendingMap.values()).some((value) => value.sessionId === resolvedSessionId)) throw assistantRequestError(INVALID, 'An assistant request is already pending');
+  if (workflow && !['batch', 'iterative'].includes(workflow)) throw assistantRequestError(INVALID, 'Invalid assistant workflow');
   if (existing?.workflow && workflow && workflow !== existing.workflow &&
-      (!['completed', 'failed', 'cancelled'].includes(existing.phase) || existing.uncertainEffects)) throw new Error('Workflow change requires a finished run with no unresolved effects');
+      (!TERMINAL_PHASES.includes(existing.phase) || existing.uncertainEffects)) throw assistantRequestError(INVALID, 'Workflow change requires a finished run with no unresolved effects');
   const selectedWorkflow = workflow || existing?.workflow || '';
   const turnId = globalThis.crypto?.randomUUID?.() || `${Date.now()}`;
   const content = {
@@ -756,6 +751,7 @@ export async function publishAssistantPrompt({ prompt, sessionId, workflow = '',
       signal,
       timeoutMs: ASSISTANT_PROMPT_TIMEOUT_MS
     });
+    assertAssistantRequestAccepted(response);
 
     pendingMap.delete(pendingItem.id);
     syncPendingRequests();
@@ -766,7 +762,7 @@ export async function publishAssistantPrompt({ prompt, sessionId, workflow = '',
     pendingMap.delete(pendingItem.id);
     syncPendingRequests();
     removeLocalAssistantItem(pendingItem.id);
-    applyLocalAssistantItem(assistantUnknownOutcomeItem(err, { sessionId: resolvedSessionId, turnId }));
+    applyLocalAssistantItem(assistantRequestOutcomeItem(err, { sessionId: resolvedSessionId, turnId }));
     throw err;
   }
 }
@@ -774,70 +770,89 @@ export async function publishAssistantPrompt({ prompt, sessionId, workflow = '',
 function currentV2Session(sessionId, runId) {
   const session = sessionMap.get(sessionId);
   if (!session?.authoritative || session.executionVersion !== 2 || !session.currentRunId || session.currentRunId !== runId) {
-    throw new Error('Current v2 run required; reload the session');
+    throw assistantRequestError(STALE, 'Current v2 run required; reload the session', 'run_not_current');
   }
   return session;
 }
 
+function requestId() {
+  return globalThis.crypto?.randomUUID?.() || createAssistantSessionId();
+}
+
+async function batchApprovalHash(input) {
+  try {
+    return (await computeAssistantBatchApprovalHash(input)).hash;
+  } catch (err) {
+    throw assistantRequestError(INVALID, `Plan cannot be approved: ${err?.message || String(err)}`);
+  }
+}
+
 export async function publishAssistantApproval({ sessionId, runId, proposalId, baseRevision, basePlanHash,
   decision, message = '', modifiedPlan = null, signal } = {}) {
-  if (!['approve', 'reject'].includes(decision)) throw new Error('Decision must be approve or reject');
+  if (!['approve', 'reject'].includes(decision)) throw assistantRequestError(INVALID, 'Decision must be approve or reject');
   const session = currentV2Session(sessionId, runId);
   const proposal = session.proposal;
   if (session.workflow !== 'batch' || session.phase !== 'awaiting_approval' || !proposal ||
     proposal.proposal_id !== proposalId || proposal.revision !== baseRevision || proposal.hash !== basePlanHash ||
-    !session.pendingApprovals.includes(proposalId)) throw new Error('Proposal changed; reload and review the current proposal');
-  const approvedRevision = modifiedPlan ? baseRevision + 1 : baseRevision;
-  const candidate = modifiedPlan || proposal.plan;
-  const { hash } = await computeAssistantBatchApprovalHash({ sessionId, runId, proposalId,
-    revision: approvedRevision, scope: session.scope, plan: candidate });
-  if (!modifiedPlan && hash !== basePlanHash) throw new Error('Proposal hash does not match the public scope commitment');
-  const content = { contract_version: 2, request_id: globalThis.crypto?.randomUUID?.() || createAssistantSessionId(), session_id: sessionId,
+    !session.pendingApprovals.includes(proposalId)) throw assistantRequestError(STALE, 'Proposal changed; reload and review the current proposal', 'proposal_changed');
+  // Recompute the base hash from the public projection: a mismatch means this
+  // browser is not looking at what the service will verify, so nothing is sent.
+  const baseHash = await batchApprovalHash({ sessionId, runId, proposalId, revision: baseRevision, scope: session.scope, plan: proposal.plan });
+  if (baseHash !== basePlanHash) throw assistantRequestError(STALE, 'Proposal hash does not match the public scope commitment; reload the current proposal', 'proposal_hash_mismatch');
+  // Only an approval can carry edits; a rejection closes the base revision.
+  const edited = decision === 'approve' && Boolean(modifiedPlan);
+  const approvedRevision = edited ? baseRevision + 1 : baseRevision;
+  const approvedHash = edited
+    ? await batchApprovalHash({ sessionId, runId, proposalId, revision: approvedRevision, scope: session.scope, plan: modifiedPlan })
+    : baseHash;
+  const content = { contract_version: 2, request_id: requestId(), session_id: sessionId,
     run_id: runId, workflow: 'batch', proposal_id: proposalId, base_revision: baseRevision,
-    base_plan_hash: basePlanHash, approved_revision: approvedRevision, approved_plan_hash: hash, decision };
+    base_plan_hash: basePlanHash, approved_revision: approvedRevision, approved_plan_hash: approvedHash, decision };
   if (message) content.message = message;
-  if (modifiedPlan && decision === 'approve') content.modified_plan = normalizeAssistantExecutablePlan(candidate);
+  if (edited) content.modified_plan = normalizeAssistantExecutablePlan(modifiedPlan);
   const response = await requestEncryptedResult({ operation: 'assistant/approval', payload: content,
     tags: [['session', sessionId], ['run', runId], ['decision', decision]], signal,
     timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS });
+  assertAssistantRequestAccepted(response);
   applyLocalAssistantItem(assistantAcknowledgementItem(response, sessionId));
   return response;
 }
 
 export async function publishAssistantActionDecision({ sessionId, runId, actionId, decision, reason = '', signal } = {}) {
-  if (!['approve', 'reject'].includes(decision)) throw new Error('Action decision must be approve or reject');
+  if (!['approve', 'reject'].includes(decision)) throw assistantRequestError(INVALID, 'Action decision must be approve or reject');
   const session = currentV2Session(sessionId, runId);
   if (session.workflow !== 'iterative' || session.phase !== 'awaiting_approval' || !session.pendingApprovals.includes(actionId)) {
-    throw new Error('Action changed; reload the current run');
+    throw assistantRequestError(STALE, 'Action changed; reload the current run', 'action_not_pending');
   }
-  const content = { contract_version: 2, request_id: globalThis.crypto?.randomUUID?.() || createAssistantSessionId(), session_id: sessionId,
+  const content = { contract_version: 2, request_id: requestId(), session_id: sessionId,
     run_id: runId, workflow: 'iterative', action_id: actionId, decision };
   if (reason) content.reason = reason;
   const response = await requestEncryptedResult({ operation: 'assistant/approval', payload: content,
     tags: [['session', sessionId], ['run', runId], ['action', actionId], ['decision', decision]],
     signal, timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS });
+  assertAssistantRequestAccepted(response);
   applyLocalAssistantItem(assistantAcknowledgementItem(response, sessionId));
   return response;
 }
 
 export async function publishAssistantCancellation({ sessionId, runId, scope = 'run', reason = '', signal } = {}) {
+  if (!['run', 'session'].includes(scope)) throw assistantRequestError(INVALID, 'Cancellation scope must be run or session');
   const session = currentV2Session(sessionId, runId);
-  if (!['proposing', 'awaiting_approval', 'executing', 'waiting_async', 'blocked'].includes(session.phase)) throw new Error('Run is not cancellable');
-  if (!['run', 'session'].includes(scope)) throw new Error('Cancellation scope must be run or session');
+  if (!CANCELLABLE_PHASES.includes(session.phase)) throw assistantRequestError(STALE, 'Run is no longer cancellable', 'run_not_cancellable');
   const content = { contract_version: 2, session_id: sessionId, run_id: runId, scope };
   if (reason) content.reason = reason;
-  return requestEncryptedResult({ operation: 'assistant/cancel', payload: content,
-    tags: [['session', sessionId], ['run', runId]], signal, timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS });
+  return assertAssistantRequestAccepted(await requestEncryptedResult({ operation: 'assistant/cancel', payload: content,
+    tags: [['session', sessionId], ['run', runId]], signal, timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS }));
 }
 
 export async function publishAssistantReconciliation({ sessionId, runId, workId, requestEventId, signal } = {}) {
+  if (!workId?.trim() || !/^[0-9a-f]{64}$/.test(requestEventId || '')) throw assistantRequestError(INVALID, 'Exact work ID and 64-character request-event ID required');
   const session = currentV2Session(sessionId, runId);
-  if (!session.uncertainEffects) throw new Error('No uncertain work in this run');
-  if (!workId?.trim() || !/^[0-9a-f]{64}$/.test(requestEventId || '')) throw new Error('Exact work ID and 64-character request-event ID required');
-  return requestEncryptedResult({ operation: 'assistant/reconcile',
+  if (!session.uncertainEffects) throw assistantRequestError(STALE, 'No uncertain work in this run', 'no_uncertain_work');
+  return assertAssistantRequestAccepted(await requestEncryptedResult({ operation: 'assistant/reconcile',
     payload: { contract_version: 2, session_id: sessionId, run_id: runId,
       work_id: workId.trim(), request_event_id: requestEventId },
-    tags: [['session', sessionId], ['run', runId]], signal, timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS });
+    tags: [['session', sessionId], ['run', runId]], signal, timeoutMs: ASSISTANT_APPROVAL_TIMEOUT_MS }));
 }
 
 export function downstreamRequestsForTurn(item) {

@@ -1,49 +1,85 @@
 <script>
   import { publishAssistantApproval, bootstrapAssistant } from '$lib/stores/assistant.svelte.js';
-  import { parseAssistantArgumentObjectText } from '$lib/nostr/assistant.js';
+  import {
+    ASSISTANT_REQUEST_ERROR_KINDS,
+    canonicalAssistantJson,
+    describeAssistantRequestError,
+    parseAssistantArgumentObjectText
+  } from '$lib/nostr/assistant.js';
 
   let { session = null, disabled = false } = $props();
   let submitting = $state(false);
+  // Set once the service acknowledged a decision. The card stays (locked) until
+  // the canonical projection records the proposal as consumed.
+  let sentDecision = $state('');
   let error = $state('');
   let stale = $state(false);
   let editedPlan = $state(null);
-  let originalPlanJSON = 'null';
+  let originalPlanKey = '';
   let lastIdentity = '';
   let draftIdentity = $state('');
+  let previousDraft = $state('');
   let argsTextByStep = $state({});
   let argsErrorsByStep = $state({});
   const proposal = $derived(session?.proposal || null);
   const sessionId = $derived(session?.sessionId || '');
   const riskLevel = $derived(String(editedPlan?.risk_level || 'low').toLowerCase());
   const steps = $derived(Array.isArray(editedPlan?.steps) ? editedPlan.steps : []);
-  const isModified = $derived(Boolean(editedPlan && JSON.stringify(editedPlan) !== originalPlanJSON));
+  const isModified = $derived(Boolean(editedPlan) && planKey(editedPlan) !== originalPlanKey);
   const hasInvalidArgs = $derived(Object.keys(argsErrorsByStep).length > 0);
+  // The draft is bound to one run + proposal + revision + hash.
   const currentIdentity = $derived(`${session?.currentRunId || ''}:${proposal?.proposal_id || ''}:${proposal?.revision || ''}:${proposal?.hash || ''}`);
+  const proposalMoved = $derived(Boolean(draftIdentity) && currentIdentity !== draftIdentity);
+  const locked = $derived(disabled || submitting || stale || Boolean(sentDecision));
 
   function clone(value) { return value ? JSON.parse(JSON.stringify(value)) : null; }
   function stepKey(step, index) { return step?.step_id || String(index); }
   function formatArgs(step) { return JSON.stringify(step?.tool_args || {}, null, 2); }
-  async function reloadProposal() {
-    if (stale && currentIdentity === draftIdentity) {
-      await bootstrapAssistant({ force: true });
-      return;
-    }
+  // Argument key order is not an edit; compare canonical JSON.
+  function planKey(plan) {
+    try { return canonicalAssistantJson(clone(plan)); } catch { return JSON.stringify(plan); }
+  }
+  function draftSnapshot() {
+    const draft = clone(editedPlan) || {};
+    draft.steps = (draft.steps || []).map((step, index) => {
+      const text = argsTextByStep[stepKey(step, index)];
+      try { return { ...step, tool_args: parseAssistantArgumentObjectText(text) }; } catch { return { ...step, tool_args_text: text }; }
+    });
+    return JSON.stringify(draft, null, 2);
+  }
+
+  function loadCurrentProposal() {
+    const plan = clone(proposal?.plan);
     draftIdentity = currentIdentity;
-    editedPlan = clone(proposal?.plan);
-    originalPlanJSON = JSON.stringify(editedPlan);
-    argsTextByStep = Object.fromEntries((editedPlan?.steps || []).map((step, i) => [stepKey(step, i), formatArgs(step)]));
+    originalPlanKey = planKey(plan);
+    editedPlan = plan;
+    argsTextByStep = Object.fromEntries((plan?.steps || []).map((step, i) => [stepKey(step, i), formatArgs(step)]));
     argsErrorsByStep = {};
     stale = false;
+    sentDecision = '';
     error = '';
+  }
+
+  // Replacing the draft is always an explicit operator choice; the unsent
+  // draft stays readable so edits can be re-applied to the new proposal.
+  function reviewCurrentProposal() {
+    if (isModified || hasInvalidArgs) previousDraft = draftSnapshot();
+    loadCurrentProposal();
+  }
+
+  async function refreshCanonicalState() {
+    await bootstrapAssistant({ force: true });
   }
 
   $effect.pre(() => {
     const identity = currentIdentity;
-    if (identity !== lastIdentity) {
-      lastIdentity = identity;
-      if (editedPlan && (isModified || Object.keys(argsErrorsByStep).length)) stale = true;
-      else reloadProposal();
-    }
+    if (identity === lastIdentity) return;
+    lastIdentity = identity;
+    // Keep unsent edits when the canonical proposal moves on underneath them.
+    if (editedPlan && (isModified || hasInvalidArgs)) {
+      stale = true;
+      sentDecision = '';
+    } else loadCurrentProposal();
   });
 
   function removeStep(index) {
@@ -75,18 +111,18 @@
     }
   }
   async function decide(decision) {
-    if (!sessionId || !proposal || submitting || stale || (decision === 'approve' && hasInvalidArgs)) return;
+    if (!sessionId || !proposal || locked || (decision === 'approve' && hasInvalidArgs)) return;
     submitting = true;
     error = '';
     try {
       await publishAssistantApproval({ sessionId, runId: session.currentRunId,
         proposalId: proposal.proposal_id, baseRevision: proposal.revision, basePlanHash: proposal.hash,
         decision, modifiedPlan: decision === 'approve' && isModified ? clone(editedPlan) : null });
+      sentDecision = decision;
     } catch (err) {
-      const detail = err?.message || String(err);
-      if (/stale|proposal.changed|revision|requires.review/i.test(detail)) {
-        stale = true; error = detail;
-      } else error = `Request outcome unknown / reconnecting: ${detail}`;
+      const described = describeAssistantRequestError(err, decision === 'approve' ? 'Approval' : 'Rejection');
+      if (described.kind === ASSISTANT_REQUEST_ERROR_KINDS.STALE) stale = true;
+      error = described.message;
     } finally {
       submitting = false;
     }
@@ -94,10 +130,10 @@
 </script>
 
 {#if editedPlan && proposal}
-  <section class="plan-card" aria-label="Assistant plan approval">
+  <section class="plan-card" aria-label="Assistant plan approval" data-proposal-id={proposal.proposal_id} data-revision={proposal.revision}>
     <div class="plan-header">
       <div>
-        <div class="eyebrow">Plan review</div>
+        <div class="eyebrow">Plan review · revision {proposal.revision}</div>
         <h3>{editedPlan.summary || 'Assistant plan'}</h3>
       </div>
       <span class="risk {riskLevel}">{riskLevel}</span>
@@ -110,9 +146,9 @@
             <div class="step-row">
               <div class="step-title">{step.title || `Step ${index + 1}`}</div>
               <div class="step-actions">
-                <button type="button" class="mini" disabled={disabled || submitting || index === 0} onclick={() => moveStep(index, -1)}>↑</button>
-                <button type="button" class="mini" disabled={disabled || submitting || index === steps.length - 1} onclick={() => moveStep(index, 1)}>↓</button>
-                <button type="button" class="mini danger" disabled={disabled || submitting} onclick={() => removeStep(index)} aria-label="Remove step">×</button>
+                <button type="button" class="mini" aria-label="Move step up" disabled={locked || index === 0} onclick={() => moveStep(index, -1)}>↑</button>
+                <button type="button" class="mini" aria-label="Move step down" disabled={locked || index === steps.length - 1} onclick={() => moveStep(index, 1)}>↓</button>
+                <button type="button" class="mini danger" disabled={locked} onclick={() => removeStep(index)} aria-label="Remove step">×</button>
               </div>
             </div>
             {#if step.description}
@@ -122,29 +158,45 @@
             <pre class="args-preview">{argsTextByStep[stepKey(step, index)] ?? '{}'}</pre>
             <label>
               <span>Tool args JSON</span>
-              <textarea disabled={disabled || submitting} value={argsTextByStep[stepKey(step, index)] ?? '{}'} oninput={(event) => updateStepArgs(index, event.currentTarget.value)}></textarea>
+              <textarea disabled={disabled || submitting || Boolean(sentDecision)} value={argsTextByStep[stepKey(step, index)] ?? '{}'} oninput={(event) => updateStepArgs(index, event.currentTarget.value)}></textarea>
             </label>
             {#if argsErrorsByStep[stepKey(step, index)]}<p class="error">Invalid JSON: {argsErrorsByStep[stepKey(step, index)]}</p>{/if}
           </li>
         {/each}
       </ol>
+    {:else}
+      <p class="modified">All steps removed. Approval completes this batch without dispatching anything.</p>
     {/if}
 
     {#if isModified}
-      <p class="modified">Plan edited. Approval will submit the modified plan.</p>
+      <p class="modified">Plan edited. Approval submits it as revision {proposal.revision + 1} of this proposal.</p>
     {/if}
 
     {#if stale}
-      <p class="error">Proposal changed. Your local edits are preserved. Reload and review the current proposal before deciding.</p>
-      <button type="button" class="reload" onclick={reloadProposal}>{currentIdentity === draftIdentity ? 'Refresh current proposal' : 'Reload and review current proposal'}</button>
+      <p class="error stale">Proposal changed. Your local edits are preserved and were not submitted. Review the current proposal before deciding.</p>
+      <div class="stale-actions">
+        <button type="button" class="reload" onclick={reviewCurrentProposal}>{proposalMoved ? 'Review current proposal' : 'Discard edits and review current proposal'}</button>
+        {#if !proposalMoved}
+          <button type="button" class="refresh" onclick={refreshCanonicalState}>Refresh canonical state</button>
+        {/if}
+      </div>
     {/if}
     {#if error}
-      <p class="error">{error}</p>
+      <p class="error" role="alert">{error}</p>
+    {/if}
+    {#if sentDecision}
+      <p class="sent" role="status">Decision sent ({sentDecision}); waiting for the canonical execution state to record it.</p>
+    {/if}
+    {#if previousDraft}
+      <details class="previous-draft">
+        <summary>Previous unsent draft</summary>
+        <pre>{previousDraft}</pre>
+      </details>
     {/if}
 
     <div class="actions">
-      <button type="button" class="approve" disabled={disabled || submitting || stale || hasInvalidArgs} onclick={() => decide('approve')}>Approve</button>
-      <button type="button" class="reject" disabled={disabled || submitting || stale} onclick={() => decide('reject')}>Reject</button>
+      <button type="button" class="approve" disabled={locked || hasInvalidArgs} onclick={() => decide('approve')}>Approve</button>
+      <button type="button" class="reject" disabled={locked} onclick={() => decide('reject')}>Reject</button>
     </div>
   </section>
 {/if}
@@ -180,5 +232,8 @@
   .reject { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); }
   .modified { color: var(--warning); }
   .error { color: var(--error); }
-  .reload { margin-top: 0.5rem; background: var(--hover-bg); color: var(--text-primary); }
+  .stale-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+  .reload, .refresh { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); }
+  .sent { color: var(--text-primary); }
+  .previous-draft pre { max-height: 10rem; overflow: auto; font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
