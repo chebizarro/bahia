@@ -24,25 +24,14 @@ const assistantDelegateSubagentToolName = "bahia_assistant_delegate_subagent"
 // subagent cannot run away independently of the parent turn's guards.
 const defaultAssistantSubagentMaxIterations = 6
 
-// assistantInternalTool is a service-owned tool executed directly by the agent
-// loop instead of routed to the MCP server. Internal tools (subagent delegation,
-// skill loading) are read-only from the perspective of the external control
-// plane: they never publish async mutation intents themselves.
-type assistantInternalTool struct {
-	name        string
-	description string
-	inputSchema map[string]any
-	effect      domain.AssistantToolEffect
-	risk        domain.AssistantToolRisk
-	handler     func(ctx context.Context, run assistantAgentLoopRun, call domain.AssistantAgentToolCall) (*domain.AssistantToolObservation, error)
-}
-
-func (t *assistantInternalTool) schema() llm.AgentToolSchema {
+// assistantInternalToolSchema advertises an internal tool to the model. The
+// executor dispatches it through the common runtime gate like any other work.
+func assistantInternalToolSchema(tool AssistantInternalTool) llm.AgentToolSchema {
 	return llm.AgentToolSchema{
-		Name:        t.name,
-		Description: t.description,
-		InputSchema: t.inputSchema,
-		Metadata:    map[string]any{"internal": true, "effect": string(t.effect), "risk": string(t.risk)},
+		Name:        tool.Name,
+		Description: tool.Description,
+		InputSchema: tool.InputSchema,
+		Metadata:    map[string]any{"internal": true, "effect": string(tool.Effect), "risk": string(tool.Risk)},
 	}
 }
 
@@ -159,14 +148,14 @@ func ParseAssistantSubagent(content, sourcePath string) (AssistantSubagentSpec, 
 }
 
 // buildDelegateSubagentTool constructs the internal delegation tool bound to the
-// loaded subagent library and this loop's model/tool-runtime dependencies.
-func (l *AssistantAgentLoop) buildDelegateSubagentTool() *assistantInternalTool {
-	return &assistantInternalTool{
-		name:        assistantDelegateSubagentToolName,
-		description: "Delegate a scoped sub-task to a configured Bahia subagent and return its synchronous result. Provide the subagent name and the task to hand off.",
-		effect:      domain.AssistantToolEffectRead,
-		risk:        domain.AssistantToolRiskLow,
-		inputSchema: map[string]any{
+// loaded subagent library and this proposer's model/runtime dependencies.
+func (l *AssistantAgentLoop) buildDelegateSubagentTool() AssistantInternalTool {
+	return AssistantInternalTool{
+		Name:        assistantDelegateSubagentToolName,
+		Description: "Delegate a scoped sub-task to a configured Bahia subagent and return its synchronous result. Provide the subagent name and the task to hand off.",
+		Effect:      domain.AssistantToolEffectRead,
+		Risk:        domain.AssistantToolRiskLow,
+		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"subagent": map[string]any{"type": "string", "description": "Name of the configured subagent to delegate to."},
@@ -175,14 +164,12 @@ func (l *AssistantAgentLoop) buildDelegateSubagentTool() *assistantInternalTool 
 			},
 			"required": []any{"subagent", "task"},
 		},
-		handler: l.runDelegateSubagent,
+		Handler: l.runDelegateSubagent,
 	}
 }
 
-func (l *AssistantAgentLoop) runDelegateSubagent(ctx context.Context, run assistantAgentLoopRun, call domain.AssistantAgentToolCall) (*domain.AssistantToolObservation, error) {
-	if run.depth > 0 {
-		return l.internalToolObservation(call, domain.AssistantToolObservationDenied, "nested subagent delegation is not permitted", nil), nil
-	}
+func (l *AssistantAgentLoop) runDelegateSubagent(ctx context.Context, parent AssistantInternalToolCall) (*domain.AssistantToolObservation, error) {
+	call := parent.ToolCall
 	name := strings.TrimSpace(stringFromAnyMapAny(call.Arguments, "subagent"))
 	task := strings.TrimSpace(stringFromAnyMapAny(call.Arguments, "task"))
 	if name == "" || task == "" {
@@ -193,7 +180,7 @@ func (l *AssistantAgentLoop) runDelegateSubagent(ctx context.Context, run assist
 		return l.internalToolObservation(call, domain.AssistantToolObservationFailed, fmt.Sprintf("unknown subagent %q", name), nil), nil
 	}
 	extra := strings.TrimSpace(stringFromAnyMapAny(call.Arguments, "context"))
-	result, err := l.runSubagentLoop(ctx, run, spec, task, extra)
+	result, err := l.runSubagentLoop(ctx, parent, spec, task, extra)
 	if err != nil {
 		return l.internalToolObservation(call, domain.AssistantToolObservationFailed, err.Error(), nil), nil
 	}
@@ -202,7 +189,7 @@ func (l *AssistantAgentLoop) runDelegateSubagent(ctx context.Context, run assist
 	// back to the parent model as an observation.
 	if l.hooks != nil {
 		outcome := l.hooks.Run(ctx, AssistantHookEventSubagentStop, AssistantHookInput{
-			SessionID: run.session.SessionID,
+			SessionID: parent.SessionID,
 			ToolName:  assistantDelegateSubagentToolName,
 			Text:      result.text,
 			Extra:     map[string]any{"subagent": spec.Name, "iterations": result.iterations},
@@ -228,14 +215,25 @@ type assistantSubagentResult struct {
 	toolCalls  int
 }
 
-func (l *AssistantAgentLoop) runSubagentLoop(ctx context.Context, parent assistantAgentLoopRun, spec AssistantSubagentSpec, task, extra string) (assistantSubagentResult, error) {
+// runSubagentLoop runs a bounded child model loop. Child tool calls go through
+// the runtime's subagent gate: the parent run's persisted command scope, the
+// current permission policy and hooks apply, and only allowed synchronous MCP
+// tools run. The child has no session of its own and never touches the
+// parent's execution state.
+func (l *AssistantAgentLoop) runSubagentLoop(ctx context.Context, parent AssistantInternalToolCall, spec AssistantSubagentSpec, task, extra string) (assistantSubagentResult, error) {
 	parentTools, err := l.toolSchemas.AgentToolSchemas(ctx)
 	if err != nil {
 		return assistantSubagentResult{}, fmt.Errorf("load subagent tool schemas: %w", err)
 	}
-	childTools := filterAssistantSubagentSchemas(parentTools, spec.Tools)
-	childRuntime := l.toolRuntime.WithoutSessionEffects()
-	childSession := cloneAssistantSubagentSession(parent.session, spec.Name)
+	inScope := assistantScopeFilter(parent.Scope)
+	scoped := make([]llm.AgentToolSchema, 0, len(parentTools))
+	for _, schema := range parentTools {
+		if inScope(schema.Name) {
+			scoped = append(scoped, schema)
+		}
+	}
+	childTools := filterAssistantSubagentSchemas(scoped, spec.Tools)
+	childSessionID := parent.SessionID + ":subagent:" + spec.Name
 
 	userText := task
 	if extra != "" {
@@ -256,7 +254,7 @@ func (l *AssistantAgentLoop) runSubagentLoop(ctx context.Context, parent assista
 			Messages:   messages,
 			Tools:      childTools,
 			ToolChoice: llm.AgentToolChoice{Mode: llm.AgentToolChoiceAuto},
-			Metadata:   map[string]any{"session_id": childSession.SessionID, "subagent": spec.Name},
+			Metadata:   map[string]any{"session_id": childSessionID, "subagent": spec.Name},
 		}, nil)
 		if err != nil {
 			return result, fmt.Errorf("subagent %q model error: %w", spec.Name, err)
@@ -272,7 +270,7 @@ func (l *AssistantAgentLoop) runSubagentLoop(ctx context.Context, parent assista
 		}
 		for _, toolCall := range resp.ToolCalls {
 			result.toolCalls++
-			obs := l.executeSubagentToolCall(ctx, childRuntime, childSession, allowed, toolCall)
+			obs := l.executeSubagentToolCall(ctx, parent, childSessionID, allowed, toolCall)
 			messages = append(messages, assistantToolObservationMessage(obs))
 		}
 	}
@@ -280,7 +278,7 @@ func (l *AssistantAgentLoop) runSubagentLoop(ctx context.Context, parent assista
 	return result, nil
 }
 
-func (l *AssistantAgentLoop) executeSubagentToolCall(ctx context.Context, childRuntime *AssistantToolRuntime, childSession *domain.AssistantSession, allowed map[string]bool, toolCall domain.AssistantAgentToolCall) *domain.AssistantToolObservation {
+func (l *AssistantAgentLoop) executeSubagentToolCall(ctx context.Context, parent AssistantInternalToolCall, childSessionID string, allowed map[string]bool, toolCall domain.AssistantAgentToolCall) *domain.AssistantToolObservation {
 	name := strings.TrimSpace(toolCall.Name)
 	if name == assistantDelegateSubagentToolName {
 		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, "nested subagent delegation is not permitted", nil)
@@ -288,24 +286,10 @@ func (l *AssistantAgentLoop) executeSubagentToolCall(ctx context.Context, childR
 	if allowed != nil && !allowed[name] {
 		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, fmt.Sprintf("tool %q is not in this subagent's allowed tool set", name), nil)
 	}
-	descriptor, ok := l.toolRuntime.AgentToolDescriptor(name)
-	if !ok {
-		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, fmt.Sprintf("tool %q is not registered for agent use", name), nil)
+	if l.toolRuntime == nil {
+		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, "assistant tool runtime is not configured", nil)
 	}
-	if descriptor.ExecutionMode == domain.AssistantToolExecutionModeAsync {
-		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, fmt.Sprintf("subagents cannot execute async tool %q; it must run in the parent turn", name), nil)
-	}
-	obs, err := childRuntime.Execute(ctx, AssistantToolRuntimeRequest{Session: childSession, RunID: "subagent", ToolCall: toolCall})
-	if err != nil {
-		return l.internalToolObservation(toolCall, domain.AssistantToolObservationFailed, err.Error(), nil)
-	}
-	if obs == nil {
-		return l.internalToolObservation(toolCall, domain.AssistantToolObservationFailed, "subagent tool runtime returned no observation", nil)
-	}
-	if obs.Status == domain.AssistantToolObservationDeferred || obs.Status == domain.AssistantToolObservationWaitingAsync {
-		return l.internalToolObservation(toolCall, domain.AssistantToolObservationDenied, fmt.Sprintf("tool %q requires approval or async execution and is unavailable to subagents", name), nil)
-	}
-	return obs
+	return l.toolRuntime.ExecuteSubagentTool(ctx, parent, childSessionID, toolCall)
 }
 
 func (l *AssistantAgentLoop) internalToolObservation(call domain.AssistantAgentToolCall, status domain.AssistantToolObservationStatus, summary string, metadata map[string]any) *domain.AssistantToolObservation {
@@ -332,18 +316,6 @@ func (l *AssistantAgentLoop) internalToolObservation(call domain.AssistantAgentT
 		obs.Content = assistantTextBlocks(summary)
 	}
 	return obs
-}
-
-func cloneAssistantSubagentSession(parent *domain.AssistantSession, name string) *domain.AssistantSession {
-	child := &domain.AssistantSession{
-		SessionID:      parent.SessionID + ":subagent:" + name,
-		State:          domain.AssistantSessionStateExecuting,
-		OperatorPubkey: parent.OperatorPubkey,
-		Participants:   append([]string(nil), parent.Participants...),
-		AssistantID:    parent.AssistantID,
-		Metadata:       map[string]any{},
-	}
-	return child
 }
 
 func filterAssistantSubagentSchemas(all []llm.AgentToolSchema, allowed []string) []llm.AgentToolSchema {

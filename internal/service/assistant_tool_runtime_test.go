@@ -3,284 +3,16 @@ package service
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-func TestAssistantToolRuntimeSyncReadReturnsCompletedObservation(t *testing.T) {
-	session := assistantRuntimeSession("session-sync")
-	server := &assistantRuntimeMCPServer{syncResult: &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"services":[{"name":"api"}],"total":1}`}}}}
-	runtime := newAssistantRuntimeForTest(t, server, assistantRuntimeRegistryWith(syncDescriptor("bahia_list_services")), domain.AssistantPermissionModeReview, nil, nil)
-
-	obs, err := runtime.Execute(context.Background(), AssistantToolRuntimeRequest{Session: session, RunID: "run-1", Iteration: 1, ToolCall: domain.AssistantAgentToolCall{ID: "call-sync", Name: "bahia_list_services"}})
-	if err != nil {
-		t.Fatalf("Execute sync: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationSucceeded || obs.ToolCallID != "call-sync" || obs.ToolName != "bahia_list_services" {
-		t.Fatalf("observation = %#v", obs)
-	}
-	if got := obs.Result["total"]; got != float64(1) {
-		t.Fatalf("result total = %#v", got)
-	}
-	if server.callCount() != 1 || server.invokeCount() != 0 {
-		t.Fatalf("server calls: call=%d invoke=%d", server.callCount(), server.invokeCount())
-	}
-	metadata := assistantAgentLoopMetadata(session)
-	if metadata.State != domain.AssistantAgentLoopStateRunning || metadata.LastObservationID != obs.ObservationID {
-		t.Fatalf("metadata = %#v", metadata)
-	}
-}
-
-func TestAssistantToolRuntimeAsyncAllowedSuspendsThenResumesLiveSuccess(t *testing.T) {
-	session := assistantRuntimeSession("session-async-live")
-	receipt := assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-live")
-	server := &assistantRuntimeMCPServer{asyncReceipt: receipt}
-	subscriber := newBlockingAssistantTestSubscriber()
-	observer := newTestAssistantOrchestrator(t, &assistantTestPublisher{}, &assistantTestToolInvoker{}, nil, subscriber, nil)
-	runtime := newAssistantRuntimeForTest(t, server, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, observer, nil)
-
-	obs, err := runtime.Execute(context.Background(), AssistantToolRuntimeRequest{Session: session, RunID: "run-live", Iteration: 2, ToolCall: domain.AssistantAgentToolCall{ID: "call-async", Name: "bahia_assistant_dns_zone_create", Arguments: map[string]any{"zone": "example.test"}}})
-	if err != nil {
-		t.Fatalf("Execute async: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationWaitingAsync {
-		t.Fatalf("async observation = %#v", obs)
-	}
-	if session.State != domain.AssistantSessionStateExecuting {
-		t.Fatalf("session state = %s", session.State)
-	}
-	metadata := assistantAgentLoopMetadata(session)
-	if metadata.State != domain.AssistantAgentLoopStateWaitingAsync || metadata.WaitingReceipt == nil || metadata.PendingToolCallID != "call-async" {
-		t.Fatalf("waiting metadata = %#v", metadata)
-	}
-	if server.invokeCount() != 1 {
-		t.Fatalf("invoke count = %d", server.invokeCount())
-	}
-
-	resumeDone := make(chan *domain.AssistantToolObservation, 1)
-	go func() {
-		resumed, err := runtime.ResumeAsync(context.Background(), AssistantToolResumeRequest{Session: session})
-		if err != nil {
-			t.Errorf("ResumeAsync: %v", err)
-		}
-		resumeDone <- resumed
-	}()
-	subscriber.waitForSubscription(t)
-	subscriber.publishResult(assistantSignedResultEvent(t, "result-live", 7961, "downstream-live", "completed"))
-
-	resumed := waitRuntimeObservation(t, resumeDone)
-	if resumed.Status != domain.AssistantToolObservationSucceeded || resumed.EventID == "" || resumed.Result["status"] != "completed" {
-		t.Fatalf("resumed observation = %#v", resumed)
-	}
-	metadata = assistantAgentLoopMetadata(session)
-	if metadata.State != domain.AssistantAgentLoopStateRunning || metadata.WaitingReceipt != nil || metadata.PendingToolCallID != "" {
-		t.Fatalf("resumed metadata = %#v", metadata)
-	}
-}
-
-func TestAssistantToolRuntimeAsyncBackfillResultResumes(t *testing.T) {
-	session := assistantRuntimeSession("session-async-backfill")
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-backfill", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-backfill", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-backfill")})
-	session.State = domain.AssistantSessionStateExecuting
-	backfill := &assistantBackfillSubscriber{event: assistantSignedResultEvent(t, "result-backfill", 7961, "downstream-backfill", "completed")}
-	observer := newTestAssistantOrchestrator(t, &assistantTestPublisher{}, &assistantTestToolInvoker{}, nil, backfill, nil)
-	runtime := newAssistantRuntimeForTest(t, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, observer, nil)
-
-	obs, err := runtime.ResumeAsync(context.Background(), AssistantToolResumeRequest{Session: session})
-	if err != nil {
-		t.Fatalf("ResumeAsync backfill: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationSucceeded || obs.EventID == "" {
-		t.Fatalf("backfill observation = %#v", obs)
-	}
-	if backfill.subscribeCount() != 1 {
-		t.Fatalf("subscribe count = %d", backfill.subscribeCount())
-	}
-}
-
-func TestAssistantToolRuntimeAsyncFailureObservation(t *testing.T) {
-	session := assistantRuntimeSession("session-async-failure")
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-fail", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-fail", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-fail")})
-	runtime := newAssistantRuntimeForTest(t, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, &assistantRuntimeObserver{status: "failed", event: assistantSignedResultEvent(t, "result-fail", 7961, "downstream-fail", "failed")}, nil)
-
-	obs, err := runtime.ResumeAsync(context.Background(), AssistantToolResumeRequest{Session: session})
-	if err != nil {
-		t.Fatalf("ResumeAsync failure: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationFailed || obs.Result["status"] != "failed" {
-		t.Fatalf("failure observation = %#v", obs)
-	}
-	if metadata := assistantAgentLoopMetadata(session); metadata.State != domain.AssistantAgentLoopStateRunning {
-		t.Fatalf("metadata = %#v", metadata)
-	}
-}
-
-func TestAssistantToolRuntimeRelayClosedBlocksSession(t *testing.T) {
-	session := assistantRuntimeSession("session-blocked")
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-blocked", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-blocked", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-blocked")})
-	runtime := newAssistantRuntimeForTest(t, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, &assistantRuntimeObserver{status: "blocked", err: errors.New("relay subscription closed before terminal result: relay=wss://relay.test reason=closed")}, nil)
-
-	obs, err := runtime.ResumeAsync(context.Background(), AssistantToolResumeRequest{Session: session})
-	if err != nil {
-		t.Fatalf("ResumeAsync blocked: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationFailed || obs.Metadata["blocked"] != true {
-		t.Fatalf("blocked observation = %#v", obs)
-	}
-	if session.State != domain.AssistantSessionStateBlocked {
-		t.Fatalf("session state = %s", session.State)
-	}
-	if metadata := assistantAgentLoopMetadata(session); metadata.State != domain.AssistantAgentLoopStateBlocked {
-		t.Fatalf("metadata = %#v", metadata)
-	}
-}
-
-func TestAssistantToolRuntimeAskDefersWithoutExecuting(t *testing.T) {
-	session := assistantRuntimeSession("session-ask")
-	server := &assistantRuntimeMCPServer{}
-	runtime := newAssistantRuntimeForTest(t, server, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_service_rollback", domain.AssistantToolRiskHigh)), domain.AssistantPermissionModeReview, nil, nil)
-
-	obs, err := runtime.Execute(context.Background(), AssistantToolRuntimeRequest{Session: session, RunID: "run-ask", TurnID: "turn-1", ToolCall: domain.AssistantAgentToolCall{ID: "call-ask", Name: "bahia_assistant_service_rollback", Arguments: map[string]any{"service_id": "svc", "environment_id": "prod"}}})
-	if err != nil {
-		t.Fatalf("Execute ask: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationDeferred || obs.Deferred == nil || obs.Deferred.ActionID == "" {
-		t.Fatalf("deferred observation = %#v", obs)
-	}
-	if session.State != domain.AssistantSessionStateAwaitingApproval {
-		t.Fatalf("session state = %s", session.State)
-	}
-	if server.invokeCount() != 0 || server.callCount() != 0 {
-		t.Fatalf("server should not execute, call=%d invoke=%d", server.callCount(), server.invokeCount())
-	}
-	actions, _ := session.Metadata[assistantDeferredActionsMetadataKey].(map[string]any)
-	if len(actions) != 1 {
-		t.Fatalf("deferred actions = %#v", session.Metadata[assistantDeferredActionsMetadataKey])
-	}
-}
-
-func TestAssistantToolRuntimeDenyReturnsDeniedObservation(t *testing.T) {
-	session := assistantRuntimeSession("session-deny")
-	server := &assistantRuntimeMCPServer{}
-	rule := AssistantPermissionRule{ID: "deny-dns", Decision: domain.AssistantPermissionDecisionDeny, ToolNames: []string{"bahia_assistant_dns_zone_create"}, Reason: "DNS changes disabled"}
-	runtime := newAssistantRuntimeForTest(t, server, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, nil, []AssistantPermissionRule{rule})
-
-	obs, err := runtime.Execute(context.Background(), AssistantToolRuntimeRequest{Session: session, RunID: "run-deny", ToolCall: domain.AssistantAgentToolCall{ID: "call-deny", Name: "bahia_assistant_dns_zone_create"}})
-	if err != nil {
-		t.Fatalf("Execute deny: %v", err)
-	}
-	if obs.Status != domain.AssistantToolObservationDenied || !strings.Contains(obs.Error, "DNS changes disabled") {
-		t.Fatalf("denied observation = %#v", obs)
-	}
-	if server.invokeCount() != 0 || server.callCount() != 0 {
-		t.Fatalf("server should not execute, call=%d invoke=%d", server.callCount(), server.invokeCount())
-	}
-}
-
-func TestAssistantToolRuntimeRestartRecoveryResumesWaitingAsync(t *testing.T) {
-	session := assistantRuntimeSession("session-restart")
-	session.State = domain.AssistantSessionStateExecuting
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-restart", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-restart", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-restart")})
-	loop := &assistantFakeAgentLoop{asyncResult: &AssistantAgentLoopResult{RunID: "run-restart", TurnID: "turn-1", Iteration: 2, State: domain.AssistantAgentLoopStateCompleted, SessionState: domain.AssistantSessionStateCompleted, Completed: true}}
-	orchestrator := newTestAssistantOrchestrator(t, &assistantTestPublisher{}, &assistantTestToolInvoker{}, nil, nil, nil)
-	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{AgentLoop: loop, Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
-
-	runner.recoverSession(context.Background(), session)
-
-	stored := orchestrator.session("session-restart")
-	if stored == nil {
-		t.Fatal("recovered session was not loaded into orchestrator")
-	}
-	if loop.asyncCalls != 1 {
-		t.Fatalf("ResumeAfterAsyncObservation calls = %d, want 1", loop.asyncCalls)
-	}
-	if loop.lastAsync.Session == nil || loop.lastAsync.Session.SessionID != "session-restart" {
-		t.Fatalf("loop received wrong session: %#v", loop.lastAsync.Session)
-	}
-}
-
-func TestAssistantSessionRecoveryWaitingAsyncWithoutRuntimeBlocks(t *testing.T) {
-	session := assistantRuntimeSession("session-no-runtime")
-	session.State = domain.AssistantSessionStateExecuting
-	setAssistantAgentLoopMetadata(session, domain.AssistantAgentLoopMetadata{RunID: "run-no-runtime", State: domain.AssistantAgentLoopStateWaitingAsync, PendingToolCallID: "call-no-runtime", WaitingReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-no-runtime")})
-	publisher := &assistantTestPublisher{}
-	orchestrator := newTestAssistantOrchestrator(t, publisher, &assistantTestToolInvoker{}, nil, nil, nil)
-	runner := NewAssistantSessionRecoveryRunner(orchestrator, AssistantSessionRecoveryConfig{Logger: slog.New(slog.NewTextHandler(testingWriter{t: t}, nil))})
-
-	runner.recoverSession(context.Background(), session)
-
-	stored := orchestrator.session("session-no-runtime")
-	if stored == nil || stored.State != domain.AssistantSessionStateBlocked {
-		t.Fatalf("stored session = %#v", stored)
-	}
-	if metadata := assistantAgentLoopMetadata(stored); metadata.State != domain.AssistantAgentLoopStateBlocked {
-		t.Fatalf("metadata = %#v", metadata)
-	}
-	statusEvents := publisher.eventsOfKind(domain.KindAssistantStatus)
-	if len(statusEvents) == 0 {
-		t.Fatal("expected blocked status event")
-	}
-	var status map[string]any
-	mustUnmarshalEventContent(t, lastAssistantEvent(t, statusEvents), &status)
-	if status["status"] != "blocked" || status["phase"] != "tool_observation_blocked" {
-		t.Fatalf("status = %#v", status)
-	}
-}
-
-func TestAssistantToolRuntimeDuplicateWaitingReceiptDoesNotInvokeAgain(t *testing.T) {
-	session := assistantRuntimeSession("session-duplicate")
-	server := &assistantRuntimeMCPServer{asyncReceipt: assistantRuntimeReceipt("bahia_assistant_dns_zone_create", "downstream-dup")}
-	runtime := newAssistantRuntimeForTest(t, server, assistantRuntimeRegistryWith(asyncDescriptor("bahia_assistant_dns_zone_create", domain.AssistantToolRiskMedium)), domain.AssistantPermissionModeAudited, nil, nil)
-	request := AssistantToolRuntimeRequest{Session: session, RunID: "run-dup", ToolCall: domain.AssistantAgentToolCall{ID: "call-dup", Name: "bahia_assistant_dns_zone_create", Arguments: map[string]any{"zone": "example.test"}}}
-
-	first, err := runtime.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("first Execute: %v", err)
-	}
-	second, err := runtime.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("second Execute: %v", err)
-	}
-	if first.Status != domain.AssistantToolObservationWaitingAsync || second.Status != domain.AssistantToolObservationWaitingAsync {
-		t.Fatalf("observations = %#v / %#v", first, second)
-	}
-	if server.invokeCount() != 1 {
-		t.Fatalf("duplicate invoke count = %d", server.invokeCount())
-	}
-	if second.Receipt == nil || second.Receipt.RequestEventID != "downstream-dup" {
-		t.Fatalf("duplicate receipt = %#v", second.Receipt)
-	}
-}
-
-func newAssistantRuntimeForTest(t *testing.T, server *assistantRuntimeMCPServer, registry assistantRuntimeRegistry, mode domain.AssistantPermissionMode, observer AssistantAsyncResultObserver, rules []AssistantPermissionRule) *AssistantToolRuntime {
-	t.Helper()
-	engine := NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: mode}, rules)
-	ids := 0
-	return NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: registry, Permissions: engine, Observer: observer, Sessions: &assistantRuntimePersister{}, Now: func() time.Time { return time.Unix(1000, 0).UTC() }, NewID: func(prefix string) string { ids++; return prefix + "-test-" + string(rune('a'+ids-1)) }})
-}
-
-func assistantRuntimeSession(id string) *domain.AssistantSession {
-	return &domain.AssistantSession{SessionID: id, State: domain.AssistantSessionStateExecuting, OperatorPubkey: "operator", Participants: []string{"operator"}, AssistantID: "assistant-test", Metadata: map[string]any{}}
-}
-
 func syncDescriptor(name string) AssistantToolRuntimeToolDescriptor {
-	return AssistantToolRuntimeToolDescriptor{Name: name, ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectRead, DefaultRisk: domain.AssistantToolRiskLow}
-}
-
-func asyncDescriptor(name string, risk domain.AssistantToolRisk) AssistantToolRuntimeToolDescriptor {
-	return AssistantToolRuntimeToolDescriptor{Name: name, ExecutionMode: domain.AssistantToolExecutionModeAsync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: risk, ResourceTypes: []string{"dns_zone"}}
-}
-
-func assistantRuntimeReceipt(tool, requestID string) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: requestID, RequestKind: 25910, ResultKinds: []int{7961}, IdempotencyKey: "idem-" + requestID}
+	return AssistantToolRuntimeToolDescriptor{Name: name, ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectRead, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}
 }
 
 type assistantRuntimeRegistry map[string]AssistantToolRuntimeToolDescriptor
@@ -301,18 +33,24 @@ func (r assistantRuntimeRegistry) GetAgentTool(name string) (AssistantToolRuntim
 	return descriptor, true
 }
 
+// assistantRuntimeMCPServer is a counting provider boundary.
 type assistantRuntimeMCPServer struct {
 	mu           sync.Mutex
 	syncResult   *AssistantToolRuntimeToolResult
 	asyncReceipt *domain.AsyncToolReceipt
 	calls        int
 	invokes      int
+	callNames    []string
 }
 
-func (s *assistantRuntimeMCPServer) CallTool(context.Context, string, map[string]interface{}) (*AssistantToolRuntimeToolResult, error) {
+func (s *assistantRuntimeMCPServer) CallTool(_ context.Context, name string, _ map[string]interface{}) (*AssistantToolRuntimeToolResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	s.callNames = append(s.callNames, name)
+	if s.syncResult == nil {
+		return &AssistantToolRuntimeToolResult{Content: []AssistantToolRuntimeToolContent{{Type: "text", Text: `{"ok":true}`}}}, nil
+	}
 	return s.syncResult, nil
 }
 
@@ -322,7 +60,7 @@ func (s *assistantRuntimeMCPServer) InvokeAssistantAsyncTool(_ context.Context, 
 	s.invokes++
 	receipt := s.asyncReceipt
 	if receipt == nil {
-		receipt = assistantRuntimeReceipt(name, "downstream-generated")
+		receipt = &domain.AsyncToolReceipt{ToolName: name, RequestEventID: "downstream-generated", RequestKind: 25910, ResultKinds: []int{7961}}
 	}
 	copyReceipt := *receipt
 	copyReceipt.ToolName = name
@@ -344,78 +82,200 @@ func (s *assistantRuntimeMCPServer) invokeCount() int {
 	return s.invokes
 }
 
-type assistantRuntimePersister struct{}
-
-func (assistantRuntimePersister) PersistAssistantSession(context.Context, *domain.AssistantSession) error {
-	return nil
-}
-func (assistantRuntimePersister) PublishAssistantStatus(context.Context, string, string, map[string]any) error {
-	return nil
-}
-
-type assistantRuntimeObserver struct {
-	mu     sync.Mutex
-	status string
-	event  *nostr.Event
-	err    error
-	calls  int
-}
-
-func (o *assistantRuntimeObserver) ObserveAssistantAsyncResult(context.Context, string, string, string, *domain.AsyncToolReceipt) (AssistantAsyncObservationOutcome, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.calls++
-	return AssistantAsyncObservationOutcome{Status: o.status, Event: o.event}, o.err
-}
-
-func (o *assistantRuntimeObserver) callCount() int {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.calls
-}
-
-type assistantBackfillSubscriber struct {
-	mu    sync.Mutex
-	event *nostr.Event
-	calls int
-}
-
-func (s *assistantBackfillSubscriber) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (AssistantMergedSubscription, error) {
-	s.mu.Lock()
-	s.calls++
-	event := s.event
-	s.mu.Unlock()
-	sub := &assistantTestMergedSubscription{events: make(chan *nostr.Event, 1), closed: make(chan AssistantRelayClosed, 1), eose: make(chan struct{}, 1)}
-	if event != nil {
-		sub.events <- event
+func TestAssistantRuntimeWorkScopedBatchApprovalCannotBeBypassed(t *testing.T) {
+	descriptor := AssistantToolRuntimeToolDescriptor{Name: "mutate", ExecutionMode: domain.AssistantToolExecutionModeAsync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"idempotency_key": map[string]any{"type": "string"}}, "required": []string{"idempotency_key"}}}
+	server := &assistantRuntimeMCPServer{}
+	r := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeAudited}, nil)})
+	x := domain.AssistantExecution{Version: 2, SessionID: "session", RunID: "run", Workflow: domain.AssistantWorkflowBatch, Proposal: &domain.AssistantProposalRevision{ProposalID: "proposal", Revision: 1, Hash: "hash"}}
+	work := domain.AssistantWorkItem{WorkID: "run:step", OriginID: "step", ToolName: "mutate", Arguments: map[string]any{}, State: domain.AssistantWorkReady}
+	if _, err := r.PrepareWork(context.Background(), x, work); err == nil {
+		t.Fatal("audited mode bypassed mandatory batch approval")
 	}
-	sub.eose <- struct{}{}
-	return sub, nil
-}
-
-func (s *assistantBackfillSubscriber) subscribeCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
-}
-
-func waitRuntimeObservation(t *testing.T, ch <-chan *domain.AssistantToolObservation) *domain.AssistantToolObservation {
-	t.Helper()
-	select {
-	case obs := <-ch:
-		return obs
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for runtime observation")
-		return nil
+	digest, err := domain.ComputeAssistantArgumentsDigest(work.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work.ArgumentsDigest = digest
+	work.Authorization = &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "decision", ProposalID: "proposal", ProposalRevision: 1, ArgumentsDigest: digest, Scope: x.Scope}
+	prepared, err := r.PrepareWork(context.Background(), x, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Work.IdempotencyKey != "assistant:session:hash:step" {
+		t.Fatalf("key=%q", prepared.Work.IdempotencyKey)
+	}
+	readonly := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReadonly}, nil)})
+	if _, err := readonly.PrepareWork(context.Background(), x, work); err == nil {
+		t.Fatal("approval bypassed readonly posture")
+	}
+	if server.invokeCount() != 0 {
+		t.Fatal("preparation dispatched tool")
 	}
 }
 
-type testingWriter struct{ t *testing.T }
-
-func (w testingWriter) Write(p []byte) (int, error) {
-	w.t.Helper()
-	w.t.Log(strings.TrimSpace(string(p)))
-	return len(p), nil
+func TestAssistantRuntimeChangedApprovedArgumentsBlock(t *testing.T) {
+	descriptor := AssistantToolRuntimeToolDescriptor{Name: "read", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectRead, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}
+	hooks := hookRunnerWith(map[AssistantHookEvent][]AssistantHookMatcher{AssistantHookEventPreToolUse: {{Matcher: "*", Handlers: []AssistantHookHandler{{Type: AssistantHookHandlerPrompt, Prompt: "change"}}}}}, &scriptedHookEvaluator{outcomes: map[string][]AssistantHookOutcome{"change": {{UpdatedInput: map[string]any{"target": "different"}}}}})
+	r := NewAssistantToolRuntime(AssistantToolRuntimeConfig{Registry: assistantRuntimeRegistryWith(descriptor), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReview}, nil), Hooks: hooks})
+	x := domain.AssistantExecution{Version: 2, SessionID: "session", RunID: "run", Workflow: domain.AssistantWorkflowBatch, Proposal: &domain.AssistantProposalRevision{ProposalID: "proposal", Revision: 1, Hash: "hash"}}
+	args := map[string]any{"target": "original"}
+	digest, err := domain.ComputeAssistantArgumentsDigest(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := domain.AssistantWorkItem{WorkID: "run:step", OriginID: "step", ToolName: "read", Arguments: args, ArgumentsDigest: digest, Authorization: &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "decision", ProposalID: "proposal", ProposalRevision: 1, ArgumentsDigest: digest, Scope: x.Scope}}
+	prepared, err := r.PrepareWork(context.Background(), x, work)
+	if !errors.Is(err, ErrAssistantApprovedInputChanged) || prepared.Work.Arguments["target"] != "different" || work.Arguments["target"] != "original" {
+		t.Fatalf("approved input change=%v prepared=%+v work=%+v", err, prepared.Work, work)
+	}
 }
 
-var _ AssistantAsyncResultObserver = (*assistantRuntimeObserver)(nil)
+func TestAssistantRuntimeHooksTightenButNeverLoosen(t *testing.T) {
+	evaluator := &assistantMutableHookEvaluator{}
+	hooks := newAssistantTestHooks(t, evaluator)
+	askMutate := []AssistantPermissionRule{{ID: "ask", Decision: domain.AssistantPermissionDecisionAsk, ToolNames: []string{"mutate"}}}
+	r := assistantTestRuntime(&assistantRuntimeMCPServer{}, hooks, askMutate)
+	x := domain.AssistantExecution{Version: 2, SessionID: "s", RunID: "r", Workflow: domain.AssistantWorkflowIterative}
+	work := domain.AssistantWorkItem{WorkID: "r:c", OriginID: "c", ToolName: "mutate", Arguments: map[string]any{}}
+
+	evaluator.set(AssistantHookOutcome{Decision: AssistantHookDecisionAllow})
+	if _, err := r.PrepareWork(context.Background(), x, work); !errors.Is(err, ErrAssistantApprovalRequired) {
+		t.Fatalf("hook allow loosened ask: %v", err)
+	}
+	evaluator.set(AssistantHookOutcome{Decision: AssistantHookDecisionDeny, Reason: "change freeze"})
+	work.ToolName = "read-one"
+	var denial *AssistantWorkDenial
+	if _, err := r.PrepareWork(context.Background(), x, work); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "change freeze") {
+		t.Fatalf("hook deny did not tighten an allow: %v", err)
+	}
+}
+
+func TestAssistantRuntimeApprovalBindsExactIterativeWorkAndBatchNeedsApproval(t *testing.T) {
+	r := assistantTestRuntime(&assistantRuntimeMCPServer{}, nil, nil)
+	x := domain.AssistantExecution{Version: 2, SessionID: "s", RunID: "r", Workflow: domain.AssistantWorkflowIterative}
+	args := map[string]any{"zone": "z"}
+	digest, err := domain.ComputeAssistantArgumentsDigest(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Audited mode lets this iterative mutation run autonomously...
+	autonomous := domain.AssistantWorkItem{WorkID: "r:a", OriginID: "a", ToolName: "mutate", Arguments: args}
+	if _, err := r.PrepareWork(context.Background(), x, autonomous); err != nil {
+		t.Fatalf("iterative autonomy changed: %v", err)
+	}
+	// ...but the same call in a batch still requires plan approval.
+	batch := x
+	batch.Workflow = domain.AssistantWorkflowBatch
+	batch.Proposal = &domain.AssistantProposalRevision{ProposalID: "p", Revision: 1, Hash: "h"}
+	if _, err := r.PrepareWork(context.Background(), batch, autonomous); !errors.Is(err, ErrAssistantApprovalRequired) {
+		t.Fatalf("batch approval bypassed: %v", err)
+	}
+	// An action binding for another work item never authorizes this one.
+	bound := autonomous
+	bound.ArgumentsDigest = digest
+	bound.Authorization = &domain.AssistantAuthorizationBinding{OperatorPubkey: "operator", DecisionRequestID: "d", ActionID: "r:other", ArgumentsDigest: digest}
+	var denial *AssistantWorkDenial
+	if _, err := r.PrepareWork(context.Background(), x, bound); !errors.As(err, &denial) {
+		t.Fatalf("foreign action binding accepted: %v", err)
+	}
+	bound.Authorization.ActionID = "r:a"
+	prepared, err := r.PrepareWork(context.Background(), x, bound)
+	if err != nil || prepared.Work.IdempotencyKey != "assistant-agent:s:r:a" {
+		t.Fatalf("exact binding: key=%q err=%v", prepared.Work.IdempotencyKey, err)
+	}
+}
+
+func assistantTestInternalTool(name string, calls *int) AssistantInternalTool {
+	return AssistantInternalTool{Name: name, Effect: domain.AssistantToolEffectRead, Risk: domain.AssistantToolRiskLow,
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}, "required": []any{"q"}},
+		Handler: func(_ context.Context, call AssistantInternalToolCall) (*domain.AssistantToolObservation, error) {
+			*calls++
+			return &domain.AssistantToolObservation{ObservationID: "obs-internal", Status: domain.AssistantToolObservationSucceeded, Summary: "internal ok " + call.SessionID}, nil
+		}}
+}
+
+// Internal tools keep a separate, service-owned registration but pass the same
+// schema, scope, permission and hook gate as MCP tools, and are unavailable to
+// the batch catalog.
+func TestAssistantRuntimeInternalToolsPassCommonGateAndStayOutOfBatch(t *testing.T) {
+	calls := 0
+	r := assistantTestRuntime(&assistantRuntimeMCPServer{}, nil, nil)
+	if err := r.RegisterInternalTools(assistantTestInternalTool("internal_lookup", &calls)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterInternalTools(assistantTestInternalTool("internal_lookup", &calls)); err == nil {
+		t.Fatal("duplicate internal registration accepted")
+	}
+	if err := r.RegisterInternalTools(assistantTestInternalTool("read-one", &calls)); err == nil {
+		t.Fatal("internal tool shadowed a registered MCP tool")
+	}
+	iterative := domain.AssistantExecution{Version: 2, SessionID: "s", RunID: "r", Workflow: domain.AssistantWorkflowIterative}
+	work := domain.AssistantWorkItem{WorkID: "r:c", OriginID: "c", ToolName: "internal_lookup", Arguments: map[string]any{"q": "x"}}
+	prepared, err := r.PrepareWork(context.Background(), iterative, work)
+	if err != nil {
+		t.Fatalf("internal tool refused by common gate: %v", err)
+	}
+	obs, receipt, err := r.DispatchPreparedWork(context.Background(), prepared)
+	if err != nil || receipt != nil || obs == nil || obs.Status != domain.AssistantToolObservationSucceeded || obs.ToolCallID != "c" || calls != 1 {
+		t.Fatalf("internal dispatch obs=%+v receipt=%v err=%v calls=%d", obs, receipt, err, calls)
+	}
+	var denial *AssistantWorkDenial
+	bad := work
+	bad.Arguments = map[string]any{}
+	if _, err := r.PrepareWork(context.Background(), iterative, bad); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "schema") {
+		t.Fatalf("internal tool schema not enforced: %v", err)
+	}
+	scoped := iterative
+	scoped.Scope = domain.AssistantCommandScope{AllowedTools: []string{"read-one"}}
+	if _, err := r.PrepareWork(context.Background(), scoped, work); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "scope") {
+		t.Fatalf("internal tool escaped command scope: %v", err)
+	}
+	readonly := NewAssistantToolRuntime(AssistantToolRuntimeConfig{Registry: assistantTestRegistry(), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeReadonly}, []AssistantPermissionRule{{ID: "deny-internal", Decision: domain.AssistantPermissionDecisionDeny, ToolNames: []string{"internal_lookup"}}})})
+	if err := readonly.RegisterInternalTools(assistantTestInternalTool("internal_lookup", &calls)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readonly.PrepareWork(context.Background(), iterative, work); !errors.As(err, &denial) {
+		t.Fatalf("internal tool bypassed permission policy: %v", err)
+	}
+	batch := iterative
+	batch.Workflow = domain.AssistantWorkflowBatch
+	batch.Proposal = &domain.AssistantProposalRevision{ProposalID: "p", Revision: 1, Hash: "h"}
+	if _, err := r.PrepareWork(context.Background(), batch, work); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "batch") {
+		t.Fatalf("internal tool reachable from batch workflow: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("gate refusals invoked the handler: calls=%d", calls)
+	}
+}
+
+// Subagent child calls pass the parent's scope and policy and may only run
+// synchronous tools that policy allows outright; they never submit async work.
+func TestAssistantRuntimeSubagentChildCallsAreGatedAndSyncOnly(t *testing.T) {
+	server := &assistantRuntimeMCPServer{}
+	askRead := []AssistantPermissionRule{{ID: "ask-read-two", Decision: domain.AssistantPermissionDecisionAsk, ToolNames: []string{"read-two"}}}
+	r := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(syncDescriptor("read-one"), syncDescriptor("read-two"), AssistantToolRuntimeToolDescriptor{Name: "mutate", ExecutionMode: domain.AssistantToolExecutionModeAsync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}, AssistantToolRuntimeToolDescriptor{Name: "sync-write", ExecutionMode: domain.AssistantToolExecutionModeSync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeAudited}, askRead)})
+	calls := 0
+	if err := r.RegisterInternalTools(assistantTestInternalTool("internal_lookup", &calls)); err != nil {
+		t.Fatal(err)
+	}
+	parent := AssistantInternalToolCall{SessionID: "s", RunID: "r", WorkID: "r:delegate", Scope: domain.AssistantCommandScope{AllowedTools: []string{"read-one", "read-two", "mutate", "sync-write", "internal_lookup"}}}
+	call := func(name string) *domain.AssistantToolObservation {
+		return r.ExecuteSubagentTool(context.Background(), parent, "s:subagent:x", domain.AssistantAgentToolCall{ID: "child-" + name, Name: name, Arguments: map[string]any{}})
+	}
+	if obs := call("read-one"); obs.Status != domain.AssistantToolObservationSucceeded {
+		t.Fatalf("allowed sync child call: %+v", obs)
+	}
+	for name, want := range map[string]string{"mutate": "async", "sync-write": "mutation", "read-two": "approval", "internal_lookup": "internal", "unknown": "not registered"} {
+		if obs := call(name); obs.Status != domain.AssistantToolObservationDenied || !strings.Contains(obs.Error, want) {
+			t.Fatalf("child %s: %+v", name, obs)
+		}
+	}
+	scoped := parent
+	scoped.Scope = domain.AssistantCommandScope{AllowedTools: []string{"read-two"}}
+	if obs := r.ExecuteSubagentTool(context.Background(), scoped, "s:subagent:x", domain.AssistantAgentToolCall{ID: "c", Name: "read-one", Arguments: map[string]any{}}); obs.Status != domain.AssistantToolObservationDenied || !strings.Contains(obs.Error, "scope") {
+		t.Fatalf("child escaped parent scope: %+v", obs)
+	}
+	if server.invokeCount() != 0 || server.callCount() != 1 || calls != 0 {
+		t.Fatalf("child dispatch invokes=%d calls=%d internal=%d", server.invokeCount(), server.callCount(), calls)
+	}
+}

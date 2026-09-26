@@ -1,6 +1,4 @@
 <script>
-  import AssistantActionApproval from './AssistantActionApproval.svelte';
-  import AssistantPlanApproval from './AssistantPlanApproval.svelte';
   import { downstreamRequestsForTurn } from '$lib/stores/assistant.svelte.js';
 
   let { item, session, operatorPubkey = '' } = $props();
@@ -10,10 +8,7 @@
   const title = $derived(titleFor(item));
   const text = $derived(textFor(item));
   const streamingContent = $derived(item?.streamingContent || '');
-  const plan = $derived(item?.plan || ((item?.status === 'planned' || session?.state === 'awaiting_approval') ? session?.currentPlan : null));
-  const planHash = $derived(item?.planHash || session?.lastPlanHash || '');
   const isPending = $derived(Boolean(item?.pending));
-  const pendingAction = $derived((session?.pendingActions || []).find((action) => action.actionId === item?.actionId) || null);
   const toolCalls = $derived(toolCallsFor(item));
   const observation = $derived(observationFor(item));
   const asyncWait = $derived(asyncWaitFor(item, observation));
@@ -235,12 +230,8 @@
     </div>
   {/if}
 
-  {#if pendingAction}
-    <AssistantActionApproval sessionId={session.sessionId} action={pendingAction} />
-  {/if}
-
-  {#if plan && planHash && (item?.status === 'planned' || session?.state === 'awaiting_approval')}
-    <AssistantPlanApproval sessionId={session.sessionId} {plan} {planHash} />
+  {#if item?.status === 'planned'}
+    <span class="muted">Historical plan record; decisions use the current v2 proposal above.</span>
   {/if}
 </article>
 

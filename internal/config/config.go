@@ -404,7 +404,14 @@ type AssistantConfig struct {
 	// When false (the default), the legacy planner uses non-streaming chat completions;
 	// some OpenAI-compatible providers do not emit delta.content for streamed
 	// response_format (json_schema) outputs, so streaming is opt-in per provider.
-	LLMStreaming         bool                       `koanf:"llm_streaming" yaml:"llm_streaming" secret:"false"`
+	LLMStreaming bool `koanf:"llm_streaming" yaml:"llm_streaming" secret:"false"`
+	// DefaultWorkflow selects the proposal workflow for a new session when the
+	// prompt names none: "batch" or "iterative". A per-request workflow always
+	// wins, then the session's persisted workflow, then this default. When
+	// unset it is derived from the deprecated Agentic.Enabled flag (true ->
+	// iterative, false -> batch). Both workflows run through the same executor.
+	// Batch is available only when LLMModel is set; a batch default requires it.
+	DefaultWorkflow      string                     `koanf:"default_workflow" yaml:"default_workflow" secret:"false"`
 	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock" secret:"false"`
 	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout" secret:"false"`
@@ -433,11 +440,15 @@ const (
 	AssistantAgenticToolModePrompted = "prompted"
 )
 
-// AssistantAgenticConfig selects the provider-neutral agent loop model backend.
-// OpenAI-compatible providers default to native chat-completions tool calls;
-// prompted mode is available for instruction-tuned OpenAI-compatible endpoints
-// that do not implement native function-calling.
+// AssistantAgenticConfig selects the provider-neutral model backend of the
+// iterative proposer. OpenAI-compatible providers default to native
+// chat-completions tool calls; prompted mode is available for
+// instruction-tuned OpenAI-compatible endpoints that do not implement native
+// function-calling.
 type AssistantAgenticConfig struct {
+	// Enabled is deprecated. It is only a fallback input for
+	// AssistantConfig.DefaultWorkflow (true -> iterative, false -> batch); it
+	// never selects an engine or gates construction of the iterative stack.
 	Enabled                    bool          `koanf:"enabled" yaml:"enabled" secret:"false"`
 	Provider                   string        `koanf:"provider" yaml:"provider" secret:"false"`
 	ToolMode                   string        `koanf:"tool_mode" yaml:"tool_mode" secret:"false"`
@@ -1466,7 +1477,7 @@ func Load(configPath string) (*Config, error) {
 		switch key {
 		case "dev_mode":
 			return "dev_mode"
-		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key", "assistant_llm_streaming":
+		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key", "assistant_llm_streaming", "assistant_default_workflow":
 			return key
 		}
 		// If no explicit separator was found, split on the first underscore.
@@ -1555,6 +1566,34 @@ func applyAssistantFlatCompat(k *koanf.Koanf, cfg *Config) {
 	if k.Exists("assistant_llm_streaming") {
 		cfg.Assistant.LLMStreaming = k.Bool("assistant_llm_streaming")
 	}
+	if k.Exists("assistant_default_workflow") {
+		cfg.Assistant.DefaultWorkflow = k.String("assistant_default_workflow")
+	}
+}
+
+// Assistant workflow names accepted by assistant.default_workflow.
+const (
+	AssistantWorkflowBatch     = "batch"
+	AssistantWorkflowIterative = "iterative"
+)
+
+// BatchWorkflowAvailable reports whether the batch proposer can be built: it
+// needs assistant.llm_model. The iterative proposer needs no such check here:
+// validation requires agentic.model, which falls back to llm_model.
+func (a AssistantConfig) BatchWorkflowAvailable() bool {
+	return strings.TrimSpace(a.LLMModel) != ""
+}
+
+// ResolvedDefaultWorkflow returns the configured default workflow, mapping the
+// deprecated agentic.enabled flag when default_workflow is unset.
+func (a AssistantConfig) ResolvedDefaultWorkflow() string {
+	if workflow := strings.ToLower(strings.TrimSpace(a.DefaultWorkflow)); workflow != "" {
+		return workflow
+	}
+	if a.Agentic.Enabled {
+		return AssistantWorkflowIterative
+	}
+	return AssistantWorkflowBatch
 }
 
 func rejectRemovedAuthKeys(k *koanf.Koanf) error {
@@ -2307,12 +2346,23 @@ func (c *Config) validateAssistant() error {
 	if err := validateAssistantExternalMCPServers(assistant.MCP.ExternalServers); err != nil {
 		return err
 	}
+	assistant.DefaultWorkflow = assistant.ResolvedDefaultWorkflow()
+	switch assistant.DefaultWorkflow {
+	case AssistantWorkflowBatch, AssistantWorkflowIterative:
+	default:
+		return fmt.Errorf("config validation failed: assistant.default_workflow must be one of batch, iterative")
+	}
 
 	if !assistant.Enabled {
 		return nil
 	}
-	if assistant.LLMModel == "" && !agentic.Enabled {
-		return fmt.Errorf("config validation failed: assistant.llm_model is required when assistant.enabled=true and assistant.agentic.enabled=false")
+	// assistant.llm_model is the batch proposer's model. It is required only
+	// when batch is the default workflow (explicitly, or via the deprecated
+	// agentic.enabled=false), exactly as before the unified executor. With an
+	// iterative default and no llm_model the batch workflow is unavailable:
+	// startup succeeds and batch requests are refused, never downgraded.
+	if assistant.LLMModel == "" && assistant.DefaultWorkflow == AssistantWorkflowBatch {
+		return fmt.Errorf("config validation failed: assistant.llm_model (batch proposer) is required when assistant.enabled=true and the default workflow is batch (assistant.default_workflow=batch, or assistant.agentic.enabled=false with default_workflow unset)")
 	}
 	parsed, err := url.Parse(assistant.LLMBaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -2321,27 +2371,24 @@ func (c *Config) validateAssistant() error {
 	if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
 		return fmt.Errorf("config validation failed: nostr.private_key is required when assistant.enabled=true")
 	}
-	if !agentic.Enabled {
-		return nil
-	}
 	if agentic.Provider != "openai_compatible" && agentic.Provider != "anthropic" {
 		return fmt.Errorf("config validation failed: assistant.agentic.provider must be one of openai_compatible, anthropic")
 	}
 	if agentic.Model == "" {
-		return fmt.Errorf("config validation failed: assistant.agentic.model or assistant.llm_model is required when assistant.enabled=true and assistant.agentic.enabled=true")
+		return fmt.Errorf("config validation failed: assistant.agentic.model or assistant.llm_model (iterative proposer) is required when assistant.enabled=true")
 	}
 	parsedAgentic, err := url.Parse(agentic.BaseURL)
 	if err != nil || parsedAgentic.Scheme == "" || parsedAgentic.Host == "" {
 		return fmt.Errorf("config validation failed: assistant.agentic.base_url must be a valid URL")
 	}
 	if agentic.MaxIterations <= 0 {
-		return fmt.Errorf("config validation failed: assistant.agentic.max_iterations must be > 0 when assistant.agentic.enabled=true")
+		return fmt.Errorf("config validation failed: assistant.agentic.max_iterations must be > 0 when assistant.enabled=true")
 	}
 	if agentic.MaxConsecutiveToolFailures <= 0 {
-		return fmt.Errorf("config validation failed: assistant.agentic.max_consecutive_tool_failures must be > 0 when assistant.agentic.enabled=true")
+		return fmt.Errorf("config validation failed: assistant.agentic.max_consecutive_tool_failures must be > 0 when assistant.enabled=true")
 	}
 	if agentic.RequestTimeout <= 0 {
-		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.agentic.enabled=true")
+		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.enabled=true")
 	}
 	return nil
 }

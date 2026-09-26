@@ -1343,123 +1343,69 @@ func New(cfg *config.Config) (*App, error) {
 				servicePubkey = secret.Public().Hex()
 			}
 		}
-		var transcriptStore *service.AssistantTranscriptStore
-		if cfg.Assistant.Agentic.Enabled {
-			transcriptKeys, err := assistantTranscriptKeyProvider(cfg)
-			if err != nil {
-				return nil, err
-			}
-			transcriptStore = service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{
-				Publisher:     assistantPublisher,
-				Subscriber:    assistantSubscriber,
-				Signer:        controlPlaneSigner,
-				Identity:      identity,
-				KeyProvider:   transcriptKeys,
-				ServicePubkey: servicePubkey,
-			})
+		transcriptKeys, err := assistantTranscriptKeyProvider(cfg)
+		if err != nil {
+			return nil, err
 		}
+		transcriptStore := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{
+			Publisher:     assistantPublisher,
+			Subscriber:    assistantSubscriber,
+			Signer:        controlPlaneSigner,
+			Identity:      identity,
+			KeyProvider:   transcriptKeys,
+			ServicePubkey: servicePubkey,
+		})
 		userDocs := docs.New(docs.DefaultBasePath)
 		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, &userDocs, service.AssistantContextBuilderConfig{TranscriptHistory: transcriptStore})
-		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
-			BaseURL: cfg.Assistant.LLMBaseURL,
-			Model:   cfg.Assistant.LLMModel,
-			APIKey:  cfg.Assistant.LLMAPIKey,
-		}, slog.Default())
-		assistantOrchestrator = service.NewAssistantOrchestrator(service.AssistantOrchestratorConfig{
-			ChatClient:       chatClient,
-			ContextBuilder:   contextBuilder,
-			ToolInvoker:      mcpServer,
-			Publisher:        assistantPublisher,
-			Subscriber:       assistantSubscriber,
-			Signer:           controlPlaneSigner,
-			Identity:         identity,
-			AllowedToolNames: assistantToolNames(mcpServer),
-			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
-			AgenticEnabled:   cfg.Assistant.Agentic.Enabled,
-			StreamingEnabled: cfg.Assistant.LLMStreaming,
-			Logger:           slog.Default(),
-		})
-		var assistantAgentLoop service.AssistantAgentLoopController
-		if cfg.Assistant.Agentic.Enabled {
-			externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, slog.Default())
-			if externalErr != nil {
-				return nil, externalErr
-			}
-			agentToolRegistry, registryErr := mcp.NewAssistantToolRegistryForServerWithExternal(mcpServer, externalMCP.descriptors)
-			if registryErr != nil {
-				return nil, registryErr
-			}
-			permissionEngine := service.NewAssistantPermissionEngine(cfg.Assistant.Permissions, externalMCP.permissionRules)
-			// Item 10 extensibility surface: load subagents/skills/commands/hooks from
-			// their configured roots. A malformed definition fails closed at startup.
-			var assistantSubagents *service.AssistantSubagentLibrary
-			var assistantSkills *service.AssistantSkillLibrary
-			var assistantCommands *service.AssistantCommandLibrary
-			var assistantHooks *service.AssistantHookRunner
-			modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, slog.Default())
-			if modelClientErr != nil {
-				return nil, modelClientErr
-			}
-			if cfg.Assistant.Subagents.Enabled {
-				lib, loadErr := service.LoadAssistantSubagents(cfg.Assistant.Subagents.Paths)
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				assistantSubagents = lib
-			}
-			if cfg.Assistant.Skills.Enabled {
-				lib, loadErr := service.LoadAssistantSkills(cfg.Assistant.Skills.Paths)
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				assistantSkills = lib
-			}
-			if cfg.Assistant.Commands.Enabled {
-				lib, loadErr := service.LoadAssistantCommands(cfg.Assistant.Commands.Paths)
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				assistantCommands = lib
-			}
-			if cfg.Assistant.Hooks.Enabled {
-				hookSet, loadErr := service.LoadAssistantHooks(cfg.Assistant.Hooks.Paths)
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				assistantHooks = service.NewAssistantHookRunner(service.AssistantHookRunnerConfig{
-					Set:    hookSet,
-					Prompt: service.NewAssistantHookModelPromptEvaluator(service.AssistantHookModelPromptEvaluatorConfig{ModelClient: modelClient, Model: cfg.Assistant.Agentic.Model}),
-					MCP: service.NewAssistantReadOnlyMCPHookCaller(service.AssistantReadOnlyMCPHookCallerConfig{
-						MCPServer: assistantMCPRuntimeAdapter{server: mcpServer},
-						Registry:  assistantToolRegistryAdapter{registry: agentToolRegistry},
-					}),
-				})
-			}
-			toolRuntime := service.NewAssistantToolRuntime(service.AssistantToolRuntimeConfig{
-				MCPServer:   assistantMCPRuntimeAdapter{server: mcpServer, externalTools: externalMCP.clients},
-				Registry:    assistantToolRegistryAdapter{registry: agentToolRegistry},
-				Permissions: permissionEngine,
-				Sessions:    assistantOrchestrator,
-				Observer:    assistantOrchestrator,
-			})
-			agentLoop := service.NewAssistantAgentLoop(service.AssistantAgentLoopConfig{
-				ModelClient:    modelClient,
-				ToolRuntime:    toolRuntime,
-				ContextBuilder: contextBuilder,
-				ToolSchemas:    assistantToolSchemaProvider{registry: agentToolRegistry},
-				Transcript:     transcriptStore,
-				Sessions:       assistantOrchestrator,
-				Agentic:        cfg.Assistant.Agentic,
-				Subagents:      assistantSubagents,
-				Skills:         assistantSkills,
-				Commands:       assistantCommands,
-				Hooks:          assistantHooks,
-			})
-			assistantAgentLoop = agentLoop
-			assistantOrchestrator.SetAgentLoop(agentLoop)
+		// The batch proposer's chat client exists only when assistant.llm_model
+		// is set; without it the batch workflow is unavailable (see wiring).
+		var chatClient service.AssistantChatClient
+		if cfg.Assistant.BatchWorkflowAvailable() {
+			chatClient = llmadapter.NewChatClient(llmadapter.ChatClientConfig{
+				BaseURL: cfg.Assistant.LLMBaseURL,
+				Model:   cfg.Assistant.LLMModel,
+				APIKey:  cfg.Assistant.LLMAPIKey,
+			}, slog.Default())
 		}
-		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, AgentLoop: assistantAgentLoop, Logger: slog.Default()}), RunnerTier(Tier3), RunnerRequired(false))
-		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.Bool("agentic_enabled", cfg.Assistant.Agentic.Enabled))
+		modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, slog.Default())
+		if modelClientErr != nil {
+			return nil, modelClientErr
+		}
+		externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, slog.Default())
+		if externalErr != nil {
+			return nil, externalErr
+		}
+		assistantExecution, err := buildAssistantExecution(assistantExecutionDeps{
+			Config:          cfg,
+			MCPServer:       mcpServer,
+			ContextBuilder:  contextBuilder,
+			ChatClient:      chatClient,
+			ModelClient:     modelClient,
+			Publisher:       assistantPublisher,
+			Subscriber:      assistantSubscriber,
+			Signer:          controlPlaneSigner,
+			Identity:        identity,
+			ServicePubkey:   servicePubkey,
+			Transcript:      transcriptStore,
+			KeyProvider:     transcriptKeys,
+			InitialSessions: loadAssistantSessions(ctx, nostrEventRepo, logger),
+			ExternalMCP:     externalMCP,
+		})
+		if err != nil {
+			return nil, err
+		}
+		assistantOrchestrator = assistantExecution.Orchestrator
+		bgManager.RegisterWithOptions(assistantExecution.Lifecycle, RunnerTier(Tier1), RunnerRequired(false))
+		bgManager.RegisterWithOptions(assistantExecution.Recovery, RunnerTier(Tier3), RunnerRequired(false))
+		availableWorkflows := make([]string, 0, len(assistantExecution.AvailableWorkflows))
+		for _, workflow := range assistantExecution.AvailableWorkflows {
+			availableWorkflows = append(availableWorkflows, string(workflow))
+		}
+		logFields := []zap.Field{zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey), zap.String("default_workflow", string(assistantExecution.DefaultWorkflow)), zap.Strings("available_workflows", availableWorkflows)}
+		if assistantExecution.Batch == nil {
+			logFields = append(logFields, zap.String("batch_unavailable_reason", assistantBatchUnavailableReason))
+		}
+		logger.Info("operator assistant executor initialized", logFields...)
 	}
 
 	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, controlPlanePool, configFabricSigner)
@@ -3765,6 +3711,7 @@ func (a assistantToolRegistryAdapter) GetAgentTool(name string) (service.Assista
 		Effect:        descriptor.Effect,
 		DefaultRisk:   descriptor.DefaultRisk,
 		ResourceTypes: append([]string(nil), descriptor.ResourceTypes...),
+		InputSchema:   descriptor.Tool.InputSchema,
 	}, true
 }
 
@@ -3811,7 +3758,7 @@ func assistantTranscriptKeyProvider(cfg *config.Config) (service.AssistantTransc
 		privateKey = strings.TrimSpace(cfg.Nostr.PrivateKey)
 	}
 	if privateKey == "" {
-		return nil, fmt.Errorf("assistant transcript key requires nostr.private_key when assistant.agentic.enabled=true")
+		return nil, fmt.Errorf("assistant transcript and checkpoint key requires nostr.private_key when assistant.enabled=true")
 	}
 	sum := sha256.Sum256([]byte("bahia assistant transcript key v1\x00" + privateKey))
 	return service.StaticAssistantTranscriptKeyProvider{Key: service.AssistantTranscriptKey{
@@ -3958,6 +3905,11 @@ func loadAssistantSessionsWithTimeout(ctx context.Context, repo repository.Nostr
 	seen := map[string]struct{}{}
 	sessions := []domain.AssistantSession{}
 	for _, record := range records {
+		// Only historical v1 sessions seed the read-only legacy cache; v2
+		// projections are hydrated by the executor's recovery path.
+		if assistantRecordSchema(record.Tags) != domain.AssistantSessionSchema {
+			continue
+		}
 		var session domain.AssistantSession
 		if err := json.Unmarshal([]byte(record.Content), &session); err != nil {
 			if logger != nil {
@@ -3975,6 +3927,19 @@ func loadAssistantSessionsWithTimeout(ctx context.Context, repo repository.Nostr
 		sessions = append(sessions, session)
 	}
 	return sessions
+}
+
+func assistantRecordSchema(raw json.RawMessage) string {
+	var tags [][]string
+	if len(raw) == 0 || json.Unmarshal(raw, &tags) != nil {
+		return ""
+	}
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == domain.AssistantSessionTagSchema {
+			return tag[1]
+		}
+	}
+	return ""
 }
 
 // controlplaneRunner adapts the controlplane.Reactor to the BackgroundRunner interface.

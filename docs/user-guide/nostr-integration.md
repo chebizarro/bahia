@@ -884,3 +884,16 @@ operator allowlist. Empty configuration denies all callers. See
 [Workers](features/workers.md#direct-scheduling-mutations) for request, state
 and failure semantics. A command publisher alone is not proof of a consumer;
 continuity/package/tool-approval gaps remain in the migration verification report.
+
+## Operator assistant v2 contract
+
+The unified assistant contract retains ContextVM `assistant/prompt` and the
+registered `assistant/approval` method, and adds `assistant/cancel` and
+`assistant/reconcile` at activation. New session state uses kind 30900 with
+`bahia.assistant-session.v2`; encrypted immutable execution checkpoints use
+4903 (`domain=assistant`, `type=execution-checkpoint`, schema
+`bahia.audit.assistant-execution-checkpoint.v1`). A ContextVM acknowledgment
+is not evidence that a submitted tool completed. Follow the scoped state and
+audit subscriptions; do not infer failure from EOSE or missing events. The v2
+contract is additive until the unified executor is wired. See
+[Operator Assistant](features/operator-assistant.md).

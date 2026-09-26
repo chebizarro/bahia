@@ -394,3 +394,13 @@ Policy CRUD publishes canonical `30900` registry state; worker transitions
 publish canonical worker state. Package and tool-approval publisher availability
 still does not establish production consumer availability; see the migration
 verification report for the remaining gaps.
+
+## Operator assistant v2 methods (contract; activation pending)
+
+The currently registered assistant methods are `assistant/prompt` and
+`assistant/approval`—not `assistant/approve` or `assistant/reject`. V2 keeps
+`assistant/approval` with explicit run/proposal revision or action identity,
+and adds `assistant/cancel` (`run|session`) and exact-event
+`assistant/reconcile`. Intents remain ContextVM 25910; 30900 v2 sessions and
+4903 encrypted checkpoints carry durable truth. An ACK is not downstream
+completion. See [protocol](operator-assistant-protocol.md).

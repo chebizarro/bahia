@@ -1,0 +1,216 @@
+{
+  "feature_id": "BAHIA_ASSISTANT_UNIFIED_EXECUTION",
+  "criteria": [
+    {
+      "id": "A1",
+      "claim": "Closed workflow, phase and work-state enums with v2 session and interface contracts",
+      "tests": [
+        "TestAssistantExecutionEnumsAndPlanValidation"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A2",
+      "claim": "Nil versus empty AllowedTools survives JSON and nested scope/work arguments cannot alias",
+      "tests": [
+        "TestAssistantAllowedToolsRoundTripAndDeepClone"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A3",
+      "claim": "Batch approval RFC 8785 bytes and SHA-256 match shared Go/browser vectors",
+      "tests": [
+        "TestAssistantBatchApprovalGoldenVectors",
+        "web/tests/unit/assistant/assistant-contract.test.js",
+        "TestAssistantJCSRFC8785NumberSamples",
+        "TestAssistantIJSONRejectsDuplicateKeysAndLoneSurrogates",
+        "TestAssistantApprovalScopeArgumentCommitmentVector"
+      ],
+      "owner": "item_1_and_4"
+    },
+    {
+      "id": "A4",
+      "claim": "Every historical class is deterministic and no single field grants executable authority",
+      "tests": [
+        "TestClassifyAssistantLegacySessionMatrix",
+        "TestClassifyAssistantLegacySessionRejectsSourceMismatch",
+        "TestClassifyAssistantLegacyBatchDraftKeepsSeparateHashes"
+      ],
+      "owner": "item_1"
+    },
+    {
+      "id": "A5",
+      "claim": "Both workflows use one durable executor with fail-closed checkpoints and receipt accounting",
+      "tests": [
+        "TestAssistantUnifiedExecutionJoinedBatchEditApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedIterativeApproveRestart",
+        "TestAssistantExecutionStoreEncryptedChainIgnoresArrivalAndTimestamp",
+        "TestAssistantCheckpointChainRejectsForkGapAndDisconnectedRoot",
+        "TestAssistantCheckpointRetryWithDifferentPayloadIsRefused",
+        "TestAssistantExecutionCheckpointFailureAtEveryBoundaryBlocksSafely",
+        "TestAssistantExecutionRelayRejectedReservationPreventsDispatch"
+      ],
+      "owner": "items_2_and_3"
+    },
+    {
+      "id": "A6",
+      "claim": "Browser edits bind revision and hash, cancellation is run-bound, v1 controls are read-only",
+      "tests": [
+        "web/tests/unit/assistant/assistant-contract.test.js",
+        "web/tests/e2e/assistant-unified-execution.spec.js"
+      ],
+      "owner": "item_4"
+    },
+    {
+      "id": "A7",
+      "claim": "A sync -> async -> sync batch and a multi-call iterative response resume after reconstructing every service and execute each eligible item exactly once without dropping the tail",
+      "tests": [
+        "TestAssistantExecutionBatchSyncAsyncSyncResumesAfterFullRestartExactlyOnce",
+        "TestAssistantExecutionIterativeMultiCallTailSurvivesSuspensionAndRestart"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A8",
+      "claim": "Replayed terminal events and replayed consumption do not duplicate observations or transcript entries, open extra observers, or advance the cursor twice",
+      "tests": [
+        "TestAssistantExecutionReplayedTerminalEventsDoNotDuplicate",
+        "TestAssistantExecutionConsumeReplayAfterTranscriptAppendIsIdempotent",
+        "TestAssistantTranscriptAppendOnceIsIdempotentAndDedupeIsOrderIndependent"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A9",
+      "claim": "Cancellation during model work, dispatch, observation and restart prevents successors while retaining submitted-effect accounting; stale targets cannot stop a newer run",
+      "tests": [
+        "TestAssistantExecutionCancellationDuringModelWorkDiscardsLateProposal",
+        "TestAssistantExecutionCancellationDuringDispatchKeepsAccounting",
+        "TestAssistantExecutionCancellationDuringObservationSurvivesRestart",
+        "TestAssistantExecutionCancellationScopesAndStaleTargets"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A10",
+      "claim": "A receipt-less dispatching item becomes uncertain, is never replayed, blocks successors and resolves only through verified request-event evidence",
+      "tests": [
+        "TestAssistantExecutionMissingReceiptBecomesUncertainAndReconcilesWithoutReplay",
+        "TestAssistantRequestEvidenceProvesExactSubmissionOnly"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A11",
+      "claim": "Hooks tighten but never loosen, changed approved input never executes, batch approval stays mandatory, action approval binds one work item, and nil/empty AllowedTools hold across workflows and restart",
+      "tests": [
+        "TestAssistantExecutionHookChangingApprovedInputNeverExecutesUnreviewedContent",
+        "TestAssistantRuntimeHooksTightenButNeverLoosen",
+        "TestAssistantRuntimeApprovalBindsExactIterativeWorkAndBatchNeedsApproval",
+        "TestAssistantExecutionIterativeActionApprovalBindsExactWork",
+        "TestAssistantExecutionAllowedToolsNilVersusEmptyAcrossWorkflowsAndRestart",
+        "TestAssistantCheckpointPreservesNilVersusEmptyAllowedTools"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A12",
+      "claim": "Observation keeps one scoped backfill-plus-live subscription per receipt; EOSE never completes it; CLOSED/AUTH blocks (projection only) and reissues; provenance is validated",
+      "tests": [
+        "TestAssistantExecutionObserverKeepsLiveSubscriptionAfterEOSE",
+        "TestAssistantExecutionObserverClosedAndAUTHBlockThenReissue",
+        "TestAssistantExecutionObserverValidatesProvenance",
+        "TestAssistantExecutionObservationBlockedIsVolatileAndReissues"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A13",
+      "claim": "v2 session projections have strictly increasing created_at per session, including same-second transitions and across restarts",
+      "tests": [
+        "TestAssistantExecutionProjectionCreatedAtStrictlyIncreasesAcrossRestart"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A14",
+      "claim": "Recovery is one path: v1 history converts once through the pure classifier; accounting-only conversions never dispatch or reason; ambiguous history parks",
+      "tests": [
+        "TestAssistantRecoveryConvertsV1IterativeWaitingAsyncForAccountingOnly",
+        "TestAssistantRecoveryConvertsV1BatchDraftForV2Approval",
+        "TestAssistantRecoveryParksAmbiguousHistory"
+      ],
+      "owner": "item_2"
+    },
+    {
+      "id": "A15",
+      "claim": "Only the unified executor dispatches assistant work: the orchestrator's direct batch dispatch and submittedPlans, AgentLoop Execute/ExecuteWithHooks dispatch, the runtime session persister/metadata writes and observeDownstreamResult are removed; subagent child calls are gated and synchronous-only",
+      "tests": [
+        "TestAssistantDispatchHasOneBoundary",
+        "TestAssistantRuntimeSubagentChildCallsAreGatedAndSyncOnly"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A16",
+      "claim": "Workflow selection is explicit request > persisted session > assistant.default_workflow (falling back to the deprecated agentic flag); the flag never gates construction; a second prompt against an awaiting, executing, waiting, cancelling-with-accounting or blocked run returns run_in_progress",
+      "tests": [
+        "TestAssistantOrchestratorWorkflowSelectionPrecedence",
+        "TestAssistantOrchestratorSecondPromptRefusedForEveryUnfinishedPhase",
+        "TestAssistantDefaultWorkflowSelection",
+        "TestAssistantAgenticValidation",
+        "TestAssistantExecutionWiringIsUnconditionalAndFlagOnlySelectsDefault"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A17",
+      "claim": "Joined real-service flow: batch proposal edited (reorder/delete/argument change) and approved with the revision-bound v2 hash executes exactly the approved sequence once across a full restart with no model request on continuation; approval cannot bypass a changed permission policy or the persisted command scope",
+      "tests": [
+        "TestAssistantUnifiedExecutionJoinedBatchEditApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedIterativeApproveRestart",
+        "TestAssistantUnifiedExecutionJoinedApprovalCannotBypassChangedPolicy",
+        "TestAssistantUnifiedExecutionJoinedApprovalCannotBypassCommandScope"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A18",
+      "claim": "Unversioned v1 approvals follow Decision 6: unedited plan-hash approval only for the matching migrated awaiting draft, edited ModifiedPlan refused with approval_contract_upgrade_required without state change, action-ID only for the unique migrated pending action, plan-hash cancel only for the migrated current batch run, v2-native runs require v2 contracts",
+      "tests": [
+        "TestTranslateLegacyAssistantApprovalRules",
+        "TestAssistantHandlerLegacyBatchApprovalRunsThroughExecutor",
+        "TestAssistantHandlerLegacyActionAndCancelRules",
+        "TestAssistantHandlerNativeRunsRequireV2Contracts",
+        "TestAssistantOrchestratorRequiresVersionedContracts"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A19",
+      "claim": "Production wiring passes the engine and store to startup recovery, which resumes in-flight runs instead of parking them; unknown session IDs are proven new by a scoped EOSE lookup; v1-only history is read-only; a session-scope cancel on a finished run stays enforced after restart",
+      "tests": [
+        "TestAssistantExecutionWiringStartupRecoveryResumes",
+        "TestAssistantOrchestratorLegacyAndUnknownSessions",
+        "TestAssistantOrchestratorSessionCloseOnFinishedRunSurvivesRestart"
+      ],
+      "owner": "item_3"
+    },
+    {
+      "id": "A20",
+      "claim": "Internal tools (subagents, skills) keep their service-owned registration outside the batch catalog and pass the common scope/schema/policy/hook gate as executor work; the iterative proposer returns whole responses and owns a restart-proof model-iteration cap; nil/empty/out-of-scope AllowedTools hold with the real proposer",
+      "tests": [
+        "TestAssistantRuntimeInternalToolsPassCommonGateAndStayOutOfBatch",
+        "TestAssistantIterativeDelegatesSubagentThroughExecutor",
+        "TestAssistantIterativeSubagentToolRestrictionIntersection",
+        "TestAssistantIterativeCommandScopeWithholdsSubagentDelegation",
+        "TestAssistantIterativeSkillLoadRunsThroughExecutor",
+        "TestAssistantIterativeProposerReturnsWholeResponseAndContinuesFromTranscript",
+        "TestAssistantIterativeProposerEnforcesIterationCapAcrossRestart",
+        "TestAssistantIterativeAllowedToolsNilEmptyAndOutOfScopeAcrossRestart"
+      ],
+      "owner": "item_3"
+    }
+  ]
+}

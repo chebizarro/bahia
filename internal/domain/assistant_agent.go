@@ -26,8 +26,9 @@ func (s AssistantAgentLoopState) Terminal() bool {
 	}
 }
 
-// AssistantAgentLoopMetadata is the JSON shape stored in
-// AssistantSession.Metadata["agent_loop"] by later loop/runtime items.
+// AssistantAgentLoopMetadata is the historical v1 JSON shape stored in
+// AssistantSession.Metadata["agent_loop"]. New v2 execution must use
+// AssistantExecution and retain this type only for historical decoding.
 type AssistantAgentLoopMetadata struct {
 	RunID                      string                  `json:"run_id"`
 	Iteration                  int                     `json:"iteration"`

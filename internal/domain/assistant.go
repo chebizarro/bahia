@@ -121,25 +121,36 @@ type AssistantPlanStep struct {
 // AssistantPromptRequest is the ContextVM params contract for assistant prompt
 // intents authored by the operator browser key.
 type AssistantPromptRequest struct {
-	SessionID    string         `json:"session_id"`
-	TurnID       string         `json:"turn_id"`
-	Prompt       string         `json:"prompt"`
-	RouteContext map[string]any `json:"route_context,omitempty"`
-	SelectedRefs []string       `json:"selected_refs,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
+	ContractVersion int               `json:"contract_version,omitempty"`
+	Workflow        AssistantWorkflow `json:"workflow,omitempty"`
+	SessionID       string            `json:"session_id"`
+	TurnID          string            `json:"turn_id"`
+	Prompt          string            `json:"prompt"`
+	RouteContext    map[string]any    `json:"route_context,omitempty"`
+	SelectedRefs    []string          `json:"selected_refs,omitempty"`
+	Metadata        map[string]any    `json:"metadata,omitempty"`
 }
 
 // AssistantApprovalRequest is the ContextVM params contract for approving,
 // rejecting, or canceling the latest assistant plan for a session.
 type AssistantApprovalRequest struct {
-	SessionID    string         `json:"session_id"`
-	PlanHash     string         `json:"plan_hash"`
-	ActionID     string         `json:"action_id,omitempty"`
-	CancelScope  string         `json:"cancel_scope,omitempty"`
-	Decision     string         `json:"decision"`
-	Reason       string         `json:"reason,omitempty"`
-	Message      string         `json:"message,omitempty"`
-	ModifiedPlan *AssistantPlan `json:"modified_plan,omitempty"`
+	ContractVersion  int               `json:"contract_version,omitempty"`
+	RequestID        string            `json:"request_id,omitempty"`
+	RunID            string            `json:"run_id,omitempty"`
+	Workflow         AssistantWorkflow `json:"workflow,omitempty"`
+	ProposalID       string            `json:"proposal_id,omitempty"`
+	BaseRevision     uint64            `json:"base_revision,omitempty"`
+	BasePlanHash     string            `json:"base_plan_hash,omitempty"`
+	ApprovedRevision uint64            `json:"approved_revision,omitempty"`
+	ApprovedPlanHash string            `json:"approved_plan_hash,omitempty"`
+	SessionID        string            `json:"session_id"`
+	PlanHash         string            `json:"plan_hash"`
+	ActionID         string            `json:"action_id,omitempty"`
+	CancelScope      string            `json:"cancel_scope,omitempty"`
+	Decision         string            `json:"decision"`
+	Reason           string            `json:"reason,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	ModifiedPlan     *AssistantPlan    `json:"modified_plan,omitempty"`
 }
 
 // AssistantTranscriptAEADEnvelope is the JSON content shape for kind 30316

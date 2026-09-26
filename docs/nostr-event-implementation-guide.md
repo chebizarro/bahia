@@ -676,3 +676,20 @@ and `d=<policy-id>` (the same shape as the projector); they never emit the retir
 policy registry kind. See the policy/worker user guides and the
 `NOSTR_NATIVE_CONTEXTVM_MIGRATION` verification report for tested behavior and
 the retained, unwired continuity/package/tool-approval findings.
+
+### Assistant unified execution checkpoint (contract; not yet wired)
+
+Assistant v2 reuses 30900 state at `d=bahia.assistant-session.v2:<session_id>`
+with `domain=assistant` and `schema=bahia.assistant-session.v2`. The durable
+execution journal is an immutable 4903 audit fact: required `domain=assistant`,
+`type=execution-checkpoint`, and
+`schema=bahia.audit.assistant-execution-checkpoint.v1`; add `session` and `run`
+for scoped reads, optional `revision`/`prev` lookup hints, and `e`/`p` when
+source/actor is known. Validate hints against authenticated checkpoint content.
+Do **not** add `d` to
+4903. Keep its content a service-held authenticated encrypted envelope, never
+public tool arguments or approval secrets. This follows section 4 above and
+Cascadia `NIP-CAS-0001`'s required 4903 tags and regular append-only class.
+Checkpoint retention, accepted OK and archive recovery must be proved before
+activation; public 30900 projections alone are not a dispatch journal. See
+[the assistant design](designs/assistant-unified-execution.md).

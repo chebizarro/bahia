@@ -288,3 +288,52 @@ func (f *assistantTranscriptHistoryFixture) BuildModelHistory(_ context.Context,
 	}
 	return out, nil
 }
+
+func TestAssistantTranscriptLogicalObservationIdentityDedupesReplay(t *testing.T) {
+	pub := &assistantTestPublisher{}
+	store := newTestAssistantTranscriptStore(t, pub, nil)
+	req := AssistantTranscriptAppend{SessionID: "logical-session", TurnID: "turn", RunID: "run", Sequence: 1, LogicalID: "run:work:observation", Message: textAssistantMessage(domain.AssistantAgentMessageRoleTool, "observed")}
+	if _, err := store.AppendMessage(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	events := pub.eventsOfKind(domain.KindAssistantTranscript)
+	if len(events) != 2 || tagValue(events[0].Tags, "d") != tagValue(events[1].Tags, "d") {
+		t.Fatal("logical identity was not stable")
+	}
+	replay := newTestAssistantTranscriptStore(t, nil, newReplayTranscriptSubscriber(events))
+	records, err := replay.Replay(context.Background(), AssistantTranscriptReplayQuery{SessionID: "logical-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("replayed logical observations=%d", len(records))
+	}
+}
+
+func TestAssistantTranscriptAppendOnceIsIdempotentAndDedupeIsOrderIndependent(t *testing.T) {
+	relay := newAssistantTestRelay()
+	store := newTestAssistantTranscriptStore(t, relay, relay)
+	appendTranscriptForTest(t, store, "once", "turn", 0, domain.AssistantAgentMessageRoleUser, "hello")
+	req := AssistantTranscriptAppend{SessionID: "once", TurnID: "turn", RunID: "run", LogicalID: "run:work:observation", Message: textAssistantMessage(domain.AssistantAgentMessageRoleTool, "observed")}
+	first, err := store.AppendMessageOnce(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendMessageOnce(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Payload.Sequence != 1 || second.EventID != first.EventID || len(relay.published(nostr.Kind(domain.KindAssistantTranscript))) != 2 {
+		t.Fatalf("append once: first=%+v second=%+v", first.Payload.Sequence, second.EventID)
+	}
+	a := AssistantTranscriptRecord{EventID: "b", Payload: domain.AssistantTranscriptPayload{Sequence: 3, Metadata: map[string]any{"logical_id": "x"}}}
+	b := AssistantTranscriptRecord{EventID: "a", Payload: domain.AssistantTranscriptPayload{Sequence: 5, Metadata: map[string]any{"logical_id": "x"}}}
+	left := dedupeAssistantLogicalRecords([]AssistantTranscriptRecord{a, b})
+	right := dedupeAssistantLogicalRecords([]AssistantTranscriptRecord{b, a})
+	if len(left) != 1 || len(right) != 1 || left[0].EventID != right[0].EventID || left[0].Payload.Sequence != 3 {
+		t.Fatalf("dedupe depends on arrival order: %+v %+v", left, right)
+	}
+}

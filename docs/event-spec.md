@@ -456,3 +456,15 @@ state (`domain=policy`, `schema=bahia.cp-state.v1`, `d=<policy-id>`) and deletio
 tombstones, matching the canonical projector; no legacy registry event is
 published. The transport owns the single correlated response, encrypted reply
 and replay. See the migration verification report for capabilities still unwired.
+
+## Assistant unified execution v2 (contract; activation pending)
+
+| Surface | Kind | Contract |
+| --- | --- | --- |
+| New session read model | 30900 | `bahia.assistant-session.v2`, `d=bahia.assistant-session.v2:<session_id>`, `domain=assistant` |
+| Immutable encrypted execution checkpoint | 4903 | `domain=assistant`, `type=execution-checkpoint`, `schema=bahia.audit.assistant-execution-checkpoint.v1`, `session`, `run`; optional `revision`/`prev` lookup hints and `e`/`p`, no `d` |
+| Mutation and decision | 25910 | `assistant/prompt`, registered `assistant/approval`, plus v2 `assistant/cancel` and `assistant/reconcile` when wired |
+
+The 4903 checkpoint is append-only and encrypted; public tags contain no tool
+arguments. It is not a 30900 replacement event. See
+[the assistant protocol](operator-assistant-protocol.md).

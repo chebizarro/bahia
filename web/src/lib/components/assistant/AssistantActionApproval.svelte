@@ -1,13 +1,18 @@
 <script>
   import { publishAssistantActionDecision } from '$lib/stores/assistant.svelte.js';
+  import { describeAssistantRequestError } from '$lib/nostr/assistant.js';
 
   let { sessionId = '', action = null, disabled = false } = $props();
 
   let submitting = $state(false);
+  // The card is never removed optimistically: after the service acknowledges a
+  // decision it stays, locked, until the projection records the action consumed.
+  let sentDecision = $state('');
   let error = $state('');
   let reason = $state('');
 
   const actionId = $derived(action?.actionId || action?.action_id || '');
+  const runId = $derived(action?.runId || action?.run_id || '');
   const toolName = $derived(action?.toolName || action?.tool_name || 'tool');
   const toolCallId = $derived(action?.toolCallId || action?.tool_call_id || '');
   const approvalPrompt = $derived(action?.approvalPrompt || action?.approval_prompt || 'This assistant action requires approval.');
@@ -24,18 +29,20 @@
   }
 
   async function decide(decision) {
-    if (!sessionId || !actionId || submitting) return;
+    if (!sessionId || !runId || !actionId || submitting || sentDecision) return;
     submitting = true;
     error = '';
     try {
       await publishAssistantActionDecision({
         sessionId,
+        runId,
         actionId,
         decision,
         reason: reason.trim()
       });
+      sentDecision = decision;
     } catch (err) {
-      error = err?.message || String(err);
+      error = describeAssistantRequestError(err, 'Decision').message;
     } finally {
       submitting = false;
     }
@@ -43,7 +50,7 @@
 </script>
 
 {#if actionId}
-  <section class="action-card" aria-label="Assistant action approval">
+  <section class="action-card" aria-label="Assistant action approval" data-action-id={actionId} data-run-id={runId}>
     <div class="action-header">
       <div>
         <div class="eyebrow">Action approval required</div>
@@ -67,16 +74,19 @@
 
     <label>
       <span>Decision reason</span>
-      <input bind:value={reason} disabled={disabled || submitting} placeholder="Optional reason for audit" />
+      <input bind:value={reason} disabled={disabled || submitting || Boolean(sentDecision)} placeholder="Optional reason for audit" />
     </label>
 
     {#if error}
-      <p class="error">{error}</p>
+      <p class="error" role="alert">{error}</p>
+    {/if}
+    {#if sentDecision}
+      <p class="sent" role="status">Decision sent ({sentDecision}); waiting for the canonical execution state to record it.</p>
     {/if}
 
     <div class="actions">
-      <button type="button" class="approve" disabled={disabled || submitting} onclick={() => decide('approve')}>Approve action</button>
-      <button type="button" class="reject" disabled={disabled || submitting} onclick={() => decide('reject')}>Reject</button>
+      <button type="button" class="approve" disabled={disabled || submitting || Boolean(sentDecision)} onclick={() => decide('approve')}>Approve action</button>
+      <button type="button" class="reject" disabled={disabled || submitting || Boolean(sentDecision)} onclick={() => decide('reject')}>Reject</button>
     </div>
   </section>
 {/if}
@@ -109,4 +119,5 @@
   .approve { background: var(--success); color: white; }
   .reject { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); }
   .error { color: var(--error); }
+  .sent { color: var(--text-primary); }
 </style>

@@ -2,13 +2,13 @@
 
 Canonical event contract for the LLM-enabled Bahia operator assistant.
 
-This document defines Milestone 1 protocol contracts only. It does not define orchestrator implementation, LLM provider behavior, UI components, or recovery runners.
+This document records the registered v1 transport and the additive v2 contract. The v2 execution path is not enabled until the unified executor and routing are wired; see [the design contract](designs/assistant-unified-execution.md).
 
 ## Design constraints
 
 - Nostr is the source of truth for assistant sessions and turns.
 - The assistant uses event-native pub/sub flows only: subscribe, react to events, publish results, and verify relay responses.
-- No downstream control-plane command may be published before explicit operator approval.
+- Batch work always requires explicit plan approval. Iterative calls follow the configured permission policy; human approval is required whenever that policy returns `ask`.
 - Transport interruptions are not terminal business outcomes. Never infer `completed`, `failed`, or `rejected` from a timeout or missing event.
 - Phase 1 downstream commands are signed by the Bahia service key and carry an `agent` tag for assistant attribution.
 
@@ -16,8 +16,8 @@ This document defines Milestone 1 protocol contracts only. It does not define or
 
 | Surface | Kind(s) | Author | Semantics |
 | --- | --- | --- | --- |
-| Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | JSON-RPC methods such as `assistant/prompt`, `assistant/approve`, `assistant/reject`, and `assistant/cancel` |
-| Assistant session state | `30900` or `30078` | Bahia service pubkey | Replaceable canonical projection keyed by `d=<assistant-session-coordinate>` |
+| Assistant prompt and approval intents | ContextVM `25910`, optionally wrapped in `1059`/`21059` | Operator browser key | Registered v1 methods `assistant/prompt` and `assistant/approval`; v2 adds `assistant/cancel` and `assistant/reconcile` |
+| Assistant session state | `30900` | Bahia service pubkey | Replaceable canonical projection keyed by `d=<assistant-session-coordinate>` |
 | Assistant status | `30315` | Bahia service pubkey | NIP-38 progress/status events correlated to the ContextVM request with `e` and resource tags |
 | Assistant transcript | `30316` | Bahia service pubkey | Append-only encrypted conversation/tool transcript entries using a service-held symmetric-key AEAD envelope in `content` |
 | Assistant audit/result facts | `4903` | Bahia service pubkey | Immutable terminal, approval, execution, and provenance facts |
@@ -66,11 +66,11 @@ Content JSON contract inside kind `25910`:
 }
 ```
 
-### `assistant/approve`, `assistant/reject`, and `assistant/cancel`
+### `assistant/approval` (registered v1 method; retained for v2 decisions)
 
 Author: operator browser key.
 
-Semantics: approval/cancel decision. Legacy approvals remain valid by `plan_hash`; agentic approvals add `action_id` to resume one deferred action. `cancel_scope` scopes cancel decisions (`action`, `turn`, or `session`) without removing the existing `plan_hash` compatibility field.
+Semantics: the `decision` parameter selects approve/reject (and historical cancel). The transport method is **one registered method**, `assistant/approval`; there are no registered `assistant/approve` or `assistant/reject` methods. V2 decisions carry `contract_version: 2` with run/proposal-revision (batch) or run/action (iterative) identity. Unversioned v1 requests are accepted only for explicitly migrated v1 targets: an unedited `plan_hash` approve/reject matching the migrated awaiting draft, an `action_id` decision for the unique migrated pending action, or a `plan_hash` cancel of the migrated current batch run; an edited `modified_plan` from an old client is refused with `approval_contract_upgrade_required` and changes nothing. Run/session cancellation uses the distinct `assistant/cancel` method.
 
 Content JSON contract:
 
@@ -78,7 +78,7 @@ Content JSON contract:
 {
   "jsonrpc": "2.0",
   "id": "assistant-approval:<session_id>:<plan_hash>",
-  "method": "assistant/approve",
+  "method": "assistant/approval",
   "params": {
     "session_id": "<session_id>",
     "plan_hash": "<sha256_hex>",
@@ -95,7 +95,7 @@ Content JSON contract:
 
 Author: Bahia service pubkey.
 
-- `30900`/`30078` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema` tags.
+- `30900` carries the latest assistant session projection with `d`, `session`, `p=<operator_pubkey>`, `agent`, `status`, `domain=assistant`, and `schema` tags.
 - `30315` carries non-terminal progress such as `planning`, `planned`, `awaiting_approval`, `executing`, `step_started`, `step_completed`, or `blocked`.
 - `30316` carries durable transcript messages. Its `content` is not per-recipient sealed; it is a service-held symmetric-key AEAD envelope with `schema=bahia.assistant-transcript.v1`, `envelope=service-held-symmetric-key-aead`, `key_ref`, `key_version`, `nonce`, and `ciphertext`. Tags mirror `domain=assistant`, `schema`, `session`, `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation`, and `envelope` for scoped replay and key rotation.
 - `4903` carries immutable approval, execution, and terminal facts such as `completed`, `blocked`, `failed`, `rejected`, `cancelled`, or `needs_clarification`.
@@ -178,7 +178,7 @@ JSON Schema:
 sha256(canonical_json({"session_id": <session_id>, "plan": <AssistantPlan>}))
 ```
 
-The hash binds an operator approval to one exact session plan. An `assistant/approve` ContextVM request with a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
+The hash binds an operator approval to one exact session plan. An `assistant/approval` ContextVM request with a hash that does not match the latest session plan MUST be rejected as stale and MUST NOT publish downstream commands.
 
 At execution time, each step receives a derived idempotency key:
 
@@ -221,7 +221,7 @@ Valid states:
 - Read-only explanatory turns and clarification prompts may complete without approval.
 - `decision=approve` executes only if the approval `plan-hash` matches the latest session plan hash.
 - `decision=reject` returns the session to `idle` and MUST NOT publish downstream commands.
-- `decision=cancel` is valid for `executing` or `blocked` sessions. It moves the session to `failed`, stops observation, and does not attempt rollback.
+- Historical `decision=cancel` is a v1 approval-path behavior. V2 `assistant/cancel` persists stop intent, prevents new work, and continues accounting for already-submitted effects; it does not attempt rollback.
 - Duplicate approval for the same already-submitted plan MUST NOT republish downstream commands.
 
 ## No-timeout semantics
@@ -300,3 +300,38 @@ Consumers and handlers MUST validate inbound events before acting:
 - JSON-RPC content matches the expected ContextVM method contract.
 - Events are deduped by event ID.
 - Replaceable/addressable semantics keep only the latest event by service pubkey and `d` tag for `30900`, `30078`, `11316`-`11320`, and `30002`.
+
+## Version 2 contract (frozen; activation requires items 2-4)
+
+New sessions use `bahia.assistant-session.v2` on kind `30900`,
+`d=bahia.assistant-session.v2:<session_id>`, and a persisted `workflow`
+(`batch` or `iterative`). Prompt selection is explicit request workflow, then
+persisted session workflow, then configured default. Current config cannot
+change an existing session's behavior. The v1 schema/hash remain read-only
+compatibility inputs.
+
+`assistant/approval` v2 batch params add `contract_version:2`, `request_id`,
+`run_id`, `workflow:batch`, `proposal_id`, `base_revision`, `base_plan_hash`,
+`approved_revision`, `approved_plan_hash`, `decision`, and optional
+`modified_plan`. An unchanged approval repeats the base revision; an edit uses
+base + 1. The approved hash is SHA-256 of RFC 8785 JSON over
+`AssistantBatchApprovalHashInput`; shared byte/hash vectors are at
+`testdata/assistant/batch_approval_hash_vectors.json`. The hash scope is the
+public commitment (`allowed_tools` null versus [] preserved, plus private
+argument digest), not the private arguments. An old edited `ModifiedPlan`
+submission is rejected with `approval_contract_upgrade_required`; the browser
+must refresh and resubmit with v2 binding. V2 iterative decisions name an
+exact `action_id` and run. Approval never overrides current hard-deny policy.
+
+`assistant/cancel` v2 params require `contract_version:2`, `session_id`,
+`run_id`, `scope:run|session`, and optional `reason`. A stale run cannot cancel
+a newer run. `assistant/reconcile` v2 names one exact `work_id` and downstream
+`request_event_id`; missing evidence does not justify replay.
+
+Immutable execution checkpoints use kind `4903`, required tags
+`domain=assistant`, `type=execution-checkpoint`,
+`schema=bahia.audit.assistant-execution-checkpoint.v1`, with scoped `session`
+and `run` tags, optional `revision`/`prev` lookup hints and source `e`/actor
+`p`. The authenticated plaintext predecessor wins over public hints. No `d` tag. Content is
+authenticated encrypted work state; public `30900` is only a projection.
+`30315` status and ContextVM responses are not downstream completion proof.

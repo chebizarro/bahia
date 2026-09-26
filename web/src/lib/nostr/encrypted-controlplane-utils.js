@@ -87,7 +87,13 @@ export function extractContextVMResult(payload, requestEventId, contextVMRequest
       throw new Error('ContextVM encrypted result payload did not correlate to the ContextVM request id');
     }
     if (payload.error) {
-      throw new Error(payload.error.message || 'ContextVM encrypted request failed');
+      // A JSON-RPC error is a definitive service response, unlike a transport
+      // timeout or disconnect. Keep its code/data so callers can tell them apart.
+      const error = new Error(payload.error.message || 'ContextVM encrypted request failed');
+      error.rpcError = payload.error;
+      error.code = payload.error.code;
+      error.data = payload.error.data;
+      throw error;
     }
     return payload.result ?? {};
   }

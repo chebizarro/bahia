@@ -1,0 +1,79 @@
+{
+  "feature_id": "BAHIA_ASSISTANT_UNIFIED_EXECUTION",
+  "item_1": {
+    "domain": [
+      "go test ./internal/domain -run 'TestAssistant|TestDecode'",
+      "testdata/assistant/batch_approval_hash_vectors.json",
+      "go test ./internal/domain -run TestAssistantJCSRFC8785NumberSamples"
+    ],
+    "compat": [
+      "go test ./internal/service -run TestClassifyAssistantLegacy"
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
+    ]
+  },
+  "item_2": {
+    "executor": [
+      "go test ./internal/service -run 'TestAssistantExecution' -count=1"
+    ],
+    "store": [
+      "go test ./internal/service -run 'TestAssistantCheckpoint|TestAssistantExecutionStore' -count=1"
+    ],
+    "observer": [
+      "go test ./internal/service -run 'TestAssistantExecutionObserver' -count=1"
+    ],
+    "recovery": [
+      "go test ./internal/service -run 'TestAssistantRecovery' -count=1"
+    ],
+    "runtime_and_evidence": [
+      "go test ./internal/service -run 'TestAssistantRuntime|TestAssistantRequestEvidence|TestAssistantTranscript' -count=1",
+      "go test ./internal/mcp -run TestAssistantAsyncToolRequestMethods -count=1"
+    ],
+    "race": [
+      "go test -race ./internal/service -run 'TestAssistantExecution|TestAssistantRecovery|TestAssistantCheckpoint|TestAssistantTranscript' -count=25",
+      "GOFLAGS=-p=1 go test -race ./..."
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
+    ]
+  },
+  "item_3": {
+    "routing_and_proposers": [
+      "go test ./internal/service -run 'TestAssistantOrchestrator|TestAssistantIterative|TestAssistantRuntime|TestAssistantDispatchHasOneBoundary' -count=1"
+    ],
+    "joined_integration": [
+      "go test ./internal/service -run TestAssistantUnifiedExecutionJoined -count=1"
+    ],
+    "transport_compat": [
+      "go test ./internal/controlplane -run 'TestTranslateLegacyAssistantApproval|TestAssistantHandler' -count=1"
+    ],
+    "config_and_wiring": [
+      "go test ./internal/config -run 'TestAssistantDefaultWorkflowSelection|TestAssistantAgenticValidation' -count=1",
+      "go test ./internal/app -run TestAssistantExecutionWiring -count=1"
+    ],
+    "race": [
+      "go test -race ./internal/service -run 'TestAssistantUnifiedExecutionJoined|TestAssistantOrchestrator|TestAssistantIterative' -count=10",
+      "GOFLAGS=-p=1 go test -race ./..."
+    ],
+    "gates": [
+      "go build ./...",
+      "go vet ./...",
+      "go test ./...",
+      "golangci-lint run --max-issues-per-linter=0 --max-same-issues=0"
+    ]
+  },
+  "item_4": {
+    "planned": [
+      "shared golden vector test",
+      "cache and stale projection tests",
+      "browser-connected edit/cancel/restart E2E"
+    ]
+  }
+}

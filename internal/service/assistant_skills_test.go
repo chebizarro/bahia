@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -67,27 +66,24 @@ func TestAssistantResolveContainedPathRejectsTraversal(t *testing.T) {
 	}
 }
 
-func TestAssistantAgentLoopSkillLoadReturnsBody(t *testing.T) {
+func TestAssistantIterativeSkillLoadRunsThroughExecutor(t *testing.T) {
+	relay := newAssistantTestRelay()
 	skills := mustSkillLibrary(AssistantSkillSpec{Name: "deploy", Description: "Deploy safely", Root: "/skills/deploy", Body: "load-me deploy instructions"})
 	model := &assistantLoopModel{responses: []*llm.AgentModelResponse{
 		{ToolCalls: []domain.AssistantAgentToolCall{{ID: "call-skill", Name: assistantSkillLoadToolName, Arguments: map[string]any{"skill": "deploy"}}}, StopReason: llm.AgentStopReasonToolCalls},
 		{Content: textBlocks("using the deploy skill"), StopReason: llm.AgentStopReasonEndTurn},
 	}}
-	loop, _ := newAssistantExtLoop(t, model, &assistantRuntimeMCPServer{}, assistantRuntimeRegistryWith(), domain.AssistantPermissionModeReview, AssistantAgentLoopConfig{Skills: skills})
-	session := assistantRuntimeSession("session-skill")
+	st := newAssistantLoopStack(t, relay, testAssistantSigner(t), &assistantRuntimeMCPServer{}, model, assistantLoopStackOptions{registry: assistantRuntimeRegistryWith(), agentic: AssistantAgentLoopConfig{Skills: skills}, permMode: domain.AssistantPermissionModeReview})
 
-	res, err := loop.StartTurn(context.Background(), AssistantAgentTurnRequest{Session: session, TurnID: "turn-skill", Prompt: "use the deploy skill"})
-	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
-	}
-	if !res.Completed {
-		t.Fatalf("result = %#v", res)
+	x := st.runIterative(t, relay, "session-skill", "use the deploy skill")
+	if x.Phase != domain.AssistantExecutionCompleted || assistantWorkState(x, 0) != domain.AssistantWorkSucceeded || x.Work[0].ToolName != assistantSkillLoadToolName {
+		t.Fatalf("skill load must run as an executor work item: phase=%s work=%+v", x.Phase, x.Work)
 	}
 	obs := findToolObservation(model.request(1), "call-skill")
 	if obs == nil || obs.Status != domain.AssistantToolObservationSucceeded || !strings.Contains(obs.Summary, "load-me deploy instructions") {
 		t.Fatalf("skill_load observation = %#v", obs)
 	}
-	// The turn-start catalog is injected as system context.
+	// The progressive-disclosure catalog is injected as system context.
 	if !requestHasText(model.request(0), "Deploy safely") {
 		t.Fatalf("skill catalog not injected at turn start: %#v", model.request(0).Messages)
 	}
@@ -100,13 +96,4 @@ func mustSkillLibrary(specs ...AssistantSkillSpec) *AssistantSkillLibrary {
 		lib.order = append(lib.order, spec.Name)
 	}
 	return lib
-}
-
-func findToolObservation(req llm.AgentModelRequest, toolCallID string) *domain.AssistantToolObservation {
-	for _, msg := range req.Messages {
-		if msg.Role == domain.AssistantAgentMessageRoleTool && msg.ToolCallID == toolCallID {
-			return msg.Observation
-		}
-	}
-	return nil
 }

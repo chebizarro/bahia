@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 
@@ -15,24 +15,28 @@ import (
 
 // AssistantSessionRecoveryConfig configures startup recovery of assistant sessions.
 type AssistantSessionRecoveryConfig struct {
+	// RecentLimit bounds the startup hydration query. It is a cache warm-up
+	// bound, not a historical inventory or migration-completeness guarantee.
 	RecentLimit   int
 	ServicePubkey string
 	Logger        *slog.Logger
-	AgentLoop     AssistantAgentLoopController
+	Engine        AssistantTurnEngine
+	Store         AssistantCheckpointStore
+	// Subscriber defaults to the orchestrator's relay subscriber.
+	Subscriber AssistantRelaySubscriber
 }
 
-// AssistantSessionRecoveryRunner resumes observation of pending assistant steps after restart.
+// AssistantSessionRecoveryRunner is the single recovery path for both
+// workflows: validate source sessions, classify/convert v1 history through the
+// pure compatibility classifier, checkpoint the conversion idempotently, then
+// hand the newest valid execution checkpoint to the engine's Recover entry.
 type AssistantSessionRecoveryRunner struct {
-	orchestrator  *AssistantOrchestrator
-	agentLoop     AssistantAgentLoopController
+	engine        AssistantTurnEngine
+	store         AssistantCheckpointStore
+	subscriber    AssistantRelaySubscriber
 	limit         int
 	servicePubkey string
 	logger        *slog.Logger
-}
-
-type recoveredSessionEvent struct {
-	session domain.AssistantSession
-	created nostr.Timestamp
 }
 
 func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg AssistantSessionRecoveryConfig) *AssistantSessionRecoveryRunner {
@@ -44,315 +48,193 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 	if limit <= 0 {
 		limit = 500
 	}
-	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, agentLoop: cfg.AgentLoop, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
+	subscriber := cfg.Subscriber
+	servicePubkey := strings.TrimSpace(cfg.ServicePubkey)
+	if orchestrator != nil {
+		if subscriber == nil {
+			subscriber = orchestrator.subscriber
+		}
+		if servicePubkey == "" {
+			servicePubkey = strings.TrimSpace(orchestrator.identity.Pubkey)
+		}
+	}
+	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, limit: limit, servicePubkey: servicePubkey, logger: logger.With("component", "assistant_session_recovery")}
 }
 
 func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-session-recovery" }
 
-// Run performs one EOSE-aware startup pass. It does not periodically poll.
-func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
-	if r == nil || r.orchestrator == nil {
-		return nil
-	}
-	o := r.orchestrator
-	if o.subscriber == nil {
-		r.logger.Warn("assistant session recovery skipped: relay subscriber not configured")
-		return nil
-	}
-	servicePubkey := r.servicePubkey
-	if servicePubkey == "" {
-		servicePubkey = strings.TrimSpace(o.identity.Pubkey)
-	}
-	if servicePubkey == "" {
-		r.logger.Warn("assistant session recovery skipped: service pubkey not configured")
-		return nil
-	}
+// assistantRecoverySource is the NIP-01-selected latest session projection for
+// one session coordinate, after signature, author and coordinate validation.
+type assistantRecoverySource struct {
+	event  *nostr.Event
+	schema string
+}
 
-	r.logger.Info("assistant session recovery started", "limit", r.limit, "service_pubkey", servicePubkey)
-	sessions, err := r.queryRecentSessions(ctx, servicePubkey)
-	if err != nil {
-		r.logger.Warn("assistant session recovery query failed", "error", err)
+// Run performs one EOSE-aware startup pass. It does not poll.
+func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
+	if r == nil {
 		return nil
 	}
-	for i := range sessions {
+	if r.engine == nil || r.store == nil {
+		r.logger.Warn("assistant recovery skipped: unified executor is not configured; sessions remain parked")
+		return nil
+	}
+	if r.subscriber == nil || r.servicePubkey == "" {
+		r.logger.Warn("assistant recovery skipped: relay subscriber or service pubkey not configured")
+		return nil
+	}
+	sources, err := r.collectSources(ctx)
+	if err != nil {
+		r.logger.Warn("assistant recovery query failed; sessions remain parked", "error", err)
+		return nil
+	}
+	recovered := 0
+	for _, src := range sources {
 		if ctx.Err() != nil {
 			return nil
 		}
-		r.recoverSession(ctx, &sessions[i])
+		var recErr error
+		if src.schema == domain.AssistantSessionSchemaV2 {
+			recErr = r.recoverV2(ctx, src.event)
+		} else {
+			recErr = r.recoverV1(ctx, src.event)
+		}
+		if recErr != nil {
+			r.logger.Error("assistant session parked during recovery", "event_id", src.event.ID.Hex(), "schema", src.schema, "error", recErr)
+			continue
+		}
+		recovered++
 	}
-	r.logger.Info("assistant session recovery completed", "sessions_checked", len(sessions))
+	r.logger.Info("assistant recovery pass completed", "sessions_seen", len(sources), "sessions_recovered", recovered, "limit", r.limit)
 	return nil
 }
 
-func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context, servicePubkey string) ([]domain.AssistantSession, error) {
-	serviceAuthor, err := nostr.PubKeyFromHex(servicePubkey)
+func (r *AssistantSessionRecoveryRunner) collectSources(ctx context.Context) ([]assistantRecoverySource, error) {
+	author, err := nostr.PubKeyFromHex(r.servicePubkey)
 	if err != nil {
 		return nil, fmt.Errorf("decode service pubkey: %w", err)
 	}
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{serviceAuthor}, Tags: nostr.TagMap{domain.AssistantSessionTagSchema: []string{domain.AssistantSessionSchema}}, Limit: r.limit}})
+	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{domain.AssistantSessionTagSchema: []string{domain.AssistantSessionSchema, domain.AssistantSessionSchemaV2}}, Limit: r.limit}
+	sub, err := r.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
 		return nil, err
 	}
-	defer merged.Close()
-
-	latest := map[string]recoveredSessionEvent{}
-	seenEvents := map[string]struct{}{}
-	eventsCh := merged.EventChan()
-	closedCh := merged.ClosedChan()
-	eoseCh := merged.EOSEChan()
+	defer sub.Close()
+	latest := map[string]assistantRecoverySource{}
+	order := []string{}
+	selected := func() []assistantRecoverySource {
+		out := make([]assistantRecoverySource, 0, len(order))
+		for _, id := range order {
+			out = append(out, latest[id])
+		}
+		return out
+	}
+	events := sub.EventChan()
+	closed := sub.ClosedChan()
+	eose := sub.EOSEChan()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case closed, ok := <-closedCh:
+		case c, ok := <-closed:
 			if !ok {
-				closedCh = nil
+				closed = nil
 				continue
 			}
-			r.logger.Warn("assistant session recovery relay subscription closed", "relay", closed.RelayURL, "reason", closed.Reason)
-		case ev, ok := <-eventsCh:
+			// Incomplete history cannot prove absence; park rather than guess.
+			return nil, fmt.Errorf("assistant recovery subscription closed: %s %s", c.RelayURL, c.Reason)
+		case ev, ok := <-events:
 			if !ok {
-				return sessionEventsToSlice(latest), nil
+				if !assistantEOSEReached(eose) {
+					return nil, errors.New("assistant recovery subscription ended before EOSE")
+				}
+				return selected(), nil
 			}
-			if ev == nil {
+			if ev == nil || ev.PubKey != author || !ev.CheckID() || !ev.VerifySignature() {
 				continue
 			}
-			eventID := ev.ID.Hex()
-			if _, dup := seenEvents[eventID]; dup {
+			schema := tagValue(ev.Tags, domain.AssistantSessionTagSchema)
+			if schema != domain.AssistantSessionSchema && schema != domain.AssistantSessionSchemaV2 {
 				continue
 			}
-			seenEvents[eventID] = struct{}{}
-			var session domain.AssistantSession
-			if err := json.Unmarshal([]byte(ev.Content), &session); err != nil {
-				r.logger.Warn("failed to parse recovered assistant session", "event_id", eventID, "error", err)
+			var header struct {
+				SessionID string `json:"session_id"`
+			}
+			if json.Unmarshal([]byte(ev.Content), &header) != nil || header.SessionID == "" || tagValue(ev.Tags, "session") != header.SessionID || tagValue(ev.Tags, "d") != schema+":"+header.SessionID {
 				continue
 			}
-			if session.SessionID == "" {
-				continue
+			current, seen := latest[header.SessionID]
+			if !seen {
+				order = append(order, header.SessionID)
 			}
-			if current, ok := latest[session.SessionID]; !ok || ev.CreatedAt > current.created {
-				latest[session.SessionID] = recoveredSessionEvent{session: session, created: ev.CreatedAt}
+			if !seen || assistantRecoverySourceNewer(schema, ev, current) {
+				copyEvent := *ev
+				latest[header.SessionID] = assistantRecoverySource{event: &copyEvent, schema: schema}
 			}
-		case <-eoseCh:
-			return sessionEventsToSlice(latest), nil
+		case <-eose:
+			return selected(), nil
 		}
 	}
 }
 
-func sessionEventsToSlice(latest map[string]recoveredSessionEvent) []domain.AssistantSession {
-	sessions := make([]domain.AssistantSession, 0, len(latest))
-	for _, item := range latest {
-		sessions = append(sessions, item.session)
+// assistantRecoverySourceNewer prefers a v2 projection over v1 history for
+// the same session; within one coordinate it applies NIP-01 replaceable
+// ordering (newest created_at, then lowest event ID).
+func assistantRecoverySourceNewer(schema string, ev *nostr.Event, current assistantRecoverySource) bool {
+	if schema != current.schema {
+		return schema == domain.AssistantSessionSchemaV2
 	}
-	return sessions
+	if ev.CreatedAt != current.event.CreatedAt {
+		return ev.CreatedAt > current.event.CreatedAt
+	}
+	return ev.ID.Hex() < current.event.ID.Hex()
 }
 
-func (r *AssistantSessionRecoveryRunner) recoverSession(ctx context.Context, recovered *domain.AssistantSession) {
-	if recovered == nil {
-		return
-	}
-	if r.recoverAgentLoop(ctx, recovered) {
-		return
-	}
-	if len(recovered.PendingSteps) == 0 {
-		return
-	}
-	if recovered.State != domain.AssistantSessionStateExecuting && recovered.State != domain.AssistantSessionStateBlocked {
-		return
-	}
-	lock := r.orchestrator.lockForSession(recovered.SessionID)
-	lock.Lock()
-	session := r.orchestrator.loadOrCreateSession(recovered.SessionID, recovered.OperatorPubkey)
-	*session = *recovered
-	lock.Unlock()
-
-	r.logger.Info("recovering assistant session", "session_id", recovered.SessionID, "state", recovered.State, "pending_steps", len(recovered.PendingSteps))
-	for {
-		lock.Lock()
-		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked {
-			lock.Unlock()
-			return
-		}
-		if len(session.PendingSteps) == 0 {
-			session.State = domain.AssistantSessionStateCompleted
-			_ = r.orchestrator.publishSession(ctx, session)
-			lock.Unlock()
-			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "completed", map[string]any{"summary": "assistant plan completed during startup recovery", "step": "completed", "plan_hash": session.LastPlanHash})
-			return
-		}
-		step := session.PendingSteps[0]
-		receipt := r.receiptForStep(session, step)
-		if receipt == nil {
-			r.logger.Warn("pending assistant step has no async receipt; leaving session blocked", "session_id", session.SessionID, "step_id", step.StepID)
-			session.State = domain.AssistantSessionStateBlocked
-			_ = r.orchestrator.publishSession(ctx, session)
-			lock.Unlock()
-			return
-		}
-		session.State = domain.AssistantSessionStateExecuting
-		_ = r.orchestrator.publishSession(ctx, session)
-		lock.Unlock()
-
-		r.logger.Info("recovering pending assistant step", "session_id", recovered.SessionID, "step_id", step.StepID, "downstream_request", receipt.RequestEventID)
-		outcome, err := r.findTerminalResult(ctx, receipt)
-		if err == nil && outcome.Status == "" {
-			outcome, err = r.orchestrator.observeDownstreamResult(ctx, recovered.SessionID, step, receipt)
-		}
-
-		lock.Lock()
-		if err != nil || outcome.Status == "blocked" {
-			session.State = domain.AssistantSessionStateBlocked
-			_ = r.orchestrator.publishSession(ctx, session)
-			lock.Unlock()
-			r.logger.Warn("assistant session recovery blocked", "session_id", recovered.SessionID, "step_id", step.StepID, "error", err)
-			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "blocked", map[string]any{"summary": "downstream observation blocked during startup recovery", "step": "blocked", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName})
-			return
-		}
-		if outcome.Status == "failed" {
-			session.State = domain.AssistantSessionStateFailed
-			_ = r.orchestrator.publishSession(ctx, session)
-			lock.Unlock()
-			r.logger.Info("assistant step recovered as failed", "session_id", recovered.SessionID, "step_id", step.StepID)
-			_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "failed", map[string]any{"summary": "downstream step failed before/during startup recovery", "step": "downstream_failed", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
-			return
-		}
-		r.orchestrator.clearPendingReceipt(session, receipt.IdempotencyKey)
-		removePendingStep(session, step.StepID)
-		_ = r.orchestrator.publishSession(ctx, session)
-		lock.Unlock()
-		r.logger.Info("assistant step recovered as completed", "session_id", recovered.SessionID, "step_id", step.StepID)
+func (r *AssistantSessionRecoveryRunner) hydrate(p domain.AssistantSessionV2, publishedAt nostr.Timestamp) {
+	if hydrator, ok := r.engine.(AssistantExecutionProjectionHydrator); ok {
+		hydrator.HydrateProjection(p, publishedAt)
 	}
 }
 
-func (r *AssistantSessionRecoveryRunner) recoverAgentLoop(ctx context.Context, recovered *domain.AssistantSession) bool {
-	metadata := assistantAgentLoopMetadata(recovered)
-	if metadata.State != domain.AssistantAgentLoopStateWaitingAsync || metadata.WaitingReceipt == nil {
-		return false
+func (r *AssistantSessionRecoveryRunner) recoverV2(ctx context.Context, ev *nostr.Event) error {
+	var p domain.AssistantSessionV2
+	if err := json.Unmarshal([]byte(ev.Content), &p); err != nil {
+		return fmt.Errorf("decode v2 projection: %w", err)
 	}
-	if r.agentLoop == nil {
-		r.logger.Warn("agentic assistant session is waiting_async but loop recovery is not configured", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID)
-		r.blockAgentLoopRecovery(ctx, recovered, metadata, "agentic assistant async recovery loop is not configured")
-		return true
+	if p.Schema != domain.AssistantSessionSchemaV2 || p.SessionID == "" || p.CurrentRunID == "" || p.CheckpointEventID == "" {
+		return errors.New("v2 projection lacks run or checkpoint identity")
 	}
-	if recovered.State != domain.AssistantSessionStateExecuting && recovered.State != domain.AssistantSessionStateBlocked {
-		return true
-	}
-	lock := r.orchestrator.lockForSession(recovered.SessionID)
-	lock.Lock()
-	session := r.orchestrator.loadOrCreateSession(recovered.SessionID, recovered.OperatorPubkey)
-	*session = *recovered
-	lock.Unlock()
-
-	r.logger.Info("recovering agentic assistant async tool through loop", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "downstream_request", metadata.WaitingReceipt.RequestEventID)
-	result, err := r.agentLoop.ResumeAfterAsyncObservation(ctx, AssistantAgentResumeAsyncRequest{Session: session})
-	if err != nil {
-		r.logger.Warn("agentic assistant loop async recovery failed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "error", err)
-		r.blockAgentLoopRecovery(ctx, session, metadata, err.Error())
-		return true
-	}
-	if result != nil && result.Error != "" {
-		r.logger.Warn("agentic assistant loop async recovery returned error result", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "error", result.Error, "loop_state", result.State)
-		r.blockAgentLoopRecovery(ctx, session, metadata, result.Error)
-		return true
-	}
-	if result != nil {
-		r.logger.Info("agentic assistant loop async recovery resumed", "session_id", recovered.SessionID, "run_id", metadata.RunID, "tool_call_id", metadata.PendingToolCallID, "loop_state", result.State, "iteration", result.Iteration)
-	}
-	return true
-}
-
-func (r *AssistantSessionRecoveryRunner) blockAgentLoopRecovery(ctx context.Context, recovered *domain.AssistantSession, metadata domain.AssistantAgentLoopMetadata, reason string) {
-	if recovered == nil {
-		return
-	}
-	lock := r.orchestrator.lockForSession(recovered.SessionID)
-	lock.Lock()
-	session := r.orchestrator.loadOrCreateSession(recovered.SessionID, recovered.OperatorPubkey)
-	*session = *recovered
-	metadata.State = domain.AssistantAgentLoopStateBlocked
-	metadata.UpdatedAt = time.Now().UTC()
-	setAssistantAgentLoopMetadata(session, metadata)
-	session.State = domain.AssistantSessionStateBlocked
-	_ = r.orchestrator.publishSession(ctx, session)
-	lock.Unlock()
-	_ = r.orchestrator.publishStatus(ctx, nil, recovered.SessionID, "blocked", map[string]any{"phase": "tool_observation_blocked", "summary": "agentic assistant async recovery blocked", "error": reason, "tool_call_id": metadata.PendingToolCallID})
-}
-
-func (r *AssistantSessionRecoveryRunner) receiptForStep(session *domain.AssistantSession, step domain.AssistantPlanStep) *domain.AsyncToolReceipt {
-	if step.IdempotencyKey != "" {
-		return r.orchestrator.pendingReceipt(session, step.IdempotencyKey)
-	}
-	if session == nil || session.Metadata == nil {
+	// The selected event is the NIP-01 latest for the v2 coordinate, so its
+	// created_at seeds the engine's monotonic projection clock.
+	r.hydrate(p, ev.CreatedAt)
+	if p.Phase == domain.AssistantExecutionCompleted || p.Phase == domain.AssistantExecutionFailed {
+		// Finished runs need no execution; identity hydration suffices.
 		return nil
 	}
-	receipts, _ := session.Metadata["pending_receipts"].(map[string]any)
-	for key := range receipts {
-		receipt := r.orchestrator.pendingReceipt(session, key)
-		if receipt != nil && (receipt.ToolName == step.ToolName || step.ToolName == "") {
-			return receipt
-		}
-	}
-	return nil
+	return r.engine.Recover(ctx, AssistantExecutionReference{SessionID: p.SessionID, RunID: p.CurrentRunID, CheckpointEventID: p.CheckpointEventID})
 }
 
-func (r *AssistantSessionRecoveryRunner) findTerminalResult(ctx context.Context, receipt *domain.AsyncToolReceipt) (downstreamOutcome, error) {
-	if receipt == nil || receipt.RequestEventID == "" || len(receipt.ResultKinds) == 0 {
-		return downstreamOutcome{Status: "blocked"}, fmt.Errorf("downstream receipt is missing observable result metadata")
+func (r *AssistantSessionRecoveryRunner) recoverV1(ctx context.Context, ev *nostr.Event) error {
+	conversion := ClassifyAssistantLegacySession(AssistantLegacySessionSource{EventID: ev.ID.Hex(), Schema: domain.AssistantSessionSchema, JSON: []byte(ev.Content)})
+	if conversion.Execution == nil {
+		r.logger.Info("assistant v1 history not executable", "event_id", ev.ID.Hex(), "classification", conversion.Classification, "reason", conversion.Reason)
+		return nil
 	}
-	resultKinds := make([]nostr.Kind, 0, len(receipt.ResultKinds))
-	for _, kind := range receipt.ResultKinds {
-		resultKinds = append(resultKinds, nostr.Kind(kind))
+	var legacy domain.AssistantSession
+	if err := json.Unmarshal([]byte(ev.Content), &legacy); err != nil {
+		return fmt.Errorf("decode v1 session identity: %w", err)
 	}
-	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: resultKinds, Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
-	if err != nil {
-		return downstreamOutcome{Status: "blocked"}, err
-	}
-	defer merged.Close()
-	seen := map[string]struct{}{}
-	eventsCh := merged.EventChan()
-	closedCh := merged.ClosedChan()
-	eoseCh := merged.EOSEChan()
-	for {
-		select {
-		case <-ctx.Done():
-			return downstreamOutcome{Status: "blocked"}, ctx.Err()
-		case closed, ok := <-closedCh:
-			if !ok {
-				closedCh = nil
-				continue
-			}
-			return downstreamOutcome{Status: "blocked"}, fmt.Errorf("relay subscription closed during recovery backfill: relay=%s reason=%s", closed.RelayURL, closed.Reason)
-		case ev, ok := <-eventsCh:
-			if !ok {
-				return downstreamOutcome{}, nil
-			}
-			if ev == nil {
-				continue
-			}
-			eventID := ev.ID.Hex()
-			if _, dup := seen[eventID]; dup {
-				continue
-			}
-			seen[eventID] = struct{}{}
-			status := terminalStatus(ev)
-			if status == "completed" || status == "failed" {
-				return downstreamOutcome{Status: status, Event: ev}, nil
-			}
-		case <-eoseCh:
-			return downstreamOutcome{}, nil
+	x := *conversion.Execution
+	r.hydrate(domain.AssistantSessionV2{Schema: domain.AssistantSessionSchemaV2, SessionID: x.SessionID, OperatorPubkey: legacy.OperatorPubkey, Participants: legacy.Participants, AssistantID: legacy.AssistantID, AssistantPubkey: legacy.AssistantPubkey, TranscriptSummary: legacy.TranscriptSummary, CurrentRunID: x.RunID, Workflow: x.Workflow}, 0)
+	// The conversion run ID is derived from the source event, so this root is
+	// idempotent: an existing chain (possibly advanced) is never re-rooted.
+	if _, err := r.store.Load(ctx, x.SessionID, x.RunID); err != nil {
+		if !errors.Is(err, ErrAssistantCheckpointNotFound) {
+			return fmt.Errorf("load conversion checkpoint: %w", err)
+		}
+		if _, err = r.store.Append(ctx, x, ""); err != nil {
+			return fmt.Errorf("publish conversion checkpoint: %w", err)
 		}
 	}
-}
-
-func removePendingStep(session *domain.AssistantSession, stepID string) {
-	if session == nil || len(session.PendingSteps) == 0 {
-		return
-	}
-	for i := range session.PendingSteps {
-		if session.PendingSteps[i].StepID == stepID {
-			session.PendingSteps = append(session.PendingSteps[:i], session.PendingSteps[i+1:]...)
-			return
-		}
-	}
-	session.PendingSteps = session.PendingSteps[1:]
+	return r.engine.Recover(ctx, AssistantExecutionReference{SessionID: x.SessionID, RunID: x.RunID, LegacySourceEventID: ev.ID.Hex()})
 }

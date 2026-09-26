@@ -73,9 +73,10 @@ Bahia is configured via environment variables or a config file.
 | `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
 | `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
 | `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
-| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Run the multi-step agentic assistant loop; set `false` to use the legacy plan/approve planner | `true` |
+| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Deprecated: only the fallback for `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` (`true` iterative, `false` batch); it never selects an engine | `true` |
+| `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` | Workflow for a new session when the prompt names none: `batch` or `iterative` | derived from `BAHIA_ASSISTANT_AGENTIC_ENABLED` |
 | `BAHIA_ASSISTANT_AGENTIC_TOOL_MODE` | Agentic OpenAI-compatible tool harness: `native` sends provider tool calls; `prompted` injects text tool instructions for models without native function-calling | `native` |
-| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for the legacy assistant planner provider | `false` |
+| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for batch proposal generation | `false` |
 
 ### Config File (bahia.yaml)
 
@@ -117,6 +118,8 @@ soul_factory:
 assistant:
   # The assistant uses the multi-step agentic loop by default in audited permission mode.
   # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
+  # llm_model is also the batch proposer's model: required when the default workflow
+  # is batch; without it new batch turns are refused (existing drafts can still be approved).
   llm_base_url: "https://api.openai.com"
   llm_model: "<assistant-model>"
   llm_api_key: "<provider-api-key>"
@@ -133,7 +136,7 @@ assistant:
     # api_key: "<agentic-api-key>"
   permissions:
     mode: "audited"
-  # Legacy planner escape hatch:
+  # Batch default (requires llm_model); prefer default_workflow: batch over this flag:
   # agentic:
   #   enabled: false
   # Disabled by default. Enable only for legacy planner providers that emit delta.content
@@ -319,3 +322,36 @@ endpoints with `[REDACTED_ADDRESS]`. For example, an internal-LAN failure become
 `dial tcp [REDACTED_ADDRESS]: connection refused`. The public route, perspective,
 classification, and failure remain visible; REST/operator evidence retains the
 original address detail. This redaction does not change event kinds or schemas.
+
+### Assistant workflow configuration migration
+
+`assistant.default_workflow: batch|iterative` selects the workflow of a new
+session. Both workflows always run through the one unified executor, so an
+explicit per-request workflow wins for a new turn; otherwise the persisted
+session workflow wins; otherwise `default_workflow` wins; when that setting is
+absent, the deprecated `assistant.agentic.enabled` maps to `iterative`/`batch`.
+The flag no longer selects an engine or gates what is constructed. Changing
+config never silently changes an existing session. Batch plan editing remains
+supported.
+
+`assistant.llm_model` is the batch proposer's model. It is required only when
+the effective default workflow is `batch` (`default_workflow: batch`, or
+`agentic.enabled: false` with `default_workflow` unset), the same rule as
+before the unified executor. With an iterative default and no `llm_model` the
+assistant starts with only the iterative workflow available, and the startup
+log line `operator assistant executor initialized` reports
+`available_workflows=[iterative]` and a `batch_unavailable_reason`. On such a
+deployment a new turn that resolves to batch (a prompt requesting
+`workflow: batch`, or a prompt on a session whose persisted workflow is batch)
+is refused with `{status:"failed", step:"workflow_unavailable"}`; it is never
+run as iterative. Everything that needs no proposer still works: approving
+(including an edited, revision-bound approval) or rejecting an existing batch
+draft, cancelling, reconciling and finishing an approved batch run, with the
+usual revision/hash binding, permission policy and command scope. Set
+`llm_model` to offer both workflows whatever the default.
+
+The iterative proposer is always validated when `assistant.enabled=true`: the
+`assistant.agentic.*` provider, model (falling back to `llm_model`; one of the
+two is required), base URL and limits must be valid even when the default is
+`batch`. `nostr.private_key` is required for the encrypted transcript and
+execution checkpoints. See [Operator Assistant](features/operator-assistant.md).
