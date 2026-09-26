@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import AssistantComposer from '../../../src/lib/components/assistant/AssistantComposer.svelte';
 import AssistantPlanApproval from '../../../src/lib/components/assistant/AssistantPlanApproval.svelte';
+import AssistantActionApproval from '../../../src/lib/components/assistant/AssistantActionApproval.svelte';
 import AssistantTurn from '../../../src/lib/components/assistant/AssistantTurn.svelte';
 import { mergeAssistantRefs, safeAssistantRefHref } from '../../../src/lib/components/assistant/assistant-refs.js';
 import { renderComponent, textOf, tick } from '../utils/svelte-component-test';
@@ -10,6 +11,8 @@ const assistantStoreMock = vi.hoisted(() => ({
   publishAssistantActionDecision: vi.fn(),
   publishAssistantApproval: vi.fn(),
   publishAssistantPrompt: vi.fn(),
+  publishAssistantCancellation: vi.fn(),
+  publishAssistantReconciliation: vi.fn(),
   downstreamRequestsForTurn: (item) => item?.downstreamRequestId ? [item.downstreamRequestId] : []
 }));
 
@@ -91,6 +94,7 @@ describe('assistant components', () => {
 
     expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
       prompt: 'Explain services',
+      workflow: '',
       sessionId: undefined,
       routeContext,
       selectedRefs: ['docs:features-services']
@@ -111,6 +115,7 @@ describe('assistant components', () => {
     expect(target.querySelector('button[type="submit"]')?.textContent).toBe('Sending…');
     expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
       prompt: 'Plan this deployment',
+      workflow: '',
       sessionId: undefined,
       routeContext: null,
       selectedRefs: []
@@ -142,6 +147,7 @@ describe('assistant components', () => {
 
     expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith({
       prompt: 'Use service context only',
+      workflow: '',
       sessionId: undefined,
       routeContext,
       selectedRefs: ['service:svc-1']
@@ -150,26 +156,16 @@ describe('assistant components', () => {
 
   it('renders plan approval steps with tool names, args previews, and decisions', () => {
     const target = renderComponent(AssistantPlanApproval, {
-      sessionId: 'assistant-session-1',
-      planHash: 'plan-hash-1',
-      plan: {
-        summary: 'Deploy the chat route',
-        risk_level: 'medium',
-        steps: [
-          {
-            step_id: 'step-1',
-            title: 'Deploy LLM route',
-            description: 'Roll the route out to staging.',
-            tool_name: 'llm.deploy',
-            args_preview: { route_id: 'route-1', environment_id: 'staging' }
-          },
-          {
-            step_id: 'step-2',
-            title: 'Approve deployment',
-            tool_name: 'llm.approve',
-            tool_args: { deployment_id: 'deploy-1' }
-          }
-        ]
+      session: {
+        sessionId: 'assistant-session-1', currentRunId: 'run-1',
+        proposal: { proposal_id: 'proposal-1', revision: 1, hash: 'plan-hash-1', plan: {
+          summary: 'Deploy the chat route', risk_level: 'medium',
+          steps: [
+            { step_id: 'step-1', title: 'Deploy LLM route', description: 'Roll the route out to staging.',
+              tool_name: 'llm.deploy', tool_args: { route_id: 'route-1', environment_id: 'staging' } },
+            { step_id: 'step-2', title: 'Approve deployment', tool_name: 'llm.approve', tool_args: { deployment_id: 'deploy-1' } }
+          ]
+        } }
       }
     });
 
@@ -186,6 +182,56 @@ describe('assistant components', () => {
     expect(text).toContain('deploy-1');
     expect(target.querySelector('button.approve')?.textContent).toBe('Approve');
     expect(target.querySelector('button.reject')?.textContent).toBe('Reject');
+  });
+
+  it("keeps a different step's invalid JSON intact and preserves edits on a stale response", async () => {
+    const plan = { summary: 'Two steps', needs_clarification: false, risk_level: 'low', steps: [
+      { step_id: 'one', title: 'One', tool_name: 'tool.one', tool_args: { first: 1 } },
+      { step_id: 'two', title: 'Two', tool_name: 'tool.two', tool_args: { second: 2 } }
+    ] };
+    const target = renderComponent(AssistantPlanApproval, { session: { sessionId: 's1', currentRunId: 'r1',
+      proposal: { proposal_id: 'p1', revision: 1, hash: 'h1', plan } } });
+    await flush();
+    const args = target.querySelectorAll('textarea');
+    args[0].value = '{"first":';
+    args[0].dispatchEvent(new Event('input', { bubbles: true }));
+    args[1].value = '{"second":3}';
+    args[1].dispatchEvent(new Event('input', { bubbles: true }));
+    await flush();
+    expect(args[0].value).toBe('{"first":');
+    expect(textOf(target)).toContain('Invalid JSON');
+    expect(target.querySelector('button.approve').disabled).toBe(true);
+
+    args[0].value = '{"first":4}';
+    args[0].dispatchEvent(new Event('input', { bubbles: true }));
+    await flush();
+    expect(target.querySelector('button.approve').disabled).toBe(false);
+    assistantStoreMock.publishAssistantApproval.mockRejectedValueOnce(new Error('stale proposal revision'));
+    target.querySelector('button.approve').click();
+    await flush();
+    expect(textOf(target)).toContain('Your local edits are preserved');
+    expect(args[0].value).toBe('{"first":4}');
+    expect(args[1].value).toBe('{"second":3}');
+    expect(target.querySelector('button.approve').disabled).toBe(true);
+    expect(target.querySelector('button.reload')).toBeTruthy();
+  });
+
+  it('offers explicit workflow selection and run cancellation without a plan hash', async () => {
+    const newSession = renderComponent(AssistantComposer, {});
+    const selector = newSession.querySelector('select[aria-label="Assistant workflow"]');
+    selector.value = 'iterative';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    await setTextAreaValue(newSession, 'Investigate');
+    newSession.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(assistantStoreMock.publishAssistantPrompt).toHaveBeenCalledWith(expect.objectContaining({ workflow: 'iterative' }));
+
+    const active = renderComponent(AssistantComposer, { session: { sessionId: 's2', executionVersion: 2,
+      authoritative: true, workflow: 'iterative', phase: 'proposing', currentRunId: 'r2' } });
+    active.querySelector('button.cancel').click();
+    await flush();
+    expect(assistantStoreMock.publishAssistantCancellation).toHaveBeenCalledWith({ sessionId: 's2', runId: 'r2', scope: 'run' });
+    expect(active.querySelector('button[type="submit"]').disabled).toBe(true);
   });
 
   it('renders a spinner bubble for pending assistant responses', () => {
@@ -228,53 +274,35 @@ describe('assistant components', () => {
     expect(text).toContain('ContextVM request timed out after 120000ms waiting for result');
   });
 
-  it('renders agentic action approval and publishes action decisions', async () => {
-    const target = renderComponent(AssistantTurn, {
-      operatorPubkey: 'a'.repeat(64),
-      session: {
-        sessionId: 'assistant-session-1',
-        state: 'awaiting_approval',
-        pendingActions: [{
-          actionId: 'action-rollback-1',
-          toolCallId: 'tool-call-1',
-          toolName: 'bahia_assistant_llm_rollback',
-          approvalPrompt: 'Rollback production requires approval',
-          argsPreview: { route_id: 'route-prod', environment_id: 'prod' },
-          permission: { risk: 'high' }
-        }]
-      },
-      item: {
-        id: 'status-approval-required',
-        type: 'status',
-        pubkey: 'b'.repeat(64),
-        createdAt: 100,
-        status: 'awaiting_approval',
-        phase: 'approval_required',
-        actionId: 'action-rollback-1',
-        toolCallId: 'tool-call-1',
-        toolName: 'bahia_assistant_llm_rollback',
-        message: 'assistant tool requires operator approval'
-      }
+  it('renders current run-bound action approval and publishes a decision without removing the card', async () => {
+    const target = renderComponent(AssistantActionApproval, {
+      sessionId: 'assistant-session-1',
+      action: { actionId: 'action-rollback-1', runId: 'run-1', toolCallId: 'tool-call-1',
+        toolName: 'bahia_assistant_llm_rollback', approvalPrompt: 'Rollback production requires approval',
+        argsPreview: { route_id: 'route-prod' }, permission: { risk: 'high' } }
     });
-
-    const text = textOf(target);
-    expect(text).toContain('approval_required');
-    expect(text).toContain('bahia_assistant_llm_rollback');
-    expect(text).toContain('Rollback production requires approval');
-    expect(text).toContain('route-prod');
-    expect(text).toContain('high');
-
+    expect(textOf(target)).toContain('Rollback production requires approval');
     target.querySelector('input').value = 'operator approved rollback';
     target.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
     target.querySelector('button.approve').click();
     await flush();
-
     expect(assistantStoreMock.publishAssistantActionDecision).toHaveBeenCalledWith({
-      sessionId: 'assistant-session-1',
-      actionId: 'action-rollback-1',
-      decision: 'approve',
-      reason: 'operator approved rollback'
+      sessionId: 'assistant-session-1', runId: 'run-1', actionId: 'action-rollback-1',
+      decision: 'approve', reason: 'operator approved rollback'
     });
+    expect(target.querySelector('.action-card')).toBeTruthy();
+  });
+
+  it('does not reactivate controls from a historical planned row', () => {
+    const target = renderComponent(AssistantTurn, {
+      operatorPubkey: 'a'.repeat(64),
+      session: { sessionId: 's1', executionVersion: 2, phase: 'completed', proposal: null, pendingActions: [] },
+      item: { id: 'old-plan', type: 'status', pubkey: 'b'.repeat(64), createdAt: 1,
+        status: 'planned', planHash: 'legacy-hash', plan: { steps: [] } }
+    });
+    expect(textOf(target)).toContain('Historical plan record');
+    expect(target.querySelector('.plan-card')).toBeNull();
+    expect(target.querySelector('.action-card')).toBeNull();
   });
 
   it('renders agentic tool calls, async waits, subagents, and phase timeline', () => {

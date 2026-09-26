@@ -1,107 +1,99 @@
 <script>
-  import { publishAssistantApproval } from '$lib/stores/assistant.svelte.js';
+  import { publishAssistantApproval, bootstrapAssistant } from '$lib/stores/assistant.svelte.js';
+  import { parseAssistantArgumentObjectText } from '$lib/nostr/assistant.js';
 
-  let { sessionId = '', plan = null, planHash = '', disabled = false } = $props();
-
+  let { session = null, disabled = false } = $props();
   let submitting = $state(false);
   let error = $state('');
+  let stale = $state(false);
   let editedPlan = $state(null);
   let originalPlanJSON = 'null';
-  let lastPlanJSON = '';
+  let lastIdentity = '';
+  let draftIdentity = $state('');
   let argsTextByStep = $state({});
-  const riskLevel = $derived(String(editedPlan?.risk_level || editedPlan?.riskLevel || 'low').toLowerCase());
+  let argsErrorsByStep = $state({});
+  const proposal = $derived(session?.proposal || null);
+  const sessionId = $derived(session?.sessionId || '');
+  const riskLevel = $derived(String(editedPlan?.risk_level || 'low').toLowerCase());
   const steps = $derived(Array.isArray(editedPlan?.steps) ? editedPlan.steps : []);
-  const isModified = $derived(plan && editedPlan && JSON.stringify(editedPlan) !== originalPlanJSON);
+  const isModified = $derived(Boolean(editedPlan && JSON.stringify(editedPlan) !== originalPlanJSON));
+  const hasInvalidArgs = $derived(Object.keys(argsErrorsByStep).length > 0);
+  const currentIdentity = $derived(`${session?.currentRunId || ''}:${proposal?.proposal_id || ''}:${proposal?.revision || ''}:${proposal?.hash || ''}`);
 
-  function clone(value) {
-    return value ? JSON.parse(JSON.stringify(value)) : null;
-  }
-
-  function stepKey(step, index) {
-    return step?.step_id || step?.stepId || String(index);
-  }
-
-  function formatArgs(step) {
-    const value = step?.tool_args || step?.toolArgs || step?.args_preview || step?.argsPreview || {};
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
+  function clone(value) { return value ? JSON.parse(JSON.stringify(value)) : null; }
+  function stepKey(step, index) { return step?.step_id || String(index); }
+  function formatArgs(step) { return JSON.stringify(step?.tool_args || {}, null, 2); }
+  async function reloadProposal() {
+    if (stale && currentIdentity === draftIdentity) {
+      await bootstrapAssistant({ force: true });
+      return;
     }
-  }
-
-  function initialArgsText(value) {
-    const nextArgs = {};
-    for (const [index, step] of (value?.steps || []).entries()) {
-      nextArgs[stepKey(step, index)] = formatArgs(step);
-    }
-    return nextArgs;
-  }
-
-  function resetEditedPlan() {
-    editedPlan = clone(plan);
-    originalPlanJSON = JSON.stringify(editedPlan || null);
-    argsTextByStep = initialArgsText(editedPlan);
+    draftIdentity = currentIdentity;
+    editedPlan = clone(proposal?.plan);
+    originalPlanJSON = JSON.stringify(editedPlan);
+    argsTextByStep = Object.fromEntries((editedPlan?.steps || []).map((step, i) => [stepKey(step, i), formatArgs(step)]));
+    argsErrorsByStep = {};
+    stale = false;
     error = '';
   }
 
   $effect.pre(() => {
-    const nextPlanJSON = JSON.stringify(plan || null);
-    if (nextPlanJSON !== lastPlanJSON) {
-      lastPlanJSON = nextPlanJSON;
-      resetEditedPlan();
+    const identity = currentIdentity;
+    if (identity !== lastIdentity) {
+      lastIdentity = identity;
+      if (editedPlan && (isModified || Object.keys(argsErrorsByStep).length)) stale = true;
+      else reloadProposal();
     }
   });
 
   function removeStep(index) {
-    if (!editedPlan?.steps) return;
+    const key = stepKey(steps[index], index);
     editedPlan.steps = editedPlan.steps.filter((_, i) => i !== index);
-    argsTextByStep = Object.fromEntries(editedPlan.steps.map((step, i) => [stepKey(step, i), formatArgs(step)]));
+    const { [key]: _removedText, ...remainingText } = argsTextByStep;
+    const { [key]: _removedError, ...remainingErrors } = argsErrorsByStep;
+    argsTextByStep = remainingText;
+    argsErrorsByStep = remainingErrors;
   }
-
   function moveStep(index, delta) {
-    if (!editedPlan?.steps) return;
     const nextIndex = index + delta;
-    if (nextIndex < 0 || nextIndex >= editedPlan.steps.length) return;
-    const next = [...editedPlan.steps];
-    const [step] = next.splice(index, 1);
-    next.splice(nextIndex, 0, step);
-    editedPlan.steps = next;
+    if (nextIndex < 0 || nextIndex >= steps.length) return;
+    const reordered = [...steps];
+    const [step] = reordered.splice(index, 1);
+    reordered.splice(nextIndex, 0, step);
+    editedPlan.steps = reordered;
   }
-
   function updateStepArgs(index, value) {
     const key = stepKey(steps[index], index);
     argsTextByStep = { ...argsTextByStep, [key]: value };
     try {
-      const parsed = value.trim() ? JSON.parse(value) : {};
+      const parsed = parseAssistantArgumentObjectText(value);
       editedPlan.steps[index].tool_args = parsed;
-      delete editedPlan.steps[index].toolArgs;
-      error = '';
+      const { [key]: _removed, ...remaining } = argsErrorsByStep;
+      argsErrorsByStep = remaining;
     } catch (err) {
-      error = `Invalid JSON for ${steps[index]?.title || `step ${index + 1}`}: ${err?.message || err}`;
+      argsErrorsByStep = { ...argsErrorsByStep, [key]: err?.message || String(err) };
     }
   }
-
   async function decide(decision) {
-    if (!sessionId || !planHash || submitting || (decision === 'approve' && error)) return;
+    if (!sessionId || !proposal || submitting || stale || (decision === 'approve' && hasInvalidArgs)) return;
     submitting = true;
     error = '';
     try {
-      await publishAssistantApproval({
-        sessionId,
-        planHash,
-        decision,
-        modifiedPlan: decision === 'approve' && isModified ? editedPlan : null
-      });
+      await publishAssistantApproval({ sessionId, runId: session.currentRunId,
+        proposalId: proposal.proposal_id, baseRevision: proposal.revision, basePlanHash: proposal.hash,
+        decision, modifiedPlan: decision === 'approve' && isModified ? clone(editedPlan) : null });
     } catch (err) {
-      error = err?.message || String(err);
+      const detail = err?.message || String(err);
+      if (/stale|proposal.changed|revision|requires.review/i.test(detail)) {
+        stale = true; error = detail;
+      } else error = `Request outcome unknown / reconnecting: ${detail}`;
     } finally {
       submitting = false;
     }
   }
 </script>
 
-{#if editedPlan}
+{#if editedPlan && proposal}
   <section class="plan-card" aria-label="Assistant plan approval">
     <div class="plan-header">
       <div>
@@ -127,11 +119,12 @@
               <p>{step.description}</p>
             {/if}
             <div class="tool">{step.tool_name || step.toolName || 'tool'}</div>
-            <pre class="args-preview">{argsTextByStep[stepKey(step, index)] || '{}'}</pre>
+            <pre class="args-preview">{argsTextByStep[stepKey(step, index)] ?? '{}'}</pre>
             <label>
               <span>Tool args JSON</span>
-              <textarea disabled={disabled || submitting} value={argsTextByStep[stepKey(step, index)] || '{}'} oninput={(event) => updateStepArgs(index, event.currentTarget.value)}></textarea>
+              <textarea disabled={disabled || submitting} value={argsTextByStep[stepKey(step, index)] ?? '{}'} oninput={(event) => updateStepArgs(index, event.currentTarget.value)}></textarea>
             </label>
+            {#if argsErrorsByStep[stepKey(step, index)]}<p class="error">Invalid JSON: {argsErrorsByStep[stepKey(step, index)]}</p>{/if}
           </li>
         {/each}
       </ol>
@@ -141,13 +134,17 @@
       <p class="modified">Plan edited. Approval will submit the modified plan.</p>
     {/if}
 
+    {#if stale}
+      <p class="error">Proposal changed. Your local edits are preserved. Reload and review the current proposal before deciding.</p>
+      <button type="button" class="reload" onclick={reloadProposal}>{currentIdentity === draftIdentity ? 'Refresh current proposal' : 'Reload and review current proposal'}</button>
+    {/if}
     {#if error}
       <p class="error">{error}</p>
     {/if}
 
     <div class="actions">
-      <button type="button" class="approve" disabled={disabled || submitting || Boolean(error)} onclick={() => decide('approve')}>Approve</button>
-      <button type="button" class="reject" disabled={disabled || submitting} onclick={() => decide('reject')}>Reject</button>
+      <button type="button" class="approve" disabled={disabled || submitting || stale || hasInvalidArgs} onclick={() => decide('approve')}>Approve</button>
+      <button type="button" class="reject" disabled={disabled || submitting || stale} onclick={() => decide('reject')}>Reject</button>
     </div>
   </section>
 {/if}
@@ -183,4 +180,5 @@
   .reject { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); }
   .modified { color: var(--warning); }
   .error { color: var(--error); }
+  .reload { margin-top: 0.5rem; background: var(--hover-bg); color: var(--text-primary); }
 </style>

@@ -96,6 +96,110 @@ describe('assistant store', () => {
     store.resetAssistantStore();
   });
 
+  async function emitV2({ sessionId = 'v2-session', id = 'v2-projection', createdAt = 100,
+    workflow = 'batch', phase = 'awaiting_approval', revision = 1, proposal = null,
+    pendingApprovals = [], uncertainEffects = 0, runId = 'run-1', scope = { allowed_tools: null } } = {}) {
+    if (!liveHandlers) await store.bootstrapAssistant({ force: true });
+    return liveHandlers.onEvent(event({ id, kind: ASSISTANT_KINDS.SESSION,
+      pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: createdAt,
+      tags: [['d', `bahia.assistant-session.v2:${sessionId}`], ['schema', 'bahia.assistant-session.v2'],
+        ['session', sessionId], ['p', authMock.authState.pubkey, '', 'operator']],
+      content: { execution_version: 2, session_id: sessionId, state: phase, workflow,
+        current_run_id: runId, execution_revision: revision, phase, scope, proposal,
+        pending_approvals: pendingApprovals, uncertain_effects: uncertainEffects } }));
+  }
+
+  it('publishes revision-bound edited batches with the public scope digest only', async () => {
+    const { computeAssistantBatchApprovalHash } = await import('../../../src/lib/nostr/client.js');
+    const plan = { summary: 'Deploy safely', needs_clarification: false, risk_level: 'medium', steps: [
+      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } },
+      { step_id: 's2', title: 'Second', description: '', tool_name: 'tool.beta', tool_args: { b: true } }
+    ] };
+    const scope = { allowed_tools: ['tool.alpha', 'tool.beta'], arguments_digest: 'a'.repeat(64) };
+    const base = await computeAssistantBatchApprovalHash({ sessionId: 'batch-1', runId: 'run-1',
+      proposalId: 'proposal-1', revision: 1, scope, plan });
+    await emitV2({ sessionId: 'batch-1', proposal: { proposal_id: 'proposal-1', revision: 1,
+      hash: base.hash, plan }, pendingApprovals: ['proposal-1'], scope });
+    const edited = { ...plan, steps: [plan.steps[1], { ...plan.steps[0], tool_args: {} }] };
+    await store.publishAssistantApproval({ sessionId: 'batch-1', runId: 'run-1', proposalId: 'proposal-1',
+      baseRevision: 1, basePlanHash: base.hash, decision: 'approve', modifiedPlan: edited });
+    const call = encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0];
+    expect(call.operation).toBe('assistant/approval');
+    expect(call.payload).toMatchObject({ contract_version: 2, workflow: 'batch', run_id: 'run-1',
+      proposal_id: 'proposal-1', base_revision: 1, base_plan_hash: base.hash, approved_revision: 2,
+      modified_plan: { steps: [{ step_id: 's2' }, { step_id: 's1', tool_args: {} }] } });
+    const approved = await computeAssistantBatchApprovalHash({ sessionId: 'batch-1', runId: 'run-1',
+      proposalId: 'proposal-1', revision: 2, scope, plan: edited });
+    expect(call.payload.approved_plan_hash).toBe(approved.hash);
+    expect(JSON.stringify(call.payload)).not.toContain('arguments":');
+    expect(store.assistantSessions.find((item) => item.sessionId === 'batch-1').pendingApprovals).toEqual(['proposal-1']);
+  });
+
+  it('uses NIP-01 event order rather than execution revision, while v2 outranks v1 history', async () => {
+    await store.bootstrapAssistant({ force: true });
+    liveHandlers.onEvent(event({ id: 'legacy-later', kind: ASSISTANT_KINDS.SESSION,
+      pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: 300,
+      tags: [['schema', 'bahia.assistant-session.v1'], ['session', 'order-1'], ['p', authMock.authState.pubkey, '', 'operator']],
+      content: { state: 'awaiting_approval', last_plan_hash: 'legacy' } }));
+    await emitV2({ sessionId: 'order-1', id: 'f'.repeat(64), createdAt: 100, revision: 99, phase: 'blocked' });
+    await emitV2({ sessionId: 'order-1', id: 'a'.repeat(64), createdAt: 100, revision: 1, phase: 'executing' });
+    await emitV2({ sessionId: 'order-1', id: 'z'.repeat(64), createdAt: 100, revision: 200, phase: 'completed' });
+    const session = store.assistantSessions.find((entry) => entry.sessionId === 'order-1');
+    expect(session).toMatchObject({ executionVersion: 2, phase: 'executing', executionRevision: 1 });
+    liveHandlers.onEvent(event({ id: 'legacy-newer', kind: ASSISTANT_KINDS.SESSION,
+      pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: 400,
+      tags: [['schema', 'bahia.assistant-session.v1'], ['session', 'order-1']],
+      content: { state: 'awaiting_approval', last_plan_hash: 'legacy' } }));
+    expect(store.assistantSessions.find((entry) => entry.sessionId === 'order-1').phase).toBe('executing');
+  });
+
+  it('imports v1 cache only as history and does not cache private metadata', async () => {
+    const operator = authMock.authState.pubkey;
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const legacyKey = `bahia_assistant_transcript:bahia_assistant_transcript_v1:${operator}:${service}`;
+    localStorage.setItem(legacyKey, JSON.stringify({ schema: 'bahia_assistant_transcript_v1',
+      operatorPubkey: operator, servicePubkey: service, activeSessionId: 'old',
+      sessions: [{ sessionId: 'old', state: 'awaiting_approval', lastPlanHash: 'legacy',
+        metadata: { command_scope: { arguments: { secret: 'DO-NOT-CACHE' } } } }], transcript: [] }));
+    await store.bootstrapAssistant({ force: true });
+    const session = store.assistantSessions[0];
+    expect(session).toMatchObject({ sessionId: 'old', executionVersion: 1, authoritative: false, pendingActions: [] });
+    await expect(store.publishAssistantApproval({ sessionId: 'old', decision: 'approve' })).rejects.toThrow('Current v2 run required');
+    const newKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`;
+    expect(localStorage.getItem(newKey)).not.toContain('DO-NOT-CACHE');
+  });
+
+  it('cancels a hashless run while its prompt RPC remains pending, without inventing failure', async () => {
+    const pending = deferred();
+    encryptedControlplaneMock.requestEncryptedResult.mockReturnValueOnce(pending.promise);
+    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
+    store.assistantConnection.servicePubkey = controlplaneMock.controlplaneConnection.servicePubkey;
+    const prompt = store.publishAssistantPrompt({ prompt: 'Investigate', sessionId: 'cancel-1', workflow: 'iterative' });
+    await emitV2({ sessionId: 'cancel-1', workflow: 'iterative', phase: 'proposing', pendingApprovals: [] });
+    encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({ result: { status: 'accepted' } });
+    await store.publishAssistantCancellation({ sessionId: 'cancel-1', runId: 'run-1', scope: 'run' });
+    const cancel = encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0];
+    expect(cancel.operation).toBe('assistant/cancel');
+    expect(cancel.payload).toEqual({ contract_version: 2, session_id: 'cancel-1', run_id: 'run-1', scope: 'run' });
+    expect(Object.keys(store.pendingAssistantRequests)).toHaveLength(1);
+    pending.reject(new Error('ContextVM connection interrupted'));
+    await expect(prompt).rejects.toThrow('ContextVM connection interrupted');
+    expect(store.assistantSessions.find((item) => item.sessionId === 'cancel-1').transcript)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ status: 'outcome_unknown' })]));
+  });
+
+  it('reconciliation submits only an exact downstream request-event reference', async () => {
+    await emitV2({ sessionId: 'uncertain-1', phase: 'blocked', uncertainEffects: 1 });
+    await expect(store.publishAssistantReconciliation({ sessionId: 'uncertain-1', runId: 'run-1',
+      workId: 'work-1', requestEventId: 'not-an-event' })).rejects.toThrow('64-character');
+    await store.publishAssistantReconciliation({ sessionId: 'uncertain-1', runId: 'run-1',
+      workId: 'work-1', requestEventId: 'a'.repeat(64) });
+    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0]).toMatchObject({
+      operation: 'assistant/reconcile', payload: { contract_version: 2, session_id: 'uncertain-1',
+        run_id: 'run-1', work_id: 'work-1', request_event_id: 'a'.repeat(64) }
+    });
+  });
+
   it('exposes subscription recovery health', async () => {
     await store.bootstrapAssistant({ force: true });
 
@@ -307,13 +411,7 @@ describe('assistant store', () => {
     }));
 
     const session = store.assistantSessions.find((item) => item.sessionId === sessionId);
-    expect(session.pendingActions).toEqual([expect.objectContaining({
-      actionId: 'action-rollback-1',
-      toolCallId: 'tool-call-2',
-      toolName: 'bahia_assistant_llm_rollback',
-      approvalPrompt: 'Rollback production requires approval',
-      permission: { risk: 'high' }
-    })]);
+    expect(session.pendingActions).toEqual([]); // v1 status is history, never approval authority
     expect(session.transcript).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'status-tool-submitted',
@@ -335,45 +433,39 @@ describe('assistant store', () => {
     ]));
   });
 
-  it('publishes action-level assistant approval decisions with action_id and reason', async () => {
-    store.assistantConnection.operatorPubkey = authMock.authState.pubkey;
-    store.assistantConnection.servicePubkey = controlplaneMock.controlplaneConnection.servicePubkey;
+  it('publishes run-bound v2 action decisions and waits for canonical consumption', async () => {
+    const operator = authMock.authState.pubkey;
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    await store.bootstrapAssistant({ force: true });
+    liveHandlers.onEvent(event({ id: 'v2-action', kind: ASSISTANT_KINDS.SESSION, pubkey: service,
+      created_at: 200, tags: [['d', 'bahia.assistant-session.v2:assistant-action-session'],
+        ['schema', 'bahia.assistant-session.v2'], ['session', 'assistant-action-session'], ['p', operator, '', 'operator']],
+      content: { session_id: 'assistant-action-session', execution_version: 2, state: 'awaiting_approval', workflow: 'iterative', current_run_id: 'run-1',
+        phase: 'awaiting_approval', scope: { allowed_tools: null }, pending_approvals: ['action-1'] } }));
     encryptedControlplaneMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { session_id: 'assistant-action-session', status: 'executing', action_id: 'action-1', decision: 'approve' },
+      result: { session_id: 'assistant-action-session', status: 'executing', action_id: 'action-1' },
       requestEventId: 'approval-request-1'
     });
-
-    await store.publishAssistantActionDecision({
-      sessionId: 'assistant-action-session',
-      actionId: 'action-1',
-      decision: 'approve',
-      reason: 'safe rollback window'
-    });
-
-    expect(encryptedControlplaneMock.requestEncryptedResult).toHaveBeenCalledWith({
-      operation: 'assistant/approval',
-      payload: {
-        session_id: 'assistant-action-session',
-        action_id: 'action-1',
-        decision: 'approve',
-        reason: 'safe rollback window'
-      },
-      tags: [['session', 'assistant-action-session'], ['action', 'action-1'], ['decision', 'approve']],
-      signal: undefined,
-      timeoutMs: 180000
-    });
+    await store.publishAssistantActionDecision({ sessionId: 'assistant-action-session', runId: 'run-1',
+      actionId: 'action-1', decision: 'approve', reason: 'safe rollback window' });
+    expect(encryptedControlplaneMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'assistant/approval', payload: expect.objectContaining({ contract_version: 2,
+        session_id: 'assistant-action-session', run_id: 'run-1', workflow: 'iterative',
+        action_id: 'action-1', decision: 'approve', reason: 'safe rollback window' })
+    }));
     const session = store.assistantSessions.find((item) => item.sessionId === 'assistant-action-session');
-    expect(session.transcript).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'approval', actionId: 'action-1', decision: 'approve', message: 'safe rollback window' })
-    ]));
+    expect(session.pendingActions.map((action) => action.actionId)).toEqual(['action-1']);
+    const consumedAccepted = liveHandlers.onEvent(event({ id: 'v2-action-consumed', kind: ASSISTANT_KINDS.SESSION, pubkey: service,
+      created_at: 201, tags: [['d', 'bahia.assistant-session.v2:assistant-action-session'],
+        ['schema', 'bahia.assistant-session.v2'], ['session', 'assistant-action-session'], ['p', operator, '', 'operator']],
+      content: { session_id: 'assistant-action-session', execution_version: 2, state: 'executing', workflow: 'iterative', current_run_id: 'run-1',
+        phase: 'executing', scope: { allowed_tools: null }, pending_approvals: [] } }));
+    expect(consumedAccepted).toBe(true);
+    expect(store.assistantSessions.find((item) => item.sessionId === 'assistant-action-session').pendingActions).toEqual([]);
   });
 
-  it('rejects cancel decisions for action-level assistant approvals', async () => {
-    await expect(store.publishAssistantApproval({
-      sessionId: 'assistant-action-session',
-      actionId: 'action-1',
-      decision: 'cancel'
-    })).rejects.toThrow('action decision must be approve or reject');
+  it('rejects cancel decisions through assistant/approval', async () => {
+    await expect(store.publishAssistantApproval({ decision: 'cancel' })).rejects.toThrow('Decision must be approve or reject');
     expect(encryptedControlplaneMock.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
@@ -404,8 +496,8 @@ describe('assistant store', () => {
     expect(session.transcript.some((item) => item.pending)).toBe(false);
     expect(session.transcript).toContainEqual(expect.objectContaining({
       type: 'result',
-      status: 'failed',
-      summary: 'assistant planning failed',
+      status: 'outcome_unknown',
+      summary: 'Request outcome unknown / reconnecting',
       error: 'ContextVM request timed out after 120000ms waiting for result'
     }));
   });
@@ -442,7 +534,7 @@ describe('assistant store', () => {
     await store.bootstrapAssistant({ force: true });
     expect(store.assistantSessions[0].transcript).toHaveLength(1);
 
-    const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v1:${operator}:${service}`;
+    const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`;
     expect(globalThis.localStorage.getItem(cacheKey)).toContain('Cached transcript survives reload');
 
     store.resetAssistantStore();

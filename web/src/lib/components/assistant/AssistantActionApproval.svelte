@@ -8,6 +8,7 @@
   let reason = $state('');
 
   const actionId = $derived(action?.actionId || action?.action_id || '');
+  const runId = $derived(action?.runId || action?.run_id || '');
   const toolName = $derived(action?.toolName || action?.tool_name || 'tool');
   const toolCallId = $derived(action?.toolCallId || action?.tool_call_id || '');
   const approvalPrompt = $derived(action?.approvalPrompt || action?.approval_prompt || 'This assistant action requires approval.');
@@ -24,18 +25,19 @@
   }
 
   async function decide(decision) {
-    if (!sessionId || !actionId || submitting) return;
+    if (!sessionId || !runId || !actionId || submitting) return;
     submitting = true;
     error = '';
     try {
       await publishAssistantActionDecision({
         sessionId,
+        runId,
         actionId,
         decision,
         reason: reason.trim()
       });
     } catch (err) {
-      error = err?.message || String(err);
+      error = `Request outcome unknown / reconnecting: ${err?.message || String(err)}`;
     } finally {
       submitting = false;
     }

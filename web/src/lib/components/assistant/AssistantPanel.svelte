@@ -9,6 +9,9 @@
   import AssistantComposer from './AssistantComposer.svelte';
   import AssistantSessionTabs from './AssistantSessionTabs.svelte';
   import AssistantTurn from './AssistantTurn.svelte';
+  import AssistantPlanApproval from './AssistantPlanApproval.svelte';
+  import AssistantActionApproval from './AssistantActionApproval.svelte';
+  import AssistantExecutionReconciliation from './AssistantExecutionReconciliation.svelte';
 
   let { routeContext = null, defaultSelectedRefs = [] } = $props();
 
@@ -76,6 +79,29 @@
       </div>
     {/if}
 
+    {#if session?.authoritative && session.executionVersion === 2}
+      <div class="execution-summary" aria-label="Current assistant execution" data-run-id={session.currentRunId} data-phase={session.phase} data-revision={session.executionRevision} data-submitted-effects={session.submittedEffects} data-uncertain-effects={session.uncertainEffects}>
+        <span>{session.workflow} · {session.phase}</span>
+        {#if session.submittedEffects > 0}<span>{session.submittedEffects} submitted operation(s)</span>{/if}
+        {#if session.uncertainEffects > 0}<span>{session.uncertainEffects} uncertain operation(s)</span>{/if}
+      </div>
+      {#if session.phase === 'cancelling'}
+        <div class="connection-banner" role="status">Assistant stopped; submitted operations may still finish. No rollback was attempted.</div>
+      {:else if session.phase === 'blocked'}
+        <div class="connection-banner" role="status">Execution is blocked. Review canonical state before acting.</div>
+      {/if}
+      {#if session.phase === 'awaiting_approval' && session.workflow === 'batch' && session.currentRunId && session.proposal?.proposal_id && session.proposal?.hash && session.proposal?.revision && session.pendingApprovals?.includes(session.proposal.proposal_id)}
+        <AssistantPlanApproval {session} />
+      {/if}
+      {#if session.phase === 'awaiting_approval' && session.workflow === 'iterative' && session.currentRunId}
+        {#each session.pendingActions || [] as action (action.actionId)}
+          <AssistantActionApproval sessionId={session.sessionId} {action} />
+        {/each}
+      {/if}
+      {#if session.uncertainEffects > 0}
+        <AssistantExecutionReconciliation {session} />
+      {/if}
+    {/if}
     <section class="transcript" aria-label="Assistant transcript" bind:this={transcriptElement}>
       {#if transcriptItems.length}
         {#each transcriptItems as item (item.id)}
@@ -94,6 +120,7 @@
 </div>
 
 <style>
+  .execution-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; }
   .assistant-panel {
     position: fixed;
     right: 32px;
@@ -141,14 +168,17 @@
   .transcript-empty strong { color: var(--text-primary); }
 
   @media (max-width: 900px) {
-    .assistant-panel { width: 380px; height: min(520px, calc(100vh - 100px)); }
+    .execution-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; }
+  .assistant-panel { width: 380px; height: min(520px, calc(100vh - 100px)); }
   }
 
   @media (max-width: 640px) {
-    .assistant-panel { left: 12px; right: 12px; bottom: 76px; width: auto; height: calc(100vh - 100px); border-radius: 12px; }
+    .execution-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; }
+  .assistant-panel { left: 12px; right: 12px; bottom: 76px; width: auto; height: calc(100vh - 100px); border-radius: 12px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .assistant-panel { transition: none; }
+    .execution-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; }
+  .assistant-panel { transition: none; }
   }
 </style>
