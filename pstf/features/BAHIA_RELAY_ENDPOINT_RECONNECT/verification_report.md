@@ -21,6 +21,11 @@
   the pinned builder with the release-contract test prerequisites (`bash` and
   `python3`) installed.
 - PSTF JSON validation and `git diff --check` pass.
+- The repository Dockerfile builds successfully from commit
+  `d98850f9c56f86bf41a2c58dea783eb2442c213e` with OCI image ID
+  `sha256:5ad6db76023057b61b88c36c54e5963eb5dde762ef2a479c9630ff13c1fd5eb8`.
+  Its OCI revision and version labels identify that exact source commit and
+  version `0.1.0-d98850f9`.
 
 ## Remaining acceptance
 
