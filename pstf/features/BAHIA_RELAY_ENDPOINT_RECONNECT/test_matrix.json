@@ -1,0 +1,29 @@
+{
+  "feature_id": "BAHIA_RELAY_ENDPOINT_RECONNECT",
+  "tests": [
+    {
+      "id": "BRER-T-001",
+      "acceptance": ["BRER-AC-001", "BRER-AC-002"],
+      "target": "TestRelayPoolSubscribeAllReconnectsStaleRelayBeforeReissuingFilters",
+      "status": "passed"
+    },
+    {
+      "id": "BRER-T-002",
+      "acceptance": ["BRER-AC-003"],
+      "target": "TestRelayPoolSubscribeAllReconnectFailureStaysDisconnected",
+      "status": "passed"
+    },
+    {
+      "id": "BRER-T-003",
+      "acceptance": ["BRER-AC-001", "BRER-AC-003"],
+      "target": "TestRelayPoolHealthSnapshotRejectsStaleManagedRelayFlag",
+      "status": "passed"
+    },
+    {
+      "id": "BRER-T-004",
+      "acceptance": ["BRER-AC-004"],
+      "target": "live Bahia relay endpoint restart without Bahia restart",
+      "status": "pending"
+    }
+  ]
+}

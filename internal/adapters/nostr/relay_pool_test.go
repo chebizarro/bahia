@@ -313,6 +313,78 @@ func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {
 	close(subs[1].Events)
 }
 
+func TestRelayPoolSubscribeAllReconnectsStaleRelayBeforeReissuingFilters(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	oldRelay := gonostr.NewRelay(context.Background(), relayURL, gonostr.RelayOptions{})
+	newRelay := gonostr.NewRelay(context.Background(), relayURL, gonostr.RelayOptions{})
+	pool.relays[relayURL].relay = oldRelay
+	pool.relays[relayURL].connected = true
+	pool.health.GetOrCreate(relayURL).SetConnected(true)
+	pool.isRelayConnected = func(relay *gonostr.Relay) bool { return relay == newRelay }
+
+	connectAttempts := 0
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		connectAttempts++
+		require.Equal(t, relayURL, url)
+		return newRelay, nil
+	})
+	var subscribedFilters []gonostr.Filter
+	setSubscribeOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, filter gonostr.Filter) (*gonostr.Subscription, error) {
+		require.Same(t, newRelay, relay)
+		subscribedFilters = append(subscribedFilters, filter)
+		return newTestSubscription(), nil
+	})
+
+	filters := []gonostr.Filter{
+		{Kinds: []gonostr.Kind{canonicalKind(25910)}},
+		{Kinds: []gonostr.Kind{canonicalKind(1059)}},
+	}
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), filters)
+	require.NoError(t, err)
+	t.Cleanup(merged.Close)
+	require.Equal(t, 1, connectAttempts)
+	require.Equal(t, filters, subscribedFilters)
+	require.Equal(t, 1, pool.ConnectedCount())
+	require.Equal(t, int64(1), pool.HealthSnapshot().Relays[0].ReconnectAttempts)
+}
+
+func TestRelayPoolSubscribeAllReconnectFailureStaysDisconnected(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	pool.relays[relayURL].relay = gonostr.NewRelay(context.Background(), relayURL, gonostr.RelayOptions{})
+	pool.relays[relayURL].connected = true
+	pool.health.GetOrCreate(relayURL).SetConnected(true)
+	pool.isRelayConnected = func(*gonostr.Relay) bool { return false }
+	setConnectRelayForTest(t, pool, func(context.Context, string, gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return nil, errors.New("endpoint unavailable")
+	})
+
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(25910)}}})
+	require.Nil(t, merged)
+	require.ErrorContains(t, err, "no relays available for subscription")
+	snapshot := pool.HealthSnapshot()
+	require.Zero(t, snapshot.Connected)
+	require.Zero(t, snapshot.Healthy)
+	require.Equal(t, int64(1), snapshot.Relays[0].ReconnectAttempts)
+	require.Contains(t, snapshot.Relays[0].LastError, "endpoint unavailable")
+}
+
+func TestRelayPoolHealthSnapshotRejectsStaleManagedRelayFlag(t *testing.T) {
+	const relayURL = "wss://relay.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	pool.relays[relayURL].relay = gonostr.NewRelay(context.Background(), relayURL, gonostr.RelayOptions{})
+	pool.relays[relayURL].connected = true
+	pool.health.GetOrCreate(relayURL).SetConnected(true)
+	pool.isRelayConnected = func(*gonostr.Relay) bool { return false }
+
+	snapshot := pool.HealthSnapshot()
+	require.Zero(t, snapshot.Connected)
+	require.Zero(t, snapshot.Healthy)
+	require.False(t, snapshot.Relays[0].Connected)
+	require.False(t, pool.relays[relayURL].connected)
+}
+
 func TestRelayPoolStalledPublishDoesNotBlockBootstrapSubscription(t *testing.T) {
 	const relayURL = "wss://relay.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
@@ -686,6 +758,7 @@ func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 
 func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 	pool := NewRelayPool(urls, zap.NewNop())
+	pool.isRelayConnected = func(relay *gonostr.Relay) bool { return relay != nil }
 	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}
 	}
