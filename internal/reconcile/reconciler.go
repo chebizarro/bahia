@@ -291,9 +291,9 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	// detects only real transitions. Volatile bookkeeping (timestamps, the
 	// rotating observation ID, backoff counters, diagnostics metadata) is
 	// excluded by construction — see materialStateOf.
-	var previousObservation *domain.RuntimeObservation
-	if latest, latestErr := r.observations.GetLatest(ctx, currentState.ServiceID, currentState.EnvironmentID); latestErr == nil {
-		previousObservation = latest
+	previousObservation, err := r.observations.GetLatest(ctx, currentState.ServiceID, currentState.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("reading previous runtime observation: %w", err)
 	}
 	previousMaterial := materialStateOf(currentState, previousObservation)
 

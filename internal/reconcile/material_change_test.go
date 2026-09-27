@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,50 @@ func TestReconcilerFirstObservationOnUnknownStateEmitsOneEvent(t *testing.T) {
 	h.pass(t, r)
 	stateChanged, _ = h.counts()
 	require.Equal(t, 1, stateChanged, "subsequent unchanged observations are silent")
+}
+
+func TestReconcilerBaselineReadFailureDoesNotManufactureTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		seedBaseline   bool
+		initialDrift   domain.DriftStatus
+		wantAfterRetry int
+	}{
+		{name: "persisted unchanged baseline", seedBaseline: true, initialDrift: domain.DriftStatusInSync, wantAfterRetry: 0},
+		{name: "genuinely absent baseline", initialDrift: domain.DriftStatusUnknown, wantAfterRetry: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newMaterialHarness(t, tc.initialDrift)
+			if tc.seedBaseline {
+				h.seedObservedBaseline(t)
+			}
+			stateBefore := *h.stateRepo.states[h.stateKey]
+			observationsBefore := len(h.obsRepo.observations)
+			readErr := errors.New("observation repository unavailable")
+			h.obsRepo.getLatestErr = readErr
+
+			err := h.reconciler().reconcileOne(context.Background(), h.stateRepo.states[h.stateKey])
+			require.ErrorIs(t, err, readErr)
+			require.Equal(t, stateBefore, *h.stateRepo.states[h.stateKey], "failed baseline read must not mutate state or linkage")
+			require.Len(t, h.obsRepo.observations, observationsBefore, "failed baseline read must not create an observation")
+			stateChanged, drift := h.counts()
+			require.Zero(t, stateChanged, "failed baseline read must not publish a transition")
+			require.Zero(t, drift, "failed baseline read must not publish drift")
+
+			h.obsRepo.getLatestErr = nil
+			r := h.reconciler()
+			h.pass(t, r)
+			stateChanged, drift = h.counts()
+			require.Equal(t, tc.wantAfterRetry, stateChanged)
+			require.Zero(t, drift)
+			require.Len(t, h.obsRepo.observations, observationsBefore+1)
+			require.NotNil(t, h.stateRepo.states[h.stateKey].CurrentObservationID)
+			h.pass(t, r)
+			stateChanged, drift = h.counts()
+			require.Equal(t, tc.wantAfterRetry, stateChanged, "unchanged retry must not repeat a transition")
+			require.Zero(t, drift)
+		})
+	}
 }
 
 // TestMaterialStateDiffIgnoresBookkeepingAndIsDeterministic unit-tests the
