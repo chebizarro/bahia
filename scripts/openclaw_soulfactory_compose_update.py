@@ -20,11 +20,17 @@ class ComposeUpdateError(ValueError):
     """Raised when the production Compose file cannot be updated safely."""
 
 
-def validate_inputs(image: str, socket_gid: str) -> None:
+def validate_id(value: str, name: str) -> None:
+    if not value.isdigit() or not 1 <= int(value) <= 2**31 - 1:
+        raise ComposeUpdateError(f"{name} must be a positive integer")
+
+
+def validate_inputs(image: str, socket_gid: str, runtime_uid: str, runtime_gid: str) -> None:
     if not IMAGE_PATTERN.fullmatch(image):
         raise ComposeUpdateError("image must be an immutable sha256 image ID")
-    if not socket_gid.isdigit() or not 1 <= int(socket_gid) <= 2**31 - 1:
-        raise ComposeUpdateError("Docker socket gid must be a positive integer")
+    validate_id(socket_gid, "Docker socket gid")
+    validate_id(runtime_uid, "runtime uid")
+    validate_id(runtime_gid, "runtime gid")
 
 
 def line_indent(line: str) -> int:
@@ -58,8 +64,23 @@ def service_bounds(lines: list[str]) -> tuple[int, int, int]:
     return start, end, service_indent
 
 
-def render_compose(text: str, image: str, socket_gid: str) -> str:
-    validate_inputs(image, socket_gid)
+def replace_or_insert_scalar(lines: list[str], start: int, end: int, child_indent: int, key: str, value: str, after: int) -> tuple[list[str], int]:
+    indexes = [
+        index for index in range(start + 1, end)
+        if line_indent(lines[index]) == child_indent and lines[index].strip().startswith(f"{key}:")
+    ]
+    if len(indexes) > 1:
+        raise ComposeUpdateError(f"multiple {key} entries found")
+    rendered = " " * child_indent + f'{key}: "{value}"'
+    if indexes:
+        lines[indexes[0]] = rendered
+        return lines, end
+    lines[after + 1:after + 1] = [rendered]
+    return lines, end + 1
+
+
+def render_compose(text: str, image: str, socket_gid: str, runtime_uid: str, runtime_gid: str) -> str:
+    validate_inputs(image, socket_gid, runtime_uid, runtime_gid)
     lines = text.splitlines()
     had_newline = text.endswith("\n")
     start, end, service_indent = service_bounds(lines)
@@ -73,6 +94,9 @@ def render_compose(text: str, image: str, socket_gid: str) -> str:
         raise ComposeUpdateError(f"expected exactly one image line; found {len(image_indexes)}")
     image_index = image_indexes[0]
     lines[image_index] = " " * child_indent + f"image: {image}"
+    lines, end = replace_or_insert_scalar(
+        lines, start, end, child_indent, "user", f"{runtime_uid}:{runtime_gid}", image_index
+    )
 
     group_indexes = [
         index for index in range(start + 1, end)
@@ -97,8 +121,8 @@ def render_compose(text: str, image: str, socket_gid: str) -> str:
     return rendered
 
 
-def check_compose(text: str, image: str, socket_gid: str) -> None:
-    if render_compose(text, image, socket_gid) != text:
+def check_compose(text: str, image: str, socket_gid: str, runtime_uid: str, runtime_gid: str) -> None:
+    if render_compose(text, image, socket_gid, runtime_uid, runtime_gid) != text:
         raise ComposeUpdateError("Compose deployment state does not match the requested image and socket gid")
 
 
@@ -107,6 +131,8 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--compose-file", required=True, type=Path)
     parser.add_argument("--image", required=True)
     parser.add_argument("--docker-socket-gid", required=True)
+    parser.add_argument("--runtime-uid", required=True)
+    parser.add_argument("--runtime-gid", required=True)
     parser.add_argument("--apply", action="store_true")
     return parser.parse_args(list(argv))
 
@@ -116,11 +142,11 @@ def main(argv: Iterable[str] = sys.argv[1:]) -> int:
     try:
         original = args.compose_file.read_text(encoding="utf-8")
         if args.apply:
-            rendered = render_compose(original, args.image, args.docker_socket_gid)
+            rendered = render_compose(original, args.image, args.docker_socket_gid, args.runtime_uid, args.runtime_gid)
             if rendered != original:
                 atomic_write(args.compose_file, rendered)
             original = rendered
-        check_compose(original, args.image, args.docker_socket_gid)
+        check_compose(original, args.image, args.docker_socket_gid, args.runtime_uid, args.runtime_gid)
     except (OSError, ComposeUpdateError) as exc:
         print(f"openclaw_soulfactory_compose_update: {exc}", file=sys.stderr)
         return 1

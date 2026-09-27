@@ -203,6 +203,24 @@ jobs:
           [[ "$prior_env_sha256" =~ ^[0-9a-f]{64}$ ]]
           docker_socket_gid="$(stat -c %g /var/run/docker.sock)"
           [[ "$docker_socket_gid" =~ ^[1-9][0-9]*$ ]]
+          runtime_uid="$(stat -c %u "$project_dir")"
+          runtime_gid="$(stat -c %g "$project_dir")"
+          [[ "$runtime_uid" =~ ^[1-9][0-9]*$ ]]
+          [[ "$runtime_gid" =~ ^[1-9][0-9]*$ ]]
+
+          docker exec --user 0:0 "$incumbent_id" sh -eu -c '
+          for path in \
+            /data/soulfactory \
+            /data/openclaw-soulfactory-controller-policy.json \
+            /data/openclaw-soulfactory-sidecar-idempotency.json; do
+            test -e "$path"
+            test ! -L "$path"
+          done
+          chown -R "$1:$2" /data/soulfactory
+          chown "$1:$2" \
+            /data/openclaw-soulfactory-controller-policy.json \
+            /data/openclaw-soulfactory-sidecar-idempotency.json
+          ' sh "$runtime_uid" "$runtime_gid"
 
           rollback_armed=1
           rollback() {
@@ -237,6 +255,8 @@ jobs:
             --compose-file "$COMPOSE_FILE" \
             --image "$EXPECTED_IMAGE_DIGEST" \
             --docker-socket-gid "$docker_socket_gid" \
+            --runtime-uid "$runtime_uid" \
+            --runtime-gid "$runtime_gid" \
             --apply
           docker compose --project-directory "$project_dir" \
             -f "$COMPOSE_FILE" -f "$deploy_override" config --quiet
@@ -285,7 +305,9 @@ jobs:
           python3 scripts/openclaw_soulfactory_compose_update.py \
             --compose-file "$COMPOSE_FILE" \
             --image "$EXPECTED_IMAGE_DIGEST" \
-            --docker-socket-gid "$docker_socket_gid"
+            --docker-socket-gid "$docker_socket_gid" \
+            --runtime-uid "$runtime_uid" \
+            --runtime-gid "$runtime_gid"
           running_groups="$(docker inspect --format '{{json .HostConfig.GroupAdd}}' "$container_id")"
           RUNNING_GROUPS="$running_groups" DOCKER_SOCKET_GID="$docker_socket_gid" python3 -c '
           import json
@@ -294,9 +316,12 @@ jobs:
           if os.environ["DOCKER_SOCKET_GID"] not in groups:
               raise SystemExit("running sidecar lacks Docker socket supplemental group")
           '
+          [[ "$(docker inspect --format '{{.Config.User}}' "$container_id")" == "$runtime_uid:$runtime_gid" ]]
 
           RELAY_POLICY_SHA256="$(sha256sum "$RELAY_POLICY_FILE" | awk '{print $1}')" \
           DOCKER_SOCKET_GID="$docker_socket_gid" \
+          RUNTIME_UID="$runtime_uid" \
+          RUNTIME_GID="$runtime_gid" \
           ARTIFACT_FILE="$artifact_file" python3 -c '
           import json
           import os
@@ -311,6 +336,8 @@ jobs:
               "created": os.environ["IMAGE_CREATED"],
               "relay_policy_sha256": os.environ["RELAY_POLICY_SHA256"],
               "docker_socket_gid": os.environ["DOCKER_SOCKET_GID"],
+              "runtime_uid": os.environ["RUNTIME_UID"],
+              "runtime_gid": os.environ["RUNTIME_GID"],
           }
           Path(os.environ["ARTIFACT_FILE"]).write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
           '
