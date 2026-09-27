@@ -29,10 +29,18 @@ host:
 ```sh
 container=$(docker create <immutable-bahia-image-digest>)
 docker cp "$container:/usr/local/bin/bahia-dns-agent" ./bahia-dns-agent
+docker cp "$container:/usr/local/share/bahia/dns-agent-provenance.json" ./dns-agent-provenance.json
 docker rm "$container"
+sha256sum ./bahia-dns-agent   # must equal "sha256" in dns-agent-provenance.json
 install -m 0755 ./bahia-dns-agent /usr/local/bin/bahia-dns-agent.next
 /usr/local/bin/bahia-dns-agent.next --version
 ```
+
+The image build itself fails unless the agent reports exactly the version it
+was stamped with, and records its digest in
+`/usr/local/share/bahia/dns-agent-provenance.json`.
+`scripts/build_verified_bahia_image.sh` checks that record without executing
+the binary, so it runs on any operator host.
 
 After the guarded systemd replacement, `GET http://127.0.0.1:8953/healthz`
 must report the same full `commit` embedded in the source image. A missing,

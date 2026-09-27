@@ -57,6 +57,23 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
     -o /bin/bahia-dns-agent ./cmd/bahia-dns-agent
 
+# Prove the agent's provenance at build time, on the build platform, instead of
+# executing the extracted binary on whatever host runs the release helper. The
+# build fails unless the agent reports exactly the version this build stamped,
+# and the resulting digest is baked into the image as a provenance record that
+# verification tooling can read without running anything.
+RUN set -eu; \
+    expected="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}"; \
+    reported="$(/bin/bahia-dns-agent --version)"; \
+    if [ "$reported" != "$expected" ]; then \
+        echo "bahia-dns-agent reports version '$reported', expected '$expected'" >&2; \
+        exit 1; \
+    fi; \
+    digest="$(sha256sum /bin/bahia-dns-agent | cut -d ' ' -f 1)"; \
+    mkdir -p /out; \
+    printf '{"revision":"%s","version":"%s","path":"/usr/local/bin/bahia-dns-agent","sha256":"%s"}\n' \
+        "$GIT_COMMIT" "$reported" "$digest" > /out/dns-agent-provenance.json
+
 RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
@@ -106,6 +123,7 @@ COPY --from=builder /bin/openclaw-soulfactory-sidecar /usr/local/bin/openclaw-so
 COPY --from=builder /bin/openclaw-soulfactory-control /usr/local/bin/openclaw-soulfactory-control
 COPY --from=builder /bin/bahia-event-archive /usr/local/bin/bahia-event-archive
 COPY --from=builder /bin/bahia-dns-agent /usr/local/bin/bahia-dns-agent
+COPY --from=builder /out/dns-agent-provenance.json /usr/local/share/bahia/dns-agent-provenance.json
 COPY --from=builder /bin/metiq-signet-enrollment /usr/local/bin/metiq-signet-enrollment
 COPY --from=builder /bin/soulfactory-runtime-validate /usr/local/bin/soulfactory-runtime-validate
 
