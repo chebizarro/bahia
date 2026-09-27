@@ -11,7 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"fiatjaf.com/nostr/nip44"
-	"fiatjaf.com/nostr/nip46"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -81,7 +81,7 @@ func TestClient_CloseCancelsOwnedLifetimeAndClearsAgentBunkers(t *testing.T) {
 	generation := client.connectionGeneration
 	client.agents["agent"] = &AgentIdentity{
 		AgentID:          "agent",
-		bunkerClient:     &nip46.BunkerClient{},
+		bunkerClient:     &nostrout.Bunker{},
 		bunkerGeneration: generation,
 	}
 	client.mu.Unlock()

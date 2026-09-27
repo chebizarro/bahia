@@ -19,9 +19,9 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"fiatjaf.com/nostr/nip44"
-	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -64,6 +64,7 @@ type Client struct {
 	bunkerURI       string
 	relays          []string
 	pool            *nostr.Pool
+	admission       *nostrout.Admission
 	logger          *slog.Logger
 	clientSecretKey string // Ephemeral key for NIP-46 session
 	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
@@ -72,7 +73,7 @@ type Client struct {
 
 	connectMu            sync.Mutex
 	mu                   sync.Mutex
-	bunker               *nip46.BunkerClient // Active NIP-46 connection
+	bunker               *nostrout.Bunker // Active admission-gated NIP-46 connection
 	agents               map[string]*AgentIdentity
 	connected            bool
 	lifetime             context.Context
@@ -88,7 +89,7 @@ type AgentIdentity struct {
 	Pubkey           string
 	Npub             string
 	BunkerURI        string
-	bunkerClient     *nip46.BunkerClient // Agent-specific bunker connection
+	bunkerClient     *nostrout.Bunker // Agent-specific admission-gated bunker connection
 	bunkerGeneration uint64
 	mockSecretKey    string // Explicit mock-mode-only agent signing key
 	mockStatus       string // Explicit mock-mode-only lifecycle status
@@ -103,6 +104,10 @@ type Config struct {
 	AllowMock       bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
 	ConnectTimeout  time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
 	SignTimeout     time.Duration // Deprecated: caller context controls signing lifetime
+	// OutboundAdmission gates every EVENT this client publishes: NIP-46
+	// requests and management gift wraps. Nil uses the process-wide
+	// controller; there is no unlimited mode.
+	OutboundAdmission *nostrout.Admission
 }
 
 // NewClient creates a new Signet client.
@@ -121,6 +126,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		bunkerURI:       config.BunkerURI,
 		relays:          config.Relays,
 		pool:            nostr.NewPool(),
+		admission:       nostrout.Or(config.OutboundAdmission),
 		logger:          logger.With("component", "signet"),
 		clientSecretKey: clientSK,
 		requireReal:     config.RequireReal,
@@ -181,8 +187,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	// ConnectBunker retains ctx for its response subscription. The application
 	// context is therefore the connection lifetime; installing a child deadline
 	// here silently kills later NIP-46 RPCs.
-	bunker, err := nip46.ConnectBunker(
+	bunker, err := nostrout.ConnectBunker(
 		connectCtx,
+		c.admission,
 		clientSecret,
 		bunkerURI,
 		c.pool,
@@ -253,7 +260,7 @@ func (c *Client) waitForConnectionState(ctx context.Context, want bool) error {
 	}
 }
 
-func (c *Client) setConnection(bunker *nip46.BunkerClient, lifetime context.Context, cancel context.CancelFunc, connected bool) {
+func (c *Client) setConnection(bunker *nostrout.Bunker, lifetime context.Context, cancel context.CancelFunc, connected bool) {
 	c.mu.Lock()
 	previousCancel := c.lifetimeCancel
 	changed := c.connected != connected || c.bunker != bunker
@@ -620,8 +627,9 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if connectCtx == nil {
 			return ErrNotConnected
 		}
-		bunker, err := nip46.ConnectBunker(
+		bunker, err := nostrout.ConnectBunker(
 			connectCtx,
+			c.admission,
 			clientSecret,
 			bunkerURI,
 			c.pool,
@@ -970,6 +978,26 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		return fmt.Errorf("sign Signet management gift-wrap: %w", err)
 	}
 
+	// Admit the gift wrap before any relay I/O. Rejection returns immediately:
+	// there is no point awaiting a response to a request that was never sent.
+	pub, err := c.admission.Begin(ctx, gift, relayURLs)
+	if err != nil {
+		return fmt.Errorf("admit Signet management request: %w", err)
+	}
+	admittedRelays := make([]string, 0, len(relayURLs))
+	var admitErr error
+	for _, relay := range pub.PendingRelays() {
+		if err := pub.BeforeAttempt(ctx, relay); err != nil {
+			admitErr = err
+			continue
+		}
+		admittedRelays = append(admittedRelays, relay)
+	}
+	if len(admittedRelays) == 0 {
+		pub.Close()
+		return fmt.Errorf("admit Signet management request: %w", admitErr)
+	}
+
 	// Subscribe before publishing. Signet can answer immediately, and creating
 	// the response subscription afterwards loses that reply on fast relays.
 	responses := c.pool.SubscribeMany(ctx, relayURLs, nostr.Filter{
@@ -987,9 +1015,13 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	// response subscription can deadlock indefinitely on otherwise functional
 	// pub/sub relays. Start the publish and drain acknowledgements independently;
 	// the correlated Signet response below is the operation's completion signal.
-	publishResults := c.pool.PublishMany(ctx, relayURLs, gift)
+	// Every ACK still feeds the shared breaker and receipt cache, even after
+	// the correlated response has completed the call.
+	publishResults := c.pool.PublishMany(ctx, admittedRelays, gift)
 	go func() {
+		defer pub.Close()
 		for result := range publishResults {
+			pub.Observe(nostrout.ResultFromPublishError(result.RelayURL, result.Error))
 			if result.Error != nil {
 				c.logger.Warn("signet management relay rejected publish",
 					"relay", result.RelayURL,

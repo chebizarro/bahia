@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -422,7 +422,7 @@ func (NIP46ConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrFile, cl
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	defer cancel()
-	bunker, err := nip46.ConnectBunker(lifetime, clientKey, bunkerURI, nil, nil)
+	bunker, err := nostrout.ConnectBunker(lifetime, nil, clientKey, bunkerURI, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("connect NIP-46 bunker: %w", err)
 	}
@@ -479,7 +479,7 @@ func (NIP46SigningConnectivityVerifier) Verify(ctx context.Context, bunkerURIOrF
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	defer cancel()
-	bunker, err := nip46.ConnectBunker(lifetime, clientKey, bunkerURI, nil, nil)
+	bunker, err := nostrout.ConnectBunker(lifetime, nil, clientKey, bunkerURI, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("connect NIP-46 bunker: %w", err)
 	}

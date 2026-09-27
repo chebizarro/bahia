@@ -143,7 +143,10 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
-	outboundAdmission := nostrAdapter.NewOutboundAdmission(nostrAdapter.DefaultOutboundAdmissionConfig())
+	// One process-wide controller gates every outbound EVENT: these pools,
+	// Signet clients, SoulFactory buses, and NIP-46 signer RPCs all resolve
+	// to the same instance.
+	outboundAdmission := nostrAdapter.DefaultOutboundAdmission()
 	poolOptions := []nostrAdapter.RelayPoolOption{
 		nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
@@ -606,6 +609,16 @@ func New(cfg *config.Config) (*App, error) {
 				"duplicates":           fmt.Sprintf("%d", state.Metrics.Duplicates),
 				"kill_switch_rejected": fmt.Sprintf("%d", state.Metrics.KillSwitchRejected),
 				"relay_rate_limited":   fmt.Sprintf("%d", state.Metrics.RelayRateLimited),
+				"in_flight_rejected":   fmt.Sprintf("%d", state.Metrics.InFlightRejected),
+				"capacity_rejected":    fmt.Sprintf("%d", state.Metrics.CapacityRejected),
+				"queue_rejected":       fmt.Sprintf("%d", state.Metrics.QueueRejected),
+				"wire_attempts":        fmt.Sprintf("%d", state.Metrics.WireAttempts),
+				"wire_rejected":        fmt.Sprintf("%d", state.Metrics.WireRejected),
+				"opaque_admitted":      fmt.Sprintf("%d", state.Metrics.OpaqueAdmitted),
+				"operations_started":   fmt.Sprintf("%d", state.Metrics.OperationsStarted),
+				"operations_queued":    fmt.Sprintf("%d", state.Metrics.OperationsQueued),
+				"operation_active":     fmt.Sprintf("%t", state.Metrics.OperationActive),
+				"active_publications":  fmt.Sprintf("%d", state.Metrics.ActivePublications),
 			},
 		}
 		if state.KillSwitchActive {
