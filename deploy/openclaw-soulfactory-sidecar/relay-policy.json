@@ -1,0 +1,10 @@
+{
+  "schema": "cascadia.bahia.openclaw-soulfactory-relay-policy.v1",
+  "relays": [
+    "wss://relay.sharegap.net",
+    "wss://bahia.sharegap.net/relay"
+  ],
+  "retired_relays": [
+    "ws://192.168.40.104:3337"
+  ]
+}

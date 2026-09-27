@@ -66,6 +66,22 @@ The relay bus handles stored-event backfill then remains live, reconnects with b
 
 The sidecar exposes `GET /health` for process liveness and `GET /ready` for functional readiness on `-health-addr` (default `127.0.0.1:8081`). Readiness returns HTTP 200 only after the kind-`30317` capability was accepted by a relay and the control subscription reached EOSE. Before both conditions it returns HTTP 503 with `capability_published`, `subscription_eose`, and `last_error` fields. Supervised-service healthchecks must use `/ready`, not a PID-only check; use `/health` only as a separate liveness probe.
 
+The production relay set is repository-owned by
+`deploy/openclaw-soulfactory-sidecar/relay-policy.json`. The sidecar release
+workflow atomically reconciles all four runtime relay variables to that exact
+ordered set before recreation and verifies both the persisted env file and the
+running container environment. A failed release gate restores the captured env
+file bytes and prior image digest together. Do not edit relay variables directly
+on the host; change the checked-in policy, review it, and use the release path.
+
+Check a host env file without printing its other values:
+
+~~~bash
+python3 scripts/openclaw_soulfactory_relay_policy.py \
+  --policy deploy/openclaw-soulfactory-sidecar/relay-policy.json \
+  --env-file /home/majordomo/.openclaw/state/openclaw-soulfactory/compose.env
+~~~
+
 ## 5. Verify capability publication
 
 Subscribe for factory-authored runtime capability kind `30317` from the sidecar runtime pubkey. The latest event must include:
