@@ -987,6 +987,12 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	admittedRelays := make([]string, 0, len(relayURLs))
 	var admitErr error
 	for _, relay := range pub.PendingRelays() {
+		// Connect first so the wire permit is spent immediately before the
+		// frame PublishMany sends on this already-open connection.
+		if _, err := c.pool.EnsureRelay(relay); err != nil {
+			admitErr = fmt.Errorf("connect %s: %w", relay, err)
+			continue
+		}
 		if err := pub.BeforeAttempt(ctx, relay); err != nil {
 			admitErr = err
 			continue

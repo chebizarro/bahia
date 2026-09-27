@@ -187,13 +187,15 @@ func (r *PgNostrEventRepository) MarkPublished(ctx context.Context, id string, p
 	return nil
 }
 
-// RecordPublishFailure retains the event as pending and records retry diagnostics.
+// RecordPublishFailure records retry diagnostics for a still-pending event. It
+// never changes state: a late failure must not resurrect an expired event or
+// overwrite a concurrent successful publication.
 func (r *PgNostrEventRepository) RecordPublishFailure(ctx context.Context, id, publishError string) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE nostr_events
-		SET publish_state = $2, publish_attempts = publish_attempts + 1,
+		SET publish_attempts = publish_attempts + 1,
 		    last_publish_error = $3
-		WHERE id = $1
+		WHERE id = $1 AND publish_state = $2
 	`, id, NostrPublishStatePending, publishError)
 	if err != nil {
 		return fmt.Errorf("recording nostr event %s publish failure: %w", id, err)

@@ -97,8 +97,12 @@ type Config struct {
 	// PurposeBudgets bounds each lane. Missing or non-positive lanes use the
 	// defaults; a lane is clamped to Aggregate.
 	PurposeBudgets map[Purpose]PurposeBudget
-	// RelayWire bounds EVENT frames sent to any single relay.
+	// RelayWire bounds non-priority EVENT frames sent to any single relay.
 	RelayWire PurposeBudget
+	// RelayWirePriority is each relay's reserved wire allocation for priority
+	// frames, so AUTH retries and non-priority churn cannot starve operator
+	// results and tombstones at the relay.
+	RelayWirePriority PurposeBudget
 
 	// RatePerMinute/Burst are a compact constructor for narrowly scoped tests
 	// and processes: when set they override the general lane.
@@ -134,8 +138,8 @@ const (
 
 // DefaultConfig stays below the shared relay's historic 120 events/minute
 // bucket even when the Bahia server and one standalone Bahia-derived agent are
-// both active against the same relay (2 × 55 wire events/minute). There is
-// intentionally no unlimited default.
+// both active against the same relay (2 × (40 + 15) wire events/minute). There
+// is intentionally no unlimited default.
 func DefaultConfig() Config {
 	return Config{
 		Aggregate: PurposeBudget{RatePerMinute: 45, Burst: 15},
@@ -146,7 +150,8 @@ func DefaultConfig() Config {
 			PurposeBulk:     {RatePerMinute: 5, Burst: 1},
 			PurposeSigner:   {RatePerMinute: 10, Burst: 4},
 		},
-		RelayWire:             PurposeBudget{RatePerMinute: 55, Burst: 18},
+		RelayWire:             PurposeBudget{RatePerMinute: 40, Burst: 13},
+		RelayWirePriority:     PurposeBudget{RatePerMinute: 15, Burst: 5},
 		BreakerMin:            2 * time.Second,
 		BreakerMax:            time.Minute,
 		KillSwitchFile:        strings.TrimSpace(os.Getenv("BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE")),
@@ -249,8 +254,20 @@ func (b *bucket) full(now time.Time) bool {
 }
 
 type relayBucket struct {
-	bucket *bucket
-	refs   int
+	priority *bucket
+	other    *bucket
+	refs     int
+}
+
+func (rb *relayBucket) forPurpose(purpose Purpose) *bucket {
+	if purpose == PurposePriority {
+		return rb.priority
+	}
+	return rb.other
+}
+
+func (rb *relayBucket) full(now time.Time) bool {
+	return rb.priority.full(now) && rb.other.full(now)
 }
 
 type receiptKey struct {
@@ -272,10 +289,11 @@ type Admission struct {
 	clock  clock
 	jitter func(time.Duration) time.Duration
 
-	aggregate *bucket
-	lanes     map[Purpose]*bucket
-	wire      PurposeBudget
-	relays    map[string]*relayBucket
+	aggregate    *bucket
+	lanes        map[Purpose]*bucket
+	wire         PurposeBudget
+	wirePriority PurposeBudget
+	relays       map[string]*relayBucket
 
 	breakerMin        time.Duration
 	breakerMax        time.Duration
@@ -351,6 +369,7 @@ func newWithClock(cfg Config, clk clock) *Admission {
 		aggregate:           newBucket(cfg.Aggregate, now),
 		lanes:               lanes,
 		wire:                cfg.RelayWire,
+		wirePriority:        cfg.RelayWirePriority,
 		relays:              make(map[string]*relayBucket),
 		breakerMin:          cfg.BreakerMin,
 		breakerMax:          cfg.BreakerMax,
@@ -400,6 +419,9 @@ func normalizeConfig(cfg Config) Config {
 	cfg.PurposeBudgets = budgets
 	if cfg.RelayWire.RatePerMinute <= 0 || cfg.RelayWire.Burst <= 0 {
 		cfg.RelayWire = defaults.RelayWire
+	}
+	if cfg.RelayWirePriority.RatePerMinute <= 0 || cfg.RelayWirePriority.Burst <= 0 {
+		cfg.RelayWirePriority = defaults.RelayWirePriority
 	}
 	if cfg.BreakerMin <= 0 {
 		cfg.BreakerMin = defaults.BreakerMin
@@ -594,7 +616,7 @@ func (a *Admission) relayBucketLocked(now time.Time, relay string) (*relayBucket
 		// Only idle identities whose buckets fully refilled may be evicted, so
 		// recreating one can never restore burst capacity early.
 		for identity, rb := range a.relays {
-			if rb.refs == 0 && rb.bucket.full(now) {
+			if rb.refs == 0 && rb.full(now) {
 				delete(a.relays, identity)
 				break
 			}
@@ -604,7 +626,7 @@ func (a *Admission) relayBucketLocked(now time.Time, relay string) (*relayBucket
 			return nil, fmt.Errorf("%w: relay identity registry full", ErrCapacity)
 		}
 	}
-	rb := &relayBucket{bucket: newBucket(a.wire, now)}
+	rb := &relayBucket{priority: newBucket(a.wirePriority, now), other: newBucket(a.wire, now)}
 	a.relays[relay] = rb
 	return rb, nil
 }
@@ -648,16 +670,17 @@ func (a *Admission) waitLocked(ctx context.Context, deadline time.Time, try func
 			return err
 		}
 		now := a.clock.Now()
+		// The deadline is checked before try so an expired waiter can never
+		// consume capacity, even if tokens happen to be available.
+		if !deadline.IsZero() && !now.Before(deadline) {
+			return ErrQueueTimeout
+		}
 		wait, err := try(now)
 		if err != nil || wait <= 0 {
 			return err
 		}
 		if !deadline.IsZero() {
-			remaining := deadline.Sub(now)
-			if remaining <= 0 {
-				return ErrQueueTimeout
-			}
-			wait = min(wait, remaining)
+			wait = min(wait, deadline.Sub(now))
 		}
 		fired, stop := a.clock.NewTimer(wait)
 		a.mu.Unlock()

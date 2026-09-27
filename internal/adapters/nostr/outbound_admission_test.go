@@ -28,6 +28,7 @@ func newIsolatedTestAdmission() *OutboundAdmission {
 			OutboundPurposeSigner:   generous,
 		},
 		RelayWire:             generous,
+		RelayWirePriority:     generous,
 		MaxActivePublications: 10_000,
 	})
 }

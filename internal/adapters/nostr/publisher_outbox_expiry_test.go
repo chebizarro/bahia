@@ -112,3 +112,17 @@ func TestPublisherRetryLifetimeCannotBeDisabled(t *testing.T) {
 	require.Equal(t, DefaultPublishRetryLifetime, publisher.retryLifetime)
 	require.True(t, errors.Is(&outboxPublishError{message: "x", cause: nostrout.ErrKillSwitch}, ErrOutboundKillSwitch))
 }
+
+func TestLateOutboxFailureCannotResurrectExpiredEvent(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	repo := repository.NewInMemoryNostrEventRepository()
+	ev := pendingOutboxRecord(t, repo, now.Add(-2*time.Hour))
+	expired, err := repo.ExpireUnpublished(t.Context(), now.Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), expired)
+	require.NoError(t, repo.RecordPublishFailure(t.Context(), ev.ID.Hex(), "late relay failure"))
+	rec, err := repo.GetByID(t.Context(), ev.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStateExpired, rec.PublishState)
+	require.NotContains(t, rec.LastPublishError, "late relay failure")
+}

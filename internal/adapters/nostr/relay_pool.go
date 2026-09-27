@@ -413,10 +413,6 @@ func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]P
 		if !pub.NeedsRelay(mr.url) {
 			continue
 		}
-		if err := pub.BeforeAttempt(ctx, mr.url); err != nil {
-			results = append(results, PublishResult{RelayURL: mr.url, Error: err})
-			continue
-		}
 		result := p.publishToRelayWithResult(ctx, mr, ev, pub)
 		pub.Observe(result)
 		results = append(results, result)
@@ -511,6 +507,14 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 	}
 	relay := mr.relay
 	mr.mu.Unlock()
+
+	// Admission is charged here — after any reconnect and immediately before
+	// the frame — so a slow reconnect cannot accumulate permits that later
+	// send together, and a kill switch or breaker that opened meanwhile wins.
+	if err := pub.BeforeAttempt(ctx, mr.url); err != nil {
+		result.Error = err
+		return result
+	}
 
 	// Do not hold the per-relay state lock across network I/O. Bootstrap and
 	// live-catchup subscriptions need this lock to attach to the same relay and

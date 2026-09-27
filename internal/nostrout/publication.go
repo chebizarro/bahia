@@ -124,6 +124,9 @@ func (a *Admission) beginLocked(ctx context.Context, op *Operation, ev nostr.Eve
 		}
 	} else {
 		err = a.waitLocked(ctx, op.deadline, func(now time.Time) (time.Duration, error) {
+			if op.closed {
+				return 0, fmt.Errorf("%w: operation closed while waiting for admission", ErrOperation)
+			}
 			if err := a.killSwitchLocked(); err != nil {
 				return 0, err
 			}
@@ -133,9 +136,6 @@ func (a *Admission) beginLocked(ctx context.Context, op *Operation, ev nostr.Eve
 			return a.laneWaitLocked(now, PurposeBulk), nil
 		})
 		err = operationDeadlineError(err)
-		if err == nil && op.closed {
-			err = fmt.Errorf("%w: operation closed while waiting for admission", ErrOperation)
-		}
 	}
 	if err != nil {
 		pub.unregisterLocked()
@@ -247,8 +247,12 @@ func (p *Publication) BeforeAttempt(ctx context.Context, relayURL string) error 
 	if !p.hasRelay(relay) {
 		return fmt.Errorf("%w: relay %s was not admitted for this publication", ErrOperation, relay)
 	}
-	rb := a.relays[relay]
 	try := func(now time.Time) (time.Duration, error) {
+		// Re-validated on every wake-up, before any token is spent: a close
+		// while this attempt waited must not let it send.
+		if p.closed || (p.op != nil && p.op.closed) {
+			return 0, fmt.Errorf("%w: publication closed while waiting to send", ErrOperation)
+		}
 		if err := a.killSwitchLocked(); err != nil {
 			return 0, err
 		}
@@ -258,14 +262,17 @@ func (p *Publication) BeforeAttempt(ctx context.Context, relayURL string) error 
 			}
 			return wait, nil
 		}
-		if wait := rb.bucket.wait(now); wait > 0 {
+		// Registered relays cannot be evicted while this publication holds a
+		// reference, and the closed check above runs first.
+		wire := a.relays[relay].forPurpose(p.purpose)
+		if wait := wire.wait(now); wait > 0 {
 			if p.op == nil {
 				a.metrics.WireRejected++
 				return 0, fmt.Errorf("%w: relay %s wire budget", ErrBudgetExceeded, relay)
 			}
 			return wait, nil
 		}
-		rb.bucket.tokens--
+		wire.tokens--
 		a.metrics.WireAttempts++
 		return 0, nil
 	}

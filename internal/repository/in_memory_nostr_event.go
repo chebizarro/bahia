@@ -116,15 +116,15 @@ func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id strin
 	return nil
 }
 
-// RecordPublishFailure retains the event as pending and records retry diagnostics.
+// RecordPublishFailure records retry diagnostics for a still-pending event. It
+// never resurrects an expired event or overwrites a published one.
 func (r *InMemoryNostrEventRepository) RecordPublishFailure(_ context.Context, id, publishError string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.records[id]
-	if !ok {
+	if !ok || rec.PublishState != NostrPublishStatePending {
 		return nil
 	}
-	rec.PublishState = NostrPublishStatePending
 	rec.PublishAttempts++
 	rec.LastPublishError = publishError
 	r.records[id] = rec

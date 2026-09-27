@@ -23,6 +23,7 @@ func TestMain(m *testing.M) {
 			nostrout.PurposeSigner:   generous,
 		},
 		RelayWire:             generous,
+		RelayWirePriority:     generous,
 		MaxActivePublications: 100_000,
 		MaxRelayIdentities:    100_000,
 	})

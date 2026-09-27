@@ -294,7 +294,7 @@ func (a *Admission) AdmitOpaque(ctx context.Context, purpose Purpose, relayURLs 
 		wait := a.breakerWaitLocked(now)
 		wait = max(wait, a.aggregate.wait(now), a.lanes[purpose].wait(now))
 		for _, rb := range buckets {
-			wait = max(wait, rb.bucket.wait(now))
+			wait = max(wait, rb.forPurpose(purpose).wait(now))
 		}
 		if wait > 0 {
 			return wait, nil
@@ -302,7 +302,7 @@ func (a *Admission) AdmitOpaque(ctx context.Context, purpose Purpose, relayURLs 
 		a.aggregate.tokens--
 		a.lanes[purpose].tokens--
 		for _, rb := range buckets {
-			rb.bucket.tokens--
+			rb.forPurpose(purpose).tokens--
 		}
 		return 0, nil
 	})

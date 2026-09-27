@@ -45,7 +45,9 @@ type relayAuthSigner interface {
 
 type relayBusEndpoint interface {
 	URL() string
-	Publish(context.Context, nostr.Event) RelayPublishResult
+	// Publish sends one EVENT frame. admit is mandatory and is invoked after
+	// the endpoint is connected and immediately before the raw frame.
+	Publish(ctx context.Context, ev nostr.Event, admit func(context.Context) error) RelayPublishResult
 	Subscribe(context.Context, []nostr.Filter) (relayBusRelaySubscription, error)
 	Auth(context.Context, relayAuthSigner) error
 	Close()
@@ -292,11 +294,9 @@ func (b *SoulFactoryRelayBus) publishSequential(ctx context.Context, ev nostr.Ev
 // EVENT frame (including the optional single NIP-42 AUTH retry) and observes
 // every outcome. A relay duplicate acknowledgement counts as acceptance.
 func (b *SoulFactoryRelayBus) sendAdmitted(ctx context.Context, pub *nostrout.Publication, endpoint relayBusEndpoint, ev nostr.Event, authRetry bool) RelayPublishResult {
+	admit := func(ctx context.Context) error { return pub.BeforeAttempt(ctx, endpoint.URL()) }
 	attempt := func() RelayPublishResult {
-		if err := pub.BeforeAttempt(ctx, endpoint.URL()); err != nil {
-			return RelayPublishResult{RelayURL: endpoint.URL(), Error: err}
-		}
-		result := endpoint.Publish(ctx, ev)
+		result := endpoint.Publish(ctx, ev, admit)
 		if result.RelayURL == "" {
 			result.RelayURL = endpoint.URL()
 		}
@@ -691,7 +691,10 @@ func newGoNostrRelayEndpoint(url string) *goNostrRelayEndpoint {
 
 func (e *goNostrRelayEndpoint) URL() string { return e.url }
 
-func (e *goNostrRelayEndpoint) Publish(ctx context.Context, ev nostr.Event) RelayPublishResult {
+func (e *goNostrRelayEndpoint) Publish(ctx context.Context, ev nostr.Event, admit func(context.Context) error) RelayPublishResult {
+	if admit == nil {
+		return RelayPublishResult{RelayURL: e.url, Error: fmt.Errorf("unadmitted relay publication refused")}
+	}
 	if err := e.ensureConnected(ctx); err != nil {
 		return RelayPublishResult{RelayURL: e.url, Error: err}
 	}
@@ -700,6 +703,9 @@ func (e *goNostrRelayEndpoint) Publish(ctx context.Context, ev nostr.Event) Rela
 	e.mu.Unlock()
 	if relay == nil {
 		return RelayPublishResult{RelayURL: e.url, Error: fmt.Errorf("relay is not connected")}
+	}
+	if err := admit(ctx); err != nil {
+		return RelayPublishResult{RelayURL: e.url, Error: err}
 	}
 	if err := relay.Publish(ctx, ev); err != nil {
 		if reason, ok := relayOKFalseReason(err); ok {

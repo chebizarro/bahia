@@ -34,7 +34,10 @@ func newFakeRelayEndpoint(url string) *fakeRelayEndpoint {
 
 func (e *fakeRelayEndpoint) URL() string { return e.url }
 
-func (e *fakeRelayEndpoint) Publish(ctx context.Context, event nostr.Event) RelayPublishResult {
+func (e *fakeRelayEndpoint) Publish(ctx context.Context, event nostr.Event, admit func(context.Context) error) RelayPublishResult {
+	if err := admit(ctx); err != nil {
+		return RelayPublishResult{RelayURL: e.url, Error: err}
+	}
 	if e.publishFn != nil {
 		return e.publishFn(ctx, event)
 	}

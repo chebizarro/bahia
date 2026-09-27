@@ -101,9 +101,10 @@ func testConfig() Config {
 			PurposeBulk:     {RatePerMinute: 60, Burst: 1},
 			PurposeSigner:   {RatePerMinute: 60, Burst: 2},
 		},
-		RelayWire:  PurposeBudget{RatePerMinute: 600, Burst: 100},
-		BreakerMin: 2 * time.Second,
-		BreakerMax: 8 * time.Second,
+		RelayWire:         PurposeBudget{RatePerMinute: 600, Burst: 100},
+		RelayWirePriority: PurposeBudget{RatePerMinute: 600, Burst: 100},
+		BreakerMin:        2 * time.Second,
+		BreakerMax:        8 * time.Second,
 	}
 }
 
@@ -396,8 +397,57 @@ func TestPerRelayWireBudgetIsSharedAcrossPublications(t *testing.T) {
 	cfg.RelayWire = PurposeBudget{RatePerMinute: 60, Burst: 1}
 	a, _ := newTestAdmission(cfg)
 	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 1}, []string{relayA}, accepted))
-	require.ErrorIs(t, publishOnce(t, a, nostr.Event{Kind: 5}, []string{relayA}, accepted), ErrBudgetExceeded)
-	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 5}, []string{relayB}, accepted))
+	require.ErrorIs(t, publishOnce(t, a, nostr.Event{Kind: 30_000}, []string{relayA}, accepted), ErrBudgetExceeded)
+	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 30_000}, []string{relayB}, accepted))
+}
+
+func TestRelayWireReservesPriorityFrames(t *testing.T) {
+	cfg := testConfig()
+	cfg.RelayWire = PurposeBudget{RatePerMinute: 60, Burst: 1}
+	cfg.RelayWirePriority = PurposeBudget{RatePerMinute: 60, Burst: 1}
+	a, _ := newTestAdmission(cfg)
+	// Non-priority churn (including AUTH retries) exhausts its wire share...
+	pub, err := a.Begin(context.Background(), nostr.Event{Kind: 1}, []string{relayA})
+	require.NoError(t, err)
+	require.NoError(t, pub.BeforeAttempt(context.Background(), relayA))
+	require.ErrorIs(t, pub.BeforeAttempt(context.Background(), relayA), ErrBudgetExceeded)
+	pub.Close()
+	// ...but a tombstone still reaches the relay on the reserved share.
+	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 5}, []string{relayA}, accepted))
+	require.ErrorIs(t, publishOnce(t, a, nostr.Event{Kind: 1059}, []string{relayA}, accepted), ErrBudgetExceeded)
+}
+
+func TestClosedPublicationCannotSendAfterWaiting(t *testing.T) {
+	cfg := testConfig()
+	cfg.RelayWire = PurposeBudget{RatePerMinute: 60, Burst: 1}
+	a, clk := newTestAdmission(cfg)
+	op, err := a.BeginOperation(context.Background(), OperationSpec{MaxEvents: 1})
+	require.NoError(t, err)
+	pub, err := op.Begin(context.Background(), signedEvent(t, 1059), []string{relayA})
+	require.NoError(t, err)
+	require.NoError(t, pub.BeforeAttempt(context.Background(), relayA))
+
+	done := make(chan error, 1)
+	go func() { done <- pub.BeforeAttempt(context.Background(), relayA) }()
+	clk.awaitTimer(t)
+	op.Close()
+	clk.Advance(time.Minute)
+	require.ErrorIs(t, <-done, ErrOperation, "a waiter must re-validate closure before spending a token")
+	require.Equal(t, uint64(1), a.Metrics().WireAttempts)
+	pub.Close()
+}
+
+func TestExpiredOperationCannotConsumeAvailableCapacity(t *testing.T) {
+	a, clk := newTestAdmission(testConfig())
+	op, err := a.BeginOperation(context.Background(), OperationSpec{MaxEvents: 1})
+	require.NoError(t, err)
+	defer op.Close()
+	pub, err := op.Begin(context.Background(), signedEvent(t, 1059), []string{relayA})
+	require.NoError(t, err)
+	clk.Advance(2 * time.Minute)
+	require.ErrorIs(t, pub.BeforeAttempt(context.Background(), relayA), ErrQueueTimeout)
+	require.Zero(t, a.Metrics().WireAttempts)
+	pub.Close()
 }
 
 func TestRelayIdentityRegistryIsBoundedWithoutRestoringBurst(t *testing.T) {
@@ -670,8 +720,13 @@ func TestOpaqueAdmissionIsBoundedAndPaced(t *testing.T) {
 
 	go func() { done <- a.AdmitOpaque(context.Background(), PurposeSigner, relays) }()
 	clk.awaitTimer(t)
-	clk.Advance(30 * time.Second)
+	clk.Advance(time.Second)
 	require.NoError(t, <-done, "capacity refilled during the bounded wait")
+
+	go func() { done <- a.AdmitOpaque(context.Background(), PurposeSigner, relays) }()
+	clk.awaitTimer(t)
+	clk.Advance(30 * time.Second)
+	require.ErrorIs(t, <-done, ErrQueueTimeout, "a waiter woken at its deadline must not consume capacity")
 }
 
 func TestConcurrentPublishersCannotExceedSharedBurst(t *testing.T) {

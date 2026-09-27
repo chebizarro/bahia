@@ -28,18 +28,47 @@ var rawPublisherPackages = []string{
 // publish hook; only the admission-gated nostrout.Bunker may use it.
 const nip46Package = "fiatjaf.com/nostr/nip46"
 
-// approvedGateways is the complete set of raw publication sites. Each gateway
-// is admitted by nostrout immediately before the frame it sends. The map is
-// exact: a new raw site fails, and so does a stale entry.
-var approvedGateways = map[string]string{
-	bahiaModule + "/internal/adapters/nostr|var publishOnRelay":           "(*fiatjaf.com/nostr.Relay).Publish",
-	bahiaModule + "/internal/soulfactory|(*goNostrRelayEndpoint).Publish": "(*fiatjaf.com/nostr.Relay).Publish",
-	bahiaModule + "/internal/adapters/signet|(*Client).callManagement":    "(*fiatjaf.com/nostr.Pool).PublishMany",
+// guardRules maps a restricted symbol to the only declarations allowed to use
+// it. The map is exact: a new use anywhere else fails, and so does an entry
+// that no longer matches a real use.
+//
+// Raw library publishers may appear only inside the gateway that admits the
+// frame immediately before sending it. Bahia's own raw-send callables (the
+// RelayPool send hook and the SoulFactory endpoint interface) are equally
+// restricted to their single admitted caller, and the isolated-controller
+// constructors to the process default and its adapter alias.
+var guardRules = map[string][]string{
+	"(*fiatjaf.com/nostr.Relay).Publish": {
+		bahiaModule + "/internal/adapters/nostr|var publishOnRelay",
+		bahiaModule + "/internal/soulfactory|(*goNostrRelayEndpoint).Publish",
+	},
+	"(*fiatjaf.com/nostr.Pool).PublishMany": {
+		bahiaModule + "/internal/adapters/signet|(*Client).callManagement",
+	},
+	"var " + bahiaModule + "/internal/adapters/nostr.publishOnRelay": {
+		bahiaModule + "/internal/adapters/nostr|(*RelayPool).publishToRelayWithResult",
+	},
+	"(" + bahiaModule + "/internal/soulfactory.relayBusEndpoint).Publish": {
+		bahiaModule + "/internal/soulfactory|(*SoulFactoryRelayBus).sendAdmitted",
+	},
+	"(*" + bahiaModule + "/internal/soulfactory.goNostrRelayEndpoint).Publish": {},
+	bahiaModule + "/internal/nostrout.New": {
+		bahiaModule + "/internal/nostrout|Default",
+		bahiaModule + "/internal/adapters/nostr|NewOutboundAdmission",
+	},
+	bahiaModule + "/internal/adapters/nostr.NewOutboundAdmission": {},
 }
 
-type rawPublication struct {
+// nip46Sites are the only declarations that may use the NIP-46 client: the
+// admission-gated Bunker wrapper.
+func nip46SiteAllowed(site string) bool {
+	const pkg = bahiaModule + "/internal/nostrout|"
+	return site == pkg+"ConnectBunker" || strings.HasPrefix(site, pkg+"(*Bunker).")
+}
+
+type guardUse struct {
 	site   string
-	callee string
+	symbol string
 	pos    token.Position
 }
 
@@ -57,31 +86,24 @@ func loadForGuard(t *testing.T, patterns ...string) []*packages.Package {
 	return pkgs
 }
 
-// findRawPublications reports every use of a raw publisher outside the
-// nostrout package itself, keyed by the enclosing top-level declaration.
-func findRawPublications(pkgs []*packages.Package) []rawPublication {
-	var found []rawPublication
+// findGuardedUses reports every identifier use of a guarded symbol, keyed by
+// the enclosing top-level declaration. Identifier uses cover qualified and
+// unqualified calls, method values, and method expressions alike.
+func findGuardedUses(pkgs []*packages.Package) []guardUse {
+	var found []guardUse
 	for _, pkg := range pkgs {
-		if pkg.PkgPath == bahiaModule+"/internal/nostrout" {
-			continue // the admission layer and its gated NIP-46 client
-		}
 		for _, file := range pkg.Syntax {
 			for _, decl := range file.Decls {
-				site := declarationSite(decl)
+				site := pkg.PkgPath + "|" + declarationSite(decl)
 				ast.Inspect(decl, func(node ast.Node) bool {
-					sel, ok := node.(*ast.SelectorExpr)
+					ident, ok := node.(*ast.Ident)
 					if !ok {
 						return true
 					}
-					fn := selectedFunc(pkg.TypesInfo, sel)
-					if fn == nil || !isRawPublisher(fn) {
-						return true
+					symbol, guarded := guardedSymbol(pkg.TypesInfo.Uses[ident])
+					if guarded {
+						found = append(found, guardUse{site: site, symbol: symbol, pos: pkg.Fset.Position(ident.Pos())})
 					}
-					found = append(found, rawPublication{
-						site:   pkg.PkgPath + "|" + site,
-						callee: fn.FullName(),
-						pos:    pkg.Fset.Position(sel.Pos()),
-					})
 					return true
 				})
 			}
@@ -91,19 +113,31 @@ func findRawPublications(pkgs []*packages.Package) []rawPublication {
 	return found
 }
 
-func selectedFunc(info *types.Info, sel *ast.SelectorExpr) *types.Func {
-	if selection, ok := info.Selections[sel]; ok {
-		fn, _ := selection.Obj().(*types.Func)
-		return fn
+func guardedSymbol(obj types.Object) (string, bool) {
+	if obj == nil || obj.Pkg() == nil {
+		return "", false
 	}
-	fn, _ := info.Uses[sel.Sel].(*types.Func)
-	return fn
+	switch o := obj.(type) {
+	case *types.Func:
+		name := o.FullName()
+		if _, ok := guardRules[name]; ok {
+			return name, true
+		}
+		if isRawPublisher(o) {
+			return name, true
+		}
+	case *types.Var:
+		if o.Parent() == o.Pkg().Scope() {
+			name := "var " + o.Pkg().Path() + "." + o.Name()
+			if _, ok := guardRules[name]; ok {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 func isRawPublisher(fn *types.Func) bool {
-	if fn.Pkg() == nil {
-		return false
-	}
 	path := fn.Pkg().Path()
 	if path == nip46Package || strings.HasPrefix(path, nip46Package+"/") {
 		return true
@@ -113,6 +147,18 @@ func isRawPublisher(fn *types.Func) bool {
 	}
 	for _, prefix := range rawPublisherPackages {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func useAllowed(use guardUse) bool {
+	if strings.HasPrefix(use.symbol, nip46Package+".") || strings.Contains(use.symbol, "("+nip46Package+".") || strings.Contains(use.symbol, "(*"+nip46Package+".") {
+		return nip46SiteAllowed(use.site)
+	}
+	for _, site := range guardRules[use.symbol] {
+		if site == use.site {
 			return true
 		}
 	}
@@ -155,65 +201,27 @@ func receiverName(expr ast.Expr) string {
 }
 
 // TestEveryRawRelayPublicationIsAnApprovedGateway enforces that no Bahia
-// production package publishes to relays around the outbound admission layer.
+// production package publishes to relays around the outbound admission layer
+// or splits the process budget with an isolated controller.
 func TestEveryRawRelayPublicationIsAnApprovedGateway(t *testing.T) {
-	found := findRawPublications(loadForGuard(t, "./..."))
-	seen := make(map[string]bool, len(approvedGateways))
+	found := findGuardedUses(loadForGuard(t, "./..."))
+	seen := map[string]bool{}
 	var violations []string
-	for _, raw := range found {
-		if approvedGateways[raw.site] == raw.callee {
-			seen[raw.site] = true
+	for _, use := range found {
+		if useAllowed(use) {
+			seen[use.symbol+" @ "+use.site] = true
 			continue
 		}
-		violations = append(violations, raw.pos.String()+": "+raw.site+" uses "+raw.callee)
+		violations = append(violations, use.pos.String()+": "+use.site+" uses "+use.symbol)
 	}
 	require.Empty(t, violations,
-		"raw Nostr publication bypasses outbound admission; route it through RelayPool, the SoulFactory relay bus, or a nostrout permit instead of widening approvedGateways")
-	for site := range approvedGateways {
-		require.True(t, seen[site], "approved gateway %s no longer exists; remove it from the allowlist", site)
-	}
-}
-
-// isolatedConstructors create a controller with its own budget. Production
-// code must share Default(); only the adapter alias may forward to New.
-var isolatedConstructors = map[string]string{
-	bahiaModule + "/internal/nostrout.New":                        "",
-	bahiaModule + "/internal/adapters/nostr.NewOutboundAdmission": "",
-}
-
-var isolatedConstructorForwarders = map[string]bool{
-	bahiaModule + "/internal/adapters/nostr|NewOutboundAdmission": true,
-}
-
-// TestProductionCodeSharesTheProcessController prevents a production package
-// from silently splitting the process budget with an isolated controller.
-func TestProductionCodeSharesTheProcessController(t *testing.T) {
-	var violations []string
-	for _, pkg := range loadForGuard(t, "./...") {
-		if pkg.PkgPath == bahiaModule+"/internal/nostrout" {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			for _, decl := range file.Decls {
-				site := pkg.PkgPath + "|" + declarationSite(decl)
-				ast.Inspect(decl, func(node ast.Node) bool {
-					sel, ok := node.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					fn := selectedFunc(pkg.TypesInfo, sel)
-					if fn == nil {
-						return true
-					}
-					if _, isolated := isolatedConstructors[fn.FullName()]; isolated && !isolatedConstructorForwarders[site] {
-						violations = append(violations, pkg.Fset.Position(sel.Pos()).String()+": "+site+" uses "+fn.FullName())
-					}
-					return true
-				})
-			}
+		"raw Nostr publication or isolated admission bypasses the process-wide controller; route it through RelayPool, the SoulFactory relay bus, or a nostrout permit instead of widening guardRules")
+	for symbol, sites := range guardRules {
+		for _, site := range sites {
+			require.True(t, seen[symbol+" @ "+site], "guard rule %s @ %s no longer matches a real use; remove it", symbol, site)
 		}
 	}
-	require.Empty(t, violations, "production code must use the process-wide outbound controller (nostrout.Default)")
+	require.True(t, seen[nip46Package+".NewBunker @ "+bahiaModule+"/internal/nostrout|ConnectBunker"], "the gated NIP-46 wrapper must remain the NIP-46 entry point")
 }
 
 // TestGuardDetectsDisguisedBypasses proves the detector is not a string
@@ -221,11 +229,12 @@ func TestProductionCodeSharesTheProcessController(t *testing.T) {
 // connect-then-publish, pool fan-out, Cascadia helpers, and raw NIP-46 are all
 // caught.
 func TestGuardDetectsDisguisedBypasses(t *testing.T) {
-	found := findRawPublications(loadForGuard(t, "./internal/nostrout/testdata/bypass"))
+	found := findGuardedUses(loadForGuard(t, "./internal/nostrout/testdata/bypass"))
 	sites := map[string][]string{}
-	for _, raw := range found {
-		name := strings.TrimPrefix(raw.site, bahiaModule+"/internal/nostrout/testdata/bypass|")
-		sites[name] = append(sites[name], raw.callee)
+	for _, use := range found {
+		require.False(t, useAllowed(use), "fixture use %s must be rejected", use.symbol)
+		name := strings.TrimPrefix(use.site, bahiaModule+"/internal/nostrout/testdata/bypass|")
+		sites[name] = append(sites[name], use.symbol)
 	}
 	for _, name := range []string{
 		"AliasedRelayPublish", "MethodValue", "MethodExpression", "ConnectThenPublish",

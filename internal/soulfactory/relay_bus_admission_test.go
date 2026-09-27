@@ -112,7 +112,8 @@ func TestConcordPublicationsArePacedByOperationInsteadOfRejected(t *testing.T) {
 }
 
 func TestConcordAuthRetryIsAdmittedAsSecondFrame(t *testing.T) {
-	admission := nostrout.New(nostrout.Config{RelayWire: nostrout.PurposeBudget{RatePerMinute: 1, Burst: 1}})
+	// A gift wrap uses the priority wire share.
+	admission := nostrout.New(nostrout.Config{RelayWirePriority: nostrout.PurposeBudget{RatePerMinute: 1, Burst: 1}})
 	endpoint := newFakeRelayEndpoint("wss://auth.example")
 	endpoint.publishResults = []RelayPublishResult{{Reason: "auth-required: sign in"}}
 	bus := busWithAdmission(t, admission, endpoint)

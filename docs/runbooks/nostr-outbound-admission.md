@@ -41,11 +41,13 @@ Logical budgets count events, not relay fan-out. Defaults per process:
 | signer | NIP-46 requests (kind 24133) | 10 | 4 |
 | aggregate | all lanes together | 45 | 15 |
 
-Each relay also has a wire budget of 55 frames/minute (burst 18), which is
-charged for every EVENT frame, including NIP-42 AUTH retries. A server plus one
-standalone agent against the same relay therefore stays below the shared
-relay's historic 120 events/minute bucket. Lanes are fixed partitions: bulk
-operations and state repair can never consume priority capacity.
+Each relay also has a wire budget, charged immediately before every EVENT
+frame (after any reconnect), including NIP-42 AUTH retries: 15 frames/minute
+(burst 5) reserved for priority frames and 40 frames/minute (burst 13) for
+everything else. A server plus one standalone agent against the same relay
+therefore stays below the shared relay's historic 120 events/minute bucket.
+Lanes and wire shares are fixed partitions: bulk operations, state repair, and
+AUTH churn can never consume priority capacity.
 
 Ordinary publications fail fast when a budget is exhausted
 (`nostr outbound publication budget exhausted`). Callers retain the event
@@ -133,8 +135,10 @@ credentials.
 
 ## Known limits
 
-- NIP-46 responses and the library's internal relay handling are outside
-  Bahia's control; only request publication is budgeted, and relay feedback on
-  those requests is not observable.
+- The pinned NIP-46 library sends exactly one request frame per bunker relay
+  per RPC, with no internal retries, and exposes no publish hook: requests are
+  admitted (signer lane plus every bunker relay's wire share) before the
+  library runs, but relay OK/rate-limit feedback on those frames is swallowed
+  by the library and cannot open the breaker.
 - Pending replaceable-state events are not yet coalesced by coordinate; expiry
   bounds their lifetime instead.
