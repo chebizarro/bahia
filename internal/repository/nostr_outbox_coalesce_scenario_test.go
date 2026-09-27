@@ -33,14 +33,20 @@ func runCoalesceScenario(t *testing.T, repo NostrEventOutboxRepository) {
 	// Replaceable (kind, pubkey): the newer revision wins.
 	record("a1", 10002, "pkA", 100, nil, pending)
 	record("a2", 10002, "pkA", 200, nil, pending)
-	// Same timestamp: the lowest event ID wins, even if it was already published.
+	// Same timestamp: the lowest event ID wins.
 	record("t9", 0, "pkA", 300, nil, pending)
-	record("t1", 0, "pkA", 300, nil, published)
-	// Addressable (kind, pubkey, first d): distinct d tags never coalesce; a
-	// newer inbound revision of the same address supersedes a pending one.
+	record("t1", 0, "pkA", 300, nil, pending)
+	// Addressable (kind, pubkey, first d): distinct d tags never coalesce;
+	// the first d tag decides the address.
 	record("d1", 30315, "pkA", 100, [][]string{{"d", "x"}}, pending)
 	record("d2", 30315, "pkA", 200, [][]string{{"d", "y"}}, pending)
-	record("d3", 30315, "pkA", 150, [][]string{{"t", "z"}, {"d", "x"}, {"d", "y"}}, inbound)
+	record("d4", 30315, "pkA", 120, [][]string{{"t", "z"}, {"d", "x"}, {"d", "y"}}, pending)
+	// Only pending revisions compete: newer published or inbound revisions are
+	// history, not outbox work, and are never scanned.
+	record("o1", 10002, "pkC", 100, nil, pending)
+	record("o2", 10002, "pkC", 200, nil, published)
+	record("o3", 30315, "pkC", 100, [][]string{{"d", "x"}}, pending)
+	record("o4", 30315, "pkC", 200, [][]string{{"d", "x"}}, inbound)
 	// A missing d tag and an empty d tag are the same address.
 	record("e1", 30000, "pkB", 100, nil, pending)
 	record("e2", 30000, "pkB", 200, [][]string{{"d", ""}}, pending)
@@ -65,7 +71,8 @@ func runCoalesceScenario(t *testing.T, repo NostrEventOutboxRepository) {
 		require.Contains(t, rec.LastPublishError, "superseded", id)
 	}
 	for id, state := range map[string]string{
-		"a2": pending, "t1": published, "d2": pending, "d3": inbound, "e2": pending,
+		"a2": pending, "t1": pending, "d2": pending, "d4": pending, "e2": pending,
+		"o1": pending, "o2": published, "o3": pending, "o4": inbound,
 		"b1": pending, "g1": pending, "g2": pending, "p1": pending, "p2": pending,
 	} {
 		rec, err := repo.GetByID(ctx, id)

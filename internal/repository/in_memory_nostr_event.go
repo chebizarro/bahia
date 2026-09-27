@@ -153,10 +153,33 @@ func (r *InMemoryNostrEventRepository) ExpireUnpublished(_ context.Context, enqu
 }
 
 // CoalesceSupersededUnpublished retires pending events that lost NIP-01
-// replacement to an already recorded revision of the same coordinate.
+// replacement to a newer pending revision of the same coordinate.
 func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.Context) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	type coordinate struct {
+		kind   int
+		pubkey string
+		dTag   string
+	}
+	winners := make(map[coordinate]NostrEventRecord)
+	for _, rec := range r.records {
+		if rec.PublishState != NostrPublishStatePending {
+			continue
+		}
+		addressable := IsNostrAddressableKind(rec.Kind)
+		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
+			continue
+		}
+		key := coordinate{kind: rec.Kind, pubkey: rec.PubKey}
+		if addressable {
+			key.dTag = firstDTag(rec.Tags)
+		}
+		best, seen := winners[key]
+		if !seen || rec.CreatedAt.After(best.CreatedAt) || (rec.CreatedAt.Equal(best.CreatedAt) && rec.ID < best.ID) {
+			winners[key] = rec
+		}
+	}
 	var superseded int64
 	for id, rec := range r.records {
 		if rec.PublishState != NostrPublishStatePending {
@@ -166,28 +189,21 @@ func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.C
 		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
 			continue
 		}
-		dTag := firstDTag(rec.Tags)
-		for _, other := range r.records {
-			if other.ID == rec.ID || other.Kind != rec.Kind || other.PubKey != rec.PubKey {
-				continue
-			}
-			if addressable && firstDTag(other.Tags) != dTag {
-				continue
-			}
-			wins := other.CreatedAt.After(rec.CreatedAt) || (other.CreatedAt.Equal(rec.CreatedAt) && other.ID < rec.ID)
-			if !wins {
-				continue
-			}
-			rec.PublishState = NostrPublishStateSuperseded
-			if rec.LastPublishError == "" {
-				rec.LastPublishError = nostrPublishSupersededReason
-			} else {
-				rec.LastPublishError += "; " + nostrPublishSupersededReason
-			}
-			r.records[id] = rec
-			superseded++
-			break
+		key := coordinate{kind: rec.Kind, pubkey: rec.PubKey}
+		if addressable {
+			key.dTag = firstDTag(rec.Tags)
 		}
+		if winners[key].ID == rec.ID {
+			continue
+		}
+		rec.PublishState = NostrPublishStateSuperseded
+		if rec.LastPublishError == "" {
+			rec.LastPublishError = nostrPublishSupersededReason
+		} else {
+			rec.LastPublishError += "; " + nostrPublishSupersededReason
+		}
+		r.records[id] = rec
+		superseded++
 	}
 	return superseded, nil
 }
