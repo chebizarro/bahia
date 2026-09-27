@@ -70,9 +70,13 @@ The production relay set is repository-owned by
 `deploy/openclaw-soulfactory-sidecar/relay-policy.json`. The sidecar release
 workflow atomically reconciles all four runtime relay variables to that exact
 ordered set before recreation and verifies both the persisted env file and the
-running container environment. A failed release gate restores the captured env
-file bytes and prior image digest together. Do not edit relay variables directly
-on the host; change the checked-in policy, review it, and use the release path.
+running container environment. It also persists the immutable image ID and the
+host Docker-socket supplemental group in Compose so the non-root sidecar can
+perform runtime operations after a later Compose reconciliation. A failed
+release gate restores the captured Compose and env file bytes plus the prior
+image digest together. Do not edit relay variables or sidecar image references
+directly on the host; change the checked-in policy, review it, and use the
+release path.
 
 Check a host env file without printing its other values:
 
