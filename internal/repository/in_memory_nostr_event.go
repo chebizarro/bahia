@@ -152,6 +152,63 @@ func (r *InMemoryNostrEventRepository) ExpireUnpublished(_ context.Context, enqu
 	return expired, nil
 }
 
+// CoalesceSupersededUnpublished retires pending events that lost NIP-01
+// replacement to an already recorded revision of the same coordinate.
+func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.Context) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var superseded int64
+	for id, rec := range r.records {
+		if rec.PublishState != NostrPublishStatePending {
+			continue
+		}
+		addressable := IsNostrAddressableKind(rec.Kind)
+		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
+			continue
+		}
+		dTag := firstDTag(rec.Tags)
+		for _, other := range r.records {
+			if other.ID == rec.ID || other.Kind != rec.Kind || other.PubKey != rec.PubKey {
+				continue
+			}
+			if addressable && firstDTag(other.Tags) != dTag {
+				continue
+			}
+			wins := other.CreatedAt.After(rec.CreatedAt) || (other.CreatedAt.Equal(rec.CreatedAt) && other.ID < rec.ID)
+			if !wins {
+				continue
+			}
+			rec.PublishState = NostrPublishStateSuperseded
+			if rec.LastPublishError == "" {
+				rec.LastPublishError = nostrPublishSupersededReason
+			} else {
+				rec.LastPublishError += "; " + nostrPublishSupersededReason
+			}
+			r.records[id] = rec
+			superseded++
+			break
+		}
+	}
+	return superseded, nil
+}
+
+// firstDTag returns the value of the first "d" tag, or "" (NIP-01).
+func firstDTag(raw json.RawMessage) string {
+	var tags [][]string
+	if err := json.Unmarshal(raw, &tags); err != nil {
+		return ""
+	}
+	for _, tag := range tags {
+		if len(tag) >= 1 && tag[0] == "d" {
+			if len(tag) >= 2 {
+				return tag[1]
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // FindSince returns events created after since, filtered by kinds when provided.
 func (r *InMemoryNostrEventRepository) FindSince(_ context.Context, since time.Time, kinds []int) ([]NostrEventRecord, error) {
 	r.mu.RLock()

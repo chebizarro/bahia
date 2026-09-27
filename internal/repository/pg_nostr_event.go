@@ -20,7 +20,25 @@ const (
 	// NostrPublishStateExpired is terminal: the event's retry lifetime elapsed
 	// before any relay accepted it, so it is never retried again.
 	NostrPublishStateExpired = "expired"
+	// NostrPublishStateSuperseded is terminal: a newer revision of the same
+	// NIP-01 replaceable or addressable coordinate is already recorded, so
+	// publishing this one could never change relay state.
+	NostrPublishStateSuperseded = "superseded"
 )
+
+// nostrPublishSupersededReason is appended to last_publish_error on coalescing.
+const nostrPublishSupersededReason = "superseded by a newer revision of the same coordinate"
+
+// IsNostrReplaceableKind reports NIP-01 replaceable kinds, keyed by (kind, pubkey).
+func IsNostrReplaceableKind(kind int) bool {
+	return kind == 0 || kind == 3 || (kind >= 10000 && kind < 20000)
+}
+
+// IsNostrAddressableKind reports NIP-01 addressable kinds, keyed by
+// (kind, pubkey, first d tag).
+func IsNostrAddressableKind(kind int) bool {
+	return kind >= 30000 && kind < 40000
+}
 
 // nostrPublishExpiredReason is appended to last_publish_error on expiry.
 const nostrPublishExpiredReason = "retry lifetime expired"
@@ -76,6 +94,11 @@ type NostrEventOutboxRepository interface {
 	// expired. Only pending rows change; an in-flight success may still mark
 	// an expired event published.
 	ExpireUnpublished(ctx context.Context, enqueuedBefore time.Time) (int64, error)
+	// CoalesceSupersededUnpublished moves pending replaceable/addressable
+	// events to the terminal superseded state when any recorded event with
+	// the same NIP-01 coordinate wins over them (newer created_at; on a tie,
+	// the lower event ID). Regular and ephemeral kinds are never touched.
+	CoalesceSupersededUnpublished(ctx context.Context) (int64, error)
 }
 
 type nostrEventDB interface {
@@ -213,6 +236,41 @@ func (r *PgNostrEventRepository) ExpireUnpublished(ctx context.Context, enqueued
 	`, NostrPublishStatePending, NostrPublishStateExpired, enqueuedBefore, nostrPublishExpiredReason)
 	if err != nil {
 		return 0, fmt.Errorf("expiring unpublished nostr events: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// CoalesceSupersededUnpublished retires pending events that lost NIP-01
+// replacement to an already recorded revision of the same coordinate.
+func (r *PgNostrEventRepository) CoalesceSupersededUnpublished(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		WITH candidates AS (
+			SELECT id, kind, pubkey, created_at,
+			       COALESCE((SELECT t.tag->>1 FROM jsonb_array_elements(tags::jsonb) WITH ORDINALITY AS t(tag, ord)
+			                 WHERE t.tag->>0 = 'd' ORDER BY t.ord LIMIT 1), '') AS d_tag
+			FROM nostr_events
+			WHERE publish_state = $1
+			  AND (kind IN (0, 3) OR kind BETWEEN 10000 AND 19999 OR kind BETWEEN 30000 AND 39999)
+		),
+		superseded AS (
+			SELECT c.id
+			FROM candidates c
+			WHERE EXISTS (
+				SELECT 1 FROM nostr_events n
+				WHERE n.kind = c.kind AND n.pubkey = c.pubkey AND n.id <> c.id
+				  AND (n.created_at > c.created_at OR (n.created_at = c.created_at AND n.id < c.id))
+				  AND (c.kind < 30000 OR COALESCE((SELECT t.tag->>1 FROM jsonb_array_elements(n.tags::jsonb) WITH ORDINALITY AS t(tag, ord)
+				                                   WHERE t.tag->>0 = 'd' ORDER BY t.ord LIMIT 1), '') = c.d_tag)
+			)
+		)
+		UPDATE nostr_events e
+		SET publish_state = $2,
+		    last_publish_error = CASE WHEN e.last_publish_error = '' THEN $3 ELSE e.last_publish_error || '; ' || $3 END
+		FROM superseded s
+		WHERE e.id = s.id AND e.publish_state = $1
+	`, NostrPublishStatePending, NostrPublishStateSuperseded, nostrPublishSupersededReason)
+	if err != nil {
+		return 0, fmt.Errorf("coalescing superseded nostr events: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

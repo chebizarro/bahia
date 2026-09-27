@@ -101,8 +101,18 @@ refusal instead of recording one identical failure per pending row. Terminal
 ContextVM results keep their single 60-second deadline across the first
 attempt and every retry, and stop immediately when the kill switch is active.
 
+Each redelivery sweep also coalesces replaceable (kinds 0, 3, 10000–19999)
+and addressable (30000–39999) events: a pending revision is moved to the
+terminal `superseded` state when any recorded event with the same NIP-01
+coordinate — `(kind, pubkey)`, plus the first `d` tag for addressable kinds —
+wins over it (newer `created_at`; on a tie, the lower event ID). Regular and
+ephemeral kinds are never coalesced. The sweep holds the publish lock, so it
+never changes an event that is mid-send.
+
 Migration `000071_nostr_publish_expired` only widens the publish-state
-constraint. Older binaries ignore expired rows. Its down migration retires
+constraint; `000072_nostr_publish_superseded` adds the `superseded` state and a
+`(kind, pubkey, created_at, id)` index, built at startup migration (Bahia is
+stopped during rollout, so the blocking build is acceptable). Older binaries ignore expired rows. Its down migration retires
 expired rows to `not_applicable`; it never returns them to `pending`.
 
 ## Emergency kill switch
@@ -140,5 +150,3 @@ credentials.
   admitted (signer lane plus every bunker relay's wire share) before the
   library runs, but relay OK/rate-limit feedback on those frames is swallowed
   by the library and cannot open the breaker.
-- Pending replaceable-state events are not yet coalesced by coordinate; expiry
-  bounds their lifetime instead.
