@@ -591,6 +591,41 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
+	healthProvider.RegisterCheck("nostr_outbound_admission", int(Tier1), func() HealthCheck {
+		state := outboundAdmission.State()
+		check := HealthCheck{
+			Name:    "nostr_outbound_admission",
+			Status:  HealthStatusPass,
+			Message: "outbound publication admission is available",
+			Tier:    int(Tier1),
+			Details: map[string]string{
+				"attempted":            fmt.Sprintf("%d", state.Metrics.Attempted),
+				"admitted":             fmt.Sprintf("%d", state.Metrics.Admitted),
+				"budget_rejected":      fmt.Sprintf("%d", state.Metrics.BudgetRejected),
+				"circuit_rejected":     fmt.Sprintf("%d", state.Metrics.CircuitRejected),
+				"duplicates":           fmt.Sprintf("%d", state.Metrics.Duplicates),
+				"kill_switch_rejected": fmt.Sprintf("%d", state.Metrics.KillSwitchRejected),
+				"relay_rate_limited":   fmt.Sprintf("%d", state.Metrics.RelayRateLimited),
+			},
+		}
+		if state.KillSwitchActive {
+			check.Status = HealthStatusFail
+			check.Message = "outbound publication kill switch is active"
+			if state.KillSwitchError != "" {
+				check.Details["kill_switch_error"] = state.KillSwitchError
+			}
+			return check
+		}
+		if state.CircuitOpen {
+			check.Status = HealthStatusWarn
+			check.Message = "outbound publication circuit breaker is open"
+			check.Details["breaker_until"] = state.Metrics.BreakerUntil.UTC().Format(time.RFC3339Nano)
+		} else if state.Metrics.BudgetRejected > 0 {
+			check.Status = HealthStatusWarn
+			check.Message = "outbound publication budget has rejected events"
+		}
+		return check
+	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager, Tier1)
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", int(Tier1), func() HealthCheck {

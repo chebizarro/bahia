@@ -392,7 +392,7 @@ func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]P
 	for _, mr := range p.orderedRelaysLocked() {
 		results = append(results, p.publishToRelayWithResult(ctx, mr, ev))
 	}
-	p.outboundAdmission.observe(results)
+	p.outboundAdmission.observe(ev, results)
 
 	return results, aggregatePublishResultsError(results)
 }
