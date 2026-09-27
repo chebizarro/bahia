@@ -39,6 +39,7 @@ type RelayPool struct {
 	authSigner          nostr.Signer
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
 	isRelayConnected    func(*nostr.Relay) bool
+	outboundAdmission   *OutboundAdmission
 
 	// connectedMu guards relay (re)connection listeners. It is never held
 	// while calling out, and notification never blocks the pool.
@@ -71,6 +72,17 @@ func WithAuthSigner(signer nostr.Signer) RelayPoolOption {
 	return func(p *RelayPool) { p.authSigner = signer }
 }
 
+// WithOutboundAdmission shares one fail-closed publication budget and circuit
+// breaker across relay pools. Passing nil is rejected by falling back to a safe
+// bounded controller; there is no option for unlimited publication.
+func WithOutboundAdmission(admission *OutboundAdmission) RelayPoolOption {
+	return func(p *RelayPool) {
+		if admission != nil {
+			p.outboundAdmission = admission
+		}
+	}
+}
+
 // RelayPoolReconfigureResult describes an in-place relay topology update.
 type RelayPoolReconfigureResult struct {
 	Changed               bool
@@ -100,6 +112,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		cancel:              cancel,
 		connectRelay:        nostr.RelayConnect,
 		isRelayConnected:    func(relay *nostr.Relay) bool { return relay != nil && relay.IsConnected() },
+		outboundAdmission:   NewOutboundAdmission(DefaultOutboundAdmissionConfig()),
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -369,6 +382,9 @@ func (p *RelayPool) Publish(ctx context.Context, ev nostr.Event) (int, error) {
 // failures preserve Error with Reason unset. A duplicate rejection is treated as
 // aggregate success because the relay already has the event.
 func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]PublishResult, error) {
+	if err := p.outboundAdmission.admit(ev); err != nil {
+		return nil, err
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -376,8 +392,14 @@ func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]P
 	for _, mr := range p.orderedRelaysLocked() {
 		results = append(results, p.publishToRelayWithResult(ctx, mr, ev))
 	}
+	p.outboundAdmission.observe(results)
 
 	return results, aggregatePublishResultsError(results)
+}
+
+// OutboundAdmissionMetrics returns content-free process publication counters.
+func (p *RelayPool) OutboundAdmissionMetrics() OutboundAdmissionMetrics {
+	return p.outboundAdmission.Metrics()
 }
 
 // PublishResult contains the outcome of a publish attempt.

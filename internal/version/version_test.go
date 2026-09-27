@@ -60,6 +60,7 @@ func TestComponentsIncludeSeparatelyPackagedArtifacts(t *testing.T) {
 		"relay":                        "cmd/relay",
 		"fips-bahia-bridge":            "cmd/fips-bahia-bridge",
 		"openclaw-soulfactory-sidecar": "cmd/openclaw-soulfactory-sidecar",
+		"bahia-dns-agent":              "cmd/bahia-dns-agent",
 	}
 	seen := make(map[string]Component, len(components))
 	for _, component := range components {
