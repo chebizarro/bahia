@@ -126,3 +126,33 @@ func TestLateOutboxFailureCannotResurrectExpiredEvent(t *testing.T) {
 	require.Equal(t, repository.NostrPublishStateExpired, rec.PublishState)
 	require.NotContains(t, rec.LastPublishError, "late relay failure")
 }
+
+func TestOutboxRedeliversOnlyTheWinningReplaceableRevision(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	repo := repository.NewInMemoryNostrEventRepository()
+	sk := gonostr.Generate()
+	revision := func(createdAt int64, content string) gonostr.Event {
+		ev := gonostr.Event{Kind: 30315, CreatedAt: gonostr.Timestamp(createdAt), Tags: gonostr.Tags{{"d", "svc-1"}}, Content: content}
+		require.NoError(t, ev.Sign(sk))
+		rec := nostrEventRecordFromEvent(ev, "test")
+		rec.ReceivedAt = now.Add(-time.Minute)
+		rec.PublishState = repository.NostrPublishStatePending
+		_, err := repo.Record(t.Context(), rec)
+		require.NoError(t, err)
+		return ev
+	}
+	for i := int64(0); i < 50; i++ {
+		revision(now.Unix()-100+i, "stale")
+	}
+	winner := revision(now.Unix(), "current")
+
+	var sent []string
+	publisher := newExpiryTestPublisher(repo, now, func(_ context.Context, ev gonostr.Event) ([]PublishResult, error) {
+		sent = append(sent, ev.ID.Hex())
+		return []PublishResult{{RelayURL: "wss://relay.example", Accepted: true}}, nil
+	})
+	_, failed, _, err := publisher.retryUnpublished(t.Context())
+	require.NoError(t, err)
+	require.False(t, failed)
+	require.Equal(t, []string{winner.ID.Hex()}, sent, "superseded revisions must not consume outbound budget")
+}

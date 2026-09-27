@@ -62,12 +62,26 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	_, err := Down(ctx, pool, logger, DownOptions{})
 	require.ErrorContains(t, err, "confirmation")
 
+	// 000072 retires superseded outbound rows to a terminal state; it never
+	// returns them to 'pending'.
+	_, err = pool.Exec(ctx, `INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, publish_state)
+		VALUES ('superseded-outbox-row', 10002, 'pk', '', '[]', 'sig', now(), now(), 'test', 'superseded')`)
+	require.NoError(t, err)
+	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000072_nostr_publish_superseded"}, rolled)
+	var supersededState string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT publish_state FROM nostr_events WHERE id = 'superseded-outbox-row'").Scan(&supersededState))
+	require.Equal(t, "not_applicable", supersededState)
+	_, err = pool.Exec(ctx, "DELETE FROM nostr_events WHERE id = 'superseded-outbox-row'")
+	require.NoError(t, err)
+
 	// 000071 retires expired outbound rows to a terminal state; it never
 	// returns them to 'pending'.
 	_, err = pool.Exec(ctx, `INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, publish_state)
 		VALUES ('expired-outbox-row', 1, 'pk', '', '[]', 'sig', now(), now(), 'test', 'expired')`)
 	require.NoError(t, err)
-	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000071_nostr_publish_expired"}, rolled)
 	var retiredState string
@@ -106,7 +120,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"000071_nostr_publish_expired", "000070_hiveci_initiations", "000069_package_authorization", "000068_relay_projection_wire_time",
+		"000072_nostr_publish_superseded", "000071_nostr_publish_expired", "000070_hiveci_initiations", "000069_package_authorization", "000068_relay_projection_wire_time",
 		"000067_vm_measured_adoption", "000066_vm_control_plane",
 	}, rolled)
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('virtualization_hosts') IS NOT NULL").Scan(&exists))
@@ -134,7 +148,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	require.Equal(t, len(migrationVersions(t)), count)
 
 	files = migrationFileCopy(t)
-	files["migrations/000071_nostr_publish_expired.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
+	files["migrations/000072_nostr_publish_superseded.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
 	_, err = downWithFS(ctx, pool, logger, files, DownOptions{Confirm: true})
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -142,7 +156,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('down_failure_marker') IS NOT NULL").Scan(&exists))
 	require.False(t, exists, "failed down SQL must roll back its DDL")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000071_nostr_publish_expired'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000072_nostr_publish_superseded'").Scan(&count))
 	require.Equal(t, 1, count)
 }
 

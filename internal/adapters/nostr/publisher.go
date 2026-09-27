@@ -443,17 +443,39 @@ func (p *Publisher) Run(ctx context.Context) error {
 	}
 }
 
-func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed bool, rateLimited bool, err error) {
-	cutoff := p.now().Add(-p.retryLifetime)
-	expired, err := p.outboxRepo.ExpireUnpublished(ctx, cutoff)
+// sweepOutbox retires pending events that can no longer be useful: those whose
+// retry lifetime elapsed and replaceable/addressable revisions already
+// superseded by a newer recorded revision of the same coordinate. It holds the
+// publish lock so it never changes the state of an event mid-send.
+func (p *Publisher) sweepOutbox(ctx context.Context) error {
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
+
+	expired, err := p.outboxRepo.ExpireUnpublished(ctx, p.now().Add(-p.retryLifetime))
 	if err != nil {
-		return 0, false, false, err
+		return err
 	}
 	if expired > 0 {
 		p.logger.Warn("nostr outbox events expired without relay acceptance",
 			zap.Int64("expired", expired),
 			zap.Duration("retry_lifetime", p.retryLifetime),
 		)
+	}
+	superseded, err := p.outboxRepo.CoalesceSupersededUnpublished(ctx)
+	if err != nil {
+		return err
+	}
+	if superseded > 0 {
+		p.logger.Info("nostr outbox coalesced superseded replaceable events",
+			zap.Int64("superseded", superseded),
+		)
+	}
+	return nil
+}
+
+func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed bool, rateLimited bool, err error) {
+	if err := p.sweepOutbox(ctx); err != nil {
+		return 0, false, false, err
 	}
 	records, err := p.outboxRepo.ListUnpublished(ctx, 100)
 	if err != nil {

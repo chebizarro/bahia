@@ -49,3 +49,8 @@ func TestNostrOutboxExpiryPostgres(t *testing.T) {
 	require.Len(t, pending, 1)
 	require.Equal(t, "fresh", pending[0].ID)
 }
+
+func TestNostrOutboxCoalescingPostgres(t *testing.T) {
+	pool, _ := vmPostgres(t)
+	runCoalesceScenario(t, NewPgNostrEventRepository(pool))
+}

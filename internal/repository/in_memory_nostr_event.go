@@ -152,6 +152,79 @@ func (r *InMemoryNostrEventRepository) ExpireUnpublished(_ context.Context, enqu
 	return expired, nil
 }
 
+// CoalesceSupersededUnpublished retires pending events that lost NIP-01
+// replacement to a newer pending revision of the same coordinate.
+func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.Context) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	type coordinate struct {
+		kind   int
+		pubkey string
+		dTag   string
+	}
+	winners := make(map[coordinate]NostrEventRecord)
+	for _, rec := range r.records {
+		if rec.PublishState != NostrPublishStatePending {
+			continue
+		}
+		addressable := IsNostrAddressableKind(rec.Kind)
+		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
+			continue
+		}
+		key := coordinate{kind: rec.Kind, pubkey: rec.PubKey}
+		if addressable {
+			key.dTag = firstDTag(rec.Tags)
+		}
+		best, seen := winners[key]
+		if !seen || rec.CreatedAt.After(best.CreatedAt) || (rec.CreatedAt.Equal(best.CreatedAt) && rec.ID < best.ID) {
+			winners[key] = rec
+		}
+	}
+	var superseded int64
+	for id, rec := range r.records {
+		if rec.PublishState != NostrPublishStatePending {
+			continue
+		}
+		addressable := IsNostrAddressableKind(rec.Kind)
+		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
+			continue
+		}
+		key := coordinate{kind: rec.Kind, pubkey: rec.PubKey}
+		if addressable {
+			key.dTag = firstDTag(rec.Tags)
+		}
+		if winners[key].ID == rec.ID {
+			continue
+		}
+		rec.PublishState = NostrPublishStateSuperseded
+		if rec.LastPublishError == "" {
+			rec.LastPublishError = nostrPublishSupersededReason
+		} else {
+			rec.LastPublishError += "; " + nostrPublishSupersededReason
+		}
+		r.records[id] = rec
+		superseded++
+	}
+	return superseded, nil
+}
+
+// firstDTag returns the value of the first "d" tag, or "" (NIP-01).
+func firstDTag(raw json.RawMessage) string {
+	var tags [][]string
+	if err := json.Unmarshal(raw, &tags); err != nil {
+		return ""
+	}
+	for _, tag := range tags {
+		if len(tag) >= 1 && tag[0] == "d" {
+			if len(tag) >= 2 {
+				return tag[1]
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // FindSince returns events created after since, filtered by kinds when provided.
 func (r *InMemoryNostrEventRepository) FindSince(_ context.Context, since time.Time, kinds []int) ([]NostrEventRecord, error) {
 	r.mu.RLock()
