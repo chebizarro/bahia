@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
@@ -17,6 +21,55 @@ type staticReadiness struct {
 }
 
 func (s staticReadiness) Readiness() soulfactory.OpenClawSidecarReadiness { return s.state }
+
+type healthLifecycleRunner struct {
+	address string
+	state   soulfactory.OpenClawSidecarReadiness
+}
+
+func (runner healthLifecycleRunner) Readiness() soulfactory.OpenClawSidecarReadiness {
+	return runner.state
+}
+
+func (runner healthLifecycleRunner) Run(ctx context.Context) error {
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://" + runner.address + "/ready")
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("health server never became reachable")
+}
+
+func TestRunSidecarWithHealthKeepsServerAliveDuringRun(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := healthLifecycleRunner{
+		address: address,
+		state: soulfactory.OpenClawSidecarReadiness{
+			Ready: true, CapabilityPublished: true, SubscriptionEOSE: true,
+		},
+	}
+	if err := runSidecarWithHealth(t.Context(), address, runner); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLoadPrivateKeyUsesFile(t *testing.T) {
 	t.Setenv("OPENCLAW_SOULFACTORY_PRIVATE_KEY", "")

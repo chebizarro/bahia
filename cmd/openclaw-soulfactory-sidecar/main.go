@@ -156,7 +156,22 @@ func main() {
 			}
 		}
 	}()
-	healthServer := newHealthServer(*healthAddr, sidecar)
+	runErr := runSidecarWithHealth(ctx, *healthAddr, sidecar)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "sidecar stopped: %v\n", runErr)
+		os.Exit(1)
+	}
+}
+
+type sidecarRunner interface {
+	readinessProvider
+	Run(context.Context) error
+}
+
+func runSidecarWithHealth(ctx context.Context, healthAddr string, sidecar sidecarRunner) error {
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	healthServer := newHealthServer(healthAddr, sidecar)
 	healthErr := make(chan error, 1)
 	go func() {
 		if err := healthServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -164,20 +179,16 @@ func main() {
 			stop()
 		}
 	}()
+	runErr := sidecar.Run(runCtx)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = healthServer.Shutdown(shutdownCtx)
-	runErr := sidecar.Run(ctx)
 	select {
 	case err := <-healthErr:
-		fmt.Fprintf(os.Stderr, "sidecar health server stopped: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("sidecar health server stopped: %w", err)
 	default:
 	}
-	if err := runErr; err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintf(os.Stderr, "sidecar stopped: %v\n", err)
-		os.Exit(1)
-	}
+	return runErr
 }
 
 type readinessProvider interface {
