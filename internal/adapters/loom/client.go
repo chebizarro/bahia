@@ -280,6 +280,17 @@ func (c *Client) StartCanonicalProjection(jobEventID string) {
 	}()
 }
 
+// DispatchRelays returns the relay URLs used by this client's publish pool.
+func (c *Client) DispatchRelays() []string {
+	if c == nil || c.pool == nil {
+		return nil
+	}
+	if pool, ok := c.pool.(interface{ URLs() []string }); ok {
+		return pool.URLs()
+	}
+	return nil
+}
+
 // SubmitJob submits a deployment job to Loom workers via a Kind 5100 job request event.
 // If no WorkerPubkey is set and a workerRepo is available, auto-selects an online worker.
 func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retErr error) {

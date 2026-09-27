@@ -13,7 +13,7 @@
     },
     {
       "id": "AC3",
-      "description": "Workerless Loom deployments are not subject to the worker-backed dispatch admission gate.",
+      "description": "Workerless legacy non-unit Loom deployments are not subject to the worker-backed dispatch admission gate; Loom-routed deployment units require a resolved worker.",
       "tests": ["TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission"]
     }
   ]

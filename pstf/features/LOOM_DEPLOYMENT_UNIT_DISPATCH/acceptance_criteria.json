@@ -1,0 +1,26 @@
+{
+  "feature_id": "LOOM_DEPLOYMENT_UNIT_DISPATCH",
+  "review_revision": "c01aaa471746dc6f1ff12f58da4e5ee2b4f763f3526ad9835c4788ee10e3d19f",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "A Loom-routed deployment unit refuses dispatch when no worker policy is configured or selection produces an empty worker pubkey, without direct-runtime fallback or a Loom submission.",
+      "tests": ["TestExecuteDeployment_LoomDispatchUnitRejectsUnresolvedWorkerAndRelayMismatch"]
+    },
+    {
+      "id": "AC2",
+      "description": "Before Loom publication, Bahia requires at least one normalized configured publish relay to overlap the freshly reloaded selected worker's advertised relays; unknown or disjoint relay sets refuse dispatch.",
+      "tests": ["TestDispatchRelaysUsesPublishPool", "TestExecuteDeployment_LoomDispatchUnitRejectsUnresolvedWorkerAndRelayMismatch", "TestExecuteDeployment_LoomDispatchUnitUsesFreshWorkerRelayAdvertisement"]
+    },
+    {
+      "id": "AC3",
+      "description": "An admitted worker with relay overlap receives the Loom job; the run retains its worker, deployment unit, and real Loom job identity without direct-runtime fallback.",
+      "tests": ["TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime", "TestExecuteDeployment_LoomDispatchUnitUsesFreshWorkerRelayAdvertisement"]
+    },
+    {
+      "id": "AC4",
+      "description": "Non-Loom Docker and Compose units continue through direct runtime, and legacy workerless non-unit Loom dispatch remains outside the deployment-unit refusal rule.",
+      "tests": ["TestExecuteDeployment_DockerUnitUsesManagedEndpointWithoutLoom", "TestExecuteDeployment_MaxComposeUnitRendersFullDesiredState", "TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission"]
+    }
+  ]
+}

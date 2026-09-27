@@ -414,6 +414,8 @@ type promotionFlowLoom struct {
 	requests []loom.JobRequest
 }
 
+func (l *promotionFlowLoom) DispatchRelays() []string { return nil }
+
 func (l *promotionFlowLoom) SubmitJob(_ context.Context, request loom.JobRequest) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -12,6 +12,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
@@ -52,6 +53,16 @@ func (p *submitRelayPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) 
 
 func (p *submitRelayPool) AuthenticateRelay(context.Context, string) error {
 	panic("not used")
+}
+
+func TestDispatchRelaysUsesPublishPool(t *testing.T) {
+	pool := nostrAdapter.NewRelayPool([]string{"https://Relay.Example/", "wss://second.example"}, zap.NewNop())
+	defer pool.Close()
+	client := NewClient(config.LoomConfig{Relays: []string{"wss://not-used.example"}}, "", pool, zap.NewNop())
+	got := client.DispatchRelays()
+	if len(got) != 2 || got[0] != "wss://relay.example" || got[1] != "wss://second.example" {
+		t.Fatalf("DispatchRelays() = %v, want normalized publish-pool URLs", got)
+	}
 }
 
 func TestSubmitAndCancelRejectZeroRelayAcceptance(t *testing.T) {

@@ -140,13 +140,13 @@ func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Envi
 }
 
 // EvaluateDispatchAdmission reloads the selected worker and applies the service-deploy admission policy immediately before dispatch.
-func (s *WorkerPolicyService) EvaluateDispatchAdmission(ctx context.Context, env *domain.Environment, workerPubkey string) (WorkerAdmissionDecision, error) {
+func (s *WorkerPolicyService) EvaluateDispatchAdmission(ctx context.Context, env *domain.Environment, workerPubkey string) (WorkerAdmissionDecision, *domain.Worker, error) {
 	if s == nil || s.workerRepo == nil {
-		return WorkerAdmissionDecision{}, fmt.Errorf("worker repository is required for dispatch admission")
+		return WorkerAdmissionDecision{}, nil, fmt.Errorf("worker repository is required for dispatch admission")
 	}
 	worker, err := s.workerRepo.GetByPubKey(ctx, workerPubkey)
 	if err != nil {
-		return WorkerAdmissionDecision{}, fmt.Errorf("loading selected worker for dispatch admission: %w", err)
+		return WorkerAdmissionDecision{}, nil, fmt.Errorf("loading selected worker for dispatch admission: %w", err)
 	}
 	policy := s.extractPolicy(env)
 	var selector map[string]any
@@ -161,7 +161,7 @@ func (s *WorkerPolicyService) EvaluateDispatchAdmission(ctx context.Context, env
 		MaxPrice:           policy.MaxPrice,
 		PinnedWorker:       policy.PinnedWorker,
 		PressureThresholds: s.pressureThresholds,
-	}), nil
+	}), worker, nil
 }
 
 // RankWorkers returns all online workers for a given environment, sorted best-first.

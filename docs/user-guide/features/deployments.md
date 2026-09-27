@@ -72,6 +72,12 @@ Generated Compose env files may contain resolved secret values because Docker Co
 
 Kubernetes desired-state apply and Compose per-service fragments are deferred. Until those follow-up slices land, Kubernetes remains outside the Compose/Docker desired-state behavior and Compose uses the authoritative full-project output.
 
+## Loom-backed deployment units
+
+A Bahia-managed deployment unit uses the direct Docker or Compose runtime by default. Setting `deployment_unit.runtime_config.dispatch_mode` to `loom` opts that unit into a Loom job instead. Before Bahia publishes the job, an environment worker policy must resolve an admitted worker with a non-empty pubkey, and at least one relay in that worker's advertised `preferred_relays` must overlap Bahia's Loom publish-pool relays. Missing worker policy, empty worker identity, missing relay advertisement, or disjoint relay sets reject the dispatch without falling back to the direct runtime. Configure the worker advertisement and Bahia relay topology to share a relay before retrying.
+
+A successful Loom dispatch records the selected worker and the real Loom job event ID on the deployment run. Relay overlap is a preflight reachability check, not proof that the worker accepted or completed the job; follow the run and Loom status/result events for terminal outcome.
+
 ## Deployment SBOMs
 
 Deployment subjects can be covered by SBOM manifests when the deployment intent has a stable desired-state hash. Bahia uses that desired hash as the deployment subject digest, then follows the same canonical SBOM flow as artifacts and packages: generate/import payload bytes, store them on Blossom, publish a `30078` SBOM reference, publish/replace the deployment-scoped `30004` availability list, and emit `30315` status plus `4903` audit observables.

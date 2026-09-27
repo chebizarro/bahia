@@ -677,15 +677,20 @@ func (r *renderingComposeRuntime) Observe(_ context.Context, serviceID, envID uu
 // --- Mock Loom Client ---
 
 type stubLoomClient struct {
-	status       *loom.JobStatus
-	err          error
-	awaitFn      func(context.Context, string, string) (*loom.JobStatus, error)
-	jobTimeout   time.Duration
-	gotJobID     string
-	gotWorkerKey string
-	submitCalls  int
-	awaitCalls   int
-	lastJobReq   loom.JobRequest
+	dispatchRelays []string
+	status         *loom.JobStatus
+	err            error
+	awaitFn        func(context.Context, string, string) (*loom.JobStatus, error)
+	jobTimeout     time.Duration
+	gotJobID       string
+	gotWorkerKey   string
+	submitCalls    int
+	awaitCalls     int
+	lastJobReq     loom.JobRequest
+}
+
+func (s *stubLoomClient) DispatchRelays() []string {
+	return append([]string(nil), s.dispatchRelays...)
 }
 
 func (s *stubLoomClient) SubmitJob(_ context.Context, req loom.JobRequest) (string, error) {
@@ -711,6 +716,17 @@ func (s *stubLoomClient) JobTimeout() time.Duration {
 	return time.Minute
 }
 
+func newLoomDispatchWorkerPolicy(preferredRelays []string) (*service.WorkerPolicyService, string) {
+	pubkey := strings.Repeat("a", 64)
+	worker := domain.Worker{
+		PubKey: pubkey, Name: "max-firecracker", Status: domain.WorkerStatusOnline,
+		SchedulingState: domain.WorkerSchedulingActive, MaxConcurrentJobs: 4,
+		LastAdvertisementAt: time.Now().UTC(), PreferredRelays: preferredRelays,
+	}
+	repo := &coordinatorWorkerRepo{workers: map[string]domain.Worker{pubkey: worker}}
+	return service.NewWorkerPolicyService(repo, zap.NewNop()), pubkey
+}
+
 // mockLoomClient is a controllable fake that replaces the real loom.Client.
 // Since loom.Client is a concrete struct (not an interface), we test the coordinator
 // indirectly through its public behavior. For direct unit tests, we verify the
@@ -719,6 +735,8 @@ func (s *stubLoomClient) JobTimeout() time.Duration {
 type coordinatorWorkerRepo struct {
 	workers        map[string]domain.Worker
 	degradeOnFetch bool
+	reloadRelays   bool
+	relaysOnFetch  []string
 }
 
 func (r *coordinatorWorkerRepo) Upsert(_ context.Context, w *domain.Worker) error {
@@ -733,6 +751,9 @@ func (r *coordinatorWorkerRepo) GetByPubKey(_ context.Context, pubkey string) (*
 	w, ok := r.workers[pubkey]
 	if !ok {
 		return nil, nil
+	}
+	if r.reloadRelays {
+		w.PreferredRelays = append([]string(nil), r.relaysOnFetch...)
 	}
 	if r.degradeOnFetch {
 		w.Pressure = &domain.WorkerPressureAssessment{
@@ -1329,10 +1350,12 @@ func TestExecuteDeploymentResolvesRuntimeReleaseIDWithoutFabricatedArtifact(t *t
 		svcRepo, envRepo, &stubBuildRepo{}, artRepo, intentRepo, runRepo, &stubObsRepo{}, stateRepo,
 		nil, &events.NoopPublisher{}, zap.NewNop(), service.WithAgentRuntimeReleaseRepository(releaseRepo),
 	)
-	loomClient := &stubLoomClient{status: &loom.JobStatus{Status: "succeeded"}}
+	workerPolicy, workerPubkey := newLoomDispatchWorkerPolicy([]string{"wss://worker.example"})
+	loomClient := &stubLoomClient{status: &loom.JobStatus{Status: "succeeded"}, dispatchRelays: []string{"wss://worker.example"}}
 	lifecycle := &stubDeploymentRuntimeLifecycle{}
 	coord := NewCoordinator(
 		registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentLoomClient(loomClient),
+		WithWorkerPolicy(workerPolicy),
 		WithDeploymentUnitRouting(&stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}, lifecycle),
 	)
 	defer coord.Shutdown(time.Second)
@@ -1347,6 +1370,9 @@ func TestExecuteDeploymentResolvesRuntimeReleaseIDWithoutFabricatedArtifact(t *t
 		t.Fatalf("Loom-backed runtime release unexpectedly used direct lifecycle: calls=%d", lifecycle.calls)
 	}
 	request := loomClient.lastJobReq
+	if request.WorkerPubkey != workerPubkey {
+		t.Fatalf("runtime release worker = %q, want %q", request.WorkerPubkey, workerPubkey)
+	}
 	if request.Image != releaseRepo.bound.Release.ImageRepo+"@"+digest || request.Digest != digest {
 		t.Fatalf("runtime release image identity was not resolved from projection: %+v", request)
 	}
@@ -1815,6 +1841,135 @@ func TestExecuteDeployment_DockerUnitUsesManagedEndpointWithoutLoom(t *testing.T
 	}
 }
 
+func TestExecuteDeployment_LoomDispatchUnitRejectsUnresolvedWorkerAndRelayMismatch(t *testing.T) {
+	cases := []struct {
+		name            string
+		workerPolicy    string
+		publishRelays   []string
+		preferredRelays []string
+		wantError       string
+	}{
+		{name: "missing worker policy", wantError: "requires a configured worker policy"},
+		{name: "empty selected worker", workerPolicy: "empty", publishRelays: []string{"wss://shared.example"}, preferredRelays: []string{"wss://shared.example"}, wantError: "requires a resolved worker pubkey"},
+		{name: "disjoint relays", workerPolicy: "valid", publishRelays: []string{"wss://bahia.example"}, preferredRelays: []string{"wss://worker.example"}, wantError: "no relay overlap"},
+		{name: "worker advertises no relays", workerPolicy: "valid", publishRelays: []string{"wss://bahia.example"}, wantError: "no relay overlap"},
+		{name: "Bahia has no publish relays", workerPolicy: "valid", preferredRelays: []string{"wss://worker.example"}, wantError: "no relay overlap"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+			svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+			unit := &domain.DeploymentUnit{
+				ID: uuid.New(), EnvironmentID: env.ID, Key: "max-firecracker",
+				RuntimeType: domain.RuntimeTypeDocker, ReconcileMode: domain.ReconcileModeObserveOnly,
+				OwnershipMode: domain.OwnershipModeBahiaManaged,
+				RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+			}
+			unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+			lifecycle := &stubDeploymentRuntimeLifecycle{}
+			loomClient := &stubLoomClient{dispatchRelays: tc.publishRelays}
+			registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+			options := []CoordinatorOption{WithDeploymentUnitRouting(unitRepo, lifecycle), WithDeploymentLoomClient(loomClient)}
+			switch tc.workerPolicy {
+			case "valid":
+				policy, _ := newLoomDispatchWorkerPolicy(tc.preferredRelays)
+				options = append(options, WithWorkerPolicy(policy))
+			case "empty":
+				worker := domain.Worker{
+					Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive,
+					MaxConcurrentJobs: 4, LastAdvertisementAt: time.Now().UTC(), PreferredRelays: tc.preferredRelays,
+				}
+				repo := &coordinatorWorkerRepo{workers: map[string]domain.Worker{"": worker}}
+				options = append(options, WithWorkerPolicy(service.NewWorkerPolicyService(repo, zap.NewNop())))
+			}
+			coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), options...)
+			defer coord.Shutdown(time.Second)
+			intent := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+				RequestedBy: "test", SourceKind: domain.SourceKindManual,
+				ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+			}
+			if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+				t.Fatal(err)
+			}
+			intentRepo.mu.Lock()
+			intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+			intentRepo.mu.Unlock()
+			err := coord.ExecuteDeployment(ctx, intent.ID)
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ExecuteDeployment() error = %v, want %q", err, tc.wantError)
+			}
+			if loomClient.submitCalls != 0 || lifecycle.calls != 0 || len(runRepo.runs) != 0 {
+				t.Fatalf("rejected dispatch had side effects: loom=%d direct=%d runs=%d", loomClient.submitCalls, lifecycle.calls, len(runRepo.runs))
+			}
+		})
+	}
+}
+
+func TestExecuteDeployment_LoomDispatchUnitUsesFreshWorkerRelayAdvertisement(t *testing.T) {
+	cases := []struct {
+		name            string
+		selectionRelays []string
+		freshRelays     []string
+		wantDispatch    bool
+	}{
+		{name: "stale overlap is refused", selectionRelays: []string{"wss://shared.example"}, freshRelays: []string{"wss://worker-only.example"}},
+		{name: "fresh overlap is accepted", selectionRelays: []string{"wss://worker-only.example"}, freshRelays: []string{"wss://shared.example"}, wantDispatch: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+			svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+			unit := &domain.DeploymentUnit{
+				ID: uuid.New(), EnvironmentID: env.ID, Key: "max-firecracker",
+				RuntimeType: domain.RuntimeTypeDocker, ReconcileMode: domain.ReconcileModeObserveOnly,
+				OwnershipMode: domain.OwnershipModeBahiaManaged,
+				RuntimeConfig: map[string]any{"dispatch_mode": "loom"},
+			}
+			pubkey := strings.Repeat("b", 64)
+			worker := domain.Worker{
+				PubKey: pubkey, Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive,
+				MaxConcurrentJobs: 4, LastAdvertisementAt: time.Now().UTC(), PreferredRelays: tc.selectionRelays,
+			}
+			workerRepo := &coordinatorWorkerRepo{
+				workers: map[string]domain.Worker{pubkey: worker}, reloadRelays: true, relaysOnFetch: tc.freshRelays,
+			}
+			loomClient := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}, dispatchRelays: []string{"wss://shared.example"}}
+			lifecycle := &stubDeploymentRuntimeLifecycle{}
+			registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+			coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+				WithDeploymentUnitRouting(&stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}, lifecycle),
+				WithDeploymentLoomClient(loomClient), WithWorkerPolicy(service.NewWorkerPolicyService(workerRepo, zap.NewNop())),
+			)
+			defer coord.Shutdown(time.Second)
+			intent := &domain.DeploymentIntent{
+				ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+				RequestedBy: "test", SourceKind: domain.SourceKindManual,
+				ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+			}
+			if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+				t.Fatal(err)
+			}
+			intentRepo.mu.Lock()
+			intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+			intentRepo.mu.Unlock()
+			err := coord.ExecuteDeployment(ctx, intent.ID)
+			if tc.wantDispatch {
+				if err != nil || loomClient.submitCalls != 1 || loomClient.lastJobReq.WorkerPubkey != pubkey || len(runRepo.runs) != 1 {
+					t.Fatalf("fresh relay overlap not dispatched: err=%v submits=%d request=%#v runs=%d", err, loomClient.submitCalls, loomClient.lastJobReq, len(runRepo.runs))
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "no relay overlap") || loomClient.submitCalls != 0 || len(runRepo.runs) != 0 {
+				t.Fatalf("stale relay overlap dispatched: err=%v submits=%d runs=%d", err, loomClient.submitCalls, len(runRepo.runs))
+			}
+			if lifecycle.calls != 0 {
+				t.Fatalf("Loom unit fell back to direct runtime: calls=%d", lifecycle.calls)
+			}
+		})
+	}
+}
+
 func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *testing.T) {
 	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
@@ -1830,11 +1985,12 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 	}
 	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
 	lifecycle := &stubDeploymentRuntimeLifecycle{}
-	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	workerPolicy, workerPubkey := newLoomDispatchWorkerPolicy([]string{"wss://worker.example"})
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}, dispatchRelays: []string{"wss://other.example", "wss://worker.example/"}}
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
 	coord := NewCoordinator(
 		registry, nil, &events.NoopPublisher{}, zap.NewNop(),
-		WithDeploymentUnitRouting(unitRepo, lifecycle),
+		WithDeploymentUnitRouting(unitRepo, lifecycle), WithWorkerPolicy(workerPolicy),
 	)
 	coord.loom = stubLoom
 
@@ -1860,7 +2016,7 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 	if stubLoom.submitCalls != 1 {
 		t.Fatalf("expected Loom dispatch unit to submit one job, got %d", stubLoom.submitCalls)
 	}
-	if stubLoom.lastJobReq.Service != svc.Name || stubLoom.lastJobReq.Environment != env.Name {
+	if stubLoom.lastJobReq.Service != svc.Name || stubLoom.lastJobReq.Environment != env.Name || stubLoom.lastJobReq.WorkerPubkey != workerPubkey {
 		t.Fatalf("unexpected Loom job request: %#v", stubLoom.lastJobReq)
 	}
 	if len(runRepo.runs) != 1 {
@@ -1870,8 +2026,8 @@ func TestExecuteDeployment_LoomDispatchUnitSubmitsJobWithoutDirectRuntime(t *tes
 		if run.LoomJobID == "runtime:direct" || run.LoomJobID == "" {
 			t.Fatalf("expected real Loom job id, got run %#v", run)
 		}
-		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != unit.ID {
-			t.Fatalf("expected run to preserve deployment unit identity, got %#v", run.DeploymentUnitID)
+		if run.DeploymentUnitID == nil || *run.DeploymentUnitID != unit.ID || run.WorkerPubkey != workerPubkey {
+			t.Fatalf("expected run to preserve deployment unit and worker identity, got %#v", run)
 		}
 	}
 }
@@ -2248,6 +2404,7 @@ func TestExecuteDeployment_ComposeUnitMissingManagedEndpointFailsClosed(t *testi
 
 func TestExecuteDeployment_LoomDispatchUnitUsesRuntimeCommandConfig(t *testing.T) {
 	ctx := context.Background()
+	workerPolicy, _ := newLoomDispatchWorkerPolicy([]string{"wss://worker.example"})
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
 	unit := &domain.DeploymentUnit{
@@ -2267,9 +2424,9 @@ func TestExecuteDeployment_LoomDispatchUnitUsesRuntimeCommandConfig(t *testing.T
 		},
 	}
 	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
-	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}, dispatchRelays: []string{"wss://worker.example"}}
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, nil))
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, nil), WithWorkerPolicy(workerPolicy))
 	coord.loom = stubLoom
 
 	di := &domain.DeploymentIntent{
@@ -2310,6 +2467,7 @@ func TestExecuteDeployment_LoomDispatchUnitUsesRuntimeCommandConfig(t *testing.T
 
 func TestExecuteDeployment_ImplicitDefaultLoomUnitUsesEnvironmentRuntimeConfig(t *testing.T) {
 	ctx := context.Background()
+	workerPolicy, _ := newLoomDispatchWorkerPolicy([]string{"wss://worker.example"})
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
 	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
 	env.RuntimeConfig = map[string]any{
@@ -2321,9 +2479,9 @@ func TestExecuteDeployment_ImplicitDefaultLoomUnitUsesEnvironmentRuntimeConfig(t
 		t.Fatal(err)
 	}
 	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{}}
-	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}, dispatchRelays: []string{"wss://worker.example"}}
 	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
-	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, nil))
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, nil), WithWorkerPolicy(workerPolicy))
 	coord.loom = stubLoom
 
 	di := &domain.DeploymentIntent{

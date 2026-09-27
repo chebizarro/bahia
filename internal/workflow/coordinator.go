@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -21,6 +22,7 @@ import (
 
 // Coordinator manages the lifecycle of deployment workflows.
 type deploymentLoomClient interface {
+	DispatchRelays() []string
 	SubmitJob(context.Context, loom.JobRequest) (string, error)
 	AwaitJobStatusFromWorker(context.Context, string, string, ...loom.StatusCallback) (*loom.JobStatus, error)
 	JobTimeout() time.Duration
@@ -270,6 +272,10 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	if c.loom == nil {
 		return fmt.Errorf("loom client is not configured")
 	}
+	loomUnit := unit != nil && deploymentUnitDispatchesViaLoom(unit)
+	if loomUnit && c.workerPolicy == nil {
+		return fmt.Errorf("Loom deployment unit %q requires a configured worker policy to resolve a target worker", unit.Key)
+	}
 
 	// Select a worker using the environment's worker policy (if configured).
 	var workerPubkey string
@@ -278,7 +284,13 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		if err != nil {
 			return fmt.Errorf("selecting worker for environment %q: %w", env.Name, err)
 		}
-		workerPubkey = selected.Worker.PubKey
+		if selected == nil {
+			return fmt.Errorf("worker policy returned no worker for environment %q", env.Name)
+		}
+		workerPubkey = strings.TrimSpace(selected.Worker.PubKey)
+		if loomUnit && workerPubkey == "" {
+			return fmt.Errorf("Loom deployment unit %q requires a resolved worker pubkey; worker policy selected an empty worker", unit.Key)
+		}
 		c.logger.Info("worker selected by policy",
 			zap.String("pubkey", workerPubkey),
 			zap.String("strategy", selected.Reason),
@@ -287,12 +299,23 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}
 
 	if c.workerPolicy != nil && workerPubkey != "" {
-		decision, err := c.workerPolicy.EvaluateDispatchAdmission(ctx, env, workerPubkey)
+		decision, worker, err := c.workerPolicy.EvaluateDispatchAdmission(ctx, env, workerPubkey)
 		if err != nil {
 			return err
 		}
 		if !decision.Eligible {
 			return c.failDeploymentRunForDispatchAdmission(ctx, intentID, workerPubkey, decision)
+		}
+		if loomUnit {
+			if worker == nil || worker.PubKey != workerPubkey {
+				return fmt.Errorf("Loom deployment unit %q cannot resolve selected worker %q for dispatch", unit.Key, workerPubkey)
+			}
+			publishRelays := c.loom.DispatchRelays()
+			overlap := overlappingRelay(publishRelays, worker.PreferredRelays)
+			if overlap == "" {
+				return fmt.Errorf("Loom deployment unit %q cannot reach worker %q: no relay overlap between Bahia publish relays %v and worker advertised relays %v; configure a shared relay before dispatch", unit.Key, workerPubkey, publishRelays, worker.PreferredRelays)
+			}
+			c.logger.Info("Loom dispatch relay overlap verified", zap.String("worker_pubkey", workerPubkey), zap.String("relay", overlap))
 		}
 	}
 
@@ -381,6 +404,22 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	c.startCompletionAwait(run)
 
 	return nil
+}
+
+func overlappingRelay(publishRelays, workerRelays []string) string {
+	workerSet := make(map[string]struct{}, len(workerRelays))
+	for _, relay := range workerRelays {
+		if normalized := nostr.NormalizeURL(relay); normalized != "" {
+			workerSet[normalized] = struct{}{}
+		}
+	}
+	for _, relay := range publishRelays {
+		normalized := nostr.NormalizeURL(relay)
+		if _, ok := workerSet[normalized]; normalized != "" && ok {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func deploymentUnitDispatchesViaLoom(unit *domain.DeploymentUnit) bool {
