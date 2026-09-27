@@ -614,7 +614,6 @@ func New(cfg *config.Config) (*App, error) {
 				"queue_rejected":       fmt.Sprintf("%d", state.Metrics.QueueRejected),
 				"wire_attempts":        fmt.Sprintf("%d", state.Metrics.WireAttempts),
 				"wire_rejected":        fmt.Sprintf("%d", state.Metrics.WireRejected),
-				"opaque_admitted":      fmt.Sprintf("%d", state.Metrics.OpaqueAdmitted),
 				"operations_started":   fmt.Sprintf("%d", state.Metrics.OperationsStarted),
 				"operations_queued":    fmt.Sprintf("%d", state.Metrics.OperationsQueued),
 				"operation_active":     fmt.Sprintf("%t", state.Metrics.OperationActive),

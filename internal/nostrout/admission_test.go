@@ -506,7 +506,8 @@ func TestNilAdmissionFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotConfigured)
 	_, err = a.BeginOperation(context.Background(), OperationSpec{MaxEvents: 1})
 	require.ErrorIs(t, err, ErrNotConfigured)
-	require.ErrorIs(t, a.AdmitOpaque(context.Background(), PurposeSigner, []string{relayA}), ErrNotConfigured)
+	_, err = a.BeginWaiting(context.Background(), nostr.Event{}, []string{relayA})
+	require.ErrorIs(t, err, ErrNotConfigured)
 	require.True(t, a.State().KillSwitchActive)
 	require.Same(t, Default(), Or(nil))
 	require.Same(t, Default(), Default())
@@ -700,33 +701,62 @@ func TestOperationQueueIsBoundedFIFOAndCancellable(t *testing.T) {
 	}
 }
 
-func TestOpaqueAdmissionIsBoundedAndPaced(t *testing.T) {
+func TestBeginWaitingIsBoundedAndPaced(t *testing.T) {
 	cfg := testConfig()
-	cfg.MaxOpaqueWaiters = 1
+	cfg.MaxWaiters = 1
 	a, clk := newTestAdmission(cfg)
+	ctx := context.Background()
 	relays := []string{relayA, relayB}
-	require.NoError(t, a.AdmitOpaque(context.Background(), PurposeSigner, relays))
-	require.NoError(t, a.AdmitOpaque(context.Background(), PurposeSigner, relays))
+	for i := 0; i < 2; i++ { // signer lane burst
+		pub, err := a.BeginWaiting(ctx, nostr.Event{Kind: 24133}, relays)
+		require.NoError(t, err)
+		require.Equal(t, PurposeSigner, pub.Purpose())
+		pub.Close()
+	}
 
 	done := make(chan error, 1)
-	go func() { done <- a.AdmitOpaque(context.Background(), PurposeSigner, relays) }()
+	begin := func() {
+		pub, err := a.BeginWaiting(ctx, nostr.Event{Kind: 24133}, relays)
+		if err == nil {
+			pub.Close()
+		}
+		done <- err
+	}
+	go begin()
 	clk.awaitTimer(t)
-	require.ErrorIs(t, a.AdmitOpaque(context.Background(), PurposeSigner, relays), ErrQueueFull)
-	clk.Advance(time.Second)
-	require.NoError(t, <-done)
-	metrics := a.Metrics()
-	require.Equal(t, uint64(3), metrics.OpaqueAdmitted)
-	require.Equal(t, uint64(6), metrics.WireAttempts, "one frame per bunker relay")
-
-	go func() { done <- a.AdmitOpaque(context.Background(), PurposeSigner, relays) }()
-	clk.awaitTimer(t)
+	_, err := a.BeginWaiting(ctx, nostr.Event{Kind: 24133}, relays)
+	require.ErrorIs(t, err, ErrQueueFull, "concurrent waiters are bounded")
 	clk.Advance(time.Second)
 	require.NoError(t, <-done, "capacity refilled during the bounded wait")
 
-	go func() { done <- a.AdmitOpaque(context.Background(), PurposeSigner, relays) }()
+	go begin()
 	clk.awaitTimer(t)
 	clk.Advance(30 * time.Second)
 	require.ErrorIs(t, <-done, ErrQueueTimeout, "a waiter woken at its deadline must not consume capacity")
+}
+
+func TestBeginWaitingPacesAnOpenCircuitButNotTheKillSwitch(t *testing.T) {
+	a, clk := newTestAdmission(testConfig())
+	path := filepath.Join(t.TempDir(), "stop")
+	a.killSwitchFile = path
+	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 1}, []string{relayA}, func(relay string) Result {
+		return Result{RelayURL: relay, Reason: "rate-limited: slow down"}
+	}))
+	done := make(chan error, 1)
+	go func() {
+		pub, err := a.BeginWaiting(context.Background(), nostr.Event{Kind: 24133}, []string{relayA})
+		if err == nil {
+			pub.Close()
+		}
+		done <- err
+	}()
+	clk.awaitTimer(t)
+	clk.Advance(2 * time.Second)
+	require.NoError(t, <-done, "a signer request waits out the breaker instead of failing")
+
+	require.NoError(t, os.WriteFile(path, []byte("stop"), 0o600))
+	_, err := a.BeginWaiting(context.Background(), nostr.Event{Kind: 24133}, []string{relayA})
+	require.ErrorIs(t, err, ErrKillSwitch)
 }
 
 func TestConcurrentPublishersCannotExceedSharedBurst(t *testing.T) {

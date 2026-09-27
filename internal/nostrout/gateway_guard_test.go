@@ -24,8 +24,10 @@ var rawPublisherPackages = []string{
 	"git.sharegap.net/cascadia/cascadia-go",
 }
 
-// nip46Package builds and publishes kind 24133 requests internally with no
-// publish hook; only the admission-gated nostrout.Bunker may use it.
+// nip46Package's client builds and publishes kind 24133 requests internally
+// with no publish hook (and may issue unsolicited switch_relays requests), so
+// only Bahia's own admission-gated nostrout.Bunker may use the package, and
+// only for URI parsing and wire types.
 const nip46Package = "fiatjaf.com/nostr/nip46"
 
 // guardRules maps a restricted symbol to the only declarations allowed to use
@@ -41,6 +43,7 @@ var guardRules = map[string][]string{
 	"(*fiatjaf.com/nostr.Relay).Publish": {
 		bahiaModule + "/internal/adapters/nostr|var publishOnRelay",
 		bahiaModule + "/internal/soulfactory|(*goNostrRelayEndpoint).Publish",
+		bahiaModule + "/internal/nostrout|(*Bunker).sendFrame",
 	},
 	"(*fiatjaf.com/nostr.Pool).PublishMany": {
 		bahiaModule + "/internal/adapters/signet|(*Client).callManagement",
@@ -221,7 +224,7 @@ func TestEveryRawRelayPublicationIsAnApprovedGateway(t *testing.T) {
 			require.True(t, seen[symbol+" @ "+site], "guard rule %s @ %s no longer matches a real use; remove it", symbol, site)
 		}
 	}
-	require.True(t, seen[nip46Package+".NewBunker @ "+bahiaModule+"/internal/nostrout|ConnectBunker"], "the gated NIP-46 wrapper must remain the NIP-46 entry point")
+	require.True(t, seen[nip46Package+".ParseBunkerInput @ "+bahiaModule+"/internal/nostrout|ConnectBunker"], "the admission-gated Bunker must remain the NIP-46 entry point")
 }
 
 // TestGuardDetectsDisguisedBypasses proves the detector is not a string
