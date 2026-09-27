@@ -13,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip59"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 const concordDirectInviteKind nostr.Kind = 3313
@@ -230,6 +231,15 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 	if err != nil {
 		return nil, err
 	}
+
+	// Each community costs at most two logical publications: the community
+	// relays and the recipient's inbox.
+	op, err := m.bus.outbound().BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: 2 * len(resolved)})
+	if err != nil {
+		return nil, fmt.Errorf("admit Concord direct invites: %w", err)
+	}
+	defer op.Close()
+	ctx = nostrout.WithOperation(ctx, op)
 
 	assigned := make([]string, 0, len(resolved))
 	for _, community := range resolved {
@@ -457,32 +467,16 @@ func authenticateConcordRelays(ctx context.Context, bus *SoulFactoryRelayBus, en
 	return nil
 }
 
+// publishConcordInvite delivers one wrap to every community relay; each relay
+// must accept it. When ctx carries a Concord operation the publication is
+// paced through that operation's bulk admission.
 func publishConcordInvite(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint, event nostr.Event) error {
-	for _, endpoint := range endpoints {
-		result := endpoint.Publish(ctx, event)
-		if result.Accepted {
-			continue
-		}
-		if isRelayAuthRequired(result.Reason) || (result.Error != nil && strings.Contains(result.Error.Error(), "auth-required:")) {
-			if bus.signer == nil {
-				return fmt.Errorf("%s requested auth but no relay auth signer is configured", endpoint.URL())
-			}
-			if err := endpoint.Auth(ctx, bus.signer); err != nil {
-				return fmt.Errorf("authenticate to %s after relay challenge: %w", endpoint.URL(), err)
-			}
-			result = endpoint.Publish(ctx, event)
-			if result.Accepted {
-				continue
-			}
-		}
-		if result.Error != nil {
-			return fmt.Errorf("%s: %w", endpoint.URL(), result.Error)
-		}
-		reason := strings.TrimSpace(result.Reason)
-		if reason == "" {
-			reason = "OK false"
-		}
-		return fmt.Errorf("%s: %s", endpoint.URL(), reason)
+	delivered, failures, err := bus.publishSequential(ctx, event, endpoints, relayBusAllRequired)
+	if err != nil {
+		return err
+	}
+	if !delivered {
+		return failures
 	}
 	return nil
 }

@@ -150,13 +150,12 @@ func concordInboxEndpoints(bus *SoulFactoryRelayBus, relays []string) ([]relayBu
 // the community relays, a recipient's list is not operator-controlled and may
 // name a dead relay, so one acceptance is enough; zero is a delivery failure.
 func publishConcordInviteToInbox(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint, event nostr.Event) error {
-	failures := make([]string, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		if err := publishConcordInvite(ctx, bus, []relayBusEndpoint{endpoint}, event); err != nil {
-			failures = append(failures, err.Error())
-			continue
-		}
-		return nil
+	delivered, failures, err := bus.publishSequential(ctx, event, endpoints, relayBusAnySufficient)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("no inbox relay accepted the invite: %s", strings.Join(failures, "; "))
+	if !delivered {
+		return fmt.Errorf("no inbox relay accepted the invite: %w", failures)
+	}
+	return nil
 }

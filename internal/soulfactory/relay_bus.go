@@ -2,6 +2,7 @@ package soulfactory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // RelayPublishResult records one relay's OK outcome for a published event.
@@ -80,6 +82,30 @@ func WithRelayBusBackoff(backoff relayBusBackoff) RelayBusOption {
 	}
 }
 
+// defaultRelayBusAdmission resolves the controller for buses that were not
+// given one. It is the process-wide controller; tests replace it to isolate
+// unrelated cases from each other's budget.
+var defaultRelayBusAdmission = nostrout.Default
+
+// WithRelayBusAdmission injects the outbound admission controller. Buses
+// default to the process-wide controller; nil keeps that default.
+func WithRelayBusAdmission(admission *nostrout.Admission) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) {
+		if admission != nil {
+			b.admission = admission
+		}
+	}
+}
+
+// outbound returns the bus controller, never nil: a bus assembled without one
+// is still admitted by the process-wide controller rather than left unlimited.
+func (b *SoulFactoryRelayBus) outbound() *nostrout.Admission {
+	if b.admission != nil {
+		return b.admission
+	}
+	return defaultRelayBusAdmission()
+}
+
 func WithRelayBusEventValidator(validator func(*nostr.Event) bool) RelayBusOption {
 	return func(b *SoulFactoryRelayBus) {
 		if validator != nil {
@@ -94,6 +120,7 @@ func WithRelayBusEventValidator(validator func(*nostr.Event) bool) RelayBusOptio
 // drive subscription handling, and reconnect timers are used only for backoff.
 type SoulFactoryRelayBus struct {
 	endpoints     []relayBusEndpoint
+	admission     *nostrout.Admission
 	signer        relayAuthSigner
 	logger        *slog.Logger
 	backoff       relayBusBackoff
@@ -118,6 +145,7 @@ func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...R
 	}
 	b := &SoulFactoryRelayBus{
 		endpoints:     endpoints,
+		admission:     defaultRelayBusAdmission(),
 		logger:        slog.Default().With("component", "soulfactory-relay-bus"),
 		backoff:       defaultRelayBusBackoff,
 		validateEvent: validSignedEvent,
@@ -130,46 +158,197 @@ func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...R
 	return b, nil
 }
 
+// Publish fans ev out to every bus relay concurrently and succeeds on the
+// first acceptance. The publication is admitted as one logical event; each
+// relay frame is admitted immediately before it is sent, and late relay
+// outcomes are still observed after Publish returns.
 func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int, error) {
 	if b == nil || len(b.endpoints) == 0 {
 		return 0, fmt.Errorf("soul factory relay bus is not configured")
 	}
+	pub, err := b.outbound().Begin(ctx, ev, relayBusEndpointURLs(b.endpoints))
+	if err != nil {
+		return 0, fmt.Errorf("admit SoulFactory relay publication: %w", err)
+	}
+	if len(pub.CachedResults()) > 0 {
+		pub.Close()
+		return 1, nil
+	}
 	publishCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
-	results := make(chan RelayPublishResult, len(b.endpoints))
+	pending := make([]relayBusEndpoint, 0, len(b.endpoints))
 	for _, endpoint := range b.endpoints {
+		if pub.NeedsRelay(endpoint.URL()) {
+			pending = append(pending, endpoint)
+		}
+	}
+	results := make(chan RelayPublishResult, len(pending))
+	var workers sync.WaitGroup
+	for _, endpoint := range pending {
 		endpoint := endpoint
+		workers.Add(1)
 		go func() {
-			result := endpoint.Publish(publishCtx, ev)
-			if result.RelayURL == "" {
-				result.RelayURL = endpoint.URL()
-			}
-			results <- result
+			defer workers.Done()
+			results <- b.sendAdmitted(publishCtx, pub, endpoint, ev, false)
 		}()
 	}
+	// The permit is released only after every worker has reported, so a relay
+	// that answers after the first acceptance still feeds the breaker.
+	go func() {
+		workers.Wait()
+		cancel()
+		pub.Close()
+	}()
 
 	var failures []string
-	for range b.endpoints {
+	for range pending {
 		result := <-results
 		if result.Accepted {
 			cancel()
 			return 1, nil
 		}
-		if result.Error != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
-			continue
-		}
-		reason := strings.TrimSpace(result.Reason)
-		if reason == "" {
-			reason = "OK false"
-		}
-		failures = append(failures, fmt.Sprintf("%s: %s", result.RelayURL, reason))
+		failures = append(failures, relayBusFailure(result))
 	}
 	if len(failures) == 0 {
 		return 0, fmt.Errorf("event was not accepted by any relay")
 	}
 	return 0, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
+}
+
+// relayBusCompletion is the delivery contract of a sequential publication.
+type relayBusCompletion int
+
+const (
+	// relayBusAllRequired needs acceptance from every endpoint (Concord
+	// community relays are operator-controlled and must all carry the wrap).
+	relayBusAllRequired relayBusCompletion = iota
+	// relayBusAnySufficient needs one acceptance (a recipient's inbox list is
+	// not operator-controlled and may name dead relays).
+	relayBusAnySufficient
+)
+
+// relayBusFailures reports per-relay delivery failures in order. It keeps each
+// cause reachable through errors.Is/As while rendering the historical
+// "relay: reason; relay: reason" message.
+type relayBusFailures []error
+
+func (f relayBusFailures) Error() string {
+	messages := make([]string, 0, len(f))
+	for _, err := range f {
+		messages = append(messages, err.Error())
+	}
+	return strings.Join(messages, "; ")
+}
+
+func (f relayBusFailures) Unwrap() []error { return f }
+
+// publishSequential delivers one signed event to endpoints in order under a
+// single admission permit. An operation carried by ctx paces the publication
+// through the bulk lane instead of failing it mid-operation. It returns one
+// error per failed endpoint.
+func (b *SoulFactoryRelayBus) publishSequential(ctx context.Context, ev nostr.Event, endpoints []relayBusEndpoint, completion relayBusCompletion) (bool, relayBusFailures, error) {
+	if b == nil {
+		return false, nil, fmt.Errorf("soul factory relay bus is not configured")
+	}
+	urls := relayBusEndpointURLs(endpoints)
+	var (
+		pub *nostrout.Publication
+		err error
+	)
+	if op := nostrout.OperationFromContext(ctx); op != nil {
+		pub, err = op.Begin(ctx, ev, urls)
+	} else {
+		pub, err = b.outbound().Begin(ctx, ev, urls)
+	}
+	if err != nil {
+		return false, nil, fmt.Errorf("admit SoulFactory relay publication: %w", err)
+	}
+	defer pub.Close()
+
+	if completion == relayBusAnySufficient && len(pub.CachedResults()) > 0 {
+		return true, nil, nil
+	}
+	var failures relayBusFailures
+	for _, endpoint := range endpoints {
+		if !pub.NeedsRelay(endpoint.URL()) {
+			continue // already accepted this exact event recently
+		}
+		result := b.sendAdmitted(ctx, pub, endpoint, ev, true)
+		if result.Accepted {
+			if completion == relayBusAnySufficient {
+				return true, nil, nil
+			}
+			continue
+		}
+		failures = append(failures, relayBusFailureError(result))
+		if completion == relayBusAllRequired {
+			return false, failures, nil
+		}
+	}
+	return completion == relayBusAllRequired, failures, nil
+}
+
+// sendAdmitted is the only caller of relayBusEndpoint.Publish. It admits every
+// EVENT frame (including the optional single NIP-42 AUTH retry) and observes
+// every outcome. A relay duplicate acknowledgement counts as acceptance.
+func (b *SoulFactoryRelayBus) sendAdmitted(ctx context.Context, pub *nostrout.Publication, endpoint relayBusEndpoint, ev nostr.Event, authRetry bool) RelayPublishResult {
+	attempt := func() RelayPublishResult {
+		if err := pub.BeforeAttempt(ctx, endpoint.URL()); err != nil {
+			return RelayPublishResult{RelayURL: endpoint.URL(), Error: err}
+		}
+		result := endpoint.Publish(ctx, ev)
+		if result.RelayURL == "" {
+			result.RelayURL = endpoint.URL()
+		}
+		pub.Observe(nostrout.Result{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
+		if !result.Accepted && nostrout.IsDuplicateReason(result.Reason) {
+			result.Accepted = true
+		}
+		return result
+	}
+	result := attempt()
+	if !authRetry || result.Accepted || !relayBusAuthRequired(result) {
+		return result
+	}
+	if b.signer == nil {
+		result.Error = fmt.Errorf("requested auth but no relay auth signer is configured")
+		return result
+	}
+	if err := endpoint.Auth(ctx, b.signer); err != nil {
+		result.Error = fmt.Errorf("authenticate after relay challenge: %w", err)
+		return result
+	}
+	return attempt()
+}
+
+func relayBusAuthRequired(result RelayPublishResult) bool {
+	return isRelayAuthRequired(result.Reason) || (result.Error != nil && strings.Contains(result.Error.Error(), "auth-required:"))
+}
+
+func relayBusFailureError(result RelayPublishResult) error {
+	if result.Error != nil {
+		return fmt.Errorf("%s: %w", result.RelayURL, result.Error)
+	}
+	return errors.New(relayBusFailure(result))
+}
+
+func relayBusFailure(result RelayPublishResult) string {
+	if result.Error != nil {
+		return fmt.Sprintf("%s: %v", result.RelayURL, result.Error)
+	}
+	reason := strings.TrimSpace(result.Reason)
+	if reason == "" {
+		reason = "OK false"
+	}
+	return fmt.Sprintf("%s: %s", result.RelayURL, reason)
+}
+
+func relayBusEndpointURLs(endpoints []relayBusEndpoint) []string {
+	urls := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		urls = append(urls, endpoint.URL())
+	}
+	return urls
 }
 
 // Authenticate establishes each relay connection and completes NIP-42 before

@@ -1,140 +1,130 @@
 package nostr
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
-func newTestOutboundAdmission(now *time.Time, rate, burst int) *OutboundAdmission {
-	admission := NewOutboundAdmission(OutboundAdmissionConfig{
-		RatePerMinute: rate,
-		Burst:         burst,
-		BreakerMin:    2 * time.Second,
-		BreakerMax:    8 * time.Second,
+// newIsolatedTestAdmission keeps unrelated pool tests from sharing the
+// process-wide budget while still exercising real admission.
+func newIsolatedTestAdmission() *OutboundAdmission {
+	generous := OutboundPurposeBudget{RatePerMinute: 60_000, Burst: 10_000}
+	return NewOutboundAdmission(OutboundAdmissionConfig{
+		Aggregate: generous,
+		PurposeBudgets: map[OutboundPurpose]OutboundPurposeBudget{
+			OutboundPurposePriority: generous,
+			OutboundPurposeState:    generous,
+			OutboundPurposeGeneral:  generous,
+			OutboundPurposeBulk:     generous,
+			OutboundPurposeSigner:   generous,
+		},
+		RelayWire:             generous,
+		MaxActivePublications: 10_000,
 	})
-	for _, bucket := range admission.buckets {
-		bucket.lastRefill = *now
-	}
-	admission.now = func() time.Time { return *now }
-	return admission
 }
 
-func TestOutboundAdmissionBoundsMisconfiguredSnapshotLoop(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 30, 10)
-
-	for i := 0; i < 1_100; i++ {
-		err := admission.admit(gonostr.Event{Kind: 1})
-		if i < 10 {
-			require.NoError(t, err)
-		} else {
-			require.ErrorIs(t, err, ErrOutboundBudgetExceeded)
+func connectedTestPool(t *testing.T, admission *OutboundAdmission, urls ...string) *RelayPool {
+	t.Helper()
+	pool := NewRelayPool(urls, zap.NewNop(), WithOutboundAdmission(admission))
+	pool.isRelayConnected = func(relay *gonostr.Relay) bool { return relay != nil }
+	for _, url := range pool.URLs() {
+		pool.relays[url] = &managedRelay{
+			url:       url,
+			relay:     gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}),
+			connected: true,
 		}
 	}
-
-	metrics := admission.Metrics()
-	require.Equal(t, uint64(1_100), metrics.Attempted)
-	require.Equal(t, uint64(10), metrics.Admitted)
-	require.Equal(t, uint64(1_090), metrics.BudgetRejected)
+	return pool
 }
 
-func TestOutboundAdmissionRefillsAtConfiguredRate(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 30, 1)
-	require.NoError(t, admission.admit(gonostr.Event{}))
-	require.ErrorIs(t, admission.admit(gonostr.Event{}), ErrOutboundBudgetExceeded)
-
-	now = now.Add(2 * time.Second)
-	require.NoError(t, admission.admit(gonostr.Event{}))
-}
-
-func TestOutboundAdmissionRateLimitOpensSharedCircuit(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 60, 10)
-	require.NoError(t, admission.admit(gonostr.Event{}))
-
-	admission.observe(gonostr.Event{}, []PublishResult{{RelayURL: "wss://relay.example", Reason: "rate-limited: slow down"}})
-	err := admission.admit(gonostr.Event{})
-	require.ErrorIs(t, err, ErrOutboundCircuitOpen)
-	require.Equal(t, uint64(1), admission.Metrics().RelayRateLimited)
-
-	now = now.Add(2 * time.Second)
-	require.NoError(t, admission.admit(gonostr.Event{}))
-}
-
-func TestOutboundAdmissionSuccessfulPublishResetsBreaker(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 60, 10)
-	admission.observe(gonostr.Event{}, []PublishResult{{RelayURL: "wss://relay.example", Reason: "rate-limited: slow down"}})
-	now = now.Add(2 * time.Second)
-	require.NoError(t, admission.admit(gonostr.Event{}))
-	admission.observe(gonostr.Event{}, []PublishResult{{RelayURL: "wss://relay.example", Accepted: true}})
-	require.True(t, admission.Metrics().BreakerUntil.IsZero())
+func TestRelayPoolsDefaultToOneProcessWideAdmission(t *testing.T) {
+	one := NewRelayPool(nil, zap.NewNop())
+	two := NewRelayPool(nil, zap.NewNop(), WithOutboundAdmission(nil))
+	require.Same(t, nostrout.Default(), one.outboundAdmission)
+	require.Same(t, one.outboundAdmission, two.outboundAdmission, "nil injection must keep the shared default, never disable admission")
+	require.Same(t, nostrout.Default(), DefaultOutboundAdmission())
 }
 
 func TestWithOutboundAdmissionSharesBudgetAcrossPools(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 60, 1)
-	one := NewRelayPool(nil, nil, WithOutboundAdmission(admission))
-	two := NewRelayPool(nil, nil, WithOutboundAdmission(admission))
-
-	_, err := one.Publish(t.Context(), gonostr.Event{})
-	require.NoError(t, err)
-	_, err = two.Publish(t.Context(), gonostr.Event{})
-	require.True(t, errors.Is(err, ErrOutboundBudgetExceeded), "second pool must share first pool's exhausted budget: %v", err)
-}
-
-func TestOutboundAdmissionKillSwitchHotReload(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	path := filepath.Join(t.TempDir(), "nostr.stop")
-	admission := newTestOutboundAdmission(&now, 60, 10)
-	admission.killSwitchFile = path
-
-	require.NoError(t, admission.admit(gonostr.Event{Content: "before"}))
-	require.NoError(t, os.WriteFile(path, []byte("stop\n"), 0o600))
-	require.ErrorIs(t, admission.admit(gonostr.Event{Content: "blocked"}), ErrOutboundKillSwitch)
-	require.True(t, admission.State().KillSwitchActive)
-	require.NoError(t, os.WriteFile(path, []byte("resume\n"), 0o600))
-	require.NoError(t, admission.admit(gonostr.Event{Content: "after"}))
-	require.False(t, admission.State().KillSwitchActive)
-	require.Equal(t, uint64(1), admission.Metrics().KillSwitchRejected)
-}
-
-func TestOutboundAdmissionSuppressesAcceptedDuplicate(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := newTestOutboundAdmission(&now, 60, 10)
-	ev := gonostr.Event{Kind: 1, Content: "same", CreatedAt: gonostr.Timestamp(now.Unix())}
-	ev.ID = ev.GetID()
-	require.NoError(t, admission.admit(ev))
-	admission.observe(ev, []PublishResult{{RelayURL: "wss://relay.example", Accepted: true}})
-	require.ErrorIs(t, admission.admit(ev), ErrOutboundDuplicate)
-	require.Equal(t, uint64(1), admission.Metrics().Duplicates)
-}
-
-func TestOutboundAdmissionReservesPriorityCapacity(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	admission := NewOutboundAdmission(OutboundAdmissionConfig{
-		BreakerMin: 2 * time.Second,
-		BreakerMax: 8 * time.Second,
-		PurposeBudgets: map[OutboundPurpose]OutboundPurposeBudget{
-			OutboundPurposePriority: {RatePerMinute: 60, Burst: 1},
-			OutboundPurposeState:    {RatePerMinute: 60, Burst: 1},
-			OutboundPurposeGeneral:  {RatePerMinute: 60, Burst: 1},
-		},
+	admission := NewOutboundAdmission(OutboundAdmissionConfig{RatePerMinute: 1, Burst: 1})
+	one := connectedTestPool(t, admission, "wss://one.example")
+	two := connectedTestPool(t, admission, "wss://two.example")
+	var frames atomic.Int32
+	setPublishOnRelayForTest(t, func(*gonostr.Relay, context.Context, gonostr.Event) error {
+		frames.Add(1)
+		return nil
 	})
-	for _, bucket := range admission.buckets {
-		bucket.lastRefill = now
-	}
-	admission.now = func() time.Time { return now }
 
-	require.NoError(t, admission.admit(gonostr.Event{Kind: 1, Content: "general"}))
-	require.ErrorIs(t, admission.admit(gonostr.Event{Kind: 1, Content: "general-2"}), ErrOutboundBudgetExceeded)
-	require.NoError(t, admission.admit(gonostr.Event{Kind: 5, Content: "tombstone"}))
-	require.NoError(t, admission.admit(gonostr.Event{Kind: 30_001, Content: "state"}))
+	_, err := one.Publish(t.Context(), gonostr.Event{Kind: 1})
+	require.NoError(t, err)
+	_, err = two.Publish(t.Context(), gonostr.Event{Kind: 1})
+	require.True(t, errors.Is(err, ErrOutboundBudgetExceeded), "second pool must share first pool's exhausted budget: %v", err)
+	require.Equal(t, int32(1), frames.Load(), "rejection must happen before relay I/O")
+}
+
+func TestRelayPoolRejectedPublicationSendsNoFrame(t *testing.T) {
+	admission := newIsolatedTestAdmission()
+	pool := connectedTestPool(t, admission, "wss://relay.example")
+	path := filepath.Join(t.TempDir(), "stop")
+	require.NoError(t, os.WriteFile(path, []byte("stop"), 0o600))
+	killed := NewOutboundAdmission(OutboundAdmissionConfig{KillSwitchFile: path})
+	pool.outboundAdmission = killed
+	setPublishOnRelayForTest(t, func(*gonostr.Relay, context.Context, gonostr.Event) error {
+		t.Fatal("kill switch must prevent every EVENT frame")
+		return nil
+	})
+	_, err := pool.PublishWithResults(t.Context(), gonostr.Event{Kind: 5})
+	require.ErrorIs(t, err, ErrOutboundKillSwitch)
+}
+
+func TestRelayPoolRateLimitOpensCircuitForEveryPool(t *testing.T) {
+	admission := newIsolatedTestAdmission()
+	limited := connectedTestPool(t, admission, "wss://limited.example")
+	other := connectedTestPool(t, admission, "wss://other.example")
+	setPublishOnRelayForTest(t, func(*gonostr.Relay, context.Context, gonostr.Event) error {
+		return errors.New("msg: rate-limited: slow down")
+	})
+	results, err := limited.PublishWithResults(t.Context(), gonostr.Event{Kind: 1})
+	require.Error(t, err)
+	require.True(t, results[0].IsRateLimited())
+
+	_, err = other.PublishWithResults(t.Context(), gonostr.Event{Kind: 5})
+	require.ErrorIs(t, err, ErrOutboundCircuitOpen)
+	require.Equal(t, uint64(1), limited.OutboundAdmissionMetrics().RelayRateLimited)
+}
+
+func TestRelayPoolReconnectReplaySuppressesAcceptedDestinationsOnly(t *testing.T) {
+	admission := newIsolatedTestAdmission()
+	pool := connectedTestPool(t, admission, "wss://a.example", "wss://b.example")
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
+	sent := map[string]int{}
+	setPublishOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, _ gonostr.Event) error {
+		sent[relay.URL]++
+		if relay.URL == "wss://b.example" && sent[relay.URL] == 1 {
+			return errors.New("connection reset")
+		}
+		return nil
+	})
+	ev := gonostr.Event{Kind: 1, Content: "replayed", CreatedAt: 1}
+	require.NoError(t, ev.Sign(gonostr.Generate()))
+
+	_, err := pool.PublishWithResults(t.Context(), ev)
+	require.NoError(t, err)
+	results, err := pool.PublishWithResults(t.Context(), ev)
+	require.NoError(t, err)
+	require.Equal(t, 1, sent["wss://a.example"], "accepted destination must not be resent on replay")
+	require.Equal(t, 2, sent["wss://b.example"], "failed destination remains eligible")
+	require.Len(t, results, 2)
+	require.Equal(t, 2, countSuccessfulPublishResults(results))
 }

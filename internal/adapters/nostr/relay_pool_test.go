@@ -757,7 +757,7 @@ func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 }
 
 func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
-	pool := NewRelayPool(urls, zap.NewNop())
+	pool := NewRelayPool(urls, zap.NewNop(), WithOutboundAdmission(newIsolatedTestAdmission()))
 	pool.isRelayConnected = func(relay *gonostr.Relay) bool { return relay != nil }
 	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}

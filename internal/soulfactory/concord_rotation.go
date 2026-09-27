@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // ConcordRotation describes an explicit CORD-06 rotation: a Rekey of one or
@@ -207,6 +208,22 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, fmt.Errorf("concord rotation for %s produced an expired invite bundle", communityID)
 	}
 
+	// Admission is all-or-none before the first irreversible transition: the
+	// rotation's publications are declared and admitted as one bounded bulk
+	// operation, so it cannot be refused halfway merely for being larger than
+	// a burst, and a full admission queue refuses it before custody changes.
+	compactionHeads := 0
+	if rotation.Refound && fold != nil {
+		compactionHeads = len(fold.heads)
+	}
+	bound := concordRotationPublicationBound(len(plan.scopes), len(blobRecipients), rotation.Refound, compactionHeads, len(recipients), len(inviteTargets))
+	op, err := m.bus.outbound().BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: bound})
+	if err != nil {
+		return nil, fmt.Errorf("admit Concord rotation for %s (%d publications): %w", communityID, bound, err)
+	}
+	defer op.Close()
+	ctx = nostrout.WithOperation(ctx, op)
+
 	if err := source.custody.Store(ctx, concordCustodyRecord{Bundle: plan.bundle, ControlRoot: plan.controlRoot}); err != nil {
 		return nil, fmt.Errorf("persist rotated Concord material for %s: %w", communityID, err)
 	}
@@ -263,6 +280,27 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		receipt.DirectInvites = append(receipt.DirectInvites, recipient)
 	}
 	return &receipt, nil
+}
+
+// concordRekeyMaxEncodedBlobBytes bounds one JSON-encoded Rekey Blob: a 64-hex
+// locator plus the NIP-44 encryption of at most the 136-byte staff plaintext
+// (about 304 base64 characters) and field syntax. It is deliberately generous;
+// it only serves to derive a safe upper bound on chunk counts.
+const concordRekeyMaxEncodedBlobBytes = 512
+
+// concordRotationPublicationBound is the upper bound of logical publications a
+// rotation performs: rekey chunks for every scope, the Refounding compaction
+// and Guestbook snapshot, and two deliveries (community relays and inbox) per
+// Direct Invite. Exceeding it at runtime fails the rotation loudly through the
+// admission operation rather than sending more than was declared.
+func concordRotationPublicationBound(scopes, blobRecipients int, refound bool, compactionHeads, snapshotMembers, invites int) int {
+	blobsPerChunk := min(concordRekeyBlobsPerEvent, (concordRekeyChunkBytes-len("[]"))/(concordRekeyMaxEncodedBlobBytes+len(",")))
+	chunksPerScope := max(1, (blobRecipients+blobsPerChunk-1)/blobsPerChunk)
+	total := scopes*chunksPerScope + 2*invites
+	if refound {
+		total += compactionHeads + (snapshotMembers+concordSnapshotChunkSize-1)/concordSnapshotChunkSize
+	}
+	return max(1, total)
 }
 
 func (m *concordMembership) findCommunity(communityID string) *concordCommunitySource {
