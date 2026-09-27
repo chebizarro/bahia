@@ -242,34 +242,34 @@ func (r *PgNostrEventRepository) ExpireUnpublished(ctx context.Context, enqueued
 	return tag.RowsAffected(), nil
 }
 
-// CoalesceSupersededUnpublished retires pending events that lost NIP-01
-// replacement to a newer pending revision of the same coordinate. It ranks
-// only the pending set (served by the partial outbox index), never the event
-// history, so its cost is bounded by the outbox depth.
+// CoalesceSupersededUnpublished retires pending events when any recorded
+// revision wins their NIP-01 coordinate. The ordered coordinate index makes
+// each winner lookup independent of the size of unrelated event history.
 func (r *PgNostrEventRepository) CoalesceSupersededUnpublished(ctx context.Context) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
-		WITH pending AS (
-			SELECT id, kind, pubkey, created_at,
-			       CASE WHEN kind BETWEEN 30000 AND 39999 THEN
-			           COALESCE((SELECT t.tag->>1 FROM jsonb_array_elements(tags::jsonb) WITH ORDINALITY AS t(tag, ord)
-			                     WHERE t.tag->>0 = 'd' ORDER BY t.ord LIMIT 1), '')
-			       ELSE '' END AS d_tag
+		WITH pending AS MATERIALIZED (
+			SELECT id, kind, pubkey, nostr_coordinate_d_tag(kind, tags) AS d_tag
 			FROM nostr_events
 			WHERE publish_state = $1
 			  AND (kind IN (0, 3) OR kind BETWEEN 10000 AND 19999 OR kind BETWEEN 30000 AND 39999)
-		),
-		ranked AS (
-			SELECT id, ROW_NUMBER() OVER (
-				PARTITION BY kind, pubkey, d_tag
-				ORDER BY created_at DESC, id ASC
-			) AS position
-			FROM pending
+		), losers AS (
+			SELECT p.id
+			FROM pending p
+			CROSS JOIN LATERAL (
+				SELECT h.id
+				FROM nostr_events h
+				WHERE h.kind = p.kind AND h.pubkey = p.pubkey
+				AND nostr_coordinate_d_tag(h.kind, h.tags) = p.d_tag
+				ORDER BY h.created_at DESC, h.id ASC
+				LIMIT 1
+			) winner
+			WHERE winner.id <> p.id
 		)
 		UPDATE nostr_events e
 		SET publish_state = $2,
 		    last_publish_error = CASE WHEN e.last_publish_error = '' THEN $3 ELSE e.last_publish_error || '; ' || $3 END
-		FROM ranked r
-		WHERE e.id = r.id AND r.position > 1 AND e.publish_state = $1
+		FROM losers l
+		WHERE e.id = l.id AND e.publish_state = $1
 	`, NostrPublishStatePending, NostrPublishStateSuperseded, nostrPublishSupersededReason)
 	if err != nil {
 		return 0, fmt.Errorf("coalescing superseded nostr events: %w", err)

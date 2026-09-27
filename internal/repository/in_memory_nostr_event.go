@@ -153,7 +153,7 @@ func (r *InMemoryNostrEventRepository) ExpireUnpublished(_ context.Context, enqu
 }
 
 // CoalesceSupersededUnpublished retires pending events that lost NIP-01
-// replacement to a newer pending revision of the same coordinate.
+// replacement to the absolute winner among all recorded revisions.
 func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.Context) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -164,9 +164,6 @@ func (r *InMemoryNostrEventRepository) CoalesceSupersededUnpublished(_ context.C
 	}
 	winners := make(map[coordinate]NostrEventRecord)
 	for _, rec := range r.records {
-		if rec.PublishState != NostrPublishStatePending {
-			continue
-		}
 		addressable := IsNostrAddressableKind(rec.Kind)
 		if !addressable && !IsNostrReplaceableKind(rec.Kind) {
 			continue

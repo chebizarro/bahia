@@ -102,17 +102,25 @@ ContextVM results keep their single 60-second deadline across the first
 attempt and every retry, and stop immediately when the kill switch is active.
 
 Each redelivery sweep also coalesces replaceable (kinds 0, 3, 10000–19999)
-and addressable (30000–39999) events: a pending revision is moved to the
-terminal `superseded` state when a newer pending revision of the same NIP-01
-coordinate — `(kind, pubkey)`, plus the first `d` tag for addressable kinds —
-wins over it (newer `created_at`; on a tie, the lower event ID). Only the
-pending set is ranked, never the event history, so the sweep costs no more than
-the outbox depth. Regular and ephemeral kinds are never coalesced. The sweep holds the publish lock, so it
-never changes an event that is mid-send.
+and addressable (30000–39999) events: a pending revision moves to terminal
+`superseded` when **any recorded revision** of its NIP-01 coordinate wins,
+including a published or inbound revision. The coordinate is `(kind, pubkey)`
+plus the first `d` tag for addressable kinds (missing and empty are equal).
+The winner has the newer `created_at`, or the lower event ID on a tie. An
+ordered coordinate index lets each pending row fetch one winner without
+scanning unrelated event history; sweep cost scales with pending depth and
+indexed lookups. Regular and ephemeral kinds are never coalesced. The sweep
+holds the publish lock, so it never changes an event that is mid-send.
 
-Migration `000071_nostr_publish_expired` only widens the publish-state
-constraint; `000072_nostr_publish_superseded` adds the `superseded` state. Older binaries ignore expired rows. Its down migration retires
-expired rows to `not_applicable`; it never returns them to `pending`.
+Migration `000071_nostr_publish_expired` widens the publish-state constraint;
+`000072_nostr_publish_superseded` adds `superseded`. Migration
+`000073_nostr_coordinate_winner` adds the first-`d` coordinate function and
+ordered index across all recorded states, including existing rows. Building
+that index blocks writes during the migration; plan its rollout while Bahia
+is stopped and verify build time on a production-sized copy. Rolling back
+`000073` drops only the index and function; rolling back `000072` retires
+superseded rows to `not_applicable`, never to `pending`. Older binaries ignore
+expired rows, whose down migration also retires them to `not_applicable`.
 
 ## Emergency kill switch
 

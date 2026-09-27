@@ -41,12 +41,18 @@ func runCoalesceScenario(t *testing.T, repo NostrEventOutboxRepository) {
 	record("d1", 30315, "pkA", 100, [][]string{{"d", "x"}}, pending)
 	record("d2", 30315, "pkA", 200, [][]string{{"d", "y"}}, pending)
 	record("d4", 30315, "pkA", 120, [][]string{{"t", "z"}, {"d", "x"}, {"d", "y"}}, pending)
-	// Only pending revisions compete: newer published or inbound revisions are
-	// history, not outbox work, and are never scanned.
+	// Every recorded state competes: a published or inbound winner suppresses
+	// an older pending revision of the same coordinate.
 	record("o1", 10002, "pkC", 100, nil, pending)
 	record("o2", 10002, "pkC", 200, nil, published)
 	record("o3", 30315, "pkC", 100, [][]string{{"d", "x"}}, pending)
 	record("o4", 30315, "pkC", 200, [][]string{{"d", "x"}}, inbound)
+	// Tie-breaking also applies across states, and only the first d tag counts.
+	record("o5", 3, "pkC", 300, nil, pending)
+	record("o0", 3, "pkC", 300, nil, published)
+	record("o6", 30315, "pkD", 100, [][]string{{"d", "x"}}, pending)
+	record("o7", 30315, "pkD", 200, [][]string{{"d", "y"}, {"d", "x"}}, inbound)
+	record("o8", 30315, "pkD", 50, [][]string{{"d", "x"}}, published)
 	// A missing d tag and an empty d tag are the same address.
 	record("e1", 30000, "pkB", 100, nil, pending)
 	record("e2", 30000, "pkB", 200, [][]string{{"d", ""}}, pending)
@@ -59,12 +65,12 @@ func runCoalesceScenario(t *testing.T, repo NostrEventOutboxRepository) {
 
 	superseded, err := repo.CoalesceSupersededUnpublished(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(4), superseded)
+	require.Equal(t, int64(7), superseded)
 	again, err := repo.CoalesceSupersededUnpublished(ctx)
 	require.NoError(t, err)
 	require.Zero(t, again, "coalescing is idempotent")
 
-	for _, id := range []string{"a1", "t9", "d1", "e1"} {
+	for _, id := range []string{"a1", "t9", "d1", "e1", "o1", "o3", "o5"} {
 		rec, err := repo.GetByID(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, NostrPublishStateSuperseded, rec.PublishState, id)
@@ -72,7 +78,8 @@ func runCoalesceScenario(t *testing.T, repo NostrEventOutboxRepository) {
 	}
 	for id, state := range map[string]string{
 		"a2": pending, "t1": pending, "d2": pending, "d4": pending, "e2": pending,
-		"o1": pending, "o2": published, "o3": pending, "o4": inbound,
+		"o2": published, "o4": inbound, "o0": published,
+		"o6": pending, "o7": inbound, "o8": published,
 		"b1": pending, "g1": pending, "g2": pending, "p1": pending, "p2": pending,
 	} {
 		rec, err := repo.GetByID(ctx, id)
