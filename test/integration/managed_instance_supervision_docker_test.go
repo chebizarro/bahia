@@ -72,12 +72,34 @@ func TestManagedInstanceSupervisionDocker(t *testing.T) {
 
 		oomName := prefix + "-oom"
 		cleanup(oomName)
-		dockerMust(t, append([]string{"run", "-d", "--memory", "16m"}, append(createArgs(oomName), image, "sh", "-c", "x=$(head -c 64m /dev/zero); sleep 30")...)...)
+		dockerMust(t, append([]string{"run", "-d", "--memory", "16m"}, append(createArgs(oomName), image, "sh", "-c", "if [ ! -e /tmp/oom-once ]; then touch /tmp/oom-once; x=$(yes x | head -c 64m); fi; sleep 300")...)...)
 		waitForStatus(t, 20*time.Second, func() bool {
-			output, err := dockerOutput("inspect", "-f", "{{.State.OOMKilled}} {{.State.Running}}", oomName)
-			return err == nil && strings.TrimSpace(output) == "true false"
+			output, err := dockerOutput("inspect", "-f", "{{.State.OOMKilled}} {{.State.Running}} {{.State.ExitCode}}", oomName)
+			return err == nil && output == "true false 137"
 		})
+		t.Logf("OOM container before recovery: %s", dockerMust(t, "inspect", "-f", "OOMKilled={{.State.OOMKilled}} Running={{.State.Running}} ExitCode={{.State.ExitCode}}", oomName))
 		assertSupervisorStatus(t, observer, newKey(oomName), domain.InstanceHealthStatusOOMKilled)
+
+		startedBefore := dockerMust(t, "inspect", "-f", "{{.State.StartedAt}}", oomName)
+		repo := newDockerHealthRepo()
+		spec := recoverySpec(newKey(oomName), observer)
+		supervisor, err := service.NewManagedInstanceSupervisor(service.StaticSupervisionSpecSource{spec}, repo, dockerTryLocker{}, &events.NoopPublisher{}, time.Second, zap.NewNop())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := supervisor.EvaluateOnce(ctx); err != nil {
+			t.Fatalf("OOM recovery evaluation: %v", err)
+		}
+		attempts, err := repo.ListRecentRecoveryAttempts(ctx, spec.Key, 1)
+		if err != nil || len(attempts) != 1 || attempts[0].Result != domain.RecoveryAttemptSuccess {
+			t.Fatalf("OOM recovery attempts=%v err=%v", attempts, err)
+		}
+		startedAfter := dockerMust(t, "inspect", "-f", "{{.State.StartedAt}}", oomName)
+		if startedAfter == startedBefore {
+			t.Fatalf("OOM container was not restarted: started_at=%s", startedAfter)
+		}
+		assertSupervisorStatus(t, observer, newKey(oomName), domain.InstanceHealthStatusRunning)
+		t.Logf("watchdog detected OOM and restarted target: result=%s started_before=%s started_after=%s", attempts[0].Result, startedBefore, startedAfter)
 	})
 
 	t.Run("restarts only the target and respects maintenance", func(t *testing.T) {
