@@ -94,6 +94,7 @@ type App struct {
 	soulFactoryCloser         func() error
 	hiveCIInitiator           *giteaAdapter.Initiator
 	reloadMu                  sync.Mutex
+	configMu                  sync.RWMutex
 }
 
 var (
@@ -1843,13 +1844,17 @@ func New(cfg *config.Config) (*App, error) {
 // swapped in place. Any other delta is deliberately left to the full
 // candidate-application replacement path in cmd/server.
 func (a *App) ReloadConfig(candidate *config.Config) (bool, error) {
-	if a == nil || candidate == nil || a.Config == nil {
+	if a == nil || candidate == nil {
 		return false, fmt.Errorf("application and candidate config are required")
 	}
 	a.reloadMu.Lock()
 	defer a.reloadMu.Unlock()
 
-	currentComparable := *a.Config
+	current := a.configSnapshot()
+	if current == nil {
+		return false, fmt.Errorf("application and candidate config are required")
+	}
+	currentComparable := *current
 	candidateComparable := *candidate
 	currentRef := currentComparable.HiveCI.Initiator.MirrorReadCredentialRef
 	candidateRef := candidateComparable.HiveCI.Initiator.MirrorReadCredentialRef
@@ -1866,9 +1871,28 @@ func (a *App) ReloadConfig(candidate *config.Config) (bool, error) {
 	if err := a.hiveCIInitiator.ReloadMirrorReadCredentialRef(candidateRef); err != nil {
 		return false, err
 	}
-	a.Config = candidate
+	a.replaceConfig(candidate)
 	a.Logger.Info("HiveCI mirror-read credential reference reloaded")
 	return true, nil
+}
+
+// configSnapshot returns the immutable configuration pointer currently owned by
+// the application. Loaded configurations are never mutated after publication;
+// reload installs a fresh pointer only after every mutable adapter accepted its
+// candidate value.
+func (a *App) configSnapshot() *config.Config {
+	if a == nil {
+		return nil
+	}
+	a.configMu.RLock()
+	defer a.configMu.RUnlock()
+	return a.Config
+}
+
+func (a *App) replaceConfig(candidate *config.Config) {
+	a.configMu.Lock()
+	a.Config = candidate
+	a.configMu.Unlock()
 }
 
 func soulFactoryReactorFromRuntime(runtime *soulFactoryRuntime) *soulfactory.Reactor {
@@ -2539,7 +2563,12 @@ func (a *App) RunContext(ctx context.Context) error {
 		a.Logger.Info("shutdown signal received")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.Config.Server.ShutdownTimeout)
+	activeConfig := a.configSnapshot()
+	if activeConfig == nil {
+		return fmt.Errorf("active application config is unavailable during shutdown")
+	}
+	shutdownTimeout := activeConfig.Server.ShutdownTimeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	// Shut down the HTTP server first (stop accepting new requests).
@@ -2548,7 +2577,7 @@ func (a *App) RunContext(ctx context.Context) error {
 	}
 
 	// Shut down the workflow coordinator (cancel in-flight polls, wait for completion).
-	a.Coordinator.Shutdown(a.Config.Server.ShutdownTimeout)
+	a.Coordinator.Shutdown(shutdownTimeout)
 
 	// Wait for background runners to finish (they should stop when ctx is cancelled).
 	a.Background.Wait()

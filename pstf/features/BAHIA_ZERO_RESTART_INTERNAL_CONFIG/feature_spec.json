@@ -1,0 +1,18 @@
+{
+  "feature_id": "BAHIA_ZERO_RESTART_INTERNAL_CONFIG",
+  "title": "Transactional zero-restart Bahia internal configuration",
+  "source_task": "bahia-zero-restart-internal-config-20260911",
+  "intent": "Apply validated mounted Bahia configuration through SIGHUP without container or process replacement, while preserving in-flight work and durable state and retaining the prior runtime on invalid candidates.",
+  "scope": [
+    "mounted YAML validation",
+    "in-place reload of explicitly supported mutable adapters",
+    "same-process whole-application reconstruction for other internal settings",
+    "graceful in-flight drain",
+    "atomic active-config publication"
+  ],
+  "out_of_scope": [
+    "container image, mount, user, or network changes",
+    "identity, key, ACL, or custody changes",
+    "direct production database mutation"
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/config"
@@ -220,6 +221,69 @@ func TestRunWithDependenciesStartsReplacementAfterOrderlyShutdown(t *testing.T) 
 	close(current.allowExit)
 	<-current.exited
 	<-replacement.started
+
+	cancelRoot()
+	<-replacement.cancelObserved
+	require.NoError(t, <-done)
+}
+
+func TestRunWithDependenciesPreservesProcessAndDurableStateWhileDrainingInflightWork(t *testing.T) {
+	root, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+	reload := make(chan os.Signal, 1)
+	current := newGatedServerApplication()
+	current.allowExit = make(chan struct{})
+	replacement := newGatedServerApplication()
+	processID := os.Getpid()
+	var durableRevision atomic.Int64
+	durableRevision.Store(41)
+	factoryCalls := 0
+	type factoryObservation struct {
+		pid      int
+		revision int64
+	}
+	factoryObservations := make(chan factoryObservation, 2)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runWithDependencies("config.yaml", serverDependencies{
+			loadConfig: func(string) (*config.Config, error) { return &config.Config{}, nil },
+			newApplication: func(*config.Config) (serverApplication, error) {
+				factoryObservations <- factoryObservation{pid: os.Getpid(), revision: durableRevision.Load()}
+				factoryCalls++
+				if factoryCalls == 1 {
+					return current, nil
+				}
+				return replacement, nil
+			},
+			newSignals: func() serverSignalSource {
+				return serverSignalSource{root: root, reload: reload}
+			},
+		})
+	}()
+
+	initialObservation := <-factoryObservations
+	require.Equal(t, processID, initialObservation.pid)
+	require.Equal(t, int64(41), initialObservation.revision)
+	<-current.started
+	durableRevision.Store(42)
+	reload <- os.Interrupt
+	reloadObservation := <-factoryObservations
+	require.Equal(t, processID, reloadObservation.pid)
+	require.Equal(t, int64(42), reloadObservation.revision)
+	<-current.cancelObserved
+	select {
+	case <-replacement.started:
+		t.Fatal("replacement started before in-flight work drained")
+	default:
+	}
+	require.Equal(t, processID, os.Getpid())
+	require.Equal(t, int64(42), durableRevision.Load())
+
+	close(current.allowExit)
+	<-replacement.started
+	require.Equal(t, processID, os.Getpid())
+	require.Equal(t, int64(42), durableRevision.Load())
 
 	cancelRoot()
 	<-replacement.cancelObserved

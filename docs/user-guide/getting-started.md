@@ -144,6 +144,29 @@ assistant:
   llm_streaming: false
 ```
 
+### Apply mounted configuration without recreating Bahia
+
+For a running `bahia-server`, edit the mounted YAML atomically and send
+`SIGHUP` to the server process. Bahia loads and validates the complete candidate
+before changing the active runtime:
+
+- supported scalar changes, such as the Hive-CI mirror-read credential
+  reference, are validated and swapped in place;
+- other valid internal configuration changes preconstruct a replacement
+  application, gracefully drain in-flight work from the current application,
+  and activate the replacement inside the same OS process;
+- a parse, validation, or replacement-initialization failure leaves the current
+  application and configuration active;
+- PostgreSQL and other durable stores remain the state boundary across the
+  in-process application handoff.
+
+Do not use `docker compose up`, container replacement, or direct database edits
+for ordinary mounted-config changes. Record the process PID, `/health`, and
+`/ready` before the signal and verify that the PID is unchanged and both health
+paths recover after the handoff. Changes to container mounts, image, user,
+network namespace, or other deployment-unit properties are not runtime config
+reloads and still require the governed deployment workflow.
+
 ## Your First Deployment
 
 ### Step 1: Sign in to the Web UI

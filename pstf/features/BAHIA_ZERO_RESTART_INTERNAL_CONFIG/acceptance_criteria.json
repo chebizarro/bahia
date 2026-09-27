@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_ZERO_RESTART_INTERNAL_CONFIG",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A valid mounted-config reload completes within the existing OS process and does not require container replacement."
+    },
+    {
+      "id": "AC2",
+      "statement": "A replacement application is fully constructed before the current application is cancelled, and the replacement does not start until current in-flight work has drained."
+    },
+    {
+      "id": "AC3",
+      "statement": "A parse, validation, adapter, or replacement-initialization failure leaves the prior application and active config unchanged."
+    },
+    {
+      "id": "AC4",
+      "statement": "In-place mutable adapter reload validates before atomically publishing the candidate config and is race-free with shutdown reads."
+    },
+    {
+      "id": "AC5",
+      "statement": "Durable state remains available across the in-process application handoff, and live acceptance proves unchanged PID plus healthy /health and /ready before and after reload."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_ZERO_RESTART_INTERNAL_CONFIG",
+  "tests": [
+    {
+      "criterion": "AC1",
+      "test": "cmd/server.TestRunWithDependenciesPreservesProcessAndDurableStateWhileDrainingInflightWork"
+    },
+    {
+      "criterion": "AC2",
+      "test": "cmd/server.TestRunWithDependenciesStartsReplacementAfterOrderlyShutdown"
+    },
+    {
+      "criterion": "AC3",
+      "test": "cmd/server.TestRunWithDependenciesRetainsRunningApplicationWhenReloadConfigIsInvalid and TestRunWithDependenciesRetainsRunningApplicationWhenReloadInitializationFails"
+    },
+    {
+      "criterion": "AC4",
+      "test": "internal/app.TestReloadConfigValidatesBeforeAtomicSwap and TestReloadConfigAndShutdownReadsAreRaceFree"
+    },
+    {
+      "criterion": "AC5",
+      "test": "cmd/server.TestRunWithDependenciesPreservesProcessAndDurableStateWhileDrainingInflightWork plus independent staged live validation"
+    }
+  ]
+}
