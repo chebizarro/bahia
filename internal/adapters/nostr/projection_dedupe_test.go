@@ -340,6 +340,89 @@ func TestProjectionDedupeHydratesAcrossRestart(t *testing.T) {
 	}
 }
 
+type transientHydrationRepo struct {
+	*memoryNostrEventRepo
+	mu       sync.Mutex
+	loadErr  error
+	failures int
+	loads    int
+}
+
+func (r *transientHydrationRepo) ListByKind(ctx context.Context, kind, limit int) ([]repository.NostrEventRecord, error) {
+	r.mu.Lock()
+	r.loads++
+	if r.failures > 0 {
+		r.failures--
+		r.mu.Unlock()
+		return nil, r.loadErr
+	}
+	r.mu.Unlock()
+	return r.memoryNostrEventRepo.ListByKind(ctx, kind, limit)
+}
+
+func (r *transientHydrationRepo) loadCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loads
+}
+
+// A failed retained-state read must neither sign an unchanged event nor make
+// the kind permanently ready. The next event after backoff retries hydration.
+func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
+	ctx := context.Background()
+	serviceID, envID := uuid.New(), uuid.New()
+	state := dedupeTestState(serviceID, envID, time.Now().UTC())
+	retained := newMemoryNostrEventRepo()
+	first := NewProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
+	if err := first.publishState(ctx, &state); err != nil {
+		t.Fatal(err)
+	}
+
+	readErr := errors.New("retained-state read unavailable")
+	repo := &transientHydrationRepo{memoryNostrEventRepo: retained, loadErr: readErr, failures: 1}
+	sink := &captureProjectionPublisher{}
+	restarted := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	restarted.projection().now = func() time.Time { return clock }
+
+	if err := restarted.publishState(ctx, &state); !errors.Is(err, readErr) {
+		t.Fatalf("first publish error = %v, want retained-state read error", err)
+	}
+	if got := countLegacy(sink, KindServiceState, false); got != 0 {
+		t.Fatalf("failed hydration published %d events, want 0", got)
+	}
+	if err := restarted.publishState(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
+		t.Fatalf("publish before hydration retry = %v, want backoff", err)
+	}
+	if got := repo.loadCount(); got != 1 {
+		t.Fatalf("retained-state loads during backoff = %d, want 1", got)
+	}
+	if got := countLegacy(sink, KindServiceState, false); got != 0 {
+		t.Fatalf("cold cache published %d events during backoff, want 0", got)
+	}
+
+	clock = clock.Add(projectionHydrationBackoffMin)
+	if err := restarted.publishState(ctx, &state); err != nil {
+		t.Fatalf("publish after successful retry: %v", err)
+	}
+	if got := repo.loadCount(); got != 2 {
+		t.Fatalf("retained-state loads after retry = %d, want 2", got)
+	}
+	if got := countLegacy(sink, KindServiceState, false); got != 0 {
+		t.Fatalf("unchanged state after restart published %d events, want 0", got)
+	}
+	state.DriftStatus = domain.DriftStatusDrifted
+	if err := restarted.publishState(ctx, &state); err != nil {
+		t.Fatalf("real change after hydration: %v", err)
+	}
+	if got := countLegacy(sink, KindServiceState, false); got != 1 {
+		t.Fatalf("real change after hydration published %d events, want 1", got)
+	}
+	if got := repo.loadCount(); got != 2 {
+		t.Fatalf("already hydrated kind reloaded %d times, want 2", got)
+	}
+}
+
 // TestProjectionAuditLogIsNeverDeduped proves the append-only audit path is
 // excluded from dedupe: identical audits are distinct records.
 func TestProjectionAuditLogIsNeverDeduped(t *testing.T) {
