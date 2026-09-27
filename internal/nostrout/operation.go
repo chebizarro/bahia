@@ -158,7 +158,7 @@ func (op *Operation) Begin(ctx context.Context, ev nostr.Event, relayURLs []stri
 	if op == nil {
 		return nil, ErrNotConfigured
 	}
-	return op.a.begin(ctx, op, ev, relayURLs)
+	return op.a.begin(ctx, op, false, ev, relayURLs)
 }
 
 func (op *Operation) claimLocked() error {
@@ -234,86 +234,4 @@ func WithOperation(ctx context.Context, op *Operation) context.Context {
 func OperationFromContext(ctx context.Context) *Operation {
 	op, _ := ctx.Value(operationContextKey{}).(*Operation)
 	return op
-}
-
-// AdmitOpaque admits one publication whose event is built and sent inside a
-// library that exposes no per-frame hook (NIP-46 remote-signer RPC): the
-// library sends the frame to every relay in relays. It waits — bounded by the
-// controller's maximum queue wait and a bounded waiter count — for the lane,
-// the aggregate budget, and every relay's wire budget, then consumes all of
-// them together. The kill switch rejects immediately.
-func (a *Admission) AdmitOpaque(ctx context.Context, purpose Purpose, relayURLs []string) error {
-	if a == nil {
-		return ErrNotConfigured
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	relays := normalizeRelayList(relayURLs)
-	if len(relays) == 0 {
-		return ErrNoDestinations
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.metrics.Attempted++
-	if err := a.killSwitchLocked(); err != nil {
-		return err
-	}
-	if _, ok := a.lanes[purpose]; !ok {
-		return fmt.Errorf("%w: unknown purpose %q", ErrOperation, purpose)
-	}
-	if a.opaqueWaiters >= a.maxOpaqueWaiters {
-		a.metrics.QueueRejected++
-		return fmt.Errorf("%w: %d opaque publications waiting", ErrQueueFull, a.opaqueWaiters)
-	}
-	now := a.clock.Now()
-	buckets := make([]*relayBucket, 0, len(relays))
-	for _, relay := range relays {
-		rb, err := a.relayBucketLocked(now, relay)
-		if err != nil {
-			for _, previous := range buckets {
-				previous.refs--
-			}
-			return err
-		}
-		rb.refs++
-		buckets = append(buckets, rb)
-	}
-	a.opaqueWaiters++
-	defer func() {
-		a.opaqueWaiters--
-		for _, rb := range buckets {
-			rb.refs--
-		}
-	}()
-
-	err := a.waitLocked(ctx, now.Add(a.maxQueueWait), func(now time.Time) (time.Duration, error) {
-		if err := a.killSwitchLocked(); err != nil {
-			return 0, err
-		}
-		wait := a.breakerWaitLocked(now)
-		wait = max(wait, a.aggregate.wait(now), a.lanes[purpose].wait(now))
-		for _, rb := range buckets {
-			wait = max(wait, rb.forPurpose(purpose).wait(now))
-		}
-		if wait > 0 {
-			return wait, nil
-		}
-		a.aggregate.tokens--
-		a.lanes[purpose].tokens--
-		for _, rb := range buckets {
-			rb.forPurpose(purpose).tokens--
-		}
-		return 0, nil
-	})
-	if err != nil {
-		if errors.Is(err, ErrQueueTimeout) {
-			a.metrics.QueueRejected++
-		}
-		return err
-	}
-	a.metrics.Admitted++
-	a.metrics.OpaqueAdmitted++
-	a.metrics.WireAttempts += uint64(len(buckets))
-	return nil
 }

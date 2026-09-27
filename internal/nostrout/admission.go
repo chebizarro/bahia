@@ -123,7 +123,8 @@ type Config struct {
 	MaxQueuedOperations   int
 	MaxOperationEvents    int
 	MaxQueueWait          time.Duration
-	MaxOpaqueWaiters      int
+	// MaxWaiters bounds concurrent BeginWaiting callers.
+	MaxWaiters int
 }
 
 const (
@@ -132,7 +133,7 @@ const (
 	defaultMaxQueuedOperations   = 8
 	defaultMaxOperationEvents    = 2048
 	defaultMaxQueueWait          = 30 * time.Second
-	defaultMaxOpaqueWaiters      = 32
+	defaultMaxWaiters            = 32
 	operationDeadlineSlack       = time.Minute
 )
 
@@ -162,7 +163,7 @@ func DefaultConfig() Config {
 		MaxQueuedOperations:   defaultMaxQueuedOperations,
 		MaxOperationEvents:    defaultMaxOperationEvents,
 		MaxQueueWait:          defaultMaxQueueWait,
-		MaxOpaqueWaiters:      defaultMaxOpaqueWaiters,
+		MaxWaiters:            defaultMaxWaiters,
 	}
 }
 
@@ -181,7 +182,6 @@ type Metrics struct {
 	QueueRejected      uint64    `json:"queue_rejected"`
 	WireAttempts       uint64    `json:"wire_attempts"`
 	WireRejected       uint64    `json:"wire_rejected"`
-	OpaqueAdmitted     uint64    `json:"opaque_admitted"`
 	OperationsStarted  uint64    `json:"operations_started"`
 	OperationsQueued   int       `json:"operations_queued"`
 	OperationActive    bool      `json:"operation_active"`
@@ -320,8 +320,8 @@ type Admission struct {
 	operation           *Operation
 	operationQueue      []*operationWaiter
 
-	maxOpaqueWaiters int
-	opaqueWaiters    int
+	maxWaiters int
+	waiters    int
 
 	metrics Metrics
 }
@@ -385,7 +385,7 @@ func newWithClock(cfg Config, clk clock) *Admission {
 		maxOperationEvents:  cfg.MaxOperationEvents,
 		maxQueueWait:        cfg.MaxQueueWait,
 		bulkRatePerSecond:   float64(cfg.PurposeBudgets[PurposeBulk].RatePerMinute) / 60,
-		maxOpaqueWaiters:    cfg.MaxOpaqueWaiters,
+		maxWaiters:          cfg.MaxWaiters,
 	}
 }
 
@@ -450,8 +450,8 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.MaxQueueWait <= 0 || cfg.MaxQueueWait > defaultMaxQueueWait {
 		cfg.MaxQueueWait = defaultMaxQueueWait
 	}
-	if cfg.MaxOpaqueWaiters <= 0 {
-		cfg.MaxOpaqueWaiters = defaultMaxOpaqueWaiters
+	if cfg.MaxWaiters <= 0 {
+		cfg.MaxWaiters = defaultMaxWaiters
 	}
 	return cfg
 }

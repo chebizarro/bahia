@@ -29,6 +29,9 @@ type Publication struct {
 	generation uint64
 	registered bool
 	closed     bool
+	// waitDeadline is zero for fail-fast publications. Operation and waiting
+	// publications pace instead of failing, but never beyond this instant.
+	waitDeadline time.Time
 }
 
 // Begin admits one ordinary publication of ev to relayURLs. It fails fast: an
@@ -39,10 +42,24 @@ func (a *Admission) Begin(ctx context.Context, ev nostr.Event, relayURLs []strin
 	if a == nil {
 		return nil, ErrNotConfigured
 	}
-	return a.begin(ctx, nil, ev, relayURLs)
+	return a.begin(ctx, nil, false, ev, relayURLs)
 }
 
-func (a *Admission) begin(ctx context.Context, op *Operation, ev nostr.Event, relayURLs []string) (*Publication, error) {
+// BeginWaiting admits one request/response publication (for example a NIP-46
+// signer request) whose caller is already blocked awaiting a reply. Instead of
+// failing on a momentary burst it waits for its lane, the aggregate budget,
+// and an open circuit — bounded by the controller's maximum queue wait (at
+// most 30 seconds) and a bounded number of concurrent waiters — and its
+// BeforeAttempt calls pace within the same deadline. The kill switch and
+// cancellation still end the wait immediately.
+func (a *Admission) BeginWaiting(ctx context.Context, ev nostr.Event, relayURLs []string) (*Publication, error) {
+	if a == nil {
+		return nil, ErrNotConfigured
+	}
+	return a.begin(ctx, nil, true, ev, relayURLs)
+}
+
+func (a *Admission) begin(ctx context.Context, op *Operation, waiting bool, ev nostr.Event, relayURLs []string) (*Publication, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -59,28 +76,40 @@ func (a *Admission) begin(ctx context.Context, op *Operation, ev nostr.Event, re
 			return nil, err
 		}
 	}
-	pub, err := a.beginLocked(ctx, op, ev, relays)
+	if waiting {
+		if a.waiters >= a.maxWaiters {
+			a.metrics.QueueRejected++
+			return nil, fmt.Errorf("%w: %d publications waiting", ErrQueueFull, a.waiters)
+		}
+		a.waiters++
+		defer func() { a.waiters-- }()
+	}
+	pub, err := a.beginLocked(ctx, op, waiting, ev, relays)
 	if op != nil {
 		op.finishClaimLocked(pub, err)
 	}
 	return pub, err
 }
 
-func (a *Admission) beginLocked(ctx context.Context, op *Operation, ev nostr.Event, relays []string) (*Publication, error) {
+func (a *Admission) beginLocked(ctx context.Context, op *Operation, waiting bool, ev nostr.Event, relays []string) (*Publication, error) {
 	if err := a.killSwitchLocked(); err != nil {
 		return nil, err
 	}
 	now := a.clock.Now()
-	if op == nil && a.breakerWaitLocked(now) > 0 {
-		return nil, a.circuitErrorLocked()
-	}
-	if op != nil && !now.Before(op.deadline) {
-		return nil, operationDeadlineError(ErrQueueTimeout)
-	}
-
 	pub := &Publication{a: a, op: op, eventID: eventKeyID(ev), purpose: PurposeForEvent(ev)}
-	if op != nil {
+	switch {
+	case op != nil:
 		pub.purpose = PurposeBulk
+		pub.waitDeadline = op.deadline
+		if !now.Before(op.deadline) {
+			return nil, operationDeadlineError(ErrQueueTimeout)
+		}
+	case waiting:
+		pub.waitDeadline = now.Add(a.maxQueueWait)
+	default:
+		if a.breakerWaitLocked(now) > 0 {
+			return nil, a.circuitErrorLocked()
+		}
 	}
 	a.pruneReceiptsLocked(now)
 	for _, relay := range relays {
@@ -117,14 +146,14 @@ func (a *Admission) beginLocked(ctx context.Context, op *Operation, ev nostr.Eve
 		return nil, err
 	}
 	var err error
-	if op == nil {
+	if pub.waitDeadline.IsZero() {
 		if a.laneWaitLocked(now, pub.purpose) > 0 {
 			a.metrics.BudgetRejected++
 			err = ErrBudgetExceeded
 		}
 	} else {
-		err = a.waitLocked(ctx, op.deadline, func(now time.Time) (time.Duration, error) {
-			if op.closed {
+		err = a.waitLocked(ctx, pub.waitDeadline, func(now time.Time) (time.Duration, error) {
+			if op != nil && op.closed {
 				return 0, fmt.Errorf("%w: operation closed while waiting for admission", ErrOperation)
 			}
 			if err := a.killSwitchLocked(); err != nil {
@@ -133,9 +162,9 @@ func (a *Admission) beginLocked(ctx context.Context, op *Operation, ev nostr.Eve
 			if wait := a.breakerWaitLocked(now); wait > 0 {
 				return wait, nil
 			}
-			return a.laneWaitLocked(now, PurposeBulk), nil
+			return a.laneWaitLocked(now, pub.purpose), nil
 		})
-		err = operationDeadlineError(err)
+		err = pub.waitError(err)
 	}
 	if err != nil {
 		pub.unregisterLocked()
@@ -257,7 +286,7 @@ func (p *Publication) BeforeAttempt(ctx context.Context, relayURL string) error 
 			return 0, err
 		}
 		if wait := a.breakerWaitLocked(now); wait > 0 {
-			if p.op == nil {
+			if p.waitDeadline.IsZero() {
 				return 0, a.circuitErrorLocked()
 			}
 			return wait, nil
@@ -266,7 +295,7 @@ func (p *Publication) BeforeAttempt(ctx context.Context, relayURL string) error 
 		// reference, and the closed check above runs first.
 		wire := a.relays[relay].forPurpose(p.purpose)
 		if wait := wire.wait(now); wait > 0 {
-			if p.op == nil {
+			if p.waitDeadline.IsZero() {
 				a.metrics.WireRejected++
 				return 0, fmt.Errorf("%w: relay %s wire budget", ErrBudgetExceeded, relay)
 			}
@@ -276,14 +305,24 @@ func (p *Publication) BeforeAttempt(ctx context.Context, relayURL string) error 
 		a.metrics.WireAttempts++
 		return 0, nil
 	}
-	if p.op == nil {
+	if p.waitDeadline.IsZero() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		_, err := try(a.clock.Now())
 		return err
 	}
-	return operationDeadlineError(a.waitLocked(ctx, p.op.deadline, try))
+	return p.waitError(a.waitLocked(ctx, p.waitDeadline, try))
+}
+
+func (p *Publication) waitError(err error) error {
+	if p.op != nil {
+		return operationDeadlineError(err)
+	}
+	if errors.Is(err, ErrQueueTimeout) {
+		p.a.metrics.QueueRejected++
+	}
+	return err
 }
 
 // Observe records one relay outcome. It may be called after Close so that

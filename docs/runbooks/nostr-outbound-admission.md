@@ -15,7 +15,7 @@ the controller immediately before every frame:
 | `RelayPool.PublishWithResults` | projections, control-plane results, DNS, outbox redelivery, migrations, release and telemetry adapters |
 | SoulFactory relay bus (`sendAdmitted`) | SoulFactory publications, Concord invites, rekeys, compaction, snapshots |
 | Signet `callManagement` | Signet management gift wraps |
-| `nostrout.Bunker` | every NIP-46 signer RPC (Signet client, agent bunkers, SoulFactory enrollment verifiers) |
+| `nostrout.Bunker` | every NIP-46 signer request (Signet client, agent bunkers, SoulFactory enrollment verifiers) |
 
 Standalone Bahia-derived agents (for example `bahia-dns-agent`) use the same
 gateways and get the same bounded process default.
@@ -137,15 +137,19 @@ Do not use the kill switch as ordinary flow control.
 The `nostr_outbound_admission` health check fails while the kill switch is
 active and warns while the breaker is open or after budget rejections. Its
 content-free details include attempted, admitted, budget/circuit/kill-switch/
-in-flight/capacity/queue rejections, wire attempts and rejections, opaque
-(NIP-46) admissions, operation state, active publications, and relay
+in-flight/capacity/queue rejections, wire attempts and rejections,
+operation state, active publications, and relay
 rate-limit responses. It never reports event bodies, tags, keys, or relay
 credentials.
 
-## Known limits
+## NIP-46 signer requests
 
-- The pinned NIP-46 library sends exactly one request frame per bunker relay
-  per RPC, with no internal retries, and exposes no publish hook: requests are
-  admitted (signer lane plus every bunker relay's wire share) before the
-  library runs, but relay OK/rate-limit feedback on those frames is swallowed
-  by the library and cannot open the breaker.
+Bahia uses its own NIP-46 client (`nostrout.Bunker`), wire-compatible with
+`fiatjaf.com/nostr/nip46`, because the upstream client publishes kind 24133
+requests internally, discards relay OK/rate-limit results, and occasionally
+issues unsolicited `switch_relays` requests. Each request is admitted in the
+signer lane with a bounded wait (at most 30 seconds, 32 concurrent waiters)
+because its caller is already blocked on the reply; each relay frame is
+admitted after the relay connection is established; and every relay outcome
+is observed, so a signer relay's rate limit opens the shared breaker for all
+gateways. Relays come only from the bunker URI.
