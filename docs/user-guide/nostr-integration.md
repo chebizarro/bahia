@@ -709,7 +709,7 @@ Policy breach notifications use the existing notification dispatcher with event 
 
 ## Durability, replay, and retention
 
-Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
+Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Retries are bounded: an event not accepted within one hour of durable enqueue moves to the terminal `expired` state. Every publication, including redelivery, passes the process-wide outbound admission controller (budgets, shared rate-limit circuit breaker, kill switch); see [Nostr outbound admission](../runbooks/nostr-outbound-admission.md). Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
 
 Terminal ContextVM responses use a separate idempotency cache keyed by requester pubkey, method, and progress token. Completed responses are cached in memory and persisted in PostgreSQL for 24 hours. A duplicate request within that window republishes the cached JSON-RPC response without re-running the handler; this recovers a completed command when its first ephemeral response was lost.
 

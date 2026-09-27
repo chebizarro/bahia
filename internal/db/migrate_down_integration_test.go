@@ -59,9 +59,24 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	logger := zap.NewNop()
 	require.NoError(t, Migrate(ctx, pool, logger))
 
-	// 000070 has a locking emptiness guard, not a bare DROP TABLE.
 	_, err := Down(ctx, pool, logger, DownOptions{})
 	require.ErrorContains(t, err, "confirmation")
+
+	// 000071 retires expired outbound rows to a terminal state; it never
+	// returns them to 'pending'.
+	_, err = pool.Exec(ctx, `INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, publish_state)
+		VALUES ('expired-outbox-row', 1, 'pk', '', '[]', 'sig', now(), now(), 'test', 'expired')`)
+	require.NoError(t, err)
+	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000071_nostr_publish_expired"}, rolled)
+	var retiredState string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT publish_state FROM nostr_events WHERE id = 'expired-outbox-row'").Scan(&retiredState))
+	require.Equal(t, "not_applicable", retiredState)
+	_, err = pool.Exec(ctx, "DELETE FROM nostr_events WHERE id = 'expired-outbox-row'")
+	require.NoError(t, err)
+
+	// 000070 has a locking emptiness guard, not a bare DROP TABLE.
 	_, err = pool.Exec(ctx, "INSERT INTO hiveci_initiations (source_event_id, build_id, stage, document) VALUES ($1, $2, $3, $4)",
 		"guarded-event", "00000000-0000-0000-0000-000000000001", "claimed", []byte{1})
 	require.NoError(t, err)
@@ -72,7 +87,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	require.Equal(t, 1, guardedCount)
 	_, err = pool.Exec(ctx, "DELETE FROM hiveci_initiations WHERE source_event_id = 'guarded-event'")
 	require.NoError(t, err)
-	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000070_hiveci_initiations"}, rolled)
 	var exists bool
@@ -91,7 +106,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"000070_hiveci_initiations", "000069_package_authorization", "000068_relay_projection_wire_time",
+		"000071_nostr_publish_expired", "000070_hiveci_initiations", "000069_package_authorization", "000068_relay_projection_wire_time",
 		"000067_vm_measured_adoption", "000066_vm_control_plane",
 	}, rolled)
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('virtualization_hosts') IS NOT NULL").Scan(&exists))
@@ -119,7 +134,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	require.Equal(t, len(migrationVersions(t)), count)
 
 	files = migrationFileCopy(t)
-	files["migrations/000070_hiveci_initiations.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
+	files["migrations/000071_nostr_publish_expired.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
 	_, err = downWithFS(ctx, pool, logger, files, DownOptions{Confirm: true})
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -127,7 +142,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('down_failure_marker') IS NOT NULL").Scan(&exists))
 	require.False(t, exists, "failed down SQL must roll back its DDL")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000070_hiveci_initiations'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000071_nostr_publish_expired'").Scan(&count))
 	require.Equal(t, 1, count)
 }
 

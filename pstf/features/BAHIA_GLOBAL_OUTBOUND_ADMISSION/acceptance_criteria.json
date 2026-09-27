@@ -1,0 +1,17 @@
+{
+  "feature_id": "BAHIA_GLOBAL_OUTBOUND_ADMISSION",
+  "criteria": [
+    {"id": "BGOA-AC-001", "statement": "Misconfigured reconciliation (1100 immediate attempts) cannot exceed lane or aggregate bursts; rejection happens before relay I/O."},
+    {"id": "BGOA-AC-002", "statement": "Every gateway (RelayPool, SoulFactory bus, Signet management, NIP-46 bunker) shares one process-wide controller; nil injection never disables admission."},
+    {"id": "BGOA-AC-003", "statement": "Per-relay wire budgets bound actual frames, including NIP-42 AUTH retries, across concurrent publishers."},
+    {"id": "BGOA-AC-004", "statement": "A relay rate limit opens the breaker for every gateway; late successes cannot clear a newer circuit; mixed fan-out records acceptance and circuit state."},
+    {"id": "BGOA-AC-005", "statement": "Reconnect replay suppresses only destinations that accepted the exact event; failed or new destinations remain eligible; concurrent duplicates are refused."},
+    {"id": "BGOA-AC-006", "statement": "A 1100-event operation is paced by bulk capacity, never flushed and never failed for size; priority capacity remains reserved."},
+    {"id": "BGOA-AC-007", "statement": "Operation queues are FIFO, bounded, cancellable, and time-limited; declared sizes and lifetimes are enforced."},
+    {"id": "BGOA-AC-008", "statement": "The kill switch hot-reloads, fails closed when unreadable, and stops operations, outbox redelivery, and ContextVM retries."},
+    {"id": "BGOA-AC-009", "statement": "Outbox redelivery expires events one hour after durable enqueue, never resends an expired event, and stops a batch on admission refusal while preserving the cause."},
+    {"id": "BGOA-AC-010", "statement": "The static guard catches aliased, method-value, method-expression, connect-then-publish, pool, Cascadia, and raw NIP-46 bypasses and rejects stale allowlist entries."},
+    {"id": "BGOA-AC-011", "statement": "Repository-native container build, full tests, vet, race checks, and exact image provenance pass."},
+    {"id": "BGOA-AC-012", "statement": "A staged canary shows bounded event rate, zero steady-state relay rejection, real operator-result and tombstone delivery, and a proven rollback, with no relay-limit, key, ACL, or custody change."}
+  ]
+}

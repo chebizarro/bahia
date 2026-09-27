@@ -3,12 +3,14 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 const (
@@ -44,6 +46,8 @@ type contextVMResultPublishFailure struct {
 func (e *contextVMResultPublishFailure) Error() string {
 	return fmt.Sprintf("terminal ContextVM result was not accepted after %d attempts: %v", e.attempts, e.cause)
 }
+
+func (e *contextVMResultPublishFailure) Unwrap() error { return e.cause }
 
 func newContextVMResultPublishFailure(attempt int, outcomes []string, err error) *contextVMResultPublishFailure {
 	if err == nil {
@@ -87,6 +91,12 @@ func continueContextVMResultRetry(ctx context.Context, publisher NostrEventPubli
 			err = fmt.Errorf("no relay accepted event")
 		}
 		failure.cause = err
+		// The operator kill switch is not transient back-pressure: stop now
+		// instead of spending the rest of the deadline on refused attempts.
+		// Budget and circuit refusals keep retrying within the same deadline.
+		if errors.Is(err, nostrout.ErrKillSwitch) {
+			return failure
+		}
 
 		backoff *= 2
 		if backoff > cfg.maxBackoff {

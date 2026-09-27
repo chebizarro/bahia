@@ -131,6 +131,27 @@ func (r *InMemoryNostrEventRepository) RecordPublishFailure(_ context.Context, i
 	return nil
 }
 
+// ExpireUnpublished retires pending events whose retry lifetime elapsed.
+func (r *InMemoryNostrEventRepository) ExpireUnpublished(_ context.Context, enqueuedBefore time.Time) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var expired int64
+	for id, rec := range r.records {
+		if rec.PublishState != NostrPublishStatePending || !rec.ReceivedAt.Before(enqueuedBefore) {
+			continue
+		}
+		rec.PublishState = NostrPublishStateExpired
+		if rec.LastPublishError == "" {
+			rec.LastPublishError = nostrPublishExpiredReason
+		} else {
+			rec.LastPublishError += "; " + nostrPublishExpiredReason
+		}
+		r.records[id] = rec
+		expired++
+	}
+	return expired, nil
+}
+
 // FindSince returns events created after since, filtered by kinds when provided.
 func (r *InMemoryNostrEventRepository) FindSince(_ context.Context, since time.Time, kinds []int) ([]NostrEventRecord, error) {
 	r.mu.RLock()

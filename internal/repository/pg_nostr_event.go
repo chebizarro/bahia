@@ -17,7 +17,13 @@ const (
 	NostrPublishStateNotApplicable = "not_applicable"
 	NostrPublishStatePending       = "pending"
 	NostrPublishStatePublished     = "published"
+	// NostrPublishStateExpired is terminal: the event's retry lifetime elapsed
+	// before any relay accepted it, so it is never retried again.
+	NostrPublishStateExpired = "expired"
 )
+
+// nostrPublishExpiredReason is appended to last_publish_error on expiry.
+const nostrPublishExpiredReason = "retry lifetime expired"
 
 // NostrEventRecord represents a row in the nostr_events audit table.
 type NostrEventRecord struct {
@@ -65,6 +71,11 @@ type NostrEventOutboxRepository interface {
 	CountUnpublished(ctx context.Context) (int64, error)
 	MarkPublished(ctx context.Context, id string, publishedAt time.Time) error
 	RecordPublishFailure(ctx context.Context, id, publishError string) error
+	// ExpireUnpublished atomically moves pending events durably enqueued
+	// before enqueuedBefore to the terminal expired state and returns how many
+	// expired. Only pending rows change; an in-flight success may still mark
+	// an expired event published.
+	ExpireUnpublished(ctx context.Context, enqueuedBefore time.Time) (int64, error)
 }
 
 type nostrEventDB interface {
@@ -188,6 +199,20 @@ func (r *PgNostrEventRepository) RecordPublishFailure(ctx context.Context, id, p
 		return fmt.Errorf("recording nostr event %s publish failure: %w", id, err)
 	}
 	return nil
+}
+
+// ExpireUnpublished retires pending events whose retry lifetime elapsed.
+func (r *PgNostrEventRepository) ExpireUnpublished(ctx context.Context, enqueuedBefore time.Time) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE nostr_events
+		SET publish_state = $2,
+		    last_publish_error = CASE WHEN last_publish_error = '' THEN $4 ELSE last_publish_error || '; ' || $4 END
+		WHERE publish_state = $1 AND received_at < $3
+	`, NostrPublishStatePending, NostrPublishStateExpired, enqueuedBefore, nostrPublishExpiredReason)
+	if err != nil {
+		return 0, fmt.Errorf("expiring unpublished nostr events: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.

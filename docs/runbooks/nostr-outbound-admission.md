@@ -1,31 +1,116 @@
 # Nostr outbound admission
 
-Bahia's `RelayPool` rejects outbound events before relay I/O when its bounded
-per-purpose budget is exhausted or a relay rate-limit response has opened the
-process-wide circuit breaker. Server pools share one controller. Standalone
-Bahia-derived agents get a bounded controller by default.
+Every EVENT a Bahia process publishes is admitted by one process-wide
+controller (`internal/nostrout`) before any relay I/O. There is no unlimited
+mode: a nil controller rejects, an unreadable kill-switch file rejects, and a
+relay rate-limit response opens a circuit breaker shared by every gateway.
 
-Default logical-event budgets are partitioned so state-repair traffic cannot
-consume capacity reserved for operator results and tombstones:
+## Gateways
 
-- priority (`kind 5` and encrypted `kind 1059`): 10/minute, burst 4;
-- replaceable/addressable state (`kind >= 10000`): 10/minute, burst 3;
-- general events: 10/minute, burst 3.
+Only these code paths may put an EVENT frame on the wire, and each one asks
+the controller immediately before every frame:
 
-Fan-out to multiple relays consumes one logical-event token. A relay
-rate-limit rejection opens a global exponential circuit breaker. Successfully
-accepted signed event IDs are suppressed for ten minutes, with a bounded 4096
-ID cache.
+| Gateway | Traffic |
+|---|---|
+| `RelayPool.PublishWithResults` | projections, control-plane results, DNS, outbox redelivery, migrations, release and telemetry adapters |
+| SoulFactory relay bus (`sendAdmitted`) | SoulFactory publications, Concord invites, rekeys, compaction, snapshots |
+| Signet `callManagement` | Signet management gift wraps |
+| `nostrout.Bunker` | every NIP-46 signer RPC (Signet client, agent bunkers, SoulFactory enrollment verifiers) |
+
+Standalone Bahia-derived agents (for example `bahia-dns-agent`) use the same
+gateways and get the same bounded process default.
+
+CI enforces this with a type-aware guard
+(`internal/nostrout/gateway_guard_test.go`): any use of a `Publish*` function or
+method from `fiatjaf.com/nostr` or `cascadia-go` — call, method value, or method
+expression, under any import alias — and any NIP-46 client symbol must be an
+exact approved gateway. Stale allowlist entries fail, and production code may
+not construct an isolated controller. Do not widen the allowlist; route new
+traffic through a gateway.
+
+## Budgets
+
+Logical budgets count events, not relay fan-out. Defaults per process:
+
+| Lane | Carries | Rate/min | Burst |
+|---|---|---:|---:|
+| priority | kind 5 tombstones, kind 1059 gift wraps, kind 25910 ContextVM | 10 | 4 |
+| state | replaceable (10000–19999) and addressable (30000–39999) | 10 | 3 |
+| general | everything else | 10 | 3 |
+| bulk | declared multi-event operations only | 5 | 1 |
+| signer | NIP-46 requests (kind 24133) | 10 | 4 |
+| aggregate | all lanes together | 45 | 15 |
+
+Each relay also has a wire budget of 55 frames/minute (burst 18), which is
+charged for every EVENT frame, including NIP-42 AUTH retries. A server plus one
+standalone agent against the same relay therefore stays below the shared
+relay's historic 120 events/minute bucket. Lanes are fixed partitions: bulk
+operations and state repair can never consume priority capacity.
+
+Ordinary publications fail fast when a budget is exhausted
+(`nostr outbound publication budget exhausted`). Callers retain the event
+(the durable outbox does this) rather than retrying immediately.
+
+## Duplicate suppression
+
+The controller keeps a bounded receipt cache (4096 entries, 10 minutes) keyed
+by event ID *and* relay. A destination that already accepted an exact signed
+event is answered locally with a `duplicate:` result and no frame; a failed or
+newly added destination remains eligible. Concurrent attempts to send the same
+event to the same relay are refused with `already in flight`.
+
+## Circuit breaker
+
+Any `rate-limited:` response opens a process-wide breaker with exponential
+backoff (2s doubling to 60s, plus up to 20% jitter). While open, ordinary
+publications fail with `circuit breaker open` before relay I/O. A late success
+from a publication admitted before a newer rate limit cannot close that newer
+circuit.
+
+## Multi-event operations
+
+Concord rotations and Direct Invite batches are admitted as one bounded
+operation before their first irreversible step (the custody write). Once
+active, their events are paced through the bulk lane and wait for an open
+circuit to close, instead of failing halfway because the operation is larger
+than a burst.
+
+- One operation is active per process; up to 8 wait in FIFO order for at most
+  30 seconds, then fail with `queue full` or `wait expired`.
+- An operation declares at most 2048 publications and is bounded by
+  `declared / bulk rate + 60s`. At defaults a 13-event rotation takes about
+  2.5 minutes, and a 2048-event operation is bounded at roughly 6h51m.
+- Exceeding the declared count, the kill switch, cancellation, or the deadline
+  interrupts the operation. Nostr cannot publish several events atomically
+  across relays: an interrupted rotation keeps CORD-06's resumable semantics
+  and must be re-run; nothing is rolled back.
+
+A caller whose context deadline is shorter than the paced duration (for example
+a short request timeout) will see a partial, resumable rotation. Give rotation
+commands a context that covers the paced duration.
+
+## Durable outbox retry lifetime
+
+Events the server persists before publishing are retried from the outbox for at
+most one hour from durable enqueue (`received_at`, not a possibly backdated
+`created_at`). After that they move to the terminal `expired` publish state
+and are never retried. A redelivery batch stops at the first admission
+refusal instead of recording one identical failure per pending row. Terminal
+ContextVM results keep their single 60-second deadline across the first
+attempt and every retry, and stop immediately when the kill switch is active.
+
+Migration `000071_nostr_publish_expired` only widens the publish-state
+constraint. Older binaries ignore expired rows. Its down migration retires
+expired rows to `not_applicable`; it never returns them to `pending`.
 
 ## Emergency kill switch
 
 Set `BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE` to a root-controlled local path.
-The file is checked on every publication, so no process restart is required.
+The file is checked on every admission, so no process restart is required.
 Content `1`, `true`, `stop`, `stopped`, `disable`, or `disabled` rejects every
-new publication before relay I/O. Missing files and any other content permit
-the configured bounded traffic. An unreadable configured file fails closed.
-
-Example:
+new publication — including NIP-46 signer requests — before relay I/O. Missing
+files and any other content permit the configured bounded traffic. An
+unreadable configured file fails closed.
 
 ```sh
 install -m 0600 /dev/null /run/bahia/nostr-publish.stop
@@ -34,11 +119,22 @@ printf 'stop\n' > /run/bahia/nostr-publish.stop
 printf 'resume\n' > /run/bahia/nostr-publish.stop
 ```
 
-Do not use the kill switch as ordinary flow control. Readiness/metrics must
-surface sustained rejection before production rollout.
+Do not use the kill switch as ordinary flow control.
 
-## Known migration boundary
+## Readiness and metrics
 
-CI freezes the remaining direct publishers in Signet and SoulFactory. Those
-paths must be migrated behind the same admission interface before Bahia can be
-restarted in production; adding another bypass fails the static guard.
+The `nostr_outbound_admission` health check fails while the kill switch is
+active and warns while the breaker is open or after budget rejections. Its
+content-free details include attempted, admitted, budget/circuit/kill-switch/
+in-flight/capacity/queue rejections, wire attempts and rejections, opaque
+(NIP-46) admissions, operation state, active publications, and relay
+rate-limit responses. It never reports event bodies, tags, keys, or relay
+credentials.
+
+## Known limits
+
+- NIP-46 responses and the library's internal relay handling are outside
+  Bahia's control; only request publication is budgeted, and relay feedback on
+  those requests is not observable.
+- Pending replaceable-state events are not yet coalesced by coordinate; expiry
+  bounds their lifetime instead.

@@ -1,0 +1,17 @@
+{
+  "feature_id": "BAHIA_GLOBAL_OUTBOUND_ADMISSION",
+  "tests": [
+    {"id": "BGOA-T-001", "acceptance": ["BGOA-AC-001"], "target": "nostrout.TestMisconfiguredReconciliationCannotExceedLaneOrAggregateBurst", "status": "passed"},
+    {"id": "BGOA-T-002", "acceptance": ["BGOA-AC-002"], "target": "nostr.TestRelayPoolsDefaultToOneProcessWideAdmission; nostrout.TestNilAdmissionFailsClosed; soulfactory.TestRelayBusesShareInjectedBudget", "status": "passed"},
+    {"id": "BGOA-T-003", "acceptance": ["BGOA-AC-003"], "target": "nostrout.TestAuthRetrySpendsWireButNotLogicalBudget; nostrout.TestPerRelayWireBudgetIsSharedAcrossPublications; nostrout.TestConcurrentPublishersCannotExceedSharedBurst; soulfactory.TestConcordAuthRetryIsAdmittedAsSecondFrame", "status": "passed"},
+    {"id": "BGOA-T-004", "acceptance": ["BGOA-AC-004"], "target": "nostrout.TestRateLimitOpensSharedCircuitWithBackoff; nostrout.TestLateSuccessCannotCloseNewerCircuit; nostrout.TestMixedFanOutRecordsAcceptanceAndOpensCircuit; nostr.TestRelayPoolRateLimitOpensCircuitForEveryPool", "status": "passed"},
+    {"id": "BGOA-T-005", "acceptance": ["BGOA-AC-005"], "target": "nostrout.TestDuplicateSuppressionIsDestinationAware; nostrout.TestConcurrentDuplicateIsRejectedButOtherDestinationIsNot; nostr.TestRelayPoolReconnectReplaySuppressesAcceptedDestinationsOnly; soulfactory.TestConcordReplayOfAcceptedWrapSendsNoFrame", "status": "passed"},
+    {"id": "BGOA-T-006", "acceptance": ["BGOA-AC-006"], "target": "nostrout.TestLargeOperationIsPacedNotFlushedOrRejected; nostrout.TestPriorityCapacityIsReservedFromStateAndBulkChurn; soulfactory.TestConcordPublicationsArePacedByOperationInsteadOfRejected", "status": "passed"},
+    {"id": "BGOA-T-007", "acceptance": ["BGOA-AC-007"], "target": "nostrout.TestOperationQueueIsBoundedFIFOAndCancellable; nostrout.TestOperationRejectsInvalidDeclarationsAndOverlappingPublications; nostrout.TestOperationDeadlineBoundsLifetime; soulfactory.TestConcordRotationPublicationBound", "status": "passed"},
+    {"id": "BGOA-T-008", "acceptance": ["BGOA-AC-008"], "target": "nostrout.TestKillSwitchHotReloadAndFailClosed; nostrout.TestKillSwitchAbortsWaitingOperation; nostr.TestRelayPoolRejectedPublicationSendsNoFrame; soulfactory.TestRelayBusPublishRejectedByKillSwitchSendsNoFrame; controlplane.TestContextVMResultRetryStopsOnKillSwitch", "status": "passed"},
+    {"id": "BGOA-T-009", "acceptance": ["BGOA-AC-009"], "target": "nostr.TestOutboxExpiresEventsPastRetryLifetimeWithoutSending; nostr.TestOutboxRetryLifetimeIsMeasuredFromEnqueueNotCreatedAt; nostr.TestOutboxStopsBatchOnAdmissionRejectionAndPreservesCause; db migrate_down integration (000071)", "status": "passed"},
+    {"id": "BGOA-T-010", "acceptance": ["BGOA-AC-010"], "target": "nostrout.TestEveryRawRelayPublicationIsAnApprovedGateway; nostrout.TestGuardDetectsDisguisedBypasses; nostrout.TestProductionCodeSharesTheProcessController", "status": "passed"},
+    {"id": "BGOA-T-011", "acceptance": ["BGOA-AC-011"], "target": "repository Docker build, go test ./..., go vet ./..., race tests on affected packages", "status": "pending"},
+    {"id": "BGOA-T-012", "acceptance": ["BGOA-AC-012"], "target": "operator-authorized staged canary with rollback", "status": "pending"}
+  ]
+}

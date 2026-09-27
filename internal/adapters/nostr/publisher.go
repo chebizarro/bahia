@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -130,13 +132,34 @@ type Publisher struct {
 	publishMu    sync.Mutex
 	newBackoff   func() *Backoff
 	idleInterval time.Duration
+	// retryLifetime bounds how long a durably enqueued event may be retried,
+	// measured from its enqueue time (received_at), not its possibly
+	// backdated Nostr created_at.
+	retryLifetime time.Duration
+	now           func() time.Time
+}
+
+// DefaultPublishRetryLifetime bounds outbox redelivery of one event.
+const DefaultPublishRetryLifetime = time.Hour
+
+// PublisherOption configures a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithPublishRetryLifetime bounds how long an unaccepted outbound event is
+// retried. Non-positive values keep the default; expiry cannot be disabled.
+func WithPublishRetryLifetime(lifetime time.Duration) PublisherOption {
+	return func(p *Publisher) {
+		if lifetime > 0 {
+			p.retryLifetime = lifetime
+		}
+	}
 }
 
 // NewPublisher creates a new Nostr event publisher.
 // It shares a RelayPool for persistent connections. If pool is nil, a new one
 // is created from config (for backward compatibility).
 // eventRepo is optional; when non-nil, all published events are recorded to the audit table.
-func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger) *Publisher {
+func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger, opts ...PublisherOption) *Publisher {
 	if pool == nil {
 		poolOpts := []RelayPoolOption(nil)
 		if cfg.PrivateKey != "" {
@@ -147,14 +170,21 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 	}
 
 	publisher := &Publisher{
-		pool:         pool,
-		privateKey:   cfg.PrivateKey,
-		enabled:      cfg.PublishEnabled && cfg.PrivateKey != "",
-		logger:       logger,
-		eventRepo:    eventRepo,
-		publishFn:    pool.PublishWithResults,
-		newBackoff:   DefaultBackoff,
-		idleInterval: time.Second,
+		pool:          pool,
+		privateKey:    cfg.PrivateKey,
+		enabled:       cfg.PublishEnabled && cfg.PrivateKey != "",
+		logger:        logger,
+		eventRepo:     eventRepo,
+		publishFn:     pool.PublishWithResults,
+		newBackoff:    DefaultBackoff,
+		idleInterval:  time.Second,
+		retryLifetime: DefaultPublishRetryLifetime,
+		now:           time.Now,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(publisher)
+		}
 	}
 	publisher.outboxRepo, _ = eventRepo.(repository.NostrEventOutboxRepository)
 	return publisher
@@ -309,7 +339,29 @@ func (p *Publisher) recordPublishFailure(ctx context.Context, eventID string, re
 			failure += "; persist publish failure: " + err.Error()
 		}
 	}
-	return publishAttempt{results: results, rateLimited: rateLimited, err: fmt.Errorf("%s", failure)}
+	return publishAttempt{results: results, rateLimited: rateLimited, err: &outboxPublishError{message: failure, cause: publishErr}}
+}
+
+// outboxPublishError keeps the persisted diagnostic text while leaving the
+// underlying cause (for example an admission rejection) reachable through
+// errors.Is/As.
+type outboxPublishError struct {
+	message string
+	cause   error
+}
+
+func (e *outboxPublishError) Error() string { return e.message }
+
+func (e *outboxPublishError) Unwrap() error { return e.cause }
+
+// isAdmissionRejection reports a shared-controller refusal. Every further
+// attempt in the same batch would be refused identically, so redelivery stops
+// the batch rather than writing one failure per pending row.
+func isAdmissionRejection(err error) bool {
+	return errors.Is(err, nostrout.ErrBudgetExceeded) ||
+		errors.Is(err, nostrout.ErrCircuitOpen) ||
+		errors.Is(err, nostrout.ErrKillSwitch) ||
+		errors.Is(err, nostrout.ErrCapacity)
 }
 
 func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
@@ -392,11 +444,28 @@ func (p *Publisher) Run(ctx context.Context) error {
 }
 
 func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed bool, rateLimited bool, err error) {
+	cutoff := p.now().Add(-p.retryLifetime)
+	expired, err := p.outboxRepo.ExpireUnpublished(ctx, cutoff)
+	if err != nil {
+		return 0, false, false, err
+	}
+	if expired > 0 {
+		p.logger.Warn("nostr outbox events expired without relay acceptance",
+			zap.Int64("expired", expired),
+			zap.Duration("retry_lifetime", p.retryLifetime),
+		)
+	}
 	records, err := p.outboxRepo.ListUnpublished(ctx, 100)
 	if err != nil {
 		return 0, false, false, err
 	}
 	for _, rec := range records {
+		deadline := rec.ReceivedAt.Add(p.retryLifetime)
+		if !p.now().Before(deadline) {
+			// Expired between the sweep and this attempt; the next sweep
+			// retires it. Never start a new attempt past the deadline.
+			continue
+		}
 		ev, decodeErr := eventFromNostrRecord(rec)
 		if decodeErr != nil {
 			attempt := p.recordPublishFailure(ctx, rec.ID, nil, decodeErr)
@@ -404,11 +473,16 @@ func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed b
 			rateLimited = rateLimited || attempt.rateLimited
 			continue
 		}
-		attempt := p.publishOutboxEvent(ctx, ev)
+		attemptCtx, cancel := context.WithDeadline(ctx, deadline)
+		attempt := p.publishOutboxEvent(attemptCtx, ev)
+		cancel()
 		if attempt.err != nil {
 			failed = true
 			rateLimited = rateLimited || attempt.rateLimited
 			err = attempt.err
+			if isAdmissionRejection(attempt.err) {
+				break
+			}
 		}
 	}
 	return len(records), failed, rateLimited, err

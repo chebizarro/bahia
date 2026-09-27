@@ -1,0 +1,23 @@
+{
+  "feature_id": "BAHIA_GLOBAL_OUTBOUND_ADMISSION",
+  "title": "Enforce one fail-closed outbound Nostr admission layer for every Bahia publisher",
+  "observed_failure": "On 2026-09-27 relay amplification recurred: projector-local dedupe and backoff did not bound DNS reconciliation retries, snapshot repair, reconnect replay, or independently packaged Bahia-derived binaries.",
+  "invariants": [
+    "Every EVENT frame leaves through an approved gateway admitted by the process-wide nostrout controller immediately before the frame.",
+    "Budgets are process-wide, partitioned by lane, bounded in aggregate and per relay, and have no unlimited mode.",
+    "Relay rate-limit feedback opens a shared jittered circuit breaker; a stale success cannot close a newer circuit.",
+    "Duplicate suppression is per event and relay; concurrent duplicates are refused.",
+    "Operator results and tombstones keep reserved priority capacity that bulk and state traffic cannot consume.",
+    "Multi-event security operations are admitted all-or-none before their first irreversible step and paced rather than rejected mid-operation.",
+    "Queues, operation sizes, operation lifetimes, receipt caches, relay identities, active publications, and outbox retry lifetimes are bounded with explicit overflow errors.",
+    "A file-backed kill switch stops every publication, including NIP-46 signer requests, without restart; an unreadable file fails closed.",
+    "Metrics and readiness are content-free.",
+    "A type-aware static guard rejects new raw publication sites and isolated production controllers."
+  ],
+  "out_of_scope": [
+    "Relay rate-limit increases",
+    "Signer, key, ACL, grant, binding, or custody changes",
+    "Transactional coalescing of pending replaceable events by coordinate",
+    "Protocol-level atomic visibility of multi-event operations across relays"
+  ]
+}
