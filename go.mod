@@ -11,24 +11,25 @@ require (
 	github.com/btcsuite/btcd/btcec/v2 v2.5.0
 	github.com/compose-spec/compose-go/v2 v2.15.0
 	github.com/digitalocean/go-libvirt v0.0.0-20260814190004-1a83157e1858
-	github.com/docker/cli v29.8.0+incompatible
+	github.com/docker/cli v29.8.1+incompatible
 	github.com/docker/compose/v5 v5.5.1
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.8.1
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/knadh/koanf/parsers/yaml v0.1.0
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/pashagolub/pgxmock/v5 v5.2.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/otlptranslator v1.0.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	go.etcd.io/etcd/client/v3 v3.7.1
+	go.etcd.io/etcd/client/v3 v3.7.2
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.22.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.22.0
@@ -43,13 +44,13 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.22.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	go.uber.org/zap v1.27.1
-	golang.org/x/crypto v0.56.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.41.0
+	go.uber.org/zap v1.28.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.58.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
@@ -306,7 +307,6 @@ require (
 	github.com/rust-secure-code/go-rustaudit v0.0.0-20250226111315-e20ec32e963c // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sassoftware/go-rpmutils v0.4.0 // indirect
 	github.com/savsgio/gotils v0.0.0-20240704082632-aef3928b8a38 // indirect
 	github.com/scylladb/go-set v1.0.3-0.20200225121959-cc7b2070d91e // indirect
@@ -354,8 +354,8 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/zclconf/go-cty v1.17.0 // indirect
-	go.etcd.io/etcd/api/v3 v3.7.1 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.7.1 // indirect
+	go.etcd.io/etcd/api/v3 v3.7.2 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.7.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.44.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0 // indirect
@@ -371,7 +371,7 @@ require (
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
@@ -386,7 +386,7 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 	howett.net/plist v1.0.1 // indirect
-	modernc.org/libc v1.75.6 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 	tags.cncf.io/container-device-interface v1.1.0 // indirect
