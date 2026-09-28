@@ -482,3 +482,25 @@ func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testin
 	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5101}))
 	require.False(t, sub.dedup.IsDuplicate(eventIDHex(valid)))
 }
+
+func TestSubscriberAdmissionRejectsSemanticEventBeforePersistenceOrProjection(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	secret := gonostr.Generate()
+	bad := &gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: 100,
+		Tags: gonostr.Tags{{"d", "service:forged"}, {"domain", "service"}, {"schema", "bahia.cp-state.v1"}, {"status", "healthy"}}, Content: `{}`}
+	require.NoError(t, bad.Sign(secret))
+	observed := 0
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithEventAdmission(func(_ context.Context, ev *gonostr.Event) bool {
+			return ev.Content != `{}`
+		}),
+		WithObserver(func(context.Context, *gonostr.Event) { observed++ }),
+		withClock(func() time.Time { return time.Unix(200, 0).UTC() }),
+	)
+	sub.handleEvent(ctx, bad)
+	require.Equal(t, 0, observed)
+	stored, err := repo.GetByID(ctx, bad.ID.Hex())
+	require.NoError(t, err)
+	require.Nil(t, stored)
+}

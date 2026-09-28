@@ -1030,6 +1030,7 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		p.prometheusHandler.ServeHTTP(w, r)
 		writer := &prometheusWriter{writer: w}
 		renderFleetHealthMetrics(writer, p.fleetHealthSnapshot(r.Context(), p.now().UTC()))
+		p.nostrFleetHealth.refreshTrust(r.Context())
 		renderNostrFleetHealthMetrics(writer, p.nostrFleetHealth.snapshot(p.now().UTC()))
 		if writer.err != nil {
 			return
@@ -1041,6 +1042,7 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fleetHealth := p.fleetHealthSnapshot(r.Context(), p.now().UTC())
+		p.nostrFleetHealth.refreshTrust(r.Context())
 		nostrFleetHealth := p.nostrFleetHealth.snapshot(p.now().UTC())
 		m := p.metrics
 		m.mu.RLock()
@@ -1482,6 +1484,12 @@ func renderNostrFleetHealthMetrics(writer *prometheusWriter, snapshot NostrFleet
 	writer.println("# HELP bahia_fleet_health_projector_errors_total Distinct rejected or over-limit observable events; redeliveries of the same event are counted once")
 	writer.println("# TYPE bahia_fleet_health_projector_errors_total counter")
 	writer.printf("bahia_fleet_health_projector_errors_total %d\n", snapshot.ProjectionErrors)
+	writer.println("# HELP bahia_fleet_health_nostr_schema_unvalidated_events_total Accepted known-schema events with no canonical payload validator")
+	writer.println("# TYPE bahia_fleet_health_nostr_schema_unvalidated_events_total counter")
+	writer.printf("bahia_fleet_health_nostr_schema_unvalidated_events_total %d\n", snapshot.SchemaUnvalidatedEvents)
+	writer.println("# HELP bahia_fleet_health_nostr_schema_unvalidated_entities Current entities whose schema payload was envelope-checked but not canonically validated")
+	writer.println("# TYPE bahia_fleet_health_nostr_schema_unvalidated_entities gauge")
+	writer.printf("bahia_fleet_health_nostr_schema_unvalidated_entities %d\n", snapshot.SchemaUnvalidatedEntities)
 	writer.println("# HELP bahia_fleet_health_nostr_entities Observed fleet entities by domain and health status, projected from Nostr state")
 	writer.println("# TYPE bahia_fleet_health_nostr_entities gauge")
 	for _, domain := range nostrFleetHealthDomains {

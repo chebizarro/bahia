@@ -327,6 +327,7 @@ func TestRouteCanaryOutageIsCountedByFleetHealthGauge(t *testing.T) {
 	rec := &routeProjectorRecorder{secret: &secret}
 	_, bus := newTestRouteCanaryProjector(t, rec)
 	provider := telemetry.Setup(telemetry.Config{}, zap.NewNop())
+	provider.SetNostrFleetHealthTrust(telemetry.FleetHealthRegistrationTrust(secret.Public().Hex(), nil, nil, nil))
 	provider.ObserveSubscriptionStart()
 
 	observeAll := func() {

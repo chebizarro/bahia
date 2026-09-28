@@ -70,6 +70,7 @@ type Subscriber struct {
 	kinds                  []int
 	handlers               []EventHandler
 	observers              []EventHandler
+	admission              func(context.Context, *nostr.Event) bool
 	logger                 *zap.Logger
 	dedup                  *EventDeduplicator
 	backfillLimit          int // max events to fetch on catch-up (0 = no limit)
@@ -123,6 +124,13 @@ func WithObserver(h EventHandler) SubscriberOption {
 			s.observers = append(s.observers, h)
 		}
 	}
+}
+
+// WithEventAdmission rejects a semantically invalid event before persistence,
+// handler dispatch, or any read-side observer runs. The callback may record a
+// bounded rejection metric but must not retain raw content.
+func WithEventAdmission(admit func(context.Context, *nostr.Event) bool) SubscriberOption {
+	return func(s *Subscriber) { s.admission = admit }
 }
 
 // WithIngestionObserver registers a subscription lifecycle observer.
@@ -361,6 +369,9 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 			zap.String("event_id", eventIDHex(ev)),
 			zap.Int("kind", eventKindInt(ev)),
 		)
+		return
+	}
+	if s.admission != nil && !s.admission(ctx, ev) {
 		return
 	}
 	ctx = telemetry.ExtractTraceContext(ctx, ev.Tags)

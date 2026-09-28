@@ -66,6 +66,7 @@ func newRouteProjectionHarness(t *testing.T) *routeProjectionHarness {
 		relay:    &routeProjectorRecorder{secret: &secret},
 		provider: telemetry.Setup(telemetry.Config{}, zap.NewNop()),
 	}
+	h.provider.SetNostrFleetHealthTrust(telemetry.FleetHealthRegistrationTrust(secret.Public().Hex(), nil, nil, nil))
 	_, err := NewRouteCanaryProjector(h.bus, h.relay, zap.NewNop())
 	require.NoError(t, err)
 	h.provider.ObserveSubscriptionStart()

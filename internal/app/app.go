@@ -1414,9 +1414,25 @@ func New(cfg *config.Config) (*App, error) {
 
 	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, controlPlanePool, configFabricSigner)
 
+	// Resolve fleet-health publishers against current worker and Soul Factory
+	// registrations. Runtime/assistant identities are existing Bahia-managed
+	// registrations; no separate observability allowlist is introduced.
+	var agentRegistrations *soulfactory.Reactor
+	var serviceRegistrations []string
+	if soulFactoryRuntime != nil {
+		agentRegistrations = soulFactoryRuntime.reactor
+		serviceRegistrations = append(serviceRegistrations, cfg.SoulFactory.SoulFactoryPubkey)
+		for _, keys := range cfg.SoulFactory.RuntimePubkeys {
+			serviceRegistrations = append(serviceRegistrations, keys...)
+		}
+	}
+	serviceRegistrations = append(serviceRegistrations, assistantIdentity.Pubkey)
+	telemetryProvider.SetNostrFleetHealthTrust(telemetry.FleetHealthRegistrationTrust(servicePubkey, workerRepo, agentRegistrations, serviceRegistrations))
+
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
+		nostrAdapter.WithEventAdmission(telemetryProvider.AdmitNostrEvent),
 		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),

@@ -51,25 +51,31 @@ var observableFleetHealthKinds = map[int]struct{}{
 }
 
 type nostrFleetHealthEntity struct {
-	domain     string
-	status     string
-	label      string
-	eventAt    time.Time
-	ingestedAt time.Time
+	domain          string
+	status          string
+	label           string
+	schemaValidated bool
+	eventAt         time.Time
+	ingestedAt      time.Time
 }
 
 type NostrFleetHealthSnapshot struct {
-	SubscriptionActive  bool
-	CaughtUp            bool
-	LastEventAt         time.Time
-	LastIngestedAt      time.Time
-	RelayClosedTotal    uint64
-	ProjectionErrors    uint64
-	Entities            map[string]int
-	HeartbeatLagSeconds map[string]float64
+	SubscriptionActive        bool
+	CaughtUp                  bool
+	LastEventAt               time.Time
+	LastIngestedAt            time.Time
+	RelayClosedTotal          uint64
+	ProjectionErrors          uint64
+	SchemaUnvalidatedEvents   uint64
+	SchemaUnvalidatedEntities uint64
+	Entities                  map[string]int
+	HeartbeatLagSeconds       map[string]float64
 }
 
+type fleetHealthTrustFunc func(context.Context, string) (bool, error)
+
 type nostrFleetHealthProjector struct {
+	trust              fleetHealthTrustFunc
 	mu                 sync.RWMutex
 	entities           map[string]nostrFleetHealthEntity
 	subscriptionActive bool
@@ -82,21 +88,48 @@ type nostrFleetHealthProjector struct {
 	// errors. The projector observes every delivery of an event (relay echo,
 	// reconnect overlap, each relay in the pool), so the error counter must
 	// count distinct events rather than deliveries.
-	rejected *boundedEventIDSet
-	now      func() time.Time
+	rejected                *boundedEventIDSet
+	unvalidated             *boundedEventIDSet
+	schemaUnvalidatedEvents uint64
+	now                     func() time.Time
 }
 
 func newNostrFleetHealthProjector(now func() time.Time) *nostrFleetHealthProjector {
-	return &nostrFleetHealthProjector{entities: make(map[string]nostrFleetHealthEntity), rejected: newBoundedEventIDSet(maxFleetHealthRejectedEventIDs), now: now}
+	return &nostrFleetHealthProjector{entities: make(map[string]nostrFleetHealthEntity), rejected: newBoundedEventIDSet(maxFleetHealthRejectedEventIDs), unvalidated: newBoundedEventIDSet(maxFleetHealthRejectedEventIDs), now: now}
 }
 
-func (p *nostrFleetHealthProjector) observeEvent(_ context.Context, ev *gonostr.Event) {
+func (p *nostrFleetHealthProjector) observeEvent(ctx context.Context, ev *gonostr.Event) {
 	if ev == nil {
 		return
 	}
 	kind := int(ev.Kind)
 	if _, ok := observableFleetHealthKinds[kind]; !ok {
 		return
+	}
+	validationErr := validateFleetHealthEvent(ev)
+	trusted := false
+	var trustErr error
+	if validationErr == nil && p.trust != nil {
+		trusted, trustErr = p.trust(ctx, ev.PubKey.Hex())
+	}
+	if validationErr != nil || !trusted || trustErr != nil {
+		p.mu.Lock()
+		if validationErr == nil && !trusted && trustErr == nil {
+			for key, entity := range p.entities {
+				if entity.label == ev.PubKey.Hex() {
+					delete(p.entities, key)
+				}
+			}
+		}
+		p.countRejected(ev)
+		p.mu.Unlock()
+		return
+	}
+	validated := fleetHealthSchemaValidated(tagValue(ev, "schema"))
+	if !validated {
+		p.mu.Lock()
+		p.countUnvalidated(ev)
+		p.mu.Unlock()
 	}
 	domain, status, key, class := classifyFleetHealthEvent(ev)
 	if class == fleetHealthLineage {
@@ -120,7 +153,7 @@ func (p *nostrFleetHealthProjector) observeEvent(_ context.Context, ev *gonostr.
 		}
 	}
 	ingestedAt := p.now().UTC()
-	p.entities[key] = nostrFleetHealthEntity{domain: domain, status: status, label: ev.PubKey.Hex(), eventAt: ev.CreatedAt.Time().UTC(), ingestedAt: ingestedAt}
+	p.entities[key] = nostrFleetHealthEntity{domain: domain, status: status, label: ev.PubKey.Hex(), schemaValidated: validated, eventAt: ev.CreatedAt.Time().UTC(), ingestedAt: ingestedAt}
 	if ev.CreatedAt.Time().After(p.lastEventAt) {
 		p.lastEventAt = ev.CreatedAt.Time().UTC()
 	}
@@ -138,6 +171,18 @@ func (p *nostrFleetHealthProjector) countRejected(ev *gonostr.Event) {
 	}
 	if p.rejected.add(id) {
 		p.projectionErrors++
+	}
+}
+
+// countUnvalidated records an accepted, known-schema envelope with no canonical
+// payload validator. Callers hold p.mu. Its metric contains no event content.
+func (p *nostrFleetHealthProjector) countUnvalidated(ev *gonostr.Event) {
+	id := ev.ID
+	if id == (gonostr.ID{}) {
+		id = ev.GetID()
+	}
+	if p.unvalidated.add(id) {
+		p.schemaUnvalidatedEvents++
 	}
 }
 
@@ -200,11 +245,47 @@ func (p *nostrFleetHealthProjector) observeRelayClosed() {
 	p.relayClosedTotal++
 }
 
+// refreshTrust removes entities whose publisher is no longer registered.
+// It reads current registration state outside the entity lock and checks each
+// publisher only once per scrape.
+func (p *nostrFleetHealthProjector) refreshTrust(ctx context.Context) {
+	p.mu.RLock()
+	publishers := make(map[string]struct{})
+	for _, entity := range p.entities {
+		publishers[entity.label] = struct{}{}
+	}
+	p.mu.RUnlock()
+	untrusted := make(map[string]struct{})
+	for pubkey := range publishers {
+		trusted := false
+		var err error
+		if p.trust != nil {
+			trusted, err = p.trust(ctx, pubkey)
+		}
+		if !trusted && err == nil {
+			untrusted[pubkey] = struct{}{}
+		}
+	}
+	if len(untrusted) == 0 {
+		return
+	}
+	p.mu.Lock()
+	for key, entity := range p.entities {
+		if _, ok := untrusted[entity.label]; ok {
+			delete(p.entities, key)
+		}
+	}
+	p.mu.Unlock()
+}
+
 func (p *nostrFleetHealthProjector) snapshot(now time.Time) NostrFleetHealthSnapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := NostrFleetHealthSnapshot{SubscriptionActive: p.subscriptionActive, CaughtUp: p.caughtUp, LastEventAt: p.lastEventAt, LastIngestedAt: p.lastIngestedAt, RelayClosedTotal: p.relayClosedTotal, ProjectionErrors: p.projectionErrors, Entities: map[string]int{}, HeartbeatLagSeconds: map[string]float64{}}
+	out := NostrFleetHealthSnapshot{SubscriptionActive: p.subscriptionActive, CaughtUp: p.caughtUp, LastEventAt: p.lastEventAt, LastIngestedAt: p.lastIngestedAt, RelayClosedTotal: p.relayClosedTotal, ProjectionErrors: p.projectionErrors, SchemaUnvalidatedEvents: p.schemaUnvalidatedEvents, Entities: map[string]int{}, HeartbeatLagSeconds: map[string]float64{}}
 	for _, entity := range p.entities {
+		if !entity.schemaValidated {
+			out.SchemaUnvalidatedEntities++
+		}
 		out.Entities[entity.domain+":"+entity.status]++
 		if entity.domain == "agent" {
 			lag := now.Sub(entity.eventAt).Seconds()
@@ -298,6 +379,43 @@ func boundedFleetStatus(value string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// SetNostrFleetHealthTrust binds the projection to current registration lookups.
+// It must be configured before the subscriber starts; without it admission fails closed.
+func (p *Provider) SetNostrFleetHealthTrust(trust func(context.Context, string) (bool, error)) {
+	p.nostrFleetHealth.trust = trust
+}
+
+// AdmitNostrEvent is the subscriber's pre-persistence semantic boundary.
+// Rejections are content-free and deduplicated by event ID.
+func (p *Provider) AdmitNostrEvent(ctx context.Context, ev *gonostr.Event) bool {
+	if ev == nil {
+		return false
+	}
+	if _, ok := observableFleetHealthKinds[int(ev.Kind)]; !ok {
+		return true
+	}
+	validationErr := validateFleetHealthEvent(ev)
+	trusted := false
+	var trustErr error
+	if validationErr == nil && p.nostrFleetHealth.trust != nil {
+		trusted, trustErr = p.nostrFleetHealth.trust(ctx, ev.PubKey.Hex())
+	}
+	if validationErr == nil && trusted && trustErr == nil {
+		return true
+	}
+	p.nostrFleetHealth.mu.Lock()
+	if validationErr == nil && !trusted && trustErr == nil {
+		for key, entity := range p.nostrFleetHealth.entities {
+			if entity.label == ev.PubKey.Hex() {
+				delete(p.nostrFleetHealth.entities, key)
+			}
+		}
+	}
+	p.nostrFleetHealth.countRejected(ev)
+	p.nostrFleetHealth.mu.Unlock()
+	return false
 }
 
 // ObserveNostrEvent projects a validated, persisted canonical observable.
