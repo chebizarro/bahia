@@ -239,7 +239,7 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 			RedactedEnvKeyCount:   redactedEnvKeyCount,
 			RedactedLabelKeyCount: redactedLabelKeyCount,
 			DurationMS:            duration.Milliseconds(),
-			Targets:               AdoptionScanTargetSummaries(previews),
+			Targets:               s.resolveScanSummaryEnvironments(ctx, AdoptionScanTargetSummaries(previews)),
 		},
 	})
 	s.logger.Info("adoption scan completed",
@@ -627,11 +627,14 @@ type AdoptionScanCompleted struct {
 type AdoptionScanTargetSummary struct {
 	Target      string
 	Environment string
-	EndpointRef string
-	Available   bool
-	Total       int
-	Managed     int
-	Unmanaged   int
+	// EnvironmentID is the Bahia environment the scan's environment name
+	// resolves to (the same lookup import uses); nil when none exists yet.
+	EnvironmentID *uuid.UUID
+	EndpointRef   string
+	Available     bool
+	Total         int
+	Managed       int
+	Unmanaged     int
 }
 
 // AdoptionScanTargetSummaries reduces scan previews to per-target counts.
@@ -660,6 +663,24 @@ func AdoptionScanTargetSummaries(previews []AdoptionPreview) []AdoptionScanTarge
 		out = append(out, summary)
 	}
 	return out
+}
+
+func (s *AdoptionService) resolveScanSummaryEnvironments(ctx context.Context, summaries []AdoptionScanTargetSummary) []AdoptionScanTargetSummary {
+	if s.environments == nil {
+		return summaries
+	}
+	for i := range summaries {
+		env, err := s.environments.GetByName(ctx, summaries[i].Environment)
+		if err != nil {
+			s.logger.Warn("resolve adoption scan environment", zap.String("environment", summaries[i].Environment), zap.Error(err))
+			continue
+		}
+		if env != nil {
+			id := env.ID
+			summaries[i].EnvironmentID = &id
+		}
+	}
+	return summaries
 }
 
 func adoptionContainerManaged(container AdoptionPreviewContainer) bool {

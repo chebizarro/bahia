@@ -95,6 +95,7 @@ function validateTargetScanPayload(payload, dTag) {
   const environment = str(payload.environment);
   const target = str(payload.target);
   if (!environment || !target || dTag !== `${TARGET_SCAN_D_PREFIX}${environment}:${target}`) return 'target coordinate mismatch';
+  if (payload.environment_id != null && !UUID.test(str(payload.environment_id))) return 'environment id malformed';
   if (!SCAN_STATES.has(payload.scan_state) || !isTimestamp(payload.scanned_at)) return 'scan state malformed';
   if (!isCount(payload.freshness?.stale_after_seconds) || payload.freshness.stale_after_seconds === 0) return 'freshness budget missing';
   if (payload.scan_state === 'complete') {
@@ -251,7 +252,10 @@ function deploymentRow(row, staleAfter, nowMs) {
   if (row.reconcile?.failure_reason) badges.push('reconcile_failing');
   const instances = (row.instances || []).map((instance) => {
     const age = ageSeconds(instance.observed_at, nowMs);
+    const deploymentUnitId = str(instance.deployment_unit_id);
     return {
+      key: `${deploymentUnitId}:${str(instance.target)}`,
+      deploymentUnitId,
       target: str(instance.target),
       supervisor: str(instance.supervisor),
       status: str(instance.status),
@@ -301,6 +305,7 @@ function targetScanRow(entry, nowMs) {
     : null;
   return {
     environment: str(payload.environment),
+    environmentId: str(payload.environment_id),
     target: str(payload.target),
     endpointRef: str(payload.endpoint_ref),
     scanState: payload.scan_state,
@@ -315,21 +320,24 @@ function targetScanRow(entry, nowMs) {
 
 /** Derive the render model. `nowMs` drives freshness only; it never gates events. */
 export function buildDeploymentInventoryView(state, { nowMs = Date.now() } = {}) {
+  // Group by Bahia environment id; scans whose environment name has no Bahia
+  // environment are grouped by that name instead.
   const environments = new Map();
-  const ensureEnvironment = (name) => {
-    if (!environments.has(name)) {
-      environments.set(name, { name, id: '', inventory: null, targetScans: [] });
+  const ensureEnvironment = (key, name) => {
+    if (!environments.has(key)) {
+      environments.set(key, { key, name, id: '', inventory: null, targetScans: [] });
     }
-    return environments.get(name);
+    return environments.get(key);
   };
   for (const entry of state.entries.values()) {
     if (entry.deleted || !entry.payload) continue;
     if (entry.entity === ENVIRONMENT_INVENTORY_ENTITY) {
       const payload = entry.payload;
-      const name = str(payload.environment.name) || str(payload.environment.id);
-      const environment = ensureEnvironment(name);
+      const id = str(payload.environment.id);
+      const environment = ensureEnvironment(`id:${id}`, str(payload.environment.name) || id);
       const staleAfter = payload.freshness.stale_after_seconds;
-      environment.id = str(payload.environment.id);
+      environment.id = id;
+      environment.name = str(payload.environment.name) || id;
       environment.inventory = {
         eventId: entry.event.id,
         publishedAt: new Date(Number(entry.event.created_at) * 1000).toISOString(),
@@ -342,13 +350,14 @@ export function buildDeploymentInventoryView(state, { nowMs = Date.now() } = {})
       };
     } else if (entry.entity === TARGET_SCAN_ENTITY) {
       const scan = targetScanRow(entry, nowMs);
-      ensureEnvironment(scan.environment).targetScans.push(scan);
+      const key = scan.environmentId ? `id:${scan.environmentId}` : `name:${scan.environment}`;
+      ensureEnvironment(key, scan.environment).targetScans.push(scan);
     }
   }
   const list = Array.from(environments.values())
     .map((environment) => ({
       ...environment,
-      targetScans: environment.targetScans.sort((a, b) => a.target.localeCompare(b.target))
+      targetScans: environment.targetScans.sort((a, b) => a.target.localeCompare(b.target) || a.environment.localeCompare(b.environment))
     }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   return {

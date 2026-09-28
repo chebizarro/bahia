@@ -176,6 +176,9 @@ type ContextVMRequest struct {
 	OuterEvent    *nostr.Event
 	RPC           ContextVMJSONRPCRequest
 	ProgressToken string
+	// Encrypted reports that the request arrived NIP-59 wrapped, so the
+	// transport encrypts the response to the seal-authenticated requester.
+	Encrypted bool
 }
 
 type ContextVMHandler func(ctx context.Context, request ContextVMRequest) (any, error)
@@ -785,7 +788,7 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		defer close(ackDone)
 		t.publishContextVMProgressAck(ackCtx, outer, inner, encrypted)
 	}()
-	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
+	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken, Encrypted: encrypted})
 	if err != nil {
 		receiveErr = err
 		t.logger.Warn("ContextVM handler failed", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.Error(err))

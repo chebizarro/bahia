@@ -50,8 +50,9 @@ function deployment(overrides = {}) {
     drift_status: 'in_sync',
     drift_evaluated: true,
     instances: [
-      { target: 'bahia-1', supervisor: 'compose', status: 'healthy', observed_at: iso(30) },
-      { target: 'bahia-2', supervisor: 'compose', status: 'restart_loop', observed_at: iso(30) }
+      { deployment_unit_id: '66666666-6666-4666-8666-666666666666', target: 'bahia-1', supervisor: 'compose', status: 'healthy', observed_at: iso(30) },
+      { deployment_unit_id: '66666666-6666-4666-8666-666666666666', target: 'bahia-2', supervisor: 'compose', status: 'restart_loop', observed_at: iso(30) },
+      { deployment_unit_id: '99999999-9999-4999-8999-999999999999', target: 'bahia-2', supervisor: 'systemd', status: 'healthy', observed_at: iso(30) }
     ],
     ...overrides
   };
@@ -132,7 +133,8 @@ describe('deployment inventory protocol', () => {
     expect(view.environments.map((environment) => environment.name)).toEqual(['production', 'staging']);
     const [bahia, relay, web] = productionRows(state);
     expect(bahia).toMatchObject({ service: 'bahia', unit: 'edge-01', target: 'edge-01-docker', desiredRef: `ghcr.io/openagentsinc/bahia@${digest('a')}`, desiredImmutable: true, observedVersion: '1.2.3', health: 'healthy', drift: 'in_sync', stale: false, badges: [] });
-    expect(bahia.instances.map((instance) => [instance.target, instance.status])).toEqual([['bahia-1', 'healthy'], ['bahia-2', 'restart_loop']]);
+    expect(bahia.instances.map((instance) => [instance.target, instance.status])).toEqual([['bahia-1', 'healthy'], ['bahia-2', 'restart_loop'], ['bahia-2', 'healthy']]);
+    expect(new Set(bahia.instances.map((instance) => instance.key)).size).toBe(3);
     expect(relay).toMatchObject({ service: 'bahia-relay', health: 'stopped', unitImplicit: true });
     expect(relay.badges).toEqual(expect.arrayContaining(['stopped', 'drifted']));
     expect(web).toMatchObject({ service: 'bahia-web', coverage: 'desired_only', health: 'not_observed', observedRef: '' });
@@ -242,6 +244,21 @@ describe('deployment inventory protocol', () => {
       expect(rendered).not.toContain(detail);
     }
     expect(buildDeploymentInventoryView(state, { nowMs: NOW_MS + 3600 * 1000 }).environments[0].targetScans[0].state).toBe('stale');
+  });
+
+  it('groups scans under the resolved Bahia environment even when names differ in case', async () => {
+    const state = createDeploymentInventoryState();
+    await ingestDeploymentInventoryEvent(state, signed(environmentPayload(PROD_ID, 'Production', [deployment()]), { d: envD(PROD_ID) }), trusted);
+    await ingestDeploymentInventoryEvent(state, scanEvent({ environment_id: PROD_ID }), trusted);
+    await ingestDeploymentInventoryEvent(state, scanEvent({ environment: 'lab', target: 'bench-1' }), trusted);
+    expect((await ingestDeploymentInventoryEvent(state, scanEvent({ target: 'edge-09', environment_id: 'not-a-uuid' }), trusted)).reason).toMatch(/environment id malformed/);
+    const view = buildDeploymentInventoryView(state, { nowMs: NOW_MS });
+    expect(view.environments.map((environment) => [environment.name, environment.inventory ? 'inventory' : 'scan-only', environment.targetScans.length])).toEqual([
+      ['lab', 'scan-only', 1],
+      ['Production', 'inventory', 1]
+    ]);
+    const keys = view.environments[1].inventory.deployments[0].instances.map((instance) => instance.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('re-verifies cached events and flags cache-only entries after relay EOSE', async () => {

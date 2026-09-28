@@ -10,6 +10,21 @@ Remediation of review `review-fp-bahia-settings-observed-deployments-20260927` (
 - **Discovery.** Discovery no longer carries `observed_deployments`. Split topology (`nostr.sidecar.enabled=false`) still publishes discovery, relay sets, and the inventory.
 - **Web.** A new protocol module and store accept only trusted author + valid id/signature. They apply addressable ordering with the lowest-id tie-break, honor tombstones, reject malformed payloads without clobbering, re-verify cached events (provisional until relay confirmation, flagged unconfirmed after EOSE), and use a retained subscription with backoff resubscribe and idempotent replay. Settings shows **Observed deployments** per environment, and a separate **Build provenance** diagnostics section.
 
+## Independent review
+
+A branch-diff review (`code-review`, high) raised 10 findings. Fixed:
+- unsafe instance target names now get a stable alias, so they no longer blank the target and cause the browser to reject the whole snapshot;
+- instances carry their deployment unit id and the UI keys them by unit and target;
+- coalesced refresh;
+- material-change gating with a forced repair refresh;
+- reconcile-cycle and instance-health triggers;
+- direct tombstone on EnvironmentDeleted and a warning when the hydration window saturates;
+- scan `environment_id` grouping;
+- allowlists for the runtime action and adoption-import audits;
+- the transport-provided `ContextVMRequest.Encrypted` flag.
+
+Accepted as residual: target-scan coordinates are never tombstoned, because there is no target-removal lifecycle; and the hydration helper duplicates the DNS one, left as is to avoid touching DNS code.
+
 ## Acceptance mapping
 
 | Criterion | Evidence | Result |

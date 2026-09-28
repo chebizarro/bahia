@@ -202,10 +202,14 @@ type Projector struct {
 	dnsCacheHydrated      bool
 
 	// Deployment inventory (deployment_inventory.go).
-	inventorySource    DeploymentInventorySource
-	inventoryMu        sync.Mutex
-	inventoryPublished map[string]deploymentInventoryRef
-	inventoryHydrated  bool
+	inventorySource         DeploymentInventorySource
+	inventoryMu             sync.Mutex
+	inventoryPublished      map[string]deploymentInventoryRef
+	inventoryMaterial       map[string]string
+	inventoryHydrated       bool
+	inventoryRefreshMu      sync.Mutex
+	inventoryRefreshRunning bool
+	inventoryRefreshPending bool
 
 	// Generalized projection dedupe/coalescing/backoff/metrics state; see
 	// projection_dedupe.go. Initialized lazily so the constructor literal is
@@ -388,6 +392,13 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 	pub.Subscribe(events.EventAdoptionScanCompleted, func(ctx context.Context, e events.Event) {
 		p.handleAdoptionScanCompleted(ctx, e)
 	})
+	// Supervised instance health is part of the inventory; the managed-instance
+	// projector owns its own status/audit observables.
+	pub.Subscribe(events.EventRuntimeInstanceHealthChanged, func(ctx context.Context, _ events.Event) {
+		if p.Enabled() {
+			p.requestDeploymentInventoryRefresh(ctx)
+		}
+	})
 }
 
 func (p *Projector) handleAdoptionScanCompleted(ctx context.Context, e events.Event) {
@@ -480,7 +491,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
-	inventoryPublished, inventoryTombstones, err := p.publishDeploymentInventorySnapshot(ctx)
+	inventoryPublished, inventoryTombstones, err := p.publishDeploymentInventorySnapshot(ctx, true)
 	if err != nil {
 		p.logger.Warn("publish deployment inventory snapshot failed", zap.Error(err))
 	}
@@ -713,10 +724,13 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 		}
 	}
-	if shouldRefreshDeploymentInventory(e.Type) {
-		if _, _, err := p.publishDeploymentInventorySnapshot(ctx); err != nil {
-			p.logger.Warn("publish deployment inventory after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+	if e.Type == events.EventEnvironmentDeleted {
+		if id, ok := parseUUID(firstString(res.EnvironmentID, e.EntityID)); ok {
+			p.noteDeletedDeploymentInventoryEnvironment(ctx, id)
 		}
+	}
+	if shouldRefreshDeploymentInventory(e.Type) {
+		p.requestDeploymentInventoryRefresh(ctx)
 	}
 	if shouldRefreshDNSProjection(e.Type) {
 		if _, _, err := p.publishDNSEndpointSnapshot(ctx); err != nil {

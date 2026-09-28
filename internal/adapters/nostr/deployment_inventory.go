@@ -2,6 +2,8 @@ package nostr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -194,22 +196,24 @@ type deploymentInventoryReconcile struct {
 }
 
 type deploymentInventoryInstance struct {
-	Target     string `json:"target"`
-	Supervisor string `json:"supervisor,omitempty"`
-	Status     string `json:"status"`
-	ObservedAt string `json:"observed_at,omitempty"`
+	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
+	Target           string `json:"target"`
+	Supervisor       string `json:"supervisor,omitempty"`
+	Status           string `json:"status"`
+	ObservedAt       string `json:"observed_at,omitempty"`
 }
 
 type deploymentInventoryTargetScanPayload struct {
-	Schema      string                       `json:"schema"`
-	Entity      string                       `json:"entity"`
-	Environment string                       `json:"environment"`
-	Target      string                       `json:"target"`
-	EndpointRef string                       `json:"endpoint_ref,omitempty"`
-	ScanState   string                       `json:"scan_state"`
-	ScannedAt   string                       `json:"scanned_at"`
-	Freshness   deploymentInventoryFreshness `json:"freshness"`
-	Counts      *deploymentInventoryCounts   `json:"counts,omitempty"`
+	Schema        string                       `json:"schema"`
+	Entity        string                       `json:"entity"`
+	Environment   string                       `json:"environment"`
+	EnvironmentID string                       `json:"environment_id,omitempty"`
+	Target        string                       `json:"target"`
+	EndpointRef   string                       `json:"endpoint_ref,omitempty"`
+	ScanState     string                       `json:"scan_state"`
+	ScannedAt     string                       `json:"scanned_at"`
+	Freshness     deploymentInventoryFreshness `json:"freshness"`
+	Counts        *deploymentInventoryCounts   `json:"counts,omitempty"`
 }
 
 type deploymentInventoryCounts struct {
@@ -224,7 +228,11 @@ func shouldRefreshDeploymentInventory(eventType events.EventType) bool {
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
 		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
 		events.EventAdoptionImported, events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop,
-		events.EventDeploymentRunCompleted:
+		events.EventDeploymentRunCompleted,
+		// Reconcile failures and backoff are persisted without their own
+		// event; the per-cycle completion lets them project within one
+		// reconcile interval. Timestamp-only changes are gated below.
+		events.EventReconcileCompleted:
 		return true
 	default:
 		return false
@@ -285,12 +293,16 @@ func (p *Projector) buildDeploymentInventories(ctx context.Context) (map[uuid.UU
 			instanceCoverage = instanceCoverageSupervised
 			for _, instance := range instances {
 				key := instance.ServiceID.String() + ":" + instance.EnvironmentID.String()
-				instancesByDeployment[key] = append(instancesByDeployment[key], deploymentInventoryInstance{
-					Target:     safeInventoryLabel(instance.RuntimeTargetName),
+				projected := deploymentInventoryInstance{
+					Target:     safeInventoryTarget(instance.RuntimeTargetName),
 					Supervisor: safeInventoryCode(string(instance.SupervisorType)),
 					Status:     firstNonEmpty(safeInventoryCode(string(instance.Status)), string(domain.InstanceHealthStatusUnknown)),
 					ObservedAt: formatTime(instance.LastObservedAt),
-				})
+				}
+				if instance.DeploymentUnitID != uuid.Nil {
+					projected.DeploymentUnitID = instance.DeploymentUnitID.String()
+				}
+				instancesByDeployment[key] = append(instancesByDeployment[key], projected)
 			}
 		}
 	}
@@ -328,7 +340,12 @@ func (p *Projector) buildDeploymentInventories(ctx context.Context) (map[uuid.UU
 		if row.Instances == nil {
 			row.Instances = []deploymentInventoryInstance{}
 		}
-		sort.Slice(row.Instances, func(a, b int) bool { return row.Instances[a].Target < row.Instances[b].Target })
+		sort.Slice(row.Instances, func(a, b int) bool {
+			if row.Instances[a].DeploymentUnitID != row.Instances[b].DeploymentUnitID {
+				return row.Instances[a].DeploymentUnitID < row.Instances[b].DeploymentUnitID
+			}
+			return row.Instances[a].Target < row.Instances[b].Target
+		})
 		payload.Deployments = append(payload.Deployments, row)
 		payload.Summary[row.Coverage]++
 		out[state.EnvironmentID] = payload
@@ -464,10 +481,53 @@ func (p *Projector) deploymentInventoryDesired(ctx context.Context, state *domai
 	return desired, nil
 }
 
-// publishDeploymentInventorySnapshot publishes every environment snapshot and
+// requestDeploymentInventoryRefresh coalesces bursts of triggering events: at
+// most one rebuild runs at a time, and requests that arrive meanwhile collapse
+// into a single follow-up pass.
+func (p *Projector) requestDeploymentInventoryRefresh(ctx context.Context) {
+	p.inventoryRefreshMu.Lock()
+	if p.inventoryRefreshRunning {
+		p.inventoryRefreshPending = true
+		p.inventoryRefreshMu.Unlock()
+		return
+	}
+	p.inventoryRefreshRunning = true
+	p.inventoryRefreshMu.Unlock()
+	for {
+		if _, _, err := p.publishDeploymentInventorySnapshot(ctx, false); err != nil {
+			p.logger.Warn("publish deployment inventory after event failed", zap.Error(err))
+		}
+		p.inventoryRefreshMu.Lock()
+		if !p.inventoryRefreshPending {
+			p.inventoryRefreshRunning = false
+			p.inventoryRefreshMu.Unlock()
+			return
+		}
+		p.inventoryRefreshPending = false
+		p.inventoryRefreshMu.Unlock()
+	}
+}
+
+// noteDeletedDeploymentInventoryEnvironment ensures a deleted environment's
+// coordinate is tombstoned even if hydration did not see its last snapshot.
+func (p *Projector) noteDeletedDeploymentInventoryEnvironment(ctx context.Context, environmentID uuid.UUID) {
+	p.inventoryMu.Lock()
+	defer p.inventoryMu.Unlock()
+	if err := p.hydrateDeploymentInventoryPublished(ctx); err != nil {
+		p.logger.Warn("hydrate deployment inventory before environment tombstone", zap.Error(err))
+	}
+	if p.inventoryPublished == nil {
+		p.inventoryPublished = map[string]deploymentInventoryRef{}
+	}
+	p.inventoryPublished[deploymentInventoryEnvironmentDTag(environmentID)] = deploymentInventoryRef{ID: environmentID.String()}
+}
+
+// publishDeploymentInventorySnapshot publishes environment snapshots and
 // tombstones previously published environment coordinates that no longer
-// exist. Unchanged snapshots are suppressed by the projection dedupe cache.
-func (p *Projector) publishDeploymentInventorySnapshot(ctx context.Context) (published, tombstones int, err error) {
+// exist. Event-driven passes (force=false) publish only material changes;
+// timestamp-only changes (observed_at, last_reconciled_at) are refreshed by
+// the forced repair pass, which bounds the freshness budget.
+func (p *Projector) publishDeploymentInventorySnapshot(ctx context.Context, force bool) (published, tombstones int, err error) {
 	if !p.Enabled() {
 		return 0, 0, nil
 	}
@@ -491,13 +551,18 @@ func (p *Projector) publishDeploymentInventorySnapshot(ctx context.Context) (pub
 	for _, id := range ids {
 		payload := payloads[id]
 		dTag := deploymentInventoryEnvironmentDTag(id)
+		next[dTag] = payload.Environment
+		material := deploymentInventoryMaterialFingerprint(payload)
+		if !force && p.inventoryMaterial[dTag] == material {
+			continue
+		}
 		if err := p.publishDeploymentInventoryEnvironment(ctx, id, payload); err != nil {
 			failures = append(failures, fmt.Sprintf("publish %s: %v", dTag, err))
 			p.logger.Warn("publish deployment inventory failed", zap.String("d_tag", dTag), zap.Error(err))
-		} else {
-			published++
+			continue
 		}
-		next[dTag] = payload.Environment
+		p.inventoryMaterial[dTag] = material
+		published++
 	}
 	for dTag, env := range p.inventoryPublished {
 		if _, current := next[dTag]; current {
@@ -509,6 +574,7 @@ func (p *Projector) publishDeploymentInventorySnapshot(ctx context.Context) (pub
 			next[dTag] = env
 			continue
 		}
+		delete(p.inventoryMaterial, dTag)
 		tombstones++
 	}
 	p.inventoryPublished = next
@@ -575,6 +641,7 @@ func (p *Projector) hydrateDeploymentInventoryPublished(ctx context.Context) err
 		return nil
 	}
 	p.inventoryPublished = map[string]deploymentInventoryRef{}
+	p.inventoryMaterial = map[string]string{}
 	if p.eventRepo == nil {
 		p.inventoryHydrated = true
 		return nil
@@ -582,6 +649,11 @@ func (p *Projector) hydrateDeploymentInventoryPublished(ctx context.Context) err
 	records, err := p.eventRepo.FindByTag(ctx, kinds.CASControlStateTagDomain, DeploymentInventoryDomain, []int{KindCASControlState}, deploymentInventoryHydrateLimit)
 	if err != nil {
 		return fmt.Errorf("hydrate deployment inventory projection cache: %w", err)
+	}
+	if len(records) >= deploymentInventoryHydrateLimit {
+		// Older coordinates beyond the window cannot be tombstoned after a
+		// restart; live EnvironmentDeleted events still tombstone directly.
+		p.logger.Warn("deployment inventory hydration window saturated", zap.Int("records", len(records)))
 	}
 	servicePubkey := ""
 	if p.privateKey != "" {
@@ -653,6 +725,9 @@ func (p *Projector) publishRuntimeTargetScans(ctx context.Context, scan service.
 			ScannedAt:   formatTime(scannedAt),
 			Freshness:   deploymentInventoryFreshness{StaleAfterSeconds: staleAfter},
 		}
+		if target.EnvironmentID != nil && *target.EnvironmentID != uuid.Nil {
+			payload.EnvironmentID = target.EnvironmentID.String()
+		}
 		if target.Available {
 			payload.ScanState = targetScanComplete
 			payload.Counts = &deploymentInventoryCounts{Total: target.Total, Managed: target.Managed, Unmanaged: target.Unmanaged}
@@ -709,6 +784,48 @@ func safeInventoryLabel(value string) string {
 	return value
 }
 
+// safeInventoryTarget keeps an instance distinguishable even when its runtime
+// target name falls outside the label allowlist (for example a systemd
+// template unit "app@1.service"): it is replaced by a stable, non-reversible
+// alias instead of being dropped.
+func safeInventoryTarget(value string) string {
+	if label := safeInventoryLabel(value); label != "" {
+		return label
+	}
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return "target-" + hex.EncodeToString(sum[:6])
+}
+
+// deploymentInventoryMaterialFingerprint hashes a snapshot without the
+// timestamps and rotating observation ids that advance on every reconcile pass.
+func deploymentInventoryMaterialFingerprint(payload deploymentInventoryEnvironmentPayload) string {
+	material := payload
+	material.Deployments = make([]deploymentInventoryDeployment, len(payload.Deployments))
+	for i, row := range payload.Deployments {
+		if row.Observed != nil {
+			observed := *row.Observed
+			observed.ObservedAt = ""
+			observed.ObservationID = ""
+			row.Observed = &observed
+		}
+		if row.Reconcile != nil {
+			reconcile := *row.Reconcile
+			reconcile.LastReconciledAt = ""
+			row.Reconcile = &reconcile
+		}
+		instances := make([]deploymentInventoryInstance, len(row.Instances))
+		for j, instance := range row.Instances {
+			instance.ObservedAt = ""
+			instances[j] = instance
+		}
+		row.Instances = instances
+		material.Deployments[i] = row
+	}
+	encoded, _ := json.Marshal(material)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
 func safeInventoryCode(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if !inventoryCodePattern.MatchString(value) {
@@ -746,17 +863,66 @@ func safeInventoryDisplayName(value string) string {
 
 // publicAuditData allowlists audit payloads that would otherwise expose raw
 // runtime detail. A runtime observation carries the raw Docker host fallback,
-// container identity, and normalized env/command/volume state; its public
-// audit keeps only identity, image, health, and hash fields.
+// container identity, and normalized env/command/volume state; runtime action
+// payloads carry free-form apply warnings; adoption imports carry container
+// identity. Their public audits keep only identity, image, health, hash, and
+// code fields.
 func publicAuditData(e events.Event) any {
+	switch e.Type {
+	case events.EventRuntimeObservation:
+		return publicObservationAuditData(e.Data)
+	case events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop:
+		return allowlistAuditMap(e.Data, runtimeActionAuditKeys)
+	case events.EventAdoptionImported:
+		return allowlistAuditMap(e.Data, adoptionImportedAuditKeys)
+	default:
+		return e.Data
+	}
+}
+
+var (
+	runtimeActionAuditKeys    = []string{"service_id", "environment_id", "service", "environment", "runtime_target", "observation_id", "health_status", "artifact_id", "desired_hash", "environment_revision", "renderer", "execution_mode", "failure_reason"}
+	adoptionImportedAuditKeys = []string{"service_id", "environment_id", "artifact_id", "target_name", "status"}
+)
+
+func allowlistAuditMap(data any, keys []string) any {
+	values, ok := data.(map[string]any)
+	if !ok {
+		// Non-map payloads are not produced for these events; publish
+		// nothing rather than an unreviewed shape.
+		return nil
+	}
+	out := make(map[string]any, len(keys))
+	for _, key := range keys {
+		value, present := values[key]
+		if !present || value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if safe := safeInventoryLabel(v); safe != "" {
+				out[key] = safe
+			}
+		case uuid.UUID:
+			out[key] = v.String()
+		case fmt.Stringer:
+			if safe := safeInventoryLabel(v.String()); safe != "" {
+				out[key] = safe
+			}
+		}
+	}
+	return out
+}
+
+func publicObservationAuditData(data any) any {
 	var obs *domain.RuntimeObservation
-	switch v := e.Data.(type) {
+	switch v := data.(type) {
 	case *domain.RuntimeObservation:
 		obs = v
 	case domain.RuntimeObservation:
 		obs = &v
 	default:
-		return e.Data
+		return nil
 	}
 	if obs == nil {
 		return nil

@@ -513,7 +513,7 @@
         </div>
       {/if}
 
-      {#each inventoryView.environments as environment (environment.name)}
+      {#each inventoryView.environments as environment (environment.key)}
         <div class="config-group">
           <h3>{environment.name}</h3>
           {#if environment.inventory}
@@ -550,7 +550,7 @@
                     {#if deployment.instances.length > 0}
                       <details>
                         <summary class="version-package">{deployment.instances.length} instance(s)</summary>
-                        {#each deployment.instances as instance (instance.target)}
+                        {#each deployment.instances as instance (instance.key)}
                           <span class="version-package">{instance.target}: {instance.status}{instance.supervisor ? ` (${instance.supervisor})` : ''} · {formatAge(instance.ageSeconds)}{instance.stale ? ' · stale' : ''}</span>
                         {/each}
                       </details>
@@ -566,7 +566,7 @@
           {#if environment.targetScans.length > 0}
             <h4 class="version-note">Runtime target scans (aggregate only)</h4>
             <div class="version-list">
-              {#each environment.targetScans as scan (scan.target)}
+              {#each environment.targetScans as scan (`${scan.environment}:${scan.target}`)}
                 <div class="version-item" data-testid="target-scan-row">
                   <div class="version-info">
                     <span class="version-name">{scan.target}</span>

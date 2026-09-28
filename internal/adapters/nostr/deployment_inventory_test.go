@@ -333,7 +333,7 @@ func TestDeploymentInventoryTombstonesDeletedEnvironmentsAcrossRestart(t *testin
 	ctx := context.Background()
 
 	first := NewProjector(cfg.Nostr, f.source, &captureProjectionPublisher{}, repo, zap.NewNop(), WithDeploymentInventorySource(f.inventory))
-	if _, _, err := first.publishDeploymentInventorySnapshot(ctx); err != nil {
+	if _, _, err := first.publishDeploymentInventorySnapshot(ctx, true); err != nil {
 		t.Fatalf("initial inventory: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func TestDeploymentInventoryTombstonesDeletedEnvironmentsAcrossRestart(t *testin
 	delete(f.source.envs, f.stagingID)
 	sink := &captureProjectionPublisher{}
 	restarted := NewProjector(cfg.Nostr, f.source, sink, repo, zap.NewNop(), WithDeploymentInventorySource(f.inventory))
-	published, tombstones, err := restarted.publishDeploymentInventorySnapshot(ctx)
+	published, tombstones, err := restarted.publishDeploymentInventorySnapshot(ctx, true)
 	if err != nil {
 		t.Fatalf("restart inventory: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestDeploymentInventoryTombstonesDeletedEnvironmentsAcrossRestart(t *testin
 	// A further pass must not re-tombstone the same coordinate.
 	again := &captureProjectionPublisher{}
 	restarted.publisher = again
-	if _, tombstones, err := restarted.publishDeploymentInventorySnapshot(ctx); err != nil || tombstones != 0 {
+	if _, tombstones, err := restarted.publishDeploymentInventorySnapshot(ctx, true); err != nil || tombstones != 0 {
 		t.Fatalf("second pass tombstones=%d err=%v", tombstones, err)
 	}
 }
@@ -377,7 +377,7 @@ func TestDeploymentInventoryRepublishesOnRollbackAndSuppressesUnchanged(t *testi
 	sink := &captureProjectionPublisher{}
 	projector := newInventoryProjector(f, sink)
 	ctx := context.Background()
-	if _, _, err := projector.publishDeploymentInventorySnapshot(ctx); err != nil {
+	if _, _, err := projector.publishDeploymentInventorySnapshot(ctx, true); err != nil {
 		t.Fatalf("initial inventory: %v", err)
 	}
 	before := len(deploymentInventoryEvents(sink, DeploymentInventoryEnvironmentEntity))
@@ -428,6 +428,7 @@ func TestRuntimeTargetScanPublishesOnlyRedactedAggregates(t *testing.T) {
 	f := newInventoryFixture()
 	sink := &captureProjectionPublisher{}
 	projector := newInventoryProjector(f, sink)
+	scan.Targets[0].EnvironmentID = &f.prodID
 	projector.handleAdoptionScanCompleted(context.Background(), events.Event{Type: events.EventAdoptionScanCompleted, Data: scan})
 
 	scans := latestInventoryByD(t, deploymentInventoryEvents(sink, DeploymentInventoryTargetScanEntity))
@@ -446,6 +447,9 @@ func TestRuntimeTargetScanPublishesOnlyRedactedAggregates(t *testing.T) {
 		return payload
 	}
 	edge1 := decode(deploymentInventoryTargetScanDTag("production", "edge-01"))
+	if edge1.EnvironmentID != f.prodID.String() {
+		t.Fatalf("scan environment_id = %q, want the resolved Bahia environment", edge1.EnvironmentID)
+	}
 	if edge1.ScanState != targetScanComplete || edge1.Counts == nil || *edge1.Counts != (deploymentInventoryCounts{Total: 4, Managed: 2, Unmanaged: 2}) || edge1.EndpointRef != "edge-01-docker" || edge1.ScannedAt == "" {
 		t.Fatalf("edge-01 aggregate = %+v counts=%+v", edge1, edge1.Counts)
 	}
@@ -478,11 +482,187 @@ func TestDeploymentInventoryIsNotPublishedWhenProjectorDisabled(t *testing.T) {
 	cfg.Nostr.PublishEnabled = false
 	sink := &captureProjectionPublisher{}
 	projector := NewProjector(cfg.Nostr, f.source, sink, nil, zap.NewNop(), WithDeploymentInventorySource(f.inventory))
-	if _, _, err := projector.publishDeploymentInventorySnapshot(context.Background()); err != nil {
+	if _, _, err := projector.publishDeploymentInventorySnapshot(context.Background(), true); err != nil {
 		t.Fatalf("disabled projector: %v", err)
 	}
 	projector.handleAdoptionScanCompleted(context.Background(), events.Event{Data: service.AdoptionScanCompleted{Targets: []service.AdoptionScanTargetSummary{{Target: "edge-01", Environment: "production", Available: true}}}})
 	if len(sink.byKind(kinds.CASControlState)) != 0 {
 		t.Fatal("disabled projector published inventory")
+	}
+}
+
+type capturingEventBus struct {
+	handlers map[events.EventType][]events.Handler
+}
+
+func (b *capturingEventBus) Publish(context.Context, events.Event) {}
+
+func (b *capturingEventBus) Subscribe(eventType events.EventType, handler events.Handler) {
+	if b.handlers == nil {
+		b.handlers = map[events.EventType][]events.Handler{}
+	}
+	b.handlers[eventType] = append(b.handlers[eventType], handler)
+}
+
+func (b *capturingEventBus) deliver(ctx context.Context, e events.Event) {
+	for _, handler := range b.handlers[e.Type] {
+		handler(ctx, e)
+	}
+}
+
+func latestInventoryFor(t *testing.T, sink *captureProjectionPublisher, environmentID uuid.UUID) (deploymentInventoryEnvironmentPayload, int) {
+	t.Helper()
+	var latest gonostr.Event
+	count := 0
+	for _, ev := range deploymentInventoryEvents(sink, DeploymentInventoryEnvironmentEntity) {
+		if eventDTag(ev) == deploymentInventoryEnvironmentDTag(environmentID) {
+			latest = ev
+			count++
+		}
+	}
+	if count == 0 {
+		t.Fatalf("no inventory published for %s", environmentID)
+	}
+	return decodeEnvironmentInventory(t, latest), count
+}
+
+func TestDeploymentInventoryKeepsUnsafeInstanceTargetsDistinctAndUnitScoped(t *testing.T) {
+	f := newInventoryFixture()
+	otherUnit := uuid.New()
+	f.inventory.instances[0].RuntimeTargetName = "app@1.service"
+	f.inventory.instances = append(f.inventory.instances, domain.ManagedInstanceHealth{
+		ManagedInstanceKey: domain.ManagedInstanceKey{ServiceID: f.ids["bahia"], EnvironmentID: f.prodID, DeploymentUnitID: otherUnit, RuntimeTargetName: "bahia-2"},
+		SupervisorType:     domain.InstanceSupervisorSystemd, Status: domain.InstanceHealthStatusHealthy, LastObservedAt: f.now,
+	})
+	sink := &captureProjectionPublisher{}
+	if _, _, err := newInventoryProjector(f, sink).publishDeploymentInventorySnapshot(context.Background(), true); err != nil {
+		t.Fatalf("publish inventory: %v", err)
+	}
+	prod, _ := latestInventoryFor(t, sink, f.prodID)
+	instances := rowByService(t, prod, "bahia").Instances
+	if len(instances) != 3 {
+		t.Fatalf("instances = %+v, want 3", instances)
+	}
+	seen := map[string]bool{}
+	for _, instance := range instances {
+		if instance.Target == "" || instance.Target == "app@1.service" || instance.DeploymentUnitID == "" {
+			t.Fatalf("instance must carry a safe non-empty target and its unit: %+v", instance)
+		}
+		key := instance.DeploymentUnitID + ":" + instance.Target
+		if seen[key] {
+			t.Fatalf("duplicate instance key %s", key)
+		}
+		seen[key] = true
+	}
+	if !strings.HasPrefix(instances[0].Target, "target-") && !strings.HasPrefix(instances[1].Target, "target-") && !strings.HasPrefix(instances[2].Target, "target-") {
+		t.Fatalf("unsafe target was not replaced by a stable alias: %+v", instances)
+	}
+}
+
+func TestDeploymentInventoryPublishesMaterialChangesPromptlyAndTimestampsOnRepair(t *testing.T) {
+	f := newInventoryFixture()
+	sink := &captureProjectionPublisher{}
+	bus := &capturingEventBus{}
+	projector := newInventoryProjector(f, sink)
+	projector.SetupSubscriptions(bus)
+	ctx := context.Background()
+	if _, _, err := projector.publishDeploymentInventorySnapshot(ctx, true); err != nil {
+		t.Fatalf("initial inventory: %v", err)
+	}
+	_, baseline := latestInventoryFor(t, sink, f.prodID)
+
+	// A reconcile pass that only refreshes observation time is not material.
+	state := f.source.states[stateKeyForTest(f.ids["bahia"], f.prodID)]
+	refreshed := f.source.observations[*state.CurrentObservationID]
+	refreshed.ID = uuid.New()
+	refreshed.ObservedAt = f.now.Add(time.Minute)
+	f.source.observations[refreshed.ID] = refreshed
+	state.CurrentObservationID = &refreshed.ID
+	f.source.states[stateKeyForTest(f.ids["bahia"], f.prodID)] = state
+	bus.deliver(ctx, events.Event{Type: events.EventReconcileCompleted})
+	if _, count := latestInventoryFor(t, sink, f.prodID); count != baseline {
+		t.Fatalf("timestamp-only change published %d extra snapshots", count-baseline)
+	}
+
+	// A reconcile failure is persisted without its own event; the cycle
+	// completion projects it within one reconcile interval.
+	relay := f.source.states[stateKeyForTest(f.ids["bahia-relay"], f.prodID)]
+	relay.ReconcileConsecutiveFailures = 1
+	relay.ReconcileFailureMetadata = map[string]any{"reason": "auto_apply_failed", "message": "tcp://10.0.0.9:2376 refused"}
+	f.source.states[stateKeyForTest(f.ids["bahia-relay"], f.prodID)] = relay
+	bus.deliver(ctx, events.Event{Type: events.EventReconcileCompleted})
+	prod, count := latestInventoryFor(t, sink, f.prodID)
+	if count != baseline+1 || rowByService(t, prod, "bahia-relay").Reconcile == nil || rowByService(t, prod, "bahia-relay").Reconcile.FailureReason != "auto_apply_failed" {
+		t.Fatalf("reconcile failure not projected promptly (count %d -> %d)", baseline, count)
+	}
+
+	// Supervised instance health changes refresh the inventory.
+	f.inventory.instances[0].Status = domain.InstanceHealthStatusUnhealthy
+	bus.deliver(ctx, events.Event{Type: events.EventRuntimeInstanceHealthChanged})
+	prod, _ = latestInventoryFor(t, sink, f.prodID)
+	if got := rowByService(t, prod, "bahia").Instances[0].Status; got != "unhealthy" {
+		t.Fatalf("instance health change not projected: %q", got)
+	}
+
+	// The forced repair pass refreshes timestamps.
+	if _, _, err := projector.publishDeploymentInventorySnapshot(ctx, true); err != nil {
+		t.Fatalf("repair pass: %v", err)
+	}
+	prod, _ = latestInventoryFor(t, sink, f.prodID)
+	if got := rowByService(t, prod, "bahia").Observed.ObservedAt; got != formatTime(f.now.Add(time.Minute)) {
+		t.Fatalf("repair did not refresh observed_at: %q", got)
+	}
+}
+
+func TestDeploymentInventoryTombstonesEnvironmentDeletedOutsideHydrationWindow(t *testing.T) {
+	f := newInventoryFixture()
+	sink := &captureProjectionPublisher{}
+	projector := newInventoryProjector(f, sink)
+	ctx := context.Background()
+	delete(f.source.envs, f.stagingID)
+	projector.handleEvent(ctx, events.Event{Type: events.EventEnvironmentDeleted, EntityID: f.stagingID.String()})
+	var tombstoned bool
+	for _, ev := range deploymentInventoryEvents(sink, DeploymentInventoryEnvironmentEntity) {
+		if eventDTag(ev) == deploymentInventoryEnvironmentDTag(f.stagingID) && hasTag(ev.Tags, "deleted", "true") {
+			tombstoned = true
+		}
+	}
+	if !tombstoned {
+		t.Fatal("EnvironmentDeleted must tombstone the coordinate even without a hydrated record")
+	}
+}
+
+func TestPublicRuntimeAuditsAllowlistActionAndImportPayloads(t *testing.T) {
+	f := newInventoryFixture()
+	sink := &captureProjectionPublisher{}
+	projector := newInventoryProjector(f, sink)
+	ctx := context.Background()
+	serviceID := f.ids["bahia"]
+	projector.handleEvent(ctx, events.Event{Type: events.EventRuntimeDeploy, EntityID: serviceID.String(), Data: map[string]any{
+		"service_id": serviceID, "environment_id": f.prodID, "service": "bahia", "health_status": domain.HealthStatusHealthy,
+		"warnings": []string{"docker host tcp://10.0.0.5:2376 slow"}, "resource_names": []string{"bahia"},
+	}})
+	projector.handleEvent(ctx, events.Event{Type: events.EventAdoptionImported, EntityID: serviceID.String(), Data: map[string]any{
+		"service_id": serviceID, "environment_id": f.prodID, "target_name": "edge-01", "container_id": "c0ffee1234", "container_name": "mystery-db", "status": "created",
+	}})
+	var audits int
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, ev := range sink.events {
+		if int(ev.Kind) != KindCASAudit {
+			continue
+		}
+		audits++
+		for _, secret := range []string{"10.0.0.5", "c0ffee1234", "mystery-db", "warnings", "resource_names"} {
+			if strings.Contains(ev.Content, secret) {
+				t.Fatalf("audit leaked %q: %s", secret, ev.Content)
+			}
+		}
+		if !strings.Contains(ev.Content, serviceID.String()) {
+			t.Fatalf("audit lost its identity fields: %s", ev.Content)
+		}
+	}
+	if audits != 2 {
+		t.Fatalf("audits = %d, want 2", audits)
 	}
 }
