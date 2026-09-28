@@ -5,7 +5,13 @@
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
-  import { buildInformationRows, observedDeploymentRows } from '$lib/version.js';
+  import { buildInformationRows } from '$lib/version.js';
+  import {
+    deploymentInventory,
+    deploymentInventoryView,
+    startDeploymentInventory,
+    stopDeploymentInventory
+  } from '$lib/stores/deployment-inventory.svelte.js';
   import * as QRCode from 'qrcode';
   import jsQR from 'jsqr';
   import {
@@ -26,8 +32,45 @@
   const serviceRelayList = $derived(systemInfo?.nostr?.service_relays || []);
   const featureEntries = $derived(Object.entries(systemInfo?.features || {}).sort(([a], [b]) => a.localeCompare(b)));
   const registryRows = $derived(systemInfo?.registries || []);
-  const observedDeploymentVersionRows = $derived(observedDeploymentRows(systemInfo));
   const buildInfoVersionRows = $derived(buildInformationRows(systemInfo));
+
+  // UI clock: re-evaluates observation age so rows age into "stale" even when
+  // no new event arrives. It never gates event delivery or completion.
+  let inventoryNowMs = $state(Date.now());
+  $effect(() => {
+    startDeploymentInventory();
+    const clock = setInterval(() => { inventoryNowMs = Date.now(); }, 30_000);
+    return () => {
+      clearInterval(clock);
+      stopDeploymentInventory();
+    };
+  });
+  const inventoryView = $derived.by(() => {
+    void deploymentInventory.revision;
+    return deploymentInventoryView(inventoryNowMs);
+  });
+
+  function formatAge(seconds) {
+    if (seconds === null || seconds === undefined) return 'unknown age';
+    if (seconds < 90) return `${seconds}s ago`;
+    if (seconds < 5400) return `${Math.round(seconds / 60)}m ago`;
+    if (seconds < 172800) return `${Math.round(seconds / 3600)}h ago`;
+    return `${Math.round(seconds / 86400)}d ago`;
+  }
+
+  const badgeLabels = {
+    stale: 'stale observation',
+    desired_only: 'desired, not observed',
+    observed_only: 'observed, no desired state',
+    unknown: 'no desired or observed state',
+    drift_pending: 'drift not yet evaluated',
+    reconcile_failing: 'reconcile failing'
+  };
+  const provenanceLabels = {
+    relay: 'verified from relay',
+    cache: 'verified cache, awaiting relay',
+    cache_unconfirmed: 'cached; not confirmed by any relay'
+  };
   const settingsAreas = [
     {
       href: '/settings/profile',
@@ -440,73 +483,132 @@
       {/if}
     </section>
 
-    <!-- Version Section -->
-    <section class="settings-section">
-      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
+    <!-- Observed deployments + build provenance -->
+    <section class="settings-section" data-testid="observed-deployments">
+      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Observed deployments</h2>
       <p class="section-description">
-        Current deployment versions come from Bahia's authoritative runtime observations. Build metadata is shown separately and does not imply that an artifact is running.
+        Signed deployment inventory published by Bahia from desired state and runtime observations. Every snapshot is verified against the trusted service key before it is shown.
       </p>
 
-      <div class="config-group">
-        <h3>Observed deployments</h3>
-        {#if observedDeploymentVersionRows.length > 0}
-          <div class="version-list">
-            {#each observedDeploymentVersionRows as deployment}
-              <div class="version-item">
-                <div class="version-info">
-                  <span class="version-name">{deployment.name}</span>
-                  <span class="version-kind">{deployment.environment} · {deployment.kind}</span>
-                  <span class="version-package">Health: {deployment.health} · Drift: {deployment.drift}</span>
-                </div>
-                <div class="version-values">
-                  <span class="config-value monospace">{deployment.version}</span>
-                  {#if deployment.image}
-                    <span class="version-package monospace">{deployment.image}</span>
-                  {/if}
-                  {#if deployment.host}
-                    <span class="version-package">Host: {deployment.host}</span>
-                  {/if}
-                  {#if deployment.observed_at}
-                    <span class="version-package">Observed: {deployment.observed_at}</span>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <div class="empty-config">
-            {#if systemLoading}
-              Loading observed deployments…
-            {:else if systemError}
-              Observed deployments unavailable: {systemError}
-            {:else}
-              No current runtime observations are advertised by discovery.
-            {/if}
-          </div>
-        {/if}
-      </div>
+      {#if deploymentInventory.error}
+        <div class="empty-config" role="alert">Deployment inventory unavailable: {deploymentInventory.error}</div>
+      {/if}
+      {#if deploymentInventory.reconnecting}
+        <p class="version-package" role="status">Relay connection lost ({deploymentInventory.lastClosedReason || 'closed'}); reconnecting. Showing the last verified inventory.</p>
+      {/if}
+      {#if deploymentInventory.status === 'cached' && !deploymentInventory.caughtUp}
+        <p class="version-package" role="status">Showing {deploymentInventory.cachedRestored} verified cached snapshot(s) while relays catch up.</p>
+      {/if}
+      {#if deploymentInventory.rejectedCount > 0}
+        <p class="version-package" role="status">{deploymentInventory.rejectedCount} inventory event(s) were rejected (untrusted, invalid signature, or malformed).</p>
+      {/if}
 
-      <div class="config-group">
-        <h3>Build information</h3>
-        <p class="section-description version-note">
-          Compile-time versions for packaged Bahia artifacts. These entries describe the build, not observed deployment state.
-        </p>
-        <div class="version-list">
-          {#each buildInfoVersionRows as component}
-            <div class="version-item">
-              <div class="version-info">
-                <span class="version-name">{component.name}</span>
-                <span class="version-kind">{component.kind}</span>
-              </div>
-              <div class="version-values">
-                <span class="config-value monospace">{component.version}</span>
-                {#if component.packaged_as}
-                  <span class="version-package monospace">{component.packaged_as}</span>
-                {/if}
-              </div>
-            </div>
-          {/each}
+      {#if inventoryView.environments.length === 0}
+        <div class="empty-config">
+          {#if deploymentInventory.status === 'loading' || deploymentInventory.status === 'idle'}
+            Loading signed deployment inventory…
+          {:else if !deploymentInventory.error}
+            No deployment inventory has been published to the configured relays.
+          {/if}
         </div>
+      {/if}
+
+      {#each inventoryView.environments as environment (environment.name)}
+        <div class="config-group">
+          <h3>{environment.name}</h3>
+          {#if environment.inventory}
+            <p class="version-package">
+              {environment.inventory.deployments.length} deployment(s) · published {environment.inventory.publishedAt} · {provenanceLabels[environment.inventory.provenance]} · instances {environment.inventory.instanceCoverage === 'supervised' ? 'supervised' : 'not supervised'}
+            </p>
+            {#if environment.inventory.deployments.length === 0}
+              <div class="empty-config">No Bahia deployments are recorded in this environment.</div>
+            {/if}
+            <div class="version-list">
+              {#each environment.inventory.deployments as deployment (deployment.key)}
+                <div class="version-item" data-testid="deployment-row">
+                  <div class="version-info">
+                    <span class="version-name">{deployment.service}</span>
+                    <span class="version-kind">{deployment.unit}{deployment.target ? ` · ${deployment.target}` : ''}{deployment.runtimeType ? ` · ${deployment.runtimeType}` : ''}</span>
+                    <span class="version-package">Health: {deployment.health} · Drift: {deployment.driftEvaluated ? deployment.drift : 'pending evaluation'}</span>
+                    {#if deployment.badges.length > 0}
+                      <span class="version-package deployment-badges">
+                        {#each deployment.badges as badge}
+                          <span class="deployment-badge" data-badge={badge}>{badgeLabels[badge] || badge}</span>
+                        {/each}
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="version-values">
+                    <span class="version-package monospace">Desired: {deployment.desiredRef || 'none'}{deployment.desiredRef && !deployment.desiredImmutable ? ' (mutable ref)' : ''}</span>
+                    <span class="config-value monospace">Observed: {deployment.observedVersion || deployment.observedRef || 'not observed'}</span>
+                    {#if deployment.observedRef && deployment.observedVersion}
+                      <span class="version-package monospace">{deployment.observedRef}</span>
+                    {/if}
+                    {#if deployment.observedAt}
+                      <span class="version-package">Observed {formatAge(deployment.ageSeconds)} via {deployment.observationSource || 'runtime'}</span>
+                    {/if}
+                    {#if deployment.instances.length > 0}
+                      <details>
+                        <summary class="version-package">{deployment.instances.length} instance(s)</summary>
+                        {#each deployment.instances as instance (instance.target)}
+                          <span class="version-package">{instance.target}: {instance.status}{instance.supervisor ? ` (${instance.supervisor})` : ''} · {formatAge(instance.ageSeconds)}{instance.stale ? ' · stale' : ''}</span>
+                        {/each}
+                      </details>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="version-package">No signed Bahia inventory for this environment; only runtime scan aggregates are known.</p>
+          {/if}
+
+          {#if environment.targetScans.length > 0}
+            <h4 class="version-note">Runtime target scans (aggregate only)</h4>
+            <div class="version-list">
+              {#each environment.targetScans as scan (scan.target)}
+                <div class="version-item" data-testid="target-scan-row">
+                  <div class="version-info">
+                    <span class="version-name">{scan.target}</span>
+                    <span class="version-kind">{scan.endpointRef || 'runtime target'} · {scan.state}</span>
+                  </div>
+                  <div class="version-values">
+                    {#if scan.counts}
+                      <span class="config-value">{scan.counts.unmanaged} unmanaged · {scan.counts.managed} managed · {scan.counts.total} total</span>
+                    {:else}
+                      <span class="config-value">Target unavailable; instance counts unknown</span>
+                    {/if}
+                    <span class="version-package">Last complete scan {formatAge(scan.ageSeconds)}{scan.stale ? ' (stale)' : ''}</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+            <p class="version-package">Per-instance details of unmanaged workloads are available only to authorized operators through an encrypted adoption scan.</p>
+          {/if}
+        </div>
+      {/each}
+    </section>
+
+    <section class="settings-section" data-testid="build-provenance">
+      <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Build provenance</h2>
+      <p class="section-description version-note">
+        Diagnostics: compile-time versions of this web bundle and the backend build that published discovery. These describe builds, not what is deployed or running.
+      </p>
+      <div class="version-list">
+        {#each buildInfoVersionRows as component}
+          <div class="version-item">
+            <div class="version-info">
+              <span class="version-name">{component.name}</span>
+              <span class="version-kind">{component.kind} build</span>
+            </div>
+            <div class="version-values">
+              <span class="config-value monospace">{component.version}</span>
+              {#if component.packaged_as}
+                <span class="version-package monospace">{component.packaged_as}</span>
+              {/if}
+            </div>
+          </div>
+        {/each}
       </div>
     </section>
 
@@ -651,6 +753,18 @@
   }
 
   /* Version display styles */
+  .deployment-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .deployment-badge {
+    border: 1px solid var(--color-border, currentColor);
+    border-radius: 999px;
+    padding: 0 0.4rem;
+  }
+
   .version-list {
     display: flex;
     flex-direction: column;

@@ -12,11 +12,12 @@ const settingsSource = readFileSync(
 const sectionIndex = (label) => settingsSource.indexOf(label);
 
 describe('settings page section order', () => {
-  it('keeps operational configuration and registries before version metadata', () => {
+  it('keeps operational configuration and registries before deployments, with build provenance last', () => {
     const operationalSettings = sectionIndex('<!-- Operational Settings Section -->');
     const serverConfiguration = sectionIndex('<!-- Server Configuration Section -->');
     const availableRegistries = sectionIndex('<!-- Available Registries Section -->');
-    const versions = sectionIndex('<!-- Version Section -->');
+    const versions = sectionIndex('<!-- Observed deployments + build provenance -->');
+    const buildProvenance = sectionIndex('data-testid="build-provenance"');
 
     expect(operationalSettings).toBeGreaterThan(-1);
     expect(serverConfiguration).toBeGreaterThan(-1);
@@ -26,6 +27,7 @@ describe('settings page section order', () => {
     expect(operationalSettings).toBeLessThan(versions);
     expect(serverConfiguration).toBeLessThan(versions);
     expect(availableRegistries).toBeLessThan(versions);
+    expect(versions).toBeLessThan(buildProvenance);
   });
 
   it('keeps documented settings surfaces visible from the settings page', () => {
