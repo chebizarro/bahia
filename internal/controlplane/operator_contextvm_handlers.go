@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -84,6 +85,9 @@ func (h *OperatorContextVMHandlers) AdoptionScan(ctx context.Context, request Co
 	if !authorizedContextVMPubkey(request.Event.PubKey.Hex(), h.adoptionAuthorizedPubkeys) {
 		return nil, fmt.Errorf("requester not in authorized adoption list")
 	}
+	if !contextVMRequestEncrypted(request) {
+		return nil, errAdoptionRequiresEncryption
+	}
 	if h.adoption == nil {
 		return nil, fmt.Errorf("adoption service is not configured")
 	}
@@ -105,6 +109,9 @@ func (h *OperatorContextVMHandlers) AdoptionScan(ctx context.Context, request Co
 func (h *OperatorContextVMHandlers) AdoptionImport(ctx context.Context, request ContextVMRequest) (any, error) {
 	if !authorizedContextVMPubkey(request.Event.PubKey.Hex(), h.adoptionAuthorizedPubkeys) {
 		return nil, fmt.Errorf("requester not in authorized adoption list")
+	}
+	if !contextVMRequestEncrypted(request) {
+		return nil, errAdoptionRequiresEncryption
 	}
 	if h.adoption == nil {
 		return nil, fmt.Errorf("adoption service is not configured")
@@ -163,6 +170,21 @@ func parseDirectRuntimeActionPayload(raw directRuntimeActionEventRequest) (parse
 		return parsedDirectRuntimeActionRequest{}, fmt.Errorf("artifact_id is only valid for deploy actions")
 	}
 	return parsedDirectRuntimeActionRequest{Action: action, ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID}, nil
+}
+
+// errAdoptionRequiresEncryption rejects plaintext adoption requests. Their
+// responses carry per-instance runtime detail (container identity, image,
+// digest, host alias) for unmanaged workloads. A plaintext ContextVM response
+// is readable by anyone subscribed to the relay, so only NIP-59 wrapped
+// requests, whose responses are encrypted to the requester, may receive it.
+var errAdoptionRequiresEncryption = errors.New("adoption requests must be NIP-59 wrapped (encrypted) because responses contain per-instance runtime detail")
+
+// contextVMRequestEncrypted reports whether the transport received the request
+// inside a NIP-59 gift wrap, which makes the transport encrypt the response to
+// the seal-authenticated requester.
+func contextVMRequestEncrypted(request ContextVMRequest) bool {
+	outer := request.OuterEvent
+	return outer != nil && (outer.Kind == KindContextVMGiftWrap || outer.Kind == KindContextVMEphemeralWrap)
 }
 
 func authorizedContextVMPubkey(pubkey string, authorized []string) bool {
