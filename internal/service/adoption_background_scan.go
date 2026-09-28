@@ -36,12 +36,6 @@ type RuntimeTargetScanScope struct {
 	Target      string
 }
 
-// RuntimeTargetScanRetirer tombstones published runtime-target-scan
-// aggregates for targets that are no longer in the configured scope.
-type RuntimeTargetScanRetirer interface {
-	RetireRuntimeTargetScans(ctx context.Context, keep []RuntimeTargetScanScope, now time.Time) (int, error)
-}
-
 // BackgroundScanClock abstracts time so scheduling is testable without sleeps.
 type BackgroundScanClock interface {
 	Now() time.Time
@@ -62,12 +56,16 @@ func (systemBackgroundScanClock) NewTimer(d time.Duration) (<-chan time.Time, fu
 // AdoptionBackgroundScanConfig configures the background adoption scan runner.
 // Targets must already be normalized (see AdoptionService.ResolveScanTargets).
 type AdoptionBackgroundScanConfig struct {
-	Targets     []AdoptionTarget
-	Interval    time.Duration
-	Jitter      time.Duration
-	Timeout     time.Duration
-	Concurrency int
-	MaxBackoff  time.Duration
+	Targets []AdoptionTarget
+	// SkippedTargets names configured endpoint aliases that could not become
+	// scan targets (for example aliases colliding after normalization). They
+	// are reported as a health warning.
+	SkippedTargets []string
+	Interval       time.Duration
+	Jitter         time.Duration
+	Timeout        time.Duration
+	Concurrency    int
+	MaxBackoff     time.Duration
 	// Clock and RandomJitter are test seams; nil uses the system clock and a
 	// uniform random jitter in [0, max].
 	Clock        BackgroundScanClock
@@ -88,6 +86,7 @@ type BackgroundScanTargetStatus struct {
 // AdoptionBackgroundScanStatus is the health view of the runner.
 type AdoptionBackgroundScanStatus struct {
 	Targets        []BackgroundScanTargetStatus
+	SkippedTargets []string
 	Failing        int
 	Cycles         int64
 	OverlapSkipped int64
@@ -114,7 +113,6 @@ type backgroundScanTargetState struct {
 // Timeout, and failing targets back off exponentially up to MaxBackoff.
 type AdoptionBackgroundScanRunner struct {
 	scanner AdoptionTargetScanner
-	retirer RuntimeTargetScanRetirer
 	cfg     AdoptionBackgroundScanConfig
 	clock   BackgroundScanClock
 	jitter  func(max time.Duration) time.Duration
@@ -132,7 +130,7 @@ type AdoptionBackgroundScanRunner struct {
 }
 
 // NewAdoptionBackgroundScanRunner validates bounds and builds a runner.
-func NewAdoptionBackgroundScanRunner(scanner AdoptionTargetScanner, retirer RuntimeTargetScanRetirer, cfg AdoptionBackgroundScanConfig, logger *zap.Logger) (*AdoptionBackgroundScanRunner, error) {
+func NewAdoptionBackgroundScanRunner(scanner AdoptionTargetScanner, cfg AdoptionBackgroundScanConfig, logger *zap.Logger) (*AdoptionBackgroundScanRunner, error) {
 	if scanner == nil {
 		return nil, errors.New("background adoption scan requires a scanner")
 	}
@@ -142,7 +140,7 @@ func NewAdoptionBackgroundScanRunner(scanner AdoptionTargetScanner, retirer Runt
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	r := &AdoptionBackgroundScanRunner{scanner: scanner, retirer: retirer, cfg: cfg, clock: cfg.Clock, jitter: cfg.RandomJitter, logger: logger}
+	r := &AdoptionBackgroundScanRunner{scanner: scanner, cfg: cfg, clock: cfg.Clock, jitter: cfg.RandomJitter, logger: logger}
 	if r.clock == nil {
 		r.clock = systemBackgroundScanClock{}
 	}
@@ -169,6 +167,12 @@ func uniformJitter(max time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(max) + 1))
 }
 
+// Scope returns the published runtime-target-scan coordinates this runner
+// maintains. The Nostr projector retires coordinates outside it.
+func (r *AdoptionBackgroundScanRunner) Scope() []RuntimeTargetScanScope {
+	return append([]RuntimeTargetScanScope(nil), r.scope...)
+}
+
 // Name implements the application background runner contract.
 func (r *AdoptionBackgroundScanRunner) Name() string { return "adoption-background-scan" }
 
@@ -177,7 +181,6 @@ func (r *AdoptionBackgroundScanRunner) Name() string { return "adoption-backgrou
 // endpoint at once.
 func (r *AdoptionBackgroundScanRunner) Run(ctx context.Context) error {
 	r.schedule(r.clock.Now())
-	r.retire(ctx)
 	for {
 		wait := r.untilNextDue(r.clock.Now())
 		if wait > 0 {
@@ -193,7 +196,6 @@ func (r *AdoptionBackgroundScanRunner) Run(ctx context.Context) error {
 			return nil
 		}
 		r.RunCycle(ctx)
-		r.retire(ctx)
 	}
 }
 
@@ -210,7 +212,7 @@ func (r *AdoptionBackgroundScanRunner) schedule(now time.Time) {
 }
 
 // untilNextDue returns how long to wait for the earliest due target; with no
-// targets the runner idles for one interval between retirement passes.
+// targets the runner idles one interval at a time.
 func (r *AdoptionBackgroundScanRunner) untilNextDue(now time.Time) time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -226,25 +228,12 @@ func (r *AdoptionBackgroundScanRunner) untilNextDue(now time.Time) time.Duration
 	return earliest.Sub(now)
 }
 
-// retire tombstones aggregates of targets no longer in scope. Failures are
-// retried after the next cycle.
-func (r *AdoptionBackgroundScanRunner) retire(ctx context.Context) {
-	if r.retirer == nil || ctx.Err() != nil {
-		return
-	}
-	retired, err := r.retirer.RetireRuntimeTargetScans(ctx, r.scope, r.clock.Now())
-	if err != nil {
-		r.logger.Warn("retire out-of-scope runtime target scans failed", zap.Error(err))
-		return
-	}
-	if retired > 0 {
-		r.logger.Info("retired out-of-scope runtime target scans", zap.Int("retired", retired))
-	}
-}
-
 // RunCycle scans every due target once, with bounded concurrency, and
 // returns whether the cycle ran. A cycle requested while another is in flight
-// is skipped rather than queued, so scans never pile up.
+// is skipped rather than queued, so scans never pile up. A cycle lasts at most
+// about Timeout per wave of Concurrency targets; a target that becomes due
+// meanwhile waits for the next cycle, which the projector's staleness budget
+// accounts for (see targetScanStaleAfter).
 func (r *AdoptionBackgroundScanRunner) RunCycle(ctx context.Context) bool {
 	if !r.cycleMu.TryLock() {
 		r.mu.Lock()
@@ -304,8 +293,13 @@ func (r *AdoptionBackgroundScanRunner) scanTarget(ctx context.Context, state *ba
 
 	outcome := BackgroundScanOutcomeOK
 	switch {
-	case err != nil && timedOut:
+	case timedOut:
+		// Classified by the deadline, not by err: a scan that overran its
+		// timeout is never counted as a success.
 		outcome = BackgroundScanOutcomeTimeout
+		if err == nil {
+			err = context.DeadlineExceeded
+		}
 	case err != nil:
 		outcome = BackgroundScanOutcomeError
 	case len(previews) != 1:
@@ -359,7 +353,7 @@ func (r *AdoptionBackgroundScanRunner) backoff(failures int) time.Duration {
 func (r *AdoptionBackgroundScanRunner) Status() AdoptionBackgroundScanStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	status := AdoptionBackgroundScanStatus{Cycles: r.cycles, OverlapSkipped: r.overlapSkipped, LastCycleAt: r.lastCycleAt}
+	status := AdoptionBackgroundScanStatus{Cycles: r.cycles, OverlapSkipped: r.overlapSkipped, LastCycleAt: r.lastCycleAt, SkippedTargets: append([]string(nil), r.cfg.SkippedTargets...)}
 	for _, state := range r.states {
 		if state.consecutiveFailures > 0 {
 			status.Failing++

@@ -133,7 +133,7 @@
     {
       "criterion": "BG4",
       "layer": "Go service",
-      "case": "a hung target is cancelled at the per-target timeout, classified timeout, backed off, and does not block other targets",
+      "case": "a hung target and one that overran its deadline but returned results are both classified timeout, backed off, and do not block other targets",
       "command": "go test ./internal/service -run TestBackgroundScanRunnerTimesOutHungTargetWithoutBlockingOthers"
     },
     {
@@ -145,7 +145,7 @@
     {
       "criterion": "BG6",
       "layer": "Go projector",
-      "case": "target removed from configuration while down is tombstoned after restart; fresh operator ad-hoc aggregate kept until stale then retired; idempotent; re-added target republishes",
+      "case": "repair pass after restart tombstones a target removed from configuration while down; fresh operator ad-hoc aggregate kept until stale then retired; idempotent; re-added target republishes",
       "command": "go test ./internal/adapters/nostr -run TestRuntimeTargetScanRetirementTombstonesRemovedTargetsAcrossRestart"
     },
     {
@@ -157,7 +157,7 @@
     {
       "criterion": "BG7",
       "layer": "Go app/config",
-      "case": "adoption disabled, explicit background_scan.enabled=false, or projection not publishing builds no runner; enabled=true without adoption is rejected; bounds validated",
+      "case": "adoption disabled, explicit background_scan.enabled=false, or no adoption service builds no runner; enabled=true without adoption is rejected; bounds validated",
       "command": "go test ./internal/app ./internal/config -run AdoptionBackgroundScan"
     },
     {
@@ -177,6 +177,36 @@
       "layer": "Go app",
       "case": "readiness check warns (never fails) on failing targets and exposes outcome codes only",
       "command": "go test ./internal/app -run TestAdoptionBackgroundScanHealthWarnsOnFailingTargets"
+    },
+    {
+      "criterion": "BG6",
+      "layer": "Go projector",
+      "case": "without background scanning the repair pass still retires unmaintained background coordinates and targets of removed endpoints, keeping operator aggregates of configured endpoints",
+      "command": "go test ./internal/adapters/nostr -run TestRuntimeTargetScanRetirementRunsWithoutBackgroundScanning"
+    },
+    {
+      "criterion": "BG6",
+      "layer": "Go projector",
+      "case": "hydration failure keeps live gating state and retries; malformed retained scanned_at falls back to created_at (logged)",
+      "command": "go test ./internal/adapters/nostr -run TestTargetScanHydrationKeepsLiveStateOnFailureAndToleratesBadScanTimes"
+    },
+    {
+      "criterion": "BG4",
+      "layer": "Go service",
+      "case": "a scan cancelled after discovery fails and publishes nothing (mutation-verified)",
+      "command": "go test ./internal/service -run TestAdoptionScanCancelledAfterDiscoveryPublishesNothing"
+    },
+    {
+      "criterion": "BG4",
+      "layer": "Go service",
+      "case": "scan completion is published without the per-target scan deadline (mutation-verified)",
+      "command": "go test ./internal/service -run TestAdoptionScanPublishesCompletionWithoutTheScanDeadline"
+    },
+    {
+      "criterion": "BG7",
+      "layer": "Go app",
+      "case": "derived endpoint aliases colliding after normalization are skipped with a health warning instead of blocking startup; explicit colliding targets are a configuration error",
+      "command": "go test ./internal/app -run TestAdoptionBackgroundScanRunnerSkipsCollidingDerivedAliasesButRejectsExplicitOnes"
     }
   ]
 }

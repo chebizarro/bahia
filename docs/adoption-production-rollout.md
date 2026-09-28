@@ -167,11 +167,11 @@ adoption:
     #     environment: production
 ```
 
-**Scope.** With no `targets`, each `runtime.endpoints.<alias>` becomes a target named after the alias. Its environment is the single `runtime.environments.<env>` that references the alias via `endpoint_ref`; if zero or several environments reference it, the alias itself is used, as `bahia adopt scan --target <alias>` does. Names and environments are normalized the same way operator scans are, so both publish the same coordinate. Use `targets` to narrow the scope to fewer endpoints (least privilege).
+**Scope.** With no `targets`, each `runtime.endpoints.<alias>` becomes a target named after the alias. An alias that cannot be a scan target never blocks startup. This includes two aliases that normalize to the same name, such as `edge_01` and `edge-01`. The alias is skipped with a log line and reported as a health warning; list such endpoints under `targets` with distinct names. Explicit `targets` must resolve, or Bahia refuses to start. Its environment is the single `runtime.environments.<env>` that references the alias via `endpoint_ref`; if zero or several environments reference it, the alias itself is used, as `bahia adopt scan --target <alias>` does. Names and environments are normalized the same way operator scans are, so both publish the same coordinate. Use `targets` to narrow the scope to fewer endpoints (least privilege).
 
 **Scheduling.** Each target is first scanned within `jitter` of startup, then every `interval + jitter`. Only one cycle runs at a time: a cycle requested while another is in flight is skipped, never queued. At most `concurrency` targets are in flight. Each target scan is cancelled after `timeout`. An error, timeout, or unreachable endpoint backs that target off exponentially (`interval × 2^failures`, capped at `max_backoff`); one success resets it. An unreachable endpoint publishes `scan_state=unavailable`. A timed-out scan publishes nothing, so its last aggregate ages into stale.
 
-**Public output and traffic.** Results feed only the redacted target-scan aggregate (owner decision option B). Unchanged counts are not republished; an aggregate is re-signed only on a material change or, as a heartbeat, once per projector repair interval (default 10 m). Everything goes through the projector's shared dedupe, coalescing, and relay-rejection backoff path. When a target leaves the scope, its coordinate is tombstoned at the next start or cycle.
+**Public output and traffic.** Results feed only the redacted target-scan aggregate (owner decision option B). Unchanged counts are not republished; an aggregate is re-signed only on a material change or, as a heartbeat, once per projector repair interval (default 10 m). Everything goes through the projector's shared dedupe, coalescing, and relay-rejection backoff path. A timed-out or cancelled scan publishes nothing. When a target leaves the scope, the projector's repair pass tombstones its coordinate at startup or at the next repair interval. That includes turning background scanning off, which retires the coordinates it maintained.
 
 **Docker access and least privilege.** The scan uses the endpoint's configured transport (TLS client certificate for `tcp://`, or the local socket for `unix://`) and issues only these Docker Engine API calls:
 - `GET /v1.44/containers/json?all=1` (list);
@@ -184,7 +184,12 @@ It never creates, starts, stops, removes, execs, pulls, or imports anything, and
 
 Because each scan inspects every container on the host, the Docker API load per cycle is proportional to container count. Size `interval` accordingly.
 
-**Health.** The runner is registered as a non-required tier-3 background runner, so it appears in the readiness runner summary. It also reports an `adoption_background_scan` readiness check with target, failing, cycle, and overlap-skip counts, plus one outcome code per target (`pending`, `ok`, `unavailable`, `timeout`, `error`). A failing target makes the check `warn`, which degrades status but never fails readiness. Raw scan errors, which can contain Docker hosts, are logged only. Background scans log per-target failures at `warn` and successful completions at `debug`, so operator scan audit logs stay readable.
+**Health.** The runner is registered as a non-required tier-3 background runner, so it appears in the readiness runner summary. It also reports an `adoption_background_scan` readiness check with these details:
+- target, failing, cycle, and overlap-skip counts;
+- the skipped aliases;
+- one outcome code per target: `pending`, `ok`, `unavailable`, `timeout`, or `error`.
+
+A failing target or a skipped alias makes the check `warn`, which degrades status but never fails readiness. Raw scan errors, which can contain Docker hosts, are logged only. Background scans log per-target failures at `warn` and successful completions at `debug`, so operator scan audit logs stay readable.
 
 ## Rate limits and telemetry
 

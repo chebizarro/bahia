@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
 )
@@ -95,18 +96,6 @@ func (s *fakeTargetScanner) callCount() int {
 	return len(s.calls)
 }
 
-type fakeTargetScanRetirer struct {
-	mu    sync.Mutex
-	calls [][]RuntimeTargetScanScope
-}
-
-func (r *fakeTargetScanRetirer) RetireRuntimeTargetScans(_ context.Context, keep []RuntimeTargetScanScope, _ time.Time) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, append([]RuntimeTargetScanScope(nil), keep...))
-	return 0, nil
-}
-
 func noJitter(time.Duration) time.Duration { return 0 }
 
 func backgroundScanTestConfig(clock BackgroundScanClock, names ...string) AdoptionBackgroundScanConfig {
@@ -139,8 +128,7 @@ func TestBackgroundScanRunnerScansEachConfiguredTargetPeriodically(t *testing.T)
 	start := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	clock := newFakeScanClock(start)
 	scanner := &fakeTargetScanner{}
-	retirer := &fakeTargetScanRetirer{}
-	runner, err := NewAdoptionBackgroundScanRunner(scanner, retirer, backgroundScanTestConfig(clock, "edge-01", "edge-02"), zap.NewNop())
+	runner, err := NewAdoptionBackgroundScanRunner(scanner, backgroundScanTestConfig(clock, "edge-01", "edge-02"), zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,10 +161,8 @@ func TestBackgroundScanRunnerScansEachConfiguredTargetPeriodically(t *testing.T)
 			t.Fatalf("scan call = %+v, want one background target with a per-target deadline", call)
 		}
 	}
-	retirer.mu.Lock()
-	defer retirer.mu.Unlock()
-	if len(retirer.calls) < 2 || len(retirer.calls[0]) != 2 || retirer.calls[0][0] != (RuntimeTargetScanScope{Environment: "production", Target: "edge-01"}) {
-		t.Fatalf("retirer calls = %+v, want the configured scope at start and after each cycle", retirer.calls)
+	if scope := runner.Scope(); len(scope) != 2 || scope[0] != (RuntimeTargetScanScope{Environment: "production", Target: "edge-01"}) {
+		t.Fatalf("scope = %+v, want the configured targets", scope)
 	}
 	if status := runner.Status(); status.Cycles != 2 || status.Failing != 0 {
 		t.Fatalf("status = %+v", status)
@@ -201,7 +187,7 @@ func TestBackgroundScanRunnerBacksOffFailingTargetsAndRecovers(t *testing.T) {
 	}}
 	cfg := backgroundScanTestConfig(clock, "edge-01", "edge-02")
 	cfg.MaxBackoff = 30 * time.Minute
-	runner, err := NewAdoptionBackgroundScanRunner(scanner, nil, cfg, zap.NewNop())
+	runner, err := NewAdoptionBackgroundScanRunner(scanner, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,10 +237,17 @@ func TestBackgroundScanRunnerTimesOutHungTargetWithoutBlockingOthers(t *testing.
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
+		// Overran its deadline but still returned results: classified by
+		// the deadline, never as a success.
+		"late": func(ctx context.Context) ([]AdoptionPreview, error) {
+			<-ctx.Done()
+			return []AdoptionPreview{{}}, nil
+		},
 	}}
-	cfg := backgroundScanTestConfig(clock, "hung", "healthy")
+	cfg := backgroundScanTestConfig(clock, "hung", "late", "healthy")
+	cfg.Concurrency = 3
 	cfg.Timeout = time.Millisecond
-	runner, err := NewAdoptionBackgroundScanRunner(scanner, nil, cfg, zap.NewNop())
+	runner, err := NewAdoptionBackgroundScanRunner(scanner, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +255,9 @@ func TestBackgroundScanRunnerTimesOutHungTargetWithoutBlockingOthers(t *testing.
 	hung := targetStatus(t, runner, "hung")
 	if hung.Outcome != BackgroundScanOutcomeTimeout || hung.ConsecutiveFailures != 1 || !hung.NextDueAt.Equal(clock.Now().Add(10*time.Minute)) {
 		t.Fatalf("hung target status = %+v, want timeout with backoff", hung)
+	}
+	if late := targetStatus(t, runner, "late"); late.Outcome != BackgroundScanOutcomeTimeout || late.ConsecutiveFailures != 1 {
+		t.Fatalf("late target status = %+v, want timeout", late)
 	}
 	if healthy := targetStatus(t, runner, "healthy"); healthy.Outcome != BackgroundScanOutcomeOK {
 		t.Fatalf("healthy target status = %+v", healthy)
@@ -291,7 +287,7 @@ func TestBackgroundScanRunnerNeverOverlapsCyclesAndBoundsConcurrency(t *testing.
 	for _, name := range names {
 		scanner.results[name] = block
 	}
-	runner, err := NewAdoptionBackgroundScanRunner(scanner, nil, backgroundScanTestConfig(clock, names...), zap.NewNop())
+	runner, err := NewAdoptionBackgroundScanRunner(scanner, backgroundScanTestConfig(clock, names...), zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +322,7 @@ func TestBackgroundScanRunnerNeverOverlapsCyclesAndBoundsConcurrency(t *testing.
 func TestBackgroundScanRunnerRejectsRawDockerHostTargets(t *testing.T) {
 	cfg := backgroundScanTestConfig(nil)
 	cfg.Targets = []AdoptionTarget{{Name: "breakglass", DockerHost: "tcp://127.0.0.1:2375"}}
-	if _, err := NewAdoptionBackgroundScanRunner(&fakeTargetScanner{}, nil, cfg, zap.NewNop()); err == nil {
+	if _, err := NewAdoptionBackgroundScanRunner(&fakeTargetScanner{}, cfg, zap.NewNop()); err == nil {
 		t.Fatal("expected raw docker_host background target to be rejected")
 	}
 }
@@ -362,7 +358,7 @@ func TestBackgroundScanIsReadOnlyAndPublishesOnlyAggregates(t *testing.T) {
 	}
 	cfg := backgroundScanTestConfig(newFakeScanClock(time.Now().UTC()))
 	cfg.Targets = targets
-	runner, err := NewAdoptionBackgroundScanRunner(adoption, nil, cfg, zap.NewNop())
+	runner, err := NewAdoptionBackgroundScanRunner(adoption, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,5 +382,72 @@ func TestBackgroundScanIsReadOnlyAndPublishesOnlyAggregates(t *testing.T) {
 	}
 	if summary := completed.Targets[0]; !summary.Available || summary.Total != 1 || summary.Unmanaged != 1 || summary.Target != "edge-01" || summary.Environment != "production" {
 		t.Fatalf("scan summary = %+v", summary)
+	}
+}
+
+type deadlineRecordingPublisher struct {
+	mu          sync.Mutex
+	events      []events.Event
+	hadDeadline []bool
+}
+
+func (p *deadlineRecordingPublisher) Publish(ctx context.Context, e events.Event) {
+	_, deadline := ctx.Deadline()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, e)
+	p.hadDeadline = append(p.hadDeadline, deadline)
+}
+
+func (p *deadlineRecordingPublisher) Subscribe(events.EventType, events.Handler) {}
+
+// TestAdoptionScanPublishesCompletionWithoutTheScanDeadline guards against the
+// in-process bus copying the per-target scan deadline onto the asynchronous
+// projector handler.
+func TestAdoptionScanPublishesCompletionWithoutTheScanDeadline(t *testing.T) {
+	docker := newAdoptionDockerServer(t)
+	defer docker.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	publisher := &deadlineRecordingPublisher{}
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, publisher, zap.NewNop())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	if _, err := adoption.Scan(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: docker.URL}}, Origin: AdoptionScanOriginBackground}); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.events) != 1 || publisher.hadDeadline[0] {
+		t.Fatalf("completion published %d times, deadline=%v; want once without the scan deadline", len(publisher.events), publisher.hadDeadline)
+	}
+}
+
+// cancellingServiceRepo cancels the scan context on the first service
+// lookup, which runs after Docker discovery has completed.
+type cancellingServiceRepo struct {
+	*mockServiceRepo
+	cancel context.CancelFunc
+}
+
+func (r cancellingServiceRepo) GetByName(ctx context.Context, name string) (*domain.Service, error) {
+	r.cancel()
+	return r.mockServiceRepo.GetByName(ctx, name)
+}
+
+// TestAdoptionScanCancelledAfterDiscoveryPublishesNothing: once the scan
+// context is done, service lookups fail and adopted workloads would be
+// miscounted as unmanaged, so the scan must fail rather than publish.
+func TestAdoptionScanCancelledAfterDiscoveryPublishesNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	docker := newAdoptionDockerServer(t)
+	defer docker.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	publisher := &capturePublisher{}
+	adoption := NewAdoptionService(registry, cancellingServiceRepo{mockServiceRepo: svcRepo, cancel: cancel}, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, publisher, zap.NewNop())
+	_, err := adoption.Scan(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: docker.URL}}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Scan error = %v, want context.Canceled", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("cancelled scan published %d events", len(publisher.events))
 	}
 }

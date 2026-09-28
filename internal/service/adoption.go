@@ -240,9 +240,19 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 		return nil, err
 	}
 	previews := s.buildPreviews(ctx, targets, results)
+	summaries := s.resolveScanSummaryEnvironments(ctx, AdoptionScanTargetSummaries(previews))
+	if err := ctx.Err(); err != nil {
+		// Service/environment lookups fail once the context is done, which
+		// would misclassify adopted workloads as unmanaged. An incomplete
+		// scan is an error, never a published aggregate.
+		s.logger.Warn("adoption scan cancelled before completion", zap.String("origin", origin), zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
+		return nil, err
+	}
 	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrors := adoptionPreviewOperationalStats(previews)
 	duration := time.Since(start)
-	s.publisher.Publish(ctx, events.Event{
+	// Projection runs asynchronously; it must not inherit the scan's
+	// deadline (the in-process bus copies deadlines onto handlers).
+	s.publisher.Publish(context.WithoutCancel(ctx), events.Event{
 		Type:     events.EventAdoptionScanCompleted,
 		EntityID: "adoption",
 		Data: AdoptionScanCompleted{
@@ -254,7 +264,7 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 			RedactedEnvKeyCount:   redactedEnvKeyCount,
 			RedactedLabelKeyCount: redactedLabelKeyCount,
 			DurationMS:            duration.Milliseconds(),
-			Targets:               s.resolveScanSummaryEnvironments(ctx, AdoptionScanTargetSummaries(previews)),
+			Targets:               summaries,
 		},
 	})
 	logCompleted := s.logger.Info

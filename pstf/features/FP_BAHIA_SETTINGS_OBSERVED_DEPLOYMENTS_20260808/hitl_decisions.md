@@ -16,7 +16,7 @@ The `observed_deployments` array that 18a5079a added to `bahia.system-discovery.
 
 ## D4 — Freshness budget
 
-`stale_after_seconds` = projector snapshot repair interval + 2 × reconcile interval (default 10 m + 2 m = 720 s). Observations refresh every reconcile pass, but the inventory is republished on material events and at the repair interval, so the published `observed_at` may lag by up to the repair interval. Unmanaged scan aggregates use this budget when background scanning is off: operator-initiated scans then display as stale with their age. With background scanning on (D5), target scans carry their own budget, repair interval + 2 × (scan interval + jitter) + scan timeout (default 1320 s).
+`stale_after_seconds` = projector snapshot repair interval + 2 × reconcile interval (default 10 m + 2 m = 720 s). Observations refresh every reconcile pass, but the inventory is republished on material events and at the repair interval, so the published `observed_at` may lag by up to the repair interval. Unmanaged scan aggregates use this budget when background scanning is off: operator-initiated scans then display as stale with their age. With background scanning on (D5), target scans carry their own budget: repair interval + 2 × (scan interval + jitter + scan timeout), 1380 s by default.
 
 ## D5 — Background adoption scans (owner decision, 2026-09-28)
 
@@ -40,6 +40,11 @@ Implementation choices (branch `task/bahia-background-adoption-scans-20260928`):
   - exponential backoff up to 1 h;
   - one cycle at a time, overlap skipped rather than queued.
 - **Traffic.** Target-scan aggregates republish only on a material change, or as a heartbeat once per repair interval. This goes through the existing dedupe, coalescing, and relay-backoff path.
-- **Retirement.** Target-scan coordinates outside the configured scope are tombstoned: background-origin ones immediately, operator ad-hoc ones once stale. This closes the "scan coordinates never retired" residual, but only while background scanning is enabled.
+- **Retirement.** The projector's repair pass tombstones target-scan coordinates in every mode, in three cases:
+  - background-origin coordinates outside the scope, including all of them when background scanning is turned off;
+  - coordinates whose `endpoint_ref` left `runtime.endpoints`;
+  - with background scanning on, stale operator ad-hoc coordinates.
+
+  This closes the "scan coordinates never retired" residual. One exception remains: without background scanning, operator scans of raw `docker_host` targets (no `endpoint_ref`) are still never retired.
 
 Access-scope note for the owner: the Docker Engine API has no read-only credential. The certificate or socket Bahia already holds for an endpoint is full-control, so background scanning adds calls, not privilege. Operators who need stricter isolation can narrow `adoption.background_scan.targets`, or front the endpoint with an authorization proxy that allows only the three GET routes. See `docs/adoption-production-rollout.md#background-adoption-scans`.

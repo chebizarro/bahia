@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -18,15 +19,32 @@ import (
 )
 
 // Default background scan budget: 10m heartbeat + 2*(5m interval + 30s
-// jitter) + 1m timeout.
-const defaultBackgroundTargetScanStaleAfter = 22 * time.Minute
+// jitter + 1m timeout).
+const defaultBackgroundTargetScanStaleAfter = 23 * time.Minute
 
-func newBackgroundScanProjector(repo repository.NostrEventRepository, sink *captureProjectionPublisher) *Projector {
+func backgroundScanProjectorConfig(backgroundScans bool, endpoints ...string) *config.Config {
 	cfg := config.Defaults()
 	cfg.Nostr.PrivateKey = projectorTestPrivateKey
 	cfg.Nostr.PublishEnabled = true
-	cfg.Adoption.Enabled = true
-	return NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, repo, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	cfg.Adoption.Enabled = backgroundScans
+	cfg.Runtime.Endpoints = map[string]config.RuntimeEndpointConfig{}
+	for _, ref := range endpoints {
+		cfg.Runtime.Endpoints[ref] = config.RuntimeEndpointConfig{DockerHost: "tcp://" + ref + ":2376"}
+	}
+	return cfg
+}
+
+// newBackgroundScanProjector models a backend with background scanning of the
+// given production targets (each on endpoint "<target>-docker").
+func newBackgroundScanProjector(repo repository.NostrEventRepository, sink *captureProjectionPublisher, targets ...string) *Projector {
+	var endpoints []string
+	var scope []service.RuntimeTargetScanScope
+	for _, target := range targets {
+		endpoints = append(endpoints, target+"-docker")
+		scope = append(scope, service.RuntimeTargetScanScope{Environment: "production", Target: target})
+	}
+	cfg := backgroundScanProjectorConfig(true, endpoints...)
+	return NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, repo, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithBackgroundTargetScanScope(scope))
 }
 
 type targetCounts struct {
@@ -169,19 +187,21 @@ func TestRuntimeTargetScanRetirementTombstonesRemovedTargetsAcrossRestart(t *tes
 	repo := newMemoryNostrEventRepo()
 	ctx := context.Background()
 	t0 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	first := newBackgroundScanProjector(repo, &captureProjectionPublisher{})
+	first := newBackgroundScanProjector(repo, &captureProjectionPublisher{}, "edge-01", "edge-02")
 	deliverScan(t, first, targetScanCompleted(service.AdoptionScanOriginBackground, t0,
 		targetCounts{name: "edge-01", available: true, unmanaged: 1},
 		targetCounts{name: "edge-02", available: true, unmanaged: 4}))
-	// An operator scans an unconfigured target ad hoc.
-	deliverScan(t, first, targetScanCompleted(service.AdoptionScanOriginOperator, t0, targetCounts{name: "adhoc", available: true, unmanaged: 7}))
+	// An operator scans an unconfigured target of a configured endpoint.
+	adhoc := targetScanCompleted(service.AdoptionScanOriginOperator, t0, targetCounts{name: "adhoc", available: true, unmanaged: 7})
+	adhoc.Targets[0].EndpointRef = "edge-01-docker"
+	deliverScan(t, first, adhoc)
 
-	// edge-02 is removed from configuration while Bahia is down.
+	// edge-02 is removed from configuration while Bahia is down; the
+	// restarted projector's repair pass retires it.
 	ageRetainedEvents(repo, time.Hour)
 	sink := &captureProjectionPublisher{}
-	restarted := newBackgroundScanProjector(repo, sink)
-	keep := []service.RuntimeTargetScanScope{{Environment: "production", Target: "edge-01"}}
-	retired, err := restarted.RetireRuntimeTargetScans(ctx, keep, t0.Add(time.Minute))
+	restarted := newBackgroundScanProjector(repo, sink, "edge-01")
+	retired, err := restarted.retireRuntimeTargetScans(ctx, t0.Add(time.Minute))
 	if err != nil || retired != 1 {
 		t.Fatalf("retired=%d err=%v, want the removed background target only", retired, err)
 	}
@@ -198,13 +218,13 @@ func TestRuntimeTargetScanRetirementTombstonesRemovedTargetsAcrossRestart(t *tes
 	}
 
 	// Retirement is idempotent.
-	if retired, err := restarted.RetireRuntimeTargetScans(ctx, keep, t0.Add(2*time.Minute)); err != nil || retired != 0 {
+	if retired, err := restarted.retireRuntimeTargetScans(ctx, t0.Add(2*time.Minute)); err != nil || retired != 0 {
 		t.Fatalf("second retirement retired=%d err=%v", retired, err)
 	}
 
 	// The ad-hoc operator aggregate is retired once it is stale, not left
 	// behind forever.
-	if retired, err := restarted.RetireRuntimeTargetScans(ctx, keep, t0.Add(defaultBackgroundTargetScanStaleAfter+time.Second)); err != nil || retired != 1 {
+	if retired, err := restarted.retireRuntimeTargetScans(ctx, t0.Add(defaultBackgroundTargetScanStaleAfter+time.Second)); err != nil || retired != 1 {
 		t.Fatalf("stale operator retirement retired=%d err=%v", retired, err)
 	}
 	if adhoc := targetScanEventsFor(sink, "adhoc"); len(adhoc) != 1 || !hasTag(adhoc[0].Tags, "deleted", "true") {
@@ -220,17 +240,111 @@ func TestRuntimeTargetScanRetirementTombstonesRemovedTargetsAcrossRestart(t *tes
 	// After another restart the tombstoned coordinate is not tombstoned again.
 	ageRetainedEvents(repo, time.Hour)
 	again := &captureProjectionPublisher{}
-	third := newBackgroundScanProjector(repo, again)
-	if retired, err := third.RetireRuntimeTargetScans(ctx, []service.RuntimeTargetScanScope{{Environment: "production", Target: "edge-01"}, {Environment: "production", Target: "edge-02"}}, t0.Add(31*time.Minute)); err != nil || retired != 0 {
+	third := newBackgroundScanProjector(repo, again, "edge-01", "edge-02")
+	if retired, err := third.retireRuntimeTargetScans(ctx, t0.Add(31*time.Minute)); err != nil || retired != 0 {
 		t.Fatalf("third retirement retired=%d err=%v", retired, err)
+	}
+}
+
+// TestRuntimeTargetScanRetirementRunsWithoutBackgroundScanning covers the
+// modes where no runner exists: coordinates nothing refreshes any more
+// (background-origin) and targets whose endpoint left configuration are
+// retired, while operator aggregates of configured endpoints keep ageing into
+// stale as before.
+func TestRuntimeTargetScanRetirementRunsWithoutBackgroundScanning(t *testing.T) {
+	repo := newMemoryNostrEventRepo()
+	ctx := context.Background()
+	t0 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	first := newBackgroundScanProjector(repo, &captureProjectionPublisher{}, "edge-01")
+	deliverScan(t, first, targetScanCompleted(service.AdoptionScanOriginBackground, t0, targetCounts{name: "edge-01", available: true, unmanaged: 1}))
+	deliverScan(t, first, targetScanCompleted(service.AdoptionScanOriginOperator, t0,
+		targetCounts{name: "kept", available: true, unmanaged: 2},
+		targetCounts{name: "removed", available: true, unmanaged: 3}))
+
+	// Restart with background scans disabled and the "removed-docker"
+	// endpoint deleted from runtime.endpoints.
+	ageRetainedEvents(repo, time.Hour)
+	cfg := backgroundScanProjectorConfig(false, "edge-01-docker", "kept-docker")
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, repo, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("repair pass: %v", err)
+	}
+	if edge := targetScanEventsFor(sink, "edge-01"); len(edge) != 1 || !hasTag(edge[0].Tags, "deleted", "true") {
+		t.Fatalf("unmaintained background coordinate not retired by the repair pass: %+v", edge)
+	}
+	if removed := targetScanEventsFor(sink, "removed"); len(removed) != 1 || !hasTag(removed[0].Tags, "deleted", "true") {
+		t.Fatalf("target of a removed endpoint not retired: %+v", removed)
+	}
+	if kept := targetScanEventsFor(sink, "kept"); len(kept) != 0 {
+		t.Fatalf("operator aggregate of a configured endpoint retired without background scanning: %+v", kept)
+	}
+	if retired, err := projector.retireRuntimeTargetScans(ctx, t0.Add(48*time.Hour)); err != nil || retired != 0 {
+		t.Fatalf("stale operator aggregate retired without background scanning: retired=%d err=%v", retired, err)
+	}
+}
+
+type failingFindByTagRepo struct {
+	*memoryNostrEventRepo
+	fail bool
+}
+
+func (r *failingFindByTagRepo) FindByTag(ctx context.Context, name, value string, wanted []int, limit int) ([]repository.NostrEventRecord, error) {
+	if r.fail {
+		return nil, errors.New("database unavailable")
+	}
+	return r.memoryNostrEventRepo.FindByTag(ctx, name, value, wanted, limit)
+}
+
+func TestTargetScanHydrationKeepsLiveStateOnFailureAndToleratesBadScanTimes(t *testing.T) {
+	memory := newMemoryNostrEventRepo()
+	t0 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	edge := targetCounts{name: "edge-01", available: true, managed: 1, unmanaged: 2}
+	deliverScan(t, newBackgroundScanProjector(memory, &captureProjectionPublisher{}, "edge-01"), targetScanCompleted(service.AdoptionScanOriginBackground, t0, edge))
+
+	// While hydration fails, live gating state accumulates and is not wiped.
+	repo := &failingFindByTagRepo{memoryNostrEventRepo: memory, fail: true}
+	sink := &captureProjectionPublisher{}
+	projector := newBackgroundScanProjector(repo, sink, "edge-01")
+	deliverScan(t, projector, targetScanCompleted(service.AdoptionScanOriginBackground, t0.Add(20*time.Minute), edge))
+	deliverScan(t, projector, targetScanCompleted(service.AdoptionScanOriginBackground, t0.Add(25*time.Minute), edge))
+	if got := len(targetScanEventsFor(sink, "edge-01")); got != 1 {
+		t.Fatalf("publishes during hydration failure = %d, want 1 (gated by live state)", got)
+	}
+	if _, err := projector.retireRuntimeTargetScans(context.Background(), t0.Add(26*time.Minute)); err == nil {
+		t.Fatal("retirement must report a hydration failure")
+	}
+	repo.fail = false
+	if _, err := projector.retireRuntimeTargetScans(context.Background(), t0.Add(27*time.Minute)); err != nil {
+		t.Fatalf("retirement after recovery: %v", err)
+	}
+	deliverScan(t, projector, targetScanCompleted(service.AdoptionScanOriginBackground, t0.Add(28*time.Minute), edge))
+	if got := len(targetScanEventsFor(sink, "edge-01")); got != 1 {
+		t.Fatalf("recovered hydration replaced newer live state: %d publishes", got)
+	}
+
+	// A retained aggregate without a valid scanned_at falls back to its
+	// created_at instead of the zero time (which would read as ancient).
+	bad := newMemoryNostrEventRepo()
+	badSink := &captureProjectionPublisher{}
+	writer := newBackgroundScanProjector(bad, badSink, "edge-01")
+	if err := writer.publishSigned(context.Background(), KindCASControlState, gonostr.Tags{
+		{"d", deploymentInventoryTargetScanDTag("production", "adhoc")}, {"domain", DeploymentInventoryDomain}, {"schema", DeploymentInventorySchema},
+		{"entity", DeploymentInventoryTargetScanEntity}, {"target", "adhoc"}, {"status", targetScanComplete}, {"deleted", "false"},
+	}, `{"schema":"bahia.deployment-inventory.v1","entity":"runtime-target-scan","environment":"production","target":"adhoc","scan_state":"complete","scanned_at":"not-a-time","freshness":{"stale_after_seconds":720},"counts":{"total":1,"managed":0,"unmanaged":1}}`, "deployment_inventory.target_scan", nil); err != nil {
+		t.Fatal(err)
+	}
+	reader := newBackgroundScanProjector(bad, &captureProjectionPublisher{}, "edge-01")
+	if retired, err := reader.retireRuntimeTargetScans(context.Background(), time.Now().UTC()); err != nil || retired != 0 {
+		t.Fatalf("fresh aggregate with malformed scanned_at retired=%d err=%v, want kept until stale", retired, err)
 	}
 }
 
 func TestRuntimeTargetScanRetirementIsNoopWhenProjectorDisabled(t *testing.T) {
 	cfg := config.Defaults()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if retired, err := projector.RetireRuntimeTargetScans(context.Background(), nil, time.Now()); err != nil || retired != 0 || len(sink.events) != 0 {
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithBackgroundTargetScanScope(nil))
+	if retired, err := projector.retireRuntimeTargetScans(context.Background(), time.Now()); err != nil || retired != 0 || len(sink.events) != 0 {
 		t.Fatalf("disabled projector retired=%d err=%v events=%d", retired, err, len(sink.events))
 	}
 }
@@ -291,10 +405,10 @@ func (c *manualScanClock) NewTimer(time.Duration) (<-chan time.Time, func()) {
 func TestBackgroundScanRunnerPublishesOnlyRedactedAggregates(t *testing.T) {
 	bus := &syncEventBus{}
 	sink := &captureProjectionPublisher{}
-	projector := newBackgroundScanProjector(nil, sink)
+	projector := newBackgroundScanProjector(nil, sink, "edge-01", "edge-02")
 	projector.SetupSubscriptions(bus)
 	clock := &manualScanClock{now: time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)}
-	runner, err := service.NewAdoptionBackgroundScanRunner(&sensitiveScanner{bus: bus, clock: clock}, projector, service.AdoptionBackgroundScanConfig{
+	runner, err := service.NewAdoptionBackgroundScanRunner(&sensitiveScanner{bus: bus, clock: clock}, service.AdoptionBackgroundScanConfig{
 		Targets: []service.AdoptionTarget{
 			{Name: "edge-01", EndpointRef: "edge-01-docker", EnvironmentName: "production"},
 			{Name: "edge-02", EndpointRef: "edge-02-docker", EnvironmentName: "production"},

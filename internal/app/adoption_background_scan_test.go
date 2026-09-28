@@ -1,21 +1,13 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
-
-type noopTargetScanRetirer struct{}
-
-func (noopTargetScanRetirer) RetireRuntimeTargetScans(context.Context, []service.RuntimeTargetScanScope, time.Time) (int, error) {
-	return 0, nil
-}
 
 func backgroundScanAppConfig() *config.Config {
 	cfg := config.Defaults()
@@ -35,26 +27,28 @@ func backgroundScanAdoptionService(cfg *config.Config) *service.AdoptionService 
 func TestAdoptionBackgroundScanRunnerIsNotBuiltWhenDisabled(t *testing.T) {
 	off := false
 	cases := map[string]func(*config.Config){
-		"adoption disabled":         func(c *config.Config) { c.Adoption.Enabled = false },
-		"explicitly disabled":       func(c *config.Config) { c.Adoption.BackgroundScan.Enabled = &off },
-		"projection not publishing": nil,
+		"adoption disabled":   func(c *config.Config) { c.Adoption.Enabled = false },
+		"explicitly disabled": func(c *config.Config) { c.Adoption.BackgroundScan.Enabled = &off },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			cfg := backgroundScanAppConfig()
-			projecting := mutate != nil
-			if mutate != nil {
-				mutate(cfg)
-			}
+			mutate(cfg)
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), noopTargetScanRetirer{}, projecting, zap.NewNop())
+			runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), zap.NewNop())
 			if err != nil || runner != nil {
 				t.Fatalf("runner=%v err=%v, want nothing built", runner, err)
 			}
 		})
 	}
+	t.Run("no adoption service", func(t *testing.T) {
+		cfg := backgroundScanAppConfig()
+		if runner, err := newAdoptionBackgroundScanRunner(cfg, nil, zap.NewNop()); err != nil || runner != nil {
+			t.Fatalf("runner=%v err=%v", runner, err)
+		}
+	})
 }
 
 func TestAdoptionBackgroundScanRunnerUsesNormalizedEndpointTargets(t *testing.T) {
@@ -62,7 +56,7 @@ func TestAdoptionBackgroundScanRunnerUsesNormalizedEndpointTargets(t *testing.T)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), noopTargetScanRetirer{}, true, zap.NewNop())
+	runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), zap.NewNop())
 	if err != nil || runner == nil {
 		t.Fatalf("runner=%v err=%v", runner, err)
 	}
@@ -98,14 +92,29 @@ func TestAdoptionBackgroundScanHealthWarnsOnFailingTargets(t *testing.T) {
 	}
 }
 
-func TestAdoptionBackgroundScanRunnerSkipsCollidingEndpointAliases(t *testing.T) {
+func TestAdoptionBackgroundScanRunnerSkipsCollidingDerivedAliasesButRejectsExplicitOnes(t *testing.T) {
 	cfg := backgroundScanAppConfig()
 	cfg.Runtime.Endpoints["edge-01"] = config.RuntimeEndpointConfig{DockerHost: "tcp://edge-01-b:2376"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), noopTargetScanRetirer{}, true, zap.NewNop())
-	if err != nil || runner == nil || len(runner.Status().Targets) != 1 {
-		t.Fatalf("runner=%v err=%v, want one target and a successful start", runner, err)
+	runner, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), zap.NewNop())
+	if err != nil || runner == nil {
+		t.Fatalf("runner=%v err=%v, want a successful start", runner, err)
+	}
+	status := runner.Status()
+	if len(status.Targets) != 1 || len(status.SkippedTargets) != 1 {
+		t.Fatalf("status = %+v, want one target and one skipped alias", status)
+	}
+	if check := adoptionBackgroundScanHealth(status, Tier3); check.Status != HealthStatusWarn || check.Details["skipped"] == "" {
+		t.Fatalf("skipped alias must surface as a warning: %+v", check)
+	}
+
+	cfg.Adoption.BackgroundScan.Targets = []config.AdoptionBackgroundScanTarget{{Name: "edge_01", EndpointRef: "Edge_01"}, {Name: "edge-01", EndpointRef: "edge-01"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newAdoptionBackgroundScanRunner(cfg, backgroundScanAdoptionService(cfg), zap.NewNop()); err == nil || !strings.Contains(err.Error(), "normalize to the same target") {
+		t.Fatalf("explicit colliding targets err=%v, want a configuration error", err)
 	}
 }

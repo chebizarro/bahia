@@ -884,6 +884,14 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("package control plane enabled", zap.Int("backends", len(cfg.Packages.Backends)))
 	}
 
+	// Background adoption scans feed only the projector's redacted
+	// runtime-target-scan aggregates; the projector retires coordinates
+	// outside the runner's scope.
+	adoptionBackgroundScans, err := newAdoptionBackgroundScanRunner(cfg, adoptionSvc, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure background adoption scans: %w", err)
+	}
+
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
@@ -895,6 +903,9 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 		nostrAdapter.WithDeploymentInventorySource(nostrAdapter.RepositoryDeploymentInventorySource{Artifacts: artifactRepo, Units: deploymentUnitRepo, Instances: managedInstanceHealthRepo, InstancesSupervised: managedInstanceSupervisor != nil}),
+	}
+	if adoptionBackgroundScans != nil {
+		projectorOpts = append(projectorOpts, nostrAdapter.WithBackgroundTargetScanScope(adoptionBackgroundScans.Scope()))
 	}
 	if llmRegistry != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
@@ -918,13 +929,18 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
 	}
-	adoptionBackgroundScans, err := newAdoptionBackgroundScanRunner(cfg, adoptionSvc, nostrProjector, nostrProjector.Enabled(), logger)
-	if err != nil {
-		return nil, fmt.Errorf("configure background adoption scans: %w", err)
-	}
 	if adoptionBackgroundScans != nil {
-		bgManager.RegisterWithOptions(adoptionBackgroundScans, RunnerTier(Tier3), RunnerRequired(false))
-		registerAdoptionBackgroundScanHealthCheck(healthProvider, adoptionBackgroundScans, Tier3)
+		if nostrProjector.Enabled() {
+			bgManager.RegisterWithOptions(adoptionBackgroundScans, RunnerTier(Tier3), RunnerRequired(false))
+			registerAdoptionBackgroundScanHealthCheck(healthProvider, adoptionBackgroundScans, Tier3)
+			bg := cfg.Adoption.BackgroundScan
+			logger.Info("background adoption scans enabled",
+				zap.Int("targets", len(adoptionBackgroundScans.Scope())),
+				zap.Duration("interval", bg.Interval), zap.Duration("jitter", bg.Jitter), zap.Duration("timeout", bg.Timeout),
+				zap.Int("concurrency", bg.Concurrency), zap.Duration("max_backoff", bg.MaxBackoff))
+		} else {
+			logger.Info("background adoption scans inactive: nostr inventory projection is not publishing")
+		}
 	}
 
 	// Virtualization remains unavailable until persistence, projection and the
