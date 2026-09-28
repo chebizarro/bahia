@@ -158,6 +158,12 @@ The **Deployments** page is linkable at `/deployments/<intent-id>`. One aggregat
 
 Relay updates may arrive late or repeat after reconnect. The dashboard merges intent, run, and service/environment projections by logical identity and domain `updated_at`, with relay timestamp and event ID as deterministic tie-breakers. Corrected service-state coordinates include both service and environment, and logical tombstone watermarks prevent stale replay from resurrecting deleted state.
 
+### Observed deployments inventory (Settings)
+
+**Settings → Observed deployments** is a fleet-wide inventory of what Bahia knows is deployed, per environment. It comes from signed deployment-inventory snapshots (`30900`, `domain=deployment-inventory`), never from build metadata. Each row shows the service, deployment unit and target, runtime, desired image reference (with a warning when the desired reference is mutable), observed version or digest, health, drift, observation source, and observation age. Supervised instances of one deployment are listed individually, and each environment is shown separately, so multiple targets are never collapsed into one version. Rows are labelled when they are stale (the observation is older than the published freshness budget), stopped or unhealthy, desired-only, observed-only, drift-pending, or failing to reconcile. A deploy or rollback appears as soon as Bahia records the new observation; the frontend does not need to be rebuilt.
+
+Unmanaged workloads found by adoption scans appear only as per-target counts, with the scan time and an `unavailable` or stale label. To see individual containers, an authorized operator runs an encrypted adoption scan (`bahia adopt scan --encrypted …`).
+
 ### CLI
 
 The current CLI does not register `bahia deployments list`, `bahia deployments get`, or `bahia deployments logs` commands. Use `bahia state list` / `bahia state drifted` for current state views and `bahia logs run <run-id>` for run logs.

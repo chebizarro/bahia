@@ -1,13 +1,24 @@
 {
   "feature_id": "FP_BAHIA_SETTINGS_OBSERVED_DEPLOYMENTS_20260808",
-  "title": "Observed deployments in Settings Versions",
-  "intent": "Present authoritative observed runtime deployment state in Settings > Versions across embedded and externally deployed relay topologies, while retaining compile-time artifact metadata only as clearly labeled build information.",
-  "authoritative_sources": ["service registry read model", "environment registry read model", "environment service state read model", "current runtime observation read model"],
+  "title": "Authoritative observed-deployment inventory in Settings",
+  "intent": "Show Bahia's signed, authoritative inventory of deployments per environment (desired vs observed, health, drift, freshness, instances) in Settings, with stale, unavailable, desired-only, observed-only and unmanaged coverage explicit, and keep build provenance structurally and visually separate.",
+  "supersedes": "The 2026-08 observed_deployments array embedded in bahia.system-discovery.v1 (commit 18a5079a), rejected by review review-fp-bahia-settings-observed-deployments-20260927.",
+  "authoritative_sources": ["service registry", "environment registry", "environment service state (desired, drift, reconcile)", "latest runtime observation", "desired artifact", "deployment unit", "managed-instance supervisor health", "adoption scan per-target aggregates"],
   "projection": {
-    "schema": "bahia.system-discovery.v1",
-    "field": "observed_deployments",
-    "publication": "signed parameterized-replaceable ContextVM server announcement",
-    "refresh_events": ["service and environment lifecycle", "runtime observation", "environment service state and drift", "reconcile and adoption", "runtime deploy, restart, and stop"]
+    "kind": 30900,
+    "domain": "deployment-inventory",
+    "schema": "bahia.deployment-inventory.v1",
+    "entities": {
+      "environment-inventory": "d=deployment-inventory:environment:<environment_id>; complete snapshot; tombstoned with deleted=true on environment deletion",
+      "runtime-target-scan": "d=deployment-inventory:target-scan:<environment>:<target>; redacted per-target counts only"
+    },
+    "refresh": ["service/environment lifecycle", "runtime observation", "state change", "drift", "runtime deploy/restart/stop", "adoption import", "deployment run completion", "snapshot repair interval", "adoption scan completion (target scans)"],
+    "freshness": "stale_after_seconds = projector repair interval + 2 x reconcile interval; consumers judge staleness from observed_at/scanned_at"
   },
-  "compatibility": "The existing versions object remains additive build metadata; observed_deployments is an additive field in the v1 discovery envelope."
+  "security": {
+    "allowlist": "image refs, labels, codes and sha256 digests only; no hosts, container IDs, env values, commands, mounts, labels, free-form failure messages",
+    "unmanaged_exposure": "Owner decision option B: public aggregates only; per-instance detail only via authorized NIP-59 wrapped adoption/scan",
+    "audit": "runtime.observation 4903 audit reduced to an allowlisted summary"
+  },
+  "compatibility": "No new kind. bahia.system-discovery.v1 no longer carries observed_deployments; discovery-only clients keep working without deployment rows. adoption/scan and adoption/import now require NIP-59 wrapped requests."
 }

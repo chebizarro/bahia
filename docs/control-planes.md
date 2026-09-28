@@ -347,7 +347,7 @@ CLI behavior:
 Authorization uses the verified inner ContextVM event pubkey after unwrap:
 
 - `nostr.authorized_pubkeys` gates ContextVM transport admission; an empty list denies all requests.
-- `adoption.allowed_pubkeys` is also required for `adoption/scan` and `adoption/import`.
+- `adoption.allowed_pubkeys` is also required for `adoption/scan` and `adoption/import`. Both methods also require a NIP-59 wrapped (encrypted) request, because their responses carry per-instance runtime detail. Plaintext requests are refused (CLI: `--encrypted --service-pubkey <hex>`).
 - `direct_runtime_actions.allowed_pubkeys` is also required for `service/action` (deploy/restart/stop).
 - These are cumulative checks, not fallback lists: a signer must be in the global list and the relevant scoped list. Empty scoped lists deny all signers, including globally authorized operators.
 - Enabling adoption or direct-runtime actions requires at least one valid 64-hex scoped pubkey at config load. Keys are trimmed, lowercased, and deduplicated; matching is case-insensitive.
@@ -512,6 +512,10 @@ The legacy 311xx command bridge and Bahia-specific request/status/result/read-mo
 ### Managed-instance health projection
 
 Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.
+
+### Deployment inventory projection
+
+Settings → Observed deployments uses canonical `30900` state under `domain=deployment-inventory`, `schema=bahia.deployment-inventory.v1`. There are two entities: complete per-environment snapshots (`d=deployment-inventory:environment:<environment_id>`, tombstoned with `deleted=true` when the environment is removed) and redacted runtime-target scan aggregates (`d=deployment-inventory:target-scan:<environment>:<target>`). Snapshots combine desired state, the latest runtime observation, deployment unit, and supervised instances using allowlisted fields only, with explicit `coverage` (`observed`, `desired_only`, `observed_only`, `unknown`) and a `freshness.stale_after_seconds` budget. Unmanaged workloads are published only as per-target counts. Per-instance detail is returned only to authorized, NIP-59 wrapped `adoption/scan` requests. System discovery no longer carries `observed_deployments`. See `docs/nostr-event-implementation-guide.md` for the full shape.
 
 ### Route canary projection
 

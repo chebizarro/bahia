@@ -121,6 +121,8 @@ Desired-state runtime metadata is an additive observable contract, not a new pro
 | `10050` | NIP-51 DM relay list; explicit DM receive routing only |
 | `5` | NIP-09 deletion events |
 
+Deployment inventory (`domain=deployment-inventory`, `schema=bahia.deployment-inventory.v1`) is an additive `30900` read model. It replaces the `observed_deployments` array that was briefly embedded in system discovery (`bahia.system-discovery.v1`); discovery-only clients keep working but no longer receive deployment rows, and discovery must not be used as inventory. ContextVM `adoption/scan` and `adoption/import` now require a NIP-59 wrapped request. Unwrapped requests receive a JSON-RPC error because the responses carry per-instance runtime detail.
+
 ### 3. Relay preferences and bootstrap
 
 Bahia publishes service-key NIP-51 kind `30002` relay sets for canonical bootstrap and topology. `bahia-browser-v1` remains the browser-safe discovery/read set, `bahia-contextvm-v1` is the preferred ContextVM request/reply set, and `bahia-service-v1` is the backend service publish/backfill set.

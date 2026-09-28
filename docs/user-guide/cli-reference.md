@@ -519,11 +519,13 @@ bahia souls templates get research-agent
 
 ```bash
 # Scan for containers (target syntax is alias=endpointRef)
-bahia adopt scan --target prod=prod-docker
+bahia adopt scan --encrypted --service-pubkey <bahia-service-pubkey-hex> --target prod=prod-docker
 
 # Import discovered containers and bind the signed request to an organization
-bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
+bahia adopt import --encrypted --service-pubkey <bahia-service-pubkey-hex> --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
 ```
+
+Adoption over Nostr requires `--encrypted`. Scan and import responses list individual containers (IDs, names, images, digests), so Bahia answers only NIP-59 wrapped requests and encrypts the response to the requester. Plaintext requests are refused. The public deployment inventory only shows per-target counts of unmanaged workloads.
 
 `--org` is part of the signed import request. Use the destination organization UUID; it is not client-only display metadata.
 

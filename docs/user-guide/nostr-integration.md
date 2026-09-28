@@ -173,6 +173,15 @@ Worker resource-pressure and cleanup projections use the same canonical state la
 
 A cleanup execution projection is kind `30900` with tags such as `schema=bahia.state.worker-cleanup.v1`, `worker=<worker_pubkey>`, `status=<requested|dispatched|running|completed|failed>`, and `cleanup_mode=<reclaimable_only|aggressive>`. Cleanup mutation intent remains encrypted ContextVM `worker/cleanup`; public cleanup progress is represented by this state projection.
 
+The deployment inventory shown in Settings → Observed deployments is canonical `30900` state with `domain=deployment-inventory` and `schema=bahia.deployment-inventory.v1`:
+
+| Entity | `d` | Purpose |
+|--------|-----|---------|
+| `environment-inventory` | `deployment-inventory:environment:<environment_id>` | Complete snapshot of desired vs observed state per deployment, with coverage, drift, instances, and a freshness budget. Tombstoned (`deleted=true`) when the environment is deleted. |
+| `runtime-target-scan` | `deployment-inventory:target-scan:<environment>:<target>` | Redacted per-target counts (`total`, `managed`, `unmanaged`) from the latest adoption scan, or `scan_state=unavailable`. |
+
+Subscribe with `{"kinds":[30900],"authors":["<service pubkey>"],"#domain":["deployment-inventory"]}`. Verify the signature and the trusted author, keep the newest event per `d`, honor tombstones, and treat an observation older than `freshness.stale_after_seconds` as stale. Public events never include hosts, container IDs, environment values, commands, mounts, or per-instance detail for unmanaged workloads. Operators get that detail from an encrypted `adoption/scan` (see [Encrypted Operations](#encrypted-operations)).
+
 Managed-route canary outages are projected with `domain=route`. Each route transition publishes a `30315` status and a `30900` state addressed by the route coordinate, plus an immutable `4903` audit fact:
 
 | Schema | Kind | Purpose |
