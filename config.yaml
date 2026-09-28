@@ -146,6 +146,16 @@ adoption:
   allowed_subjects: []
   allowed_pubkeys: []
   allowed_emails: []
+  # Read-only background scans keep the redacted unmanaged-workload counts in
+  # Settings fresh. Unset "enabled" follows adoption.enabled; set false to opt
+  # out. Only runtime.endpoints aliases are scanned (list/inspect GETs only).
+  # See docs/adoption-production-rollout.md#background-adoption-scans.
+  background_scan:
+    interval: 5m
+    jitter: 30s
+    timeout: 1m
+    concurrency: 2
+    max_backoff: 1h
 
 direct_runtime_actions:
   # Locked-down default. MVP deployments enable this only after btc-01 endpoint_ref

@@ -210,6 +210,9 @@ type Projector struct {
 	inventoryRefreshMu      sync.Mutex
 	inventoryRefreshRunning bool
 	inventoryRefreshPending bool
+	targetScanMu            sync.Mutex
+	targetScans             map[string]targetScanRecord
+	targetScansHydrated     bool
 
 	// Generalized projection dedupe/coalescing/backoff/metrics state; see
 	// projection_dedupe.go. Initialized lazily so the constructor literal is
@@ -217,6 +220,9 @@ type Projector struct {
 	projInitOnce sync.Once
 	proj         *projectionState
 }
+
+// defaultProjectorRepairInterval is the periodic snapshot repair interval.
+const defaultProjectorRepairInterval = 10 * time.Minute
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
@@ -302,7 +308,7 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		eventRepo:          eventRepo,
 		privateKey:         cfg.PrivateKey,
 		enabled:            cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
-		repairInterval:     10 * time.Minute,
+		repairInterval:     defaultProjectorRepairInterval,
 		backupStaleTimeout: 15 * time.Minute,
 		logger:             logger.Named("nostr-projector"),
 	}

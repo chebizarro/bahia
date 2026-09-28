@@ -246,6 +246,18 @@ describe('deployment inventory protocol', () => {
     expect(buildDeploymentInventoryView(state, { nowMs: NOW_MS + 3600 * 1000 }).environments[0].targetScans[0].state).toBe('stale');
   });
 
+  it('removes a retired target scan and ignores its older aggregate replayed afterwards', async () => {
+    const state = createDeploymentInventoryState();
+    const aggregate = scanEvent({ target: 'edge-02' }, { createdAt: NOW_S - 60 });
+    expect((await ingestDeploymentInventoryEvent(state, aggregate, trusted)).accepted).toBe(true);
+    await ingestDeploymentInventoryEvent(state, scanEvent(), trusted);
+    const tombstone = signed({ schema: DEPLOYMENT_INVENTORY_SCHEMA, entity: TARGET_SCAN_ENTITY, deleted: true, environment: 'production', target: 'edge-02' }, { d: scanD('production', 'edge-02'), entity: TARGET_SCAN_ENTITY, createdAt: NOW_S, extraTags: [['deleted', 'true']] });
+    expect(await ingestDeploymentInventoryEvent(state, tombstone, trusted)).toMatchObject({ accepted: true, deleted: true });
+    expect((await ingestDeploymentInventoryEvent(state, aggregate, trusted)).accepted).toBe(false);
+    const production = buildDeploymentInventoryView(state, { nowMs: NOW_MS }).environments.find((environment) => environment.name === 'production');
+    expect(production.targetScans.map((scan) => scan.target)).toEqual(['edge-01']);
+  });
+
   it('groups scans under the resolved Bahia environment even when names differ in case', async () => {
     const state = createDeploymentInventoryState();
     await ingestDeploymentInventoryEvent(state, signed(environmentPayload(PROD_ID, 'Production', [deployment()]), { d: envD(PROD_ID) }), trusted);

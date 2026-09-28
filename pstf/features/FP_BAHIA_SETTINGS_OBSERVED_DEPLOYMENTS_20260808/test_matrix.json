@@ -99,6 +99,84 @@
       "layer": "live",
       "case": "edge-01 comparison against docker/compose ps and runtime_observations; stale (stop reconciler), unmanaged (stray container + encrypted scan), rollback; grep relay events and rendered DOM for secrets",
       "command": "manual \u2014 see verification_report.md"
+    },
+    {
+      "criterion": "BG1",
+      "layer": "Go service",
+      "case": "background runner scans each configured target once per interval on a fake clock, one target per call, origin=background, per-target deadline; retirement scope passed at start and after each cycle",
+      "command": "go test ./internal/service -run TestBackgroundScanRunnerScansEachConfiguredTargetPeriodically"
+    },
+    {
+      "criterion": "BG1",
+      "layer": "Go projector",
+      "case": "background scans update the aggregate: count change and unavailable publish promptly; older late results ignored",
+      "command": "go test ./internal/adapters/nostr -run TestBackgroundTargetScanRepublishesOnlyMaterialChangesAndFreshnessHeartbeats"
+    },
+    {
+      "criterion": "BG2",
+      "layer": "Go projector",
+      "case": "unchanged counts are not republished (dedupe metric counted) until the freshness heartbeat; stale_after_seconds reflects the background budget",
+      "command": "go test ./internal/adapters/nostr -run TestBackgroundTargetScanRepublishesOnlyMaterialChangesAndFreshnessHeartbeats"
+    },
+    {
+      "criterion": "BG2",
+      "layer": "Go projector",
+      "case": "unchanged counts are not republished after a restart (hydrated from retained events)",
+      "command": "go test ./internal/adapters/nostr -run TestBackgroundTargetScanSuppressesUnchangedCountsAcrossRestart"
+    },
+    {
+      "criterion": "BG3",
+      "layer": "Go service",
+      "case": "error and unreachable targets back off interval*2^n capped at max_backoff, are not scanned inside the window, and reset on success",
+      "command": "go test ./internal/service -run TestBackgroundScanRunnerBacksOffFailingTargetsAndRecovers"
+    },
+    {
+      "criterion": "BG4",
+      "layer": "Go service",
+      "case": "a hung target is cancelled at the per-target timeout, classified timeout, backed off, and does not block other targets",
+      "command": "go test ./internal/service -run TestBackgroundScanRunnerTimesOutHungTargetWithoutBlockingOthers"
+    },
+    {
+      "criterion": "BG5",
+      "layer": "Go service",
+      "case": "a cycle requested while one is in flight is skipped (overlap_skipped counted); in-flight scans never exceed concurrency; each target scanned once",
+      "command": "go test ./internal/service -run TestBackgroundScanRunnerNeverOverlapsCyclesAndBoundsConcurrency"
+    },
+    {
+      "criterion": "BG6",
+      "layer": "Go projector",
+      "case": "target removed from configuration while down is tombstoned after restart; fresh operator ad-hoc aggregate kept until stale then retired; idempotent; re-added target republishes",
+      "command": "go test ./internal/adapters/nostr -run TestRuntimeTargetScanRetirementTombstonesRemovedTargetsAcrossRestart"
+    },
+    {
+      "criterion": "BG6",
+      "layer": "Web",
+      "case": "a target-scan tombstone removes the row and an older aggregate replayed afterwards cannot resurrect it",
+      "command": "cd web && pnpm exec vitest run tests/unit/deployment-inventory.test.js"
+    },
+    {
+      "criterion": "BG7",
+      "layer": "Go app/config",
+      "case": "adoption disabled, explicit background_scan.enabled=false, or projection not publishing builds no runner; enabled=true without adoption is rejected; bounds validated",
+      "command": "go test ./internal/app ./internal/config -run AdoptionBackgroundScan"
+    },
+    {
+      "criterion": "BG8",
+      "layer": "Go projector",
+      "case": "runner-driven scans with per-instance detail (container ids, names, image, digest, env secret, host, dial error) publish only redacted aggregates and no public audit",
+      "command": "go test ./internal/adapters/nostr -run TestBackgroundScanRunnerPublishesOnlyRedactedAggregates"
+    },
+    {
+      "criterion": "BG9",
+      "layer": "Go service",
+      "case": "real adoption scan via the runner issues only GET Docker API calls, writes no Bahia state, and publishes one aggregate-only completion",
+      "command": "go test ./internal/service -run TestBackgroundScanIsReadOnlyAndPublishesOnlyAggregates"
+    },
+    {
+      "criterion": "BG10",
+      "layer": "Go app",
+      "case": "readiness check warns (never fails) on failing targets and exposes outcome codes only",
+      "command": "go test ./internal/app -run TestAdoptionBackgroundScanHealthWarnsOnFailingTargets"
     }
   ]
 }

@@ -145,9 +145,19 @@ func NewAdoptionService(
 	return svc
 }
 
+// Adoption scan origins. Background scans are issued by the supervised
+// background runner; operator scans by an authorized adoption/scan request.
+const (
+	AdoptionScanOriginOperator   = "operator"
+	AdoptionScanOriginBackground = "background"
+)
+
 // AdoptionScanRequest requests a scan of one or more Docker targets.
 type AdoptionScanRequest struct {
 	Targets []AdoptionTarget
+	// Origin is AdoptionScanOriginOperator (the default) or
+	// AdoptionScanOriginBackground.
+	Origin string
 }
 
 // AdoptionTarget identifies a Docker host and target environment.
@@ -215,6 +225,10 @@ type AdoptionImportResult struct {
 // Scan discovers containers and proposes Bahia service names.
 func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
 	start := time.Now()
+	origin := AdoptionScanOriginOperator
+	if req.Origin == AdoptionScanOriginBackground {
+		origin = AdoptionScanOriginBackground
+	}
 	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
 		s.logger.Warn("adoption scan rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
@@ -232,6 +246,7 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 		Type:     events.EventAdoptionScanCompleted,
 		EntityID: "adoption",
 		Data: AdoptionScanCompleted{
+			Origin:                origin,
 			CompletedAt:           time.Now().UTC(),
 			TargetCount:           len(targets),
 			CandidateCount:        candidateCount,
@@ -242,7 +257,14 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 			Targets:               s.resolveScanSummaryEnvironments(ctx, AdoptionScanTargetSummaries(previews)),
 		},
 	})
-	s.logger.Info("adoption scan completed",
+	logCompleted := s.logger.Info
+	if origin == AdoptionScanOriginBackground {
+		// The background runner reports its own per-target outcomes; keep
+		// periodic scans out of the operator audit log stream.
+		logCompleted = s.logger.Debug
+	}
+	logCompleted("adoption scan completed",
+		zap.String("origin", origin),
 		zap.Int("target_count", len(targets)),
 		zap.Int("candidate_count", candidateCount),
 		zap.Int("target_error_count", targetErrors),
@@ -610,6 +632,8 @@ func isRetryableImportTxError(err error) bool {
 // name, image, digest, version, host, labels, or environment values. Per-instance
 // detail is returned only to the authorized adoption/scan requester.
 type AdoptionScanCompleted struct {
+	// Origin is AdoptionScanOriginOperator or AdoptionScanOriginBackground.
+	Origin                string
 	CompletedAt           time.Time
 	TargetCount           int
 	CandidateCount        int
@@ -1105,6 +1129,13 @@ func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, artifacts 
 		return nil, fmt.Errorf("creating adoption artifact: %w", err)
 	}
 	return artifact, nil
+}
+
+// ResolveScanTargets validates and normalizes targets exactly as Scan does, so
+// callers (the background runner) can precompute the target names and
+// environments the published scan coordinates will use.
+func (s *AdoptionService) ResolveScanTargets(targets []AdoptionTarget) ([]AdoptionTarget, error) {
+	return s.normalizeAdoptionTargets(targets)
 }
 
 func (s *AdoptionService) normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error) {

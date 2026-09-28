@@ -918,6 +918,14 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
 	}
+	adoptionBackgroundScans, err := newAdoptionBackgroundScanRunner(cfg, adoptionSvc, nostrProjector, nostrProjector.Enabled(), logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure background adoption scans: %w", err)
+	}
+	if adoptionBackgroundScans != nil {
+		bgManager.RegisterWithOptions(adoptionBackgroundScans, RunnerTier(Tier3), RunnerRequired(false))
+		registerAdoptionBackgroundScanHealthCheck(healthProvider, adoptionBackgroundScans, Tier3)
+	}
 
 	// Virtualization remains unavailable until persistence, projection and the
 	// explicitly configured provider/plane trust boundaries are all ready.

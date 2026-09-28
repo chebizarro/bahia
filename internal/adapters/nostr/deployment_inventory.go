@@ -698,14 +698,36 @@ func (p *Projector) hydrateDeploymentInventoryPublished(ctx context.Context) err
 // a completed adoption scan. Only counts, scan state, and target/environment
 // aliases are public; per-instance detail stays on the encrypted adoption/scan
 // response to the authorized requester.
+//
+// Background scans repeat every few minutes, so a coordinate is republished
+// only when its material content (counts, scan state, aliases, freshness
+// budget, origin) changes, or as a freshness heartbeat once the published
+// scanned_at is older than the refresh interval. Unchanged counts therefore
+// cost at most one event per coordinate per refresh interval, and consumers
+// judge staleness from scanned_at against stale_after_seconds.
 func (p *Projector) publishRuntimeTargetScans(ctx context.Context, scan service.AdoptionScanCompleted) error {
 	if !p.Enabled() {
 		return nil
 	}
-	staleAfter := int64(p.deploymentInventoryStaleAfter() / time.Second)
-	scannedAt := scan.CompletedAt
+	p.targetScanMu.Lock()
+	defer p.targetScanMu.Unlock()
+	if err := p.hydrateTargetScans(ctx); err != nil {
+		// Without the retained state every coordinate is treated as new;
+		// the dedupe/admission path still bounds what reaches relays.
+		p.logger.Warn("hydrate runtime target scan state", zap.Error(err))
+	}
+	staleAfter := int64(p.targetScanStaleAfter() / time.Second)
+	refreshAfter := p.targetScanRefreshAfter()
+	scannedAt := scan.CompletedAt.UTC()
 	if scannedAt.IsZero() {
 		scannedAt = time.Now().UTC()
+	}
+	// Timestamps are published at second resolution; compare what is
+	// published so hydrated and live state agree.
+	scannedAt = scannedAt.Truncate(time.Second)
+	origin := service.AdoptionScanOriginOperator
+	if scan.Origin == service.AdoptionScanOriginBackground {
+		origin = service.AdoptionScanOriginBackground
 	}
 	var failures []string
 	for _, target := range scan.Targets {
@@ -732,27 +754,251 @@ func (p *Projector) publishRuntimeTargetScans(ctx context.Context, scan service.
 			payload.ScanState = targetScanComplete
 			payload.Counts = &deploymentInventoryCounts{Total: target.Total, Managed: target.Managed, Unmanaged: target.Unmanaged}
 		}
-		content, err := json.Marshal(payload)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("marshal %s: %v", alias, err))
-			continue
-		}
+		dTag := deploymentInventoryTargetScanDTag(environment, alias)
 		tags := gonostr.Tags{
-			{kinds.CASControlStateTagD, deploymentInventoryTargetScanDTag(environment, alias)},
+			{kinds.CASControlStateTagD, dTag},
 			{kinds.CASControlStateTagDomain, DeploymentInventoryDomain},
 			{kinds.CASControlStateTagSchema, DeploymentInventorySchema},
 			{"entity", DeploymentInventoryTargetScanEntity},
 			{"target", alias},
 			{"status", payload.ScanState},
+			{"origin", origin},
 			{"deleted", "false"},
+		}
+		material := targetScanMaterialFingerprint(payload, origin)
+		if previous, ok := p.targetScans[dTag]; ok && !previous.deleted {
+			if scannedAt.Before(previous.scannedAt) {
+				// An older result finishing late never overwrites a newer one.
+				continue
+			}
+			if previous.material == material && scannedAt.Sub(previous.scannedAt) < refreshAfter {
+				p.projection().count(projectionFamily(KindCASControlState, tags), func(m *ProjectionFamilyMetrics) { m.Deduped++ })
+				continue
+			}
+		}
+		content, err := json.Marshal(payload)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("marshal %s: %v", alias, err))
+			continue
 		}
 		if err := p.publishSigned(ctx, KindCASControlState, tags, string(content), "deployment_inventory.target_scan", nil); err != nil {
 			failures = append(failures, fmt.Sprintf("publish %s: %v", alias, err))
+			continue
 		}
+		p.targetScans[dTag] = targetScanRecord{material: material, scannedAt: scannedAt, origin: origin, environment: environment, target: alias}
 	}
 	if len(failures) > 0 {
 		return fmt.Errorf("runtime target scan projection completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
 	}
+	return nil
+}
+
+// targetScanRecord is the last published state of one target-scan coordinate.
+type targetScanRecord struct {
+	material    string
+	scannedAt   time.Time
+	origin      string
+	environment string
+	target      string
+	deleted     bool
+}
+
+type deploymentInventoryTargetScanTombstonePayload struct {
+	Schema      string `json:"schema"`
+	Entity      string `json:"entity"`
+	Deleted     bool   `json:"deleted"`
+	Environment string `json:"environment"`
+	Target      string `json:"target"`
+}
+
+// targetScanMaterialFingerprint hashes a target-scan aggregate without its
+// scan time, so repeated scans with unchanged counts are not material.
+func targetScanMaterialFingerprint(payload deploymentInventoryTargetScanPayload, origin string) string {
+	payload.ScannedAt = ""
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(append(encoded, []byte("\x00"+origin)...))
+	return hex.EncodeToString(sum[:])
+}
+
+// targetScanRefreshAfter is the heartbeat interval: an unchanged aggregate is
+// republished once its published scanned_at is at least this old.
+func (p *Projector) targetScanRefreshAfter() time.Duration {
+	if p.repairInterval > 0 {
+		return p.repairInterval
+	}
+	return defaultProjectorRepairInterval
+}
+
+// targetScanStaleAfter is the freshness budget published with target-scan
+// aggregates. With background scanning, a healthy target's published
+// scanned_at lags by at most the heartbeat plus one scan period (interval,
+// jitter, timeout); the budget allows one missed period on top. Without
+// background scanning, the inventory budget applies (operator scans age into
+// stale).
+func (p *Projector) targetScanStaleAfter() time.Duration {
+	budget := p.deploymentInventoryStaleAfter()
+	if p.systemConfig == nil || !p.systemConfig.Adoption.BackgroundScanEnabled() {
+		return budget
+	}
+	bg := p.systemConfig.Adoption.BackgroundScan
+	background := p.targetScanRefreshAfter() + 2*(bg.Interval+bg.Jitter) + bg.Timeout
+	if background > budget {
+		return background
+	}
+	return budget
+}
+
+// RetireRuntimeTargetScans tombstones published target-scan coordinates that
+// are not in keep (the configured background scan scope). Coordinates last
+// published by a background scan are retired immediately, which covers
+// targets removed from configuration while Bahia was down. Coordinates from
+// operator-initiated scans of unconfigured targets are retired once stale, so
+// an ad-hoc scan remains visible for its freshness budget but is never left
+// behind forever.
+func (p *Projector) RetireRuntimeTargetScans(ctx context.Context, keep []service.RuntimeTargetScanScope, now time.Time) (int, error) {
+	if !p.Enabled() {
+		return 0, nil
+	}
+	p.targetScanMu.Lock()
+	defer p.targetScanMu.Unlock()
+	if err := p.hydrateTargetScans(ctx); err != nil {
+		return 0, err
+	}
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, scope := range keep {
+		environment, target := safeInventoryLabel(scope.Environment), safeInventoryLabel(scope.Target)
+		if environment != "" && target != "" {
+			keepSet[deploymentInventoryTargetScanDTag(environment, target)] = struct{}{}
+		}
+	}
+	staleAfter := p.targetScanStaleAfter()
+	dTags := make([]string, 0, len(p.targetScans))
+	for dTag := range p.targetScans {
+		dTags = append(dTags, dTag)
+	}
+	sort.Strings(dTags)
+	retired := 0
+	var failures []string
+	for _, dTag := range dTags {
+		record := p.targetScans[dTag]
+		if record.deleted {
+			continue
+		}
+		if _, configured := keepSet[dTag]; configured {
+			continue
+		}
+		if record.origin != service.AdoptionScanOriginBackground && now.Sub(record.scannedAt) <= staleAfter {
+			continue
+		}
+		if err := p.publishTargetScanTombstone(ctx, dTag, record); err != nil {
+			failures = append(failures, fmt.Sprintf("tombstone %s: %v", dTag, err))
+			continue
+		}
+		record.deleted = true
+		p.targetScans[dTag] = record
+		retired++
+	}
+	if len(failures) > 0 {
+		return retired, fmt.Errorf("runtime target scan retirement completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	return retired, nil
+}
+
+func (p *Projector) publishTargetScanTombstone(ctx context.Context, dTag string, record targetScanRecord) error {
+	content, err := json.Marshal(deploymentInventoryTargetScanTombstonePayload{
+		Schema:      DeploymentInventorySchema,
+		Entity:      DeploymentInventoryTargetScanEntity,
+		Deleted:     true,
+		Environment: record.environment,
+		Target:      record.target,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal runtime target scan tombstone: %w", err)
+	}
+	tags := gonostr.Tags{
+		{kinds.CASControlStateTagD, dTag},
+		{kinds.CASControlStateTagDomain, DeploymentInventoryDomain},
+		{kinds.CASControlStateTagSchema, DeploymentInventorySchema},
+		{"entity", DeploymentInventoryTargetScanEntity},
+		{"target", record.target},
+		{"status", "deleted"},
+		{"deleted", "true"},
+	}
+	return p.publishSigned(ctx, KindCASControlState, tags, string(content), "deployment_inventory.target_scan", nil)
+}
+
+// hydrateTargetScans restores the last published state of each target-scan
+// coordinate from this service's retained events, so a restart neither
+// republishes unchanged counts nor forgets coordinates it must retire. It
+// queries by entity tag, giving target scans their own hydration window.
+func (p *Projector) hydrateTargetScans(ctx context.Context) error {
+	if p.targetScansHydrated {
+		return nil
+	}
+	p.targetScans = map[string]targetScanRecord{}
+	if p.eventRepo == nil {
+		p.targetScansHydrated = true
+		return nil
+	}
+	records, err := p.eventRepo.FindByTag(ctx, "entity", DeploymentInventoryTargetScanEntity, []int{KindCASControlState}, deploymentInventoryHydrateLimit)
+	if err != nil {
+		return fmt.Errorf("hydrate runtime target scan state: %w", err)
+	}
+	if len(records) >= deploymentInventoryHydrateLimit {
+		p.logger.Warn("runtime target scan hydration window saturated", zap.Int("records", len(records)))
+	}
+	servicePubkey := ""
+	if p.privateKey != "" {
+		servicePubkey, err = publicKeyHexFromPrivateKeyHex(p.privateKey)
+		if err != nil {
+			return fmt.Errorf("derive runtime target scan service pubkey: %w", err)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.After(records[j].CreatedAt)
+	})
+	for _, record := range records {
+		if servicePubkey != "" && record.PubKey != servicePubkey {
+			continue
+		}
+		var tags gonostr.Tags
+		if err := json.Unmarshal(record.Tags, &tags); err != nil {
+			continue
+		}
+		dTag := tagValue(tags, kinds.CASControlStateTagD)
+		if !strings.HasPrefix(dTag, deploymentInventoryTargetScanDPrefix) || tagValue(tags, "entity") != DeploymentInventoryTargetScanEntity {
+			continue
+		}
+		if _, seen := p.targetScans[dTag]; seen {
+			continue
+		}
+		if tagValue(tags, "deleted") == "true" {
+			p.targetScans[dTag] = targetScanRecord{deleted: true}
+			continue
+		}
+		var payload deploymentInventoryTargetScanPayload
+		if err := json.Unmarshal([]byte(record.Content), &payload); err != nil {
+			continue
+		}
+		scannedAt, _ := time.Parse(time.RFC3339Nano, payload.ScannedAt)
+		origin := tagValue(tags, "origin")
+		if origin != service.AdoptionScanOriginBackground {
+			// Events published before scan origins existed came from
+			// operator scans.
+			origin = service.AdoptionScanOriginOperator
+		}
+		p.targetScans[dTag] = targetScanRecord{
+			material:    targetScanMaterialFingerprint(payload, origin),
+			scannedAt:   scannedAt.UTC(),
+			origin:      origin,
+			environment: payload.Environment,
+			target:      payload.Target,
+		}
+	}
+	p.targetScansHydrated = true
 	return nil
 }
 

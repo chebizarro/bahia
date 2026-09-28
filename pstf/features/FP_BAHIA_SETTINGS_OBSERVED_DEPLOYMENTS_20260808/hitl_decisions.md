@@ -16,8 +16,30 @@ The `observed_deployments` array that 18a5079a added to `bahia.system-discovery.
 
 ## D4 — Freshness budget
 
-`stale_after_seconds` = projector snapshot repair interval + 2 × reconcile interval (default 10 m + 2 m = 720 s). Observations refresh every reconcile pass, but the inventory is republished on material events and at the repair interval, so the published `observed_at` may lag by up to the repair interval. Unmanaged scan aggregates use the same budget. Scans are operator-initiated, so they normally display as stale with their age.
+`stale_after_seconds` = projector snapshot repair interval + 2 × reconcile interval (default 10 m + 2 m = 720 s). Observations refresh every reconcile pass, but the inventory is republished on material events and at the repair interval, so the published `observed_at` may lag by up to the repair interval. Unmanaged scan aggregates use this budget when background scanning is off: operator-initiated scans then display as stale with their age. With background scanning on (D5), target scans carry their own budget, repair interval + 2 × (scan interval + jitter) + scan timeout (default 1320 s).
 
-## Open question for the owner
+## D5 — Background adoption scans (owner decision, 2026-09-28)
 
-- Should Bahia run periodic background adoption scans of configured runtime endpoints so that unmanaged counts stay fresh? This changes Docker-socket access patterns and is out of scope without an explicit decision.
+Owner decision: Bahia runs background adoption scans of its configured runtime targets and endpoints, so the unmanaged aggregate counts stay fresh. This resolves the open question the original branch left.
+
+Implementation choices (branch `task/bahia-background-adoption-scans-20260928`):
+
+- **Default on only where adoption is enabled.** `adoption.background_scan.enabled` unset follows `adoption.enabled`, and `false` opts out. `true` without adoption is a config error. This is safe because:
+  - it scans only `runtime.endpoints` aliases already configured for adoption, reusing the transport and credentials Bahia already uses there;
+  - it never scans raw `docker_host` targets;
+  - its Docker calls are GET list/inspect only;
+  - it publishes only D1 aggregates.
+
+  Deployments that never enabled adoption gain no new Docker access.
+- **Same scan logic** as `adoption/scan` (`AdoptionService.Scan`, origin `background`), one target per call.
+- **Bounded:**
+  - interval 5 m (1 m–24 h);
+  - jitter 30 s (≤ interval/2);
+  - per-target timeout 1 m;
+  - concurrency 2 (≤ 8);
+  - exponential backoff up to 1 h;
+  - one cycle at a time, overlap skipped rather than queued.
+- **Traffic.** Target-scan aggregates republish only on a material change, or as a heartbeat once per repair interval. This goes through the existing dedupe, coalescing, and relay-backoff path.
+- **Retirement.** Target-scan coordinates outside the configured scope are tombstoned: background-origin ones immediately, operator ad-hoc ones once stale. This closes the "scan coordinates never retired" residual, but only while background scanning is enabled.
+
+Access-scope note for the owner: the Docker Engine API has no read-only credential. The certificate or socket Bahia already holds for an endpoint is full-control, so background scanning adds calls, not privilege. Operators who need stricter isolation can narrow `adoption.background_scan.targets`, or front the endpoint with an authorization proxy that allows only the three GET routes. See `docs/adoption-production-rollout.md#background-adoption-scans`.

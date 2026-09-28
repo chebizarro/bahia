@@ -178,7 +178,7 @@ The deployment inventory shown in Settings → Observed deployments is canonical
 | Entity | `d` | Purpose |
 |--------|-----|---------|
 | `environment-inventory` | `deployment-inventory:environment:<environment_id>` | Complete snapshot of desired vs observed state per deployment, with coverage, drift, instances, and a freshness budget. Tombstoned (`deleted=true`) when the environment is deleted. |
-| `runtime-target-scan` | `deployment-inventory:target-scan:<environment>:<target>` | Redacted per-target counts (`total`, `managed`, `unmanaged`) from the latest adoption scan, or `scan_state=unavailable`. |
+| `runtime-target-scan` | `deployment-inventory:target-scan:<environment>:<target>` | Redacted per-target counts (`total`, `managed`, `unmanaged`) from the latest adoption scan, or `scan_state=unavailable`. Kept fresh by background scans where adoption is enabled; tombstoned (`deleted=true`) when the target leaves the scan scope. |
 
 Subscribe with `{"kinds":[30900],"authors":["<service pubkey>"],"#domain":["deployment-inventory"]}`. Verify the signature and the trusted author, keep the newest event per `d`, honor tombstones, and treat an observation older than `freshness.stale_after_seconds` as stale. Public events never include hosts, container IDs, environment values, commands, mounts, or per-instance detail for unmanaged workloads. Operators get that detail from an encrypted `adoption/scan` (see [Encrypted Operations](#encrypted-operations)).
 

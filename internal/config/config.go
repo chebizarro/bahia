@@ -909,6 +909,142 @@ type AdoptionConfig struct {
 	AllowRawDockerHosts  bool `koanf:"allow_raw_docker_hosts" secret:"false"`
 	AllowComposeTakeover bool `koanf:"allow_compose_takeover" secret:"false"`
 	OperatorAccessConfig `koanf:",squash"`
+	// BackgroundScan keeps the redacted per-target unmanaged-workload
+	// aggregates fresh by periodically running the read-only adoption scan.
+	BackgroundScan AdoptionBackgroundScanConfig `koanf:"background_scan"`
+}
+
+// Background adoption scan bounds. Scans are read-only Docker list/inspect
+// calls against server-managed runtime endpoints; the bounds keep Docker API
+// load and outbound Nostr traffic predictable.
+const (
+	DefaultAdoptionBackgroundScanInterval    = 5 * time.Minute
+	DefaultAdoptionBackgroundScanJitter      = 30 * time.Second
+	DefaultAdoptionBackgroundScanTimeout     = time.Minute
+	DefaultAdoptionBackgroundScanConcurrency = 2
+	DefaultAdoptionBackgroundScanMaxBackoff  = time.Hour
+
+	MinAdoptionBackgroundScanInterval    = time.Minute
+	MaxAdoptionBackgroundScanInterval    = 24 * time.Hour
+	MinAdoptionBackgroundScanTimeout     = 5 * time.Second
+	MaxAdoptionBackgroundScanConcurrency = 8
+)
+
+// AdoptionBackgroundScanConfig configures periodic background adoption scans.
+//
+// Enabled is tri-state: unset follows adoption.enabled (background scanning is
+// on by default wherever adoption is enabled, because it scans only endpoints
+// already configured for adoption and never mutates them); false disables it;
+// true requires adoption.enabled=true.
+type AdoptionBackgroundScanConfig struct {
+	Enabled     *bool         `koanf:"enabled" secret:"false"`
+	Interval    time.Duration `koanf:"interval" secret:"false"`
+	Jitter      time.Duration `koanf:"jitter" secret:"false"`
+	Timeout     time.Duration `koanf:"timeout" secret:"false"`
+	Concurrency int           `koanf:"concurrency" secret:"false"`
+	MaxBackoff  time.Duration `koanf:"max_backoff" secret:"false"`
+	// Targets optionally narrows the scan scope. When empty, every
+	// runtime.endpoints alias is scanned as a target of the same name, in the
+	// single runtime environment that references it (else the alias).
+	Targets []AdoptionBackgroundScanTarget `koanf:"targets"`
+}
+
+// AdoptionBackgroundScanTarget is one explicitly scoped background scan
+// target. Only server-managed endpoint aliases are accepted; raw Docker hosts
+// are never scanned in the background.
+type AdoptionBackgroundScanTarget struct {
+	Name        string `koanf:"name" secret:"false"`
+	EndpointRef string `koanf:"endpoint_ref" secret:"false"`
+	Environment string `koanf:"environment" secret:"false"`
+}
+
+// BackgroundScanEnabled reports whether background adoption scans run.
+func (c AdoptionConfig) BackgroundScanEnabled() bool {
+	if c.BackgroundScan.Enabled != nil {
+		return c.Enabled && *c.BackgroundScan.Enabled
+	}
+	return c.Enabled
+}
+
+// BackgroundScanTargets resolves the configured background scan scope. The
+// result is sorted by target name and uses endpoint aliases only.
+func (c *Config) BackgroundScanTargets() []AdoptionBackgroundScanTarget {
+	if len(c.Adoption.BackgroundScan.Targets) > 0 {
+		out := append([]AdoptionBackgroundScanTarget(nil), c.Adoption.BackgroundScan.Targets...)
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	envsByEndpoint := map[string][]string{}
+	for envName, target := range c.Runtime.Environments {
+		if ref := strings.TrimSpace(target.EndpointRef); ref != "" {
+			envsByEndpoint[ref] = append(envsByEndpoint[ref], envName)
+		}
+	}
+	out := make([]AdoptionBackgroundScanTarget, 0, len(c.Runtime.Endpoints))
+	for ref := range c.Runtime.Endpoints {
+		target := AdoptionBackgroundScanTarget{Name: ref, EndpointRef: ref}
+		if envs := envsByEndpoint[ref]; len(envs) == 1 {
+			target.Environment = envs[0]
+		}
+		out = append(out, target)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (c *Config) validateAdoptionBackgroundScan() error {
+	bg := &c.Adoption.BackgroundScan
+	if bg.Enabled != nil && *bg.Enabled && !c.Adoption.Enabled {
+		return fmt.Errorf("config validation failed: adoption.background_scan.enabled=true requires adoption.enabled=true")
+	}
+	if !c.Adoption.BackgroundScanEnabled() {
+		return nil
+	}
+	if bg.Interval == 0 {
+		bg.Interval = DefaultAdoptionBackgroundScanInterval
+	}
+	if bg.Timeout == 0 {
+		bg.Timeout = DefaultAdoptionBackgroundScanTimeout
+	}
+	if bg.Concurrency == 0 {
+		bg.Concurrency = DefaultAdoptionBackgroundScanConcurrency
+	}
+	if bg.MaxBackoff == 0 {
+		bg.MaxBackoff = DefaultAdoptionBackgroundScanMaxBackoff
+	}
+	if bg.Interval < MinAdoptionBackgroundScanInterval || bg.Interval > MaxAdoptionBackgroundScanInterval {
+		return fmt.Errorf("config validation failed: adoption.background_scan.interval must be between %s and %s", MinAdoptionBackgroundScanInterval, MaxAdoptionBackgroundScanInterval)
+	}
+	if bg.Jitter < 0 || bg.Jitter > bg.Interval/2 {
+		return fmt.Errorf("config validation failed: adoption.background_scan.jitter must be between 0 and half the interval")
+	}
+	if bg.Timeout < MinAdoptionBackgroundScanTimeout || bg.Timeout >= bg.Interval {
+		return fmt.Errorf("config validation failed: adoption.background_scan.timeout must be at least %s and shorter than the interval", MinAdoptionBackgroundScanTimeout)
+	}
+	if bg.Concurrency < 1 || bg.Concurrency > MaxAdoptionBackgroundScanConcurrency {
+		return fmt.Errorf("config validation failed: adoption.background_scan.concurrency must be between 1 and %d", MaxAdoptionBackgroundScanConcurrency)
+	}
+	if bg.MaxBackoff < bg.Interval || bg.MaxBackoff > MaxAdoptionBackgroundScanInterval {
+		return fmt.Errorf("config validation failed: adoption.background_scan.max_backoff must be between the interval and %s", MaxAdoptionBackgroundScanInterval)
+	}
+	seen := map[string]struct{}{}
+	for i, target := range bg.Targets {
+		name := strings.TrimSpace(target.Name)
+		ref := strings.TrimSpace(target.EndpointRef)
+		if name == "" || ref == "" {
+			return fmt.Errorf("config validation failed: adoption.background_scan.targets[%d] requires name and endpoint_ref", i)
+		}
+		if _, ok := c.Runtime.Endpoints[ref]; !ok {
+			return fmt.Errorf("config validation failed: adoption.background_scan.targets[%d].endpoint_ref %q is not configured in runtime.endpoints", i, ref)
+		}
+		key := strings.ToLower(name)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("config validation failed: adoption.background_scan.targets has duplicate name %q", name)
+		}
+		seen[key] = struct{}{}
+		bg.Targets[i] = AdoptionBackgroundScanTarget{Name: name, EndpointRef: ref, Environment: strings.TrimSpace(target.Environment)}
+	}
+	return nil
 }
 
 // DirectRuntimeConfig holds privileged direct runtime action route settings.
@@ -1362,6 +1498,13 @@ func Defaults() *Config {
 		},
 		Adoption: AdoptionConfig{
 			Enabled: false,
+			BackgroundScan: AdoptionBackgroundScanConfig{
+				Interval:    DefaultAdoptionBackgroundScanInterval,
+				Jitter:      DefaultAdoptionBackgroundScanJitter,
+				Timeout:     DefaultAdoptionBackgroundScanTimeout,
+				Concurrency: DefaultAdoptionBackgroundScanConcurrency,
+				MaxBackoff:  DefaultAdoptionBackgroundScanMaxBackoff,
+			},
 		},
 		DirectRuntime: DirectRuntimeConfig{
 			Enabled: false,
@@ -1665,6 +1808,9 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
 			return fmt.Errorf("config validation failed: nostr.private_key is required when adoption.enabled=true because adopted workload secret import requires encryption")
 		}
+	}
+	if err := c.validateAdoptionBackgroundScan(); err != nil {
+		return err
 	}
 	for name, endpoint := range c.Runtime.Endpoints {
 		if strings.TrimSpace(name) == "" {

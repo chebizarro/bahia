@@ -140,6 +140,52 @@ Example compatibility-only raw-target invocation:
 bahia --http-fallback adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
 ```
 
+## Background adoption scans
+
+Settings → Observed deployments shows unmanaged workloads only as redacted per-target counts (`runtime-target-scan` aggregates; see `docs/nostr-event-implementation-guide.md`). To keep those counts fresh without operator action, Bahia runs a supervised background runner, `adoption-background-scan`.
+
+**Default.** On wherever `adoption.enabled=true`, and off otherwise. Why this is safe to default on:
+- it scans only server-managed `runtime.endpoints` aliases, which are already configured for adoption and which Bahia already uses for runtime observation and deploys;
+- raw `docker_host` targets are never scanned in the background, whatever `adoption.allow_raw_docker_hosts` says;
+- a scan is read-only;
+- the public result is aggregate counts only.
+
+To disable it explicitly, set `adoption.background_scan.enabled: false`. Setting `enabled: true` while adoption is disabled is a config error. Background scans also stay inactive when Nostr publishing is off, because nothing would consume them.
+
+```yaml
+adoption:
+  background_scan:
+    # enabled: false        # explicit opt-out; unset follows adoption.enabled
+    interval: 5m            # 1m..24h between scans of a healthy target
+    jitter: 30s             # 0..interval/2, added to every schedule (spreads load)
+    timeout: 1m             # per-target scan bound; >=5s and < interval
+    concurrency: 2          # 1..8 targets scanned at once
+    max_backoff: 1h         # failing targets back off interval*2^n up to this cap
+    # targets:              # optional scope; default = every runtime.endpoints alias
+    #   - name: prod-docker
+    #     endpoint_ref: prod-docker
+    #     environment: production
+```
+
+**Scope.** With no `targets`, each `runtime.endpoints.<alias>` becomes a target named after the alias. Its environment is the single `runtime.environments.<env>` that references the alias via `endpoint_ref`; if zero or several environments reference it, the alias itself is used, as `bahia adopt scan --target <alias>` does. Names and environments are normalized the same way operator scans are, so both publish the same coordinate. Use `targets` to narrow the scope to fewer endpoints (least privilege).
+
+**Scheduling.** Each target is first scanned within `jitter` of startup, then every `interval + jitter`. Only one cycle runs at a time: a cycle requested while another is in flight is skipped, never queued. At most `concurrency` targets are in flight. Each target scan is cancelled after `timeout`. An error, timeout, or unreachable endpoint backs that target off exponentially (`interval × 2^failures`, capped at `max_backoff`); one success resets it. An unreachable endpoint publishes `scan_state=unavailable`. A timed-out scan publishes nothing, so its last aggregate ages into stale.
+
+**Public output and traffic.** Results feed only the redacted target-scan aggregate (owner decision option B). Unchanged counts are not republished; an aggregate is re-signed only on a material change or, as a heartbeat, once per projector repair interval (default 10 m). Everything goes through the projector's shared dedupe, coalescing, and relay-rejection backoff path. When a target leaves the scope, its coordinate is tombstoned at the next start or cycle.
+
+**Docker access and least privilege.** The scan uses the endpoint's configured transport (TLS client certificate for `tcp://`, or the local socket for `unix://`) and issues only these Docker Engine API calls:
+- `GET /v1.44/containers/json?all=1` (list);
+- `GET /v1.44/containers/{id}/json` (inspect);
+- `GET /v1.44/images/{id}/json` (image inspect).
+
+It never creates, starts, stops, removes, execs, pulls, or imports anything, and it writes no Bahia state. The background path cannot reach adoption import. The Docker API has no read-only role: the same TLS client certificate or socket that Bahia already uses for deploys on that endpoint is full-control, so background scanning adds calls, not privilege. For least privilege:
+- scope `targets` to the endpoints whose counts you need;
+- if a Docker authorization plugin or socket proxy fronts the endpoint, allow only the three `GET` routes for the certificate or socket Bahia uses, where deploys to that endpoint do not share it.
+
+Because each scan inspects every container on the host, the Docker API load per cycle is proportional to container count. Size `interval` accordingly.
+
+**Health.** The runner is registered as a non-required tier-3 background runner, so it appears in the readiness runner summary. It also reports an `adoption_background_scan` readiness check with target, failing, cycle, and overlap-skip counts, plus one outcome code per target (`pending`, `ok`, `unavailable`, `timeout`, `error`). A failing target makes the check `warn`, which degrades status but never fails readiness. Raw scan errors, which can contain Docker hosts, are logged only. Background scans log per-target failures at `warn` and successful completions at `debug`, so operator scan audit logs stay readable.
+
 ## Rate limits and telemetry
 
 Dedicated operational rate limits remain separate from the generic write limiter:
@@ -163,7 +209,7 @@ Prometheus-style metrics include:
 
 If adoption or direct-runtime execution causes unexpected behavior:
 
-1. Disable the execution surface and restart Bahia:
+1. Disable the execution surface and restart Bahia (this also stops background adoption scans; to stop only those, set `adoption.background_scan.enabled: false`):
 
    ```yaml
    adoption:
