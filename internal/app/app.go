@@ -894,6 +894,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
+		nostrAdapter.WithDeploymentInventorySource(nostrAdapter.RepositoryDeploymentInventorySource{Artifacts: artifactRepo, Units: deploymentUnitRepo, Instances: managedInstanceHealthRepo, InstancesSupervised: managedInstanceSupervisor != nil}),
 	}
 	if llmRegistry != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))

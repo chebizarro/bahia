@@ -201,6 +201,12 @@ type Projector struct {
 	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
 
+	// Deployment inventory (deployment_inventory.go).
+	inventorySource    DeploymentInventorySource
+	inventoryMu        sync.Mutex
+	inventoryPublished map[string]deploymentInventoryRef
+	inventoryHydrated  bool
+
 	// Generalized projection dedupe/coalescing/backoff/metrics state; see
 	// projection_dedupe.go. Initialized lazily so the constructor literal is
 	// untouched.
@@ -377,6 +383,25 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 			p.handleEvent(ctx, e)
 		})
 	}
+	// Adoption scan completion is projected only as redacted per-target
+	// aggregates; it deliberately bypasses the generic audit path.
+	pub.Subscribe(events.EventAdoptionScanCompleted, func(ctx context.Context, e events.Event) {
+		p.handleAdoptionScanCompleted(ctx, e)
+	})
+}
+
+func (p *Projector) handleAdoptionScanCompleted(ctx context.Context, e events.Event) {
+	if !p.Enabled() {
+		return
+	}
+	scan, ok := adoptionScanCompletedPayload(e.Data)
+	if !ok {
+		p.logger.Warn("adoption scan completion has an unsupported payload", zap.String("payload_type", fmt.Sprintf("%T", e.Data)))
+		return
+	}
+	if err := p.publishRuntimeTargetScans(ctx, scan); err != nil {
+		p.logger.Warn("publish runtime target scan inventory failed", zap.Error(err))
+	}
 }
 
 // Run performs startup snapshot repair and then periodically republishes
@@ -455,6 +480,10 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
+	inventoryPublished, inventoryTombstones, err := p.publishDeploymentInventorySnapshot(ctx)
+	if err != nil {
+		p.logger.Warn("publish deployment inventory snapshot failed", zap.Error(err))
+	}
 	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshotsFromSource(ctx, snapshotSource, services, envs)
 	policiesPublished := p.publishPolicySnapshots(ctx)
 	llmRoutes := 0
@@ -531,7 +560,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("deployment_inventories", inventoryPublished), zap.Int("deployment_inventory_tombstones", inventoryTombstones), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -684,9 +713,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 		}
 	}
-	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
-		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
-			p.logger.Warn("publish observed deployments discovery after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+	if shouldRefreshDeploymentInventory(e.Type) {
+		if _, _, err := p.publishDeploymentInventorySnapshot(ctx); err != nil {
+			p.logger.Warn("publish deployment inventory after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 		}
 	}
 	if shouldRefreshDNSProjection(e.Type) {
@@ -2207,128 +2236,14 @@ func shouldRefreshDNSProjection(eventType events.EventType) bool {
 	}
 }
 
-type observedDeploymentDiscovery struct {
-	ServiceID           string `json:"service_id"`
-	ServiceName         string `json:"service_name,omitempty"`
-	EnvironmentID       string `json:"environment_id"`
-	EnvironmentName     string `json:"environment_name,omitempty"`
-	DeploymentUnitID    string `json:"deployment_unit_id,omitempty"`
-	RuntimeType         string `json:"runtime_type,omitempty"`
-	RuntimeTarget       string `json:"runtime_target,omitempty"`
-	ObservationID       string `json:"observation_id"`
-	ObservedVersion     string `json:"observed_version,omitempty"`
-	ObservedImageRepo   string `json:"observed_image_repo,omitempty"`
-	ObservedImageDigest string `json:"observed_image_digest,omitempty"`
-	ObservedContainerID string `json:"observed_container_id,omitempty"`
-	ObservedHost        string `json:"observed_host,omitempty"`
-	ObservationSource   string `json:"observation_source,omitempty"`
-	HealthStatus        string `json:"health_status,omitempty"`
-	DriftStatus         string `json:"drift_status,omitempty"`
-	ObservedAt          string `json:"observed_at"`
-}
-
-func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool {
-	switch eventType {
-	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
-		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
-		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
-		events.EventReconcileCompleted, events.EventAdoptionImported, events.EventRuntimeDeploy,
-		events.EventRuntimeRestart, events.EventRuntimeStop:
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *Projector) observedDeployments(ctx context.Context) ([]observedDeploymentDiscovery, error) {
-	source := p.snapshotSource()
-	services, err := source.ListServices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list services for observed deployments: %w", err)
-	}
-	environments, err := source.ListEnvironments(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list environments for observed deployments: %w", err)
-	}
-	states, err := source.ListStates(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list states for observed deployments: %w", err)
-	}
-
-	servicesByID := make(map[uuid.UUID]domain.Service, len(services))
-	for _, service := range services {
-		servicesByID[service.ID] = service
-	}
-	environmentsByID := make(map[uuid.UUID]domain.Environment, len(environments))
-	for _, environment := range environments {
-		environmentsByID[environment.ID] = environment
-	}
-
-	deployments := make([]observedDeploymentDiscovery, 0, len(states))
-	for i := range states {
-		state := &states[i]
-		if state.CurrentObservationID == nil {
-			continue
-		}
-		observation, err := source.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
-		if err != nil {
-			return nil, fmt.Errorf("get latest observation for service %s in environment %s: %w", state.ServiceID, state.EnvironmentID, err)
-		}
-		if observation == nil || observation.ID != *state.CurrentObservationID {
-			continue
-		}
-
-		service := servicesByID[state.ServiceID]
-		environment := environmentsByID[state.EnvironmentID]
-		deployment := observedDeploymentDiscovery{
-			ServiceID:           state.ServiceID.String(),
-			ServiceName:         service.Name,
-			EnvironmentID:       state.EnvironmentID.String(),
-			EnvironmentName:     environment.Name,
-			RuntimeType:         string(service.RuntimeType),
-			RuntimeTarget:       service.RuntimeTargetName(),
-			ObservationID:       observation.ID.String(),
-			ObservedVersion:     observation.ObservedVersion,
-			ObservedImageRepo:   observation.ObservedImageRepo,
-			ObservedImageDigest: observation.ObservedImageDigest,
-			ObservedContainerID: observation.ObservedContainerID,
-			ObservedHost:        observation.ObservedHost,
-			ObservationSource:   observation.Source,
-			HealthStatus:        string(observation.HealthStatus),
-			DriftStatus:         string(state.DriftStatus),
-			ObservedAt:          formatTime(observation.ObservedAt),
-		}
-		if state.DeploymentUnitID != nil {
-			deployment.DeploymentUnitID = state.DeploymentUnitID.String()
-		}
-		deployments = append(deployments, deployment)
-	}
-
-	sort.Slice(deployments, func(i, j int) bool {
-		left := strings.ToLower(deployments[i].EnvironmentName) + "\x00" +
-			strings.ToLower(deployments[i].ServiceName) + "\x00" +
-			deployments[i].EnvironmentID + "\x00" + deployments[i].ServiceID + "\x00" + deployments[i].DeploymentUnitID
-		right := strings.ToLower(deployments[j].EnvironmentName) + "\x00" +
-			strings.ToLower(deployments[j].ServiceName) + "\x00" +
-			deployments[j].EnvironmentID + "\x00" + deployments[j].ServiceID + "\x00" + deployments[j].DeploymentUnitID
-		return left < right
-	})
-	return deployments, nil
-}
-
 func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg *config.Config) error {
-	observedDeployments, err := p.observedDeployments(ctx)
-	if err != nil {
-		return err
-	}
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
 	payload := map[string]any{
-		"schema":               SystemDiscoverySchema,
-		"registries":           discoveryRegistries(cfg),
-		"versions":             discoveryVersions(),
-		"observed_deployments": observedDeployments,
-		"control_plane":        discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
+		"schema":        SystemDiscoverySchema,
+		"registries":    discoveryRegistries(cfg),
+		"versions":      discoveryVersions(),
+		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,
@@ -3505,7 +3420,7 @@ func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
 	content, _ := json.Marshal(map[string]any{
 		"event_type": string(e.Type),
 		"entity_id":  e.EntityID,
-		"data":       e.Data,
+		"data":       publicAuditData(e),
 	})
 	domainName := auditDomainForEvent(e.Type)
 	tags := gonostr.Tags{

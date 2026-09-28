@@ -231,13 +231,15 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 	s.publisher.Publish(ctx, events.Event{
 		Type:     events.EventAdoptionScanCompleted,
 		EntityID: "adoption",
-		Data: map[string]any{
-			"target_count":             len(targets),
-			"candidate_count":          candidateCount,
-			"target_error_count":       targetErrors,
-			"redacted_env_key_count":   redactedEnvKeyCount,
-			"redacted_label_key_count": redactedLabelKeyCount,
-			"duration_ms":              duration.Milliseconds(),
+		Data: AdoptionScanCompleted{
+			CompletedAt:           time.Now().UTC(),
+			TargetCount:           len(targets),
+			CandidateCount:        candidateCount,
+			TargetErrorCount:      targetErrors,
+			RedactedEnvKeyCount:   redactedEnvKeyCount,
+			RedactedLabelKeyCount: redactedLabelKeyCount,
+			DurationMS:            duration.Milliseconds(),
+			Targets:               AdoptionScanTargetSummaries(previews),
 		},
 	})
 	s.logger.Info("adoption scan completed",
@@ -601,6 +603,71 @@ func isRetryableImportTxError(err error) bool {
 	default:
 		return false
 	}
+}
+
+// AdoptionScanCompleted is the in-process payload of EventAdoptionScanCompleted.
+// It deliberately carries only per-target aggregates: no container identity,
+// name, image, digest, version, host, labels, or environment values. Per-instance
+// detail is returned only to the authorized adoption/scan requester.
+type AdoptionScanCompleted struct {
+	CompletedAt           time.Time
+	TargetCount           int
+	CandidateCount        int
+	TargetErrorCount      int
+	RedactedEnvKeyCount   int
+	RedactedLabelKeyCount int
+	DurationMS            int64
+	Targets               []AdoptionScanTargetSummary
+}
+
+// AdoptionScanTargetSummary is the redacted aggregate of one complete runtime
+// target scan. Target is the operator-assigned target alias, never the raw
+// Docker host. Available is false when the target could not be scanned; the
+// counts are then unknown and zero.
+type AdoptionScanTargetSummary struct {
+	Target      string
+	Environment string
+	EndpointRef string
+	Available   bool
+	Total       int
+	Managed     int
+	Unmanaged   int
+}
+
+// AdoptionScanTargetSummaries reduces scan previews to per-target counts.
+// A discovered workload counts as managed when Bahia labelled it at deploy
+// time or it is already bound to an adopted Bahia service on the same target;
+// every other workload is unmanaged.
+func AdoptionScanTargetSummaries(previews []AdoptionPreview) []AdoptionScanTargetSummary {
+	out := make([]AdoptionScanTargetSummary, 0, len(previews))
+	for _, preview := range previews {
+		summary := AdoptionScanTargetSummary{
+			Target:      preview.Target.Name,
+			Environment: preview.Target.EnvironmentName,
+			EndpointRef: preview.Target.EndpointRef,
+			Available:   preview.Error == "",
+		}
+		if summary.Available {
+			for _, container := range preview.Containers {
+				summary.Total++
+				if adoptionContainerManaged(container) {
+					summary.Managed++
+				} else {
+					summary.Unmanaged++
+				}
+			}
+		}
+		out = append(out, summary)
+	}
+	return out
+}
+
+func adoptionContainerManaged(container AdoptionPreviewContainer) bool {
+	labels := container.Discovered.Labels
+	if strings.EqualFold(strings.TrimSpace(labels["bahia.managed"]), "true") || strings.TrimSpace(labels["bahia.service_id"]) != "" {
+		return true
+	}
+	return container.ExistingServiceID != nil && container.WillUpdate
 }
 
 func adoptionPreviewOperationalStats(previews []AdoptionPreview) (candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrorCount int) {
