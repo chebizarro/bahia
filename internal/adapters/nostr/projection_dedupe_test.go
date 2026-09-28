@@ -423,6 +423,103 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	}
 }
 
+// A retained-state read failure must not hold back a tombstone: tombstones
+// are never deduped, so they do not depend on the hydrated cache.
+func TestProjectionHydrationFailureDoesNotSuppressTombstones(t *testing.T) {
+	ctx := context.Background()
+	serviceID, envID := uuid.New(), uuid.New()
+	readErr := errors.New("retained-state read unavailable")
+	repo := &transientHydrationRepo{memoryNostrEventRepo: newMemoryNostrEventRepo(), loadErr: readErr, failures: 2}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	projector.projection().now = func() time.Time { return clock }
+	res := events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String()}
+
+	// First tombstone hits the failing load; the second lands inside the
+	// hydration backoff window. Both must publish.
+	for i := 0; i < 2; i++ {
+		if err := projector.publishStateTombstone(ctx, res); err != nil {
+			t.Fatalf("tombstone %d during hydration failure: %v", i, err)
+		}
+	}
+	if got := countLegacy(sink, KindServiceState, true); got != 2 {
+		t.Fatalf("tombstones published during hydration failure = %d, want 2", got)
+	}
+	state := dedupeTestState(serviceID, envID, clock)
+	if err := projector.publishState(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
+		t.Fatalf("non-tombstone during hydration backoff = %v, want hydration backoff", err)
+	}
+}
+
+type blockingHydrationRepo struct {
+	*memoryNostrEventRepo
+	release chan struct{}
+	entered chan struct{}
+	mu      sync.Mutex
+	loads   int
+}
+
+func (r *blockingHydrationRepo) ListByKind(ctx context.Context, kind, limit int) ([]repository.NostrEventRecord, error) {
+	r.mu.Lock()
+	r.loads++
+	first := r.loads == 1
+	r.mu.Unlock()
+	if first {
+		close(r.entered)
+		<-r.release
+	}
+	return r.memoryNostrEventRepo.ListByKind(ctx, kind, limit)
+}
+
+// Concurrent publishes on a cold wire kind share one retained-state load and
+// none of them observes the kind as ready before the load has been applied,
+// so an unchanged coordinate is never re-signed during the race.
+func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
+	ctx := context.Background()
+	serviceID, envID := uuid.New(), uuid.New()
+	state := dedupeTestState(serviceID, envID, time.Now().UTC())
+	retained := newMemoryNostrEventRepo()
+	first := NewProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
+	if err := first.publishState(ctx, &state); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := &blockingHydrationRepo{memoryNostrEventRepo: retained, release: make(chan struct{}), entered: make(chan struct{})}
+	sink := &captureProjectionPublisher{}
+	restarted := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+
+	const workers = 16
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st := state
+			errs <- restarted.publishState(ctx, &st)
+		}()
+	}
+	<-repo.entered
+	close(repo.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent publish: %v", err)
+		}
+	}
+	repo.mu.Lock()
+	loads := repo.loads
+	repo.mu.Unlock()
+	if loads != 1 {
+		t.Fatalf("retained-state loads = %d, want 1", loads)
+	}
+	if got := countLegacy(sink, KindServiceState, false); got != 0 {
+		t.Fatalf("unchanged state published %d times during concurrent hydration, want 0", got)
+	}
+}
+
 // TestProjectionAuditLogIsNeverDeduped proves the append-only audit path is
 // excluded from dedupe: identical audits are distinct records.
 func TestProjectionAuditLogIsNeverDeduped(t *testing.T) {

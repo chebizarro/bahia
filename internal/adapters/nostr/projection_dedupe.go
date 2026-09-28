@@ -400,7 +400,11 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	if dedupable {
 		key = projectionKeyOf(wireKind, tags)
 		fingerprint = projectionFingerprint(wireKind, tags, content)
-		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil {
+		// Fail closed on unavailable retained state for dedupable projections:
+		// a cold cache would re-sign every unchanged coordinate. Tombstones are
+		// never deduped, so they do not depend on the cache and must not be
+		// held back by a retained-state read failure.
+		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil && !isTombstoneTags(tags) {
 			return err
 		}
 		contended, unlock = p.lockProjectionKey(key)
