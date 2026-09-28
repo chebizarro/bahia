@@ -24,6 +24,7 @@ var (
 
 type mockObservationRepo struct {
 	observations []domain.RuntimeObservation
+	getLatestErr error
 }
 
 func (m *mockObservationRepo) Create(_ context.Context, obs *domain.RuntimeObservation) error {
@@ -35,6 +36,9 @@ func (m *mockObservationRepo) Create(_ context.Context, obs *domain.RuntimeObser
 }
 
 func (m *mockObservationRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	if m.getLatestErr != nil {
+		return nil, m.getLatestErr
+	}
 	for i := len(m.observations) - 1; i >= 0; i-- {
 		obs := m.observations[i]
 		if obs.ServiceID == serviceID && obs.EnvironmentID == envID {
