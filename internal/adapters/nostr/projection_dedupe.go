@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -32,9 +33,15 @@ import (
 // log-and-continue; the periodic repair loop retries after the window closes.
 var ErrProjectorBackoff = errors.New("projector publish suppressed: relay backoff window open")
 
+// ErrProjectorHydrationBackoff means retained state is still unavailable.
+// A later projection trigger retries the load after the bounded window.
+var ErrProjectorHydrationBackoff = errors.New("projector publish suppressed: hydration backoff window open")
+
 const (
-	projectionBackoffMin = 2 * time.Second
-	projectionBackoffMax = time.Minute
+	projectionBackoffMin          = 2 * time.Second
+	projectionBackoffMax          = time.Minute
+	projectionHydrationBackoffMin = 2 * time.Second
+	projectionHydrationBackoffMax = time.Minute
 	// projectionHydrateLimit bounds how many retained records are read per wire
 	// kind when warming the dedupe cache after a restart.
 	projectionHydrateLimit = 10000
@@ -83,7 +90,7 @@ type projectionState struct {
 	mu        sync.Mutex
 	published map[projectionKey]string
 	keyLocks  map[projectionKey]*sync.Mutex
-	hydrated  map[int]bool
+	hydration map[int]*projectionHydrationState
 	metrics   map[string]*ProjectionFamilyMetrics
 
 	backoffMu    sync.Mutex
@@ -93,12 +100,21 @@ type projectionState struct {
 	jitterSource *rand.Rand
 }
 
+// A wire kind has one load in flight. Waiters cannot observe it as hydrated
+// until its retained records have been applied to the fingerprint cache.
+type projectionHydrationState struct {
+	mu         sync.Mutex
+	hydrated   bool
+	retryAfter time.Time
+	retryDelay time.Duration
+}
+
 func (p *Projector) projection() *projectionState {
 	p.projInitOnce.Do(func() {
 		p.proj = &projectionState{
 			published:    map[projectionKey]string{},
 			keyLocks:     map[projectionKey]*sync.Mutex{},
-			hydrated:     map[int]bool{},
+			hydration:    map[int]*projectionHydrationState{},
 			metrics:      map[string]*ProjectionFamilyMetrics{},
 			now:          time.Now,
 			jitterSource: rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -243,21 +259,40 @@ func (p *Projector) rememberProjection(key projectionKey, fingerprint string) {
 // retained event store so an unchanged coordinate is not re-signed merely
 // because the process restarted. Newest record per coordinate wins; only this
 // projector's own events are considered.
-func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) {
+func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) error {
+	if p.eventRepo == nil {
+		return nil
+	}
 	s := p.projection()
 	s.mu.Lock()
-	if s.hydrated[wireKind] || p.eventRepo == nil {
-		s.hydrated[wireKind] = true
-		s.mu.Unlock()
-		return
+	hydration := s.hydration[wireKind]
+	if hydration == nil {
+		hydration = &projectionHydrationState{}
+		s.hydration[wireKind] = hydration
 	}
-	s.hydrated[wireKind] = true
 	s.mu.Unlock()
+	hydration.mu.Lock()
+	defer hydration.mu.Unlock()
+	if hydration.hydrated {
+		return nil
+	}
+	if p.projectionNow().Before(hydration.retryAfter) {
+		return fmt.Errorf("%w: kind %d", ErrProjectorHydrationBackoff, wireKind)
+	}
 
 	records, err := p.eventRepo.ListByKind(ctx, wireKind, projectionHydrateLimit)
 	if err != nil {
-		p.logger.Warn("hydrate projection dedupe cache failed; treating kind as cold", zap.Int("kind", wireKind), zap.Error(err))
-		return
+		if hydration.retryDelay == 0 {
+			hydration.retryDelay = projectionHydrationBackoffMin
+		} else {
+			hydration.retryDelay *= 2
+			if hydration.retryDelay > projectionHydrationBackoffMax {
+				hydration.retryDelay = projectionHydrationBackoffMax
+			}
+		}
+		hydration.retryAfter = p.projectionNow().Add(hydration.retryDelay)
+		p.logger.Warn("hydrate projection dedupe cache failed; suppressing publish", zap.Int("kind", wireKind), zap.Error(err))
+		return fmt.Errorf("hydrate projection dedupe cache for kind %d: %w", wireKind, err)
 	}
 	servicePubkey := ""
 	if p.privateKey != "" {
@@ -286,6 +321,8 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) {
 		seen[key] = struct{}{}
 		s.published[key] = projectionFingerprint(record.Kind, tags, record.Content)
 	}
+	hydration.hydrated = true
+	return nil
 }
 
 func recordTags(record repository.NostrEventRecord) gonostr.Tags {
@@ -363,7 +400,13 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	if dedupable {
 		key = projectionKeyOf(wireKind, tags)
 		fingerprint = projectionFingerprint(wireKind, tags, content)
-		p.hydrateProjectionCache(ctx, wireKind)
+		// Fail closed on unavailable retained state for dedupable projections:
+		// a cold cache would re-sign every unchanged coordinate. Tombstones are
+		// never deduped, so they do not depend on the cache and must not be
+		// held back by a retained-state read failure.
+		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil && !isTombstoneTags(tags) {
+			return err
+		}
 		contended, unlock = p.lockProjectionKey(key)
 	}
 	defer unlock()
