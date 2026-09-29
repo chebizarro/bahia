@@ -59,6 +59,18 @@ func (a *ComposeDesiredStateApplier) tryFragmentApply(
 	req DesiredStateApplyRequest,
 	unitPlan *domain.DesiredDeploymentUnitPlan,
 ) (*DesiredStateApplyResult, error) {
+	// Secret-backed units must use the full-project staging path. Fragment
+	// apply starts the service before syncFullProject refreshes protected env
+	// files, which can expose stale or redacted values. The full path resolves,
+	// stages, validates, and promotes env material before Compose up.
+	for _, svc := range unitPlan.Services {
+		if len(svc.SecretRefs) > 0 {
+			a.logger.Info("compose fragment apply: secret-backed unit requires full-project path",
+				zap.String("service", svc.StableServiceKey))
+			return nil, nil
+		}
+	}
+
 	composeDir, err := filepath.Abs(a.runtime.projectDir)
 	if err != nil {
 		a.logger.Warn("compose fragment apply: cannot resolve compose dir, falling back",

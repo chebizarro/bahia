@@ -156,6 +156,9 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 	if err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: render failed: %w", err)
 	}
+	if err := resolveComposeEnvMaterial(renderResult, unitPlan, req.Secrets); err != nil {
+		return nil, fmt.Errorf("compose desired-state apply: resolve env material: %w", err)
+	}
 
 	// Step 3–4: Stage rendered files and validate through the executor seam.
 	staged, err := a.staging.Stage(ctx, composeDir, renderResult)
@@ -211,6 +214,60 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 		ResourceNames:       serviceKeys,
 		ObservationHints:    &ObservationHints{},
 	}, nil
+}
+
+// resolveComposeEnvMaterial replaces renderer-safe redaction placeholders with
+// apply-scoped plaintext values immediately before protected env files are
+// staged. Compose YAML and render metadata remain redacted and deterministic.
+//
+// Values containing line breaks or NUL bytes are rejected because emitting
+// them verbatim would allow one secret to inject additional dotenv entries.
+// Missing values fail closed; a placeholder is never promoted as runtime
+// configuration.
+func resolveComposeEnvMaterial(result *RenderResult, unitPlan *domain.DesiredDeploymentUnitPlan, secrets map[string]string) error {
+	if result == nil {
+		return fmt.Errorf("render result is nil")
+	}
+	if unitPlan == nil {
+		return fmt.Errorf("deployment unit plan is nil")
+	}
+
+	for _, svc := range unitPlan.Services {
+		if len(svc.SecretRefs) == 0 {
+			continue
+		}
+		content, ok := result.EnvMaterial[svc.StableServiceKey]
+		if !ok {
+			return fmt.Errorf("service %q has secret refs but no env material", svc.StableServiceKey)
+		}
+
+		lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+		for _, ref := range svc.SecretRefs {
+			value, ok := secrets[ref.EnvVar]
+			if !ok {
+				return fmt.Errorf("service %q is missing resolved secret for env var %q", svc.StableServiceKey, ref.EnvVar)
+			}
+			if strings.ContainsAny(value, "\r\n\x00") {
+				return fmt.Errorf("service %q secret for env var %q cannot be represented safely in dotenv material", svc.StableServiceKey, ref.EnvVar)
+			}
+
+			placeholder := ref.EnvVar + "=" + ref.RedactedValue
+			resolved := false
+			for i := range lines {
+				if lines[i] == placeholder {
+					lines[i] = ref.EnvVar + "=" + value
+					resolved = true
+					break
+				}
+			}
+			if !resolved {
+				return fmt.Errorf("service %q env material is missing redacted placeholder for env var %q", svc.StableServiceKey, ref.EnvVar)
+			}
+		}
+		result.EnvMaterial[svc.StableServiceKey] = strings.Join(lines, "\n") + "\n"
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------

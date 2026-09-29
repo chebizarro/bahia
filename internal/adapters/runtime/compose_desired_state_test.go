@@ -209,6 +209,114 @@ func TestComposeDesiredStateApplier_Success(t *testing.T) {
 	}
 }
 
+func TestComposeDesiredStateApplier_ResolvesSecretsOnlyIntoProtectedEnvFile(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	runner := allSuccessRunner()
+	applier := newTestApplier(t, dir, runner)
+
+	plan := testEnvironmentPlan()
+	target := &plan.Services[0]
+	target.SecretRefs = []domain.DesiredSecretRef{{
+		EnvVar:        "PG_DSN",
+		Name:          "agent-memory-pg-dsn",
+		SecretID:      uuid.MustParse("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
+		RedactedValue: "REDACTED(PG_DSN)",
+	}}
+	target.DesiredHash = target.ComputeDesiredHash()
+	plan.ComputeRevisionHash()
+
+	secret := "postgres://agent-memory:opaque@postgres:5432/agent_memory?sslmode=disable"
+	_, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+		Secrets:         map[string]string{"PG_DSN": secret},
+	})
+	if err != nil {
+		t.Fatalf("ApplyDesiredState: %v", err)
+	}
+
+	envPath := filepath.Join(dir, ".bahia", "env", "web-frontend.env")
+	envData, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read protected env file: %v", err)
+	}
+	if !strings.Contains(string(envData), "PG_DSN="+secret) {
+		t.Fatal("protected env file does not contain resolved secret")
+	}
+	if strings.Contains(string(envData), "REDACTED(PG_DSN)") {
+		t.Fatal("protected env file contains redacted placeholder")
+	}
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("stat protected env file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("protected env file mode = %o, want 600", info.Mode().Perm())
+	}
+
+	composeData, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read compose file: %v", err)
+	}
+	metadataData, err := os.ReadFile(filepath.Join(dir, ".bahia", "render-state.json"))
+	if err != nil {
+		t.Fatalf("read render metadata: %v", err)
+	}
+	if strings.Contains(string(composeData), secret) || strings.Contains(string(metadataData), secret) {
+		t.Fatal("plaintext secret leaked into compose YAML or render metadata")
+	}
+}
+
+func TestComposeDesiredStateApplier_MissingSecretFailsClosed(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	applier := newTestApplier(t, dir, allSuccessRunner())
+	plan := testEnvironmentPlan()
+	target := &plan.Services[0]
+	target.SecretRefs = []domain.DesiredSecretRef{{
+		EnvVar:        "PG_DSN",
+		Name:          "agent-memory-pg-dsn",
+		SecretID:      uuid.MustParse("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
+		RedactedValue: "REDACTED(PG_DSN)",
+	}}
+	target.DesiredHash = target.ComputeDesiredHash()
+	plan.ComputeRevisionHash()
+
+	_, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing resolved secret") {
+		t.Fatalf("expected missing-secret failure, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "docker-compose.yml")); !os.IsNotExist(statErr) {
+		t.Fatal("failed apply must not promote a compose file")
+	}
+}
+
+func TestComposeDesiredStateApplier_MultilineSecretFailsClosed(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	applier := newTestApplier(t, dir, allSuccessRunner())
+	plan := testEnvironmentPlan()
+	target := &plan.Services[0]
+	target.SecretRefs = []domain.DesiredSecretRef{{
+		EnvVar:        "TOKEN",
+		Name:          "token",
+		SecretID:      uuid.MustParse("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
+		RedactedValue: "REDACTED(TOKEN)",
+	}}
+	target.DesiredHash = target.ComputeDesiredHash()
+	plan.ComputeRevisionHash()
+
+	_, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+		Secrets:         map[string]string{"TOKEN": "first\nINJECTED=value"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be represented safely") {
+		t.Fatalf("expected unsafe-dotenv failure, got %v", err)
+	}
+}
+
 func TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans(t *testing.T) {
 	dir := setupBahiaOwnedDir(t)
 	runner := allSuccessRunner()
