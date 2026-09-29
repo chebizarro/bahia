@@ -161,7 +161,10 @@ func (m *ComposeStagingManager) Stage(ctx context.Context, composeDir string, re
 	}
 
 	// Stage env files.
-	stagingEnvDir := filepath.Join(staged.StagingDir, bahiaEnvDir)
+	// Compose resolves relative env_file paths from the directory containing
+	// the Compose file. Mirror the live .bahia/env layout inside staging so the
+	// exact promoted YAML validates before it can replace the live project.
+	stagingEnvDir := filepath.Join(staged.StagingDir, bahiaMarkerDir, bahiaEnvDir)
 	if len(result.EnvMaterial) > 0 {
 		if err := os.MkdirAll(stagingEnvDir, 0o755); err != nil {
 			return staged, fmt.Errorf("compose staging: create env dir: %w", err)

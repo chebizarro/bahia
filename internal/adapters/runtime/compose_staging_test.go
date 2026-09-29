@@ -207,6 +207,10 @@ func TestComposeStagingManager_StageAndValidate_Success(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("env file permissions: want 0600, got %o", info.Mode().Perm())
 	}
+	wantStagedEnv := filepath.Join(staged.StagingDir, bahiaMarkerDir, bahiaEnvDir, "web.env")
+	if staged.EnvFiles["web"] != wantStagedEnv {
+		t.Errorf("staged env path = %q, want %q", staged.EnvFiles["web"], wantStagedEnv)
+	}
 
 	// Verify metadata was staged.
 	metaData, err := os.ReadFile(staged.MetadataFile)
@@ -255,7 +259,7 @@ func TestComposeStagingManager_StageAndValidate_NoEnvMaterial(t *testing.T) {
 	}
 
 	// Staging env directory should not exist.
-	envDir := filepath.Join(staged.StagingDir, bahiaEnvDir)
+	envDir := filepath.Join(staged.StagingDir, bahiaMarkerDir, bahiaEnvDir)
 	if _, err := os.Stat(envDir); !os.IsNotExist(err) {
 		t.Error("env dir should not exist when no env material")
 	}

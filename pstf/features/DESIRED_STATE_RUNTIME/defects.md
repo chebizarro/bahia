@@ -4,6 +4,29 @@
 
 No defects recorded yet for the bahia-zu2p.8.8 ownership inventory scope.
 
+### DSR-D-001 — Secret-backed Compose env file was generated but not consumed
+
+| Field | Value |
+|-------|-------|
+| **Severity** | critical |
+| **Status** | fixed |
+| **Related ACs** | DSR-AC-005, DSR-AC-008 |
+| **Related Tests** | DSR-T-010, DSR-T-011 |
+
+**Evidence:**
+- `ComposeRenderer.buildEnvMaterial` generated a protected env file for a managed service with `secret_refs`, but `buildComposeService` added `env_file` only when a caller separately populated `ComposeExtension.EnvFile`.
+- A live staging deployment rendered `POSTGRES_PASSWORD` into the protected file while the resulting container received no password and failed closed before database initialization.
+
+**Root cause:**
+The renderer treated the env-file reference and the generated secret material as independent optional inputs, violating the invariant that generated secret material must be consumed by the rendered service.
+
+**Fix:**
+- Automatically reference `.bahia/env/<service-key>.env` whenever a Compose service has secret refs and no explicit env-file override.
+- Mirror the live `.bahia/env` layout inside the staging directory so the exact promoted Compose YAML validates before promotion.
+- Lock both behaviors with deterministic renderer and staging tests.
+
+**Requires human decision:** no
+
 ---
 
 ## Defect Template

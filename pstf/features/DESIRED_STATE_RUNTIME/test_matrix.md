@@ -216,7 +216,7 @@
 |-------|-------|
 | **AC IDs** | DSR-AC-008 |
 | **Type** | unit |
-| **Status** | not_implemented |
+| **Status** | implemented |
 | **Target path** | `internal/adapters/runtime/compose_renderer_test.go` |
 | **Work item** | DSR-WI-05 |
 
@@ -240,7 +240,7 @@
 |-------|-------|
 | **AC IDs** | DSR-AC-008 |
 | **Type** | integration |
-| **Status** | not_implemented |
+| **Status** | implemented |
 | **Target path** | `internal/adapters/runtime/compose_renderer_test.go` |
 | **Work item** | DSR-WI-05 |
 

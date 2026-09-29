@@ -12,6 +12,8 @@ services:
     environment:
       LOG_LEVEL: debug
       PORT: "8080"
+    env_file:
+      - .bahia/env/api-server.env
     ports:
       - 8080:8080
     volumes:

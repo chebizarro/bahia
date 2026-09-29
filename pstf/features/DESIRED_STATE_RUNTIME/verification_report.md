@@ -98,6 +98,15 @@
 
 ## Acceptance Criteria Status
 
+## 2026-09-29 Secret-backed Compose env-file regression
+
+- `internal/adapters/runtime/compose_renderer_test.go::TestComposeRenderer_SecretRefsUseGeneratedEnvFileByDefault` proves a secret-backed service references the protected env file without requiring a separate caller-supplied extension.
+- `internal/adapters/runtime/compose_staging_test.go::TestComposeStagingManager_StageAndValidate_Success` proves staged env material uses the same `.bahia/env/<service>.env` relative layout as the promoted project.
+- The focused runtime, service, and workflow suites pass.
+- The runtime adapter race suite and focused vet pass.
+- A real `docker compose config -q` accepts the generated relative env-file layout.
+- No secret plaintext is introduced into Compose YAML, desired-state snapshots, metadata, or logs.
+
 | AC ID | Status | Basis |
 |-------|--------|-------|
 | DSR-AC-001 | Not verified | DSR-WI-01 not started |

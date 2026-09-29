@@ -237,6 +237,21 @@ func TestComposeRenderer_RenderEnvironmentPlan_GoldenYAML(t *testing.T) {
 	assertGolden(t, "full_project_compose.yml", result.ComposeYAML)
 }
 
+func TestComposeRenderer_SecretRefsUseGeneratedEnvFileByDefault(t *testing.T) {
+	renderer := NewComposeRenderer()
+	plan := testPlan()
+
+	result, err := renderer.RenderEnvironmentPlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	yaml := string(result.ComposeYAML)
+	if !strings.Contains(yaml, "- .bahia/env/api-server.env") {
+		t.Fatalf("secret-backed service does not reference generated env file:\n%s", yaml)
+	}
+}
+
 func TestComposeRenderer_RenderEnvironmentPlan_GoldenEnvMaterial(t *testing.T) {
 	renderer := NewComposeRenderer()
 	plan := testPlan()
