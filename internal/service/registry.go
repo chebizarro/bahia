@@ -496,7 +496,11 @@ func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Conte
 }
 
 // updateEnvironmentWithDeploymentUnits runs an optional signer-first publication
-// after locking and checking the environment revision, but before local writes.
+// after locking, checking, and staging the environment revision, but before the
+// transaction commits. Staging the write first is significant: environment
+// repositories assign UpdatedAt during Update, and the canonical relay event
+// must carry that exact revision or the next complete-set mutation will always
+// read a stale revision from the relay.
 func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 	ctx context.Context,
 	env *domain.Environment,
@@ -544,13 +548,13 @@ func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 			return fmt.Errorf("deployment unit transactional mutation handling is not configured")
 		}
 		env.CreatedAt = current.CreatedAt
+		if err := repos.Environments.Update(ctx, env); err != nil {
+			return err
+		}
 		if beforeWrite != nil {
 			if err := beforeWrite(); err != nil {
 				return err
 			}
-		}
-		if err := repos.Environments.Update(ctx, env); err != nil {
-			return err
 		}
 		return reconcileExplicitDeploymentUnits(ctx, unitWriter, env.ID, units)
 	}); err != nil {

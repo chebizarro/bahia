@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -100,6 +101,90 @@ func TestRelayFirstRegistryCompleteSetConflictDoesNotPublishCanonicalState(t *te
 	}
 	if len(publisher.events) != 0 || len(calls) != 0 {
 		t.Fatalf("stale complete-set update published canonical state: events=%d calls=%v", len(publisher.events), calls)
+	}
+}
+
+func TestRelayFirstRegistryCompleteSetPublishesPersistedRevision(t *testing.T) {
+	ctx := context.Background()
+	envs := newEnvironmentMutationEnvRepo()
+	units := newEnvironmentMutationUnitRepo()
+	env := &domain.Environment{ID: uuid.New(), Name: "prod"}
+	if err := envs.Create(ctx, env); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+
+	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
+	publisher := &relayFirstCapturePublisher{published: 1}
+	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	requested := []*domain.DeploymentUnit{{
+		Key:           domain.DefaultDeploymentUnitKey,
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}}
+
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested, env.UpdatedAt); err != nil {
+		t.Fatalf("UpdateEnvironmentWithDeploymentUnits: %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	var content struct {
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.Unmarshal([]byte(publisher.events[0].Content), &content); err != nil {
+		t.Fatalf("decode canonical environment event: %v", err)
+	}
+	publishedRevision, err := time.Parse(time.RFC3339Nano, content.UpdatedAt)
+	if err != nil {
+		t.Fatalf("parse published revision %q: %v", content.UpdatedAt, err)
+	}
+	persisted, err := envs.GetByID(ctx, env.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("load persisted environment: env=%#v err=%v", persisted, err)
+	}
+	if !publishedRevision.Equal(persisted.UpdatedAt) {
+		t.Fatalf("published revision %s != persisted revision %s", publishedRevision, persisted.UpdatedAt)
+	}
+
+	requested[0].ReconcileMode = domain.ReconcileModeAutoApply
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, persisted, requested, publishedRevision); err != nil {
+		t.Fatalf("second complete-set update using published revision: %v", err)
+	}
+}
+
+func TestRelayFirstRegistryCompleteSetPublishFailureRollsBackStagedRevision(t *testing.T) {
+	ctx := context.Background()
+	envs := newEnvironmentMutationEnvRepo()
+	units := newEnvironmentMutationUnitRepo()
+	env := &domain.Environment{ID: uuid.New(), Name: "prod"}
+	if err := envs.Create(ctx, env); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+	originalRevision := env.UpdatedAt
+
+	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
+	publisher := &relayFirstCapturePublisher{err: errors.New("relay rejected event")}
+	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	requested := []*domain.DeploymentUnit{{
+		Key:           domain.DefaultDeploymentUnitKey,
+		RuntimeType:   domain.RuntimeTypeDocker,
+		ReconcileMode: domain.ReconcileModeObserveOnly,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}}
+
+	if err := registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, requested, originalRevision); err == nil {
+		t.Fatal("expected relay publication failure")
+	}
+	persisted, err := envs.GetByID(ctx, env.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("load persisted environment: env=%#v err=%v", persisted, err)
+	}
+	if !persisted.UpdatedAt.Equal(originalRevision) {
+		t.Fatalf("revision changed after rollback: got %s want %s", persisted.UpdatedAt, originalRevision)
+	}
+	if persistedUnits, _ := units.ListByEnvironment(ctx, env.ID); len(persistedUnits) != 0 {
+		t.Fatalf("units persisted after publication failure: %#v", persistedUnits)
 	}
 }
 
