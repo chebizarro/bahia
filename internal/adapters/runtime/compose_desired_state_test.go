@@ -317,6 +317,51 @@ func TestComposeDesiredStateApplier_MultilineSecretFailsClosed(t *testing.T) {
 	}
 }
 
+func TestComposeDesiredStateApplier_ResolvesSiblingSecretsWithoutEnvNameCollision(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	applier := newTestApplier(t, dir, allSuccessRunner())
+	plan := testMultiServicePlan()
+	for i := range plan.Services {
+		plan.Services[i].SecretRefs = []domain.DesiredSecretRef{{
+			EnvVar:        "TOKEN",
+			Name:          plan.Services[i].StableServiceKey + "-token",
+			SecretID:      uuid.New(),
+			RedactedValue: "REDACTED(TOKEN)",
+		}}
+		plan.Services[i].DesiredHash = plan.Services[i].ComputeDesiredHash()
+	}
+	plan.ComputeRevisionHash()
+	target := &plan.Services[0]
+
+	_, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+		Secrets:         map[string]string{"TOKEN": "api-value"},
+		ServiceSecrets: map[string]map[string]string{
+			"api-server":   {"TOKEN": "api-value"},
+			"web-frontend": {"TOKEN": "web-value"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyDesiredState: %v", err)
+	}
+
+	apiEnv, err := os.ReadFile(filepath.Join(dir, ".bahia", "env", "api-server.env"))
+	if err != nil {
+		t.Fatalf("read api env: %v", err)
+	}
+	webEnv, err := os.ReadFile(filepath.Join(dir, ".bahia", "env", "web-frontend.env"))
+	if err != nil {
+		t.Fatalf("read web env: %v", err)
+	}
+	if !strings.Contains(string(apiEnv), "TOKEN=api-value") || strings.Contains(string(apiEnv), "web-value") {
+		t.Fatal("api env did not receive only its service-scoped secret")
+	}
+	if !strings.Contains(string(webEnv), "TOKEN=web-value") || strings.Contains(string(webEnv), "api-value") {
+		t.Fatal("web env did not receive only its service-scoped secret")
+	}
+}
+
 func TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans(t *testing.T) {
 	dir := setupBahiaOwnedDir(t)
 	runner := allSuccessRunner()

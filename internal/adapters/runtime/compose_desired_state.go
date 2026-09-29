@@ -156,7 +156,14 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 	if err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: render failed: %w", err)
 	}
-	if err := resolveComposeEnvMaterial(renderResult, unitPlan, req.Secrets); err != nil {
+	serviceSecrets := make(map[string]map[string]string, len(req.ServiceSecrets)+1)
+	for serviceKey, values := range req.ServiceSecrets {
+		serviceSecrets[serviceKey] = values
+	}
+	if _, ok := serviceSecrets[req.TargetService.StableServiceKey]; !ok {
+		serviceSecrets[req.TargetService.StableServiceKey] = req.Secrets
+	}
+	if err := resolveComposeEnvMaterial(renderResult, unitPlan, serviceSecrets); err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: resolve env material: %w", err)
 	}
 
@@ -224,7 +231,7 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 // them verbatim would allow one secret to inject additional dotenv entries.
 // Missing values fail closed; a placeholder is never promoted as runtime
 // configuration.
-func resolveComposeEnvMaterial(result *RenderResult, unitPlan *domain.DesiredDeploymentUnitPlan, secrets map[string]string) error {
+func resolveComposeEnvMaterial(result *RenderResult, unitPlan *domain.DesiredDeploymentUnitPlan, serviceSecrets map[string]map[string]string) error {
 	if result == nil {
 		return fmt.Errorf("render result is nil")
 	}
@@ -239,6 +246,10 @@ func resolveComposeEnvMaterial(result *RenderResult, unitPlan *domain.DesiredDep
 		content, ok := result.EnvMaterial[svc.StableServiceKey]
 		if !ok {
 			return fmt.Errorf("service %q has secret refs but no env material", svc.StableServiceKey)
+		}
+		secrets, ok := serviceSecrets[svc.StableServiceKey]
+		if !ok {
+			return fmt.Errorf("service %q is missing resolved secret material", svc.StableServiceKey)
 		}
 
 		lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")

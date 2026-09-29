@@ -474,6 +474,16 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("assembling desired environment plan: %w", err)
 	}
+	serviceSecrets := map[string]map[string]string{targetSpec.StableServiceKey: opts.Environment}
+	if rt.Type() == domain.RuntimeTypeCompose {
+		var siblingSecretAccesses []domain.SecretAccessManifest
+		serviceSecrets, siblingSecretAccesses, err = s.resolveUnitApplySecrets(ctx, plan, targetSpec, envID, opts.Environment)
+		if err != nil {
+			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			return nil, fmt.Errorf("resolving deployment-unit secrets: %w", err)
+		}
+		secretAccesses = append(secretAccesses, siblingSecretAccesses...)
+	}
 
 	if opts.Labels == nil {
 		opts.Labels = map[string]string{}
@@ -544,6 +554,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 			EnvironmentPlan: plan,
 			TargetService:   targetSpec,
 			Secrets:         opts.Environment,
+			ServiceSecrets:  serviceSecrets,
 			PullPolicy:      targetSpec.PullPolicy,
 		})
 		if err != nil {
@@ -1016,6 +1027,75 @@ func (s *RuntimeLifecycleService) effectiveSecrets(ctx context.Context, serviceI
 		return nil, nil
 	}
 	return s.secrets.ListEffective(ctx, serviceID, envID)
+}
+
+// resolveUnitApplySecrets resolves the reviewed secret references for every
+// service in the target deployment unit. Full-project runtimes apply sibling
+// services atomically, so resolving only the requested target would either
+// promote redaction placeholders or reuse stale sibling env files.
+//
+// The returned map is keyed by stable service key to avoid collisions when
+// sibling services use the same environment variable name for different
+// values. The target service values were already resolved and audited by the
+// caller; this method resolves and returns audit manifests only for siblings.
+func (s *RuntimeLifecycleService) resolveUnitApplySecrets(
+	ctx context.Context,
+	plan *domain.DesiredEnvironmentPlan,
+	target *domain.DesiredServiceSpec,
+	envID uuid.UUID,
+	targetValues map[string]string,
+) (map[string]map[string]string, []domain.SecretAccessManifest, error) {
+	if plan == nil || target == nil {
+		return nil, nil, fmt.Errorf("desired environment plan and target service are required")
+	}
+	plan.NormalizeUnitIdentity()
+	plan.GroupByDeploymentUnit()
+
+	var targetUnit *domain.DesiredDeploymentUnitPlan
+	for i := range plan.UnitPlans {
+		unit := &plan.UnitPlans[i]
+		for j := range unit.Services {
+			candidate := &unit.Services[j]
+			if candidate.ServiceID == target.ServiceID && candidate.StableServiceKey == target.StableServiceKey {
+				targetUnit = unit
+				break
+			}
+		}
+		if targetUnit != nil {
+			break
+		}
+	}
+	if targetUnit == nil {
+		return nil, nil, fmt.Errorf("target service %q is absent from deployment-unit plan", target.StableServiceKey)
+	}
+
+	resolved := make(map[string]map[string]string, len(targetUnit.Services))
+	resolved[target.StableServiceKey] = targetValues
+	var accesses []domain.SecretAccessManifest
+	for i := range targetUnit.Services {
+		svc := &targetUnit.Services[i]
+		if svc.ServiceID == target.ServiceID && svc.StableServiceKey == target.StableServiceKey {
+			continue
+		}
+		if len(svc.SecretRefs) == 0 {
+			resolved[svc.StableServiceKey] = nil
+			continue
+		}
+
+		effective, err := s.effectiveSecrets(ctx, svc.ServiceID, envID)
+		if err != nil {
+			return nil, accesses, fmt.Errorf("loading effective secrets for service %q: %w", svc.StableServiceKey, err)
+		}
+		siblingOpts := runtime.DeployOptions{Environment: map[string]string{}}
+		siblingAccesses, err := s.mergeEffectiveSecrets(ctx, effective, &siblingOpts, svc, true)
+		accesses = append(accesses, siblingAccesses...)
+		if err != nil {
+			return nil, accesses, fmt.Errorf("resolving secrets for service %q: %w", svc.StableServiceKey, err)
+		}
+		resolved[svc.StableServiceKey] = siblingOpts.Environment
+	}
+
+	return resolved, accesses, nil
 }
 
 type secretListerOrEmpty struct{ repo repository.SecretRepository }

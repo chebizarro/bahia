@@ -51,6 +51,13 @@ type DesiredStateApplyRequest struct {
 	// environment variable name. These are never persisted in the plan.
 	Secrets map[string]string
 
+	// ServiceSecrets carries apply-scoped plaintext values for every service
+	// in a multi-service deployment unit, keyed first by stable service key and
+	// then by environment variable name. Compose full-project applies require
+	// this shape so sibling services can use the same env var name without
+	// colliding. Values are never persisted in desired state or metadata.
+	ServiceSecrets map[string]map[string]string
+
 	// PullPolicy controls image pull behavior ("always", "if-not-present", "never").
 	PullPolicy string
 

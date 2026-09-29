@@ -160,6 +160,55 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	}
 }
 
+func TestResolveUnitApplySecretsSeparatesSiblingEnvNames(t *testing.T) {
+	ctx := context.Background()
+	envID := uuid.New()
+	targetID := uuid.New()
+	siblingID := uuid.New()
+	repo := newMockSecretRepo()
+	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	siblingCiphertext, err := encryptor.Encrypt("sibling-value", domain.EncryptionAES256)
+	if err != nil {
+		t.Fatalf("encrypt sibling secret: %v", err)
+	}
+	siblingSecret := &domain.ServiceSecret{
+		ServiceID:        siblingID,
+		EnvironmentID:    &envID,
+		Name:             "TOKEN",
+		EncryptedValue:   siblingCiphertext,
+		EncryptionMethod: domain.EncryptionAES256,
+	}
+	if err := repo.Create(ctx, siblingSecret); err != nil {
+		t.Fatalf("create sibling secret: %v", err)
+	}
+
+	target := domain.DesiredServiceSpec{
+		ServiceID: targetID, StableServiceKey: "target", DeploymentUnitKey: "unit",
+		SecretRefs: []domain.DesiredSecretRef{{EnvVar: "TOKEN", SecretID: uuid.New(), RedactedValue: "REDACTED(TOKEN)"}},
+	}
+	sibling := domain.DesiredServiceSpec{
+		ServiceID: siblingID, StableServiceKey: "sibling", DeploymentUnitKey: "unit",
+		SecretRefs: []domain.DesiredSecretRef{{EnvVar: "TOKEN", SecretID: siblingSecret.ID, RedactedValue: "REDACTED(TOKEN)"}},
+	}
+	plan := &domain.DesiredEnvironmentPlan{EnvironmentID: envID, Services: []domain.DesiredServiceSpec{target, sibling}}
+	plan.ComputeRevisionHash()
+	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: encryptor}
+
+	resolved, accesses, err := lifecycle.resolveUnitApplySecrets(ctx, plan, &target, envID, map[string]string{"TOKEN": "target-value"})
+	if err != nil {
+		t.Fatalf("resolveUnitApplySecrets: %v", err)
+	}
+	if resolved["target"]["TOKEN"] != "target-value" || resolved["sibling"]["TOKEN"] != "sibling-value" {
+		t.Fatalf("service-scoped values were not preserved: %#v", resolved)
+	}
+	if len(accesses) != 1 || accesses[0].ServiceID != siblingID {
+		t.Fatalf("sibling secret access manifests = %#v, want one sibling access", accesses)
+	}
+}
+
 func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
