@@ -608,6 +608,7 @@ type DesiredServiceSpec struct {
 	// Resources
 	Ports          []string               `json:"ports,omitempty"`
 	Volumes        []string               `json:"volumes,omitempty"`
+	ExtraHosts     []string               `json:"extra_hosts,omitempty"`
 	Labels         map[string]string      `json:"labels,omitempty"`
 	ResourceLimits *RuntimeResourceLimits `json:"resource_limits,omitempty"`
 

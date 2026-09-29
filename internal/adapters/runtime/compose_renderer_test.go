@@ -602,6 +602,35 @@ func TestComposeRenderer_RenderEnvironmentPlan_NetworkModeService(t *testing.T) 
 	}
 }
 
+func TestComposeRenderer_RenderEnvironmentPlan_ExtraHosts(t *testing.T) {
+	renderer := NewComposeRenderer()
+	envID := fixedUUID("env-extrahost01")
+	plan := &domain.DesiredEnvironmentPlan{
+		EnvironmentID: envID,
+		Services: []domain.DesiredServiceSpec{{
+			SchemaVersion:    domain.DesiredStateSchemaVersion,
+			ServiceID:        fixedUUID("svc-extrahost01"),
+			EnvironmentID:    envID,
+			ArtifactID:       fixedUUID("art-extrahost01"),
+			StableServiceKey: "host-reachable-svc",
+			ImageRef:         "nginx:latest",
+			ExtraHosts:       []string{"stage-host:host-gateway"},
+		}},
+	}
+	plan.Services[0].ComputeDesiredHash()
+	plan.ComputeRevisionHash()
+
+	result, err := renderer.RenderEnvironmentPlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	yaml := string(result.ComposeYAML)
+	if !strings.Contains(yaml, "extra_hosts:\n      - stage-host:host-gateway") {
+		t.Fatalf("expected deterministic extra_hosts in YAML:\n%s", yaml)
+	}
+}
+
 func TestComposeRenderer_MetadataJSON(t *testing.T) {
 	m := RenderMetadata{
 		SchemaVersion: 1,

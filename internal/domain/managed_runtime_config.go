@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ const ManagedRuntimeConfigSchemaVersion = "1"
 var (
 	managedServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 	environmentNamePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	managedHostNamePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
 )
 
 // ManagedSecretReference maps an environment variable to an opaque Bahia
@@ -56,6 +58,7 @@ type ManagedRuntimeConfig struct {
 	Healthcheck    *ManagedHTTPHealthcheck  `json:"healthcheck,omitempty"`
 	RestartPolicy  string                   `json:"restart_policy,omitempty"`
 	Volumes        []string                 `json:"volumes,omitempty"`
+	ExtraHosts     []string                 `json:"extra_hosts,omitempty"`
 	ResourceLimits *RuntimeResourceLimits   `json:"resource_limits,omitempty"`
 	PullPolicy     string                   `json:"pull_policy,omitempty"`
 }
@@ -79,6 +82,7 @@ func NormalizeManagedRuntimeConfig(input *ManagedRuntimeConfig) *ManagedRuntimeC
 	}
 	out.Ports = canonicalStringSlice(out.Ports)
 	out.Volumes = canonicalStringSlice(out.Volumes)
+	out.ExtraHosts = canonicalStringSlice(out.ExtraHosts)
 	out.Command = append([]string(nil), out.Command...)
 	out.Environment = copyStringMapDomain(out.Environment)
 	out.SecretRefs = append([]ManagedSecretReference(nil), out.SecretRefs...)
@@ -167,8 +171,8 @@ func ValidateManagedRuntimeConfig(config *ManagedRuntimeConfig) error {
 		seenSecretEnv[ref.EnvVar] = struct{}{}
 		seenSecretIDs[ref.SecretID] = struct{}{}
 	}
-	if len(config.Ports) > 64 || len(config.Volumes) > 64 {
-		return fmt.Errorf("ports and volumes must each contain at most 64 entries")
+	if len(config.Ports) > 64 || len(config.Volumes) > 64 || len(config.ExtraHosts) > 64 {
+		return fmt.Errorf("ports, volumes, and extra_hosts must each contain at most 64 entries")
 	}
 	for _, port := range config.Ports {
 		if err := validateRuntimeText(port, 256, "port mapping"); err != nil {
@@ -179,6 +183,17 @@ func ValidateManagedRuntimeConfig(config *ManagedRuntimeConfig) error {
 		if err := validateRuntimeText(volume, 1024, "volume mapping"); err != nil {
 			return err
 		}
+	}
+	seenExtraHosts := make(map[string]struct{}, len(config.ExtraHosts))
+	for _, mapping := range config.ExtraHosts {
+		if err := validateManagedExtraHost(mapping); err != nil {
+			return err
+		}
+		hostname := mapping[:strings.Index(mapping, ":")]
+		if _, exists := seenExtraHosts[hostname]; exists {
+			return fmt.Errorf("extra host hostname %q is duplicated", hostname)
+		}
+		seenExtraHosts[hostname] = struct{}{}
 	}
 	switch config.RestartPolicy {
 	case "", "no", "always", "on-failure", "unless-stopped":
@@ -202,6 +217,25 @@ func ValidateManagedRuntimeConfig(config *ManagedRuntimeConfig) error {
 		if config.ResourceLimits.CPUMillis == 0 && config.ResourceLimits.MemoryBytes == 0 {
 			return fmt.Errorf("resource_limits must set cpu_millis or memory_bytes")
 		}
+	}
+	return nil
+}
+
+func validateManagedExtraHost(mapping string) error {
+	if err := validateRuntimeText(mapping, 512, "extra host mapping"); err != nil {
+		return err
+	}
+	separator := strings.Index(mapping, ":")
+	if separator < 1 || separator == len(mapping)-1 {
+		return fmt.Errorf("extra host mapping %q must use hostname:address", mapping)
+	}
+	hostname := mapping[:separator]
+	address := mapping[separator+1:]
+	if !managedHostNamePattern.MatchString(hostname) || strings.Contains(hostname, "..") {
+		return fmt.Errorf("extra host hostname %q is invalid", hostname)
+	}
+	if address != "host-gateway" && net.ParseIP(strings.Trim(address, "[]")) == nil {
+		return fmt.Errorf("extra host address %q must be an IP address or host-gateway", address)
 	}
 	return nil
 }

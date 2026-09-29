@@ -465,6 +465,7 @@ func TestDesiredStateBuilderBuildsManagedComposeDefinition(t *testing.T) {
 		Ports:         []string{"8080:8080"},
 		Command:       []string{"nginx", "-g", "daemon off;"},
 		Environment:   map[string]string{"PUBLIC_MODE": "production"},
+		ExtraHosts:    []string{"stage-host:host-gateway"},
 		SecretRefs:    []domain.ManagedSecretReference{{EnvVar: "API_TOKEN", SecretID: secretID}},
 		Healthcheck: &domain.ManagedHTTPHealthcheck{
 			Protocol: "http", Method: "GET", Path: "/healthz", Port: 8080,
@@ -499,6 +500,9 @@ func TestDesiredStateBuilderBuildsManagedComposeDefinition(t *testing.T) {
 	}
 	if spec.Env["PUBLIC_MODE"] != "production" || spec.DesiredHash == "" {
 		t.Fatalf("managed literals or desired hash missing: %#v", spec)
+	}
+	if !reflect.DeepEqual(spec.ExtraHosts, []string{"stage-host:host-gateway"}) {
+		t.Fatalf("managed extra hosts mismatch: %#v", spec.ExtraHosts)
 	}
 }
 

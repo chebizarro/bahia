@@ -11,10 +11,27 @@ func validManagedRuntimeConfig() *ManagedRuntimeConfig {
 		ServiceName:    "arcana-web",
 		Ports:          []string{"8080:8080"},
 		Environment:    map[string]string{"PUBLIC_MODE": "production"},
+		ExtraHosts:     []string{"stage-host:host-gateway"},
 		SecretRefs:     []ManagedSecretReference{{EnvVar: "API_TOKEN", SecretID: uuid.MustParse("00000000-0000-0000-0000-000000000111")}},
 		Healthcheck:    &ManagedHTTPHealthcheck{Protocol: "HTTP", Method: "get", Path: "/healthz", Port: 8080, Interval: "30s", Timeout: "5s", Retries: 3},
 		RestartPolicy:  "UNLESS-STOPPED",
 		ResourceLimits: &RuntimeResourceLimits{CPUMillis: 500, MemoryBytes: 268435456},
+	}
+}
+
+func TestManagedRuntimeConfigRejectsUnsafeExtraHost(t *testing.T) {
+	config := NormalizeManagedRuntimeConfig(validManagedRuntimeConfig())
+	config.ExtraHosts = []string{"stage-host:$(id)"}
+	if err := ValidateManagedRuntimeConfig(config); err == nil {
+		t.Fatal("expected unsafe extra host mapping to fail")
+	}
+}
+
+func TestManagedRuntimeConfigRejectsDuplicateExtraHost(t *testing.T) {
+	config := NormalizeManagedRuntimeConfig(validManagedRuntimeConfig())
+	config.ExtraHosts = []string{"stage-host:host-gateway", "stage-host:192.0.2.10"}
+	if err := ValidateManagedRuntimeConfig(config); err == nil {
+		t.Fatal("expected duplicate extra host hostname to fail")
 	}
 }
 

@@ -68,6 +68,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		pullPolicy     string
 		ports          []string
 		volumes        []string
+		extraHosts     []string
 		labels         map[string]string
 		envLiterals    map[string]string
 		healthcheck    *domain.HealthcheckConfig
@@ -89,6 +90,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		pullPolicy = managed.PullPolicy
 		ports = copySlice(managed.Ports)
 		volumes = copySlice(managed.Volumes)
+		extraHosts = copySlice(managed.ExtraHosts)
 		envLiterals = copyStringMap(managed.Environment)
 		healthcheck = desiredHealthcheck(managed.Healthcheck)
 		if managed.ResourceLimits != nil {
@@ -189,6 +191,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	// Sort ports and volumes for deterministic hashing.
 	sort.Strings(ports)
 	sort.Strings(volumes)
+	sort.Strings(extraHosts)
 
 	spec := &domain.DesiredServiceSpec{
 		SchemaVersion:     domain.DesiredStateSchemaVersion,
@@ -207,6 +210,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		SecretRefs:        secretRefs,
 		Ports:             ports,
 		Volumes:           volumes,
+		ExtraHosts:        extraHosts,
 		Labels:            labels,
 		Healthcheck:       healthcheck,
 		ResourceLimits:    resourceLimits,

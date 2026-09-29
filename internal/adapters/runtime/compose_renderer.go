@@ -208,6 +208,7 @@ type composeService struct {
 	EnvFile       []string
 	Ports         []string
 	Volumes       []string
+	ExtraHosts    []string
 	Labels        map[string]string
 	Healthcheck   *composeHealthcheck
 	DependsOn     map[string]composeDependsOn
@@ -350,6 +351,7 @@ func (r *ComposeRenderer) buildComposeService(svc domain.DesiredServiceSpec) com
 
 	// Network mode.
 	cs.NetworkMode = svc.NetworkMode
+	cs.ExtraHosts = sortedCopy(svc.ExtraHosts)
 
 	// Networks from extension.
 	if svc.ComposeExtension != nil && len(svc.ComposeExtension.Networks) > 0 {
@@ -612,6 +614,10 @@ func buildServiceNode(svc composeService) *yaml.Node {
 	// networks
 	if len(svc.Networks) > 0 {
 		addSequencePair(node, "networks", svc.Networks)
+	}
+
+	if len(svc.ExtraHosts) > 0 {
+		addSequencePair(node, "extra_hosts", svc.ExtraHosts)
 	}
 
 	// Resource limits use service-level Compose fields so non-Swarm Compose
