@@ -237,6 +237,55 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	}
 }
 
+func TestComposeRuntimeObserveSDKUsesDockerAPIWithoutComposeCLI(t *testing.T) {
+	dockerMock := newMockDockerAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/_ping":
+			w.Header().Set("API-Version", "1.44")
+			w.Header().Set("OSType", "linux")
+		case "/v1.44/containers/json":
+			if !strings.Contains(r.URL.Query().Get("filters"), "com.docker.compose.service=app") ||
+				!strings.Contains(r.URL.Query().Get("filters"), "com.docker.compose.project.working_dir=/srv/bahia/compose/managed") {
+				t.Errorf("container list filters = %q, want service and project directory", r.URL.Query().Get("filters"))
+			}
+			_, _ = fmt.Fprint(w, `[{"Id":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up","Labels":{"com.docker.compose.service":"app","com.docker.compose.project.working_dir":"/srv/bahia/compose/managed"}}]`)
+		case "/v1.44/containers/running-id/json":
+			_, _ = fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","State":{"Status":"running","Health":{"Status":"healthy"}},"Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
+		case "/v1.44/images/sha256:runningimage/json":
+			_, _ = fmt.Fprint(w, `{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.WithHost(dockerMock.URL), dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	t.Cleanup(func() { checkTestError(t, cli.Close()) })
+	r := &ComposeRuntime{
+		projectDir:    "/srv/bahia/compose/managed",
+		executionMode: ExecutionModeSDK,
+		logger:        zap.NewNop(),
+		dockerClient:  cli,
+	}
+
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy || obs.ObservedContainerID != "running-id" {
+		t.Fatalf("SDK observation mismatch: health=%s container=%q", obs.HealthStatus, obs.ObservedContainerID)
+	}
+	if obs.ObservedImageRepo != "registry.example/app" || obs.ObservedImageDigest != "sha256:runningdigest" {
+		t.Fatalf("SDK digest observation mismatch: repo=%q digest=%q", obs.ObservedImageRepo, obs.ObservedImageDigest)
+	}
+	if obs.NormalizedHash != "sha256:reviewed" {
+		t.Fatalf("SDK desired hash = %q, want reviewed hash", obs.NormalizedHash)
+	}
+}
+
 func TestComposeRuntimeObserveParsesJSONArrayAndPrefersRunningEntry(t *testing.T) {
 	bin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '[{"ID":"stopped-id","Image":"registry.example/app:v1","State":"exited","Status":"Exited"},{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}]'

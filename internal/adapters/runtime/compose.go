@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 
+	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/google/uuid"
@@ -191,6 +193,9 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	if err != nil {
 		return nil, err
 	}
+	if r.ExecutionMode() == ExecutionModeSDK {
+		return r.observeWithDockerAPI(ctx, serviceID, envID, serviceName)
+	}
 	args := r.composeArgs("ps", "--format", "json", "--", serviceName)
 	output, stderr, err := r.runCommandStdout(ctx, nil, args...)
 	if err != nil {
@@ -246,6 +251,85 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		NormalizedHash:      normalizedHash,
 		ObservedAt:          time.Now().UTC(),
 	}, nil
+}
+
+// observeWithDockerAPI observes an SDK-managed Compose service without
+// requiring a Docker Compose CLI in the Bahia runtime image. SDK mutation and
+// observation must use the same Docker endpoint; otherwise a successful SDK
+// apply is followed by an impossible CLI health check in minimal images.
+func (r *ComposeRuntime) observeWithDockerAPI(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	dockerCli, err := r.getDockerClient()
+	if err != nil {
+		return nil, fmt.Errorf("create docker client for compose observation: %w", err)
+	}
+	filterArgs := filters.NewArgs(filters.Arg("label", "com.docker.compose.service="+serviceName))
+	if projectDir := strings.TrimSpace(r.projectDir); projectDir != "" {
+		filterArgs.Add("label", "com.docker.compose.project.working_dir="+projectDir)
+	}
+	containers, err := dockerCli.ContainerList(ctx, containertypes.ListOptions{All: true, Filters: filterArgs})
+	if err != nil {
+		return nil, fmt.Errorf("list compose containers through docker API: %w", err)
+	}
+
+	obs := &domain.RuntimeObservation{
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		HealthStatus:  domain.HealthStatusStopped,
+		Source:        "compose",
+		ObservedAt:    time.Now().UTC(),
+	}
+	if len(containers) == 0 {
+		return obs, nil
+	}
+
+	selected := containers[0]
+	selectedHealth := mapDockerState(selected.State)
+	for _, candidate := range containers {
+		health := mapDockerState(candidate.State)
+		if health == domain.HealthStatusHealthy || (selectedHealth != domain.HealthStatusHealthy && strings.EqualFold(candidate.State, "running")) {
+			selected = candidate
+			selectedHealth = health
+			if health == domain.HealthStatusHealthy {
+				break
+			}
+		}
+	}
+
+	inspected, err := dockerCli.ContainerInspect(ctx, selected.ID)
+	if err != nil {
+		return nil, fmt.Errorf("inspect compose container through docker API: %w", err)
+	}
+	health := mapDockerState(string(inspected.State.Status))
+	if inspected.State.Health != nil {
+		switch strings.ToLower(string(inspected.State.Health.Status)) {
+		case "healthy":
+			health = domain.HealthStatusHealthy
+		case "unhealthy":
+			health = domain.HealthStatusUnhealthy
+		case "starting":
+			health = domain.HealthStatusStarting
+		}
+	}
+	configuredImage := ""
+	desiredHash := ""
+	if inspected.Config != nil {
+		configuredImage = strings.TrimSpace(inspected.Config.Image)
+		desiredHash = strings.TrimSpace(inspected.Config.Labels["bahia.desired_hash"])
+	}
+	imageRepo, imageDigest := r.inspectDockerImage(ctx, firstNonNilLogger(r.logger), inspected.Image, configuredImage)
+	obs.ObservedContainerID = selected.ID
+	obs.ObservedImageRepo = imageRepo
+	obs.ObservedImageDigest = imageDigest
+	obs.HealthStatus = health
+	obs.NormalizedHash = desiredHash
+	return obs, nil
+}
+
+func firstNonNilLogger(logger *zap.Logger) *zap.Logger {
+	if logger == nil {
+		return zap.NewNop()
+	}
+	return logger
 }
 
 // ObserveInstance resolves the concrete container ID with compose ps and reuses Docker's exact-container inspect path.
