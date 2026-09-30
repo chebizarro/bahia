@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -127,7 +128,9 @@ func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 	require.Equal(t, []string{"wss://one.example", "wss://two.example"}, bootstrapper.Progress().BlockingRelays)
 }
 
-func TestBootstrapperNoRelayDataFails(t *testing.T) {
+// An empty fleet is synced, not failed: every required group reached EOSE
+// with no stored events, so the requested tier is ready (bahia-irsry.20).
+func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
 		testKindTier0Snapshot: {eose: true},
@@ -141,13 +144,17 @@ func TestBootstrapperNoRelayDataFails(t *testing.T) {
 		CatchupTimeout:  50 * time.Millisecond,
 	})
 
+	cache := &bootstrapApplyRecorder{}
+	bootstrapper.cache = cache
+
 	err := bootstrapper.attemptBootstrap(context.Background())
 
-	require.Error(t, err)
-	require.False(t, bootstrapper.Ready())
-	require.Equal(t, -1, bootstrapper.ReadyTier())
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	require.Equal(t, 1, bootstrapper.ReadyTier())
+	require.Zero(t, cache.count())
 	progress := bootstrapper.Progress()
-	require.Equal(t, BootstrapPhaseFailed, progress.Phase)
+	require.Equal(t, BootstrapPhaseReady, progress.Phase)
 	require.Equal(t, 3, progress.GroupsComplete)
 }
 
@@ -167,14 +174,16 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 		attempt := attemptsByKind[kind]
 		attemptsMu.Unlock()
 
+		if attempt == 1 {
+			// No relay reachable: every group fails, so the attempt fails.
+			return nil, errors.New("no connected relays")
+		}
 		script := scriptedBootstrapSubscription{eose: true}
-		if attempt > 1 {
-			switch kind {
-			case testKindTier1Snapshot:
-				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "retry-snapshot")}
-			case testKindTier1Live:
-				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "retry-live")}
-			}
+		switch kind {
+		case testKindTier1Snapshot:
+			script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "retry-snapshot")}
+		case testKindTier1Live:
+			script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "retry-live")}
 		}
 		return scriptedMergedSubscription(ctx, script), nil
 	}
@@ -291,8 +300,9 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 
 	err = bootstrapper.attemptBootstrap(context.Background())
 
-	require.Error(t, err)
-	require.NotEmpty(t, captured)
+	require.NoError(t, err)
+	require.Equal(t, 2, bootstrapper.ReadyTier())
+	require.Len(t, captured, 5)
 	require.Equal(t, projectionAuthors, captured[0].Authors)
 	require.Equal(t, controlPlaneAuthors, captured[1].Authors)
 	require.Equal(t, projectionAuthors, captured[2].Authors)

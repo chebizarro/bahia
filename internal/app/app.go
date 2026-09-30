@@ -2115,7 +2115,7 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 		if pubErr := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
 			return r.statusProjector.PublishReadiness(publishCtx, service.ReadinessStatusPayload{
 				Phase:         string(progress.Phase),
-				ActiveTier:    int(r.policy.ActiveTier),
+				ActiveTier:    int(r.policy.ActiveTier()),
 				RequestedTier: int(r.policy.RequestedTier),
 				Ready:         r.bootstrapper.Ready(),
 			})
@@ -2491,7 +2491,7 @@ func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, pol
 
 	for _, reg := range manager.runners {
 		if !policy.RunnerEnabled(Tier(reg.tier)) {
-			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier)))
+			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier())))
 			continue
 		}
 		manager.wg.Add(1)
