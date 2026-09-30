@@ -576,6 +576,27 @@ func (r *memorySecurityRepo) UpdateSecurityPublicationState(_ context.Context, i
 	return nil
 }
 
+func (r *memorySecurityRepo) AbandonSecurityPublication(_ context.Context, eventID, reason string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var changed int64
+	for _, pub := range r.publications {
+		if pub.EventID != eventID || pub.PublishState != domain.SecurityPublicationPending {
+			continue
+		}
+		pub.PublishState = domain.SecurityPublicationFailedTerminal
+		pub.LastError = reason
+		pub.NextRetryAt = nil
+		changed++
+		if pub.RunID != nil {
+			if run := r.runs[*pub.RunID]; run != nil {
+				run.PublishState = domain.SecurityPublicationFailedTerminal
+			}
+		}
+	}
+	return changed, nil
+}
+
 func (r *memorySecurityRepo) hasPublicationState(state domain.SecurityPublicationState) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -743,6 +764,9 @@ func (r *recordingSBOMCompatibilityUpdater) ListManifestsBySubject(context.Conte
 }
 func (r *recordingSBOMCompatibilityUpdater) ListPublishedManifests(context.Context, int) ([]domain.SBOMManifest, error) {
 	return nil, nil
+}
+func (r *recordingSBOMCompatibilityUpdater) FailManifestByReferenceEvent(context.Context, string, string) (int64, error) {
+	return 0, nil
 }
 func (r *recordingSBOMCompatibilityUpdater) UpdateManifestPublishState(context.Context, uuid.UUID, domain.SBOMPublishState, string, string, string) error {
 	return nil

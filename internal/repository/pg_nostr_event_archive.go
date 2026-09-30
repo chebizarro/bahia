@@ -109,7 +109,26 @@ func (r *PgNostrEventArchiveRepository) EnsureOnlineIndexes(ctx context.Context)
 	if _, err := r.pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_publish_state_check`); err != nil {
 		return fmt.Errorf("validating Nostr publish state constraint: %w", err)
 	}
+	for _, statement := range SecurityPublishStateValidationStatements() {
+		if _, err := r.pool.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("validating Security publish state constraints: %w", err)
+		}
+	}
 	return nil
+}
+
+// SecurityPublishStateValidationStatements is the out-of-band half of startup
+// migration 000072, which narrows the Security publish-state checks NOT VALID
+// (failed_retryable retired). security_scan_runs has no publish_state index,
+// so its leftover failed_retryable rows are converted here rather than at
+// startup; the statement only writes those rows and is idempotent. Validation
+// then takes SHARE UPDATE EXCLUSIVE, which blocks neither reads nor writes.
+func SecurityPublishStateValidationStatements() []string {
+	return []string{
+		`UPDATE security_scan_runs SET publish_state = 'failed_terminal', updated_at = now() WHERE publish_state = 'failed_retryable'`,
+		`ALTER TABLE security_scan_runs VALIDATE CONSTRAINT security_scan_runs_publish_state_check`,
+		`ALTER TABLE security_observable_publications VALIDATE CONSTRAINT security_observable_publications_publish_state_check`,
+	}
 }
 
 func (r *PgNostrEventArchiveRepository) OnlineIndexesReady(ctx context.Context) (bool, error) {

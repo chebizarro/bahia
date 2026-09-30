@@ -16,6 +16,8 @@ tests:
         values: '1x10'
       - series: 'bahia_nostr_relays_unhealthy_total'
         values: '0x10'
+      - series: 'bahia_nostr_outbox_failed'
+        values: '-1 -1 0 0 2 2 2 2 2 2'
       - series: 'bahia_audit_4903_anomalies_total'
         values: '0 0 0 0 0 1 1 1 1 1'
       - series: 'bahia_authorization_rejections_total{reason="policy"}'
@@ -92,6 +94,16 @@ tests:
             exp_annotations:
               summary: "Bahia relay connectivity is degraded"
               runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
+      - eval_time: 3m
+        alertname: BahiaNostrOutboxFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: BahiaNostrOutboxFailed
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "2 Nostr outbox event(s) were abandoned by every write relay"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahianostroutboxfailed"
       - eval_time: 6m
         alertname: BahiaAudit4903Anomaly
         exp_alerts:

@@ -12,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // mockEventPublisher captures published events.
@@ -300,5 +301,43 @@ func TestNostrDocsPublisher_SyncToRelay_QueuedTopicsAreNotRepublished(t *testing
 	defer pub.mu.Unlock()
 	if len(pub.events) != 2 {
 		t.Fatalf("expected each topic signed exactly once, got %d publishes", len(pub.events))
+	}
+}
+
+// abandonedEventPublisher reports every event abandoned: every relay rejected
+// it permanently, the outbox row is failed and nothing retries it.
+type abandonedEventPublisher struct {
+	mu     sync.Mutex
+	events []*nostr.Event
+}
+
+func (m *abandonedEventPublisher) PublishSignedEvent(_ context.Context, ev *nostr.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, ev)
+	return fmt.Errorf("wss://relay rejected permanently: blocked: not allowed: %w", nostrutil.ErrPublishAbandoned)
+}
+
+func TestNostrDocsPublisher_SyncToRelay_AbandonedTopicsCountAsFailed(t *testing.T) {
+	dir := t.TempDir()
+	writeTestDoc(t, dir, "getting-started.md", "# Getting Started\n\nWelcome to Bahia.")
+	writeTestDoc(t, dir, "features/services.md", "# Services\n\nManage your services.")
+	pub := &abandonedEventPublisher{}
+	core, logs := observer.New(zap.DebugLevel)
+	publisher := NewNostrDocsPublisher(New(dir), pub, nil, zap.New(core))
+
+	if err := publisher.SyncToRelay(context.Background()); err != nil {
+		t.Fatalf("SyncToRelay failed: %v", err)
+	}
+	if got := logs.FilterMessage("doc publish abandoned by relays").Len(); got != 2 {
+		t.Fatalf("expected both topics logged as abandoned, got %d", got)
+	}
+	summary := logs.FilterMessage("docs nostr sync complete").All()
+	if len(summary) != 1 {
+		t.Fatalf("expected one sync summary, got %d", len(summary))
+	}
+	fields := summary[0].ContextMap()
+	if fields["failed"] != int64(2) || fields["queued"] != int64(0) || fields["published"] != int64(0) {
+		t.Fatalf("abandoned topics must count as failed, not queued: %v", fields)
 	}
 }

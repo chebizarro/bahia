@@ -291,7 +291,8 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 
 	event := testSignedEvent("blocked")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
-	require.ErrorIs(t, err, ErrPublishIncomplete)
+	require.ErrorIs(t, err, ErrPublishAbandoned, "an unreachable quorum is abandoned, not queued")
+	require.NotErrorIs(t, err, ErrPublishIncomplete)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.abandoned, "event abandoned"))
 

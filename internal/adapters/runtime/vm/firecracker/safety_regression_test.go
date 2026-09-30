@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -85,15 +84,14 @@ func TestPersistentStartWaitsForDelayedSocketAndPreservesTimeoutEvidence(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// No wall-clock deadline: every step below waits on an event
+			// (launch, socket appearance, cancel, exit); go test -timeout
+			// bounds a genuine hang.
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			result := make(chan error, 1)
 			go func() { result <- d.TransitionPersistent(ctx, before, domain.VMOperationStart, false) }()
-			select {
-			case <-procs.started:
-			case <-ctx.Done():
-				t.Fatal("launch never reached")
-			}
+			<-procs.started
 			select {
 			case err := <-result:
 				t.Fatalf("startup completed before API readiness: %v", err)
@@ -101,10 +99,7 @@ func TestPersistentStartWaitsForDelayedSocketAndPreservesTimeoutEvidence(t *test
 			}
 			switch outcome {
 			case "ready":
-				listener, err := net.Listen("unix", d.apiSocketPath(spec.Instance.Name))
-				if err != nil {
-					t.Fatal(err)
-				}
+				listener := listenThenPublishSocket(t, d.apiSocketPath(spec.Instance.Name))
 				server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"state":"Running"}`)) })}
 				done := make(chan struct{})
 				go func() { defer close(done); _ = server.Serve(listener) }()
@@ -131,6 +126,28 @@ func TestPersistentStartWaitsForDelayedSocketAndPreservesTimeoutEvidence(t *test
 			}
 		})
 	}
+}
+
+// listenThenPublishSocket makes the fake API socket appear at path only once
+// it already accepts connections. net.Listen binds (creating the file, which
+// wakes readiness through fsnotify) before it listens; a probe landing between
+// the two is refused, and in this test nothing else changes the instance
+// directory to wake readiness again, so it would wait for its deadline. The
+// socket is bound and listening under a temporary name in the same directory
+// and then renamed into place, so its appearance is the readiness signal.
+func listenThenPublishSocket(t *testing.T, path string) net.Listener {
+	t.Helper()
+	staging := path + ".staging"
+	listener, err := net.Listen("unix", staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Rename(staging, path); err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	return listener
 }
 
 func TestDefinitionCannotResizeAnotherResourcesDiskOrOverwriteForeignMarker(t *testing.T) {

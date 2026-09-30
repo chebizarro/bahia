@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -691,6 +692,9 @@ func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event,
 		return nostrutil.EventIDHex(ev), nil
 	}
 	if err != nil {
+		// Includes nostrutil.ErrPublishAbandoned: the outbox gave up on the
+		// event (every relay rejected it permanently), so the run fails
+		// rather than recording it as published.
 		return "", fmt.Errorf("publishing %s event: %w", label, err)
 	}
 	if len(results) == 0 {
@@ -717,6 +721,52 @@ func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event,
 		}
 	}
 	return "", fmt.Errorf("publishing %s event: no relay accepted event: %s", label, strings.Join(rejections, "; "))
+}
+
+// sbomAbandonWriteTimeout bounds the manifest update made from the outbox's
+// abandonment hook, which runs on the publisher's delivery path.
+const sbomAbandonWriteTimeout = 10 * time.Second
+
+// HandlePublishAbandoned is registered with the control-plane outbox
+// publisher's OnDeliveryAbandoned hook. A run records a manifest as published
+// once its reference event is queued; when the outbox later abandons that
+// reference, the manifest is marked failed (so later runs regenerate it and
+// do not list it as available) and cached run results that carry the
+// reference are dropped, so retrying the same idempotency key runs again.
+// Events other than SBOM references are ignored.
+func (s *SBOMOrchestrator) HandlePublishAbandoned(ev nostr.Event) {
+	if s == nil || int(ev.Kind) != sbomadapter.KindSBOMReference {
+		return
+	}
+	eventID := ev.ID.Hex()
+	s.forgetResultsWithReference(eventID)
+	if s.Repo == nil {
+		return
+	}
+	logger := s.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sbomAbandonWriteTimeout)
+	defer cancel()
+	changed, err := s.Repo.FailManifestByReferenceEvent(ctx, eventID, "SBOM reference "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in nostr_events.last_publish_error")
+	if err != nil {
+		logger.Warn("failed to record abandoned SBOM reference", zap.String("event_id", eventID), zap.Error(err))
+		return
+	}
+	if changed > 0 {
+		logger.Warn("SBOM reference abandoned by the publish outbox; manifest marked failed", zap.String("event_id", eventID), zap.Int64("manifests", changed))
+	}
+}
+
+func (s *SBOMOrchestrator) forgetResultsWithReference(eventID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, result := range s.results {
+		if slices.Contains(result.ReferenceEventIDs, eventID) {
+			delete(s.results, key)
+		}
+	}
 }
 
 func (s *SBOMOrchestrator) validateRuntimeConfigured() error {
