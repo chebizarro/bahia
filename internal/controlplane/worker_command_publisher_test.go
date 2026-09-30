@@ -5,19 +5,14 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
-
-func TestWorkerLegacyKindConstantsRemainMigrationOnly(t *testing.T) {
-	if KindWorkerState != 32000 || KindWorkerAssignmentState != 32001 || KindWorkerDrainStatus != 32002 || KindWorkerEligibilityPreview != 32003 {
-		t.Fatalf("unexpected legacy worker read model kind mappings: state=%d assignment=%d drain=%d eligibility=%d", KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
-	}
-}
 
 func TestWorkerReadModelRuntimeAcceptsCanonicalStateKindOnly(t *testing.T) {
 	if !isAcceptedWorkerReadModelKind(KindCASControlState) {
 		t.Fatalf("canonical worker read-model kind %d should be accepted", KindCASControlState)
 	}
-	for _, kind := range []int{KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview, 31974, 31991, 31992, 31993, 31994, 31995, 31996, 31997, 31998, 31999, 32010} {
+	for _, kind := range []int{kinds.CPStateFamilyWorkerState.LegacyKind(), kinds.CPStateFamilyWorkerAssignment.LegacyKind(), kinds.CPStateFamilyWorkerDrain.LegacyKind(), kinds.CPStateFamilyWorkerEligibility.LegacyKind(), kinds.CPStateFamilyWorkerCleanup.LegacyKind(), 31974, 31991, 31992, 31993, 31994, 31995, 31996, 31997, 31998, 31999, 32010} {
 		if isAcceptedWorkerReadModelKind(kind) {
 			t.Fatalf("legacy/non-worker read-model kind %d should not be accepted at runtime", kind)
 		}

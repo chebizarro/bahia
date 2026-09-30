@@ -22,6 +22,18 @@ const (
 	CPStateFamilyDNSBackend  CPStateFamily = DNSBackendState
 )
 
+// Worker cp-state families (bahia-irsry.9.2). 32000-32003 are the retired
+// WorkerState* catalog kinds; 32004 names worker cleanup execution, which never
+// had a wire kind. Every worker record is published on 30900 only; the retired
+// wire kinds are decoded solely by internal/nostrmigration.
+const (
+	CPStateFamilyWorkerState       CPStateFamily = 32000
+	CPStateFamilyWorkerAssignment  CPStateFamily = 32001
+	CPStateFamilyWorkerDrain       CPStateFamily = 32002
+	CPStateFamilyWorkerEligibility CPStateFamily = 32003
+	CPStateFamilyWorkerCleanup     CPStateFamily = 32004
+)
+
 // LegacyKind returns the numeric discriminator for producer APIs that still
 // key records by the catalog kind (the projector's control-state envelope).
 func (f CPStateFamily) LegacyKind() int { return int(f) }

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -142,7 +143,7 @@ func (s *Server) handleWorkerGetAssignments(ctx context.Context, args map[string
 	if state == nil {
 		return errorResult("worker not found"), nil
 	}
-	return jsonResult(map[string]interface{}{"assignment_state": state, "read_model_kind": controlplane.KindWorkerAssignmentState})
+	return jsonResult(map[string]interface{}{"assignment_state": state, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerAssignmentTopic})
 }
 
 func (s *Server) handleWorkerListAssignments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -153,7 +154,7 @@ func (s *Server) handleWorkerListAssignments(ctx context.Context, args map[strin
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list worker assignments: %v", err)), nil
 	}
-	return jsonResult(map[string]interface{}{"assignment_states": states, "total": len(states), "read_model_kind": controlplane.KindWorkerAssignmentState})
+	return jsonResult(map[string]interface{}{"assignment_states": states, "total": len(states), "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerAssignmentTopic})
 }
 
 func (s *Server) handleWorkerGetDrainStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -167,7 +168,7 @@ func (s *Server) handleWorkerGetDrainStatus(ctx context.Context, args map[string
 	if status == nil {
 		return errorResult("worker not found"), nil
 	}
-	return jsonResult(map[string]interface{}{"drain_status": status, "read_model_kind": controlplane.KindWorkerDrainStatus})
+	return jsonResult(map[string]interface{}{"drain_status": status, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerDrainTopic})
 }
 
 func (s *Server) handleWorkerListDrainStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -178,7 +179,7 @@ func (s *Server) handleWorkerListDrainStatus(ctx context.Context, args map[strin
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list worker drain statuses: %v", err)), nil
 	}
-	return jsonResult(map[string]interface{}{"drain_statuses": statuses, "total": len(statuses), "read_model_kind": controlplane.KindWorkerDrainStatus})
+	return jsonResult(map[string]interface{}{"drain_statuses": statuses, "total": len(statuses), "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerDrainTopic})
 }
 
 func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -197,14 +198,14 @@ func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[st
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to preview worker eligibility: %v", err)), nil
 		}
-		return jsonResult(map[string]interface{}{"eligibility_preview": preview, "read_model_kind": controlplane.KindWorkerEligibilityPreview})
+		return jsonResult(map[string]interface{}{"eligibility_preview": preview, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerEligibilityTopic})
 	}
 	req := mlPlacementRequestFromArgs(args)
 	preview, err := s.workerReadModels.PreviewMLEligibility(ctx, previewID, req, policy)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to preview ML worker eligibility: %v", err)), nil
 	}
-	return jsonResult(map[string]interface{}{"eligibility_preview": preview, "read_model_kind": controlplane.KindWorkerEligibilityPreview})
+	return jsonResult(map[string]interface{}{"eligibility_preview": preview, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerEligibilityTopic})
 }
 
 func (s *Server) environmentForWorkerPreview(ctx context.Context, args map[string]interface{}, policy map[string]any) (*domain.Environment, error) {

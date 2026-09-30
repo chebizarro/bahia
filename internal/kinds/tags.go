@@ -38,3 +38,16 @@ const (
 	VirtualizationTagClass      = "lifecycle_class"
 	VirtualizationTagJournal    = "journal"
 )
+
+// Worker cp-state contract (bahia-irsry.9.2): worker records are canonical
+// 30900 cp-state (schema CASControlStateSchema, legacy_kind CPStateFamilyWorker*,
+// deleted) in domain WorkerDomain, and live records and tombstones both carry
+// the family's single-letter "t" topic so REQs scope on #t, not #domain/#schema.
+const (
+	WorkerDomain           = "worker"
+	WorkerStateTopic       = "worker-state"
+	WorkerAssignmentTopic  = "worker-assignment"
+	WorkerDrainTopic       = "worker-drain"
+	WorkerEligibilityTopic = "worker-eligibility"
+	WorkerCleanupTopic     = "worker-cleanup"
+)

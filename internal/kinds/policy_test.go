@@ -28,7 +28,7 @@ func TestIsRequestKind(t *testing.T) {
 		{"DNS operation status", DNSOperationStatus, false},
 		{"Deployment result", DeploymentResult, false},
 		{"Service registry", ServiceRegistry, false},
-		{"Worker state", WorkerState, false},
+		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
 		{"Loom worker ad", LoomWorkerAdvertisement, false},
 	}
 
@@ -82,7 +82,7 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		{"Deployment status", DeploymentStatus, false},
 		{"Deployment result", DeploymentResult, false},
 		{"Service registry", ServiceRegistry, false},
-		{"Worker state", WorkerState, false},
+		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
 		{"Build registered audit", BuildRegistered, false},
 		// Requests and open interop kinds are not Bahia projections.
 		{"Deploy request", DeployRequest, false},
@@ -140,7 +140,7 @@ func TestIsOpenInteropKind(t *testing.T) {
 		// Non-interop kinds
 		{"Deploy request", DeployRequest, false},
 		{"Service registry", ServiceRegistry, false},
-		{"Worker state", WorkerState, false},
+		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
 	}
 
 	for _, tc := range testCases {
@@ -192,7 +192,7 @@ func TestIsReadableKind(t *testing.T) {
 		// Legacy runtime kinds and requests are not readable after the migration boundary.
 		{"DNS operation status", DNSOperationStatus, false},
 		{"Service registry", ServiceRegistry, false},
-		{"Worker state", WorkerState, false},
+		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
 		{"Encrypted result", EncryptedResult, false},
 		{"Deploy request", DeployRequest, false},
 		{"DNS zone create request", DNSZoneCreateRequest, false},

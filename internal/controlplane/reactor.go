@@ -129,10 +129,6 @@ const (
 	KindPackageRepositoryRegistry = nostrpool.KindPackageRepositoryRegistry // Replaceable package repository state (d=repository_id)
 	KindPackageArtifactRegistry   = nostrpool.KindPackageArtifactRegistry   // Replaceable package artifact state (d=artifact_id)
 	KindPackagePromotionRegistry  = nostrpool.KindPackagePromotionRegistry  // Replaceable package promotion/publication state (d=publication_id)
-	KindWorkerState               = nostrpool.KindWorkerState               // Replaceable worker state (d=worker pubkey)
-	KindWorkerAssignmentState     = nostrpool.KindWorkerAssignmentState     // Replaceable worker assignment state (d=worker pubkey)
-	KindWorkerDrainStatus         = nostrpool.KindWorkerDrainStatus         // Replaceable worker drain status (d=worker pubkey)
-	KindWorkerEligibilityPreview  = nostrpool.KindWorkerEligibilityPreview  // Replaceable worker eligibility preview (d=preview id)
 
 	// Canonical runtime observable kinds.
 	KindCASControlState = nostrpool.KindCASControlState

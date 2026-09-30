@@ -38,7 +38,7 @@ func TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle(t *testing.T) {
 	assertPublishedKind(t, capture.events, KindCASControlState)
 	assertPublishedKind(t, capture.events, KindWorkerResult)
 	state := lastPublishedKind(t, capture.events, KindCASControlState)
-	if tagValueNostr(state.Tags, "d") != "worker:state:"+workerPubkey || tagValueNostr(state.Tags, "domain") != "worker" || tagValueNostr(state.Tags, "schema") != "bahia.state.worker.v1" || tagValueNostr(state.Tags, "legacy_kind") != "32000" || tagValueNostr(state.Tags, "scheduling_state") != string(domain.WorkerSchedulingCordoned) {
+	if tagValueNostr(state.Tags, "d") != "worker:state:"+workerPubkey || tagValueNostr(state.Tags, "domain") != "worker" || tagValueNostr(state.Tags, "schema") != "bahia.cp-state.v1" || tagValueNostr(state.Tags, "legacy_kind") != "32000" || tagValueNostr(state.Tags, "t") != "worker-state" || tagValueNostr(state.Tags, "scheduling_state") != string(domain.WorkerSchedulingCordoned) {
 		t.Fatalf("unexpected worker state tags: %#v", state.Tags)
 	}
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)

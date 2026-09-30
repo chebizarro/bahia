@@ -89,10 +89,10 @@ const (
 	KindMLArtifactProvenanceGraph   = kinds.MLArtifactProvenanceGraph
 	KindMLRuntimeCapabilityProfile  = kinds.MLRuntimeCapabilityProfile
 
-	KindWorkerState              = kinds.WorkerState
-	KindWorkerAssignmentState    = kinds.WorkerAssignmentState
-	KindWorkerDrainStatus        = kinds.WorkerDrainStatus
-	KindWorkerEligibilityPreview = kinds.WorkerEligibilityPreview
+	KindWorkerState              = int(kinds.CPStateFamilyWorkerState)
+	KindWorkerAssignmentState    = int(kinds.CPStateFamilyWorkerAssignment)
+	KindWorkerDrainStatus        = int(kinds.CPStateFamilyWorkerDrain)
+	KindWorkerEligibilityPreview = int(kinds.CPStateFamilyWorkerEligibility)
 )
 
 // Continuity fabric event kinds are aliases to internal/kinds.

@@ -8,6 +8,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func TestWorkerCleanupStatePublisherPublishesCanonicalState(t *testing.T) {
@@ -42,7 +43,7 @@ func TestWorkerCleanupStatePublisherPublishesCanonicalState(t *testing.T) {
 	if event.Kind != KindCASControlState {
 		t.Fatalf("expected kind %d, got %d", KindCASControlState, event.Kind)
 	}
-	if tagValueNostr(event.Tags, "schema") != workerCleanupStateSchema || tagValueNostr(event.Tags, "worker") != "worker-pubkey-1" || tagValueNostr(event.Tags, "status") != "completed" {
+	if tagValueNostr(event.Tags, "schema") != kinds.CASControlStateSchema || tagValueNostr(event.Tags, "legacy_kind") != kinds.CPStateFamilyWorkerCleanup.TagValue() || tagValueNostr(event.Tags, "t") != kinds.WorkerCleanupTopic || tagValueNostr(event.Tags, "domain") != kinds.WorkerDomain || tagValueNostr(event.Tags, "deleted") != "false" || tagValueNostr(event.Tags, "worker") != "worker-pubkey-1" || tagValueNostr(event.Tags, "status") != "completed" {
 		t.Fatalf("unexpected cleanup state tags: %#v", event.Tags)
 	}
 	if tagValueNostr(event.Tags, "d") != "worker:cleanup:worker-pubkey-1:loom-job-1" {

@@ -46,27 +46,28 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 	repo := repositoryRoot(t)
 	goKinds := parseGoKindConstants(t, filepath.Join(repo, "internal", "kinds", "kinds.go"))
 	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repo, "web", "src", "lib", "nostr", "kinds.gen.js"))
-	for jsName := range frontendCanonicalKindOverrides {
-		if !strings.HasPrefix(jsName, "WORKER_") {
-			t.Fatalf("frontendCanonicalKindOverrides may only shrink (C-43, bahia-irsry.9); new override %s", jsName)
-		}
-	}
-	if len(frontendCanonicalKindOverrides) > 4 {
-		t.Fatalf("frontendCanonicalKindOverrides may only shrink (C-43, bahia-irsry.9); has %d entries", len(frontendCanonicalKindOverrides))
-	}
-
 	for name, goValue := range goKinds {
 		jsName := goConstNameToJS(name)
 		jsValue, ok := jsKinds[jsName]
 		if !ok {
 			t.Fatalf("web/src/lib/nostr/kinds.gen.js missing generated constant %s for internal/kinds.%s", jsName, name)
 		}
-		expected := goValue
-		if override, ok := frontendCanonicalKindOverrides[jsName]; ok {
-			expected = override
+		if jsValue != goValue {
+			t.Fatalf("kind drift for %s: frontend %d, internal/kinds %d", jsName, jsValue, goValue)
 		}
-		if jsValue != expected {
-			t.Fatalf("kind drift for %s: frontend %d, expected %d (internal/kinds %d)", jsName, jsValue, expected, goValue)
+	}
+}
+
+// TestKindCatalogDefinesNoWorkerStateWireKinds guards C-43: worker read models
+// are 30900 cp-state records whose family is a CPStateFamily discriminator, so
+// the kind catalog must not reintroduce 32000-32004 as publishable kinds.
+func TestKindCatalogDefinesNoWorkerStateWireKinds(t *testing.T) {
+	goKinds := parseGoKindConstants(t, filepath.Join(repositoryRoot(t), "internal", "kinds", "kinds.go"))
+	for name, value := range goKinds {
+		for _, family := range []CPStateFamily{CPStateFamilyWorkerState, CPStateFamilyWorkerAssignment, CPStateFamilyWorkerDrain, CPStateFamilyWorkerEligibility, CPStateFamilyWorkerCleanup} {
+			if value == family.LegacyKind() {
+				t.Fatalf("internal/kinds.%s = %d reintroduces a worker cp-state family as a wire kind; use kinds.CPStateFamily", name, value)
+			}
 		}
 	}
 }
@@ -99,34 +100,48 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 }
 
 // TestGeneratedFrontendWorkerCatalogKindsMatchGo keeps the web's legacy_kind
-// values for the worker read models (whose JS names alias the 30900 wire
-// kind) equal to the catalog kinds producers stamp.
+// values for the worker cp-state families equal to the CPStateFamily
+// discriminators producers stamp.
 func TestGeneratedFrontendWorkerCatalogKindsMatchGo(t *testing.T) {
 	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js"))
-	for jsName, goValue := range map[string]int{
-		"WORKER_STATE_CATALOG_KIND":               WorkerState,
-		"WORKER_ASSIGNMENT_STATE_CATALOG_KIND":    WorkerAssignmentState,
-		"WORKER_DRAIN_STATUS_CATALOG_KIND":        WorkerDrainStatus,
-		"WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND": WorkerEligibilityPreview,
+	for jsName, family := range map[string]CPStateFamily{
+		"WORKER_STATE_CATALOG_KIND":               CPStateFamilyWorkerState,
+		"WORKER_ASSIGNMENT_STATE_CATALOG_KIND":    CPStateFamilyWorkerAssignment,
+		"WORKER_DRAIN_STATUS_CATALOG_KIND":        CPStateFamilyWorkerDrain,
+		"WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND": CPStateFamilyWorkerEligibility,
+		"WORKER_CLEANUP_EXECUTION_CATALOG_KIND":   CPStateFamilyWorkerCleanup,
 	} {
-		if got, ok := jsKinds[jsName]; !ok || got != goValue {
-			t.Fatalf("kinds.gen.js %s = %d (present=%t), want internal/kinds value %d", jsName, got, ok, goValue)
+		if got, ok := jsKinds[jsName]; !ok || got != family.LegacyKind() {
+			t.Fatalf("kinds.gen.js %s = %d (present=%t), want kinds.CPStateFamily %d", jsName, got, ok, family.LegacyKind())
 		}
 	}
 }
 
-// frontendCanonicalKindOverrides is a known anti-pattern (audit finding C-43):
-// it makes this drift test pass while Go still defines WorkerState* as
-// 32000-32003 and the web reads worker state from CAS 30900. Removing it needs
-// the WorkerState kinds unified in the Go kind model (catalog, projector,
-// publisher, reactor), which is Phase 1 scope: bahia-irsry.9. Do not add
-// entries; delete the table when .9 aliases the Go constants to
-// CASControlState or removes them.
-var frontendCanonicalKindOverrides = map[string]int{
-	"WORKER_STATE":               30900,
-	"WORKER_ASSIGNMENT_STATE":    30900,
-	"WORKER_DRAIN_STATUS":        30900,
-	"WORKER_ELIGIBILITY_PREVIEW": 30900,
+// TestGeneratedFrontendWorkerTopicsMatchGo keeps the web's worker domain and
+// #t topics equal to the ones the worker cp-state producers stamp.
+func TestGeneratedFrontendWorkerTopicsMatchGo(t *testing.T) {
+	path := filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	re := regexp.MustCompile(`(?m)^export const ([A-Z0-9_]+) = '([^']*)';$`)
+	jsStrings := map[string]string{}
+	for _, match := range re.FindAllStringSubmatch(string(content), -1) {
+		jsStrings[match[1]] = match[2]
+	}
+	for jsName, goValue := range map[string]string{
+		"WORKER_STATE_DOMAIN":              WorkerDomain,
+		"WORKER_STATE_TOPIC":               WorkerStateTopic,
+		"WORKER_ASSIGNMENT_STATE_TOPIC":    WorkerAssignmentTopic,
+		"WORKER_DRAIN_STATUS_TOPIC":        WorkerDrainTopic,
+		"WORKER_ELIGIBILITY_PREVIEW_TOPIC": WorkerEligibilityTopic,
+		"WORKER_CLEANUP_EXECUTION_TOPIC":   WorkerCleanupTopic,
+	} {
+		if got, ok := jsStrings[jsName]; !ok || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)
+		}
+	}
 }
 
 func parseGoKindConstants(t *testing.T, path string) map[string]int {

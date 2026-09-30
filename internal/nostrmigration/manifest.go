@@ -29,6 +29,18 @@ const (
 	CanonicalNIP78AppData          = 30078
 )
 
+// Retired worker read-model wire kinds (bahia-irsry.9.2). Older producers
+// published worker state on these kinds; current producers publish only 30900
+// cp-state records whose legacy_kind is the matching kinds.CPStateFamilyWorker*
+// discriminator. They are decoded here, and nowhere else, so old events still
+// migrate onto the canonical kind.
+const (
+	retiredWorkerStateKind              = 32000
+	retiredWorkerAssignmentStateKind    = 32001
+	retiredWorkerDrainStatusKind        = 32002
+	retiredWorkerEligibilityPreviewKind = 32003
+)
+
 type EventLayer string
 
 const (
@@ -51,6 +63,9 @@ type Disposition struct {
 	DTagPrefix    string
 	Delete        bool
 	Encrypted     bool
+	// Topic is the single-letter t tag canonical consumers REQ on; set for
+	// families whose readers filter on #t (worker state).
+	Topic string
 }
 
 func (d Disposition) DTag(legacyEventID string) string {
@@ -72,6 +87,9 @@ func (d Disposition) Tags(legacyEventID string) [][]string {
 		{"schema", d.Schema},
 		{"domain", d.Domain},
 		{"layer", string(d.Layer)},
+	}
+	if d.Topic != "" {
+		tags = append(tags, []string{"t", d.Topic})
 	}
 	if d.Method != "" {
 		tags = append(tags, []string{"method", d.Method})
@@ -244,20 +262,20 @@ func omitted(name string, kind int, category, reason string) KindJustification {
 }
 
 func legacyWorkerAliasDisposition(kind int) (Disposition, bool) {
-	schema := ""
+	schema, topic := "", ""
 	switch kind {
 	case kinds.LegacyWorkerState:
-		schema = "bahia.state.worker.v1"
+		schema, topic = "bahia.state.worker.v1", kinds.WorkerStateTopic
 	case kinds.LegacyWorkerAssignmentState:
-		schema = "bahia.state.worker-assignment.v1"
+		schema, topic = "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic
 	case kinds.LegacyWorkerDrainStatus:
-		schema = "bahia.state.worker-drain.v1"
+		schema, topic = "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic
 	case kinds.LegacyWorkerEligibilityPreview:
-		schema = "bahia.state.worker-eligibility.v1"
+		schema, topic = "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic
 	default:
 		return Disposition{}, false
 	}
-	return Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: "worker", Operation: "state", Schema: schema, DTagPrefix: "worker"}, true
+	return Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: kinds.WorkerDomain, Operation: "state", Schema: schema, DTagPrefix: "worker", Topic: topic}, true
 }
 
 func hasLegacyWorkerEvidence(kind int, tagsJSON []byte, content string) bool {
@@ -371,8 +389,18 @@ func buildManifest() map[int]Disposition {
 	for _, item := range []struct {
 		kind           int
 		domain, schema string
-	}{{kinds.ServiceState, "service", "bahia.state.service.v1"}, {kinds.ServiceRegistry, "service", "bahia.registry.service.v1"}, {kinds.EnvironmentRegistry, "environment", "bahia.registry.environment.v1"}, {kinds.LLMRouteRegistry, "llm", "bahia.registry.llm-route.v1"}, {kinds.LLMRouteState, "llm", "bahia.state.llm-route.v1"}, {kinds.ArtifactRegistry, "artifact", "bahia.registry.artifact.v1"}, {kinds.DeploymentIntentRegistry, "deployment", "bahia.registry.deployment-intent.v1"}, {kinds.DeploymentRunRegistry, "deployment", "bahia.registry.deployment-run.v1"}, {kinds.BuildRegistry, "build", "bahia.registry.build.v1"}, {kinds.PolicyRegistry, "policy", "bahia.registry.policy.v1"}, {kinds.PackageRepositoryRegistry, "package", "bahia.registry.package-repository.v1"}, {kinds.PackageArtifactRegistry, "package", "bahia.registry.package-artifact.v1"}, {kinds.PackagePromotionRegistry, "package", "bahia.registry.package-promotion.v1"}, {kinds.DNSZoneState, "dns", "bahia.state.dns-zone.v1"}, {kinds.DNSEndpointState, "dns", "bahia.state.dns-endpoint.v1"}, {kinds.DNSPolicyState, "dns", "bahia.state.dns-policy.v1"}, {kinds.DNSBackendState, "dns", "bahia.state.dns-backend.v1"}, {kinds.MLModelRegistry, "ml", "bahia.registry.ml-model.v1"}, {kinds.MLModelVersionRegistry, "ml", "bahia.registry.ml-model-version.v1"}, {kinds.MLDatasetRegistry, "ml", "bahia.registry.ml-dataset.v1"}, {kinds.MLRecipeRegistry, "ml", "bahia.registry.ml-recipe.v1"}, {kinds.MLRecipeRunState, "ml", "bahia.state.ml-recipe-run.v1"}, {kinds.MLInferenceEndpointRegistry, "ml", "bahia.registry.ml-inference-endpoint.v1"}, {kinds.MLInferenceEndpointState, "ml", "bahia.state.ml-inference-endpoint.v1"}, {kinds.MLEvaluationExperimentState, "ml", "bahia.state.ml-evaluation.v1"}, {kinds.MLArtifactProvenanceGraph, "ml", "bahia.state.ml-provenance.v1"}, {kinds.MLRuntimeCapabilityProfile, "ml", "bahia.state.ml-runtime-capability.v1"}, {kinds.AssistantSession, "assistant", "bahia.state.assistant-session.v1"}, {kinds.BackupDefinitionRegistry, "backup", "bahia.registry.backup-definition.v1"}, {kinds.BackupPolicyRegistry, "backup", "bahia.registry.backup-policy.v1"}, {kinds.BackupRepositoryRegistry, "backup", "bahia.registry.backup-repository.v1"}, {kinds.BackupRetentionRegistry, "backup", "bahia.registry.backup-retention.v1"}, {kinds.BackupRecipeRegistry, "backup", "bahia.registry.backup-recipe.v1"}, {kinds.BackupRunState, "backup", "bahia.state.backup-run.v1"}, {kinds.BackupVerificationState, "backup", "bahia.state.backup-verification.v1"}, {kinds.BackupRestoreState, "backup", "bahia.state.backup-restore.v1"}, {kinds.BackupRuntimeObservationState, "backup", "bahia.state.backup-observation.v1"}, {kinds.WorkerState, "worker", "bahia.state.worker.v1"}, {kinds.WorkerAssignmentState, "worker", "bahia.state.worker-assignment.v1"}, {kinds.WorkerDrainStatus, "worker", "bahia.state.worker-drain.v1"}, {kinds.WorkerEligibilityPreview, "worker", "bahia.state.worker-eligibility.v1"}, {kinds.ContinuityProfile, "continuity", "bahia.state.continuity-profile.v1"}, {kinds.FailoverPolicy, "continuity", "bahia.state.failover-policy.v1"}, {kinds.StandbyNodeDefinition, "continuity", "bahia.state.standby-node.v1"}, {kinds.ReplicationPolicy, "continuity", "bahia.state.replication-policy.v1"}, {kinds.RecoveryWorkflow, "continuity", "bahia.state.recovery-workflow.v1"}, {kinds.BahiaIdentityDefinition, "system", "bahia.identity.v1"}, {kinds.BahiaReplayCheckpoint, "system", "bahia.replay-checkpoint.v1"}} {
+	}{{kinds.ServiceState, "service", "bahia.state.service.v1"}, {kinds.ServiceRegistry, "service", "bahia.registry.service.v1"}, {kinds.EnvironmentRegistry, "environment", "bahia.registry.environment.v1"}, {kinds.LLMRouteRegistry, "llm", "bahia.registry.llm-route.v1"}, {kinds.LLMRouteState, "llm", "bahia.state.llm-route.v1"}, {kinds.ArtifactRegistry, "artifact", "bahia.registry.artifact.v1"}, {kinds.DeploymentIntentRegistry, "deployment", "bahia.registry.deployment-intent.v1"}, {kinds.DeploymentRunRegistry, "deployment", "bahia.registry.deployment-run.v1"}, {kinds.BuildRegistry, "build", "bahia.registry.build.v1"}, {kinds.PolicyRegistry, "policy", "bahia.registry.policy.v1"}, {kinds.PackageRepositoryRegistry, "package", "bahia.registry.package-repository.v1"}, {kinds.PackageArtifactRegistry, "package", "bahia.registry.package-artifact.v1"}, {kinds.PackagePromotionRegistry, "package", "bahia.registry.package-promotion.v1"}, {kinds.DNSZoneState, "dns", "bahia.state.dns-zone.v1"}, {kinds.DNSEndpointState, "dns", "bahia.state.dns-endpoint.v1"}, {kinds.DNSPolicyState, "dns", "bahia.state.dns-policy.v1"}, {kinds.DNSBackendState, "dns", "bahia.state.dns-backend.v1"}, {kinds.MLModelRegistry, "ml", "bahia.registry.ml-model.v1"}, {kinds.MLModelVersionRegistry, "ml", "bahia.registry.ml-model-version.v1"}, {kinds.MLDatasetRegistry, "ml", "bahia.registry.ml-dataset.v1"}, {kinds.MLRecipeRegistry, "ml", "bahia.registry.ml-recipe.v1"}, {kinds.MLRecipeRunState, "ml", "bahia.state.ml-recipe-run.v1"}, {kinds.MLInferenceEndpointRegistry, "ml", "bahia.registry.ml-inference-endpoint.v1"}, {kinds.MLInferenceEndpointState, "ml", "bahia.state.ml-inference-endpoint.v1"}, {kinds.MLEvaluationExperimentState, "ml", "bahia.state.ml-evaluation.v1"}, {kinds.MLArtifactProvenanceGraph, "ml", "bahia.state.ml-provenance.v1"}, {kinds.MLRuntimeCapabilityProfile, "ml", "bahia.state.ml-runtime-capability.v1"}, {kinds.AssistantSession, "assistant", "bahia.state.assistant-session.v1"}, {kinds.BackupDefinitionRegistry, "backup", "bahia.registry.backup-definition.v1"}, {kinds.BackupPolicyRegistry, "backup", "bahia.registry.backup-policy.v1"}, {kinds.BackupRepositoryRegistry, "backup", "bahia.registry.backup-repository.v1"}, {kinds.BackupRetentionRegistry, "backup", "bahia.registry.backup-retention.v1"}, {kinds.BackupRecipeRegistry, "backup", "bahia.registry.backup-recipe.v1"}, {kinds.BackupRunState, "backup", "bahia.state.backup-run.v1"}, {kinds.BackupVerificationState, "backup", "bahia.state.backup-verification.v1"}, {kinds.BackupRestoreState, "backup", "bahia.state.backup-restore.v1"}, {kinds.BackupRuntimeObservationState, "backup", "bahia.state.backup-observation.v1"}, {kinds.ContinuityProfile, "continuity", "bahia.state.continuity-profile.v1"}, {kinds.FailoverPolicy, "continuity", "bahia.state.failover-policy.v1"}, {kinds.StandbyNodeDefinition, "continuity", "bahia.state.standby-node.v1"}, {kinds.ReplicationPolicy, "continuity", "bahia.state.replication-policy.v1"}, {kinds.RecoveryWorkflow, "continuity", "bahia.state.recovery-workflow.v1"}, {kinds.BahiaIdentityDefinition, "system", "bahia.identity.v1"}, {kinds.BahiaReplayCheckpoint, "system", "bahia.replay-checkpoint.v1"}} {
 		addState(item.kind, item.domain, item.schema)
+	}
+
+	for _, item := range []struct {
+		kind          int
+		schema, topic string
+	}{{retiredWorkerStateKind, "bahia.state.worker.v1", kinds.WorkerStateTopic}, {retiredWorkerAssignmentStateKind, "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic}, {retiredWorkerDrainStatusKind, "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic}, {retiredWorkerEligibilityPreviewKind, "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic}} {
+		addState(item.kind, kinds.WorkerDomain, item.schema)
+		disposition := m[item.kind]
+		disposition.Topic = item.topic
+		m[item.kind] = disposition
 	}
 
 	m[kinds.SystemDiscovery] = Disposition{LegacyKind: kinds.SystemDiscovery, CanonicalKind: CanonicalContextVMDiscovery, Layer: LayerDiscovery, Domain: "system", Operation: "discover", Schema: "bahia.system-discovery.v1", DTagPrefix: "bahia-system-v1"}

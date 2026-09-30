@@ -10,15 +10,16 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
-const workerCleanupStateSchema = "bahia.state.worker-cleanup.v1"
-
-// WorkerCleanupStatePublisher publishes cleanup execution lifecycle as canonical
-// kind 30900 state so web clients can subscribe to durable cleanup status rather
-// than infer status from command acknowledgments.
+// WorkerCleanupStatePublisher publishes cleanup execution lifecycle as a
+// canonical 30900 cp-state record (legacy_kind kinds.CPStateFamilyWorkerCleanup,
+// t kinds.WorkerCleanupTopic) so web clients can subscribe to durable cleanup
+// status rather than infer status from command acknowledgments. Its input is the
+// WorkerCleanupOrchestrator's worker.cleanup.* lifecycle events.
 type WorkerCleanupStatePublisher struct {
 	publisher NostrEventPublisher
 	signer    nostr.Signer
@@ -67,7 +68,7 @@ func (p *WorkerCleanupStatePublisher) Publish(ctx context.Context, cleanup event
 	event := &nostr.Event{
 		Kind:      KindCASControlState,
 		CreatedAt: p.nextCreatedAt(id),
-		Tags:      workerCleanupStateTags(id, cleanup),
+		Tags:      workerCleanupStateTags(id, cleanup, false),
 		Content:   mustJSON(workerCleanupStateContent(id, cleanup)),
 	}
 	if err := SignGoNostrEvent(ctx, p.signer, event); err != nil {
@@ -122,16 +123,13 @@ func workerCleanupStateContent(id string, cleanup events.WorkerCleanupEvent) map
 	return content
 }
 
-func workerCleanupStateTags(id string, cleanup events.WorkerCleanupEvent) nostr.Tags {
-	tags := nostr.Tags{
-		{"d", id},
-		{"domain", "worker"},
-		{"schema", workerCleanupStateSchema},
-		{"worker", cleanup.WorkerPubKey},
-		{"status", cleanup.Status},
-		{"cleanup_mode", cleanup.CleanupMode},
-		{"deleted", "false"},
-	}
+func workerCleanupStateTags(id string, cleanup events.WorkerCleanupEvent, deleted bool) nostr.Tags {
+	tags := workerCPStateEnvelope(kinds.CPStateFamilyWorkerCleanup, kinds.WorkerCleanupTopic, id, deleted)
+	tags = append(tags,
+		nostr.Tag{"worker", cleanup.WorkerPubKey},
+		nostr.Tag{"status", cleanup.Status},
+		nostr.Tag{"cleanup_mode", cleanup.CleanupMode},
+	)
 	if cleanup.LoomJobID != "" {
 		tags = append(tags, nostr.Tag{"loom_job", cleanup.LoomJobID})
 	}
