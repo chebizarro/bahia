@@ -44,8 +44,8 @@ type Server struct {
 	httpServer  *http.Server
 	logger      *zap.Logger
 	consumer    *ConfigConsumer
-	broadcastCh chan nostr.Event
-	configCh    chan nostr.Event
+	fanout      *liveFanout
+	configDirty *configDirtySet
 	wg          sync.WaitGroup
 }
 
@@ -101,12 +101,12 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		return store.Query(ctx, filter, nostrCfg.Sidecar.MaxQueryLimit)
 	}
 	relay.Count = store.Count
-	// Khatru broadcasts to matching subscribers synchronously before sending
-	// the publisher's OK. Persist first, acknowledge promptly, and move fanout
-	// off the publisher path so slow subscribers cannot stall unrelated writes.
-	relay.PreventBroadcast = func(_ *khatru.WebSocket, _ nostr.Filter, _ nostr.Event) bool {
-		return true
-	}
+	// Khatru broadcasts to matching subscribers synchronously, before it sends
+	// the publisher's OK. The fanout disables that path and delivers through
+	// per-connection bounded queues instead. The publisher is acknowledged
+	// promptly, and a slow subscriber is CLOSED rather than silently skipped.
+	fanout := newLiveFanout(logger, defaultSubscriberQueueSize)
+	fanout.install(relay)
 	var consumer *ConfigConsumer
 	if len(nostrCfg.Sidecar.ConfigTrustedPubkeys) > 0 {
 		secret, ok, err := parseFiatjafSecret(nostrCfg.PrivateKey)
@@ -139,29 +139,21 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 			return nil, err
 		}
 	}
-	broadcastCh := make(chan nostr.Event, 256)
-	configCh := make(chan nostr.Event, 64)
-	relay.OnEventSaved = func(ctx context.Context, event nostr.Event) {
+	var configDirty *configDirtySet
+	if consumer != nil {
+		configDirty = newConfigDirtySet()
+	}
+	// OnEventSaved also runs for internal AddEvent publishes, such as config
+	// status, where khatru never broadcasts. Dispatching here covers both paths.
+	relay.OnEventSaved = func(_ context.Context, event nostr.Event) {
 		logger.Debug("sidecar event accepted", zap.String("event_id", event.ID.Hex()), zap.Uint16("kind", uint16(event.Kind)))
-		select {
-		case broadcastCh <- event:
-		default:
-			logger.Warn("relay-sidecar broadcast queue full, dropping broadcast", zap.String("event_id", event.ID.Hex()))
-		}
-		if consumer != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
-			select {
-			case configCh <- event:
-			default:
-				logger.Warn("relay-sidecar config queue full, dropping config event", zap.String("event_id", event.ID.Hex()))
-			}
+		fanout.dispatch(event)
+		if configDirty != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
+			configDirty.mark(replaceableKey(event))
 		}
 	}
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
-		select {
-		case broadcastCh <- event:
-		default:
-			logger.Warn("relay-sidecar broadcast queue full, dropping ephemeral broadcast", zap.String("event_id", event.ID.Hex()))
-		}
+		fanout.dispatch(event)
 	}
 
 	return &Server{
@@ -171,8 +163,8 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		policy:      admin,
 		logger:      logger,
 		consumer:    consumer,
-		broadcastCh: broadcastCh,
-		configCh:    configCh,
+		fanout:      fanout,
+		configDirty: configDirty,
 	}, nil
 }
 
@@ -259,7 +251,6 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 
-	s.startBroadcastWorkers(workerCtx)
 	s.startConfigWorker(workerCtx)
 	if s.consumer != nil {
 		s.consumer.Start(workerCtx)
@@ -300,50 +291,6 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	}
 	s.logger.Info("relay sidecar stopped")
 	return nil
-}
-
-func (s *Server) startBroadcastWorkers(ctx context.Context) {
-	for i := 0; i < 4; i++ {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case event, ok := <-s.broadcastCh:
-					if !ok {
-						return
-					}
-					s.relay.ForceBroadcastEvent(event)
-				}
-			}
-		}()
-	}
-}
-
-func (s *Server) startConfigWorker(ctx context.Context) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-s.configCh:
-				if !ok {
-					return
-				}
-				if s.consumer == nil {
-					continue
-				}
-				bgCtx := context.WithoutCancel(ctx)
-				if err := s.consumer.Handle(bgCtx, event); err != nil {
-					s.logger.Warn("relay-sidecar desired config rejected", zap.String("event_id", event.ID.Hex()), zap.Error(err))
-				}
-			}
-		}
-	}()
 }
 
 func (s *Server) runRetentionSweeps(ctx context.Context) {
