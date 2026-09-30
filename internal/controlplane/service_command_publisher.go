@@ -22,6 +22,10 @@ func NewServiceCommandPublisher(publisher NostrEventPublisher, signer nostr.Sign
 }
 
 type ServiceCreateCommand struct {
+	// ID is an optional client-minted entity id (bahia-irsry.35). It is sent
+	// only when set: minting here would change the request fingerprint on a
+	// retry that reuses IdempotencyKey. Callers that retry mint it once.
+	ID                   uuid.UUID
 	Name                 string
 	OrgID                uuid.UUID
 	RepoURL              string
@@ -106,6 +110,9 @@ func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Contex
 		return nil, fmt.Errorf("name is required")
 	}
 	content := map[string]any{"name": name}
+	if cmd.ID != uuid.Nil {
+		content["id"] = cmd.ID.String()
+	}
 	if cmd.OrgID != uuid.Nil {
 		content["org_id"] = cmd.OrgID.String()
 	}
@@ -131,6 +138,9 @@ func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Contex
 	receipt, err := p.publish(ctx, ContextVMMethodServiceCreate, tags, content, cmd.IdempotencyKey, cmd.AgentID)
 	if receipt != nil {
 		receipt.ServiceName = name
+		if cmd.ID != uuid.Nil {
+			receipt.ServiceID = cmd.ID.String()
+		}
 		receipt.RegistryKind = KindCASControlState
 		receipt.StateKind = KindCASControlState
 	}

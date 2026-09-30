@@ -590,6 +590,47 @@ Common tags across fleet events:
 
 Do not rely on relay indexing for multi-character tags unless the sidecar or target relay explicitly supports it. Still include semantic tags for consumers and internal sidecar indexing.
 
+## Entity identity for create paths
+
+Normative companion to [event-spec "Entity identity and coordinates"](event-spec.md#entity-identity-and-coordinates) (bahia-irsry.35). The author of a create fixes the entity id. It is the entity segment of every addressable coordinate for that entity, so it must exist before the first relay publish or database write.
+
+**Minting (clients).**
+- Mint one UUIDv7 per create *attempt*: web `mintEntityId()` in `web/src/lib/entity-id.js`, Go `domain.NewEntityID()`.
+- Keep that id for every retry of the same attempt, e.g. a timeout followed by "Create" again. Mint a new id only when the user starts a new entity (the form resets).
+- Never derive an id from a name (UUIDv5 or a hash of `org:slug`). A predictable id lets anyone pre-claim the coordinate.
+- The web stores `createService`/`createEnvironment` add an id when the caller passes none (`withEntityId`). Dialogs pass their own id so retries stay idempotent.
+
+**Validating (servers).**
+- Parse the intent's optional `id` with `domain.ResolveCreateEntityID`. It accepts canonical lowercase UUIDv7/v4, mints a UUIDv7 when the id is absent, and wraps `domain.ErrInvalidEntityID` otherwise; the handler reports it as `invalid id: …`.
+- Validate before authorization side effects and before any publish.
+
+**Building and decoding coordinates.**
+- Build `d` with `domain.FormatEntityCoordinate(prefix, id)`. It is input-agnostic: it never asks who minted the id, so v7 and legacy v4 ids produce coordinates of the same shape.
+- A coordinate builder takes the entity id. It must not take a row or a database sequence.
+- Consumers read the entity id from `content.id` and accept any UUID version (`parseProjectionUUID` in the relay projection cache). Existing v4 coordinates therefore keep decoding.
+
+**Resolving a create (idempotency).**
+1. Apply the write-path defaults and normalization, including the id.
+2. Look the id up. If it is absent, create.
+3. If it is present, compare the declared content: every field except the id and timestamps, including the explicit deployment-unit set for environments.
+   - Equal: return the stored entity and write, publish and emit nothing.
+   - Different: return `*domain.EntityIDConflictError`, which is `errors.Is(err, domain.ErrEntityIDConflict)`. The ContextVM transport maps it to JSON-RPC `-32010`; the web checks `isEntityIdConflict(error)`.
+4. Relay-first paths (`service.RelayFirstRegistry`) resolve the id *before* publishing. A conflicting create must never replace the existing coordinate, and an idempotent retry must not republish. The registry serializes check → publish → store per id within the process, so two concurrent creates of one id cannot both publish.
+5. Repositories store the supplied id verbatim. They mint (UUIDv7) only when an internal caller passes none. A primary-key unique violation is reported as `repository.ErrAlreadyExists` and resolved by the service layer as in step 3; a name unique violation is `repository.ErrConflict`.
+
+**Uniqueness without a central database.**
+- Ids are unique by construction. Natural keys such as `(org, name)` are constraints the authoritative applier enforces, never identity.
+- In Phase 3 the intent applier orders competing creates by `(created_at, event id)`. It applies the first and publishes a rejection status, referencing the loser's intent event id, for a later create whose id conflicts or whose natural key is taken.
+- Authorization is checked against the org named in the intent. The stored org is part of the compared content, so an id can never reach into another org.
+
+**Adopting the rule in another domain.**
+- Add `id` to the create intent.
+- Resolve it with `ResolveCreateEntityID` in the handler.
+- Add a `replay<Entity>Create` check in the service (see `internal/service/registry_create_identity.go`).
+- Classify the primary-key violation in the repository.
+- Mint once per attempt in the web store/dialog.
+- Cover the four cases in tests: id round-trips to the coordinate, same-content retry, different-content conflict, and absent id minted.
+
 ## Publication, replay, and retention invariants
 
 - For service-authored events using `internal/adapters/nostr.Publisher`, persist the fully signed event as a pending `nostr_events` outbox row before relay delivery. Mark it published only after an accepted or duplicate relay `OK`; retain and retry failures with backoff.
@@ -620,6 +661,7 @@ Before adding or changing Nostr event code:
 - [ ] Verify that consumers validate authors, signatures, encryption, tags, and application semantics without relying on relay admission.
 - [ ] Add or update event shape tests for required tags, content schema, and projection family decoding.
 - [ ] Add idempotency and dedupe behavior for handlers.
+- [ ] Create paths take a client-minted entity id and resolve retries by content; never let a database mint an addressable `d` (see [Entity identity for create paths](#entity-identity-for-create-paths)).
 - [ ] Verify relay `OK`, duplicate-`OK`, `CLOSED`, and `AUTH` paths; verify outbox state only when using the outbox-backed publisher.
 - [ ] Subscribe with scoped filters and handle EOSE as historical catch-up, not completion.
 - [ ] Update docs when event kinds, tags, schemas, or migration behavior change.

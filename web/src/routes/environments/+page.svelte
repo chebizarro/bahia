@@ -12,6 +12,7 @@
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
   import { environments, workers, loading, loadEnvironments, loadWorkers, operations, operationsForDomain } from '$lib/stores';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
+  import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { orgsState } from '$lib/stores/orgs.svelte.js';
   import { parseKeyValueLines } from '../ml/page-model.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
@@ -34,6 +35,9 @@
   let liveEnvironmentOperations = $derived(operationsForDomain(operations, 'environment'));
   let creating = $state(false);
   let createError = $state(null);
+  // Client-minted entity id for this create attempt, reused on retry and
+  // re-minted when the modal is closed (bahia-irsry.35).
+  let createEntityId = mintEntityId();
 
   let createForm = $state({
     org_id: '',
@@ -100,6 +104,7 @@
   function closeCreateModal() {
     createOpen = false;
     createError = null;
+    createEntityId = mintEntityId();
     // Reset form
     createForm = {
       org_id: '',
@@ -170,6 +175,7 @@
 
     try {
       await createEnvironmentCommand({
+        id: createEntityId,
         org_id: createForm.org_id.trim(),
         name: createForm.name.trim(),
         loom_worker_selector: createForm.loom_worker_selector.trim(),
@@ -183,7 +189,9 @@
       closeCreateModal();
       await loadEnvironments();
     } catch (err) {
-      createError = err.message || 'Failed to create environment';
+      createError = isEntityIdConflict(err)
+        ? 'This environment was already created with different settings. Close the dialog and start again to create another environment.'
+        : err.message || 'Failed to create environment';
     } finally {
       creating = false;
     }

@@ -2,6 +2,7 @@ import { goto } from '$app/navigation';
 import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
+import { withEntityId } from '$lib/entity-id.js';
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
   if (result !== undefined) {
@@ -101,8 +102,10 @@ export async function publishCommandOnly({ operation, tags = [], content = {}, p
   });
 }
 
-export function createService(payload) {
-  return publishCommand({ operation: 'service/create', content: payload });
+// Create intents carry a client-minted entity id (bahia-irsry.35). Callers that
+// may retry should mint it once and pass it in; otherwise one is minted here.
+export async function createService(payload) {
+  return publishCommand({ operation: 'service/create', content: withEntityId(payload) });
 }
 
 export function updateService(id, payload) {
@@ -119,8 +122,8 @@ export function deleteService(id, force = false) {
   return publishCommand({ operation: 'service/delete', tags: [['service', id]], content: { id, force } });
 }
 
-export function createEnvironment(payload) {
-  return publishCommand({ operation: 'environment/create', content: payload });
+export async function createEnvironment(payload) {
+  return publishCommand({ operation: 'environment/create', content: withEntityId(payload) });
 }
 
 export function updateEnvironment(id, payload) {
