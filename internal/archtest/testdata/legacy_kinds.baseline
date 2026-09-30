@@ -72,35 +72,10 @@
 5	internal/adapters/nostr/projector.go nostr.KindDNSEndpointState
 5	internal/adapters/nostr/projector.go nostr.KindDNSPolicyState
 5	internal/adapters/nostr/projector.go nostr.KindDNSZoneState
-1	internal/adapters/nostr/publisher.go kinds.AdoptionAudit
-1	internal/adapters/nostr/publisher.go kinds.ArtifactRegistered
-1	internal/adapters/nostr/publisher.go kinds.BuildRegistered
 1	internal/adapters/nostr/publisher.go kinds.DNSBackendState
-1	internal/adapters/nostr/publisher.go kinds.DNSDriftDetectedAudit
-1	internal/adapters/nostr/publisher.go kinds.DNSEndpointDeregisteredAudit
-1	internal/adapters/nostr/publisher.go kinds.DNSEndpointRegisteredAudit
 1	internal/adapters/nostr/publisher.go kinds.DNSEndpointState
 1	internal/adapters/nostr/publisher.go kinds.DNSPolicyState
-1	internal/adapters/nostr/publisher.go kinds.DNSRecordChangedAudit
 1	internal/adapters/nostr/publisher.go kinds.DNSZoneState
-1	internal/adapters/nostr/publisher.go kinds.DNSZoneSyncedAudit
-1	internal/adapters/nostr/publisher.go kinds.DeploymentApprovalAudit
-1	internal/adapters/nostr/publisher.go kinds.DeploymentComplete
-1	internal/adapters/nostr/publisher.go kinds.DeploymentCreated
-1	internal/adapters/nostr/publisher.go kinds.DeploymentRunAudit
-1	internal/adapters/nostr/publisher.go kinds.DriftDetected
-1	internal/adapters/nostr/publisher.go kinds.EnvironmentRegistryAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMDeploymentAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMGatewayAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMReleaseRegisteredAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMRouteRegistryAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMRouteStateAudit
-1	internal/adapters/nostr/publisher.go kinds.LLMRunAudit
-1	internal/adapters/nostr/publisher.go kinds.Observation
-1	internal/adapters/nostr/publisher.go kinds.ReconcileAudit
-1	internal/adapters/nostr/publisher.go kinds.RuntimeActionAudit
-1	internal/adapters/nostr/publisher.go kinds.ServiceRegistryAudit
-1	internal/adapters/nostr/publisher.go kinds.StateChangedAudit
 1	internal/adapters/nostr/subscriber.go literal 31100
 1	internal/adapters/nostr/subscriber.go literal 5941
 1	internal/adapters/nostr/subscriber.go literal 5999

@@ -144,6 +144,116 @@ func TestGeneratedFrontendWorkerTopicsMatchGo(t *testing.T) {
 	}
 }
 
+// TestGeneratedFrontendWorkerCoordinatesMatchGo keeps the web's worker d
+// prefixes equal to the canonical worker d builder's (bahia-irsry.36), so web
+// consumers read the record id off the same coordinate producers publish on.
+func TestGeneratedFrontendWorkerCoordinatesMatchGo(t *testing.T) {
+	jsStrings := parseGeneratedJSStringConstants(t)
+	for jsName, family := range map[string]CPStateFamily{
+		"WORKER_STATE_D_PREFIX":               CPStateFamilyWorkerState,
+		"WORKER_ASSIGNMENT_STATE_D_PREFIX":    CPStateFamilyWorkerAssignment,
+		"WORKER_DRAIN_STATUS_D_PREFIX":        CPStateFamilyWorkerDrain,
+		"WORKER_ELIGIBILITY_PREVIEW_D_PREFIX": CPStateFamilyWorkerEligibility,
+		"WORKER_CLEANUP_EXECUTION_D_PREFIX":   CPStateFamilyWorkerCleanup,
+	} {
+		prefix, ok := family.WorkerDPrefix()
+		if !ok {
+			t.Fatalf("family %d has no worker d prefix", family)
+		}
+		if got, present := jsStrings[jsName]; !present || got != prefix {
+			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, present, prefix)
+		}
+	}
+}
+
+// TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate pins bahia-irsry.36:
+// the same record id (a worker pubkey) yields a distinct d per worker family,
+// and non-worker families have no worker coordinate.
+func TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate(t *testing.T) {
+	const pubkey = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+	seen := map[string]CPStateFamily{}
+	for _, family := range []CPStateFamily{CPStateFamilyWorkerState, CPStateFamilyWorkerAssignment, CPStateFamilyWorkerDrain, CPStateFamilyWorkerEligibility, CPStateFamilyWorkerCleanup} {
+		d, ok := family.WorkerDTag(pubkey)
+		if !ok || !strings.HasPrefix(d, "worker:") || !strings.HasSuffix(d, ":"+pubkey) {
+			t.Fatalf("family %d WorkerDTag = %q, %t", family, d, ok)
+		}
+		if other, dup := seen[d]; dup {
+			t.Fatalf("families %d and %d share d=%q", other, family, d)
+		}
+		seen[d] = family
+	}
+	if want := "worker:assignment:" + pubkey; mustWorkerDTag(t, CPStateFamilyWorkerAssignment, pubkey) != want {
+		t.Fatalf("assignment d = %q, want %q", mustWorkerDTag(t, CPStateFamilyWorkerAssignment, pubkey), want)
+	}
+	if want := "worker:drain:" + pubkey; mustWorkerDTag(t, CPStateFamilyWorkerDrain, pubkey) != want {
+		t.Fatalf("drain d = %q, want %q", mustWorkerDTag(t, CPStateFamilyWorkerDrain, pubkey), want)
+	}
+	if _, ok := CPStateFamilyDNSEndpoint.WorkerDTag(pubkey); ok {
+		t.Fatal("DNS endpoint family must not get a worker coordinate")
+	}
+}
+
+func mustWorkerDTag(t *testing.T, family CPStateFamily, id string) string {
+	t.Helper()
+	d, ok := family.WorkerDTag(id)
+	if !ok {
+		t.Fatalf("family %d has no worker coordinate", family)
+	}
+	return d
+}
+
+// TestGeneratedFrontendAssistantAndRelaySettingsTopicsMatchGo keeps the web's
+// single-letter topics for assistant transcript/status and relay settings
+// equal to the ones the producers stamp (bahia-irsry.37).
+func TestGeneratedFrontendAssistantAndRelaySettingsTopicsMatchGo(t *testing.T) {
+	jsStrings := parseGeneratedJSStringConstants(t)
+	for jsName, goValue := range map[string]string{
+		"ASSISTANT_TRANSCRIPT_TOPIC":                AssistantTranscriptTopic,
+		"ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX": AssistantTranscriptSessionTopicPrefix,
+		"ASSISTANT_STATUS_TOPIC":                    AssistantStatusTopic,
+		"RELAY_SETTINGS_TOPIC":                      RelaySettingsTopic,
+	} {
+		if got, ok := jsStrings[jsName]; !ok || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)
+		}
+	}
+	if got := AssistantTranscriptSessionTopic("s-1"); got != AssistantTranscriptSessionTopicPrefix+"s-1" {
+		t.Fatalf("AssistantTranscriptSessionTopic = %q", got)
+	}
+}
+
+// TestRetiredAuditKindsAreNotDeclared guards bahia-irsry.37: the retired
+// addressable audit kinds 31000-31099 are decoded only by
+// internal/nostrmigration, so neither kinds.go nor kinds.gen.js declares them.
+func TestRetiredAuditKindsAreNotDeclared(t *testing.T) {
+	repo := repositoryRoot(t)
+	for name, value := range parseGoKindConstants(t, filepath.Join(repo, "internal", "kinds", "kinds.go")) {
+		if value >= 31000 && value <= 31099 {
+			t.Errorf("internal/kinds.%s = %d redeclares a retired audit kind; audits are 4903", name, value)
+		}
+	}
+	for name, value := range parseGeneratedJSKindConstants(t, filepath.Join(repo, "web", "src", "lib", "nostr", "kinds.gen.js")) {
+		if value >= 31000 && value <= 31099 {
+			t.Errorf("kinds.gen.js %s = %d redeclares a retired audit kind; audits are 4903", name, value)
+		}
+	}
+}
+
+func parseGeneratedJSStringConstants(t *testing.T) map[string]string {
+	t.Helper()
+	path := filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	re := regexp.MustCompile(`(?m)^export const ([A-Z0-9_]+) = '([^']*)';$`)
+	out := map[string]string{}
+	for _, match := range re.FindAllStringSubmatch(string(content), -1) {
+		out[match[1]] = match[2]
+	}
+	return out
+}
+
 func parseGoKindConstants(t *testing.T, path string) map[string]int {
 	t.Helper()
 	fileSet := token.NewFileSet()

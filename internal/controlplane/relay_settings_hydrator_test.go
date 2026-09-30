@@ -95,17 +95,37 @@ func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {
 	if len(filter.Authors) != 1 || filter.Authors[0].Hex() != servicePubkey {
 		t.Fatalf("unexpected filter authors: %#v", filter.Authors)
 	}
-	for tag, want := range map[string]string{
-		kinds.CASControlStateTagD: RelaySettingsDTag, kinds.CASControlStateTagDomain: RelaySettingsDomain, kinds.CASControlStateTagSchema: RelaySettingsSchema,
-	} {
-		if got := filter.Tags[tag]; len(got) != 1 || got[0] != want {
-			t.Fatalf("unexpected %s tag filter: %#v", tag, got)
-		}
+	// Relays index single-letter tags only (bahia-irsry.37): the REQ names the
+	// exact coordinate by #d and sends no #domain/#schema.
+	if len(filter.Tags) != 1 || len(filter.Tags[kinds.CASControlStateTagD]) != 1 || filter.Tags[kinds.CASControlStateTagD][0] != RelaySettingsDTag {
+		t.Fatalf("relay settings filter tags = %#v, want only #d=[%s]", filter.Tags, RelaySettingsDTag)
 	}
 
-	event := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema})
-	if !filter.Matches(*event) {
-		t.Fatalf("relay settings projection did not match hydrator filter: tags=%v", event.Tags)
+	// A producer-shaped record (the handler's own tags, with the t topic) and a
+	// record retained from before the topic was stamped both match.
+	content, err := json.Marshal(RelayPolicyState{Schema: RelaySettingsSchema})
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	signer, err := NewPrivateKeySigner(testServiceKey)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	produced := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Timestamp(1_000), Tags: relaySettingsStateTags("applied", servicePubkey), Content: string(content)}
+	if err := SignGoNostrEvent(context.Background(), signer, produced); err != nil {
+		t.Fatalf("sign produced state: %v", err)
+	}
+	if tagValueNostr(produced.Tags, "t") != kinds.RelaySettingsTopic {
+		t.Fatalf("produced relay settings state lacks t=%s: %v", kinds.RelaySettingsTopic, produced.Tags)
+	}
+	pretopic := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema})
+	for name, event := range map[string]*nostr.Event{"producer-shaped": produced, "pre-topic": pretopic} {
+		if !filter.Matches(*event) {
+			t.Fatalf("%s relay settings projection did not match hydrator filter: tags=%v", name, event.Tags)
+		}
+		if _, err := relayPolicyStateFromCanonicalEvent(event, servicePubkey); err != nil {
+			t.Fatalf("%s relay settings projection rejected locally: %v", name, err)
+		}
 	}
 }
 

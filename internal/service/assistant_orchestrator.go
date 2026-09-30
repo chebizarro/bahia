@@ -13,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const defaultAssistantAgentID = "bahia-operator-assistant"
@@ -580,7 +581,7 @@ func (p *AssistantStatusEventPublisher) PublishAssistantStatus(ctx context.Conte
 		return fmt.Errorf("marshal assistant status: %w", err)
 	}
 	dTag := fmt.Sprintf("%s:%s:%s:%d", domain.AssistantStatusSchema, sessionID, status, time.Now().UnixNano())
-	tags := nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}, {"session", sessionID}, {"agent", p.identity.AgentID}, {"status", status}}
+	tags := nostr.Tags{{"d", dTag}, {"schema", domain.AssistantStatusSchema}, {"t", kinds.AssistantStatusTopic}, {"session", sessionID}, {"agent", p.identity.AgentID}, {"status", status}}
 	if runID := stringFromMap(body, "run_id"); runID != "" {
 		tags = append(tags, nostr.Tag{"run", runID})
 	}

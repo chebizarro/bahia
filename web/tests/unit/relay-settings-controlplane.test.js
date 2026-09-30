@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import { RELAY_SETTINGS_TOPIC } from '../../src/lib/nostr/kinds.gen.js';
 
 const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 
@@ -188,15 +190,38 @@ describe('relay settings control-plane helpers', () => {
   });
 
   it('builds a scoped canonical relay-settings read-model filter', () => {
+    // Relays index single-letter tags only (bahia-irsry.37): the exact
+    // coordinate is named by #d; domain and schema are checked locally.
     expect(relaySettings.relayPolicyReadModelFilter({ servicePubkey: 'A'.repeat(64), since: 123 })).toEqual({
       kinds: [30900],
       '#d': ['relay-settings:operator'],
-      '#domain': ['relay-settings'],
-      '#schema': ['bahia.relay-settings.v1'],
       authors: ['a'.repeat(64)],
       since: 123,
       limit: 10
     });
+  });
+
+  it('matches producer-shaped and pre-topic relay-settings state with the #d REQ', () => {
+    const servicePubkey = 'd'.repeat(64);
+    const filter = relaySettings.relayPolicyReadModelFilter({ servicePubkey });
+    for (const key of Object.keys(filter).filter((name) => name.startsWith('#'))) {
+      expect(key).toHaveLength(2);
+    }
+    const content = JSON.stringify({ schema: 'bahia.relay-settings.v1', browser_relays: ['wss://browser.example'], updated_at: '2026-09-30T00:00:00Z' });
+    // Tags as internal/controlplane relaySettingsStateTags stamps them.
+    const produced = {
+      id: 'e'.repeat(64),
+      kind: 30900,
+      pubkey: servicePubkey,
+      created_at: 200,
+      tags: [['d', 'relay-settings:operator'], ['domain', 'relay-settings'], ['entity', 'relay-policy'], ['schema', 'bahia.relay-settings.v1'], ['t', RELAY_SETTINGS_TOPIC], ['status', 'applied'], ['p', 'f'.repeat(64)]],
+      content
+    };
+    const pretopic = { ...produced, id: 'f'.repeat(64), created_at: 100, tags: produced.tags.filter((tag) => tag[0] !== 't') };
+    for (const event of [produced, pretopic]) {
+      expect(matchFilter(filter, event)).toBe(true);
+      expect(relaySettings.parseRelayPolicyStateEvent(event, { servicePubkey })).not.toBeNull();
+    }
   });
 
   it('parses only trusted canonical relay-settings state events', () => {

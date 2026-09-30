@@ -95,7 +95,11 @@ func TestControlStateEnvelopeStampsFamilyTopic(t *testing.T) {
 			if got := topicValues(tags); len(got) != 1 || got[0] != want {
 				t.Fatalf("family %d (deleted=%t) t topics = %v, want [%s]", legacyKind, deleted, got, want)
 			}
-			if tagValue(tags, "d") != "id-1" || tagValue(tags, "legacy_kind") != strconv.Itoa(legacyKind) {
+			wantD := "id-1"
+			if prefix, worker := kinds.CPStateFamily(legacyKind).WorkerDPrefix(); worker {
+				wantD = prefix + "id-1"
+			}
+			if tagValue(tags, "d") != wantD || tagValue(tags, "legacy_kind") != strconv.Itoa(legacyKind) {
 				t.Fatalf("family %d envelope coordinate changed: %v", legacyKind, tags)
 			}
 		}

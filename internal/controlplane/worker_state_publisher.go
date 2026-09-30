@@ -136,9 +136,13 @@ func workerStateContent(worker *domain.Worker) (map[string]any, error) {
 	return content, nil
 }
 
-// workerStateDTag is the worker-state record's coordinate. It is unchanged from
-// the per-family schema, so envelope records replace earlier ones in place.
-func workerStateDTag(workerPubKey string) string { return "worker:state:" + workerPubKey }
+// workerStateDTag is the worker-state record's coordinate, built by the
+// canonical worker d builder ("worker:state:<pubkey>", unchanged from the
+// per-family schema, so envelope records replace earlier ones in place).
+func workerStateDTag(workerPubKey string) string {
+	d, _ := kinds.CPStateFamilyWorkerState.WorkerDTag(workerPubKey)
+	return d
+}
 
 func workerStateTags(worker *domain.Worker, deleted bool) nostr.Tags {
 	tags := workerCPStateEnvelope(kinds.CPStateFamilyWorkerState, kinds.WorkerStateTopic, workerStateDTag(worker.PubKey), deleted)

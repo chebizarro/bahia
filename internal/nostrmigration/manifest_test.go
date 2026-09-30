@@ -11,9 +11,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,7 +75,7 @@ func TestManifestCanonicalTargets(t *testing.T) {
 	require.Equal(t, CanonicalCASCPState, state.CanonicalKind)
 	require.Equal(t, LayerState, state.Layer)
 
-	audit, ok := Lookup(kinds.DeploymentCreated)
+	audit, ok := Lookup(retiredAuditFirstKind + 2) // retired DeploymentCreated
 	require.True(t, ok)
 	require.Equal(t, CanonicalCASAudit, audit.CanonicalKind)
 
@@ -237,7 +240,6 @@ func TestKindConstantsAreMappedOrJustified(t *testing.T) {
 	}
 
 	primaryDuplicateNames := map[int]string{
-		kinds.BuildRegistered:          "BuildRegistered",
 		kinds.SystemDiscovery:          "SystemDiscovery",
 		kinds.BackupDefinitionRegistry: "BackupDefinitionRegistry",
 		kinds.BackupPolicyRegistry:     "BackupPolicyRegistry",
@@ -378,4 +380,56 @@ func TestRetiredWorkerKindsMigrateOntoCPStateTopics(t *testing.T) {
 	alias, ok := ResolveDisposition(kinds.LegacyWorkerState, []byte(`[["worker","w1"]]`), `{}`)
 	require.True(t, ok)
 	require.Equal(t, kinds.WorkerStateTopic, alias.Topic)
+}
+
+// Migrated worker records land on their family's canonical coordinate
+// (bahia-irsry.36), not a per-legacy-event d: a migrated assignment and drain
+// for one worker never share a coordinate, and each competes with the live
+// record on its own family coordinate under NIP-01 replacement.
+func TestRetiredWorkerKindsMigrateOntoFamilyCoordinates(t *testing.T) {
+	const pubkey = "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+	cases := []struct {
+		kind    int
+		tags    string
+		content string
+		wantD   string
+	}{
+		{retiredWorkerStateKind, `[]`, `{"pubkey":"` + pubkey + `","name":"w"}`, kinds.WorkerStateDPrefix + pubkey},
+		{retiredWorkerAssignmentStateKind, `[]`, `{"worker_pubkey":"` + pubkey + `","active_assignments":[]}`, kinds.WorkerAssignmentDPrefix + pubkey},
+		{retiredWorkerDrainStatusKind, `[["worker","` + pubkey + `"]]`, `{"remaining_assignments":[]}`, kinds.WorkerDrainDPrefix + pubkey},
+		{retiredWorkerEligibilityPreviewKind, `[]`, `{"preview_id":"preview-1","eligible_workers":[]}`, kinds.WorkerEligibilityDPrefix + "preview-1"},
+		{kinds.LegacyWorkerAssignmentState, `[["worker","` + pubkey + `"]]`, `{"worker_pubkey":"` + pubkey + `","active_assignments":[]}`, kinds.WorkerAssignmentDPrefix + pubkey},
+	}
+	seen := map[string]int{}
+	for i, tc := range cases {
+		disp, ok := ResolveDisposition(tc.kind, []byte(tc.tags), tc.content)
+		require.Truef(t, ok, "kind %d has no disposition", tc.kind)
+		rec := repository.NostrEventRecord{ID: fmt.Sprintf("%064x", i+1), Kind: tc.kind, PubKey: pubkey, Content: tc.content, Tags: []byte(tc.tags), CreatedAt: time.Unix(1_700_000_000, 0).UTC()}
+		ev, err := BuildCanonicalEvent(rec, disp)
+		require.NoError(t, err)
+		d := ev.Tags.GetD()
+		require.Equalf(t, tc.wantD, d, "kind %d migrated d", tc.kind)
+		require.Equal(t, 1, countTags(ev.Tags, "d"), "one d tag")
+		if tc.kind != kinds.LegacyWorkerAssignmentState {
+			if previous, dup := seen[d]; dup {
+				t.Fatalf("kinds %d and %d migrate onto the same coordinate %q", previous, tc.kind, d)
+			}
+			seen[d] = tc.kind
+		}
+	}
+
+	// A record that names no worker keeps the per-legacy-event coordinate.
+	disp, ok := ResolveDisposition(retiredWorkerDrainStatusKind, []byte(`[]`), `{"remaining_assignments":[]}`)
+	require.True(t, ok)
+	ev, err := BuildCanonicalEvent(repository.NostrEventRecord{ID: "legacy-x", Kind: retiredWorkerDrainStatusKind, Content: `{}`, Tags: []byte(`[]`), CreatedAt: time.Unix(1_700_000_000, 0)}, disp)
+	require.NoError(t, err)
+	require.Equal(t, "worker:migrated:legacy-x", ev.Tags.GetD())
+}
+
+func countTags(tags gonostr.Tags, key string) int {
+	n := 0
+	for range tags.FindAll(key) {
+		n++
+	}
+	return n
 }

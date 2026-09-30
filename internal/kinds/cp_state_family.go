@@ -34,6 +34,46 @@ const (
 	CPStateFamilyWorkerCleanup     CPStateFamily = 32004
 )
 
+// Worker cp-state coordinates (bahia-irsry.36). Every worker family addresses
+// its records under its own "worker:<entity>:" prefix. Relays keep one event
+// per (kind, pubkey, d), and assignment and drain were both keyed by the bare
+// worker pubkey, so each family replaced the other on the relay. Live records
+// and tombstones share the family coordinate.
+const (
+	WorkerStateDPrefix       = "worker:state:"
+	WorkerAssignmentDPrefix  = "worker:assignment:"
+	WorkerDrainDPrefix       = "worker:drain:"
+	WorkerEligibilityDPrefix = "worker:eligibility:"
+	WorkerCleanupDPrefix     = "worker:cleanup:"
+)
+
+var workerDPrefixes = map[CPStateFamily]string{
+	CPStateFamilyWorkerState:       WorkerStateDPrefix,
+	CPStateFamilyWorkerAssignment:  WorkerAssignmentDPrefix,
+	CPStateFamilyWorkerDrain:       WorkerDrainDPrefix,
+	CPStateFamilyWorkerEligibility: WorkerEligibilityDPrefix,
+	CPStateFamilyWorkerCleanup:     WorkerCleanupDPrefix,
+}
+
+// WorkerDPrefix returns the d prefix of a worker family's coordinates, and
+// false for a family that is not a worker family.
+func (f CPStateFamily) WorkerDPrefix() (string, bool) {
+	prefix, ok := workerDPrefixes[f]
+	return prefix, ok
+}
+
+// WorkerDTag is the canonical d builder for worker cp-state records: the
+// family's prefix followed by the record id (the worker pubkey for state,
+// assignment and drain; the preview id for eligibility; "<pubkey>:<run>" for
+// cleanup). It returns false for a family that is not a worker family.
+func (f CPStateFamily) WorkerDTag(id string) (string, bool) {
+	prefix, ok := f.WorkerDPrefix()
+	if !ok {
+		return "", false
+	}
+	return prefix + id, true
+}
+
 // LegacyKind returns the numeric discriminator for producer APIs that still
 // key records by the catalog kind (the projector's control-state envelope).
 func (f CPStateFamily) LegacyKind() int { return int(f) }

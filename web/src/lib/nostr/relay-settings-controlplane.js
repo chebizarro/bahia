@@ -182,12 +182,16 @@ export function compareRelayPolicyTruthCandidates(candidate, current) {
   return candidateID < currentID ? 1 : -1;
 }
 
+// The operator policy is one addressable coordinate, so the REQ names it by
+// its single-letter #d (plus kind and service author). Relays index only
+// single-letter tags: domain and schema are checked locally in
+// parseRelayPolicyStateEvent, never sent as #domain/#schema. The record also
+// carries t=relay-settings, but #t would AND with #d and miss a policy
+// retained from before the topic was stamped (bahia-irsry.37).
 export function relayPolicyReadModelFilter({ servicePubkey, since, limit = 10 } = {}) {
   const filter = {
     kinds: [CASCADIA_CONTROLPLANE_STATE],
     '#d': [RELAY_SETTINGS_DTAG],
-    '#domain': [RELAY_SETTINGS_DOMAIN],
-    '#schema': [RELAY_SETTINGS_SCHEMA],
     limit
   };
   const author = String(servicePubkey || '').trim().toLowerCase();

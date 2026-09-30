@@ -26,36 +26,6 @@ const (
 	KindCASControlState = kinds.CASControlState
 )
 
-// Nostr event kinds for Bahia outbound audit events.
-const (
-	KindBuildRegistered           = kinds.BuildRegistered
-	KindArtifactRegistered        = kinds.ArtifactRegistered
-	KindDeploymentCreated         = kinds.DeploymentCreated
-	KindDeploymentComplete        = kinds.DeploymentComplete
-	KindDriftDetected             = kinds.DriftDetected
-	KindObservation               = kinds.Observation
-	KindServiceRegistryAudit      = kinds.ServiceRegistryAudit
-	KindEnvironmentRegistryAudit  = kinds.EnvironmentRegistryAudit
-	KindStateChangedAudit         = kinds.StateChangedAudit
-	KindRuntimeActionAudit        = kinds.RuntimeActionAudit
-	KindReconcileAudit            = kinds.ReconcileAudit
-	KindAdoptionAudit             = kinds.AdoptionAudit
-	KindDeploymentApprovalAudit   = kinds.DeploymentApprovalAudit
-	KindDeploymentRunAudit        = kinds.DeploymentRunAudit
-	KindLLMRouteRegistryAudit     = kinds.LLMRouteRegistryAudit
-	KindLLMReleaseRegisteredAudit = kinds.LLMReleaseRegisteredAudit
-	KindLLMDeploymentAudit        = kinds.LLMDeploymentAudit
-	KindLLMRunAudit               = kinds.LLMRunAudit
-	KindLLMRouteStateAudit        = kinds.LLMRouteStateAudit
-	KindLLMGatewayAudit           = kinds.LLMGatewayAudit
-
-	KindDNSZoneSyncedAudit           = kinds.DNSZoneSyncedAudit
-	KindDNSRecordChangedAudit        = kinds.DNSRecordChangedAudit
-	KindDNSDriftDetectedAudit        = kinds.DNSDriftDetectedAudit
-	KindDNSEndpointRegisteredAudit   = kinds.DNSEndpointRegisteredAudit
-	KindDNSEndpointDeregisteredAudit = kinds.DNSEndpointDeregisteredAudit
-)
-
 // Canonical replaceable read-model kinds are aliases to internal/kinds.
 const (
 	KindServiceState              = kinds.ServiceState

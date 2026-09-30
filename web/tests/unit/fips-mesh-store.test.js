@@ -335,6 +335,28 @@ describe('FIPS mesh store (producer 30900 contract)', () => {
     expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'migrated-worker', overlayAddress: 'fd00::42' });
   });
 
+  it('describes a worker by its newest record when a migrated record replays after the canonical one', () => {
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 300, name: 'canonical-worker', mesh: MESH_FIELDS }))).toBe(true);
+    const olderMigrated = signed({
+      created_at: 100,
+      tags: [['d', 'worker:migrated:legacy-2'], ['schema', 'bahia.state.worker.v1'], ['domain', 'worker'], ['t', 'worker-state'], ['legacy-kind', '32000']],
+      content: { schema: 'bahia.state.worker.v1', pubkey: WORKER, name: 'migrated-worker', status: 'online', ...MESH_FIELDS }
+    });
+    expect(store.applyFipsMeshEvent(olderMigrated)).toBe(true);
+    expect(store.meshNodes).toHaveLength(1);
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'canonical-worker' });
+  });
+
+  it('reads the worker pubkey off the worker:state coordinate, never the raw d', () => {
+    const bare = signed({
+      created_at: 100,
+      tags: [...envelope({ legacyKind: 32000, d: `worker:state:${WORKER}`, domain: 'worker' }), ['t', 'worker-state']],
+      content: { name: 'no-pubkey-fields', status: 'online', ...MESH_FIELDS }
+    });
+    expect(store.applyFipsMeshEvent(bare)).toBe(true);
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'no-pubkey-fields' });
+  });
+
   it('classifies FIPS mesh health deterministically', () => {
     expect(store.classifyHealth({ worker: { status: 'online', mesh_health: { rtt: 500_000_000, loss: 0.01 } } })).toBe('healthy');
     expect(store.classifyHealth({ worker: { status: 'online', mesh_health: { rtt: 2_000_000_000, loss: 0.01 } } })).toBe('degraded');

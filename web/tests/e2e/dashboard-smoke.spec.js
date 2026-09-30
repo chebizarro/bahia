@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
+import { BAHIA_STATE_SCHEMAS, cpStateFixture, workerStateFixture } from './cp-state-fixtures.js';
 
 // Mock data
 const mockServices = [
@@ -206,38 +207,51 @@ function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags 
   return { id, kind, pubkey, created_at, tags, content: JSON.stringify(content), sig: '0'.repeat(128) };
 }
 
+// Control-plane read models are producer-shaped cp-state records (kind 30900,
+// schema bahia.cp-state.v1, legacy_kind, deleted and the family's t topic), so
+// the dashboard's #t REQs match them exactly as they match the daemon's.
 function dashboardNostrEvents({ services = mockServices, environments = mockEnvironments, states = mockStates, workers = mockWorkers, intents = mockPendingIntents, events = mockEvents } = {}) {
   return [
-    ...services.map((svc, index) => nostrEvent({
+    ...services.map((svc, index) => cpStateFixture({
       id: `svc-${index}`,
-      kind: 30900,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', svc.id], ['deleted', 'false'], ['name', svc.name]],
-      content: { schema: 'bahia.registry.service.v1', ...svc, deleted: false }
+      createdAt: now,
+      schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
+      domain: 'service',
+      d: svc.id,
+      tags: [['name', svc.name]],
+      content: svc
     })),
-    ...environments.map((env, index) => nostrEvent({
+    ...environments.map((env, index) => cpStateFixture({
       id: `env-${index}`,
-      kind: 30900,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.environment.v1'], ['d', env.id], ['deleted', 'false'], ['name', env.name]],
-      content: { schema: 'bahia.registry.environment.v1', ...env, deleted: false }
+      createdAt: now,
+      schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY,
+      domain: 'environment',
+      d: env.id,
+      tags: [['name', env.name]],
+      content: env
     })),
-    ...states.map((state, index) => nostrEvent({
+    ...states.map((state, index) => cpStateFixture({
       id: `state-${index}`,
-      kind: 30900,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.state.service.v1'], ['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
-      content: { schema: 'bahia.state.service.v1', ...state, deleted: false }
+      createdAt: now,
+      schema: BAHIA_STATE_SCHEMAS.SERVICE_STATE,
+      domain: 'service',
+      d: state.id || `${state.service_id}:${state.environment_id}`,
+      tags: [['service', state.service_id], ['environment', state.environment_id]],
+      content: state
     })),
-    ...intents.map((intent, index) => nostrEvent({
+    ...intents.map((intent, index) => cpStateFixture({
       id: `intent-${index}`,
-      kind: 30900,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.deployment-intent.v1'], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['deleted', 'false']],
-      content: { schema: 'bahia.registry.deployment-intent.v1', ...intent, deleted: false }
+      createdAt: now,
+      schema: BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY,
+      domain: 'deployment',
+      d: intent.id,
+      tags: [['service', intent.service_id], ['environment', intent.environment_id]],
+      content: intent
     })),
-    ...workers.map((worker, index) => nostrEvent({
-      id: `worker-${index}`,
-      kind: 30900,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.state.worker.v1'], ['d', worker.pubkey], ['worker', worker.pubkey], ['deleted', 'false']],
-      content: { schema: 'bahia.state.worker.v1', ...worker, worker_pubkey: worker.pubkey, name: worker.name || worker.pubkey, deleted: false }
-    })),
+    ...workers.map((worker, index) => workerStateFixture(
+      { ...worker, name: worker.name || worker.pubkey },
+      { id: `worker-${index}`, createdAt: now }
+    )),
     ...events.map((event, index) => nostrEvent({
       id: `activity-${index}`,
       kind: 4903,
