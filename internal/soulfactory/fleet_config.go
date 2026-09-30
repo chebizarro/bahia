@@ -220,17 +220,3 @@ func isEnvironmentPlaceholder(value string) bool {
 	return name != ""
 }
 
-// newestFleetConfigEvent implements deterministic replaceable ordering.
-func newestFleetConfigEvent(events []*nostr.Event) *nostr.Event {
-	var latest *nostr.Event
-	for _, event := range events {
-		if event == nil || event.Kind != nostr.Kind(domain.KindSoulFleetConfig) {
-			continue
-		}
-		if latest == nil || event.CreatedAt > latest.CreatedAt ||
-			(event.CreatedAt == latest.CreatedAt && event.ID.Hex() < latest.ID.Hex()) {
-			latest = event
-		}
-	}
-	return latest
-}

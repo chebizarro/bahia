@@ -23,19 +23,31 @@ const (
 // FleetConfigReconciler applies a trusted fleet-config revision to deployed
 // OpenClaw souls. Revisions are serialized while soul work is bounded and
 // independent, so a slow older rollout cannot overtake a newer revision.
+//
+// An apply whose runtime result was not observed within the wait is neither
+// applied nor failed: the soul is awaiting_terminal, nothing is rolled back,
+// and the late result is reconciled when the reactor observes it (see
+// runtimeResultWaiters). Until then newer revisions defer that soul, and the
+// reconciliation re-drives the soul to the latest revision afterwards, so a
+// runtime never has two fleet reloads in flight and revisions apply in order.
 type FleetConfigReconciler struct {
 	reactor     *Reactor
 	concurrency int
 
+	// mu serializes revisions and late-result continuations; it guards latest.
 	mu     sync.Mutex
 	latest *FleetConfigSnapshot
+
+	awaitingMu sync.Mutex
+	// awaiting holds the revision each awaiting_terminal soul is applying.
+	awaiting map[string]string
 }
 
 func NewFleetConfigReconciler(reactor *Reactor, concurrency int) *FleetConfigReconciler {
 	if concurrency <= 0 {
 		concurrency = defaultFleetReconcileConcurrency
 	}
-	return &FleetConfigReconciler{reactor: reactor, concurrency: concurrency}
+	return &FleetConfigReconciler{reactor: reactor, concurrency: concurrency, awaiting: make(map[string]string)}
 }
 
 // Reconcile fans one exact fleet revision out to every affected deployed soul.
@@ -63,10 +75,12 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 	}
 	eligible := make([]*domain.AgentSoul, 0, len(souls))
 	for _, soul := range souls {
-		if soul == nil ||
-			soul.Status != domain.SoulStatusActive ||
-			soul.Runtime.Target != domain.RuntimeTargetOpenClaw ||
-			soul.AppliedFleetConfigRevision == snapshot.EventID {
+		if !fleetReconcileEligible(soul, snapshot) {
+			continue
+		}
+		if revision, awaiting := r.awaitingRevision(soul.AgentID); awaiting {
+			r.reactor.logger.Info("fleet config revision deferred for soul awaiting a runtime terminal result",
+				"agent_id", soul.AgentID, "fleet_revision", snapshot.EventID, "awaiting_revision", revision)
 			continue
 		}
 		eligible = append(eligible, soul)
@@ -105,6 +119,35 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 	wg.Wait()
 	close(errs)
 	return errors.Join(drainFleetErrors(errs)...)
+}
+
+func fleetReconcileEligible(soul *domain.AgentSoul, snapshot *FleetConfigSnapshot) bool {
+	return soul != nil &&
+		soul.Status == domain.SoulStatusActive &&
+		soul.Runtime.Target == domain.RuntimeTargetOpenClaw &&
+		soul.AppliedFleetConfigRevision != snapshot.EventID
+}
+
+func (r *FleetConfigReconciler) awaitingRevision(agentID string) (string, bool) {
+	r.awaitingMu.Lock()
+	defer r.awaitingMu.Unlock()
+	revision, ok := r.awaiting[agentID]
+	return revision, ok
+}
+
+func (r *FleetConfigReconciler) setAwaiting(agentID, revision string) {
+	r.awaitingMu.Lock()
+	defer r.awaitingMu.Unlock()
+	if r.awaiting == nil {
+		r.awaiting = make(map[string]string)
+	}
+	r.awaiting[agentID] = revision
+}
+
+func (r *FleetConfigReconciler) clearAwaiting(agentID string) {
+	r.awaitingMu.Lock()
+	defer r.awaitingMu.Unlock()
+	delete(r.awaiting, agentID)
 }
 
 func fleetSnapshotBefore(candidate, current *FleetConfigSnapshot) bool {
@@ -159,21 +202,114 @@ func (r *FleetConfigReconciler) reconcileSoul(ctx context.Context, soul *domain.
 	}
 	applyReq := r.runtimeRequest(soul, next, next, "apply")
 	result, applyErr := adapter.Execute(ctx, applyReq)
+	if pending, unknown := runtimeOutcomeUnknown(applyErr); unknown {
+		return r.awaitApply(ctx, adapter, action, soul, next, previous, changed, pending, applyErr)
+	}
+	_, err = r.finishApply(ctx, adapter, action, soul, next, previous, changed, result, applyErr)
+	return err
+}
+
+// finishApply applies the apply request's terminal result, observed in time or
+// late: success records the revision on the soul, an observed failure rolls
+// the runtime back. It returns the soul as now recorded.
+func (r *FleetConfigReconciler) finishApply(
+	ctx context.Context,
+	adapter RuntimeAdapter,
+	action *domain.SoulAction,
+	soul *domain.AgentSoul,
+	next, previous *FleetConfigSnapshot,
+	changed []string,
+	result *RuntimeControlResultEnvelope,
+	applyErr error,
+) (*domain.AgentSoul, error) {
 	if applyErr == nil {
 		applyErr = fleetRuntimeResultError(result)
 	}
 	if applyErr != nil {
 		rollbackErr := r.rollbackSoul(ctx, adapter, action, soul, next, previous)
-		return r.failSoul(ctx, action, next, soul, fmt.Errorf("apply fleet config: %w", applyErr), rollbackErr)
+		return soul, r.failSoul(ctx, action, next, soul, fmt.Errorf("apply fleet config: %w", applyErr), rollbackErr)
 	}
 
 	updated := *soul
 	updated.AppliedFleetConfigRevision = next.EventID
 	if err := r.reactor.PublishSoul(ctx, &updated); err != nil {
 		rollbackErr := r.rollbackSoul(ctx, adapter, action, soul, next, previous)
-		return r.failSoul(ctx, action, next, soul, fmt.Errorf("publish applied fleet revision: %w", err), rollbackErr)
+		return soul, r.failSoul(ctx, action, next, soul, fmt.Errorf("publish applied fleet revision: %w", err), rollbackErr)
 	}
-	return r.completeSoul(ctx, action, next, soul, changed, "applied")
+	return &updated, r.completeSoul(ctx, action, next, soul, changed, "applied")
+}
+
+// awaitApply parks an apply whose runtime result was not observed: the soul is
+// awaiting_terminal, with no rollback and no terminal result, until the
+// reactor delivers the late result to resumeApply.
+func (r *FleetConfigReconciler) awaitApply(
+	ctx context.Context,
+	adapter RuntimeAdapter,
+	action *domain.SoulAction,
+	soul *domain.AgentSoul,
+	next, previous *FleetConfigSnapshot,
+	changed []string,
+	pending *runtimeResultPending,
+	cause error,
+) error {
+	logger := r.reactor.logger.With("agent_id", soul.AgentID, "fleet_revision", next.EventID)
+	message := fmt.Sprintf("%s: fleet config apply outcome unknown: %v; no rollback without an observed runtime failure", actionStatusAwaitingTerminal, cause)
+	if err := r.publishProgress(ctx, action, next, actionStatusAwaitingTerminal, message); err != nil {
+		logger.Warn("failed to publish fleet awaiting_terminal progress", "error", err)
+	}
+	if pending == nil {
+		logger.Warn("fleet config apply outcome unknown and not correlatable; the soul is re-driven by the next revision or restart", "error", cause)
+		return nil
+	}
+	r.setAwaiting(soul.AgentID, next.EventID)
+	late, observed := r.reactor.resultWaiters().park(pending, fleetHandlerShardKey, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+		r.resumeApply(ctx, adapter, action, soul, next, previous, changed, late)
+	})
+	if !observed {
+		logger.Info("fleet config apply awaiting runtime terminal result", "request_event", pending.requestID())
+		return nil
+	}
+	defer r.clearAwaiting(soul.AgentID)
+	_, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil)
+	return err
+}
+
+// resumeApply reconciles a late apply result exactly as a timely one, then
+// re-drives the soul if a newer revision was deferred while it was awaiting.
+func (r *FleetConfigReconciler) resumeApply(
+	ctx context.Context,
+	adapter RuntimeAdapter,
+	action *domain.SoulAction,
+	soul *domain.AgentSoul,
+	next, previous *FleetConfigSnapshot,
+	changed []string,
+	late *RuntimeControlResultEnvelope,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	logger := r.reactor.logger.With("agent_id", soul.AgentID, "fleet_revision", next.EventID)
+	recorded, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil)
+	r.clearAwaiting(soul.AgentID)
+	if err != nil {
+		logger.Error("fleet config reconciliation failed after late runtime result", "error", err)
+	}
+	latest := r.latest
+	if latest == nil || latest.EventID == next.EventID || fleetSnapshotBefore(latest, next) {
+		return
+	}
+	current, err := r.reactor.GetSoul(ctx, soul.AgentID)
+	if err != nil || current == nil {
+		logger.Warn("cannot re-drive soul to the deferred fleet revision; the next revision or a restart re-drives it", "latest_revision", latest.EventID, "error", err)
+		return
+	}
+	// The relay read may lag the revision just recorded; ours is authoritative.
+	current.AppliedFleetConfigRevision = recorded.AppliedFleetConfigRevision
+	if !fleetReconcileEligible(current, latest) {
+		return
+	}
+	if err := r.reconcileSoul(ctx, current, latest); err != nil {
+		logger.Error("deferred fleet config reconciliation failed", "latest_revision", latest.EventID, "error", err)
+	}
 }
 
 func fleetRuntimeResultError(result *RuntimeControlResultEnvelope) error {
@@ -201,7 +337,7 @@ func (r *FleetConfigReconciler) rollbackSoul(
 	}
 	result, err := adapter.Execute(ctx, r.runtimeRequest(soul, failed, previous, "rollback"))
 	if err != nil {
-		return err
+		return rollbackStepError("rollback fleet config", err)
 	}
 	return fleetRuntimeResultError(result)
 }
@@ -324,10 +460,13 @@ func (r *FleetConfigReconciler) failSoul(
 	cause, rollbackErr error,
 ) error {
 	rollbackStatus := "not-required"
-	if rollbackErr == nil && (strings.Contains(cause.Error(), "apply fleet config") || strings.Contains(cause.Error(), "publish applied fleet revision")) {
-		rollbackStatus = "completed"
-	} else if rollbackErr != nil {
+	switch {
+	case errors.Is(rollbackErr, ErrNoTerminalResult):
+		rollbackStatus = rollbackStatusOutcomeUnknown
+	case rollbackErr != nil:
 		rollbackStatus = "failed"
+	case strings.Contains(cause.Error(), "apply fleet config") || strings.Contains(cause.Error(), "publish applied fleet revision"):
+		rollbackStatus = "completed"
 	}
 	data := map[string]interface{}{
 		"soul_ref":        action.SoulRef,
@@ -447,11 +586,7 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 			continue
 		}
 		agentID := tagValue(event.Tags, tagParameterizedD)
-		current := latest[agentID]
-		if current == nil || event.CreatedAt > current.CreatedAt ||
-			(event.CreatedAt == current.CreatedAt && event.ID.Hex() < current.ID.Hex()) {
-			latest[agentID] = event
-		}
+		latest[agentID] = newerRelayEvent(latest[agentID], event)
 	}
 	souls := make([]*domain.AgentSoul, 0, len(latest))
 	for _, event := range latest {

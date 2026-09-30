@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
@@ -95,7 +96,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		return nil, err
 	}
 
-	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, slogLogger)
+	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, sf.RuntimeResultTimeout, slogLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -233,8 +234,8 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 // buildSoulFactoryRuntimeAdapters instantiates the generic runtime-control
 // adapter for every administratively enabled agent runtime target. Startup
 // fails on any invalid or failing target; enabled targets are never silently
-// omitted from the registry.
-func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
+// omitted from the registry. resultTimeout is soul_factory.runtime_result_timeout.
+func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, resultTimeout time.Duration, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("soul_factory.agent_runtimes is empty; configuration validation must default or reject it before startup")
 	}
@@ -255,6 +256,7 @@ func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string
 			Signer:                signer,
 			Relays:                relays,
 			Logger:                logger,
+			ResultTimeout:         resultTimeout,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("creating SoulFactory runtime adapter for %q: %w", target, err)

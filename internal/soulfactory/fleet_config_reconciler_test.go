@@ -269,7 +269,19 @@ func newFleetReconcileTestReactor(
 	previous *FleetConfigSnapshot,
 ) (*Reactor, *fleetReconcileRuntime, *fleetReconcilePublishCapture) {
 	t.Helper()
-	signer := newFakeSigner(t)
+	runtime := &fleetReconcileRuntime{}
+	reactor, capture := newFleetReconcileTestReactorWithRuntime(t, newFakeSigner(t), souls, previous, runtime)
+	return reactor, runtime, capture
+}
+
+func newFleetReconcileTestReactorWithRuntime(
+	t *testing.T,
+	signer fakeSigner,
+	souls []*domain.AgentSoul,
+	previous *FleetConfigSnapshot,
+	runtime RuntimeAdapter,
+) (*Reactor, *fleetReconcilePublishCapture) {
+	t.Helper()
 	reactor := NewReactor(Config{
 		Relays:                    []string{"wss://relay.example"},
 		AuthorizedPubkeys:         []string{signer.pubkey},
@@ -288,13 +300,13 @@ func newFleetReconcileTestReactor(
 		}
 		return nil, nil
 	}
-	runtime := &fleetReconcileRuntime{}
 	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
 	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{
 		domain.RuntimeTargetOpenClaw: runtime,
 	})
 	reactor.lifecycleHandler = handler
-	return reactor, runtime, capture
+	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	return reactor, capture
 }
 
 func fleetReconcileSnapshots(t *testing.T) (*FleetConfigSnapshot, *FleetConfigSnapshot) {

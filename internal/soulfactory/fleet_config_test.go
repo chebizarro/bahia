@@ -96,12 +96,10 @@ func TestFleetConfigValidationRejectsUnknownSectionsAndConcreteSecrets(t *testin
 func TestNewestFleetConfigEventUsesTimestampThenEventID(t *testing.T) {
 	firstID, _ := nostr.IDFromHex(strings.Repeat("1", 64))
 	secondID, _ := nostr.IDFromHex(strings.Repeat("2", 64))
-	events := []*nostr.Event{
-		{ID: firstID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)},
-		{ID: secondID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)},
-	}
-	if got := newestFleetConfigEvent(events); got == nil || got.ID != firstID {
-		t.Fatalf("newestFleetConfigEvent() = %#v", got)
+	first := &nostr.Event{ID: firstID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)}
+	second := &nostr.Event{ID: secondID, Kind: nostr.Kind(domain.KindSoulFleetConfig), CreatedAt: nostr.Timestamp(42)}
+	if got := newerRelayEvent(newerRelayEvent(nil, second), first); got != first {
+		t.Fatalf("newerRelayEvent() = %#v, want the lowest id on a created_at tie", got)
 	}
 }
 

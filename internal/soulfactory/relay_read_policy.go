@@ -60,6 +60,9 @@ import (
 // Accepted partial reads are logged at Warn and counted in the
 // bahia.soulfactory.relay_read.partial metric with outcome=accepted; rejected
 // ones are counted with outcome=rejected and returned as the original error.
+// Prometheus exposes the counter as bahia_soulfactory_relay_read_partial; the
+// BahiaSoulFactoryRelayReadRejected alert in deploy/observability/bahia-alerts.yml
+// fires on sustained outcome=rejected.
 type RelayReadPolicy struct {
 	name string
 	// acceptPartial reports whether events, read with incomplete, may stand in

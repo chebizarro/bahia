@@ -27,6 +27,7 @@ operations and are not implied by these source fixtures.
 | `BahiaAudit4903Anomaly` | A rejected or contradictory kind-4903 event increments the anomaly counter | Security/operator pair | Tier 3 | Preserve the event chain and pause correlated mutations pending signature/correlation review |
 | `BahiaAuthorizationRejectionSpike` | More than ten bounded authorization rejections occur within five minutes | Security operator | Tier 2 | Inspect identity, policy, replay, and signature reason counts; do not loosen policy |
 | `BahiaTierRejectionSpike` | More than five insufficient-tier rejections occur within five minutes | Bahia operator | Tier 1 | Compare requested and active tier and restore the failed dependency instead of bypassing the gate |
+| `BahiaSoulFactoryRelayReadRejected` | A fail-closed SoulFactory relay read keeps ending without EOSE from enough relays (rejected partial reads for ten minutes) | SoulFactory operator | Tier 1, Tier 2 if lifecycle or fleet work is blocked | Identify the silent or CLOSED relays for the named caller and restore them; do not relax the read policy |
 | `NodeExporterDown` | An expected-up node scrape fails for five minutes | Host owner | Tier 1 | Check the exporter service and monitoring-interface route; do not infer host failure from exporter failure alone |
 | `HostMemoryPressure` | Available host memory remains below 10% for ten minutes | Host owner | Tier 1 | Inspect workload pressure and preserve continuity capacity before evicting work |
 | `HostFilesystemPressure` | A writable filesystem remains below 10% free for ten minutes | Host owner | Tier 1 | Identify reclaimable data and use approved cleanup policy; do not delete manually |
@@ -102,6 +103,21 @@ authorization boundary merely to clear the alert.
 
 Inspect dependency health and Bahia's requested versus active tier. Restore the
 dependency instead of bypassing tier gates.
+
+## BahiaSoulFactoryRelayReadRejected
+
+`bahia_soulfactory_relay_read_partial{outcome="rejected"}` counts SoulFactory
+reads whose `RelayReadPolicy` refused a partial answer (a relay never sent
+EOSE, or CLOSED the REQ). Fail-closed callers such as `reactor.get_soul`,
+`reactor.fleet_reconcile_souls` and `communikeys.profile_list` return an error
+instead of acting on possibly stale state, so lifecycle actions, fleet
+reconciliation or provisioning grants stall while this fires. Use the `caller`
+label and the SoulFactory logs ("relay bus stored events are incomplete") to
+find the relays that did not answer, then restore or remove them from
+`soul_factory.relays` / `additional_relays`. Do not switch a caller to a
+partial-read policy to clear the alert: the policy table in
+`internal/soulfactory/relay_read_policy.go` records why each caller fails
+closed.
 
 ## NodeExporterDown
 
