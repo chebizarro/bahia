@@ -2,16 +2,21 @@ import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-too
 import { authState, ensureEncryptedSignerReady, signWithAuth } from '$lib/stores/auth.js';
 import { createNostrPoolClient } from './client.js';
 import {
+  CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND,
   CONTEXTVM_GIFT_WRAP_KIND,
+  CONTEXTVM_MAX_RELAY_MESSAGE_BYTES,
   CONTEXTVM_MESSAGE_KIND,
   ENCRYPTED_REQUEST_KIND,
   ENCRYPTED_REQUEST_ROUTING_TAG,
   ENCRYPTED_REQUEST_WIRE_VERSION,
-  ENCRYPTED_RESULT_KIND
+  ENCRYPTED_RESULT_KIND,
+  NIP44_MAX_PLAINTEXT_BYTES,
+  STORED_EVENT_MAX_CONTENT_BYTES
 } from './encrypted-controlplane-constants.js';
 import { awaitEncryptedResultForTransport } from './encrypted-controlplane-result.js';
 import {
   assertConnectedBahiaRelays,
+  assertRelayMessageFits,
   buildContextVMRequest,
   encryptedRelayUrlsFromSystemInfo,
   jsonContent,
@@ -82,15 +87,25 @@ export class EncryptedControlplaneTransport {
 
     if (kind !== CONTEXTVM_GIFT_WRAP_KIND) return innerEvent;
 
+    const plaintext = jsonContent(innerEvent);
+    const plaintextBytes = new TextEncoder().encode(plaintext).length;
+    if (plaintextBytes > NIP44_MAX_PLAINTEXT_BYTES) {
+      throw new Error(`ContextVM request is ${plaintextBytes} bytes, over the ${NIP44_MAX_PLAINTEXT_BYTES}-byte NIP-44 encryption limit; send large documents by reference (upload them to Blossom and pass the location).`);
+    }
     const wrapperSecretKey = generateSecretKey();
     const wrapperPubkey = getPublicKey(wrapperSecretKey);
     const conversationKey = nip44.v2.utils.getConversationKey(wrapperSecretKey, this.servicePubkey);
-    const ciphertext = nip44.v2.encrypt(jsonContent(innerEvent), conversationKey);
-    return finalizeEvent({ kind, pubkey: wrapperPubkey, created_at, tags: [['p', this.servicePubkey]], content: ciphertext }, wrapperSecretKey);
+    const ciphertext = nip44.v2.encrypt(plaintext, conversationKey);
+    // Bahia's relay stores at most STORED_EVENT_MAX_CONTENT_BYTES of content,
+    // so a wrap too large to store is sent as an ephemeral 21059: relayed live
+    // to the daemon (which answers in kind), never stored.
+    const wrapKind = ciphertext.length > STORED_EVENT_MAX_CONTENT_BYTES ? CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND : kind;
+    return finalizeEvent({ kind: wrapKind, pubkey: wrapperPubkey, created_at, tags: [['p', this.servicePubkey]], content: ciphertext }, wrapperSecretKey);
   }
 
   async publishEncryptedRequest(event) {
     if (!event?.id) throw new Error('Cannot publish unsigned ContextVM request event');
+    assertRelayMessageFits(event, CONTEXTVM_MAX_RELAY_MESSAGE_BYTES);
     await this.connect();
     assertConnectedBahiaRelays(this.client);
     const results = await this.client.publish(event);

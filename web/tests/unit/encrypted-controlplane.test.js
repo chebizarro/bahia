@@ -290,6 +290,81 @@ describe('encrypted controlplane transport', () => {
     })).toEqual(['wss://contextvm.example', 'wss://relay.example']);
   });
 
+  it('sends a request too large for the relay to store as an ephemeral 21059 wrap', async () => {
+    const constants = await import('../../src/lib/nostr/encrypted-controlplane-constants.js');
+    const { nip44 } = await import('nostr-tools');
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+
+    const small = await transport.buildEncryptedRequestEvent({ operation: 'secrets.set', payload: { value: 'x'.repeat(1_000) }, requestId: 'small' });
+    expect(small.kind).toBe(constants.CONTEXTVM_GIFT_WRAP_KIND);
+    expect(small.content.length).toBeLessThanOrEqual(constants.STORED_EVENT_MAX_CONTENT_BYTES);
+
+    // 45 KB of plaintext pads to 49,152 bytes, whose base64 exceeds 65,535.
+    const large = await transport.buildEncryptedRequestEvent({ operation: 'secrets.set', payload: { value: 'x'.repeat(45_000) }, requestId: 'large' });
+    expect(large.kind).toBe(constants.CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND);
+    expect(large.content.length).toBeGreaterThan(constants.STORED_EVENT_MAX_CONTENT_BYTES);
+    expect(large.tags).toEqual([['p', SERVICE_PUBKEY]]);
+    const inner = JSON.parse(nip44.v2.decrypt(large.content, nip44.v2.utils.getConversationKey(SERVICE_SECRET_KEY, large.pubkey)));
+    expect(JSON.parse(inner.content).params.value).toHaveLength(45_000);
+
+    await expect(transport.publishEncryptedRequest(large)).resolves.toMatchObject({ requestEventId: large.id });
+    expect(client.publish).toHaveBeenCalledWith(large);
+  });
+
+  it('refuses a request over the NIP-44 limit before publishing, pointing at Blossom', async () => {
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+
+    await expect(transport.requestEncryptedResult({ operation: 'secrets.set', payload: { value: 'x'.repeat(70_000) } }))
+      .rejects.toThrow(/over the 65535-byte NIP-44 encryption limit; send large documents by reference \(upload them to Blossom/);
+    expect(client.publish).not.toHaveBeenCalled();
+  });
+
+  it('refuses an event over the relay message limit before publishing instead of losing the connection', async () => {
+    const constants = await import('../../src/lib/nostr/encrypted-controlplane-constants.js');
+    const { relayMessageBytes } = await import('../../src/lib/nostr/encrypted-controlplane-utils.js');
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+    const base = { id: 'e'.repeat(64), pubkey: 'a'.repeat(64), sig: 'f'.repeat(128), kind: module.CONTEXTVM_MESSAGE_KIND, created_at: 1, tags: [], content: '' };
+    const overhead = relayMessageBytes(base);
+    const atLimit = { ...base, content: 'x'.repeat(constants.CONTEXTVM_MAX_RELAY_MESSAGE_BYTES - overhead) };
+    const overLimit = { ...base, content: 'x'.repeat(constants.CONTEXTVM_MAX_RELAY_MESSAGE_BYTES - overhead + 1) };
+    expect(relayMessageBytes(atLimit)).toBe(constants.CONTEXTVM_MAX_RELAY_MESSAGE_BYTES);
+
+    await expect(transport.publishEncryptedRequest(overLimit)).rejects.toThrow(/over the 512000-byte relay message limit; send large documents by reference \(upload them to Blossom/);
+    expect(client.publish).not.toHaveBeenCalled();
+    await expect(transport.publishEncryptedRequest(atLimit)).resolves.toMatchObject({ requestEventId: atLimit.id });
+    expect(client.publish).toHaveBeenCalledWith(atLimit);
+  });
+
+  it('publishes an sbom/import at the inline limit as one relay message', async () => {
+    // MAX_CONTEXTVM_INLINE_SBOM_BYTES; public-controlplane.test.js pins the value.
+    const MAX_CONTEXTVM_INLINE_SBOM_BYTES = 360 * 1024;
+    const { relayMessageBytes } = await import('../../src/lib/nostr/encrypted-controlplane-utils.js');
+    const constants = await import('../../src/lib/nostr/encrypted-controlplane-constants.js');
+    const requester = Uint8Array.from({ length: 32 }, () => 0x7c);
+    authMock.signWithAuth.mockImplementation(async (event) => finalizeEvent(event, requester));
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+    const payloadBase64 = Buffer.alloc(MAX_CONTEXTVM_INLINE_SBOM_BYTES).toString('base64');
+    const digest = `sha256:${'ab'.repeat(32)}`;
+
+    const event = await transport.buildEncryptedRequestEvent({
+      operation: 'sbom/import',
+      kind: module.CONTEXTVM_MESSAGE_KIND,
+      tags: [['domain', 'sbom'], ['operation', 'sbom/import'], ['subject_type', 'artifact'], ['artifact', 'artifact-1'], ['subject', digest], ['format', 'spdx'], ['generator', 'web-import']],
+      payload: {
+        idempotencyKey: `web.sbom.import:artifact:artifact-1:${digest}:spdx:inline:${MAX_CONTEXTVM_INLINE_SBOM_BYTES}:${payloadBase64.slice(0, 24)}:${payloadBase64.slice(-24)}:web-import`,
+        subject: { type: 'artifact', id: 'artifact-1', display_name: 'registry.example.com/acme/some-service-with-a-long-name', digest },
+        format: 'spdx',
+        payloadBase64,
+        storage: 'blossom',
+        generator: { id: 'web-import' }
+      }
+    });
+
+    expect(event.kind).toBe(module.CONTEXTVM_MESSAGE_KIND);
+    expect(relayMessageBytes(event)).toBeLessThanOrEqual(constants.CONTEXTVM_MAX_RELAY_MESSAGE_BYTES);
+    await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: event.id });
+  });
+
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
     const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };

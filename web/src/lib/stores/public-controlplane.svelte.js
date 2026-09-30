@@ -308,7 +308,11 @@ function artifactDisplayName(artifact) {
   return String(artifact?.name || artifact?.image_repo || artifact?.image_tag || artifact?.id || '').trim();
 }
 
-export const MAX_CONTEXTVM_INLINE_SBOM_BYTES = 512 * 1024;
+// An inline SBOM travels base64-encoded (4/3 larger) inside one relay message,
+// and Bahia's relay drops frames over 512,000 bytes without an OK. 360 KiB
+// encodes to 491,520 bytes and leaves room for the envelope. The daemon
+// enforces the same limit (maxContextVMInlineSBOMBytes).
+export const MAX_CONTEXTVM_INLINE_SBOM_BYTES = 360 * 1024;
 
 function normalizeSBOMFormat(format) {
   const normalized = String(format || '').trim().toLowerCase();
@@ -341,7 +345,7 @@ function inlineSBOMSourceKey(payloadBase64) {
 }
 
 export function inlineSBOMLimitMessage() {
-  return `Inline SBOM imports are limited to ${MAX_CONTEXTVM_INLINE_SBOM_BYTES} bytes; use a Blossom or REST compatibility import reference for larger SBOM files.`;
+  return `Inline SBOM imports are limited to ${MAX_CONTEXTVM_INLINE_SBOM_BYTES} bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.`;
 }
 
 export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal } = {}) {
