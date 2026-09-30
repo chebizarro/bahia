@@ -9,12 +9,14 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
-// WorkerStatePublisher publishes the replaceable worker state read model used by
-// control-plane clients.
+// WorkerStatePublisher publishes the worker-state read model used by
+// control-plane clients as a canonical 30900 cp-state record
+// (legacy_kind kinds.CPStateFamilyWorkerState, t kinds.WorkerStateTopic).
 type WorkerStatePublisher struct {
 	publisher NostrEventPublisher
 	signer    nostr.Signer
@@ -58,8 +60,11 @@ func (p *WorkerStatePublisher) Publish(ctx context.Context, worker *domain.Worke
 	if worker.SchedulingState == "" {
 		worker.SchedulingState = domain.WorkerSchedulingActive
 	}
-	content := workerStateContent(worker)
-	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: p.nextCreatedAt(worker.PubKey), Tags: workerStateTags(worker), Content: mustJSON(content)}
+	content, err := workerStateContent(worker)
+	if err != nil {
+		return err
+	}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: p.nextCreatedAt(worker.PubKey), Tags: workerStateTags(worker, false), Content: mustJSON(content)}
 	if err := SignGoNostrEvent(ctx, p.signer, event); err != nil {
 		return fmt.Errorf("sign worker state: %w", err)
 	}
@@ -104,42 +109,44 @@ func (p *WorkerStatePublisher) nextCreatedAt(workerPubKey string) nostr.Timestam
 	return now
 }
 
-func workerStateContent(worker *domain.Worker) map[string]any {
-	return map[string]any{
-		"deleted":               false,
-		"pubkey":                worker.PubKey,
-		"name":                  worker.Name,
-		"description":           worker.Description,
-		"architecture":          worker.Architecture,
-		"max_concurrent_jobs":   worker.MaxConcurrentJobs,
-		"current_queue_depth":   worker.CurrentQueueDepth,
-		"status":                string(worker.Status),
-		"scheduling_state":      string(worker.SchedulingState),
-		"scheduling_note":       worker.SchedulingNote,
-		"labels":                worker.Labels,
-		"capabilities":          worker.Capabilities,
-		"ml_capabilities":       worker.MLCapabilities,
-		"runtime_target":        worker.RuntimeTarget,
-		"resources":             worker.Resources,
-		"accelerators":          worker.Accelerators,
-		"telemetry":             worker.Telemetry,
-		"pressure":              worker.Pressure,
-		"last_advertisement_at": worker.LastAdvertisementAt.Format(time.RFC3339),
-		"updated_at":            worker.UpdatedAt.Format(time.RFC3339),
+// workerStateUnpublishedFields are domain.Worker fields kept off the relay:
+// verified execution planes are live reconciliation evidence (plane, session
+// and probe ids) owned by the daemon, not worker state for clients.
+var workerStateUnpublishedFields = []string{"verified_execution_planes"}
+
+// workerStateContent is the domain.Worker JSON (minus
+// workerStateUnpublishedFields) plus deleted=false. It is lossless on purpose:
+// the relay projection cache replays this record into the worker repository
+// (catalog decodeWorkerProjection -> workerApplier), whose upsert overwrites
+// every advertised column, so a partial record would erase software, pricing
+// or FIPS mesh fields on replay.
+func workerStateContent(worker *domain.Worker) (map[string]any, error) {
+	encoded, err := json.Marshal(worker)
+	if err != nil {
+		return nil, fmt.Errorf("encode worker state: %w", err)
 	}
+	content := map[string]any{}
+	if err := json.Unmarshal(encoded, &content); err != nil {
+		return nil, fmt.Errorf("encode worker state: %w", err)
+	}
+	for _, field := range workerStateUnpublishedFields {
+		delete(content, field)
+	}
+	content["deleted"] = false
+	return content, nil
 }
 
-func workerStateTags(worker *domain.Worker) nostr.Tags {
-	tags := nostr.Tags{
-		{"d", "worker:state:" + worker.PubKey},
-		{"domain", "worker"},
-		{"schema", "bahia.state.worker.v1"},
-		{"legacy_kind", fmt.Sprintf("%d", KindWorkerState)},
-		{"worker", worker.PubKey},
-		{"deleted", "false"},
-		{"status", string(worker.Status)},
-		{"scheduling_state", string(worker.SchedulingState)},
-	}
+// workerStateDTag is the worker-state record's coordinate. It is unchanged from
+// the per-family schema, so envelope records replace earlier ones in place.
+func workerStateDTag(workerPubKey string) string { return "worker:state:" + workerPubKey }
+
+func workerStateTags(worker *domain.Worker, deleted bool) nostr.Tags {
+	tags := workerCPStateEnvelope(kinds.CPStateFamilyWorkerState, kinds.WorkerStateTopic, workerStateDTag(worker.PubKey), deleted)
+	tags = append(tags,
+		nostr.Tag{"worker", worker.PubKey},
+		nostr.Tag{"status", string(worker.Status)},
+		nostr.Tag{"scheduling_state", string(worker.SchedulingState)},
+	)
 	if worker.Pressure != nil {
 		if worker.Pressure.CapacityClass != "" {
 			tags = append(tags, nostr.Tag{"capacity_class", string(worker.Pressure.CapacityClass)})

@@ -163,29 +163,35 @@ type DecodeFunc func(ev *gonostr.Event) (*DecodedProjectionEvent, error)
 type ProjectionFamily string
 
 const (
-	FamilyService      ProjectionFamily = "service"
-	FamilyEnvironment  ProjectionFamily = "environment"
-	FamilyWorker       ProjectionFamily = "worker"
-	FamilyBuild        ProjectionFamily = "build"
-	FamilyArtifact     ProjectionFamily = "artifact"
-	FamilyIntent       ProjectionFamily = "intent"
-	FamilyRun          ProjectionFamily = "run"
-	FamilyPolicy       ProjectionFamily = "policy"
-	FamilyState        ProjectionFamily = "state"
-	FamilyContinuity   ProjectionFamily = "continuity"
-	FamilyBackup       ProjectionFamily = "backup"
-	FamilyDNS          ProjectionFamily = "dns"
-	FamilyLLM          ProjectionFamily = "llm"
-	FamilyML           ProjectionFamily = "ml"
-	FamilyPackage      ProjectionFamily = "package"
-	FamilyHiveCI       ProjectionFamily = "hive_ci"
-	FamilyLoom         ProjectionFamily = "loom"
-	FamilyAssistant    ProjectionFamily = "assistant"
-	FamilyTool         ProjectionFamily = "tool"
-	FamilyAdoption     ProjectionFamily = "adoption"
-	FamilySystem       ProjectionFamily = "system"
-	FamilyFIPS         ProjectionFamily = "fips"
-	FamilyControlPlane ProjectionFamily = "control_plane"
+	FamilyService     ProjectionFamily = "service"
+	FamilyEnvironment ProjectionFamily = "environment"
+	FamilyWorker      ProjectionFamily = "worker"
+	// The other worker cp-state families project into their own streams:
+	// assignment and drain records share d=<worker pubkey> with each other, so
+	// one stream would make each look stale against the other.
+	FamilyWorkerAssignment  ProjectionFamily = "worker_assignment"
+	FamilyWorkerDrain       ProjectionFamily = "worker_drain"
+	FamilyWorkerEligibility ProjectionFamily = "worker_eligibility"
+	FamilyBuild             ProjectionFamily = "build"
+	FamilyArtifact          ProjectionFamily = "artifact"
+	FamilyIntent            ProjectionFamily = "intent"
+	FamilyRun               ProjectionFamily = "run"
+	FamilyPolicy            ProjectionFamily = "policy"
+	FamilyState             ProjectionFamily = "state"
+	FamilyContinuity        ProjectionFamily = "continuity"
+	FamilyBackup            ProjectionFamily = "backup"
+	FamilyDNS               ProjectionFamily = "dns"
+	FamilyLLM               ProjectionFamily = "llm"
+	FamilyML                ProjectionFamily = "ml"
+	FamilyPackage           ProjectionFamily = "package"
+	FamilyHiveCI            ProjectionFamily = "hive_ci"
+	FamilyLoom              ProjectionFamily = "loom"
+	FamilyAssistant         ProjectionFamily = "assistant"
+	FamilyTool              ProjectionFamily = "tool"
+	FamilyAdoption          ProjectionFamily = "adoption"
+	FamilySystem            ProjectionFamily = "system"
+	FamilyFIPS              ProjectionFamily = "fips"
+	FamilyControlPlane      ProjectionFamily = "control_plane"
 )
 
 type DecodedProjectionEvent struct {
@@ -581,10 +587,9 @@ func (c *KindCatalog) registerProjectionDecoders() {
 	c.decoders[KindPolicyRegistry] = decodePolicyProjection
 	c.decoders[KindServiceState] = decodeStateProjection
 
-	c.decoders[KindWorkerState] = decodeWorkerProjection
-	c.decoders[KindWorkerAssignmentState] = decodeWorkerAssignmentProjection
-	c.decoders[KindWorkerDrainStatus] = decodeWorkerDrainProjection
-	c.decoders[KindWorkerEligibilityPreview] = decodeWorkerEligibilityProjection
+	// Worker read models exist only as 30900 cp-state records, so they are
+	// decoded through the state_snapshot decoder by their legacy_kind family.
+	c.decoders[KindCASControlState] = decodeCPStateProjection(c.decoders[KindCASControlState])
 	c.decoders[KindLoomWorkerAdvertisement] = decodeWorkerAdvertisementProjection
 
 	c.decoders[KindContinuityProfile] = decodeContinuityProfileProjection
@@ -909,12 +914,54 @@ func decodeHiveCIWorkflowResultProjection(ev *gonostr.Event) (*DecodedProjection
 	}), nil
 }
 
+// workerCPStateDecoders decode the worker cp-state families by their
+// kinds.CPStateFamily legacy_kind discriminator (bahia-irsry.9.2). Worker
+// cleanup execution (CPStateFamilyWorkerCleanup) has no daemon-side read model
+// and stays on the state_snapshot no-op decoder.
+var workerCPStateDecoders = map[string]DecodeFunc{
+	kinds.CPStateFamilyWorkerState.TagValue():       decodeWorkerProjection,
+	kinds.CPStateFamilyWorkerAssignment.TagValue():  decodeWorkerAssignmentProjection,
+	kinds.CPStateFamilyWorkerDrain.TagValue():       decodeWorkerDrainProjection,
+	kinds.CPStateFamilyWorkerEligibility.TagValue(): decodeWorkerEligibilityProjection,
+}
+
+// decodeCPStateProjection routes canonical 30900 cp-state records whose family
+// has a daemon read model to that family's decoder; every other 30900 record
+// keeps the fallback (state_snapshot no-op) decoder.
+func decodeCPStateProjection(fallback DecodeFunc) DecodeFunc {
+	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+		if ev != nil && tagValueLocal(ev.Tags, kinds.CASControlStateTagSchema) == kinds.CASControlStateSchema {
+			if decode, ok := workerCPStateDecoders[tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind)]; ok {
+				return decode(ev)
+			}
+		}
+		return fallback(ev)
+	}
+}
+
+// cpStateDeleted reports whether a cp-state record is a tombstone: the deleted
+// tag's value is authoritative ("false" on live records), with the content's
+// deleted field as the fallback for records that predate the tag.
+func cpStateDeleted(ev *gonostr.Event) bool {
+	if value := tagValueLocal(ev.Tags, kinds.CASControlStateTagDeleted); value != "" {
+		return value == "true"
+	}
+	var content struct {
+		Deleted bool `json:"deleted"`
+	}
+	return json.Unmarshal([]byte(ev.Content), &content) == nil && content.Deleted
+}
+
 func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	var worker domain.Worker
 	if err := decodeContent(ev, &worker); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), eventPubKeyHex(ev)), false, func(out *DecodedProjectionEvent) {
+	worker.PubKey = firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"))
+	if worker.PubKey == "" {
+		return nil, fmt.Errorf("worker state record %s names no worker", eventIDHex(ev))
+	}
+	return baseDecoded(ev, FamilyWorker, worker.PubKey, cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{Worker: &worker}
 	}), nil
 }
@@ -924,7 +971,7 @@ func decodeWorkerAssignmentProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if err := decodeContent(ev, &state); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorkerAssignment, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{AssignmentState: &state}
 	}), nil
 }
@@ -934,7 +981,7 @@ func decodeWorkerDrainProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err := decodeContent(ev, &status); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorkerDrain, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{DrainStatus: &status}
 	}), nil
 }
@@ -944,7 +991,7 @@ func decodeWorkerEligibilityProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err := decodeContent(ev, &preview); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorker, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), false, func(out *DecodedProjectionEvent) {
+	return baseDecoded(ev, FamilyWorkerEligibility, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{EligibilityPreview: &preview}
 	}), nil
 }

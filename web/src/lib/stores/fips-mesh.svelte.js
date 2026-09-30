@@ -6,6 +6,7 @@ import {
   BAHIA_STATE_SCHEMAS,
   CASCADIA_CONTROLPLANE_STATE,
   DNS_ENDPOINT_TOPIC,
+  WORKER_STATE_TOPIC,
   getDTag,
   getTagValue,
   parseJsonContent,
@@ -15,13 +16,14 @@ import { controlStateSchema } from '../nostr/cp-state.js';
 
 // Producer contract: DNS endpoints are canonical 30900 records (schema
 // bahia.cp-state.v1, legacy_kind 31976, deleted=true|false, t=dns-endpoint)
-// from the projector; worker state is the 30900 record the control plane's
-// worker-state publisher emits (schema bahia.state.worker.v1, domain=worker).
-// controlStateSchema resolves both to their family schema.
+// from the projector; worker state is the canonical 30900 record the control
+// plane's worker-state publisher emits (schema bahia.cp-state.v1, legacy_kind
+// 32000, deleted=true|false, t=worker-state, content = the full worker with
+// fips_overlay_addr, fips_endpoints and mesh_health). controlStateSchema
+// resolves both to their family schema.
 const CAS_STATE_KIND = CASCADIA_CONTROLPLANE_STATE;
 const DNS_ENDPOINT_SCHEMA = BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE;
 const WORKER_STATE_SCHEMA = BAHIA_STATE_SCHEMAS.WORKER_STATE;
-const WORKER_STATE_DOMAIN = 'worker';
 const READ_MODEL_LIMIT = 1000;
 const MAX_HEALTHY_RTT_NS = 1_000_000_000;
 const MAX_PROJECTABLE_RTT_NS = 5_000_000_000;
@@ -73,11 +75,10 @@ export function fipsMeshReadModelFilters() {
   const scopedAuthor = authorFilter();
   return [
     // #t is single-letter, so relays index it. Tombstones carry the same
-    // topic, and mesh membership is decided locally per record.
+    // topic as live records; mesh membership and the family are re-checked
+    // locally per record.
     { kinds: [CAS_STATE_KIND], '#t': [DNS_ENDPOINT_TOPIC], limit: READ_MODEL_LIMIT, ...scopedAuthor },
-    // The worker-state publisher stamps no single-letter tag yet, so this REQ
-    // still scopes on the multi-letter domain tag; events are re-checked locally.
-    { kinds: [CAS_STATE_KIND], '#domain': [WORKER_STATE_DOMAIN], limit: READ_MODEL_LIMIT, ...scopedAuthor }
+    { kinds: [CAS_STATE_KIND], '#t': [WORKER_STATE_TOPIC], limit: READ_MODEL_LIMIT, ...scopedAuthor }
   ];
 }
 

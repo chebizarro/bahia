@@ -236,10 +236,6 @@ export const BACKUP_RUN_STATE = 31996;
 export const BACKUP_VERIFICATION_STATE = 31997;
 export const BACKUP_RESTORE_STATE = 31998;
 export const BACKUP_RUNTIME_OBSERVATION_STATE = 31999;
-export const WORKER_STATE = 30900;
-export const WORKER_ASSIGNMENT_STATE = 30900;
-export const WORKER_DRAIN_STATUS = 30900;
-export const WORKER_ELIGIBILITY_PREVIEW = 30900;
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
@@ -388,13 +384,24 @@ export const DNS_ENDPOINT_TOPIC = 'dns-endpoint';
 export const DNS_POLICY_TOPIC = 'dns-policy';
 export const DNS_BACKEND_TOPIC = 'dns-backend';
 export const DNS_STATE_TOPICS = Object.freeze([DNS_ZONE_TOPIC, DNS_ENDPOINT_TOPIC, DNS_POLICY_TOPIC, DNS_BACKEND_TOPIC]);
-// Catalog kinds (internal/kinds WorkerState...) for the worker read models.
-// WORKER_STATE and its siblings above alias the 30900 wire kind; producers
-// stamp these catalog values in the 30900 record's legacy_kind tag.
+// Worker cp-state families (internal/kinds CPStateFamilyWorker*). Worker read
+// models are 30900 records only; producers stamp these values in legacy_kind
+// and nostr/cp-state.js routes them to the matching BAHIA_STATE_SCHEMAS entry.
 export const WORKER_STATE_CATALOG_KIND = 32000;
 export const WORKER_ASSIGNMENT_STATE_CATALOG_KIND = 32001;
 export const WORKER_DRAIN_STATUS_CATALOG_KIND = 32002;
 export const WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND = 32003;
+export const WORKER_CLEANUP_EXECUTION_CATALOG_KIND = 32004;
+// Worker domain and single-letter t topics (internal/kinds WorkerDomain,
+// Worker*Topic). Live records and tombstones carry the topic, so worker REQs
+// filter on #t, not #domain/#schema.
+export const WORKER_STATE_DOMAIN = 'worker';
+export const WORKER_STATE_TOPIC = 'worker-state';
+export const WORKER_ASSIGNMENT_STATE_TOPIC = 'worker-assignment';
+export const WORKER_DRAIN_STATUS_TOPIC = 'worker-drain';
+export const WORKER_ELIGIBILITY_PREVIEW_TOPIC = 'worker-eligibility';
+export const WORKER_CLEANUP_EXECUTION_TOPIC = 'worker-cleanup';
+export const WORKER_STATE_TOPICS = Object.freeze([WORKER_STATE_TOPIC, WORKER_ASSIGNMENT_STATE_TOPIC, WORKER_DRAIN_STATUS_TOPIC, WORKER_ELIGIBILITY_PREVIEW_TOPIC, WORKER_CLEANUP_EXECUTION_TOPIC]);
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,
   [DNS_ENDPOINT_STATE]: DNS_STATE_SCHEMAS.ENDPOINT,

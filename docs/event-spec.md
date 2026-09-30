@@ -414,7 +414,7 @@ This is idempotent and safe to run every startup. If the migration fails because
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
 | `30079` | historical SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
-| worker cleanup lifecycle | resource-pressure cleanup state | `30900` with `schema=bahia.state.worker-cleanup.v1`, `domain=worker`, and narrow `worker`/`status` tags |
+| `32000`-`32003` worker read models, worker cleanup lifecycle | worker state, assignment, drain, eligibility preview, resource-pressure cleanup | `30900` cp-state envelope (`schema=bahia.cp-state.v1`, `domain=worker`, `deleted`) with `legacy_kind` = `kinds.CPStateFamilyWorker*` (`32000`-`32004`, discriminators only, never wire kinds) and `t` = `worker-state`, `worker-assignment`, `worker-drain`, `worker-eligibility`, `worker-cleanup`; REQ on `#t` |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |
