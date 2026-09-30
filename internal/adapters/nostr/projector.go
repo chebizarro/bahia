@@ -1485,18 +1485,18 @@ func controlStateEnvelope(legacyKind int, id string, deleted bool) (wireKind int
 	deletedValue := strconv.FormatBool(deleted)
 	domainName, entity := canonicalStateDomain(legacyKind)
 	if domainName == "" {
-		return legacyKind, gonostr.Tags{{kinds.CASControlStateTagD, id}, {"deleted", deletedValue}}
+		return legacyKind, gonostr.Tags{{kinds.CASControlStateTagD, id}, {kinds.CASControlStateTagDeleted, deletedValue}}
 	}
 	return KindCASControlState, gonostr.Tags{
 		{kinds.CASControlStateTagD, canonicalStateDTag(domainName, entity, id)},
 		{kinds.CASControlStateTagDomain, domainName},
 		{kinds.CASControlStateTagSchema, controlStateSchema},
-		{"legacy_kind", strconv.Itoa(legacyKind)},
-		{"deleted", deletedValue},
+		{kinds.CASControlStateTagLegacyKind, strconv.Itoa(legacyKind)},
+		{kinds.CASControlStateTagDeleted, deletedValue},
 	}
 }
 
-const controlStateSchema = "bahia.cp-state.v1"
+const controlStateSchema = kinds.CASControlStateSchema
 
 func canonicalStateDomain(kind int) (domainName string, entity string) {
 	switch kind {
@@ -1535,13 +1535,13 @@ func canonicalStateDomain(kind int) (domainName string, entity string) {
 	case KindWorkerEligibilityPreview:
 		return "worker", "eligibility"
 	case KindDNSZoneState:
-		return "dns", "zone"
+		return kinds.DNSDomain, "zone"
 	case KindDNSEndpointState:
-		return "dns", "endpoint"
+		return kinds.DNSDomain, "endpoint"
 	case KindDNSPolicyState:
-		return "dns", "policy"
+		return kinds.DNSDomain, "policy"
 	case KindDNSBackendState:
-		return "dns", "backend"
+		return kinds.DNSDomain, "backend"
 	case KindMLModelRegistry:
 		return "ml", "model"
 	case KindMLModelVersionRegistry:
@@ -1666,7 +1666,7 @@ func (p *Projector) publishDNSEndpoint(ctx context.Context, endpoint domain.DNSE
 func (p *Projector) publishDNSEndpointTombstone(ctx context.Context, coordinate, fqdn string) error {
 	now := time.Now().UTC()
 	content := map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"t", "dns-endpoint"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"t", kinds.DNSEndpointTopic}, {"t", "bahia"}}
 	if strings.TrimSpace(fqdn) != "" {
 		tags = append(tags, gonostr.Tag{"dns", strings.TrimSpace(fqdn)})
 	}
@@ -1731,7 +1731,7 @@ func (p *Projector) publishDNSZoneSnapshot(ctx context.Context) (int, int, error
 func (p *Projector) publishDNSZone(ctx context.Context, zone domain.DNSZone, deleted bool) error {
 	now := time.Now().UTC()
 	content := map[string]any{"name": zone.Name, "visibility": string(zone.Visibility), "backend_ref": zone.BackendRef, "ttl": zone.TTL, "deleted": deleted, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}, {"visibility", string(zone.Visibility)}, {"t", "dns-zone"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}, {"visibility", string(zone.Visibility)}, {"t", kinds.DNSZoneTopic}, {"t", "bahia"}}
 	return p.publishReplaceableJSON(ctx, KindDNSZoneState, dnsZoneDTag(zone.Name), tags, content, "dns_zone.projection", nil)
 }
 
@@ -1739,7 +1739,7 @@ func (p *Projector) publishDNSZone(ctx context.Context, zone domain.DNSZone, del
 func (p *Projector) publishDNSZoneTombstone(ctx context.Context, dTag string, previous dnsPublishedZone) error {
 	now := time.Now().UTC()
 	content := map[string]any{"name": previous.Name, "visibility": previous.Visibility, "backend_ref": previous.BackendRef, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", "dns-zone"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", kinds.DNSZoneTopic}, {"t", "bahia"}}
 	return p.publishReplaceableTombstone(ctx, KindDNSZoneState, dTag, tags, content, "dns_zone.projection", nil)
 }
 
@@ -1815,7 +1815,7 @@ func (p *Projector) publishDNSBackend(ctx context.Context, backend domain.DNSBac
 	if backend.LastSyncAt != nil {
 		content["last_sync_at"] = formatTime(*backend.LastSyncAt)
 	}
-	tags := gonostr.Tags{{"backend", backend.Ref}, {"type", string(backend.Type)}, {"health", string(backend.Health)}, {"t", "dns-backend"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"backend", backend.Ref}, {"type", string(backend.Type)}, {"health", string(backend.Health)}, {"t", kinds.DNSBackendTopic}, {"t", "bahia"}}
 	for _, zone := range backend.ZoneRefs {
 		if strings.TrimSpace(zone) != "" {
 			tags = append(tags, gonostr.Tag{"zone", strings.TrimSpace(zone)})
@@ -1828,7 +1828,7 @@ func (p *Projector) publishDNSBackend(ctx context.Context, backend domain.DNSBac
 func (p *Projector) publishDNSBackendTombstone(ctx context.Context, dTag string, previous dnsPublishedBackend) error {
 	now := time.Now().UTC()
 	content := map[string]any{"ref": previous.Ref, "type": previous.Type, "health": previous.Health, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", "dns-backend"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", kinds.DNSBackendTopic}, {"t", "bahia"}}
 	return p.publishReplaceableTombstone(ctx, KindDNSBackendState, dTag, tags, content, "dns_backend.projection", nil)
 }
 
@@ -2067,7 +2067,7 @@ func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolic
 		updatedAt = time.Now().UTC()
 	}
 	content := map[string]any{"id": policy.ID.String(), "name": policy.Name, "zone_id": uuidStringPtr(policy.ZoneID), "environment_id": uuidStringPtr(policy.EnvironmentID), "rules": policy.Rules, "enabled": policy.Enabled, "deleted": deleted, "created_at": formatTime(policy.CreatedAt), "updated_at": formatTime(updatedAt)}
-	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", fmt.Sprintf("%t", policy.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", fmt.Sprintf("%t", policy.Enabled)}, {"t", kinds.DNSPolicyTopic}, {"t", "bahia"}}
 	if policy.ZoneID != nil {
 		tags = append(tags, gonostr.Tag{"zone", policy.ZoneID.String()})
 	}
@@ -2078,7 +2078,7 @@ func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolic
 func (p *Projector) publishDNSPolicyTombstone(ctx context.Context, dTag string, previous dnsPublishedPolicy) error {
 	now := time.Now().UTC()
 	content := map[string]any{"id": previous.ID, "name": previous.Name, "zone_id": previous.ZoneID, "enabled": previous.Enabled, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", kinds.DNSPolicyTopic}, {"t", "bahia"}}
 	if previous.ZoneID != "" {
 		tags = append(tags, gonostr.Tag{"zone", previous.ZoneID})
 	}
@@ -2249,7 +2249,7 @@ func (p *Projector) liveRetainedControlState(ctx context.Context, legacyKind int
 }
 
 func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
-	tags := gonostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", "dns-endpoint"}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", kinds.DNSEndpointTopic}, {"t", "bahia"}}
 	if endpoint.Environment != "" {
 		tags = append(tags, gonostr.Tag{"environment", endpoint.Environment})
 	}

@@ -375,6 +375,19 @@ export const DNS_STATE_SCHEMAS = Object.freeze({
   BACKEND: BAHIA_STATE_SCHEMAS.DNS_BACKEND_STATE
 });
 
+// Canonical control-state envelope (internal/kinds/tags.go). The projector
+// publishes every projected record on kind 30900 with schema
+// BAHIA_CP_STATE_SCHEMA and a legacy_kind tag naming the per-family catalog
+// kind it came from; consumers resolve the family through legacy_kind.
+export const BAHIA_CP_STATE_SCHEMA = 'bahia.cp-state.v1';
+export const DNS_STATE_DOMAIN = 'dns';
+export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
+  [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,
+  [DNS_ENDPOINT_STATE]: DNS_STATE_SCHEMAS.ENDPOINT,
+  [DNS_POLICY_STATE]: DNS_STATE_SCHEMAS.POLICY,
+  [DNS_BACKEND_STATE]: DNS_STATE_SCHEMAS.BACKEND
+});
+
 export const BAHIA_SYSTEM_DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
 export const BAHIA_RELAY_SET_SCHEMA = 'bahia.relay-set.v1';
 export const BAHIA_SBOM_REFERENCE_SCHEMA = 'bahia.sbom.ref.v1';

@@ -63,6 +63,29 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 	}
 }
 
+// TestGeneratedFrontendControlStateStringsMatchGo keeps the web's copy of the
+// canonical control-state envelope strings in step with the producer's.
+func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
+	path := filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	re := regexp.MustCompile(`(?m)^export const ([A-Z0-9_]+) = '([^']*)';$`)
+	jsStrings := map[string]string{}
+	for _, match := range re.FindAllStringSubmatch(string(content), -1) {
+		jsStrings[match[1]] = match[2]
+	}
+	for jsName, goValue := range map[string]string{
+		"BAHIA_CP_STATE_SCHEMA": CASControlStateSchema,
+		"DNS_STATE_DOMAIN":      DNSDomain,
+	} {
+		if got, ok := jsStrings[jsName]; !ok || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)
+		}
+	}
+}
+
 var frontendCanonicalKindOverrides = map[string]int{
 	"WORKER_STATE":               30900,
 	"WORKER_ASSIGNMENT_STATE":    30900,
