@@ -7,6 +7,8 @@ import (
 
 	"fiatjaf.com/nostr"
 	"go.uber.org/zap"
+
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // configRetryDelay is how long the config worker waits before re-reading a
@@ -56,10 +58,23 @@ func (s *Server) startConfigWorker(ctx context.Context) {
 	if s.consumer == nil || s.configDirty == nil {
 		return
 	}
+	// Reconcile persisted desired state with the store once: a desired event
+	// deleted or expired while the sidecar was down reads back absent and is
+	// withdrawn, an unchanged one is skipped as already handled, and pending
+	// expirations are re-armed.
+	handled := make(map[string]nostr.ID)
+	for key, eventID := range s.consumer.desiredEvents() {
+		if id, err := nostr.IDFromHex(eventID); err == nil {
+			handled[key] = id
+		}
+		s.configDirty.mark(key)
+	}
+	for key, expiresAt := range s.consumer.desiredExpiries() {
+		s.scheduleConfigExpiry(ctx, key, expiresAt)
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		handled := make(map[string]nostr.ID)
 		for {
 			select {
 			case <-ctx.Done():
@@ -90,11 +105,37 @@ func (s *Server) handleLatestConfig(ctx context.Context, key string, handled map
 		})
 		return
 	}
-	if !ok || handled[key] == event.ID {
+	// The store's replaceable read does not filter NIP-40 expiration (only
+	// Query does, and the sweep runs periodically), so check it here.
+	if ok && nostrutil.Expired(&event, s.consumer.now()) {
+		ok = false
+	}
+	if !ok {
+		// Deleted (NIP-09) or expired (NIP-40): the desired event is gone.
+		delete(handled, key)
+		if err := s.consumer.withdraw(context.WithoutCancel(ctx), key, "desired event was deleted or has expired"); err != nil {
+			s.logger.Warn("relay-sidecar could not withdraw desired config", zap.String("coordinate", key), zap.Error(err))
+		}
+		return
+	}
+	if handled[key] == event.ID {
 		return
 	}
 	handled[key] = event.ID
 	if err := s.consumer.Handle(context.WithoutCancel(ctx), event); err != nil {
 		s.logger.Warn("relay-sidecar desired config rejected", zap.String("event_id", event.ID.Hex()), zap.Error(err))
 	}
+	if expiresAt := nostrutil.ExpiresAt(&event); expiresAt > 0 {
+		s.scheduleConfigExpiry(ctx, key, expiresAt.Time())
+	}
+}
+
+// scheduleConfigExpiry re-reads key when its desired event expires, so the
+// expiry is handled at that moment rather than at the next retention sweep.
+func (s *Server) scheduleConfigExpiry(ctx context.Context, key string, expiresAt time.Time) {
+	s.configAfter(expiresAt.Sub(s.consumer.now()), func() {
+		if ctx.Err() == nil {
+			s.configDirty.mark(key)
+		}
+	})
 }

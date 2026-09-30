@@ -488,3 +488,25 @@ func recordFromEvent(ev *gonostr.Event) (*repository.NostrEventRecord, error) {
 	}
 	return &repository.NostrEventRecord{ID: nostrutil.EventIDHex(ev), Kind: int(ev.Kind), PubKey: nostrutil.EventPubKeyHex(ev), Content: ev.Content, Tags: tags, Sig: nostrutil.EventSignatureHex(ev), CreatedAt: ev.CreatedAt.Time().UTC(), ReceivedAt: time.Now().UTC(), EntityType: "nostr_migration"}, nil
 }
+
+// NewRelayPoolPublisher publishes migration output through a relay pool and
+// reports every relay's OK.
+func NewRelayPoolPublisher(pool *nostrAdapter.RelayPool) EventPublisher {
+	return relayPoolPublisher{pool: pool}
+}
+
+type relayPoolPublisher struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (p relayPoolPublisher) PublishMigrationEvent(ctx context.Context, ev gonostr.Event) ([]PublishOutcome, error) {
+	if p.pool == nil {
+		return nil, fmt.Errorf("migration relay pool is not configured")
+	}
+	results, err := p.pool.PublishWithResults(ctx, ev)
+	outcomes := make([]PublishOutcome, 0, len(results))
+	for _, result := range results {
+		outcomes = append(outcomes, PublishOutcome{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
+	}
+	return outcomes, err
+}

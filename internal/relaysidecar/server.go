@@ -51,6 +51,9 @@ type Server struct {
 	consumer    *ConfigConsumer
 	fanout      *liveFanout
 	configDirty *configDirtySet
+	// configAfter schedules a re-read of a desired coordinate at its NIP-40
+	// expiration; tests replace it.
+	configAfter func(time.Duration, func())
 	wg          sync.WaitGroup
 }
 
@@ -208,6 +211,14 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		if configDirty != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
 			configDirty.mark(replaceableKey(event))
 		}
+		if configDirty != nil && event.Kind == nostr.KindDeletion {
+			// The store has already applied the request (NIP-09). Re-read every
+			// desired coordinate; one it deleted reads back absent and is
+			// withdrawn, the rest are unchanged no-ops.
+			for key := range consumer.desiredEvents() {
+				configDirty.mark(key)
+			}
+		}
 	}
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
 		fanout.dispatch(event)
@@ -223,6 +234,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		consumer:    consumer,
 		fanout:      fanout,
 		configDirty: configDirty,
+		configAfter: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}, nil
 }
 
@@ -346,6 +358,9 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	}
 	stopWorkers()
 	s.wg.Wait()
+	if s.consumer != nil {
+		s.consumer.wait()
+	}
 	if runErr != nil {
 		return runErr
 	}

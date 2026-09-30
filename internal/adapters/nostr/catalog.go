@@ -192,6 +192,9 @@ const (
 	FamilySystem            ProjectionFamily = "system"
 	FamilyFIPS              ProjectionFamily = "fips"
 	FamilyControlPlane      ProjectionFamily = "control_plane"
+	// FamilyDeletion marks a NIP-09 deletion request. The relay projection
+	// cache resolves it against the events it applied; it has no stream.
+	FamilyDeletion ProjectionFamily = "deletion"
 )
 
 type DecodedProjectionEvent struct {
@@ -227,6 +230,20 @@ type DecodedProjectionEvent struct {
 	FIPS        *DecodedFIPS
 
 	Tombstone bool
+
+	// source is the signed event this projection was decoded from, set by
+	// KindCatalog.Decoder. Consumers resolve replacement, NIP-09 deletion and
+	// NIP-40 expiration from it (see nostrutil.Lifecycle).
+	source *gonostr.Event
+}
+
+// SourceEvent returns the signed event the projection was decoded from, or
+// nil when it was built without one.
+func (e *DecodedProjectionEvent) SourceEvent() *gonostr.Event {
+	if e == nil {
+		return nil
+	}
+	return e.source
 }
 
 type DecodedService struct {
@@ -488,6 +505,9 @@ func NewKindCatalog() *KindCatalog {
 	catalog.registerRequiredGroupNoopDecoders()
 	catalog.registerOptionalProtocolDecoders()
 	catalog.registerProjectionDecoders()
+	// NIP-09 requests are decodable so any replay that includes kind 5 feeds
+	// them to the projection cache. No replay group requests them yet.
+	catalog.decoders[int(gonostr.KindDeletion)] = decodeDeletionRequest
 	return catalog
 }
 
@@ -526,9 +546,20 @@ func (c *KindCatalog) RequiredGroupsForTier(tier int) []ReplayGroup {
 	return filterReplayGroups(c.Groups, func(group ReplayGroup) bool { return group.Tier <= tier && group.Required })
 }
 
+// Decoder returns the decoder for kind. Every decoded projection carries its
+// source event (DecodedProjectionEvent.SourceEvent).
 func (c *KindCatalog) Decoder(kind int) (DecodeFunc, bool) {
 	decoder, ok := c.decoders[kind]
-	return decoder, ok
+	if !ok {
+		return nil, false
+	}
+	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+		decoded, err := decoder(ev)
+		if decoded != nil {
+			decoded.source = ev
+		}
+		return decoded, err
+	}, true
 }
 
 func filterReplayGroups(groups []ReplayGroup, keep func(ReplayGroup) bool) []ReplayGroup {
@@ -1161,6 +1192,19 @@ func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), false, func(out *DecodedProjectionEvent) {
 		out.Continuity = &DecodedContinuity{Status: &status, PreviousProfile: previous, RecoveryProgressKey: tagValueLocal(ev.Tags, "run")}
 	}), nil
+}
+
+func decodeDeletionRequest(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	if ev == nil || ev.Kind != gonostr.KindDeletion {
+		return nil, fmt.Errorf("deletion request must be kind %d", gonostr.KindDeletion)
+	}
+	return &DecodedProjectionEvent{
+		Kind:      eventKindInt(ev),
+		DTag:      eventIDHex(ev),
+		Timestamp: ev.CreatedAt.Time().UTC(),
+		SourceID:  eventIDHex(ev),
+		Family:    FamilyDeletion,
+	}, nil
 }
 
 func decodeNoopProjection(group string, tier int, family ProjectionFamily) DecodeFunc {

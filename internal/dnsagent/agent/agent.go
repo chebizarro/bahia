@@ -15,11 +15,13 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/dnsagent/protocol"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 const stateSchema = "bahia.dnsagent.state.v1"
@@ -31,6 +33,8 @@ type Config struct {
 	AllowedZones      []string
 	StateFilePath     string
 	RequireEncryption bool
+	// Now is the clock for NIP-40 expiration checks; nil means time.Now.
+	Now func() time.Time
 }
 
 type Agent struct {
@@ -42,16 +46,20 @@ type Agent struct {
 	allowed           map[string]struct{}
 	stateFilePath     string
 	requireEncryption bool
+	now               func() time.Time
 
 	mu    sync.Mutex
 	state persistentState
 }
 
 type persistentState struct {
-	Schema          string           `json:"schema"`
-	ZoneSerials     map[string]int64 `json:"zone_serials"`
-	LastApplySerial int64            `json:"last_apply_serial"`
-	LastApplyAt     string           `json:"last_apply_at"`
+	Schema      string           `json:"schema"`
+	ZoneSerials map[string]int64 `json:"zone_serials"`
+	// ZoneRequestIDs is the id of the request event applied at each zone's
+	// serial, so equal-serial requests resolve by the lowest id (C-13).
+	ZoneRequestIDs  map[string]string `json:"zone_request_ids,omitempty"`
+	LastApplySerial int64             `json:"last_apply_serial"`
+	LastApplyAt     string            `json:"last_apply_at"`
 }
 
 // Status is the process-local state exposed by the optional HTTP health endpoint.
@@ -85,6 +93,10 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Agent{
 		engine:            cfg.Engine,
 		includeDir:        includeDir,
@@ -94,6 +106,7 @@ func New(cfg Config) (*Agent, error) {
 		allowed:           allowed,
 		stateFilePath:     stateFilePath,
 		requireEncryption: cfg.RequireEncryption,
+		now:               now,
 		state:             state,
 	}, nil
 }
@@ -187,8 +200,18 @@ func (a *Agent) SyncHandler(ctx context.Context, request controlplane.ContextVMR
 		// with a stepped-back clock).
 		return protocol.SyncResult{Schema: protocol.Schema, Status: protocol.SyncStatusStale, Changed: false, Serial: lastSerial}, nil
 	}
+	requestID := requestEventID(request)
 	if previouslyApplied && params.Serial == lastSerial {
-		return protocol.SyncResult{Schema: protocol.Schema, Status: protocol.SyncStatusOK, Changed: false, Serial: lastSerial}, nil
+		// The serial plays created_at's role: an equal-serial request replaces
+		// the applied one only when its event id is lower (NIP-01 tie-break),
+		// so two backends racing on one serial converge on the same records
+		// whatever order they arrive in. A retry of the applied request, or a
+		// request without an event, stays an idempotent no-op.
+		applied := nostrutil.Version{CreatedAt: nostr.Timestamp(lastSerial), ID: a.state.ZoneRequestIDs[zoneName]}
+		candidate := nostrutil.Version{CreatedAt: nostr.Timestamp(params.Serial), ID: requestID}
+		if requestID == "" || applied.ID == "" || !candidate.Supersedes(applied) {
+			return protocol.SyncResult{Schema: protocol.Schema, Status: protocol.SyncStatusOK, Changed: false, Serial: lastSerial}, nil
+		}
 	}
 
 	changed := true
@@ -219,6 +242,11 @@ func (a *Agent) SyncHandler(ctx context.Context, request controlplane.ContextVMR
 
 	next := cloneState(a.state)
 	next.ZoneSerials[zoneName] = params.Serial
+	if requestID != "" {
+		next.ZoneRequestIDs[zoneName] = requestID
+	} else {
+		delete(next.ZoneRequestIDs, zoneName)
+	}
 	next.LastApplySerial = params.Serial
 	next.LastApplyAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := writeStateAtomic(ctx, a.stateFilePath, next); err != nil {
@@ -246,6 +274,12 @@ func (a *Agent) Status() Status {
 }
 
 func (a *Agent) validateRequestEnvelope(request controlplane.ContextVMRequest) error {
+	now := a.now()
+	for _, ev := range []*nostr.Event{request.OuterEvent, request.Event} {
+		if nostrutil.Expired(ev, now) {
+			return fmt.Errorf("request event expired (NIP-40)")
+		}
+	}
 	if !a.requireEncryption {
 		return nil
 	}
@@ -261,6 +295,17 @@ func (a *Agent) requireAllowedZone(zone string) (string, error) {
 		return "", fmt.Errorf("zone %q not allowed by agent allowlist", zone)
 	}
 	return normalized, nil
+}
+
+// requestEventID identifies the request event that carried a call: the inner
+// ContextVM event, else its envelope.
+func requestEventID(request controlplane.ContextVMRequest) string {
+	for _, ev := range []*nostr.Event{request.Event, request.OuterEvent} {
+		if ev != nil && ev.ID != nostr.ZeroID {
+			return ev.ID.Hex()
+		}
+	}
+	return ""
 }
 
 func decodeParams(request controlplane.ContextVMRequest, out any) error {
@@ -291,7 +336,7 @@ func normalizeAllowedZones(zones []string) ([]string, map[string]struct{}, error
 }
 
 func loadState(path string) (persistentState, error) {
-	state := persistentState{Schema: stateSchema, ZoneSerials: map[string]int64{}}
+	state := persistentState{Schema: stateSchema, ZoneSerials: map[string]int64{}, ZoneRequestIDs: map[string]string{}}
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
@@ -317,6 +362,9 @@ func loadState(path string) (persistentState, error) {
 	if state.ZoneSerials == nil {
 		state.ZoneSerials = map[string]int64{}
 	}
+	if state.ZoneRequestIDs == nil {
+		state.ZoneRequestIDs = map[string]string{}
+	}
 	return state, nil
 }
 
@@ -341,6 +389,10 @@ func cloneState(state persistentState) persistentState {
 	clone.ZoneSerials = make(map[string]int64, len(state.ZoneSerials))
 	for zone, serial := range state.ZoneSerials {
 		clone.ZoneSerials[zone] = serial
+	}
+	clone.ZoneRequestIDs = make(map[string]string, len(state.ZoneRequestIDs))
+	for zone, id := range state.ZoneRequestIDs {
+		clone.ZoneRequestIDs[zone] = id
 	}
 	return clone
 }

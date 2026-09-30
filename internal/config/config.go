@@ -706,7 +706,7 @@ type NostrConfig struct {
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
 	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
-	// LegacyRelayBackfill explicitly enables startup reads of retired Bahia
+	// LegacyRelayBackfill makes `bahia-migrate nostr` also read retired Bahia
 	// request kinds from an external migration relay. The hardened Bahia
 	// sidecar intentionally refuses those reads, so this must remain opt-in.
 	LegacyRelayBackfill bool               `koanf:"legacy_relay_backfill" yaml:"legacy_relay_backfill" secret:"false"`
