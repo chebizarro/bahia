@@ -28,7 +28,16 @@ type Subscription struct {
 	// the Events channel emits all EVENTs that come in a Subscription
 	// will be closed when the subscription ends
 	Events chan Event
-	mu     sync.Mutex
+
+	// mu guards the closing of Events and countResult. Senders hold the read
+	// lock for the whole send and check channelsClosed first; the teardown
+	// goroutine takes the write lock, sets channelsClosed and closes the
+	// channels. Because teardown only runs after Context is done, and every
+	// sender also selects on Context.Done(), the write lock is always granted
+	// promptly. (bahia-irsry.17: without this, a CLOSED from the relay could
+	// close Events while a dispatch goroutine was sending on it.)
+	mu             sync.RWMutex
+	channelsClosed bool
 
 	// the EndOfStoredEvents channel receives a value when an EOSE comes for that subscription
 	EndOfStoredEvents chan EndOfStoredEvent
@@ -93,23 +102,44 @@ func (sub *Subscription) dispatchEvent(evt Event) {
 
 	go func() {
 		if isStored {
-			if sub.live.Load() {
-				select {
-				case sub.Events <- evt:
-				case <-sub.Context.Done():
-				case <-sub.eoseTimedOut:
-				}
+			defer sub.storedwg.Done()
+		}
+
+		// hold the read lock across the send so the teardown goroutine cannot
+		// close Events underneath us (see the comment on sub.mu).
+		sub.mu.RLock()
+		defer sub.mu.RUnlock()
+		if sub.channelsClosed || !sub.live.Load() {
+			return
+		}
+
+		if isStored {
+			select {
+			case sub.Events <- evt:
+			case <-sub.Context.Done():
+			case <-sub.eoseTimedOut:
 			}
-			sub.storedwg.Done()
 		} else {
-			if sub.live.Load() {
-				select {
-				case sub.Events <- evt:
-				case <-sub.Context.Done():
-				}
+			select {
+			case sub.Events <- evt:
+			case <-sub.Context.Done():
 			}
 		}
 	}()
+}
+
+// dispatchCount delivers a COUNT reply, unless the subscription has already
+// been torn down (in which case countResult is closed and nobody is waiting).
+func (sub *Subscription) dispatchCount(env CountEnvelope) {
+	sub.mu.RLock()
+	defer sub.mu.RUnlock()
+	if sub.channelsClosed {
+		return
+	}
+	select {
+	case sub.countResult <- env:
+	case <-sub.Context.Done():
+	}
 }
 
 func (sub *Subscription) dispatchEose(hint []string) {

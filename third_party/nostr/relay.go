@@ -430,7 +430,7 @@ func (r *Relay) handleMessage(message string) {
 		}
 	case *CountEnvelope:
 		if subscription, ok := r.Subscriptions.Load(subIdToSerial(env.SubscriptionID)); ok && env.Count != nil && subscription.countResult != nil {
-			subscription.countResult <- *env
+			subscription.dispatchCount(*env)
 		}
 	case *OKEnvelope:
 		r.okCallbacksMutex.Lock()
@@ -691,6 +691,7 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 
 		// do this so we don't have the possibility of closing the Events channel and then trying to send to it
 		sub.mu.Lock()
+		sub.channelsClosed = true
 		close(sub.Events)
 		if sub.countResult != nil {
 			close(sub.countResult)
