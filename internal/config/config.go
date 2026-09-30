@@ -743,7 +743,18 @@ type RelaySidecarConfig struct {
 	ServiceID            string        `koanf:"service_id" yaml:"service_id" secret:"false"`
 	Scope                string        `koanf:"scope" yaml:"scope" secret:"false"`
 	MaxQueryLimit        int           `koanf:"max_query_limit" secret:"false"`
+	// SubscriberQueueSize bounds the live events buffered per client
+	// connection. A subscription that would overflow it is CLOSED so the client
+	// re-subscribes from its cursor, instead of silently missing events.
+	SubscriberQueueSize int `koanf:"subscriber_queue_size" yaml:"subscriber_queue_size" secret:"false"`
 }
+
+// Bounds for RelaySidecarConfig.SubscriberQueueSize. Each slot costs two words
+// per connection, so the ceiling keeps a connection's queue under ~1 MiB.
+const (
+	DefaultRelaySidecarSubscriberQueueSize = 1024
+	MaxRelaySidecarSubscriberQueueSize     = 1 << 16
+)
 
 // RelayAdministrationAuthorization values declare why a NIP-86 target is in
 // scope. They are operator assertions for Bahia-owned/Bahia-authorized relays;
@@ -1278,17 +1289,18 @@ func Defaults() *Config {
 				EmergencyMinHealthy: 1,
 			},
 			Sidecar: RelaySidecarConfig{
-				Enabled:          false,
-				ListenAddr:       "127.0.0.1:3334",
-				PublicURL:        "ws://127.0.0.1:3334",
-				BackendURL:       "ws://127.0.0.1:3334",
-				DataDir:          "./data/relay-sidecar",
-				MirrorExternal:   false,
-				EventRetention:   7 * 24 * time.Hour,
-				RequestRetention: 24 * time.Hour,
-				ServiceID:        "bahia-relay-sidecar",
-				Scope:            "prod",
-				MaxQueryLimit:    2000,
+				Enabled:             false,
+				ListenAddr:          "127.0.0.1:3334",
+				PublicURL:           "ws://127.0.0.1:3334",
+				BackendURL:          "ws://127.0.0.1:3334",
+				DataDir:             "./data/relay-sidecar",
+				MirrorExternal:      false,
+				EventRetention:      7 * 24 * time.Hour,
+				RequestRetention:    24 * time.Hour,
+				ServiceID:           "bahia-relay-sidecar",
+				Scope:               "prod",
+				MaxQueryLimit:       2000,
+				SubscriberQueueSize: DefaultRelaySidecarSubscriberQueueSize,
 			},
 		},
 		Reconcile: ReconcileConfig{
@@ -3624,6 +3636,9 @@ func (c *Config) validateRelaySidecar() error {
 	}
 	if sidecar.MaxQueryLimit <= 0 {
 		return fmt.Errorf("config validation failed: nostr.sidecar.max_query_limit must be > 0 when sidecar is enabled")
+	}
+	if sidecar.SubscriberQueueSize <= 0 || sidecar.SubscriberQueueSize > MaxRelaySidecarSubscriberQueueSize {
+		return fmt.Errorf("config validation failed: nostr.sidecar.subscriber_queue_size must be between 1 and %d when sidecar is enabled", MaxRelaySidecarSubscriberQueueSize)
 	}
 	administrators, err := normalizePubkeyList(sidecar.AdministratorPubkeys)
 	if err != nil {

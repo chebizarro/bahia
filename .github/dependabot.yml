@@ -46,6 +46,10 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+      # go.mod replaces fiatjaf.com/nostr with the patched copy in
+      # third_party/nostr, so a version bump here would change nothing that is
+      # built. Upgrade by re-vendoring (third_party/nostr/BAHIA_PATCHES.md).
+      - dependency-name: "fiatjaf.com/nostr"
 
   - package-ecosystem: npm
     directory: "/web"

@@ -11,6 +11,11 @@ ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 
 COPY go.mod go.sum ./
+# go.mod replaces fiatjaf.com/nostr with the patched copy in third_party/nostr
+# (see third_party/nostr/BAHIA_PATCHES.md). `go mod download` reads the
+# replacement's go.mod, so it must exist before this step; the sources arrive
+# with `COPY . .` below.
+COPY third_party/nostr/go.mod third_party/nostr/go.sum ./third_party/nostr/
 RUN go mod download
 
 COPY . .

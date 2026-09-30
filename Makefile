@@ -91,10 +91,12 @@ pstf-soulfactory-coverage:
 lint:
 	golangci-lint run ./...
 
-# Format
+# Format. third_party/ holds a vendored upstream module (a separate Go module,
+# so ./... targets already skip it); keep formatters from rewriting it too.
+GO_FMT_FILES = $$(find . -name '*.go' -not -path './third_party/*' -not -path './.git/*' -not -path './web/node_modules/*')
 fmt:
-	gofmt -w .
-	goimports -w .
+	gofmt -w $(GO_FMT_FILES)
+	goimports -w $(GO_FMT_FILES)
 
 # Clean
 clean:

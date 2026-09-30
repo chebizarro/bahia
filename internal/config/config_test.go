@@ -98,6 +98,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Nostr.Sidecar.MaxQueryLimit != 2000 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
 	}
+	if cfg.Nostr.Sidecar.SubscriberQueueSize != 1024 {
+		t.Errorf("default sidecar SubscriberQueueSize = %d, want 1024", cfg.Nostr.Sidecar.SubscriberQueueSize)
+	}
 	if cfg.SoulFactory.Enabled {
 		t.Error("expected SoulFactory disabled by default")
 	}
@@ -1895,6 +1898,7 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
     request_retention: 24h
     auth_private_key: ""
     max_query_limit: 250
+    subscriber_queue_size: 4096
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -1918,6 +1922,9 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	}
 	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("BrowserRelays = %#v", got)
+	}
+	if cfg.Nostr.Sidecar.SubscriberQueueSize != 4096 {
+		t.Errorf("SubscriberQueueSize = %d, want 4096", cfg.Nostr.Sidecar.SubscriberQueueSize)
 	}
 }
 
@@ -2412,6 +2419,25 @@ func TestRelaySidecarValidation(t *testing.T) {
 		cfg.Nostr.Sidecar.BackendURL = "wss://relay.example"
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
+		}
+	})
+
+	t.Run("bounds subscriber queue size", func(t *testing.T) {
+		for _, size := range []int{0, -1, MaxRelaySidecarSubscriberQueueSize + 1} {
+			cfg := Defaults()
+			cfg.Nostr.Sidecar.Enabled = true
+			cfg.Nostr.Sidecar.SubscriberQueueSize = size
+			if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.sidecar.subscriber_queue_size") {
+				t.Fatalf("size %d: validate error = %v, want subscriber_queue_size bound", size, err)
+			}
+		}
+		for _, size := range []int{1, MaxRelaySidecarSubscriberQueueSize} {
+			cfg := Defaults()
+			cfg.Nostr.Sidecar.Enabled = true
+			cfg.Nostr.Sidecar.SubscriberQueueSize = size
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("size %d: validate error = %v", size, err)
+			}
 		}
 	})
 }
