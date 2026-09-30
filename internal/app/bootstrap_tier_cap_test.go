@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/api/middleware"
+	"github.com/openagentsinc/bahia/internal/nostrmigration"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -66,16 +67,31 @@ func findBootstrapperRunner(t *testing.T, app *App) *bootstrapperRunner {
 	app.Background.mu.Lock()
 	defer app.Background.mu.Unlock()
 	for _, reg := range app.Background.runners {
-		ordered, ok := reg.runner.(*orderedStartupRunner)
-		if !ok {
-			continue
-		}
-		for _, inner := range ordered.runners {
-			if runner, ok := inner.(*bootstrapperRunner); ok {
-				return runner
-			}
+		if runner, ok := reg.runner.(*bootstrapperRunner); ok {
+			return runner
 		}
 	}
 	t.Fatal("relay bootstrapper runner is not registered")
 	return nil
+}
+
+// B-28: the legacy nostr_events migration re-signs and republishes events,
+// so it runs offline (bahia-migrate nostr), never on the daemon startup path.
+func TestNewDoesNotRegisterNostrMigrationOnStartup(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	app, err := New(startupTestConfig(ModeFull))
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+
+	findBootstrapperRunner(t, app)
+	app.Background.mu.Lock()
+	defer app.Background.mu.Unlock()
+	for _, reg := range app.Background.runners {
+		_, isMigration := reg.runner.(*nostrmigration.Runner)
+		require.False(t, isMigration, "nostrmigration.Runner must not be registered on startup")
+		require.NotEqual(t, "nostr-migration", reg.runner.Name())
+	}
 }

@@ -1,6 +1,7 @@
 package nostr
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -87,4 +88,38 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 			require.Error(t, ValidateInboundEvent(tt.ev(), now, InboundEventMaxFutureSkew))
 		})
 	}
+}
+
+// C-11: replaceable and addressable state and deletion requests keep their
+// force however old they are; regular events stay capped.
+func TestValidateInboundEventAgeCapAppliesOnlyToRegularKinds(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	old := now.Add(-InboundEventMaxPastAge - 30*24*time.Hour)
+
+	for _, kind := range []int{0, 3, 10002, 19999, 30000, 31410, 39999, 5} {
+		require.NoError(t, ValidateInboundEvent(signedTestEvent(t, kind, old), now, InboundEventMaxFutureSkew), "kind %d", kind)
+	}
+	for _, kind := range []int{1, 4903, 9999, 20000, 40000} {
+		err := ValidateInboundEvent(signedTestEvent(t, kind, old), now, InboundEventMaxFutureSkew)
+		require.ErrorContains(t, err, "too far in past", "kind %d", kind)
+	}
+}
+
+// C-12: expired events (NIP-40) are dropped at the trust boundary.
+func TestValidateInboundEventRejectsExpiredEvents(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	withExpiration := func(expiresAt time.Time) *gonostr.Event {
+		ev := &gonostr.Event{
+			Kind:      canonicalKind(30078),
+			CreatedAt: gonostr.Timestamp(now.Add(-time.Hour).Unix()),
+			Content:   "{}",
+			Tags:      gonostr.Tags{{"d", "x"}, {"expiration", strconv.FormatInt(expiresAt.Unix(), 10)}},
+		}
+		require.NoError(t, signEventWithPrivateKeyHex(ev, testNostrPrivateKey))
+		return ev
+	}
+
+	require.ErrorContains(t, ValidateInboundEvent(withExpiration(now), now, InboundEventMaxFutureSkew), "expired")
+	require.ErrorContains(t, ValidateInboundEvent(withExpiration(now.Add(-time.Minute)), now, InboundEventMaxFutureSkew), "expired")
+	require.NoError(t, ValidateInboundEvent(withExpiration(now.Add(time.Minute)), now, InboundEventMaxFutureSkew))
 }

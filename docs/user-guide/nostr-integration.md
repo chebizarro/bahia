@@ -112,7 +112,7 @@ REST routes for SoulFactory provisioning or lifecycle operations are a non-goal.
 
 ## Migrating Existing Deployments to the New Kinds
 
-Bahia includes a startup migration app in `internal/nostrmigration` that converts historical Bahia custom events into the canonical ContextVM/canonical observable contract. Operators should run the migrated app with the migration app enabled rather than keeping legacy subscribers in the runtime.
+Bahia includes an offline migration tool, `bahia-migrate nostr` (code in `internal/nostrmigration`), that converts historical Bahia custom events into the canonical ContextVM/canonical observable contract. Operators run it once after upgrading instead of keeping legacy subscribers in the runtime; the daemon does not run it on startup (see [the CLI reference](cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
 
 What it converts:
 

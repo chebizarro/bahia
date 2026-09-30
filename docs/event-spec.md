@@ -390,9 +390,9 @@ Bahia also emits typed in-process audit events used by projectors, automation su
 | `llm_gateway_route.synced` | Gateway model route synchronized | `route_id`, `environment_id` |
 | `security.policy_breached` | Security policy breach became new or materially changed | `policy_id`, `target_key_hash`, `fingerprint`, `severity_counts`, `violated_rules` |
 
-## Startup Migration App
+## Migration Tool
 
-The startup migration app in `internal/nostrmigration` converts historical Bahia custom events to the canonical contract before production runtime processes live traffic.
+The offline migration tool `bahia-migrate nostr` (code in `internal/nostrmigration`) converts historical Bahia custom events to the canonical contract. Operators run it explicitly after upgrading; the daemon does not run it on startup (see [the CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
 
 It performs these steps:
 

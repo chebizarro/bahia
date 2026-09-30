@@ -195,11 +195,11 @@ Production runtime subscribes to ContextVM `25910` messages and canonical observ
 
 Historical Bahia-specific request/status/result/read-model/encrypted ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are migration inventory only. Production clients must not publish or subscribe to those numbers as live runtime contracts; they may appear in startup migration manifests, historical conversion tests, and fail-closed fixtures.
 
-### Startup migration app
+### Migration tool
 
-Bahia includes a startup migration app in `internal/nostrmigration` so deployed relays and local repositories can be converted to the canonical contract without keeping legacy kind support in core runtime code.
+Bahia includes an offline migration tool, `bahia-migrate nostr` (code in `internal/nostrmigration`), so deployed relays and local repositories can be converted to the canonical contract without keeping legacy kind support in core runtime code. The daemon does not run it on startup; operators run it once after upgrading (see [the CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
 
-Runtime behavior:
+Behavior:
 
 1. Scan the local Nostr event repository for `LegacyKinds()`.
 2. Optionally subscribe to configured relays for legacy kinds, bounded by migration backfill settings, and require `EOSE`.

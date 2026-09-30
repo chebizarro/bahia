@@ -56,7 +56,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
-	"github.com/openagentsinc/bahia/internal/nostrmigration"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/readmodel"
@@ -648,6 +648,8 @@ func New(cfg *config.Config) (*App, error) {
 			Policies:     policyRepo,
 		})
 		bootstrapCache = &bootstrapCacheAdapter{cache: projectionCache}
+		// Tombstones cached projections when their NIP-40 expiration passes.
+		bgManager.RegisterWithOptions(projectionCache, RunnerTier(Tier1), RunnerRequired(false))
 	}
 
 	// Bahia self-identity publisher: emits 31410/31411/30360 events to relays.
@@ -689,24 +691,16 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		return details
 	})
-	migrationEventRepo, ok := nostrEventRepo.(nostrmigration.EventRepository)
-	if !ok {
-		return nil, fmt.Errorf("nostr event repository does not support durable migration cursors")
-	}
-	migrationRunner := nostrmigration.NewRunner(migrationEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
-		PrivateKey:    cfg.Nostr.PrivateKey,
-		RelayBackfill: cfg.Nostr.LegacyRelayBackfill && len(relayURLs) > 0 && strings.TrimSpace(cfg.Nostr.PrivateKey) != "",
-	}, logger)
-	bgManager.RegisterWithOptions(&orderedStartupRunner{runners: []BackgroundRunner{
-		migrationRunner,
-		&bootstrapperRunner{
-			bootstrapper:    bootstrapper,
-			policy:          policy,
-			statusProjector: bahiaStatusProjector,
-			catalogVersion:  catalog.Version,
-			logger:          logger,
-		},
-	}}, RunnerTier(Tier0), RunnerRequired(false))
+	// The legacy nostr_events migration (internal/nostrmigration) is not on
+	// the startup path (B-28): operators run it once with
+	// `bahia-migrate nostr` (see docs/user-guide/cli-reference.md).
+	bgManager.RegisterWithOptions(&bootstrapperRunner{
+		bootstrapper:    bootstrapper,
+		policy:          policy,
+		statusProjector: bahiaStatusProjector,
+		catalogVersion:  catalog.Version,
+		logger:          logger,
+	}, RunnerTier(Tier0), RunnerRequired(false))
 
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
@@ -2036,11 +2030,18 @@ func (r *inMemoryProjectionMetaRepo) Upsert(_ context.Context, meta repository.R
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := meta.Stream + "/" + meta.EntityKey
-	if existing, ok := r.store[key]; ok && !meta.UpdatedAt.After(existing.UpdatedAt) {
+	if existing, ok := r.store[key]; ok && !projectionMetaVersion(meta).Supersedes(projectionMetaVersion(*existing)) {
 		return nil
 	}
 	r.store[key] = &meta
 	return nil
+}
+
+// projectionMetaVersion orders metadata like the cache orders projections:
+// later timestamp, then lowest source event id (C-13). Keeping the higher id on
+// a same-second tie would let a third version between the two win.
+func projectionMetaVersion(meta repository.RelayProjectionMeta) nostrutil.Version {
+	return nostrutil.Version{CreatedAt: nostr.Timestamp(meta.UpdatedAt.Unix()), ID: meta.SourceEventID}
 }
 
 func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream string) ([]repository.RelayProjectionMeta, error) {
@@ -2053,23 +2054,6 @@ func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream stri
 		}
 	}
 	return result, nil
-}
-
-type orderedStartupRunner struct {
-	runners []BackgroundRunner
-}
-
-func (r *orderedStartupRunner) Name() string { return "tier0-startup" }
-func (r *orderedStartupRunner) Run(ctx context.Context) error {
-	for _, runner := range r.runners {
-		if runner == nil {
-			continue
-		}
-		if err := runner.Run(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type bootstrapperRunner struct {
@@ -3397,22 +3381,6 @@ type auditedNostrPublisher struct {
 
 type relayFirstNostrPublisher struct {
 	pool *nostrAdapter.RelayPool
-}
-
-type migrationRelayPublisher struct {
-	pool *nostrAdapter.RelayPool
-}
-
-func (p migrationRelayPublisher) PublishMigrationEvent(ctx context.Context, ev nostr.Event) ([]nostrmigration.PublishOutcome, error) {
-	if p.pool == nil {
-		return nil, fmt.Errorf("migration relay pool is not configured")
-	}
-	results, err := p.pool.PublishWithResults(ctx, ev)
-	outcomes := make([]nostrmigration.PublishOutcome, 0, len(results))
-	for _, result := range results {
-		outcomes = append(outcomes, nostrmigration.PublishOutcome{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
-	}
-	return outcomes, err
 }
 
 func (p relayFirstNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {

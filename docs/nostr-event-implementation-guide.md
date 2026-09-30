@@ -600,12 +600,12 @@ Do not rely on relay indexing for multi-character tags unless the sidecar or tar
 
 ## Migration app rules
 
-Bahia has already deployed older events. Legacy events are migrated by a startup migration module rather than by keeping legacy runtime behavior alive.
+Bahia has already deployed older events. Legacy events are migrated by the offline `bahia-migrate nostr` tool (`internal/nostrmigration`) rather than by keeping legacy runtime behavior alive. It is not on the daemon startup path.
 
 Implementation rules:
 
 1. Legacy subscriptions, decoders, and transforms belong in `internal/nostrmigration` or tests for that module.
-2. The migration must be idempotent. Re-running startup must not duplicate canonical events.
+2. The migration must be idempotent. Re-running `bahia-migrate nostr` must not duplicate canonical events.
 3. Migrated events must publish canonical `kind` values and may include metadata tags such as `legacy_kind`, `migrated-from`, `migration`, and `schema`.
 4. Runtime publishers and subscribers should not include legacy kind support just to ease rollout.
 5. The relay sidecar accepts every valid Nostr event kind. Canonical-versus-legacy distinctions are application semantics enforced by Bahia consumers, never relay admission policy.
