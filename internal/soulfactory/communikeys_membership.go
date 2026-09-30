@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 )
@@ -385,21 +384,9 @@ func cloneCommunikeysTags(tags nostr.Tags) nostr.Tags {
 	return cloned
 }
 
+// publishCommunikeysReplacement requires a relay OK. Publish answers an
+// "auth-required:" OK by authenticating and republishing once.
 func publishCommunikeysReplacement(ctx context.Context, bus *SoulFactoryRelayBus, event nostr.Event) error {
-	if _, err := bus.Publish(ctx, event); err != nil {
-		if !strings.Contains(err.Error(), "auth-required:") {
-			return err
-		}
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		if _, retryErr := bus.Publish(ctx, event); retryErr != nil {
-			return fmt.Errorf("publish after auth: %w", retryErr)
-		}
-	}
-	return nil
+	_, err := bus.Publish(ctx, event)
+	return err
 }

@@ -675,36 +675,36 @@ func BuildProvisionRuntimeParamsFromDraft(draft domain.SoulDraftContent) map[str
 	}
 }
 
+// collectRuntimeAdapterEvents returns the valid stored events matching filters.
+// The read is complete only when every relay sent EOSE; see CollectStoredEvents.
 func collectRuntimeAdapterEvents(ctx context.Context, transport RuntimeAdapterTransport, filters []nostr.Filter) ([]*nostr.Event, error) {
 	sub, err := transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, err
 	}
 	defer sub.Close()
-	var events []*nostr.Event
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-eose:
-			return events, nil
-		case event, ok := <-sub.Events:
-			if !ok {
-				return events, nil
-			}
-			if event == nil || !validSignedEvent(event) {
-				continue
-			}
-			eventID := event.ID.Hex()
-			if _, exists := seen[eventID]; exists {
-				continue
-			}
-			seen[eventID] = struct{}{}
-			events = append(events, event)
-		}
+	stored, err := sub.CollectStoredEvents(ctx)
+	if err != nil {
+		return nil, err
 	}
+	return uniqueValidRelayEvents(stored), nil
+}
+
+// uniqueValidRelayEvents keeps the first copy of each validly signed event.
+func uniqueValidRelayEvents(events []*nostr.Event) []*nostr.Event {
+	out := make([]*nostr.Event, 0, len(events))
+	seen := make(map[nostr.ID]struct{}, len(events))
+	for _, event := range events {
+		if event == nil || !validSignedEvent(event) {
+			continue
+		}
+		if _, duplicate := seen[event.ID]; duplicate {
+			continue
+		}
+		seen[event.ID] = struct{}{}
+		out = append(out, event)
+	}
+	return out
 }
 
 func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, requestEvent *nostr.Event, req RuntimeAdapterRequest, controllerPubkey string) (*RuntimeControlResultEnvelope, error) {
