@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -61,6 +62,18 @@ type NostrClient struct {
 	signer                soulClientSigner
 	transport             SoulFactoryTransport
 	expectedFactoryPubkey string // when set, reject results not signed by this pubkey
+	// replyTimeout bounds each wait for a terminal reply; zero means
+	// DefaultSoulFactoryReplyTimeout.
+	replyTimeout time.Duration
+}
+
+// WithReplyTimeout bounds how long AwaitProvisioningResult, ExecuteSoulAction
+// and AwaitSoulActionResult wait for a terminal result. A wait that ends first
+// returns *NoTerminalResultError. A non-positive timeout restores
+// DefaultSoulFactoryReplyTimeout; an earlier context deadline always wins.
+func (c *NostrClient) WithReplyTimeout(timeout time.Duration) *NostrClient {
+	c.replyTimeout = timeout
+	return c
 }
 
 // WithExpectedFactoryPubkey sets the expected SoulFactory service pubkey.
@@ -122,7 +135,7 @@ func (c *NostrClient) ListSouls(ctx context.Context, limit int, status string) (
 		limit = 50
 	}
 	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Limit: limit}}
-	events, err := c.collectEvents(ctx, filters)
+	events, err := c.collectEvents(ctx, "client.list_souls", filters)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +167,7 @@ func (c *NostrClient) GetSoul(ctx context.Context, agentID string) (*domain.Agen
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
-	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Tags: nostr.TagMap{tagParameterizedD: []string{agentID}}, Limit: 10}})
+	events, err := c.collectEvents(ctx, "client.get_soul", []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)}, Tags: nostr.TagMap{tagParameterizedD: []string{agentID}}, Limit: 10}})
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +188,7 @@ func (c *NostrClient) ListTemplates(ctx context.Context, limit int, tier string)
 	if limit <= 0 {
 		limit = 50
 	}
-	events, err := c.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulTemplate)}, Limit: limit}})
+	events, err := c.collectEvents(ctx, "client.list_templates", []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulTemplate)}, Limit: limit}})
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +296,7 @@ func (c *NostrClient) AwaitProvisioningResult(ctx context.Context, receipt *Soul
 		return nil, fmt.Errorf("valid provisioning receipt is required")
 	}
 	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult)}, Tags: nostr.TagMap{tagEvent: []string{receipt.RequestID}, tagPubkey: []string{receipt.RequesterPubkey}}}}
-	reply, err := c.awaitTerminal(ctx, filters, map[int]bool{domain.KindProvisioningStatus: true}, map[int]bool{domain.KindProvisioningResult: true}, func(ev *nostr.Event) {
+	reply, err := c.awaitTerminal(ctx, receipt.RequestID, filters, map[int]bool{domain.KindProvisioningStatus: true}, map[int]bool{domain.KindProvisioningResult: true}, func(ev *nostr.Event) {
 		if onStatus != nil {
 			onStatus(statusEventFromNostr(ev))
 		}
@@ -318,8 +331,7 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign soul action: %w", err)
 	}
-	filters := []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}, Tags: nostr.TagMap{tagEvent: []string{event.ID.Hex()}}}}
-	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
+	sub, err := c.transport.SubscribeAllWithEOSE(ctx, soulActionReplyFilters(event.ID.Hex()))
 	if err != nil {
 		return nil, fmt.Errorf("subscribe for soul action result: %w", err)
 	}
@@ -331,41 +343,56 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 		}
 		return nil, err
 	}
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-eose:
-			eose = nil
-		case reply, ok := <-sub.Events:
-			if !ok {
-				return nil, fmt.Errorf("soul action subscription closed before terminal result")
-			}
-			if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", event.ID.Hex()) {
-				continue
-			}
-			if c.expectedFactoryPubkey != "" && reply.PubKey.Hex() != c.expectedFactoryPubkey {
-				continue
-			}
-			if _, duplicate := seen[reply.ID.Hex()]; duplicate {
-				continue
-			}
-			seen[reply.ID.Hex()] = struct{}{}
-			if reply.Kind == nostr.Kind(domain.KindProvisioningStatus) {
-				continue
-			}
-			if domain.IsLifecycleResultKind(int(reply.Kind)) {
-				return reply, nil
-			}
-		}
-	}
+	return c.awaitSoulActionReply(ctx, sub, event.ID.Hex())
 }
 
-// collectEvents returns the valid stored events matching filters. The read is
-// complete only when every relay sent EOSE; see CollectStoredEvents.
-func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter) ([]*nostr.Event, error) {
+// AwaitSoulActionResult waits for the terminal result of an already published
+// soul action, for example after ExecuteSoulAction returned
+// *NoTerminalResultError. The result is a stored event, so the subscription's
+// backfill returns it if the factory has published it since.
+func (c *NostrClient) AwaitSoulActionResult(ctx context.Context, requestID string) (*nostr.Event, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, fmt.Errorf("soul action request id is required")
+	}
+	if c == nil || c.transport == nil {
+		return nil, fmt.Errorf("soul factory client is not configured")
+	}
+	sub, err := c.transport.SubscribeAllWithEOSE(ctx, soulActionReplyFilters(requestID))
+	if err != nil {
+		return nil, fmt.Errorf("subscribe for soul action result: %w", err)
+	}
+	defer sub.Close()
+	return c.awaitSoulActionReply(ctx, sub, requestID)
+}
+
+func soulActionReplyFilters(requestID string) []nostr.Filter {
+	return []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningStatus), nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}, Tags: nostr.TagMap{tagEvent: []string{requestID}}}}
+}
+
+// awaitSoulActionReply waits on sub for the soul action's terminal result,
+// bounded by the client's reply timeout.
+func (c *NostrClient) awaitSoulActionReply(ctx context.Context, sub *RelayBusSubscription, requestID string) (*nostr.Event, error) {
+	return awaitTerminalReply(ctx, sub, requestID, c.replyTimeout, DefaultSoulFactoryReplyTimeout, func(reply *nostr.Event) replyClass {
+		if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", requestID) {
+			return replyIgnore
+		}
+		if c.expectedFactoryPubkey != "" && reply.PubKey.Hex() != c.expectedFactoryPubkey {
+			return replyIgnore
+		}
+		if domain.IsLifecycleResultKind(int(reply.Kind)) {
+			return replyTerminal
+		}
+		return replyIgnore
+	}, nil)
+}
+
+// collectEvents returns the valid stored events matching filters for the
+// client's display reads (CLI and MCP listings and lookups). They are
+// latest-wins reads, so a partial read is accepted under RelayReadLatestQuorum
+// and logged as degraded; see RelayReadPolicy. Actions are not decided on these
+// reads: the factory re-reads authoritative state itself.
+func (c *NostrClient) collectEvents(ctx context.Context, caller string, filters []nostr.Filter) ([]*nostr.Event, error) {
 	if c == nil || c.transport == nil {
 		return nil, fmt.Errorf("soul factory client is not configured")
 	}
@@ -375,13 +402,17 @@ func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter)
 	}
 	defer sub.Close()
 	stored, err := sub.CollectStoredEvents(ctx)
+	read, err := resolveRelayRead(ctx, nil, caller, RelayReadLatestQuorum(), stored, err)
 	if err != nil {
 		return nil, err
 	}
-	return uniqueValidRelayEvents(stored), nil
+	return uniqueValidRelayEvents(read.Events), nil
 }
 
-func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter, statusKinds, terminalKinds map[int]bool, onStatus func(*nostr.Event), expectedAuthor ...string) (*nostr.Event, error) {
+// awaitTerminal subscribes with filters and waits for a terminal reply to
+// requestID, bounded by the client's reply timeout (see WithReplyTimeout). A
+// wait that ends first returns *NoTerminalResultError.
+func (c *NostrClient) awaitTerminal(ctx context.Context, requestID string, filters []nostr.Filter, statusKinds, terminalKinds map[int]bool, onStatus func(*nostr.Event), expectedAuthor ...string) (*nostr.Event, error) {
 	var authorCheck string
 	if len(expectedAuthor) > 0 {
 		authorCheck = strings.TrimSpace(expectedAuthor[0])
@@ -391,39 +422,21 @@ func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter,
 		return nil, err
 	}
 	defer sub.Close()
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-eose:
-			eose = nil
-		case ev, ok := <-sub.Events:
-			if !ok {
-				return nil, fmt.Errorf("reply subscription closed before terminal result")
-			}
-			if ev == nil || !validSignedEvent(ev) {
-				continue
-			}
-			if authorCheck != "" && ev.PubKey.Hex() != authorCheck {
-				continue
-			}
-			if _, duplicate := seen[ev.ID.Hex()]; duplicate {
-				continue
-			}
-			seen[ev.ID.Hex()] = struct{}{}
-			if statusKinds[int(ev.Kind)] {
-				if onStatus != nil {
-					onStatus(ev)
-				}
-				continue
-			}
-			if terminalKinds[int(ev.Kind)] {
-				return ev, nil
-			}
+	return awaitTerminalReply(ctx, sub, requestID, c.replyTimeout, DefaultSoulFactoryReplyTimeout, func(ev *nostr.Event) replyClass {
+		if !validSignedEvent(ev) {
+			return replyIgnore
 		}
-	}
+		if authorCheck != "" && ev.PubKey.Hex() != authorCheck {
+			return replyIgnore
+		}
+		switch {
+		case statusKinds[int(ev.Kind)]:
+			return replyStatus
+		case terminalKinds[int(ev.Kind)]:
+			return replyTerminal
+		}
+		return replyIgnore
+	}, onStatus)
 }
 
 func ParseSoulEvent(event *nostr.Event) *domain.AgentSoul {

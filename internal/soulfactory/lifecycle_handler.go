@@ -191,7 +191,12 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	if bus == nil {
 		return nil, nil
 	}
-	results, err := bus.Query(ctx, []nostr.Filter{{
+	terminal := func(result *nostr.Event) bool {
+		return result != nil && domain.IsLifecycleResultKind(int(result.Kind)) && tagValue(result.Tags, tagRequestKind) == fmt.Sprint(domain.KindSoulAction)
+	}
+	// Idempotency check: a found terminal result is final, but absence would
+	// re-run the action, so it needs every relay. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "lifecycle.terminal_result", RelayReadFound(terminal), []nostr.Filter{{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)},
 		Tags:  nostr.TagMap{tagEvent: []string{eventID}},
 		Limit: 1,
@@ -199,8 +204,8 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	if err != nil {
 		return nil, err
 	}
-	for _, result := range results {
-		if result != nil && domain.IsLifecycleResultKind(int(result.Kind)) && tagValue(result.Tags, tagRequestKind) == fmt.Sprint(domain.KindSoulAction) {
+	for _, result := range read.Events {
+		if terminal(result) {
 			return result, nil
 		}
 	}

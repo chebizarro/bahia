@@ -36,9 +36,10 @@ func (s *RelayRuntimeValidationEventSource) Close() {
 	}
 }
 
-// LoadEvents fetches events by ID. A read that is not complete on every relay
-// (see CollectStoredEvents) is an error: validation must not judge a scenario
-// on events a relay never delivered.
+// LoadEvents fetches events by ID. Ids are content hashes, so a partial read
+// that delivered every requested event is accepted (RelayReadAllIDs); any other
+// partial read is an error: validation must not judge a scenario on events a
+// relay never delivered.
 func (s *RelayRuntimeValidationEventSource) LoadEvents(ctx context.Context, eventIDs []string) (map[string]*nostr.Event, error) {
 	ids := make([]nostr.ID, 0, len(eventIDs))
 	for _, raw := range uniqueStrings(eventIDs) {
@@ -48,12 +49,12 @@ func (s *RelayRuntimeValidationEventSource) LoadEvents(ctx context.Context, even
 		}
 		ids = append(ids, id)
 	}
-	stored, err := s.bus.Query(ctx, []nostr.Filter{{IDs: ids, Limit: len(ids)}})
+	read, err := s.bus.QueryWithPolicy(ctx, "runtime_validation.load_events", RelayReadAllIDs(ids...), []nostr.Filter{{IDs: ids, Limit: len(ids)}})
 	if err != nil {
 		return nil, err
 	}
-	events := make(map[string]*nostr.Event, len(stored))
-	for _, event := range stored {
+	events := make(map[string]*nostr.Event, len(read.Events))
+	for _, event := range read.Events {
 		if event != nil {
 			events[event.ID.Hex()] = event
 		}

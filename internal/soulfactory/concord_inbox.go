@@ -36,7 +36,10 @@ func (i concordInbox) empty() bool { return len(i.relays) == 0 }
 // A transport failure is an error rather than an empty inbox: silently falling
 // back would publish an invite where the recipient may never look.
 func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient nostr.PubKey) (concordInbox, error) {
-	events, err := m.bus.Query(ctx, []nostr.Filter{{
+	// Latest-wins routing lookup of replaceable relay lists: the newest list of
+	// a relay majority is accepted and the degradation logged. Fewer answers
+	// than a majority stay an error. See RelayReadPolicy.
+	read, err := m.bus.QueryWithPolicy(ctx, "concord.inbox", RelayReadLatestQuorum(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{concordDMRelayListKind, concordRelayListKind},
 		Authors: []nostr.PubKey{recipient},
 	}})
@@ -45,7 +48,7 @@ func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient n
 	}
 
 	var dmRelayList, relayListMetadata *nostr.Event
-	for _, event := range events {
+	for _, event := range read.Events {
 		// A relay may return anything; only the recipient's own signed lists count.
 		if event == nil || event.PubKey != recipient || !validSignedEvent(event) {
 			continue
