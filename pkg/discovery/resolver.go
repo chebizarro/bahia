@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,19 +13,36 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
-const (
-	// KindDNSEndpointState is the Nostr kind for DNS endpoint state events.
-	KindDNSEndpointState = 31976
+// Bahia publishes DNS endpoint state (live and tombstone) only through the
+// projector's canonical control-state envelope: kind 30900 with domain=dns,
+// schema=bahia.cp-state.v1, legacy_kind=31976, deleted=true|false and
+// t=dns-endpoint. Legacy kind 31976 is no longer published and its tombstones
+// land on 30900, so the resolver reads 30900 only.
+var endpointLegacyKind = strconv.Itoa(kinds.DNSEndpointState)
 
+const (
 	resolverReconnectInitialBackoff = time.Second
 	resolverReconnectMaxBackoff     = 30 * time.Second
+
+	// resolverSinceOverlap is subtracted from the newest created_at seen after
+	// EOSE when resubscribing. Relays apply since to live events as well, so
+	// the overlap has to cover producer clock skew and delayed (outbox retry)
+	// publishes; it matches the inbound future-skew tolerance.
+	resolverSinceOverlap = nostradapter.InboundEventMaxFutureSkew
 )
 
-// Endpoint represents a resolved DNS endpoint from a kind 31976 event.
+// errNotDNSEndpoint marks 30900 state that is not a DNS endpoint record. Relays
+// that ignore #t can return it; it is skipped, not treated as invalid.
+var errNotDNSEndpoint = errors.New("not a DNS endpoint record")
+
+// Endpoint represents a resolved DNS endpoint from Bahia's canonical kind 30900
+// DNS endpoint state. Port is 0 and Protocol is empty when the producer did not
+// project them (for example service endpoints resolved from observed hosts).
 type Endpoint struct {
 	FQDN         string
 	Name         string
@@ -91,7 +109,8 @@ type relayPool interface {
 
 type relayPoolFactory func([]string, *zap.Logger, string) relayPool
 
-// Resolver maintains a live cache of DNS endpoints from Nostr kind 31976 events.
+// Resolver maintains a live cache of DNS endpoints from Bahia's canonical kind
+// 30900 DNS endpoint state.
 type Resolver struct {
 	relayURLs    []string
 	authorPubkey string
@@ -103,6 +122,13 @@ type Resolver struct {
 	mu            sync.RWMutex
 	records       map[string]endpointRecord
 	relayMetadata map[string]RelayAdvisoryMetadata
+	// syncedThrough is the newest created_at the resolver is known to be
+	// caught up to: set at EOSE from the backfill and advanced by live events.
+	// Zero means no subscription has reached EOSE yet.
+	syncedThrough nostr.Timestamp
+
+	ready     chan struct{}
+	readyOnce sync.Once
 
 	lifecycleMu sync.Mutex
 	pool        relayPool
@@ -114,19 +140,25 @@ type Resolver struct {
 type endpointRecord struct {
 	endpoint  Endpoint
 	createdAt nostr.Timestamp
+	eventID   string
 	deleted   bool
 }
 
+// endpointContent is the subset of the projector's domain.DNSEndpoint JSON
+// (live records) and tombstone content the resolver reads.
 type endpointContent struct {
-	Address  string          `json:"address"`
-	Addr     string          `json:"addr"`
-	Port     int             `json:"port"`
-	Protocol string          `json:"protocol"`
-	Proto    string          `json:"proto"`
-	FQDN     string          `json:"fqdn"`
-	DNS      string          `json:"dns"`
-	Deleted  bool            `json:"deleted"`
-	Metadata json.RawMessage `json:"metadata"`
+	Name         string   `json:"name"`
+	Environment  string   `json:"environment"`
+	Zone         string   `json:"zone"`
+	FQDN         string   `json:"fqdn"`
+	Address      string   `json:"address"`
+	Port         int      `json:"port"`
+	Protocol     string   `json:"protocol"`
+	Health       string   `json:"health"`
+	Runtime      string   `json:"runtime"`
+	Hardware     string   `json:"hardware"`
+	Capabilities []string `json:"capabilities"`
+	Deleted      bool     `json:"deleted"`
 }
 
 // New creates a Resolver connected to the given relay URLs.
@@ -138,6 +170,7 @@ func New(relayURLs []string, authorPubkey string, opts ...Option) *Resolver {
 		poolFactory:   newRelayPool,
 		records:       make(map[string]endpointRecord),
 		relayMetadata: make(map[string]RelayAdvisoryMetadata),
+		ready:         make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -145,7 +178,7 @@ func New(relayURLs []string, authorPubkey string, opts ...Option) *Resolver {
 	return r
 }
 
-// Start connects to relays and begins subscribing to kind 31976 events.
+// Start connects to relays and begins subscribing to DNS endpoint state.
 func (r *Resolver) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("discovery resolver start: nil context")
@@ -198,6 +231,13 @@ func (r *Resolver) Stop() error {
 	}
 	r.wg.Wait()
 	return nil
+}
+
+// Ready is closed once the first subscription has received EOSE from every
+// relay, i.e. stored endpoint state has been backfilled. Lookups before that
+// may miss endpoints that exist on the relays.
+func (r *Resolver) Ready() <-chan struct{} {
+	return r.ready
 }
 
 // Resolve looks up an endpoint by name and environment.
@@ -431,10 +471,9 @@ func limitationWarnings(limitations RelayAdvisoryLimitations) []string {
 }
 
 func (r *Resolver) subscribeUntilClosed(ctx context.Context, pool relayPool) error {
-	filters := []nostr.Filter{r.subscriptionFilter()}
 	authAttempted := make(map[string]struct{})
 	for {
-		merged, err := pool.SubscribeAllWithEOSE(ctx, filters)
+		merged, err := pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{r.subscriptionFilter()})
 		if err != nil {
 			return err
 		}
@@ -453,6 +492,10 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 		return false, nil
 	}
 	defer merged.Close()
+	// Backfill-then-live: until EOSE, stored events may arrive in any order,
+	// so the resume cursor only moves once the whole backfill has been seen.
+	caughtUp := false
+	var newest nostr.Timestamp
 	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
 		select {
 		case <-ctx.Done():
@@ -466,6 +509,8 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 		case <-merged.EndOfStoredEvents:
 			r.logger.Info("all relays sent EOSE; historical endpoint catch-up complete")
 			merged.EndOfStoredEvents = nil
+			caughtUp = true
+			r.markSynced(newest)
 		case closed, ok := <-merged.Closed:
 			if ok {
 				if r.handleClosed(ctx, pool, closed, authAttempted) {
@@ -483,7 +528,17 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 				continue
 			}
 			if err := r.applyEvent(ev); err != nil {
-				r.logger.Warn("ignored invalid discovery endpoint event", zap.String("event_id", eventID(ev)), zap.Error(err))
+				if errors.Is(err, errNotDNSEndpoint) {
+					r.logger.Debug("skipped non-endpoint control state", zap.String("event_id", eventID(ev)), zap.Error(err))
+				} else {
+					r.logger.Warn("ignored invalid discovery endpoint event", zap.String("event_id", eventID(ev)), zap.Error(err))
+				}
+				continue
+			}
+			if caughtUp {
+				r.markSynced(ev.CreatedAt)
+			} else if ev.CreatedAt > newest {
+				newest = ev.CreatedAt
 			}
 		}
 	}
@@ -506,99 +561,168 @@ func (r *Resolver) handleClosed(ctx context.Context, pool relayPool, closed nost
 	return true
 }
 
-func (r *Resolver) subscriptionFilter() nostr.Filter {
-	pubkey, _ := nostrutil.PubKeyFromHex(r.authorPubkey)
-	return nostr.Filter{
-		Kinds:   []nostr.Kind{KindDNSEndpointState},
-		Authors: []nostr.PubKey{pubkey},
+// markSynced records that the resolver has seen everything up to createdAt
+// and releases Ready waiters.
+func (r *Resolver) markSynced(createdAt nostr.Timestamp) {
+	r.mu.Lock()
+	if createdAt > r.syncedThrough {
+		r.syncedThrough = createdAt
 	}
+	r.mu.Unlock()
+	r.readyOnce.Do(func() { close(r.ready) })
 }
 
+// subscriptionFilter scopes the REQ to canonical DNS endpoint state from the
+// Bahia service key. #t is a single-letter tag, so NIP-01 relays index it; the
+// envelope's domain/schema/legacy_kind tags are multi-letter and are checked
+// locally. After a completed backfill, resubscribes start from the newest seen
+// created_at minus resolverSinceOverlap instead of re-downloading everything.
+func (r *Resolver) subscriptionFilter() nostr.Filter {
+	pubkey, _ := nostrutil.PubKeyFromHex(r.authorPubkey)
+	filter := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+		Authors: []nostr.PubKey{pubkey},
+		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
+	}
+	r.mu.RLock()
+	synced := r.syncedThrough
+	r.mu.RUnlock()
+	if since := int64(synced) - int64(resolverSinceOverlap/time.Second); synced > 0 && since > 0 {
+		filter.Since = nostr.Timestamp(since)
+	}
+	return filter
+}
+
+// applyEvent folds one DNS endpoint record into the cache. Per (pubkey, d) the
+// newest created_at wins and equal created_at is broken by the lowest event
+// id (NIP-01), so the result does not depend on arrival order. A tombstone is
+// kept as a deleted record so older live events cannot resurrect it.
 func (r *Resolver) applyEvent(event *nostr.Event) error {
-	endpoint, deleted, err := r.endpointFromEvent(event)
+	if err := r.validateEnvelope(event); err != nil {
+		return err
+	}
+	coordinate := nostrutil.EventPubKeyHex(event) + ":" + event.Tags.GetD()
+	id := nostrutil.EventIDHex(event)
+
+	r.mu.RLock()
+	current, ok := r.records[coordinate]
+	r.mu.RUnlock()
+	if ok && !supersedes(event.CreatedAt, id, current) {
+		return nil
+	}
+
+	endpoint, deleted, err := endpointFromEvent(event)
 	if err != nil {
 		return err
 	}
 
-	coordinate := event.Tags.GetD()
-	if coordinate == "" {
-		return errors.New("missing d tag coordinate")
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, ok := r.records[coordinate]
-	if ok && current.createdAt >= event.CreatedAt {
+	// Recheck: another applyEvent may have raced in between the locks.
+	if current, ok := r.records[coordinate]; ok && !supersedes(event.CreatedAt, id, current) {
 		return nil
 	}
 	if deleted {
-		r.records[coordinate] = endpointRecord{createdAt: event.CreatedAt, deleted: true}
+		r.records[coordinate] = endpointRecord{createdAt: event.CreatedAt, eventID: id, deleted: true}
 		return nil
 	}
-	r.records[coordinate] = endpointRecord{endpoint: endpoint, createdAt: event.CreatedAt}
+	r.records[coordinate] = endpointRecord{endpoint: endpoint, createdAt: event.CreatedAt, eventID: id}
 	return nil
 }
 
-func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error) {
+func supersedes(createdAt nostr.Timestamp, id string, current endpointRecord) bool {
+	if createdAt != current.createdAt {
+		return createdAt > current.createdAt
+	}
+	return id < current.eventID
+}
+
+// validateEnvelope accepts only signed canonical DNS endpoint records from the
+// configured Bahia service key; relays that ignore #t may return other 30900
+// state, and relays do not enforce authors on our behalf.
+func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 	if event == nil {
-		return Endpoint{}, false, errors.New("nil event")
+		return errors.New("nil event")
 	}
 	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
-		return Endpoint{}, false, err
+		return err
 	}
-	if int(event.Kind) != KindDNSEndpointState {
-		return Endpoint{}, false, fmt.Errorf("unexpected kind %d", event.Kind)
+	if int(event.Kind) != kinds.CASControlState {
+		return fmt.Errorf("unexpected kind %d", event.Kind)
 	}
-	pubkey := nostrutil.EventPubKeyHex(event)
-	if r.authorPubkey != "" && pubkey != r.authorPubkey {
-		return Endpoint{}, false, fmt.Errorf("unexpected author %s", pubkey)
+	if pubkey := nostrutil.EventPubKeyHex(event); pubkey != r.authorPubkey {
+		return fmt.Errorf("unexpected author %s", pubkey)
 	}
+	if domain := firstTagValue(event.Tags, kinds.CASControlStateTagDomain); domain != kinds.DNSDomain {
+		return fmt.Errorf("%w: domain %q", errNotDNSEndpoint, domain)
+	}
+	if schema := firstTagValue(event.Tags, kinds.CASControlStateTagSchema); schema != kinds.CASControlStateSchema {
+		return fmt.Errorf("%w: schema %q", errNotDNSEndpoint, schema)
+	}
+	if legacyKind := firstTagValue(event.Tags, kinds.CASControlStateTagLegacyKind); legacyKind != endpointLegacyKind {
+		return fmt.Errorf("%w: legacy_kind %q", errNotDNSEndpoint, legacyKind)
+	}
+	if event.Tags.GetD() == "" {
+		return errors.New("missing d tag coordinate")
+	}
+	return nil
+}
 
-	coordinate := event.Tags.GetD()
-	if coordinate == "" {
-		return Endpoint{}, false, errors.New("missing d tag coordinate")
-	}
-
+// endpointFromEvent parses the projector's DNS endpoint record: dnsEndpointTags
+// plus domain.DNSEndpoint JSON content for live records, or the tombstone
+// content. Live records carry deleted=false, so the tag value is compared
+// rather than its presence.
+func endpointFromEvent(event *nostr.Event) (Endpoint, bool, error) {
 	var content endpointContent
-	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
-		return Endpoint{}, false, fmt.Errorf("parse endpoint content JSON: %w", err)
+	if strings.TrimSpace(event.Content) != "" {
+		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+			return Endpoint{}, false, fmt.Errorf("parse endpoint content JSON: %w", err)
+		}
+	}
+	if content.Deleted || firstTagValue(event.Tags, kinds.CASControlStateTagDeleted) == "true" {
+		return Endpoint{}, true, nil
 	}
 
-	fqdn := firstString(firstTagValue(event.Tags, "dns"), content.FQDN, content.DNS)
+	fqdn := firstString(firstTagValue(event.Tags, "dns"), content.FQDN)
 	if fqdn == "" {
 		return Endpoint{}, false, errors.New("missing dns tag FQDN")
 	}
-	address := firstString(content.Addr, content.Address)
-	protocol := firstString(content.Proto, content.Protocol)
-	if !content.Deleted {
-		if strings.TrimSpace(address) == "" {
-			return Endpoint{}, false, errors.New("endpoint content address is required")
+	address := firstString(firstTagValue(event.Tags, "addr"), content.Address)
+	if address == "" {
+		return Endpoint{}, false, errors.New("endpoint address is required")
+	}
+	port := content.Port
+	if raw := firstTagValue(event.Tags, "port"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return Endpoint{}, false, fmt.Errorf("endpoint port tag %q is invalid: %w", raw, err)
 		}
-		if content.Port <= 0 || content.Port > 65535 {
-			return Endpoint{}, false, fmt.Errorf("endpoint content port %d is invalid", content.Port)
-		}
-		if strings.TrimSpace(protocol) == "" {
-			return Endpoint{}, false, errors.New("endpoint content protocol is required")
-		}
+		port = parsed
+	}
+	if port < 0 || port > 65535 {
+		return Endpoint{}, false, fmt.Errorf("endpoint port %d is invalid", port)
 	}
 
-	environment := firstString(firstTagValue(event.Tags, "env"), firstTagValue(event.Tags, "environment"))
-	zone := firstTagValue(event.Tags, "zone")
-	endpoint := Endpoint{
+	environment := firstString(firstTagValue(event.Tags, "environment"), content.Environment)
+	zone := firstString(firstTagValue(event.Tags, "zone"), content.Zone)
+	capabilities := allTagValues(event.Tags, "capability")
+	if len(capabilities) == 0 {
+		capabilities = append(capabilities, content.Capabilities...)
+	}
+	return Endpoint{
 		FQDN:         fqdn,
-		Name:         endpointName(fqdn, environment, zone),
+		Name:         firstString(content.Name, endpointName(fqdn, environment, zone)),
 		Environment:  environment,
 		ZoneName:     zone,
 		Address:      address,
-		Port:         content.Port,
-		Protocol:     protocol,
-		Health:       firstTagValue(event.Tags, "health"),
-		Capabilities: allTagValues(event.Tags, "capability"),
-		Runtime:      firstTagValue(event.Tags, "runtime"),
-		Hardware:     firstTagValue(event.Tags, "hardware"),
+		Port:         port,
+		Protocol:     firstString(firstTagValue(event.Tags, "proto"), content.Protocol),
+		Health:       firstString(firstTagValue(event.Tags, "health"), content.Health),
+		Capabilities: capabilities,
+		Runtime:      firstString(firstTagValue(event.Tags, "runtime"), content.Runtime),
+		Hardware:     firstString(firstTagValue(event.Tags, "hardware"), content.Hardware),
 		UpdatedAt:    time.Unix(int64(event.CreatedAt), 0).UTC(),
-	}
-	return endpoint, content.Deleted, nil
+	}, false, nil
 }
 
 func firstTagValue(tags nostr.Tags, key string) string {
