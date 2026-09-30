@@ -37,6 +37,14 @@ type NostrEventRecord struct {
 	PublishedAt      *time.Time
 }
 
+// NostrOutboxCursor is a keyset position in the pending outbox, ordered by
+// (received_at, id). It lets the publisher walk every pending row instead of
+// re-reading the same oldest page while those rows wait on a slow relay.
+type NostrOutboxCursor struct {
+	ReceivedAt time.Time
+	ID         string
+}
+
 // NostrMigrationCursor is a durable keyset cursor for deterministic migrations.
 type NostrMigrationCursor struct {
 	Name      string
@@ -59,12 +67,29 @@ type NostrEventRepository interface {
 
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
+//
+// Publish-state lifecycle for an outbound event:
+//   - pending: at least one configured relay still has to accept it (or the
+//     publisher has not finished retrying the relays that have not accepted it).
+//   - published (MarkPublished): every relay has settled and the required relay
+//     acceptance (all write relays, or the configured quorum) was reached.
+//   - abandoned (AbandonPublish): delivery can no longer succeed (permanent
+//     relay rejections, undecodable row, or the attempt budget ran out). The row
+//     returns to not_applicable with the terminal reason kept in
+//     last_publish_error, so it leaves the outbox without widening the
+//     publish_state CHECK constraint.
 type NostrEventOutboxRepository interface {
 	NostrEventRepository
 	ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error)
+	// ListUnpublishedAfter returns pending rows strictly after the cursor in
+	// (received_at, id) order; a nil cursor starts at the oldest pending row.
+	ListUnpublishedAfter(ctx context.Context, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error)
 	CountUnpublished(ctx context.Context) (int64, error)
 	MarkPublished(ctx context.Context, id string, publishedAt time.Time) error
 	RecordPublishFailure(ctx context.Context, id, publishError string) error
+	// AbandonPublish removes a still-pending row from the outbox after a
+	// terminal delivery failure and records the reason.
+	AbandonPublish(ctx context.Context, id, reason string) error
 }
 
 type nostrEventDB interface {
@@ -138,14 +163,26 @@ func (r *PgNostrEventRepository) GetByID(ctx context.Context, id string) (*Nostr
 
 // ListUnpublished returns the oldest pending outbound events first.
 func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error) {
+	return r.ListUnpublishedAfter(ctx, nil, limit)
+}
+
+// ListUnpublishedAfter returns pending outbound events after the keyset cursor,
+// oldest first. It is served by the partial idx_nostr_events_publish_outbox index.
+func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+`
+	query := `SELECT ` + nostrEventColumns + `
 		FROM nostr_events
-		WHERE publish_state = $1
-		ORDER BY received_at ASC, id ASC
-		LIMIT $2`, NostrPublishStatePending, limit)
+		WHERE publish_state = $1`
+	args := []any{NostrPublishStatePending}
+	if after != nil {
+		query += ` AND (received_at, id) > ($2, $3)`
+		args = append(args, after.ReceivedAt, after.ID)
+	}
+	query += ` ORDER BY received_at ASC, id ASC LIMIT $` + fmt.Sprint(len(args)+1)
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing unpublished nostr events: %w", err)
 	}
@@ -162,7 +199,8 @@ func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, e
 	return count, nil
 }
 
-// MarkPublished records a successful relay acceptance (including duplicate OK).
+// MarkPublished records that the event reached its required relay acceptance
+// (duplicate OK counts as acceptance) and every relay has settled.
 func (r *PgNostrEventRepository) MarkPublished(ctx context.Context, id string, publishedAt time.Time) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE nostr_events
@@ -186,6 +224,21 @@ func (r *PgNostrEventRepository) RecordPublishFailure(ctx context.Context, id, p
 	`, id, NostrPublishStatePending, publishError)
 	if err != nil {
 		return fmt.Errorf("recording nostr event %s publish failure: %w", id, err)
+	}
+	return nil
+}
+
+// AbandonPublish takes a still-pending row out of the outbox after a terminal
+// delivery failure. Rows already published by another path are left untouched.
+func (r *PgNostrEventRepository) AbandonPublish(ctx context.Context, id, reason string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE nostr_events
+		SET publish_state = $2, publish_attempts = publish_attempts + 1,
+		    last_publish_error = $3
+		WHERE id = $1 AND publish_state = $4
+	`, id, NostrPublishStateNotApplicable, reason, NostrPublishStatePending)
+	if err != nil {
+		return fmt.Errorf("abandoning nostr event %s publish: %w", id, err)
 	}
 	return nil
 }

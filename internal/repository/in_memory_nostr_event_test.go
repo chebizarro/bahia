@@ -157,3 +157,60 @@ func TestNostrArchiveLatestQueriesUseLowestIDOnTie(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "1111", tagged[0].ID)
 }
+
+func TestInMemoryNostrEventRepositoryListUnpublishedAfterPagesByKeyset(t *testing.T) {
+	ctx := context.Background()
+	repo := NewInMemoryNostrEventRepository()
+	base := time.Unix(1000, 0).UTC()
+	for i, id := range []string{"b", "a", "c"} {
+		_, err := repo.Record(ctx, &NostrEventRecord{ID: id, ReceivedAt: base.Add(time.Duration(i/2) * time.Second), PublishState: NostrPublishStatePending})
+		require.NoError(t, err)
+	}
+	_, err := repo.Record(ctx, &NostrEventRecord{ID: "done", ReceivedAt: base, PublishState: NostrPublishStatePublished})
+	require.NoError(t, err)
+
+	first, err := repo.ListUnpublishedAfter(ctx, nil, 2)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, nostrRecordIDs(first))
+
+	last := first[len(first)-1]
+	rest, err := repo.ListUnpublishedAfter(ctx, &NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}, 2)
+	require.NoError(t, err)
+	require.Equal(t, []string{"c"}, nostrRecordIDs(rest))
+}
+
+func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *testing.T) {
+	ctx := context.Background()
+	repo := NewInMemoryNostrEventRepository()
+	_, err := repo.Record(ctx, &NostrEventRecord{ID: "pending", PublishState: NostrPublishStatePending})
+	require.NoError(t, err)
+	_, err = repo.Record(ctx, &NostrEventRecord{ID: "published", PublishState: NostrPublishStatePending})
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkPublished(ctx, "published", time.Now()))
+
+	require.NoError(t, repo.AbandonPublish(ctx, "pending", "abandoned: blocked: no"))
+	require.NoError(t, repo.AbandonPublish(ctx, "published", "abandoned: late"))
+
+	pending, err := repo.GetByID(ctx, "pending")
+	require.NoError(t, err)
+	require.Equal(t, NostrPublishStateNotApplicable, pending.PublishState)
+	require.Equal(t, "abandoned: blocked: no", pending.LastPublishError)
+	require.Equal(t, 1, pending.PublishAttempts)
+
+	published, err := repo.GetByID(ctx, "published")
+	require.NoError(t, err)
+	require.Equal(t, NostrPublishStatePublished, published.PublishState)
+	require.Empty(t, published.LastPublishError)
+
+	depth, err := repo.CountUnpublished(ctx)
+	require.NoError(t, err)
+	require.Zero(t, depth)
+}
+
+func nostrRecordIDs(records []NostrEventRecord) []string {
+	ids := make([]string, 0, len(records))
+	for _, rec := range records {
+		ids = append(ids, rec.ID)
+	}
+	return ids
+}

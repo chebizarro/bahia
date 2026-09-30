@@ -673,6 +673,18 @@ type NostrConfig struct {
 
 	AuthorizedPubkeys []string `koanf:"authorized_pubkeys" secret:"false"`
 	PublishEnabled    bool     `koanf:"publish_enabled" secret:"false"`
+	// PublishQuorum is the caller-facing success threshold for daemon
+	// publishes: how many configured write relays must accept an event (OK
+	// true or duplicate) before a publish call returns success.
+	//   - 1 (the default; 0/unset means the same): at least one relay.
+	//   - N > 1: at least N relays (capped at the number of write relays).
+	//   - -1 (PublishQuorumAllRelays): every configured write relay.
+	// It does not change delivery tracking: the outbox row stays pending, and
+	// relays that have not accepted keep being retried, until every write
+	// relay has accepted or reached a terminal state (permanent rejection or
+	// the attempt budget). Only then is the row marked published (quorum
+	// reached) or abandoned (quorum not reached).
+	PublishQuorum int `koanf:"publish_quorum" yaml:"publish_quorum" secret:"false"`
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
 	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
@@ -697,6 +709,14 @@ type DMRelayListConfig struct {
 	Identity string   `koanf:"identity" yaml:"identity" secret:"false"`
 	Relays   []string `koanf:"relays" yaml:"relays" secret:"false"`
 }
+
+// Publish quorum values for NostrConfig.PublishQuorum.
+const (
+	// PublishQuorumDefault succeeds once one write relay has accepted.
+	PublishQuorumDefault = 1
+	// PublishQuorumAllRelays succeeds only once every write relay has accepted.
+	PublishQuorumAllRelays = -1
+)
 
 // RelayQuorumConfig holds readiness quorum thresholds by operating mode.
 type RelayQuorumConfig struct {
@@ -1249,6 +1269,7 @@ func Defaults() *Config {
 		Nostr: NostrConfig{
 			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
+			PublishQuorum:              PublishQuorumDefault,
 			StaleRunAfter:              5 * time.Minute,
 			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{
@@ -3369,6 +3390,9 @@ func validatePressureRatio(name string, value float64) error {
 func (c *Config) validateNostrRelayPolicy() error {
 	if c.Nostr.StaleRunAfter <= 0 {
 		return fmt.Errorf("config validation failed: nostr.stale_run_after must be > 0")
+	}
+	if c.Nostr.PublishQuorum < PublishQuorumAllRelays {
+		return fmt.Errorf("config validation failed: nostr.publish_quorum must be >= 1, or -1 for every write relay (0/unset means 1)")
 	}
 	switch c.Nostr.RelayAuthUnavailablePolicy {
 	case RelayAuthUnavailableExcludeAndFail:

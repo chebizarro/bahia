@@ -343,14 +343,45 @@ func (p *RelayPool) Publish(ctx context.Context, ev nostr.Event) (int, error) {
 // preserve the relay-provided reason with Error unset; transport and connection
 // failures preserve Error with Reason unset. A duplicate rejection is treated as
 // aggregate success because the relay already has the event.
+//
+// The aggregate error only reports "no relay accepted"; callers that need a
+// delivery guarantee must inspect the per-relay results (see Publisher, which
+// tracks acceptance per relay and retries the relays that have not accepted).
 func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]PublishResult, error) {
+	return p.PublishToRelaysWithResults(ctx, ev, nil)
+}
+
+// PublishToRelaysWithResults publishes ev to the configured relays named in
+// relayURLs (every configured relay when relayURLs is nil). Relays are contacted
+// concurrently so one slow or half-open relay does not delay the others; results
+// are returned in configured relay order. URLs that are not configured in the
+// pool are ignored and produce no result.
+func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Event, relayURLs []string) ([]PublishResult, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	results := make([]PublishResult, 0, len(p.relays))
-	for _, mr := range p.orderedRelaysLocked() {
-		results = append(results, p.publishToRelayWithResult(ctx, mr, ev))
+	relays := p.orderedRelaysLocked()
+	if relayURLs != nil {
+		wanted := relayURLSet(normalizeRelayURLs(relayURLs))
+		selected := relays[:0]
+		for _, mr := range relays {
+			if _, ok := wanted[mr.url]; ok {
+				selected = append(selected, mr)
+			}
+		}
+		relays = selected
 	}
+
+	results := make([]PublishResult, len(relays))
+	var wg sync.WaitGroup
+	for i, mr := range relays {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = p.publishToRelayWithResult(ctx, mr, ev)
+		}()
+	}
+	wg.Wait()
 
 	return results, aggregatePublishResultsError(results)
 }

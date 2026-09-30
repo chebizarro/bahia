@@ -988,7 +988,10 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
-		sbomControlPlanePublisher := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
+		sbomControlPlanePublisher := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger,
+			// The outbox runner (nostrPub) delivers to relayPool; this
+			// control-plane publisher must not leave rows for it to adopt.
+			nostrAdapter.WithInlineDeliveryOnly())
 		attestationSigner, err := sbomAdapter.NewNostrDSSESigner(cfg.Nostr.PrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("configure SBOM attestation signer: %w", err)
@@ -1431,7 +1434,10 @@ func New(cfg *config.Config) (*App, error) {
 	// (or control-plane relays) as long-form content. Uses controlPlanePool so
 	// docs land on the same relay set the browser reads from.
 	if controlPlanePool != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
-		docsPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
+		docsPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger,
+			// The outbox runner (nostrPub) delivers to relayPool; this
+			// control-plane publisher must not leave rows for it to adopt.
+			nostrAdapter.WithInlineDeliveryOnly())
 		userDocsForNostr := docs.New(docs.DefaultBasePath)
 		var docsQuerier docs.NostrDocsQuerier
 		if servicePubkey != "" {

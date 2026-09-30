@@ -30,7 +30,7 @@ type fakePublishResponse struct {
 	err     error
 }
 
-func (f *fakeOutboxRelayPool) PublishWithResults(ctx context.Context, ev gonostr.Event) ([]PublishResult, error) {
+func (f *fakeOutboxRelayPool) PublishWithResults(ctx context.Context, ev gonostr.Event, _ []string) ([]PublishResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -92,6 +92,7 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 		zap.NewNop(),
 	)
 	publisher.publishFn = fakePool.PublishWithResults
+	publisher.relayURLs = func() []string { return []string{"wss://relay.example"} }
 
 	event := &gonostr.Event{
 		Kind:      gonostr.Kind(30315),
@@ -143,6 +144,7 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 		zap.NewNop(),
 	)
 	publisher.publishFn = fakePool.PublishWithResults
+	publisher.relayURLs = func() []string { return []string{"wss://relay.example"} }
 	publisher.newBackoff = func() *Backoff {
 		return &Backoff{Initial: 50 * time.Millisecond, Max: 50 * time.Millisecond, Multiplier: 1, Jitter: 0}
 	}
