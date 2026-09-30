@@ -147,33 +147,6 @@ export class BahiaClient {
     });
   }
 
-  getSBOM(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`);
-  }
-
-  getSBOMPackages(artifactId, params = {}) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/packages${this.query(params)}`);
-  }
-
-  searchSBOMPackages(params = {}) {
-    return this.fetch(`/sbom/search${this.query(params)}`);
-  }
-
-  ingestSBOM(artifactId, payload) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-  }
-
-  getSBOMAttestation(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/attestation`);
-  }
-
-  getSBOMNTIACompliance(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/ntia`);
-  }
-
   listRouteCanaries(params = {}) {
     return this.fetch(`/route-canaries${this.query(params)}`).then((result) => result ?? []);
   }

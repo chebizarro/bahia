@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -835,53 +834,6 @@ func (e publishAggregateError) Unwrap() []error {
 	return e.causes
 }
 
-// Subscribe creates a subscription on the first available relay.
-// It attempts each relay in order and returns the first successful subscription.
-func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nostr.Subscription, error) {
-	if len(filters) != 1 {
-		return nil, fmt.Errorf("single-relay Subscribe requires exactly one filter, got %d; use SubscribeAllWithEOSE for multi-filter coverage", len(filters))
-	}
-
-	p.mu.RLock()
-	relays := p.orderedRelaysLocked()
-	p.mu.RUnlock()
-
-	for _, mr := range relays {
-		if _, err := p.reconnectRelay(ctx, mr); err != nil {
-			continue
-		}
-		mr.mu.Lock()
-		if !mr.connected || mr.relay == nil {
-			mr.mu.Unlock()
-			continue
-		}
-
-		filter := filters[0]
-		sub, err := subscribeOnRelay(mr.relay, ctx, filter)
-		recordedAuthUnavailable := false
-		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
-			if authErr := p.authenticateManagedRelayLocked(ctx, mr); authErr == nil {
-				sub, err = subscribeOnRelay(mr.relay, ctx, filter)
-			} else {
-				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
-				recordedAuthUnavailable = true
-			}
-		}
-		if err != nil && !recordedAuthUnavailable {
-			p.recordRelayError(mr.url, err.Error())
-		}
-		mr.mu.Unlock()
-		if err != nil {
-			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
-			continue
-		}
-		p.recordRelayConnectionState(mr.url, true)
-		return sub, nil
-	}
-
-	return nil, fmt.Errorf("no relays available for subscription")
-}
-
 // RelayEOSE identifies the relay subscription that reached end-of-stored-events.
 type RelayEOSE struct {
 	RelayURL       string
@@ -1485,152 +1437,6 @@ func closeManagedRelay(pool *RelayPool, mr *managedRelay) {
 	mr.mu.Unlock()
 }
 
-func mergeSubscriptions(ctx context.Context, subs []*nostr.Subscription, buffer int) *MergedSubscription {
-	wrapped := make([]relaySubscription, 0, len(subs))
-	for _, sub := range subs {
-		wrapped = append(wrapped, relaySubscription{relayURL: relayURLForSubscription(sub), sub: sub})
-	}
-	return mergeRelaySubscriptions(ctx, wrapped, buffer)
-}
-
-func mergeRelaySubscriptions(ctx context.Context, subs []relaySubscription, buffer int) *MergedSubscription {
-	merged := make(chan *nostr.Event, buffer)
-	eoseChan := make(chan struct{})
-	relayEOSE := make(chan RelayEOSE, len(subs))
-	closed := make(chan RelayClosed, len(subs))
-	subscription := &MergedSubscription{
-		Events:            merged,
-		EndOfStoredEvents: eoseChan,
-		RelayEOSE:         relayEOSE,
-		Closed:            closed,
-		eventSources:      &sync.Map{},
-	}
-	relayURLs := make(map[string]struct{}, len(subs))
-	for _, relaySub := range subs {
-		if relaySub.relayURL != "" {
-			relayURLs[relaySub.relayURL] = struct{}{}
-		}
-	}
-	for relayURL := range relayURLs {
-		subscription.relayURLs = append(subscription.relayURLs, relayURL)
-	}
-	sort.Strings(subscription.relayURLs)
-	if len(subs) == 0 {
-		close(merged)
-		close(eoseChan)
-		close(relayEOSE)
-		close(closed)
-		return subscription
-	}
-
-	var eventsWg sync.WaitGroup
-	var eoseCount atomic.Int32
-	var closeEOSE sync.Once
-
-	eventsWg.Add(len(subs))
-	for _, relaySub := range subs {
-		go func(rs relaySubscription) {
-			defer eventsWg.Done()
-			s := rs.sub
-			var eoseCh <-chan nostr.EndOfStoredEvent
-			var eventsCh <-chan nostr.Event
-			var closedCh <-chan string
-			if s != nil {
-				eoseCh = s.EndOfStoredEvents
-				eventsCh = s.Events
-				closedCh = s.ClosedReason
-			}
-			terminal := false
-			markTerminal := func(realEOSE bool) {
-				if terminal {
-					return
-				}
-				terminal = true
-				if realEOSE {
-					info := RelayEOSE{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s)}
-					select {
-					case relayEOSE <- info:
-					case <-ctx.Done():
-					}
-				}
-				if eoseCount.Add(1) == int32(len(subs)) {
-					closeEOSE.Do(func() { close(eoseChan) })
-				}
-			}
-			// A subscription that terminates before protocol EOSE is still terminal
-			// for this catch-up attempt. Counting it prevents one dead relay from
-			// wedging the merged subscription while surviving relays continue.
-			defer markTerminal(false)
-
-			for eoseCh != nil || eventsCh != nil || closedCh != nil {
-				if closedCh != nil {
-					select {
-					case reason, ok := <-closedCh:
-						if ok {
-							emitRelayClosed(ctx, closed, RelayClosed{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s), Reason: reason})
-						}
-						closedCh = nil
-						continue
-					default:
-					}
-				}
-
-				select {
-				case <-ctx.Done():
-					return
-				case _, ok := <-eoseCh:
-					if ok || eoseCh != nil {
-						markTerminal(true)
-					}
-					eoseCh = nil
-				case reason, ok := <-closedCh:
-					if ok {
-						emitRelayClosed(ctx, closed, RelayClosed{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s), Reason: reason})
-					}
-					closedCh = nil
-				case ev, ok := <-eventsCh:
-					if !ok {
-						// The upstream subscription is over. Drain a CLOSED reason if it is already
-						// available. If the relay library has marked the subscription context as relay CLOSED,
-						// keep waiting for the protocol reason instead of racing channel ordering.
-						if closedCh != nil {
-							select {
-							case reason, ok := <-closedCh:
-								if ok {
-									emitRelayClosed(ctx, closed, RelayClosed{RelayURL: rs.relayURL, SubscriptionID: subscriptionID(s), Reason: reason})
-								}
-								return
-							default:
-								if subscriptionEndedByRelayClosed(s) {
-									eventsCh = nil
-									continue
-								}
-							}
-						}
-						return
-					}
-					event := ev
-					subscription.recordEventSource(event.ID.Hex(), rs.relayURL)
-					select {
-					case merged <- &event:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}(relaySub)
-	}
-
-	go func() {
-		eventsWg.Wait()
-		close(merged)
-		close(relayEOSE)
-		close(closed)
-	}()
-
-	return subscription
-}
-
 func emitRelayClosed(ctx context.Context, closed chan<- RelayClosed, info RelayClosed) bool {
 	select {
 	case closed <- info:
@@ -1638,21 +1444,6 @@ func emitRelayClosed(ctx context.Context, closed chan<- RelayClosed, info RelayC
 	case <-ctx.Done():
 		return false
 	}
-}
-
-func subscriptionEndedByRelayClosed(sub *nostr.Subscription) bool {
-	if sub == nil || sub.Context == nil {
-		return false
-	}
-	cause := context.Cause(sub.Context)
-	return cause != nil && strings.Contains(cause.Error(), "CLOSED received")
-}
-
-func relayURLForSubscription(sub *nostr.Subscription) string {
-	if sub == nil || sub.Relay == nil {
-		return ""
-	}
-	return sub.Relay.URL
 }
 
 func subscriptionID(sub *nostr.Subscription) string {

@@ -55,27 +55,7 @@ api.query({ status: 'running', tags: ['gpu', 'us-west'], empty: '' });
 
 ## Implemented domain methods
 
-The current client exposes only SBOM and Blossom compatibility methods.
-
-### SBOM
-
-```javascript
-await api.getSBOM(artifactId);
-await api.getSBOMPackages(artifactId, { limit: 50, offset: 0 });
-await api.searchSBOMPackages({ name: 'openssl' });
-await api.ingestSBOM(artifactId, payload);
-await api.getSBOMAttestation(artifactId);
-await api.getSBOMNTIACompliance(artifactId);
-```
-
-Paths:
-
-- `GET /api/v1/artifacts/{artifactId}/sbom`
-- `GET /api/v1/artifacts/{artifactId}/sbom/packages`
-- `GET /api/v1/sbom/search`
-- `POST /api/v1/artifacts/{artifactId}/sbom`
-- `GET /api/v1/artifacts/{artifactId}/sbom/attestation`
-- `GET /api/v1/artifacts/{artifactId}/sbom/ntia`
+The current client exposes Blossom, route-canary, instance-health and config-fabric compatibility methods. The SBOM REST methods (`getSBOM`, `getSBOMPackages`, `searchSBOMPackages`, `ingestSBOM`, `getSBOMAttestation`, `getSBOMNTIACompliance`) were removed in bahia-irsry.8 (audit A-30) because nothing called them; SBOM availability is read from relay SBOM reference events (`$lib/stores/collections/sbom.svelte.js`).
 
 ### Blossom
 
@@ -96,7 +76,7 @@ const blob = await response.blob();
 
 ## What is not on this client
 
-There are no `listServices`, `createService`, `listEnvironments`, deployment, policy, secret, worker, state, payment, notification, LLM, or SoulFactory methods on `BahiaClient`.
+There are no SBOM, `listServices`, `createService`, `listEnvironments`, deployment, policy, secret, worker, state, payment, notification, LLM, or SoulFactory methods on `BahiaClient`.
 
 Current browser paths use:
 
@@ -112,13 +92,13 @@ Do not add a convenient REST method for a domain whose authoritative mutation pa
 
 ```javascript
 try {
-  const sbom = await api.getSBOM(artifactId);
+  const canaries = await api.listRouteCanaries({ service_id: serviceId });
 } catch (error) {
   console.error(error.message);
 }
 ```
 
-For `{"error":"artifact not found"}`, the thrown message is `artifact not found`. If the body is not JSON, the fallback is `HTTP <status>: <statusText>`.
+For `{"error":"service not found"}`, the thrown message is `service not found`. If the body is not JSON, the fallback is `HTTP <status>: <statusText>`.
 
 ## Extending the client
 

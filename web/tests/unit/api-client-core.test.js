@@ -75,18 +75,14 @@ describe('BahiaClient core HTTP behavior', () => {
     await expect(client.fetch('/blossom/health', { retries: 0 })).rejects.toThrow('HTTP 500: Internal Server Error');
   });
 
-  it('supports the live Blossom and SBOM route calls', async () => {
+  it('supports the live Blossom route calls', async () => {
     global.fetch
       .mockResolvedValueOnce(response({ data: ['https://blossom.example'] }))
       .mockResolvedValueOnce(response({ data: { 'https://blossom.example': 'ok' } }))
-      .mockResolvedValueOnce(response({ data: [{ sha256: 'abc' }] }))
-      .mockResolvedValueOnce(response({ data: { bomFormat: 'CycloneDX' } }))
-      .mockResolvedValueOnce(response({ data: { statement: 'attested' } }));
+      .mockResolvedValueOnce(response({ data: [{ sha256: 'abc' }] }));
 
     await expect(client.getBlossomServers()).resolves.toEqual(['https://blossom.example']);
     await expect(client.checkBlossomHealth()).resolves.toEqual({ 'https://blossom.example': 'ok' });
     await expect(client.listBlossomBlobs()).resolves.toEqual([{ sha256: 'abc' }]);
-    await expect(client.getSBOM('artifact-1')).resolves.toEqual({ bomFormat: 'CycloneDX' });
-    await expect(client.getSBOMAttestation('artifact-1')).resolves.toEqual({ statement: 'attested' });
   });
 });

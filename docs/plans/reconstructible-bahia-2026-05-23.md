@@ -2,7 +2,7 @@
 
 ## Goal
 
-Evolve Bahia from a DB-coupled management server into a reconstructible, relay-canonical orchestration fabric where Nostr relays hold canonical state, Postgres becomes a disposable cache, and fresh Bahia instances can cold-start by replaying the event graph — making Bahia itself restartable, replaceable infrastructure rather than a sacred cluster brain.
+The charter that used to open this plan is now normative and lives in [`docs/architecture.md`, "Charter: relay-canonical Bahia"](../architecture.md#charter-relay-canonical-bahia-normative) (moved 2026-09-30, bahia-irsry.8). This file is the historical implementation plan from 2026-05-23. Where it conflicts with the charter or with `docs/investigations/nostr-first-architecture-audit-2026-09-29.md`, for example on Postgres-backed dedup/cursors, projector snapshot republish or timeout-based EOSE completion, the charter and the audit win.
 
 ## Background
 

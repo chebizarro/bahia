@@ -26,7 +26,11 @@ Do not build:
 - timeout-based completion
 - fake request/response wrappers over relays
 
-Approved exception: ContextVM JSON-RPC kind `25910`, optionally wrapped with CEP-4/NIP-59 `1059` or `21059`, is Bahia's canonical mutation intent transport. A ContextVM response is only an acknowledgment; durable progress and terminal truth still come from scoped subscriptions to canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and relevant standard NIPs).
+Reads are REQ subscriptions against addressable state; ContextVM is not a read path. Relays (addressable events) are canonical and Postgres is an optional, derived index or cache; see the charter in `docs/architecture.md` ("Charter: relay-canonical Bahia") and its source-of-truth table for the current gaps (epic `bahia-irsry`).
+
+Approved exception, narrowed: ContextVM JSON-RPC kind `25910`, optionally wrapped with CEP-4/NIP-59 `1059` or `21059`, is for interactive RPC only: assistant turns, secret reveal and log fetch. Never use it to read state, and do not add new ContextVM read or CRUD methods. Existing ContextVM mutation handlers are legacy transport being replaced by client-signed intent events (`bahia-irsry` Phases 3-5). A ContextVM response is only an acknowledgment; durable progress and terminal truth come from scoped subscriptions to canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and relevant standard NIPs).
+
+Architecture ratchet: `make lint-arch` (also run by `go test ./...` and `pnpm run test:unit`) fails on new legacy kinds outside `internal/nostrmigration`, direct library relay subscriptions outside the relay pool/SoulFactory bus, unannotated `time.NewTicker`/`time.Tick` in `internal/service` or `internal/reconcile` (justify with `//nostr:allow-poll <reason>`), test-only exported symbols in `internal/`, `setInterval` or `$lib/api/client.js` imports in web stores, and ungated DB-less routes. Fix the violation; never grow a baseline by hand. `make arch-baseline` regenerates baselines only after violations are removed.
 
 For event-kind selection, event shapes, legacy-kind migration boundaries, and Cascadia fleet interoperability, follow `docs/nostr-event-implementation-guide.md`. Treat that guide as the Bahia-specific authority before introducing or reusing any Nostr kind.
 
