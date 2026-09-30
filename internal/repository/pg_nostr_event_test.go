@@ -48,7 +48,7 @@ func TestPgNostrEventRepositoryRecordReportsInserted(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO nostr_events").
 		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, rec.Sig, rec.CreatedAt, rec.ReceivedAt, rec.EntityType, rec.EntityID,
-			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt).
+			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt, NostrPublishTargetDefault).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 
 	inserted, err := repo.Record(ctx, rec)
@@ -76,7 +76,7 @@ func TestPgNostrEventRepositoryRecordReportsDuplicate(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO nostr_events").
 		WithArgs(rec.ID, rec.Kind, rec.PubKey, rec.Content, rec.Tags, pgxmock.AnyArg(), rec.CreatedAt, pgxmock.AnyArg(), rec.EntityType, rec.EntityID,
-			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt).
+			NostrPublishStateNotApplicable, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt, NostrPublishTargetDefault).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0"))
 
 	inserted, err := repo.Record(ctx, rec)
@@ -120,5 +120,38 @@ func TestPgNostrEventRepositoryLatestCreatedAtForKindsAndAuthors(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.True(t, latest.Equal(*got))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgNostrEventRepositoryListUnpublishedAfterUsesKeysetCursor(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgNostrEventRepositoryWithDB(mock)
+	cursor := &NostrOutboxCursor{ReceivedAt: time.Unix(100, 0).UTC(), ID: "event-9"}
+	mock.ExpectQuery(`WHERE publish_state = \$1 AND publish_target = \$2 AND \(received_at, id\) > \(\$3, \$4\) ORDER BY received_at ASC, id ASC LIMIT \$5`).
+		WithArgs(NostrPublishStatePending, NostrPublishTargetControlPlane, cursor.ReceivedAt, cursor.ID, 25).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "kind", "pubkey", "content", "tags", "sig", "created_at", "received_at", "entity_type", "entity_id", "publish_state", "publish_attempts", "last_publish_error", "published_at", "publish_target"}))
+
+	records, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetControlPlane, cursor, 25)
+	require.NoError(t, err)
+	require.Empty(t, records)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgNostrEventRepositoryAbandonPublishOnlyUpdatesPendingRows(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgNostrEventRepositoryWithDB(mock)
+	mock.ExpectExec(`UPDATE nostr_events\s+SET publish_state = \$2, publish_attempts = publish_attempts \+ 1,\s+last_publish_error = \$3\s+WHERE id = \$1 AND publish_state = \$4`).
+		WithArgs("event-1", NostrPublishStateFailed, "abandoned: blocked: no", NostrPublishStatePending).
+		WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+
+	require.NoError(t, repo.AbandonPublish(ctx, "event-1", "abandoned: blocked: no"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

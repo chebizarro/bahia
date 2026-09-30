@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -102,99 +103,6 @@ func TestBootstrapperTimeoutFallsBackToLowerTier(t *testing.T) {
 	require.Equal(t, 4, cache.count())
 }
 
-func TestBootstrapperLiveCatchupCompletesAfterFirstRelayEOSE(t *testing.T) {
-	catalog := testBootstrapCatalog()
-	cache := &bootstrapApplyRecorder{}
-	original := bootstrapSubscribeAllWithEOSE
-	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
-		require.Len(t, filters, 1)
-		require.Len(t, filters[0].Kinds, 1)
-		kind := int(filters[0].Kinds[0])
-		if kind != testKindTier1Live {
-			return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{
-				events: []*gonostr.Event{signedBootstrapEvent(t, kind, "snapshot")},
-				eose:   true,
-			}), nil
-		}
-
-		subCtx, cancel := context.WithCancel(ctx)
-		events := make(chan *gonostr.Event, 1)
-		relayEOSE := make(chan RelayEOSE, 1)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			events <- signedBootstrapEvent(t, testKindTier1Live, "live")
-			relayEOSE <- RelayEOSE{RelayURL: "wss://fast.example"}
-			<-subCtx.Done()
-		}()
-		t.Cleanup(func() { <-done })
-		return &MergedSubscription{
-			Events:            events,
-			EndOfStoredEvents: make(chan struct{}),
-			RelayEOSE:         relayEOSE,
-			Closed:            make(chan RelayClosed),
-			closeFn:           cancel,
-		}, nil
-	}
-	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
-
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
-
-	err := bootstrapper.Run(context.Background())
-
-	require.NoError(t, err)
-	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 1, bootstrapper.ReadyTier())
-	progress := bootstrapper.Progress()
-	require.Equal(t, BootstrapPhaseReady, progress.Phase)
-	require.Equal(t, 3, progress.GroupsComplete)
-	require.Equal(t, 3, cache.count())
-}
-
-func TestBootstrapperSnapshotCompletesAfterFirstRelayEOSEAndToleratesClosedRelay(t *testing.T) {
-	catalog := testBootstrapCatalog()
-	cache := &bootstrapApplyRecorder{}
-	original := bootstrapSubscribeAllWithEOSE
-	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
-		kind := int(filters[0].Kinds[0])
-		if kind != testKindTier1Snapshot {
-			return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{
-				events: []*gonostr.Event{signedBootstrapEvent(t, kind, "complete")},
-				eose:   true,
-			}), nil
-		}
-		events := make(chan *gonostr.Event, 1)
-		relayEOSE := make(chan RelayEOSE, 1)
-		closed := make(chan RelayClosed, 1)
-		events <- signedBootstrapEvent(t, kind, "snapshot")
-		closed <- RelayClosed{RelayURL: "wss://closed.example", Reason: "maintenance"}
-		relayEOSE <- RelayEOSE{RelayURL: "wss://ready.example"}
-		return &MergedSubscription{
-			Events:            events,
-			EndOfStoredEvents: make(chan struct{}),
-			RelayEOSE:         relayEOSE,
-			Closed:            closed,
-			relayURLs:         []string{"wss://closed.example", "wss://ready.example", "wss://slow.example"},
-			closeFn:           func() {},
-		}, nil
-	}
-	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
-
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
-
-	require.NoError(t, bootstrapper.Run(context.Background()))
-	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 3, cache.count())
-}
-
 func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 	original := bootstrapSubscribeAllWithEOSE
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, _ context.Context, _ []gonostr.Filter) (*MergedSubscription, error) {
@@ -213,14 +121,16 @@ func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 		RequestedTier:   0,
 		SnapshotTimeout: 10 * time.Millisecond,
 	})
-	_, _, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], []gonostr.Filter{{}}, 10*time.Millisecond)
+	_, _, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], gonostr.Filter{}, 10*time.Millisecond)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wss://one.example")
 	require.Equal(t, "tier0_snapshot", bootstrapper.Progress().CurrentGroup)
 	require.Equal(t, []string{"wss://one.example", "wss://two.example"}, bootstrapper.Progress().BlockingRelays)
 }
 
-func TestBootstrapperNoRelayDataFails(t *testing.T) {
+// An empty fleet is synced, not failed: every required group reached EOSE
+// with no stored events, so the requested tier is ready (bahia-irsry.20).
+func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
 		testKindTier0Snapshot: {eose: true},
@@ -234,13 +144,17 @@ func TestBootstrapperNoRelayDataFails(t *testing.T) {
 		CatchupTimeout:  50 * time.Millisecond,
 	})
 
+	cache := &bootstrapApplyRecorder{}
+	bootstrapper.cache = cache
+
 	err := bootstrapper.attemptBootstrap(context.Background())
 
-	require.Error(t, err)
-	require.False(t, bootstrapper.Ready())
-	require.Equal(t, -1, bootstrapper.ReadyTier())
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	require.Equal(t, 1, bootstrapper.ReadyTier())
+	require.Zero(t, cache.count())
 	progress := bootstrapper.Progress()
-	require.Equal(t, BootstrapPhaseFailed, progress.Phase)
+	require.Equal(t, BootstrapPhaseReady, progress.Phase)
 	require.Equal(t, 3, progress.GroupsComplete)
 }
 
@@ -260,14 +174,16 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 		attempt := attemptsByKind[kind]
 		attemptsMu.Unlock()
 
+		if attempt == 1 {
+			// No relay reachable: every group fails, so the attempt fails.
+			return nil, errors.New("no connected relays")
+		}
 		script := scriptedBootstrapSubscription{eose: true}
-		if attempt > 1 {
-			switch kind {
-			case testKindTier1Snapshot:
-				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "retry-snapshot")}
-			case testKindTier1Live:
-				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "retry-live")}
-			}
+		switch kind {
+		case testKindTier1Snapshot:
+			script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "retry-snapshot")}
+		case testKindTier1Live:
+			script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "retry-live")}
 		}
 		return scriptedMergedSubscription(ctx, script), nil
 	}
@@ -330,11 +246,11 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	catalog := &KindCatalog{
 		Version: "test",
 		Groups: []ReplayGroup{
-			{Name: "system_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true},
-			{Name: "continuity_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true},
-			{Name: "continuity_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true},
-			{Name: "core_registry_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true},
-			{Name: "core_control_plane_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true},
+			{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+			{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsControlPlane},
+			{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+			{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+			{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 		},
 		decoders: map[int]DecodeFunc{
 			testKindTier0Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -384,13 +300,54 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 
 	err = bootstrapper.attemptBootstrap(context.Background())
 
-	require.Error(t, err)
-	require.NotEmpty(t, captured)
+	require.NoError(t, err)
+	require.Equal(t, 2, bootstrapper.ReadyTier())
+	require.Len(t, captured, 5)
 	require.Equal(t, projectionAuthors, captured[0].Authors)
 	require.Equal(t, controlPlaneAuthors, captured[1].Authors)
 	require.Equal(t, projectionAuthors, captured[2].Authors)
 	require.Equal(t, controlPlaneAuthors, captured[3].Authors)
 	require.Equal(t, controlPlaneAuthors, captured[4].Authors)
+}
+
+func TestBootstrapperUnknownAuthorScopeIsHardError(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	catalog.Groups[0].Authors = ""
+	subscribed := false
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, _ []gonostr.Filter) (*MergedSubscription, error) {
+		subscribed = true
+		return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{eose: true}), nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{RequestedTier: 1})
+	err := bootstrapper.attemptBootstrap(context.Background())
+
+	require.ErrorContains(t, err, `bootstrap group "tier0_snapshot"`)
+	require.ErrorContains(t, err, "unknown author scope")
+	require.False(t, subscribed, "an unscoped group must never be replayed")
+	progress := bootstrapper.Progress()
+	require.Equal(t, BootstrapPhaseFailed, progress.Phase)
+	require.Equal(t, "tier0_snapshot", progress.CurrentGroup)
+	require.Contains(t, progress.LastError, "unknown author scope")
+}
+
+func TestBootstrapperScopedGroupWithoutConfiguredAuthorsIsHardError(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	catalog.Groups[0].Authors = ReplayAuthorsProjection
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, _ context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		t.Fatalf("scoped group without authors was replayed with filter %+v", filters)
+		return nil, nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{RequestedTier: 0})
+	err := bootstrapper.attemptBootstrap(context.Background())
+
+	require.ErrorContains(t, err, "requires projection authors but none are configured")
+	require.Equal(t, -1, bootstrapper.ReadyTier())
 }
 
 func TestBootstrapperProgressReturnsSnapshot(t *testing.T) {
@@ -446,11 +403,11 @@ func TestBootstrapperReadyTierComputation(t *testing.T) {
 
 func testBootstrapCatalog() *KindCatalog {
 	groups := []ReplayGroup{
-		{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true},
-		{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true},
-		{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true},
-		{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true},
-		{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true},
+		{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
 	}
 	catalog := &KindCatalog{Version: "test", Groups: groups, decoders: make(map[int]DecodeFunc)}
 	for _, group := range groups {

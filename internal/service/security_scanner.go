@@ -1045,6 +1045,15 @@ func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.Sec
 		_ = s.repo.UpsertSecurityPublication(ctx, publication)
 	}
 	results, err := s.publisher.PublishSignedEventWithResults(ctx, ev)
+	if nostrutil.IsPublishQueued(err) {
+		// Below the publish quorum but durably queued: the outbox runner keeps
+		// retrying this exact signed event. Record it as pending under its
+		// event ID rather than as a failure that invites a re-sign.
+		if s.repo != nil {
+			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPending, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
+		}
+		return nil
+	}
 	if err != nil {
 		if s.repo != nil {
 			next := time.Now().UTC().Add(time.Minute)

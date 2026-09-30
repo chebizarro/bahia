@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -23,6 +24,12 @@ const (
 
 const maxBootstrapRetryInterval = 5 * time.Minute
 
+// defaultBootstrapPageLimit bounds every replay REQ explicitly. It sits at or
+// below common relay query caps (strfry's default maxFilterLimit is 500, the
+// Bahia relay sidecar's MaxQueryLimit is 2000) so a full page is detectable
+// and the next page is requested with `until` instead of silently truncating.
+const defaultBootstrapPageLimit = 500
+
 type BootstrapProgress struct {
 	Phase          BootstrapPhase
 	RequestedTier  int
@@ -36,10 +43,13 @@ type BootstrapProgress struct {
 }
 
 type BootstrapConfig struct {
-	RequestedTier       int
-	SnapshotTimeout     time.Duration
-	CatchupTimeout      time.Duration
-	RetryInterval       time.Duration
+	RequestedTier   int
+	SnapshotTimeout time.Duration
+	CatchupTimeout  time.Duration
+	RetryInterval   time.Duration
+	// PageLimit is the explicit `limit` on every replay REQ page. A page
+	// that returns PageLimit events is followed by an `until`-bounded page.
+	PageLimit           int
 	ProjectionAuthors   []string
 	ControlPlaneAuthors []string
 }
@@ -104,6 +114,9 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursorPlanner *Repla
 	}
 	if config.RetryInterval <= 0 {
 		config.RetryInterval = 30 * time.Second
+	}
+	if config.PageLimit <= 0 {
+		config.PageLimit = defaultBootstrapPageLimit
 	}
 	if config.RequestedTier < 0 {
 		config.RequestedTier = 0
@@ -184,6 +197,11 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		progress.LastError = ""
 	})
 
+	// A group is completed only when every page reached a terminal state on
+	// every relay with at least one real EOSE (see runPage). Readiness is
+	// "synced", not "non-empty": a brand-new fleet whose relays all answer
+	// EOSE with no stored events is ready, while a group whose relays all
+	// CLOSED or dropped is not completed no matter what they sent.
 	completed := make(map[string]bool, len(groups))
 	decodedEvents := 0
 
@@ -192,12 +210,11 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if !group.Snapshot {
 			continue
 		}
-		filters, filterErr := b.snapshotFilters(group, startedAt)
+		filter, filterErr := b.snapshotFilter(group, startedAt)
 		if filterErr != nil {
-			b.logger.Warn("bootstrap snapshot filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
-			continue
+			return b.failAttempt(group.Name, filterErr)
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.SnapshotTimeout)
+		ok, applied, err := b.runGroup(ctx, group, filter, b.config.SnapshotTimeout)
 		decodedEvents += applied
 		if err != nil {
 			b.recordGroupFailure(group.Name, err)
@@ -214,12 +231,11 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if group.Snapshot {
 			continue
 		}
-		filters, filterErr := b.liveFilters(ctx, group, startedAt)
+		filter, filterErr := b.liveFilter(ctx, group, startedAt)
 		if filterErr != nil {
-			b.logger.Warn("bootstrap live filter build failed", zap.String("group", group.Name), zap.Error(filterErr))
-			continue
+			return b.failAttempt(group.Name, filterErr)
 		}
-		ok, applied, err := b.runGroup(ctx, group, filters, b.config.CatchupTimeout)
+		ok, applied, err := b.runGroup(ctx, group, filter, b.config.CatchupTimeout)
 		decodedEvents += applied
 		if err != nil {
 			b.recordGroupFailure(group.Name, err)
@@ -232,7 +248,7 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 	}
 
 	readyTier := b.computeReadyTier(completed)
-	if readyTier < 0 || decodedEvents == 0 {
+	if readyTier < 0 {
 		b.setProgress(func(progress *BootstrapProgress) {
 			progress.Phase = BootstrapPhaseFailed
 			progress.ReadyTier = -1
@@ -247,7 +263,24 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		progress.Phase = BootstrapPhaseReady
 		progress.ReadyTier = readyTier
 	})
+	b.logger.Info("bootstrap ready",
+		zap.Int("ready_tier", readyTier),
+		zap.Int("groups_synced", len(completed)),
+		zap.Int("events_applied", decodedEvents))
 	return nil
+}
+
+// failAttempt ends a bootstrap attempt on a configuration error that no relay
+// response can fix, such as a replay group with no usable author scope.
+func (b *Bootstrapper) failAttempt(group string, err error) error {
+	err = fmt.Errorf("bootstrap group %q: %w", group, err)
+	b.setProgress(func(progress *BootstrapProgress) {
+		progress.Phase = BootstrapPhaseFailed
+		progress.ReadyTier = -1
+		progress.CurrentGroup = group
+		progress.LastError = err.Error()
+	})
+	return err
 }
 
 func (b *Bootstrapper) Progress() BootstrapProgress {
@@ -273,13 +306,73 @@ func (b *Bootstrapper) requiredGroupsAtOrBelowRequestedTier() []ReplayGroup {
 	return b.catalog.RequiredGroupsForTier(b.config.RequestedTier)
 }
 
-func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters []gonostr.Filter, timeout time.Duration) (bool, int, error) {
-	if err := ctx.Err(); err != nil {
-		return false, 0, err
+// runGroup replays one group to completion, paging backwards with `until`
+// whenever a page comes back full. The returned count is events applied.
+func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, base gonostr.Filter, timeout time.Duration) (bool, int, error) {
+	limit := b.config.PageLimit
+	if limit <= 0 {
+		limit = defaultBootstrapPageLimit
 	}
-	subscription, err := bootstrapSubscribeAllWithEOSE(b.pool, ctx, filters)
+	applied := make(map[string]struct{})
+	until := base.Until
+	for page := 1; ; page++ {
+		filter := base
+		filter.Limit = limit
+		filter.Until = until
+		result, err := b.runPage(ctx, group, filter, timeout, applied)
+		if err != nil {
+			return false, len(applied), err
+		}
+		if len(result.createdAt) < limit {
+			b.clearGroupProgress()
+			return true, len(applied), nil
+		}
+		// Each relay returns at most `limit` of its newest matching events,
+		// so any relay that filled its page has its oldest returned event at
+		// or before the limit-th newest event of the merged page. Paging from
+		// there (inclusive) cannot skip an older event on any relay; events
+		// already applied are deduplicated by ID.
+		next := result.nthNewest(limit)
+		if until != 0 && next >= until {
+			return false, len(applied), fmt.Errorf("bootstrap group %q page %d: at least %d events share created_at %d; cannot page past them with until", group.Name, page, limit, next)
+		}
+		b.logger.Debug("bootstrap group page full; requesting older page",
+			zap.String("group", group.Name),
+			zap.Int("page", page),
+			zap.Int("limit", limit),
+			zap.Int64("until", int64(next)))
+		until = next
+	}
+}
+
+type bootstrapPageResult struct {
+	// createdAt holds one entry per distinct event ID the page delivered,
+	// including events that were later rejected, because every delivered
+	// event counts against the relay's limit.
+	createdAt []gonostr.Timestamp
+}
+
+// nthNewest returns the created_at of the n-th newest delivered event.
+// Callers guarantee len(r.createdAt) >= n.
+func (r bootstrapPageResult) nthNewest(n int) gonostr.Timestamp {
+	sorted := append([]gonostr.Timestamp(nil), r.createdAt...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] > sorted[j] })
+	return sorted[n-1]
+}
+
+// runPage runs one REQ across every relay and returns only after each relay
+// the REQ reached has hit a terminal state: EOSE, CLOSED, or a dropped
+// connection. A relay that closes or fails is terminal for itself only; it
+// never completes the page on behalf of a relay that is still sending
+// stored events. At least one relay must send a real EOSE.
+func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter gonostr.Filter, timeout time.Duration, applied map[string]struct{}) (bootstrapPageResult, error) {
+	var result bootstrapPageResult
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	subscription, err := bootstrapSubscribeAllWithEOSE(b.pool, ctx, []gonostr.Filter{filter})
 	if err != nil {
-		return false, 0, err
+		return result, err
 	}
 	defer subscription.Close()
 	b.setProgress(func(progress *BootstrapProgress) {
@@ -288,6 +381,13 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 		progress.LastError = ""
 	})
 
+	allowedAuthors := make(map[gonostr.PubKey]struct{}, len(filter.Authors))
+	for _, author := range filter.Authors {
+		allowedAuthors[author] = struct{}{}
+	}
+	delivered := make(map[string]struct{})
+	eoseRelays := make(map[string]struct{})
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	eventsCh := subscription.Events
@@ -295,10 +395,29 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 	relayEOSECh := subscription.RelayEOSE
 	closedCh := subscription.Closed
 
-	applied := 0
-	applyEvent := func(event *gonostr.Event) error {
+	handleEvent := func(event *gonostr.Event) error {
 		if event == nil {
 			return nil
+		}
+		id := eventIDHex(event)
+		if _, dup := delivered[id]; dup {
+			return nil
+		}
+		delivered[id] = struct{}{}
+		result.createdAt = append(result.createdAt, event.CreatedAt)
+		if _, done := applied[id]; done {
+			return nil
+		}
+		if len(allowedAuthors) > 0 {
+			if _, ok := allowedAuthors[event.PubKey]; !ok {
+				b.logger.Warn("bootstrap event rejected: author outside replay group scope",
+					zap.String("group", group.Name),
+					zap.String("scope", string(group.Authors)),
+					zap.Int("kind", eventKindInt(event)),
+					zap.String("event_id", id),
+					zap.String("pubkey", event.PubKey.Hex()))
+				return nil
+			}
 		}
 		if err := b.decodeAndApply(ctx, group, event); err != nil {
 			var decodeErr *bootstrapEventDecodeError
@@ -306,13 +425,13 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 				b.logger.Warn("bootstrap event skipped",
 					zap.String("group", group.Name),
 					zap.Int("kind", eventKindInt(event)),
-					zap.String("event_id", eventIDHex(event)),
+					zap.String("event_id", id),
 					zap.Error(decodeErr))
 				return nil
 			}
 			return err
 		}
-		applied++
+		applied[id] = struct{}{}
 		return nil
 	}
 	drainEvents := func() error {
@@ -323,7 +442,7 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 					eventsCh = nil
 					return nil
 				}
-				if err := applyEvent(event); err != nil {
+				if err := handleEvent(event); err != nil {
 					return err
 				}
 			default:
@@ -334,58 +453,87 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 	}
 	for {
 		if eventsCh == nil && aggregateEOSECh == nil && relayEOSECh == nil && closedCh == nil {
-			return false, applied, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
+			return result, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
 		}
 		select {
 		case <-ctx.Done():
-			return false, applied, ctx.Err()
+			return result, ctx.Err()
 		case <-timer.C:
 			blocking := subscription.PendingEOSE()
 			if len(blocking) == 0 {
 				blocking = subscription.RelayURLs()
 			}
 			b.setBlockingRelays(blocking)
-			return false, applied, fmt.Errorf("bootstrap group %q timed out waiting for EOSE from relays %v", group.Name, blocking)
+			return result, fmt.Errorf("bootstrap group %q timed out waiting for EOSE from relays %v", group.Name, blocking)
 		case <-aggregateEOSECh:
+			// Every relay the REQ reached is now terminal.
 			if !subscription.HasRealEOSE() {
-				return false, applied, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
+				return result, fmt.Errorf("bootstrap group %q ended before any relay EOSE", group.Name)
 			}
 			if err := drainEvents(); err != nil {
-				return false, applied, err
+				return result, err
 			}
-			b.clearGroupProgress()
-			return true, applied, nil
-		case relayEOSE, ok := <-relayEOSECh:
-			if ok {
-				if err := drainEvents(); err != nil {
-					return false, applied, err
+			for relayEOSECh != nil {
+				select {
+				case relayEOSE, ok := <-relayEOSECh:
+					if !ok {
+						relayEOSECh = nil
+						continue
+					}
+					eoseRelays[relayEOSE.RelayURL] = struct{}{}
+					continue
+				default:
 				}
-				b.removeBlockingRelay(relayEOSE.RelayURL)
-				b.clearGroupProgress()
-				return true, applied, nil
+				break
 			}
-			relayEOSECh = nil
+			b.warnRelaysWithoutEOSE(group, subscription, eoseRelays)
+			return result, nil
+		case relayEOSE, ok := <-relayEOSECh:
+			if !ok {
+				relayEOSECh = nil
+				continue
+			}
+			eoseRelays[relayEOSE.RelayURL] = struct{}{}
+			b.removeBlockingRelay(relayEOSE.RelayURL)
 		case closed, ok := <-closedCh:
-			if ok {
-				b.removeBlockingRelay(closed.RelayURL)
-				b.logger.Warn("relay closed during bootstrap group; waiting for remaining relay quorum",
-					zap.String("group", group.Name),
-					zap.String("relay", closed.RelayURL),
-					zap.String("subscription_id", closed.SubscriptionID),
-					zap.String("reason", closed.Reason))
-			} else {
+			if !ok {
 				closedCh = nil
+				continue
 			}
+			b.removeBlockingRelay(closed.RelayURL)
+			b.logger.Warn("relay closed bootstrap subscription; still waiting for the other relays",
+				zap.String("group", group.Name),
+				zap.String("relay", closed.RelayURL),
+				zap.String("subscription_id", closed.SubscriptionID),
+				zap.String("reason", closed.Reason))
 		case event, ok := <-eventsCh:
 			if !ok {
 				eventsCh = nil
 				continue
 			}
-			if err := applyEvent(event); err != nil {
-				return false, applied, err
+			if err := handleEvent(event); err != nil {
+				return result, err
 			}
 		}
 	}
+}
+
+func (b *Bootstrapper) warnRelaysWithoutEOSE(group ReplayGroup, subscription *MergedSubscription, eoseRelays map[string]struct{}) {
+	if subscription.AllRelaysReachedEOSE() {
+		return
+	}
+	var missing []string
+	for _, relayURL := range subscription.RelayURLs() {
+		if _, ok := eoseRelays[relayURL]; !ok {
+			missing = append(missing, relayURL)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	b.logger.Warn("bootstrap group completed without EOSE from some relays; their stored history is not included",
+		zap.String("group", group.Name),
+		zap.Strings("relays", missing))
 }
 
 func (b *Bootstrapper) setBlockingRelays(relays []string) {
@@ -453,26 +601,18 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 	return nil
 }
 
-func (b *Bootstrapper) snapshotFilters(group ReplayGroup, startedAt time.Time) ([]gonostr.Filter, error) {
+func (b *Bootstrapper) snapshotFilter(group ReplayGroup, startedAt time.Time) (gonostr.Filter, error) {
 	until := gonostr.Timestamp(startedAt.Unix())
-	filter, err := b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Until: until})
-	if err != nil {
-		return nil, err
-	}
-	return []gonostr.Filter{filter}, nil
+	return b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Until: until})
 }
 
-func (b *Bootstrapper) liveFilters(ctx context.Context, group ReplayGroup, startedAt time.Time) ([]gonostr.Filter, error) {
+func (b *Bootstrapper) liveFilter(ctx context.Context, group ReplayGroup, startedAt time.Time) (gonostr.Filter, error) {
 	since := b.cursorSince(ctx, group.Kinds)
 	if since == nil {
 		fallback := gonostr.Timestamp(startedAt.Unix())
 		since = &fallback
 	}
-	filter, err := b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Since: *since})
-	if err != nil {
-		return nil, err
-	}
-	return []gonostr.Filter{filter}, nil
+	return b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Since: *since})
 }
 
 func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Timestamp {
@@ -482,31 +622,47 @@ func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Ti
 	return b.cursorPlanner.ComputeSince(ctx, kinds)
 }
 
+// scopedFilter applies the group's author scope. Scoped groups with no
+// configured authors, and groups with an unknown scope, are hard errors:
+// replaying them unscoped would let any pubkey's events count.
 func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) (gonostr.Filter, error) {
 	var authors []string
-	switch group.Name {
-	case "system_snapshot", "worker_snapshot", "core_registry_snapshot":
+	switch group.Authors {
+	case ReplayAuthorsAny:
+		return filter, nil
+	case ReplayAuthorsProjection:
 		authors = b.config.ProjectionAuthors
-	case "continuity_snapshot", "continuity_live", "core_control_plane_live":
+	case ReplayAuthorsControlPlane:
 		authors = b.config.ControlPlaneAuthors
+	default:
+		return gonostr.Filter{}, fmt.Errorf("replay group has unknown author scope %q", group.Authors)
 	}
-	if len(authors) > 0 {
-		converted, err := filterAuthorsFromHex(authors)
-		if err != nil {
-			return gonostr.Filter{}, err
-		}
-		filter.Authors = converted
+	if len(authors) == 0 {
+		return gonostr.Filter{}, fmt.Errorf("replay group requires %s authors but none are configured", group.Authors)
 	}
+	converted, err := filterAuthorsFromHex(authors)
+	if err != nil {
+		return gonostr.Filter{}, err
+	}
+	filter.Authors = converted
 	return filter, nil
 }
 
+// computeReadyTier returns the highest tier at or below the requested tier
+// whose required groups all synced. A tier with no required groups is never
+// ready: with nothing replayed there is no relay EOSE proving anything, and
+// counting it would let an attempt in which every relay failed succeed.
 func (b *Bootstrapper) computeReadyTier(completed map[string]bool) int {
 	if b == nil || b.catalog == nil {
 		return -1
 	}
 	for tier := b.config.RequestedTier; tier >= 0; tier-- {
+		required := b.catalog.RequiredGroupsForTier(tier)
+		if len(required) == 0 {
+			continue
+		}
 		ready := true
-		for _, group := range b.catalog.RequiredGroupsForTier(tier) {
+		for _, group := range required {
 			if !completed[group.Name] {
 				ready = false
 				break

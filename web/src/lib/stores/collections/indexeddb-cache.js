@@ -1,5 +1,7 @@
 export const CONTROLPLANE_CACHE_DB_NAME = 'bahia-controlplane-cache';
-export const CONTROLPLANE_CACHE_DB_VERSION = 2;
+// v3: records hold raw relay events (schema bahia_controlplane_event_cache_v3)
+// instead of projected collection snapshots; v2 stores are dropped on upgrade.
+export const CONTROLPLANE_CACHE_DB_VERSION = 3;
 export const CONTROLPLANE_COLLECTION_STORE = 'collections';
 
 function defaultIndexedDB() {
@@ -45,8 +47,12 @@ async function openDatabase(indexedDBImpl) {
       return;
     }
 
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
+      const oldVersion = Number(event?.oldVersion || 0);
+      if (oldVersion > 0 && oldVersion < 3 && db.objectStoreNames.contains(CONTROLPLANE_COLLECTION_STORE)) {
+        db.deleteObjectStore(CONTROLPLANE_COLLECTION_STORE);
+      }
       if (!db.objectStoreNames.contains(CONTROLPLANE_COLLECTION_STORE)) {
         db.createObjectStore(CONTROLPLANE_COLLECTION_STORE, { keyPath: 'name' });
       }
@@ -102,7 +108,12 @@ export function createIndexedDBCollectionCacheAdapter({ indexedDB = defaultIndex
         const transactionDone = resolveTransaction(transaction);
         const store = transaction.objectStore(CONTROLPLANE_COLLECTION_STORE);
         for (const record of records) {
-          store.put({ name: record.name, cachedAt: record.cachedAt, items: Array.isArray(record.items) ? record.items : [] });
+          store.put({
+            name: record.name,
+            schema: record.schema,
+            cachedAt: record.cachedAt,
+            items: Array.isArray(record.items) ? record.items : []
+          });
         }
         await transactionDone;
         return true;

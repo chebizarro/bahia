@@ -1,14 +1,18 @@
 import {
   BAHIA_AUDIT_KINDS,
+  BAHIA_CP_STATE_SCHEMA,
   BAHIA_READ_MODEL_KINDS,
   BAHIA_SBOM_KINDS,
   BAHIA_STATE_SCHEMAS,
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
+  DNS_STATE_SCHEMA_BY_LEGACY_KIND,
   LOOM_WORKER_ADVERTISEMENT,
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
   LOOM_JOB_RESULT,
+  SBOM_AVAILABILITY_LIST,
+  SBOM_REFERENCE,
   parseJsonContent
 } from '../../nostr/client.js';
 import { controlplaneConnection } from './connection.svelte.js';
@@ -44,7 +48,13 @@ import {
   applyOperationStatusEvent
 } from '../collections/operations.svelte.js';
 import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
-import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
+import {
+  readCachedControlplaneEvents,
+  recordPersistedEvent,
+  refreshCollections,
+  scheduleRefreshCollections,
+  schedulePersistCachedCollections
+} from '../collections/index.svelte.js';
 
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
@@ -56,7 +66,6 @@ const OPERATION_LIMIT = 1000;
 const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
-const CP_STATE_SCHEMA = 'bahia.cp-state.v1';
 
 const replaceableEvents = new Map();
 const seenEventIds = new Set();
@@ -144,10 +153,10 @@ const legacyKindSchemaRoutes = new Map([
   ['31967', BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY],
   ['31968', BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY],
   ['31969', BAHIA_STATE_SCHEMAS.BUILD_REGISTRY],
-  ['31975', BAHIA_STATE_SCHEMAS.DNS_ZONE_STATE],
-  ['31976', BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE],
-  ['31977', BAHIA_STATE_SCHEMAS.DNS_POLICY_STATE],
-  ['31978', BAHIA_STATE_SCHEMAS.DNS_BACKEND_STATE],
+  // DNS routes resolve to the DNS family schemas but deliberately have no
+  // handler here: /dns state is owned by stores/dns.svelte.js, which keeps its
+  // own domain-scoped subscription and applies the same resolution.
+  ...Object.entries(DNS_STATE_SCHEMA_BY_LEGACY_KIND),
   ['31980', BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY],
   ['31981', BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY],
   ['31982', BAHIA_STATE_SCHEMAS.ML_DATASET_REGISTRY],
@@ -173,7 +182,7 @@ const legacyKindSchemaRoutes = new Map([
 function semanticRoute(event) {
   if (event?.kind === CASCADIA_CONTROLPLANE_STATE) {
     const schema = eventSchema(event);
-    if (schema !== CP_STATE_SCHEMA) return schema;
+    if (schema !== BAHIA_CP_STATE_SCHEMA) return schema;
     return legacyKindSchemaRoutes.get(eventLegacyKind(event)) || schema;
   }
   return event?.kind;
@@ -238,24 +247,84 @@ const handlers = new Map([
   }]
 ]);
 
-export function applyControlplaneEvent(event) {
+// Routes whose events feed a persisted (cached) collection. The cache stores
+// these raw events so hydration can replay them through applyControlplaneEvent.
+const PERSISTED_ROUTE_COLLECTIONS = new Map([
+  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, 'services'],
+  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, 'environments'],
+  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, 'states'],
+  [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, 'llmRoutes'],
+  [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, 'artifacts'],
+  [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, 'deploymentIntents'],
+  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, 'policies'],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, 'packageRepositories'],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, 'packageArtifacts'],
+  [LOOM_WORKER_ADVERTISEMENT, 'workers'],
+  [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
+  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],
+  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, 'workerDrainStatuses'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, 'backupRepositories'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, 'backupPolicies'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, 'backupRecipes'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, 'backupDefinitions'],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, 'mlModels'],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, 'mlModelVersions'],
+  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, 'mlEndpoints'],
+  [SBOM_REFERENCE, 'sbomRefs'],
+  [SBOM_AVAILABILITY_LIST, 'sbomAvailability']
+]);
+
+export const persistedRouteCollections = Object.freeze(Array.from(new Set(PERSISTED_ROUTE_COLLECTIONS.values())));
+
+/**
+ * Apply one relay (or cached) event to the backing Maps.
+ *
+ * - `deferRefresh`: coalesce the collection rebuild into one batched refresh
+ *   (used by the streaming subscription; avoids O(n^2) catch-up rebuilds).
+ * - `fromCache`: the event is being replayed from the local cache; skip the
+ *   per-event refresh, persist and liveness side effects.
+ */
+export function applyControlplaneEvent(event, { deferRefresh = false, fromCache = false } = {}) {
   if (!event?.id || typeof event.kind !== 'number') return false;
   if (!shouldAcceptControlplaneEvent(event)) return false;
   if (seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
   const route = semanticRoute(event);
+  const persistedCollection = PERSISTED_ROUTE_COLLECTIONS.get(route);
+  if (persistedCollection) recordPersistedEvent(persistedCollection, event);
+
   const handler = handlers.get(route);
   const changed = handler
     ? handler(event, replaceableEvents)
     : (ACTIVITY_KINDS.includes(event.kind) ? applyActivityEvent(event) : false);
 
-  if (changed) {
+  if (changed && !fromCache) {
     controlplaneConnection.lastEventAt = new Date().toISOString();
-    refreshCollections();
+    if (deferRefresh) scheduleRefreshCollections();
+    else refreshCollections();
     schedulePersistCachedCollections();
   }
   return changed;
+}
+
+/**
+ * Hydrate collections from the local event cache by replaying cached events
+ * through applyControlplaneEvent, then rebuild once. Because the backing Maps
+ * and replaceable index are populated, later relay events merge by the same
+ * coordinates and newer-wins rules instead of wiping hydrated state.
+ */
+export async function hydrateCachedControlplane(options = {}) {
+  const cachedEvents = await readCachedControlplaneEvents(options);
+  if (cachedEvents.length === 0) return false;
+
+  cachedEvents.sort((left, right) => Number(left.created_at || 0) - Number(right.created_at || 0));
+  let hydrated = false;
+  for (const event of cachedEvents) {
+    if (applyControlplaneEvent(event, { fromCache: true })) hydrated = true;
+  }
+  refreshCollections();
+  return hydrated;
 }
 
 export const controlplaneEventRouting = Object.freeze({

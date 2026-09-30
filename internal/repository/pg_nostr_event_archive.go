@@ -89,6 +89,12 @@ func (r *PgNostrEventArchiveRepository) EnsureOnlineIndexes(ctx context.Context)
 	if _, err := r.pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_archive_batch_id_fkey`); err != nil {
 		return fmt.Errorf("validating Nostr archive ownership constraint: %w", err)
 	}
+	// Startup migration 000071 adds the publish-state check NOT VALID so it
+	// never scans the table under ACCESS EXCLUSIVE; validation here only takes
+	// SHARE UPDATE EXCLUSIVE and does not block reads or writes.
+	if _, err := r.pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_publish_state_check`); err != nil {
+		return fmt.Errorf("validating Nostr publish state constraint: %w", err)
+	}
 	return nil
 }
 
@@ -319,8 +325,8 @@ func (r *PgNostrEventArchiveRepository) RestoreArchiveBatchJSON(ctx context.Cont
 	var inserted int64
 	for i, row := range rows {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at)
-			SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at
+			INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at, publish_target)
+			SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at, COALESCE(publish_target, '')
 			FROM jsonb_populate_record(NULL::nostr_events, $1::jsonb)
 			ON CONFLICT (id) DO NOTHING
 		`, row)

@@ -170,8 +170,9 @@ func New(cfg *config.Config) (*App, error) {
 	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger, policy)
 
 	// Repositories. When DB is unavailable, PG-backed repositories are nil.
-	// Route gating prevents tier2/tier3 routes from being accessed, so nil repos
-	// won't be hit on those paths. Tier1 uses in-memory stores exclusively.
+	// connectOptionalDatabase caps the policy at tier1, and SetActiveTier can
+	// never exceed that cap, so route gating keeps tier2/tier3 routes (and
+	// their nil repos) unreachable. Tier1 uses in-memory stores exclusively.
 	var serviceRepo repository.ServiceRepository
 	var envRepo repository.EnvironmentRepository
 	var buildRepo repository.BuildRepository
@@ -324,6 +325,11 @@ func New(cfg *config.Config) (*App, error) {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
+	// Control-plane outbox publisher shared by docs, SBOM and config-fabric.
+	// Its rows carry the control-plane publish target and its own runner
+	// retries them, so they are never redelivered to the interop relays.
+	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger,
+		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane))
 
 	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
 	// wrap registry mutations so relay publish must succeed before local DB writes.
@@ -553,6 +559,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
+	bgManager.RegisterWithOptions(controlPlanePub, RunnerTier(Tier1))
 	if managedInstanceSupervisor != nil {
 		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerTier(Tier2), RunnerRequired(false))
 	}
@@ -655,8 +662,11 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
+	// Request no more than the constructed dependencies support: without
+	// Postgres the tier2/tier3 repositories are nil, so the bootstrapper must
+	// neither report nor raise a tier above policy.MaxTier().
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
-		RequestedTier:       int(policy.RequestedTier),
+		RequestedTier:       int(policy.MaxTier()),
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys),
 	})
@@ -984,7 +994,6 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
-		sbomControlPlanePublisher := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
 		attestationSigner, err := sbomAdapter.NewNostrDSSESigner(cfg.Nostr.PrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("configure SBOM attestation signer: %w", err)
@@ -993,7 +1002,7 @@ func New(cfg *config.Config) (*App, error) {
 			Generators:        generatorRegistry,
 			Storage:           sbomStorageResolver,
 			Repo:              sbomManifestRepo,
-			Publisher:         sbomPublishAdapter{publisher: sbomControlPlanePublisher},
+			Publisher:         sbomPublishAdapter{publisher: controlPlanePub},
 			Subscriber:        sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
 			AttestationSigner: attestationSigner,
 			Resolver: service.SBOMSubjectResolver{
@@ -1412,7 +1421,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("operator assistant executor initialized", logFields...)
 	}
 
-	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, controlPlanePool, configFabricSigner)
+	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, configFabricPublishAdapter{publisher: controlPlanePub}, configFabricSigner)
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
@@ -1427,13 +1436,12 @@ func New(cfg *config.Config) (*App, error) {
 	// (or control-plane relays) as long-form content. Uses controlPlanePool so
 	// docs land on the same relay set the browser reads from.
 	if controlPlanePool != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
-		docsPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
 		userDocsForNostr := docs.New(docs.DefaultBasePath)
 		var docsQuerier docs.NostrDocsQuerier
 		if servicePubkey != "" {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
-		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, docsPub, docsQuerier, logger)
+		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, controlPlanePub, docsQuerier, logger)
 		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3), RunnerRequired(false))
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
@@ -1955,16 +1963,16 @@ func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *za
 	pool, err := dbConnect(ctx, cfg.DB, logger)
 	if err != nil {
 		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
-		if policy != nil && policy.ActiveTier > Tier1 {
-			policy.SetActiveTier(Tier1)
+		if policy != nil {
+			policy.CapTier(Tier1)
 		}
 		return nil, false
 	}
 	if err := dbMigrate(ctx, pool, logger); err != nil {
 		pool.Close()
 		logger.Warn("postgres cache migration failed; continuing with relay-first reduced tier", zap.Error(err))
-		if policy != nil && policy.ActiveTier > Tier1 {
-			policy.SetActiveTier(Tier1)
+		if policy != nil {
+			policy.CapTier(Tier1)
 		}
 		return nil, false
 	}
@@ -2105,7 +2113,7 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 		if pubErr := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
 			return r.statusProjector.PublishReadiness(publishCtx, service.ReadinessStatusPayload{
 				Phase:         string(progress.Phase),
-				ActiveTier:    int(r.policy.ActiveTier),
+				ActiveTier:    int(r.policy.ActiveTier()),
 				RequestedTier: int(r.policy.RequestedTier),
 				Ready:         r.bootstrapper.Ready(),
 			})
@@ -2481,7 +2489,7 @@ func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, pol
 
 	for _, reg := range manager.runners {
 		if !policy.RunnerEnabled(Tier(reg.tier)) {
-			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier)))
+			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier())))
 			continue
 		}
 		manager.wg.Add(1)
@@ -4135,19 +4143,37 @@ type sbomPublishAdapter struct {
 	publisher *nostrAdapter.Publisher
 }
 
+// PublishSignedEventWithResults keeps the per-relay results alongside the
+// error: an ErrPublishIncomplete publish is queued, not lost, and callers
+// inspect both.
 func (a sbomPublishAdapter) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomAdapter.PublishOKResult, error) {
 	if a.publisher == nil {
 		return nil, fmt.Errorf("nostr publisher is not configured")
 	}
 	results, err := a.publisher.PublishSignedEventWithResults(ctx, ev)
-	if err != nil {
-		return nil, err
-	}
 	out := make([]sbomAdapter.PublishOKResult, 0, len(results))
 	for _, result := range results {
 		out = append(out, sbomAdapter.PublishOKResult{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
 	}
-	return out, nil
+	return out, err
+}
+
+// configFabricPublishAdapter delivers operator-signed config-fabric events
+// through the control-plane outbox publisher.
+type configFabricPublishAdapter struct {
+	publisher *nostrAdapter.Publisher
+}
+
+func (a configFabricPublishAdapter) PublishPresignedEvent(ctx context.Context, ev nostr.Event, entityType string) error {
+	if a.publisher == nil {
+		return fmt.Errorf("config-fabric relay publisher is not configured")
+	}
+	if a.publisher.Target() != repository.NostrPublishTargetControlPlane {
+		// The service records its rows for the control-plane runner.
+		return fmt.Errorf("config-fabric publisher must target %q, got %q", repository.NostrPublishTargetControlPlane, a.publisher.Target())
+	}
+	_, err := a.publisher.PublishPresignedEvent(ctx, ev, entityType)
+	return err
 }
 
 // newDocsRelayQuerier creates a NostrDocsQuerier that queries existing NIP-23

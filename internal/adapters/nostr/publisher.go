@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -119,6 +120,23 @@ const (
 )
 
 // Publisher bridges internal events to Nostr relay publication.
+//
+// Two thresholds apply to every outbound event:
+//   - Caller success: a publish call succeeds once nostr.publish_quorum write
+//     relays (default 1; -1 = all) have accepted. Below the quorum it returns
+//     ErrPublishIncomplete, and the event stays queued for retry either way.
+//   - Delivery completion: acceptance is tracked per relay, and relays that
+//     have not accepted keep being retried with backoff up to a bounded attempt
+//     budget. The outbox row is marked published only once every write relay
+//     has accepted or reached a terminal state.
+//
+// Duplicate OK counts as acceptance; blocked:, invalid: and pow: rejections
+// are terminal for the relay that sent them.
+//
+// Every outbox row a Publisher writes carries its publish target (see
+// WithPublishTarget), and its Run only drains rows for that target, so each
+// row is retried to the relays of the pool it was written for. Run one
+// registered Publisher per target.
 type Publisher struct {
 	pool         *RelayPool
 	privateKey   string
@@ -126,17 +144,52 @@ type Publisher struct {
 	logger       *zap.Logger
 	eventRepo    repository.NostrEventRepository
 	outboxRepo   repository.NostrEventOutboxRepository
-	publishFn    func(context.Context, nostr.Event) ([]PublishResult, error)
-	publishMu    sync.Mutex
+	publishFn    func(ctx context.Context, ev nostr.Event, relayURLs []string) ([]PublishResult, error)
+	relayURLs    func() []string
 	newBackoff   func() *Backoff
 	idleInterval time.Duration
+	now          func() time.Time
+	quorum       int
+	maxAttempts  int
+	pageSize     int
+	// target is the publish target recorded on this publisher's outbox rows
+	// and the only target its runner discovers.
+	target string
+
+	// deliveriesMu guards the deliveries map and each delivery's nextAt.
+	deliveriesMu sync.Mutex
+	deliveries   map[string]*outboxDelivery
+	// running is set while Run is active; only then are partially delivered
+	// events kept in memory for retry by this publisher.
+	running atomic.Bool
+	// wake nudges Run to recompute its next retry time.
+	wake chan struct{}
+	// outboxCursor is the runner's keyset position in the pending outbox. It
+	// is only touched by the Run goroutine.
+	outboxCursor *repository.NostrOutboxCursor
+}
+
+// PublisherOption configures a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithPublishTarget binds the publisher to a named publish target
+// (repository.NostrPublishTarget*), which must identify the relay pool the
+// publisher was built with. Its outbox rows record the target and its Run only
+// redelivers rows for that target, so a pool that is not the daemon interop
+// pool gets its own retry loop instead of leaking rows to another pool's
+// runner. Exactly one registered publisher may own each target. A publisher
+// bound to a non-default target redelivers even when nostr.publish_enabled is
+// off: that flag gates the daemon's audit-event bridge, while rows for a
+// dedicated target exist only because a caller asked for them to be delivered.
+func WithPublishTarget(target string) PublisherOption {
+	return func(p *Publisher) { p.target = target }
 }
 
 // NewPublisher creates a new Nostr event publisher.
 // It shares a RelayPool for persistent connections. If pool is nil, a new one
 // is created from config (for backward compatibility).
 // eventRepo is optional; when non-nil, all published events are recorded to the audit table.
-func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger) *Publisher {
+func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger, opts ...PublisherOption) *Publisher {
 	if pool == nil {
 		poolOpts := []RelayPoolOption(nil)
 		if cfg.PrivateKey != "" {
@@ -152,11 +205,23 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 		enabled:      cfg.PublishEnabled && cfg.PrivateKey != "",
 		logger:       logger,
 		eventRepo:    eventRepo,
-		publishFn:    pool.PublishWithResults,
+		publishFn:    pool.PublishToRelaysWithResults,
+		relayURLs:    pool.URLs,
 		newBackoff:   DefaultBackoff,
 		idleInterval: time.Second,
+		now:          time.Now,
+		quorum:       cfg.PublishQuorum,
+		maxAttempts:  defaultMaxPublishAttempts,
+		pageSize:     defaultOutboxPageSize,
+		deliveries:   make(map[string]*outboxDelivery),
+		wake:         make(chan struct{}, 1),
 	}
 	publisher.outboxRepo, _ = eventRepo.(repository.NostrEventOutboxRepository)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(publisher)
+		}
+	}
 	return publisher
 }
 
@@ -213,9 +278,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 
 	rec := nostrEventRecordFromEvent(ev, label)
 	if p.eventRepo != nil {
-		if p.outboxRepo != nil {
-			rec.PublishState = repository.NostrPublishStatePending
-		}
+		p.markOutbound(rec)
 		if _, recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
 			p.logger.Warn("failed to persist nostr event before publish",
 				zap.String("event_id", ev.ID.Hex()),
@@ -239,13 +302,13 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 	p.logger.Debug("nostr event published",
 		zap.String("event_type", label),
 		zap.String("event_id", ev.ID.Hex()),
-		zap.Int("relays", attempt.published),
+		zap.Int("relays", attempt.accepted),
 	)
 }
 
 type publishAttempt struct {
 	results     []PublishResult
-	published   int
+	accepted    int
 	rateLimited bool
 	err         error
 }
@@ -265,51 +328,41 @@ func nostrEventRecordFromEvent(ev nostr.Event, entityType string) *repository.No
 	}
 }
 
-func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publishAttempt {
-	p.publishMu.Lock()
-	defer p.publishMu.Unlock()
-
-	if p.publishFn == nil {
-		return p.recordPublishFailure(ctx, ev.ID.Hex(), nil, fmt.Errorf("relay publisher is not configured"))
+// markOutbound makes rec a pending outbox row for this publisher's target when
+// a durable outbox is configured.
+func (p *Publisher) markOutbound(rec *repository.NostrEventRecord) {
+	if p.outboxRepo == nil {
+		return
 	}
-	results, publishErr := p.publishFn(ctx, ev)
-	published := countSuccessfulPublishResults(results)
-	if published > 0 {
-		if p.outboxRepo != nil {
-			if err := p.outboxRepo.MarkPublished(ctx, ev.ID.Hex(), time.Now().UTC()); err != nil {
-				return publishAttempt{results: results, published: published, err: err}
-			}
-		}
-		return publishAttempt{results: results, published: published}
-	}
-	return p.recordPublishFailure(ctx, ev.ID.Hex(), results, publishErr)
+	rec.PublishState = repository.NostrPublishStatePending
+	rec.PublishTarget = p.target
 }
 
-func (p *Publisher) recordPublishFailure(ctx context.Context, eventID string, results []PublishResult, publishErr error) publishAttempt {
-	rateLimited := false
-	details := make([]string, 0, len(results)+1)
-	if publishErr != nil {
-		details = append(details, publishErr.Error())
+// publishOutboxEvent runs a delivery round for ev. It returns nil error once
+// the publish quorum has accepted the event. Relays that have not accepted are
+// retried by Run (in memory, and from the durable outbox when one is
+// configured).
+func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publishAttempt {
+	d, _ := p.trackDelivery(ev, 0)
+	d.mu.Lock()
+	report := p.deliverRound(ctx, d)
+	settled := d.settled
+	d.mu.Unlock()
+	if settled || !p.running.Load() {
+		// Without an active runner this publisher cannot retry from memory;
+		// the pending outbox row remains for this target's runner.
+		p.forgetDelivery(d)
+	} else {
+		p.nudge()
 	}
-	for _, result := range results {
-		rateLimited = rateLimited || result.IsRateLimited()
-		switch {
-		case result.Error != nil:
-			details = append(details, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
-		case result.Reason != "":
-			details = append(details, fmt.Sprintf("%s: %s", result.RelayURL, result.Reason))
-		}
+	return publishAttempt{results: report.results, accepted: report.accepted, rateLimited: report.rateLimited, err: report.err}
+}
+
+func (p *Publisher) nudge() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
 	}
-	if len(details) == 0 {
-		details = append(details, "no relay accepted the event")
-	}
-	failure := strings.Join(details, "; ")
-	if p.outboxRepo != nil {
-		if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, failure); err != nil {
-			failure += "; persist publish failure: " + err.Error()
-		}
-	}
-	return publishAttempt{results: results, rateLimited: rateLimited, err: fmt.Errorf("%s", failure)}
 }
 
 func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
@@ -344,74 +397,81 @@ func decodeEventHex(dst []byte, value, field string) error {
 	return nil
 }
 
-// Name implements app.BackgroundRunner.
-func (p *Publisher) Name() string { return "nostr-publish-outbox" }
+// Name implements app.BackgroundRunner. Each publish target has its own
+// runner name.
+func (p *Publisher) Name() string {
+	if p.target == repository.NostrPublishTargetDefault {
+		return "nostr-publish-outbox"
+	}
+	return "nostr-publish-outbox:" + p.target
+}
 
-// Run redelivers pending outbound events until the application context is cancelled.
+// Target returns the publish target this publisher records and redelivers.
+func (p *Publisher) Target() string { return p.target }
+
+// redeliveryEnabled reports whether Run retries this publisher's rows. The
+// default target keeps the nostr.publish_enabled gate; see WithPublishTarget.
+func (p *Publisher) redeliveryEnabled() bool {
+	return p.enabled || p.target != repository.NostrPublishTargetDefault
+}
+
+// Run retries relays that have not accepted tracked events and discovers
+// pending outbox rows for this publisher's target until the application
+// context is cancelled.
 func (p *Publisher) Run(ctx context.Context) error {
-	if !p.enabled || p.outboxRepo == nil {
+	if !p.redeliveryEnabled() {
 		<-ctx.Done()
 		return nil
 	}
+	p.running.Store(true)
+	defer p.running.Store(false)
 
-	backoff := p.newBackoff()
-	if backoff == nil {
-		backoff = DefaultBackoff()
+	discoveryBackoff := p.newBackoff()
+	if discoveryBackoff == nil {
+		discoveryBackoff = DefaultBackoff()
 	}
 	for {
-		pending, failed, rateLimited, err := p.retryUnpublished(ctx)
+		rateLimited := p.redeliverDue(ctx)
+		more, err := p.discoverPending(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
 
 		delay := p.idleInterval
-		if err != nil || failed {
-			delay = backoff.Next()
-			p.logger.Warn("nostr outbox redelivery delayed",
+		switch {
+		case err != nil:
+			delay = discoveryBackoff.Next()
+			p.logger.Warn("nostr outbox discovery delayed",
 				zap.Duration("delay", delay),
 				zap.Bool("rate_limited", rateLimited),
 				zap.Error(err),
 			)
-		} else {
-			backoff.Reset()
-			if pending > 0 {
-				continue
+		case more:
+			discoveryBackoff.Reset()
+			delay = 0
+		default:
+			discoveryBackoff.Reset()
+		}
+		if _, next := p.dueDeliveries(p.now()); !next.IsZero() {
+			// An overdue retry (next in the past) runs immediately.
+			if untilNext := next.Sub(p.now()); untilNext < delay {
+				delay = max(untilNext, 0)
 			}
+		}
+		if delay == 0 {
+			continue
 		}
 
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			return nil
+		case <-p.wake:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
-}
-
-func (p *Publisher) retryUnpublished(ctx context.Context) (pending int, failed bool, rateLimited bool, err error) {
-	records, err := p.outboxRepo.ListUnpublished(ctx, 100)
-	if err != nil {
-		return 0, false, false, err
-	}
-	for _, rec := range records {
-		ev, decodeErr := eventFromNostrRecord(rec)
-		if decodeErr != nil {
-			attempt := p.recordPublishFailure(ctx, rec.ID, nil, decodeErr)
-			failed = true
-			rateLimited = rateLimited || attempt.rateLimited
-			continue
-		}
-		attempt := p.publishOutboxEvent(ctx, ev)
-		if attempt.err != nil {
-			failed = true
-			rateLimited = rateLimited || attempt.rateLimited
-			err = attempt.err
-		}
-	}
-	return len(records), failed, rateLimited, err
 }
 
 // Subscribe listens for incoming Nostr events on all connected relays.
@@ -491,18 +551,41 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
 		return nil, err
 	}
+	return p.enqueueAndDeliver(ctx, *ev, signedEventAuditLabel(*ev))
+}
 
+// PublishPresignedEvent delivers an event that was signed elsewhere (for
+// example by an operator's remote signer) through this publisher's outbox and
+// relay pool, with the same durability, per-relay retry and quorum semantics
+// as PublishSignedEventWithResults. entityType labels the outbox row. The
+// event is not re-signed; an event whose id or signature does not verify is
+// refused before anything is recorded.
+func (p *Publisher) PublishPresignedEvent(ctx context.Context, ev nostr.Event, entityType string) ([]PublishResult, error) {
+	if p == nil {
+		return nil, fmt.Errorf("nostr publisher not configured")
+	}
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return nil, fmt.Errorf("presigned nostr event %s has an invalid id or signature", ev.ID.Hex())
+	}
+	if strings.TrimSpace(entityType) == "" {
+		entityType = signedEventAuditLabel(ev)
+	}
+	return p.enqueueAndDeliver(ctx, ev, entityType)
+}
+
+// enqueueAndDeliver records a signed event as a pending outbox row for this
+// publisher's target (durable before the first relay attempt) and runs the
+// first delivery round.
+func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string) ([]PublishResult, error) {
 	if p.eventRepo != nil {
-		rec := nostrEventRecordFromEvent(*ev, signedEventAuditLabel(*ev))
-		if p.outboxRepo != nil {
-			rec.PublishState = repository.NostrPublishStatePending
-		}
+		rec := nostrEventRecordFromEvent(ev, entityType)
+		p.markOutbound(rec)
 		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
 			return nil, fmt.Errorf("persist signed nostr event before publish: %w", err)
 		}
 	}
 
-	attempt := p.publishOutboxEvent(ctx, *ev)
+	attempt := p.publishOutboxEvent(ctx, ev)
 	return attempt.results, attempt.err
 }
 

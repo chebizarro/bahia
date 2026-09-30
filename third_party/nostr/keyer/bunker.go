@@ -1,0 +1,64 @@
+package keyer
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip46"
+)
+
+var _ nostr.Keyer = (*BunkerSigner)(nil)
+
+// BunkerSigner is a signer that delegates operations to a remote bunker using NIP-46.
+// It communicates with the bunker for all cryptographic operations rather than
+// handling the private key locally.
+type BunkerSigner struct {
+	bunker *nip46.BunkerClient
+}
+
+// NewBunkerSignerFromBunkerClient creates a new BunkerSigner from an existing BunkerClient.
+func NewBunkerSignerFromBunkerClient(bc *nip46.BunkerClient) BunkerSigner {
+	return BunkerSigner{bc}
+}
+
+// GetPublicKey retrieves the public key from the remote bunker.
+// It uses a timeout to prevent hanging indefinitely.
+func (bs BunkerSigner) GetPublicKey(ctx context.Context) (nostr.PubKey, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, errors.New("get_public_key took too long"))
+	defer cancel()
+	pk, err := bs.bunker.GetPublicKey(ctx)
+	if err != nil {
+		return nostr.ZeroPK, err
+	}
+	return pk, nil
+}
+
+// SignEvent sends the event to the remote bunker for signing.
+// It uses a timeout to prevent hanging indefinitely.
+func (bs BunkerSigner) SignEvent(ctx context.Context, evt *nostr.Event) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, errors.New("sign_event took too long"))
+	defer cancel()
+	return bs.bunker.SignEvent(ctx, evt)
+}
+
+// Encrypt encrypts a plaintext message for a recipient using the remote bunker.
+func (bs BunkerSigner) Encrypt(ctx context.Context, plaintext string, recipient nostr.PubKey) (string, error) {
+	return bs.bunker.NIP44Encrypt(ctx, recipient, plaintext)
+}
+
+// Decrypt decrypts a base64-encoded ciphertext from a sender using the remote bunker.
+func (bs BunkerSigner) Decrypt(ctx context.Context, base64ciphertext string, sender nostr.PubKey) (plaintext string, err error) {
+	return bs.bunker.NIP44Decrypt(ctx, sender, base64ciphertext)
+}
+
+// Nip04Encrypt encrypts a plaintext message for a recipient using the remote bunker.
+func (bs BunkerSigner) Nip04Encrypt(ctx context.Context, plaintext string, recipient nostr.PubKey) (string, error) {
+	return bs.bunker.NIP04Encrypt(ctx, recipient, plaintext)
+}
+
+// Nip04Decrypt decrypts a ciphertext from a sender using the remote bunker.
+func (bs BunkerSigner) Nip04Decrypt(ctx context.Context, ciphertext string, sender nostr.PubKey) (string, error) {
+	return bs.bunker.NIP04Decrypt(ctx, sender, ciphertext)
+}

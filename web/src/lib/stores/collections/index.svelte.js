@@ -39,6 +39,7 @@ import { events } from './activity.svelte.js';
 import { sbomRefs, sbomAvailability, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact, sbomArtifactIds } from './sbom.svelte.js';
 import { browser } from '$app/environment';
 import { createIndexedDBCollectionCacheAdapter } from './indexeddb-cache.js';
+import { replaceableKey, shouldAcceptReplaceableEvent } from '../../nostr/client.js';
 
 export { services, upsertServiceProjection } from './services.svelte.js';
 export { environments } from './environments.svelte.js';
@@ -102,7 +103,13 @@ import { resetActivity, refreshActivity } from './activity.svelte.js';
 import { resetSBOM, refreshSBOM } from './sbom.svelte.js';
 
 export const LEGACY_CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
-export const CONTROLPLANE_COLLECTION_CACHE_SCHEMA = 'bahia_controlplane_collection_cache_v2';
+// v3 persists the winning raw relay events of each stable collection instead of
+// projected snapshots. Hydration replays them through the live
+// applyControlplaneEvent path, so the backing Maps, the NIP-01 replaceable
+// index and newer-wins rules are identical to a live session and a later relay
+// event merges into cached state instead of wiping it. v2 projection records
+// carry no event coordinates and are discarded on read.
+export const CONTROLPLANE_COLLECTION_CACHE_SCHEMA = 'bahia_controlplane_event_cache_v3';
 export const CONTROLPLANE_CACHE_TTL_MS = 15 * 60 * 1000;
 const PERSISTED_COLLECTION_DEFAULT_CAP = 250;
 const PERSISTED_COLLECTION_MIN_CAP = 10;
@@ -111,6 +118,8 @@ const PERSISTED_COLLECTION_CAPS = Object.freeze({
   artifacts: 200,
   deploymentIntents: 150,
   packageArtifacts: 200,
+  // Worker rows are merged from an advertisement and a worker-state event.
+  workers: 500,
   workerAssignments: 150,
   workerDrainStatuses: 150,
   sbomRefs: 200,
@@ -160,9 +169,19 @@ export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'mlEndpointStates'
 ]);
 
-let persistTimer = null;
-let collectionCacheStorage = createIndexedDBCollectionCacheAdapter();
+// Relay events arrive one per WebSocket task, so a microtask batch would still
+// rebuild per event. Coalesce streamed events into one rebuild per frame.
+const REFRESH_BATCH_MS = 16;
 
+let persistTimer = null;
+let refreshTimer = null;
+let collectionCacheStorage = createIndexedDBCollectionCacheAdapter();
+// collection name -> Map<replaceable coordinate, newest raw event>
+const persistedEvents = new Map();
+
+// A loading flag means "nothing to render yet": it is cleared as soon as its
+// collection holds data (from cache or relay). EOSE drives the connection
+// status (syncing -> live), not rendering.
 export const loading = $state({
   services: false,
   environments: false,
@@ -182,7 +201,21 @@ export function setAllLoading(value) {
   loading.workers = value;
 }
 
+export function clearLoadingForPopulatedCollections() {
+  for (const key of Object.keys(loading)) {
+    if (loading[key] && COLLECTION_TARGETS[key]?.length > 0) loading[key] = false;
+  }
+}
+
+function cancelScheduledRefresh() {
+  if (!refreshTimer) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = null;
+}
+
 export function resetCollections() {
+  cancelScheduledRefresh();
+  persistedEvents.clear();
   resetServices();
   resetEnvironments();
   resetDeployments();
@@ -196,6 +229,7 @@ export function resetCollections() {
 }
 
 export function refreshCollections() {
+  cancelScheduledRefresh();
   refreshServices();
   refreshEnvironments();
   refreshDeployments();
@@ -205,6 +239,21 @@ export function refreshCollections() {
   refreshML();
   refreshActivity();
   refreshSBOM();
+  clearLoadingForPopulatedCollections();
+}
+
+export function scheduleRefreshCollections(delayMs = REFRESH_BATCH_MS) {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    refreshCollections();
+  }, delayMs);
+}
+
+export function flushCollectionRefresh() {
+  if (!refreshTimer) return false;
+  refreshCollections();
+  return true;
 }
 
 export function setControlplaneCacheStorageAdapter(adapter) {
@@ -221,11 +270,6 @@ function createNoopCollectionCacheAdapter() {
     async putMany() { return false; },
     async delete() { return false; }
   };
-}
-
-function replaceSnapshotArray(target, values) {
-  target.length = 0;
-  if (Array.isArray(values)) target.push(...values);
 }
 
 const COLLECTION_TARGETS = Object.freeze({
@@ -274,6 +318,50 @@ function collectionEntries() {
   );
 }
 
+function isReplaceableOrAddressableKind(kind) {
+  return kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000) || (kind >= 30000 && kind < 40000);
+}
+
+function isCachedEvent(value) {
+  return typeof value?.id === 'string'
+    && Number.isInteger(value.kind)
+    && typeof value.pubkey === 'string'
+    && Array.isArray(value.tags);
+}
+
+// Copy only NIP-01 fields so the cache holds structured-clone-safe plain data.
+function plainEvent(event) {
+  return {
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    created_at: Number(event.created_at || 0),
+    tags: event.tags.map((tag) => (Array.isArray(tag) ? tag.map(String) : [])),
+    content: typeof event.content === 'string' ? event.content : '',
+    sig: typeof event.sig === 'string' ? event.sig : ''
+  };
+}
+
+/**
+ * Remember an accepted relay event that feeds a persisted collection. Events
+ * are reduced by NIP-01 coordinate with the same newer-wins rule as the live
+ * path, so the cache holds exactly the winners (tombstones included).
+ */
+export function recordPersistedEvent(collectionName, event) {
+  if (!PERSISTED_CONTROLPLANE_COLLECTIONS.includes(collectionName) || !isCachedEvent(event)) return false;
+  const key = isReplaceableOrAddressableKind(event.kind) ? replaceableKey(event) : event.id;
+  if (!key) return false;
+
+  let log = persistedEvents.get(collectionName);
+  if (!log) {
+    log = new Map();
+    persistedEvents.set(collectionName, log);
+  }
+  if (!shouldAcceptReplaceableEvent(log.get(key), event)) return false;
+  log.set(key, plainEvent(event));
+  return true;
+}
+
 function entryTimestamp(entry) {
   const timestamp = entry?.updated_at ?? entry?.created_at ?? entry?.cachedAt;
   const numeric = Number(timestamp);
@@ -307,22 +395,11 @@ function capPersistedCollection(collectionName, values, scale = 1) {
   return values.slice(-cap);
 }
 
-function snapshotPersistedCollection(collectionName) {
-  const values = COLLECTION_TARGETS[collectionName];
-  if (!Array.isArray(values)) return [];
-
-  // IndexedDB uses the structured-clone algorithm, which cannot clone the
-  // reactive Proxy objects produced by Svelte's deeply reactive $state arrays.
-  // Snapshot at the persistence boundary so the cache contains plain data
-  // transfer objects rather than live application state.
-  return $state.snapshot(values);
-}
-
 export function persistedControlplaneCollections(scale = 1) {
   return Object.fromEntries(
     PERSISTED_CONTROLPLANE_COLLECTIONS.map((collectionName) => [
       collectionName,
-      capPersistedCollection(collectionName, snapshotPersistedCollection(collectionName), scale)
+      capPersistedCollection(collectionName, Array.from(persistedEvents.get(collectionName)?.values() || []), scale)
     ])
   );
 }
@@ -358,35 +435,36 @@ function isFreshCacheRecord(record, now = Date.now()) {
   return Number.isFinite(cachedAt) && now - cachedAt <= CONTROLPLANE_CACHE_TTL_MS;
 }
 
-export async function hydrateCachedCollections({ adapter = collectionCacheStorage, now = Date.now() } = {}) {
-  if (!browser) return false;
+/**
+ * Read cached raw events for the persisted collections. Records from an older
+ * schema or past the TTL are deleted. Projection into collections is done by
+ * the caller (controlplane/events hydrateCachedControlplane) through the live
+ * event-application path.
+ */
+export async function readCachedControlplaneEvents({ adapter = collectionCacheStorage, now = Date.now() } = {}) {
+  if (!browser) return [];
   clearLegacyControlplaneSnapshot();
 
   try {
     const records = await adapter.getAll();
-    if (!Array.isArray(records) || records.length === 0) return false;
+    if (!Array.isArray(records) || records.length === 0) return [];
 
-    let hydrated = false;
+    const cachedEvents = [];
     for (const record of records) {
       const collectionName = record?.name;
-      const target = COLLECTION_TARGETS[collectionName];
-      if (!target) continue;
       if (!PERSISTED_CONTROLPLANE_COLLECTIONS.includes(collectionName)) continue;
-      if (!Array.isArray(record?.items)) continue;
 
-      if (!isFreshCacheRecord(record, now)) {
+      if (record?.schema !== CONTROLPLANE_COLLECTION_CACHE_SCHEMA || !Array.isArray(record?.items) || !isFreshCacheRecord(record, now)) {
         await adapter.delete?.(collectionName);
         continue;
       }
 
-      replaceSnapshotArray(target, capPersistedCollection(collectionName, record.items));
-      hydrated = true;
+      cachedEvents.push(...capPersistedCollection(collectionName, record.items.filter(isCachedEvent)));
     }
-
-    return hydrated;
+    return cachedEvents;
   } catch (error) {
-    console.warn('Failed to hydrate cached controlplane collections:', error);
-    return false;
+    console.warn('Failed to read cached controlplane events:', error);
+    return [];
   }
 }
 
@@ -395,7 +473,12 @@ export async function persistCachedCollections({ adapter = collectionCacheStorag
 
   const cachedAt = Date.now();
   const collections = persistedControlplaneCollections();
-  const records = Object.entries(collections).map(([name, items]) => ({ name, cachedAt, items }));
+  const records = Object.entries(collections).map(([name, items]) => ({
+    name,
+    schema: CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
+    cachedAt,
+    items
+  }));
 
   try {
     return await adapter.putMany(records);

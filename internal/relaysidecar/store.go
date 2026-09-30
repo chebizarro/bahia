@@ -127,6 +127,25 @@ func (s *sqliteStore) Replace(ctx context.Context, event nostr.Event) error {
 	return nil
 }
 
+// latestByReplaceableKey returns the event currently stored under a replaceable
+// or addressable key. Unlike Query, it reports store failures, so callers that
+// must not lose a change can retry.
+func (s *sqliteStore) latestByReplaceableKey(ctx context.Context, key string) (nostr.Event, bool, error) {
+	var encoded []byte
+	err := s.readDB.QueryRowContext(ctx, `SELECT event_json FROM events WHERE replaceable_key = ?`, key).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nostr.Event{}, false, nil
+	}
+	if err != nil {
+		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: %w", key, err)
+	}
+	var event nostr.Event
+	if err := json.Unmarshal(encoded, &event); err != nil {
+		return nostr.Event{}, false, fmt.Errorf("decode replaceable relay event %s: %w", key, err)
+	}
+	return event, true, nil
+}
+
 func (s *sqliteStore) Delete(ctx context.Context, id nostr.ID) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id.Hex()); err != nil {
 		return fmt.Errorf("delete relay event: %w", err)

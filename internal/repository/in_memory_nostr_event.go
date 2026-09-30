@@ -64,8 +64,20 @@ func (r *InMemoryNostrEventRepository) FindByID(ctx context.Context, id string) 
 	return r.GetByID(ctx, id)
 }
 
-// ListUnpublished returns the oldest pending outbound events first.
+// ListUnpublished returns the oldest pending outbound events first, across
+// every publish target.
 func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit int) ([]NostrEventRecord, error) {
+	return r.listPending(func(NostrEventRecord) bool { return true }, nil, limit), nil
+}
+
+// ListUnpublishedAfter returns pending outbound events for one publish target
+// after the keyset cursor, oldest first, matching the PostgreSQL
+// (received_at, id) ordering.
+func (r *InMemoryNostrEventRepository) ListUnpublishedAfter(_ context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
+	return r.listPending(func(rec NostrEventRecord) bool { return rec.PublishTarget == target }, after, limit), nil
+}
+
+func (r *InMemoryNostrEventRepository) listPending(match func(NostrEventRecord) bool, after *NostrOutboxCursor, limit int) []NostrEventRecord {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -74,9 +86,13 @@ func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit 
 
 	records := make([]NostrEventRecord, 0)
 	for _, rec := range r.records {
-		if rec.PublishState == NostrPublishStatePending {
-			records = append(records, cloneNostrEventRecord(&rec))
+		if rec.PublishState != NostrPublishStatePending || !match(rec) {
+			continue
 		}
+		if after != nil && !outboxKeyAfter(rec.ReceivedAt, rec.ID, *after) {
+			continue
+		}
+		records = append(records, cloneNostrEventRecord(&rec))
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].ReceivedAt.Equal(records[j].ReceivedAt) {
@@ -84,7 +100,14 @@ func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit 
 		}
 		return records[i].ReceivedAt.Before(records[j].ReceivedAt)
 	})
-	return limitNostrEventRecords(records, limit), nil
+	return limitNostrEventRecords(records, limit)
+}
+
+func outboxKeyAfter(receivedAt time.Time, id string, cursor NostrOutboxCursor) bool {
+	if receivedAt.Equal(cursor.ReceivedAt) {
+		return id > cursor.ID
+	}
+	return receivedAt.After(cursor.ReceivedAt)
 }
 
 // CountUnpublished returns the current in-memory publish outbox depth.
@@ -100,7 +123,8 @@ func (r *InMemoryNostrEventRepository) CountUnpublished(_ context.Context) (int6
 	return count, nil
 }
 
-// MarkPublished records a successful relay acceptance (including duplicate OK).
+// MarkPublished records that the event reached its required relay acceptance
+// (duplicate OK counts as acceptance) and every relay has settled.
 func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id string, publishedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -127,6 +151,22 @@ func (r *InMemoryNostrEventRepository) RecordPublishFailure(_ context.Context, i
 	rec.PublishState = NostrPublishStatePending
 	rec.PublishAttempts++
 	rec.LastPublishError = publishError
+	r.records[id] = rec
+	return nil
+}
+
+// AbandonPublish moves a still-pending row to failed after a terminal delivery
+// failure. Rows already published by another path are left untouched.
+func (r *InMemoryNostrEventRepository) AbandonPublish(_ context.Context, id, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[id]
+	if !ok || rec.PublishState != NostrPublishStatePending {
+		return nil
+	}
+	rec.PublishState = NostrPublishStateFailed
+	rec.PublishAttempts++
+	rec.LastPublishError = reason
 	r.records[id] = rec
 	return nil
 }

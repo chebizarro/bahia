@@ -17,6 +17,26 @@ const (
 	NostrPublishStateNotApplicable = "not_applicable"
 	NostrPublishStatePending       = "pending"
 	NostrPublishStatePublished     = "published"
+	// NostrPublishStateFailed marks an outbound event whose delivery was given
+	// up on (permanent relay rejections made the quorum unreachable, the
+	// attempt budget ran out, or the row could not be decoded). The reason is
+	// kept in last_publish_error.
+	NostrPublishStateFailed = "failed"
+)
+
+// Publish targets name the relay set a pending outbox row must be delivered
+// to. Each target is drained by exactly one publisher runner, bound to the
+// relay pool for that target, so a row is only ever retried to the relays of
+// the pool it was written for. The target is a logical pool name rather than
+// a URL list: relay topology is reconfigurable at runtime, and a row follows
+// its pool's current write relays.
+const (
+	// NostrPublishTargetDefault is the daemon's interop relay pool. It is the
+	// empty string so rows written before targets existed keep their runner.
+	NostrPublishTargetDefault = ""
+	// NostrPublishTargetControlPlane is the control-plane relay pool (docs,
+	// SBOM, config-fabric).
+	NostrPublishTargetControlPlane = "control-plane"
 )
 
 // NostrEventRecord represents a row in the nostr_events audit table.
@@ -35,6 +55,17 @@ type NostrEventRecord struct {
 	PublishAttempts  int
 	LastPublishError string
 	PublishedAt      *time.Time
+	// PublishTarget names the relay pool a pending row is delivered to (see
+	// NostrPublishTargetDefault). It is only meaningful for outbound rows.
+	PublishTarget string
+}
+
+// NostrOutboxCursor is a keyset position in the pending outbox, ordered by
+// (received_at, id). It lets the publisher walk every pending row instead of
+// re-reading the same oldest page while those rows wait on a slow relay.
+type NostrOutboxCursor struct {
+	ReceivedAt time.Time
+	ID         string
 }
 
 // NostrMigrationCursor is a durable keyset cursor for deterministic migrations.
@@ -59,12 +90,33 @@ type NostrEventRepository interface {
 
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
+//
+// Publish-state lifecycle for an outbound event:
+//   - pending: at least one configured relay still has to accept it (or the
+//     publisher has not finished retrying the relays that have not accepted it).
+//   - published (MarkPublished): every relay has settled and the required relay
+//     acceptance (all write relays, or the configured quorum) was reached.
+//   - failed (AbandonPublish): delivery can no longer succeed (permanent
+//     relay rejections, undecodable row, or the attempt budget ran out). The
+//     row leaves the outbox with the terminal reason kept in
+//     last_publish_error.
+//
+// Every pending row carries a publish target (NostrPublishTarget*); a runner
+// only discovers rows for its own target.
 type NostrEventOutboxRepository interface {
 	NostrEventRepository
+	// ListUnpublished returns pending rows for every target, oldest first.
 	ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error)
+	// ListUnpublishedAfter returns pending rows for target strictly after the
+	// cursor in (received_at, id) order; a nil cursor starts at the oldest
+	// pending row for that target.
+	ListUnpublishedAfter(ctx context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error)
 	CountUnpublished(ctx context.Context) (int64, error)
 	MarkPublished(ctx context.Context, id string, publishedAt time.Time) error
 	RecordPublishFailure(ctx context.Context, id, publishError string) error
+	// AbandonPublish removes a still-pending row from the outbox after a
+	// terminal delivery failure and records the reason.
+	AbandonPublish(ctx context.Context, id, reason string) error
 }
 
 type nostrEventDB interface {
@@ -89,7 +141,7 @@ func newPgNostrEventRepositoryWithDB(db nostrEventDB) *PgNostrEventRepository {
 	return &PgNostrEventRepository{pool: db}
 }
 
-const nostrEventColumns = `id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, publish_state, publish_attempts, last_publish_error, published_at`
+const nostrEventColumns = `id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, publish_state, publish_attempts, last_publish_error, published_at, publish_target`
 
 // Record inserts a Nostr event into the audit table.
 // Duplicate event IDs are ignored idempotently and reported as inserted=false.
@@ -109,12 +161,12 @@ func (r *PgNostrEventRepository) Record(ctx context.Context, rec *NostrEventReco
 	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO nostr_events (
 			id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id,
-			publish_state, publish_attempts, last_publish_error, published_at
+			publish_state, publish_attempts, last_publish_error, published_at, publish_target
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (id) DO NOTHING
 	`, rec.ID, rec.Kind, rec.PubKey, rec.Content, tagsJSON, rec.Sig, rec.CreatedAt, rec.ReceivedAt, rec.EntityType, rec.EntityID,
-		rec.PublishState, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt)
+		rec.PublishState, rec.PublishAttempts, rec.LastPublishError, rec.PublishedAt, rec.PublishTarget)
 	if err != nil {
 		return false, fmt.Errorf("recording nostr event: %w", err)
 	}
@@ -126,7 +178,7 @@ func (r *PgNostrEventRepository) GetByID(ctx context.Context, id string) (*Nostr
 	rec := &NostrEventRecord{}
 	err := r.pool.QueryRow(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE id = $1`, id).
 		Scan(&rec.ID, &rec.Kind, &rec.PubKey, &rec.Content, &rec.Tags, &rec.Sig, &rec.CreatedAt, &rec.ReceivedAt, &rec.EntityType, &rec.EntityID,
-			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt)
+			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt, &rec.PublishTarget)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -136,7 +188,8 @@ func (r *PgNostrEventRepository) GetByID(ctx context.Context, id string) (*Nostr
 	return rec, nil
 }
 
-// ListUnpublished returns the oldest pending outbound events first.
+// ListUnpublished returns the oldest pending outbound events first, across
+// every publish target.
 func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -144,8 +197,33 @@ func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int)
 	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+`
 		FROM nostr_events
 		WHERE publish_state = $1
-		ORDER BY received_at ASC, id ASC
-		LIMIT $2`, NostrPublishStatePending, limit)
+		ORDER BY received_at ASC, id ASC LIMIT $2`, NostrPublishStatePending, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing unpublished nostr events: %w", err)
+	}
+	defer rows.Close()
+	return scanNostrEventRows(rows)
+}
+
+// ListUnpublishedAfter returns pending outbound events for one publish target
+// after the keyset cursor, oldest first. It walks the partial
+// idx_nostr_events_publish_outbox (received_at, id) WHERE pending index and
+// filters publish_target on that small row set; no target index is needed.
+func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT ` + nostrEventColumns + `
+		FROM nostr_events
+		WHERE publish_state = $1 AND publish_target = $2`
+	args := []any{NostrPublishStatePending, target}
+	if after != nil {
+		query += ` AND (received_at, id) > ($3, $4)`
+		args = append(args, after.ReceivedAt, after.ID)
+	}
+	query += ` ORDER BY received_at ASC, id ASC LIMIT $` + fmt.Sprint(len(args)+1)
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing unpublished nostr events: %w", err)
 	}
@@ -162,7 +240,8 @@ func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, e
 	return count, nil
 }
 
-// MarkPublished records a successful relay acceptance (including duplicate OK).
+// MarkPublished records that the event reached its required relay acceptance
+// (duplicate OK counts as acceptance) and every relay has settled.
 func (r *PgNostrEventRepository) MarkPublished(ctx context.Context, id string, publishedAt time.Time) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE nostr_events
@@ -190,12 +269,27 @@ func (r *PgNostrEventRepository) RecordPublishFailure(ctx context.Context, id, p
 	return nil
 }
 
+// AbandonPublish moves a still-pending row to failed after a terminal delivery
+// failure. Rows already published by another path are left untouched.
+func (r *PgNostrEventRepository) AbandonPublish(ctx context.Context, id, reason string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE nostr_events
+		SET publish_state = $2, publish_attempts = publish_attempts + 1,
+		    last_publish_error = $3
+		WHERE id = $1 AND publish_state = $4
+	`, id, NostrPublishStateFailed, reason, NostrPublishStatePending)
+	if err != nil {
+		return fmt.Errorf("abandoning nostr event %s publish: %w", id, err)
+	}
+	return nil
+}
+
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
 func (r *PgNostrEventRepository) FindLatestByKindPubkeyDTag(ctx context.Context, kind int, pubkey, dTag, excludeID string) (*NostrEventRecord, error) {
 	rec := &NostrEventRecord{}
 	err := r.pool.QueryRow(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 AND pubkey = $2 AND id <> $4 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags::jsonb) tag WHERE tag->>0 = 'd' AND tag->>1 = $3) ORDER BY created_at DESC, id ASC LIMIT 1`, kind, pubkey, dTag, excludeID).
 		Scan(&rec.ID, &rec.Kind, &rec.PubKey, &rec.Content, &rec.Tags, &rec.Sig, &rec.CreatedAt, &rec.ReceivedAt, &rec.EntityType, &rec.EntityID,
-			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt)
+			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt, &rec.PublishTarget)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -341,7 +435,7 @@ func scanNostrEventRows(rows pgx.Rows) ([]NostrEventRecord, error) {
 	for rows.Next() {
 		var rec NostrEventRecord
 		if err := rows.Scan(&rec.ID, &rec.Kind, &rec.PubKey, &rec.Content, &rec.Tags, &rec.Sig, &rec.CreatedAt, &rec.ReceivedAt, &rec.EntityType, &rec.EntityID,
-			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt); err != nil {
+			&rec.PublishState, &rec.PublishAttempts, &rec.LastPublishError, &rec.PublishedAt, &rec.PublishTarget); err != nil {
 			return nil, fmt.Errorf("scanning nostr event: %w", err)
 		}
 		records = append(records, rec)

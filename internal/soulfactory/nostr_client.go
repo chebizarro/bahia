@@ -363,6 +363,8 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 	}
 }
 
+// collectEvents returns the valid stored events matching filters. The read is
+// complete only when every relay sent EOSE; see CollectStoredEvents.
 func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter) ([]*nostr.Event, error) {
 	if c == nil || c.transport == nil {
 		return nil, fmt.Errorf("soul factory client is not configured")
@@ -372,29 +374,11 @@ func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter)
 		return nil, err
 	}
 	defer sub.Close()
-	var result []*nostr.Event
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-eose:
-			return result, nil
-		case ev, ok := <-sub.Events:
-			if !ok {
-				return result, nil
-			}
-			if ev == nil || !validSignedEvent(ev) {
-				continue
-			}
-			if _, duplicate := seen[ev.ID.Hex()]; duplicate {
-				continue
-			}
-			seen[ev.ID.Hex()] = struct{}{}
-			result = append(result, ev)
-		}
+	stored, err := sub.CollectStoredEvents(ctx)
+	if err != nil {
+		return nil, err
 	}
+	return uniqueValidRelayEvents(stored), nil
 }
 
 func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter, statusKinds, terminalKinds map[int]bool, onStatus func(*nostr.Event), expectedAuthor ...string) (*nostr.Event, error) {

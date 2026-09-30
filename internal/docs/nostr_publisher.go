@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -88,7 +89,7 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 		existingHashes = p.fetchExistingHashes(ctx)
 	}
 
-	var published, skipped, failed int
+	var published, queued, skipped, failed int
 	for _, topic := range catalog {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -114,6 +115,16 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 		}
 
 		if err := p.publishTopic(ctx, doc, hash); err != nil {
+			if nostrutil.IsPublishQueued(err) {
+				// Durably queued and still being retried by the outbox
+				// runner; the next sync must not re-sign it.
+				p.logger.Info("doc queued for relay redelivery",
+					zap.String("topic", topic.Topic),
+					zap.Error(err),
+				)
+				queued++
+				continue
+			}
 			p.logger.Warn("failed to publish doc to relay",
 				zap.String("topic", topic.Topic),
 				zap.Error(err),
@@ -126,6 +137,7 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 
 	p.logger.Info("docs nostr sync complete",
 		zap.Int("published", published),
+		zap.Int("queued", queued),
 		zap.Int("skipped", skipped),
 		zap.Int("failed", failed),
 		zap.Int("total", len(catalog)),

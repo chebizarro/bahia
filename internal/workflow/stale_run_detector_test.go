@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -53,13 +55,16 @@ func (f *staleRunSourceFake) put(run domain.DeploymentRun) {
 type staleRunPublisherFake struct {
 	mu     sync.Mutex
 	events []nostr.Event
+	// err is returned after the event is recorded, as the outbox publisher
+	// does for a durably queued event.
+	err error
 }
 
 func (f *staleRunPublisherFake) PublishSignedEvent(_ context.Context, event *nostr.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, *event)
-	return nil
+	return f.err
 }
 
 func (f *staleRunPublisherFake) snapshot() []nostr.Event {
@@ -265,4 +270,21 @@ func tagValue(event nostr.Event, name string) string {
 		}
 	}
 	return ""
+}
+
+// A health event below the publish quorum is durably queued and retried by the
+// outbox: the check succeeds and later ticks do not re-sign it.
+func TestStaleRunDetectorTreatsQueuedPublishAsKept(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-10 * time.Minute)
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job-queued", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt, UpdatedAt: startedAt}
+	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
+	published := &staleRunPublisherFake{err: fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)}
+	detector := NewStaleRunDetector(runs, repository.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
+	detector.now = func() time.Time { return now }
+
+	require.NoError(t, detector.check(ctx), "a queued publish is not a failed transition")
+	require.NoError(t, detector.check(ctx))
+	require.Len(t, published.snapshot(), 1, "the queued stale signal must not be re-signed")
 }

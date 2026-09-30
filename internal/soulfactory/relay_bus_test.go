@@ -60,7 +60,7 @@ func (e *fakeRelayEndpoint) Subscribe(_ context.Context, filters []nostr.Filter)
 	return sub, nil
 }
 
-func (e *fakeRelayEndpoint) Auth(context.Context, relayAuthSigner) error {
+func (e *fakeRelayEndpoint) Authenticate(context.Context, relayAuthSigner, *relayAuthProbe) error {
 	e.authCalls <- struct{}{}
 	return nil
 }
@@ -136,7 +136,7 @@ func newEOSEOnlyRelayBus(t *testing.T) *SoulFactoryRelayBus {
 	return bus
 }
 
-func TestRelayBusPublishRequiresAtLeastOneAcceptedOK(t *testing.T) {
+func TestRelayBusPublishDefaultQuorumSucceedsAndCollectsFailures(t *testing.T) {
 	accepted := newFakeRelayEndpoint("wss://accepted.example")
 	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
 	rejected := newFakeRelayEndpoint("wss://rejected.example")
@@ -146,45 +146,84 @@ func TestRelayBusPublishRequiresAtLeastOneAcceptedOK(t *testing.T) {
 		t.Fatalf("new bus: %v", err)
 	}
 
-	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-1")})
+	results, err := bus.PublishWithResults(t.Context(), nostr.Event{ID: soulTestID("event-1")})
 	if err != nil {
-		t.Fatalf("Publish() error = %v, want success with one accepted OK", err)
+		t.Fatalf("PublishWithResults() error = %v, want default quorum of one relay to succeed", err)
+	}
+	if len(results) != 2 || !results[0].Accepted || results[1].Reason != "blocked: policy" {
+		t.Fatalf("PublishWithResults() results = %+v, want both relay outcomes", results)
+	}
+}
+
+func TestRelayBusPublishAllRelaysQuorumReportsFailures(t *testing.T) {
+	accepted := newFakeRelayEndpoint("wss://accepted.example")
+	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
+	rejected := newFakeRelayEndpoint("wss://rejected.example")
+	rejected.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: policy"}}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, rejected}, WithRelayBusPublishQuorum(RelayBusPublishQuorumAll))
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-all")})
+	if err == nil {
+		t.Fatal("Publish() error = nil, want failure below the all-relays quorum")
+	}
+	if count != 1 || !containsAll(err.Error(), "accepted by 1 of 2", "blocked: policy") {
+		t.Fatalf("Publish() = %d, %q; want count 1 and per-relay failure detail", count, err.Error())
+	}
+}
+
+func TestRelayBusPublishQuorumAndDuplicateOK(t *testing.T) {
+	duplicate := newFakeRelayEndpoint("wss://duplicate.example")
+	duplicate.publishResults = []RelayPublishResult{{Accepted: false, Reason: "duplicate: already have it"}}
+	down := newFakeRelayEndpoint("wss://down.example")
+	down.publishResults = []RelayPublishResult{{Error: errors.New("connection refused")}}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{duplicate, down})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("quorum")})
+	if err != nil {
+		t.Fatalf("Publish() error = %v, want duplicate OK to satisfy the default quorum", err)
 	}
 	if count != 1 {
 		t.Fatalf("Publish() accepted count = %d, want 1", count)
 	}
 }
 
-func TestRelayBusPublishReturnsAfterFirstAcceptedOK(t *testing.T) {
-	blocked := newFakeRelayEndpoint("wss://blocked.example")
-	blockedEntered := make(chan struct{})
-	blockedCanceled := make(chan struct{})
-	blocked.publishFn = func(ctx context.Context, _ nostr.Event) RelayPublishResult {
-		close(blockedEntered)
-		<-ctx.Done()
-		close(blockedCanceled)
-		return RelayPublishResult{RelayURL: blocked.url, Error: ctx.Err()}
-	}
-
+func TestRelayBusPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
+	acceptedReturned := make(chan struct{})
 	accepted := newFakeRelayEndpoint("wss://accepted.example")
 	accepted.publishFn = func(context.Context, nostr.Event) RelayPublishResult {
-		<-blockedEntered
+		defer close(acceptedReturned)
 		return RelayPublishResult{RelayURL: accepted.url, Accepted: true}
 	}
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{blocked, accepted})
+	// The slow relay answers only after the first relay's OK has been
+	// returned to the bus. The old bus cancelled it at that point.
+	slow := newFakeRelayEndpoint("wss://slow.example")
+	slow.publishFn = func(ctx context.Context, _ nostr.Event) RelayPublishResult {
+		<-acceptedReturned
+		if err := ctx.Err(); err != nil {
+			return RelayPublishResult{RelayURL: slow.url, Error: err}
+		}
+		return RelayPublishResult{RelayURL: slow.url, Accepted: true}
+	}
+
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, slow})
 	if err != nil {
 		t.Fatalf("new bus: %v", err)
 	}
 
-	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("first-ok")})
+	results, err := bus.PublishWithResults(t.Context(), nostr.Event{ID: soulTestID("no-cancel")})
 	if err != nil {
-		t.Fatalf("Publish() error = %v, want first accepted OK to complete quorum", err)
+		t.Fatalf("PublishWithResults() error = %v, want both relays to accept", err)
 	}
-	if count != 1 {
-		t.Fatalf("Publish() accepted count = %d, want 1", count)
+	if len(results) != 2 || !results[0].Accepted || !results[1].Accepted {
+		t.Fatalf("PublishWithResults() results = %+v, want the slow relay's OK collected too", results)
 	}
-	<-blockedCanceled
 }
 
 func TestRelayBusPublishReportsOKFalseAndAllRelayReject(t *testing.T) {
@@ -311,7 +350,10 @@ func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *te
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
 }
 
-func TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill(t *testing.T) {
+// A CLOSED before EOSE is the relay's terminal answer to the stored-event
+// read: backfill ends without waiting on the reissue, but it is reported as
+// incomplete, never as complete. The REQ is still reissued for realtime events.
+func TestRelayBusClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
 	signer := newFakeSigner(t)
 	endpoint := newFakeRelayEndpoint("wss://closed.example")
 	first := newFakeRelaySubscription()
@@ -333,15 +375,17 @@ func TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill(t *testing.T)
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
 	mustReceiveFilters(t, endpoint.subscribeCalls)
-	first.closed <- "closed: relay restart"
-	mustReceiveFilters(t, endpoint.subscribeCalls)
-	select {
-	case <-sub.EndOfStoredEvents:
-		t.Fatal("EOSE closed after CLOSED-before-EOSE instead of waiting for reissued subscription")
-	default:
-	}
-	close(second.eose)
+	first.closed <- "error: relay restart"
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
+	var incomplete *RelayBusIncompleteError
+	if err := sub.StoredEventsIncomplete(nil); !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayBusIncomplete) {
+		t.Fatalf("StoredEventsIncomplete() = %v, want *RelayBusIncompleteError", err)
+	}
+	if incomplete.Cause != nil || len(incomplete.Relays) != 1 ||
+		incomplete.Relays[0].Status != RelayStoredEventsClosed || incomplete.Relays[0].Reason != "error: relay restart" {
+		t.Fatalf("incomplete = %+v, want the relay reported closed with its reason", incomplete)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
 }
 
 func TestRelayBusClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testing.T) {

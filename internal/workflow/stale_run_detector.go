@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -308,7 +309,9 @@ func (d *StaleRunDetector) publishHealth(
 		},
 		Content: string(content),
 	}
-	if err := d.publisher.PublishSignedEvent(ctx, event); err != nil {
+	// A queued publish (nostrutil.ErrPublishIncomplete) is kept and retried by
+	// the outbox, so it is not a failure of this transition.
+	if err := d.publisher.PublishSignedEvent(ctx, event); err != nil && !nostrutil.IsPublishQueued(err) {
 		return fmt.Errorf("publish %s health for deployment run %s: %w", state, run.ID, err)
 	}
 	return nil
