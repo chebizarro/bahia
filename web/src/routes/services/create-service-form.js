@@ -16,8 +16,10 @@ export function validateCreateServiceForm({ name, artifactRepo, runtimeType }) {
   return result.error;
 }
 
-export function buildCreateServicePayload(form) {
+// `id` is the client-minted entity id for this create attempt (bahia-irsry.35).
+export function buildCreateServicePayload(form, { id } = {}) {
   return {
+    ...(id ? { id } : {}),
     name: (form.name || '').trim(),
     repo_url: form.repositorySelection?.repoUrl || '',
     artifact_repo: (form.artifact_repo || '').trim(),

@@ -16,6 +16,7 @@ import (
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.opentelemetry.io/otel/attribute"
@@ -816,6 +817,8 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		code := -32000
 		if errors.Is(err, repository.ErrStaleRevision) {
 			code = ContextVMEnvironmentConflictErrorCode
+		} else if errors.Is(err, domain.ErrEntityIDConflict) {
+			code = ContextVMEntityIDConflictErrorCode
 		}
 		response.Error = &JSONRPCError{Code: code, Message: err.Error()}
 	}

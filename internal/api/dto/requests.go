@@ -38,6 +38,10 @@ type GitSourceRequest struct {
 
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
+	// ID is the optional client-minted entity id (canonical UUIDv7, or v4).
+	// It fixes the service's addressable coordinate; when absent Bahia mints
+	// one. See docs/event-spec.md "Entity identity and coordinates".
+	ID                   string                       `json:"id,omitempty"`
 	OrgID                uuid.UUID                    `json:"org_id"`
 	Name                 string                       `json:"name"`
 	RepoURL              string                       `json:"repo_url,omitempty"`

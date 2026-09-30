@@ -27,8 +27,10 @@ func newPgEnvironmentRepositoryWithDB(db pgQueryer) *PgEnvironmentRepository {
 const environmentColumns = `id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at`
 
 func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {
+	// The id is normally client-minted (bahia-irsry.35); the database never
+	// generates it. Mint only for internal callers that supply none.
 	if env.ID == uuid.Nil {
-		env.ID = uuid.New()
+		env.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	env.CreatedAt = now
@@ -53,7 +55,7 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 		VALUES ($1, NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), $3, $4, $5, $6, $7, $8, $9, $10)
 	`, env.ID, env.OrgID, env.Name, selectorJSON, configJSON, targetingJSON, env.DeployStrategy, env.Protected, env.CreatedAt, env.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("inserting environment: %w", err)
+		return classifyEnvironmentInsertError(env, err)
 	}
 	return nil
 }
@@ -222,4 +224,20 @@ func (r *PgEnvironmentRepository) Delete(ctx context.Context, id uuid.UUID) erro
 		return fmt.Errorf("deleting environment %s: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// classifyEnvironmentInsertError maps unique violations on insert to typed
+// errors: a primary-key hit is ErrAlreadyExists (the caller decides between an
+// idempotent retry and an id conflict), a name hit is ErrConflict.
+func classifyEnvironmentInsertError(env *domain.Environment, err error) error {
+	switch constraint := uniqueViolationConstraint(err); constraint {
+	case "":
+		return fmt.Errorf("inserting environment: %w", err)
+	case "environments_pkey":
+		return fmt.Errorf("inserting environment %s: %w", env.ID, ErrAlreadyExists)
+	case "environments_name_key":
+		return fmt.Errorf("inserting environment: environment name %q is already in use: %w", env.Name, ErrConflict)
+	default:
+		return fmt.Errorf("inserting environment: unique constraint %s violated: %w", constraint, ErrConflict)
+	}
 }

@@ -4,6 +4,7 @@ const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 vi.mock('$app/navigation', () => ({
   goto: gotoMock
@@ -54,13 +55,34 @@ describe('public controlplane command helpers', () => {
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
     expect(requestEncryptedResultMock).toHaveBeenCalledWith({
       operation: 'service/create',
-      payload,
+      payload: { ...payload, id: expect.stringMatching(UUID_V7) },
       tags: [],
       kind: 25910,
       resultKinds: [25910],
       signal: undefined,
       timeoutMs: undefined
     });
+  });
+
+  it('mints a client entity id for service and environment creates when absent (bahia-irsry.35)', async () => {
+    await api.createService({ name: 'api', artifact_repo: 'ghcr.io/example/api' });
+    await api.createEnvironment({ org_id: 'org-1', name: 'staging' });
+
+    const [serviceCall, environmentCall] = requestEncryptedResultMock.mock.calls.map(([request]) => request);
+    expect(serviceCall.operation).toBe('service/create');
+    expect(serviceCall.payload.id).toMatch(UUID_V7);
+    expect(environmentCall.operation).toBe('environment/create');
+    expect(environmentCall.payload.id).toMatch(UUID_V7);
+    expect(environmentCall.payload.id).not.toBe(serviceCall.payload.id);
+  });
+
+  it('sends a caller-minted entity id unchanged so retries stay idempotent', async () => {
+    const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
+    await api.createService({ id, name: 'api', artifact_repo: 'ghcr.io/example/api' });
+    await api.createService({ id, name: 'api', artifact_repo: 'ghcr.io/example/api' });
+
+    expect(requestEncryptedResultMock.mock.calls.map(([request]) => request.payload.id)).toEqual([id, id]);
+    await expect(api.createEnvironment({ id: 'Not-A-UUID', name: 'prod' })).rejects.toThrow(/Invalid entity id/);
   });
 
   it('creates deployment intents with service/environment/artifact routing tags', async () => {

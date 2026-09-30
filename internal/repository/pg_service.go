@@ -26,8 +26,10 @@ func newPgServiceRepositoryWithDB(db pgQueryer) *PgServiceRepository {
 }
 
 func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) error {
+	// The id is normally client-minted (bahia-irsry.35); the database never
+	// generates it. Mint only for internal callers that supply none.
 	if svc.ID == uuid.Nil {
-		svc.ID = uuid.New()
+		svc.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	svc.CreatedAt = now
@@ -47,7 +49,7 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 		VALUES ($1, NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, svc.ID, svc.OrgID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.CreatedAt, svc.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("inserting service: %w", err)
+		return classifyServiceInsertError(svc, err)
 	}
 	return nil
 }
@@ -201,4 +203,20 @@ func (r *PgServiceRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("deleting service %s: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// classifyServiceInsertError maps unique violations on insert to typed
+// errors: a primary-key hit is ErrAlreadyExists (the caller decides between an
+// idempotent retry and an id conflict), a name hit is ErrConflict.
+func classifyServiceInsertError(svc *domain.Service, err error) error {
+	switch constraint := uniqueViolationConstraint(err); constraint {
+	case "":
+		return fmt.Errorf("inserting service: %w", err)
+	case "services_pkey":
+		return fmt.Errorf("inserting service %s: %w", svc.ID, ErrAlreadyExists)
+	case "services_name_key":
+		return fmt.Errorf("inserting service: service name %q is already in use: %w", svc.Name, ErrConflict)
+	default:
+		return fmt.Errorf("inserting service: unique constraint %s violated: %w", constraint, ErrConflict)
+	}
 }
