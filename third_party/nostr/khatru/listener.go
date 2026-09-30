@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"slices"
 	"sync"
 
 	"fiatjaf.com/lib/set"
@@ -12,6 +13,10 @@ import (
 )
 
 var ErrSubscriptionClosedByClient = errors.New("subscription closed by client")
+
+// ErrSubscriptionClosedByRelay is the cancel cause of a listener removed with
+// RemoveListeners.
+var ErrSubscriptionClosedByRelay = errors.New("subscription closed by relay")
 
 type listenerSpec struct {
 	ssid   int    // internal numeric id for a listener
@@ -360,6 +365,43 @@ func (rl *Relay) removeListenerId(ws *WebSocket, id string) {
 		}
 		rl.clients[ws] = kept
 	}
+}
+
+// RemoveListeners removes the listeners of ws with the given internal ids (the
+// ssid passed to OnListenerAdded), cancelling their request context and firing
+// OnListenerRemoved, just as if the client had sent CLOSE. It is the server-side
+// counterpart to that: call it after sending the client a CLOSED for the
+// subscription. Ids that are no longer registered are ignored, so listeners the
+// client has since re-created under the same subscription id are unaffected.
+//
+// It must not be called from OnListenerAdded or OnListenerRemoved, which run
+// with the client lock held.
+func (rl *Relay) RemoveListeners(ws *WebSocket, ssids ...int) {
+	if len(ssids) == 0 {
+		return
+	}
+	rl.clientsMutex.Lock()
+	defer rl.clientsMutex.Unlock()
+
+	specs, ok := rl.clients[ws]
+	if !ok {
+		return
+	}
+	kept := specs[:0]
+	for _, spec := range specs {
+		if slices.Contains(ssids, spec.ssid) {
+			spec.cancel(ErrSubscriptionClosedByRelay)
+			filter := rl.dispatcher.removeSubscription(spec.ssid)
+
+			if rl.OnListenerRemoved != nil {
+				rl.OnListenerRemoved(ws, spec.ssid, spec.sid, filter)
+			}
+
+			continue
+		}
+		kept = append(kept, spec)
+	}
+	rl.clients[ws] = kept
 }
 
 func (rl *Relay) removeClientAndListeners(ws *WebSocket) {

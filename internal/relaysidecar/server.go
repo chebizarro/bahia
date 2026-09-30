@@ -60,6 +60,9 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if nostrCfg.Sidecar.PublicURL == "" {
 		nostrCfg.Sidecar.PublicURL = "ws://localhost:3334"
 	}
+	if nostrCfg.Sidecar.SubscriberQueueSize <= 0 {
+		nostrCfg.Sidecar.SubscriberQueueSize = defaultSubscriberQueueSize
+	}
 
 	pol, err := newPolicy(nostrCfg)
 	if err != nil {
@@ -91,22 +94,32 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		relay.Info.PubKey = &pk
 	}
 
+	// Khatru broadcasts to matching subscribers synchronously, before it sends
+	// the publisher's OK. The fanout disables that path and delivers through
+	// per-connection bounded queues instead. The publisher is acknowledged
+	// promptly, and a slow subscriber is CLOSED rather than silently skipped.
+	fanout := newLiveFanout(logger, nostrCfg.Sidecar.SubscriberQueueSize)
+	fanout.install(relay)
+
 	relay.OnEvent = pol.acceptEvent
-	relay.OnRequest = pol.acceptFilter
+	// Khatru runs a REQ filter's stored query before it registers the live
+	// listener. beginRequest starts buffering live matches before the query, so
+	// an event saved in between is still delivered (see pendingListener).
+	relay.OnRequest = func(ctx context.Context, filter nostr.Filter) (bool, string) {
+		if reject, msg := pol.acceptFilter(ctx, filter); reject {
+			return reject, msg
+		}
+		fanout.beginRequest(ctx, filter)
+		return false, ""
+	}
 	relay.OnCount = pol.acceptFilter
 	relay.StoreEvent = store.Save
 	relay.ReplaceEvent = store.Replace
 	relay.DeleteEvent = store.Delete
 	relay.QueryStored = func(ctx context.Context, filter nostr.Filter) iter.Seq[nostr.Event] {
-		return store.Query(ctx, filter, nostrCfg.Sidecar.MaxQueryLimit)
+		return fanout.trackStored(ctx, store.Query(ctx, filter, nostrCfg.Sidecar.MaxQueryLimit))
 	}
 	relay.Count = store.Count
-	// Khatru broadcasts to matching subscribers synchronously, before it sends
-	// the publisher's OK. The fanout disables that path and delivers through
-	// per-connection bounded queues instead. The publisher is acknowledged
-	// promptly, and a slow subscriber is CLOSED rather than silently skipped.
-	fanout := newLiveFanout(logger, defaultSubscriberQueueSize)
-	fanout.install(relay)
 	var consumer *ConfigConsumer
 	if len(nostrCfg.Sidecar.ConfigTrustedPubkeys) > 0 {
 		secret, ok, err := parseFiatjafSecret(nostrCfg.PrivateKey)
@@ -179,11 +192,13 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.relay.ServeHTTP(w, r)
 	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+metricsPath, s.serveMetrics)
 	if publicPath == "/" {
-		return dispatch
+		mux.Handle("/", dispatch)
+		return mux
 	}
 
-	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

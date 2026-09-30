@@ -81,6 +81,7 @@ nostr:
     request_retention: 24h
     auth_private_key: ""
     max_query_limit: 2000
+    subscriber_queue_size: 1024
 
 reconcile:
   interval: 60s

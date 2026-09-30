@@ -43,11 +43,36 @@ websocket relay that sends EOSE, an EVENT burst, then CLOSED).
 Note: several upstream tests in this package (`TestSubscribeBasic`,
 `TestEOSEMadness`, `TestNestedSubscriptions`, `TestCount`, `TestPublish`,
 `TestPublishBlocked`) dial public relays or are flaky, and fail identically on
-the pristine copy.
+the pristine copy. So does `khatru`'s `TestWithServiceURL`.
+
+## khatru: server-side listener close (bahia-irsry.18)
+
+Khatru had no way to close a subscription from the server side. After the
+relay sidecar sent an overflow `CLOSED`, the internal listener lingered until
+the client disconnected, because go-nostr clients re-subscribe under a new id
+and, per NIP-01, don't send `CLOSE` for a subscription the relay closed.
+
+- `khatru/listener.go`: `Relay.RemoveListeners(ws, ssids...)` removes listeners
+  by their internal id (the `ssid` given to `OnListenerAdded`), cancels their
+  REQ context with `ErrSubscriptionClosedByRelay`, and fires
+  `OnListenerRemoved`, the same as a client `CLOSE`. Removing by ssid rather
+  than subscription id leaves a re-REQ under the same id untouched.
+- `khatru/utils.go`: `GetSubscriptionID` returns `""` outside a REQ instead of
+  panicking. NIP-77 negentropy also runs `OnRequest`/`QueryStored`, without a
+  subscription id.
+
+Test: `khatru/listener_remove_test.go`.
+
+Not patched here (handled in `internal/relaysidecar/fanout.go`): khatru runs
+a filter's stored query before it registers the live listener, which leaves a
+gap. The sidecar closes it with `OnRequest` + `QueryStored` hooks. A natural
+upstream fix is to register the listener, or buffer, before `QueryStored`.
 
 ## Removal criteria
 
-Drop the `replace` and this directory once upstream carries an equivalent fix:
+Drop the `replace` and this directory once upstream carries equivalent fixes
+(for the khatru part, any server-side listener close keyed so that a reused
+subscription id is unaffected):
 bump `fiatjaf.com/nostr` to that version and keep both regression tests (the
 Bahia-side one must keep passing under -race). The previous local copy was
 removed the same way in c70042c0.

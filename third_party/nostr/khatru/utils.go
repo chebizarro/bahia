@@ -119,9 +119,12 @@ func GetIP(ctx context.Context) string {
 }
 
 // GetSubscriptionID returns the subscription ID stored in the context.
-// Only meaningful during filter processing (REQ message handling).
+// Only meaningful during filter processing (REQ message handling); it returns
+// "" in any other context (e.g. NIP-77 negentropy, which also runs OnRequest
+// and QueryStored).
 func GetSubscriptionID(ctx context.Context) string {
-	return ctx.Value(subscriptionIdKey).(string)
+	id, _ := ctx.Value(subscriptionIdKey).(string)
+	return id
 }
 
 // SendNotice sends a NOTICE message to the WebSocket connection stored in ctx.
