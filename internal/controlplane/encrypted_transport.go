@@ -97,6 +97,16 @@ const (
 	contextVMResultMaxInFlight     = 128
 )
 
+const (
+	// maxStoredGiftWrapContentBytes is the largest content Bahia's relay
+	// sidecar stores (its eventstore codec's 16-bit content length, advertised
+	// as NIP-11 limitation.max_content_length). NIP-44 pads plaintext above
+	// 40,960 bytes to 49,152 or more, whose base64 exceeds it, so a stored
+	// 1059 wrap of such a message would be refused. Those travel as ephemeral
+	// 21059 wraps instead: relayed live to the waiting peer, never stored.
+	maxStoredGiftWrapContentBytes = 65535
+)
+
 // EncryptedRequestSubscriber is the relay subscription contract used by the
 // encrypted request/result event runtime. RelayPool satisfies this interface.
 type EncryptedRequestSubscriber interface {
@@ -614,15 +624,18 @@ func contextVMSubscriptionFilters(servicePubkey string, now time.Time) []nostr.F
 	}
 	return []nostr.Filter{
 		{
-			Kinds: []nostr.Kind{KindContextVMMessage, KindContextVMEphemeralWrap},
+			Kinds: []nostr.Kind{KindContextVMMessage},
 			Tags:  tags,
 			Since: nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix()),
 		},
 		{
-			Kinds: []nostr.Kind{KindContextVMGiftWrap},
+			// Both wrap kinds may carry a NIP-59 envelope (a request too large
+			// for a stored 1059 is sent as 21059), and NIP-59 deliberately
+			// backdates the public outer event. Run gates the decrypted inner
+			// event to the normal replay window. 21059 is never stored, so the
+			// longer lookback only affects live matching.
+			Kinds: []nostr.Kind{KindContextVMGiftWrap, KindContextVMEphemeralWrap},
 			Tags:  tags,
-			// NIP-59 deliberately backdates the public outer event. Run gates
-			// the decrypted inner event to the normal replay window.
 			Since: nostr.Timestamp(now.Add(-contextVMNIP59OuterLookback).Unix()),
 		},
 	}
@@ -882,26 +895,12 @@ func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, ev
 	if t.responder == nil {
 		return nil, "", fmt.Errorf("ContextVM responder is not configured")
 	}
-	if event.Kind == KindContextVMGiftWrap {
-		// This shared ingress also receives worker JSON-RPC responses; fp-5l35
-		// owns response-role dispatch and fp-20aa owns maintenance consumption.
-		return cascontextvm.UnwrapAny(ctx, t.responder.signer, event)
-	}
-	// cascadia-go Wrap/Unwrap covers the legacy stored direct-encryption
-	// envelope. Bahia still accepts the local ephemeral 21059 policy surface.
-	conversationKey, err := t.responder.conversationKey(event.PubKey.Hex())
-	if err != nil {
-		return nil, "", err
-	}
-	plaintext, err := nip44.Decrypt(event.Content, conversationKey)
-	if err != nil {
-		return nil, "", fmt.Errorf("decrypt ContextVM gift wrap: %w", err)
-	}
-	var inner nostr.Event
-	if err := json.Unmarshal([]byte(plaintext), &inner); err != nil {
-		return nil, "", fmt.Errorf("decode ContextVM inner event: %w", err)
-	}
-	return &inner, cascontextvm.EnvelopeFormatLegacyDirect, nil
+	// Both wrap kinds accept the NIP-59 and the legacy direct-encryption
+	// envelope: a client sends a request that is too large for a stored 1059
+	// as 21059 in whichever envelope it uses. This shared ingress also
+	// receives worker JSON-RPC responses; fp-5l35 owns response-role dispatch
+	// and fp-20aa owns maintenance consumption.
+	return cascontextvm.UnwrapAny(ctx, t.responder.signer, event)
 }
 
 func (t *EncryptedRequestTransport) publishContextVMProgressAck(ctx context.Context, outer, request *nostr.Event, encrypted bool) {
@@ -1084,6 +1083,11 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 	ciphertext, err := nip44.Encrypt(string(innerJSON), conversationKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt ContextVM response: %w", err)
+	}
+	if wrapperKind == KindContextVMGiftWrap && len(ciphertext) > maxStoredGiftWrapContentBytes {
+		// Too large for the relay to store (see maxStoredGiftWrapContentBytes).
+		// Requesters subscribe to both wrap kinds before they publish.
+		wrapperKind = KindContextVMEphemeralWrap
 	}
 	wrapped := &nostr.Event{Kind: nostr.Kind(wrapperKind), PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{tagReplyEvent, outer.ID.Hex(), "", "reply"}, {tagRecipientPubkey, request.PubKey.Hex()}}, Content: ciphertext}
 	if err := wrapped.Sign(wrapperPrivateKey); err != nil {

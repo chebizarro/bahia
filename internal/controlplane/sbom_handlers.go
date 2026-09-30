@@ -13,8 +13,15 @@ import (
 const (
 	ContextVMMethodSBOMGenerate = "sbom/generate"
 	ContextVMMethodSBOMImport   = "sbom/import"
-	maxContextVMInlineSBOMBytes = 512 * 1024
 )
+
+// maxContextVMInlineSBOMBytes bounds a decoded inline SBOM. The request is one
+// Nostr message: base64 inflates the document by 4/3, and Bahia's relay closes
+// a websocket frame over 512,000 bytes (NIP-11 max_message_length) without an
+// OK. 360 KiB encodes to 491,520 bytes and leaves room for the envelope.
+// Larger SBOMs are uploaded to Blossom and imported by location. The web
+// client enforces the same limit (MAX_CONTEXTVM_INLINE_SBOM_BYTES).
+const maxContextVMInlineSBOMBytes = 360 * 1024
 
 type sbomRequestRunner interface {
 	EnqueueGenerate(context.Context, service.SBOMGenerateRequest) (service.SBOMAcceptedAck, error)
@@ -65,7 +72,7 @@ func (h sbomContextVMHandler) importSBOM(ctx context.Context, req ContextVMReque
 			return nil, fmt.Errorf("decode sbom/import payloadBase64: %w", err)
 		}
 		if len(decoded) > maxContextVMInlineSBOMBytes {
-			return nil, fmt.Errorf("sbom/import inline payload exceeds %d byte ContextVM limit; use a Blossom or REST compatibility import reference", maxContextVMInlineSBOMBytes)
+			return nil, fmt.Errorf("sbom/import inline payload is %d bytes, over the %d-byte ContextVM limit; upload the SBOM to Blossom and import it by location", len(decoded), maxContextVMInlineSBOMBytes)
 		}
 		bytes = decoded
 	}

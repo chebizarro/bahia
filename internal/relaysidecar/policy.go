@@ -11,6 +11,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 )
 
+// Admission bounds on created_at, also advertised in NIP-11.
+const (
+	maxEventFutureSkew = 10 * time.Minute
+	maxEventAge        = 365 * 24 * time.Hour
+)
+
 type policy struct {
 	now           func() nostr.Timestamp
 	admin         *adminPolicy
@@ -36,11 +42,14 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	if !event.VerifySignature() {
 		return true, "invalid: signature is invalid"
 	}
-	if event.CreatedAt > p.now()+nostr.Timestamp((10*time.Minute).Seconds()) {
+	if event.CreatedAt > p.now()+nostr.Timestamp(maxEventFutureSkew.Seconds()) {
 		return true, "invalid: created_at too far in the future"
 	}
-	if p.now()-event.CreatedAt > nostr.Timestamp((365 * 24 * time.Hour).Seconds()) {
+	if p.now()-event.CreatedAt > nostr.Timestamp(maxEventAge.Seconds()) {
 		return true, "invalid: created_at too far in the past"
+	}
+	if expired(event, p.now()) {
+		return true, "invalid: event has expired (NIP-40)"
 	}
 	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
 		return true, "blocked: pubkey is not admitted by the persisted relay policy"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
@@ -112,4 +113,42 @@ func (r *fakeSBOMRequestRunner) EnqueueImport(_ context.Context, req service.SBO
 	r.importCalls++
 	r.importReq = req
 	return r.importAck, nil
+}
+
+// TestSBOMContextVMImportInlineLimitAndLocation: an inline SBOM of exactly
+// maxContextVMInlineSBOMBytes is enqueued; one byte more is refused with an
+// error pointing at the Blossom location import, which is not size-limited.
+func TestSBOMContextVMImportInlineLimitAndLocation(t *testing.T) {
+	ack, err := service.NewSBOMAcceptedAck("import-limit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: "artifact-1", Digest: "sha256:abc123"}
+	importWith := func(params sbomImportParams) (*fakeSBOMRequestRunner, error) {
+		runner := &fakeSBOMRequestRunner{importAck: ack}
+		encoded, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sbomContextVMHandler{runner: runner}.importSBOM(context.Background(), ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: encoded}})
+		return runner, err
+	}
+	inline := func(size int) sbomImportParams {
+		return sbomImportParams{IDempotencyKey: "import-limit", Subject: subject, Format: domain.SBOMFormatSPDX,
+			PayloadBase64: base64.StdEncoding.EncodeToString(make([]byte, size)), Storage: domain.SBOMStorageBlossom}
+	}
+
+	runner, err := importWith(inline(maxContextVMInlineSBOMBytes))
+	if err != nil || runner.importCalls != 1 || len(runner.importReq.Payload) != maxContextVMInlineSBOMBytes {
+		t.Fatalf("at the limit: err=%v calls=%d payload=%d", err, runner.importCalls, len(runner.importReq.Payload))
+	}
+	runner, err = importWith(inline(maxContextVMInlineSBOMBytes + 1))
+	if err == nil || !strings.Contains(err.Error(), "upload the SBOM to Blossom and import it by location") || runner.importCalls != 0 {
+		t.Fatalf("over the limit: err=%v calls=%d", err, runner.importCalls)
+	}
+	location := &domain.SBOMLocation{Type: domain.SBOMStorageBlossom, URI: "https://blossom.example/" + strings.Repeat("a", 64), MediaType: "application/spdx+json"}
+	runner, err = importWith(sbomImportParams{IDempotencyKey: "import-limit", Subject: subject, Format: domain.SBOMFormatSPDX, Location: location, Storage: domain.SBOMStorageBlossom})
+	if err != nil || runner.importCalls != 1 || runner.importReq.Location == nil || runner.importReq.Location.URI != location.URI || len(runner.importReq.Payload) != 0 {
+		t.Fatalf("location import: err=%v req=%+v", err, runner.importReq)
+	}
 }

@@ -19,8 +19,14 @@ func (s *Server) WritePrometheus(w io.Writer) error {
 			"bahia_relay_sidecar_subscription_overflow_closes_total %d\n"+
 			"# HELP bahia_relay_sidecar_subscriber_queue_size Configured per-connection live delivery queue size\n"+
 			"# TYPE bahia_relay_sidecar_subscriber_queue_size gauge\n"+
-			"bahia_relay_sidecar_subscriber_queue_size %d\n",
-		s.fanout.OverflowCloses(), s.fanout.subscriberQueueSize()); err != nil {
+			"bahia_relay_sidecar_subscriber_queue_size %d\n"+
+			"# HELP bahia_relay_sidecar_retention_deleted_events_total Events deleted by retention sweeps, by cause\n"+
+			"# TYPE bahia_relay_sidecar_retention_deleted_events_total counter\n"+
+			"bahia_relay_sidecar_retention_deleted_events_total{cause=\"nip40_expired\"} %d\n"+
+			"bahia_relay_sidecar_retention_deleted_events_total{cause=\"request_retention\"} %d\n"+
+			"bahia_relay_sidecar_retention_deleted_events_total{cause=\"event_retention\"} %d\n",
+		s.fanout.OverflowCloses(), s.fanout.subscriberQueueSize(),
+		s.swept.expired.Load(), s.swept.request.Load(), s.swept.regular.Load()); err != nil {
 		return fmt.Errorf("write relay sidecar metrics: %w", err)
 	}
 	return nil

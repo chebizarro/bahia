@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSQLiteReplaceNIP01ArrivalOrderAndRestart(t *testing.T) {
+func TestEventStoreReplaceNIP01ArrivalOrderAndRestart(t *testing.T) {
 	for _, kind := range []nostr.Kind{0, 3, 10002, 11316, 30315, 30900, 30078} {
 		for _, reverse := range []bool{false, true} {
 			t.Run(fmt.Sprint(kind)+map[bool]string{false: "/low-first", true: "/high-first"}[reverse], func(t *testing.T) {
 				dir := t.TempDir()
-				store, err := newSQLiteStore(dir)
+				store, err := openEventStore(t.Context(), dir, nil)
 				require.NoError(t, err)
 				first := nostr.Event{Kind: kind, CreatedAt: 100, Tags: nostr.Tags{{"d", "same"}}, Content: `{"deleted":true}`}
 				second := first
@@ -38,7 +38,7 @@ func TestSQLiteReplaceNIP01ArrivalOrderAndRestart(t *testing.T) {
 				require.ErrorIs(t, store.Replace(t.Context(), low), eventstore.ErrDupEvent)
 				require.ErrorIs(t, store.Replace(t.Context(), high), eventstore.ErrDupEvent)
 				require.NoError(t, store.Close())
-				store, err = newSQLiteStore(dir)
+				store, err = openEventStore(t.Context(), dir, nil)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, store.Close()) }()
 				var events []nostr.Event

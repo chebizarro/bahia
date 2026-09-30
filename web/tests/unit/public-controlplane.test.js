@@ -392,9 +392,33 @@ describe('public controlplane command helpers', () => {
   });
 
   it('rejects oversized inline artifact SBOM imports before publishing', () => {
-    const oversized = 'a'.repeat(Math.ceil(((api.MAX_CONTEXTVM_INLINE_SBOM_BYTES + 1) * 4) / 3));
-    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized })).toThrow('use a Blossom or REST compatibility import reference');
+    expect(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES).toBe(360 * 1024);
+    const oversized = Buffer.alloc(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES + 1).toString('base64');
+    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized }))
+      .toThrow('Inline SBOM imports are limited to 368640 bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.');
     expect(publishEncryptedRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes an inline artifact SBOM of exactly the inline limit', async () => {
+    const atLimit = Buffer.alloc(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES).toString('base64');
+    await api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: atLimit });
+    expect(publishEncryptedRequestMock).toHaveBeenCalledTimes(1);
+    expect(publishEncryptedRequestMock.mock.calls[0][0].payload.payloadBase64).toBe(atLimit);
+  });
+
+  it('imports artifact SBOMs of any size by Blossom location', async () => {
+    const uri = `https://blossom.example/${'c'.repeat(64)}`;
+    await api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, {
+      format: 'spdx',
+      location: { type: 'blossom', uri, mediaType: 'application/spdx+json' }
+    });
+    expect(publishEncryptedRequestMock).toHaveBeenCalledTimes(1);
+    const request = publishEncryptedRequestMock.mock.calls[0][0];
+    expect(request.operation).toBe('sbom/import');
+    expect(request.kind).toBe(25910);
+    expect(request.payload.location).toEqual({ type: 'blossom', uri, mediaType: 'application/spdx+json' });
+    expect(request.payload).not.toHaveProperty('payloadBase64');
+    expect(request.payload.idempotencyKey).toContain(`location:blossom:${uri}`);
   });
 
   it('rejects artifact SBOM generation without an immutable digest', () => {

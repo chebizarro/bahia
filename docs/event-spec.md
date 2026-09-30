@@ -234,7 +234,7 @@ Audit events are append-only facts for provenance, compliance, deployment eviden
 
 Audit facts never carry `d`: 4903 is a regular kind, so repeated audits of one entity coexist. The control-plane projector's facts use `schema=bahia.audit.v1` and correlate by `state=<cp-state d of the entity>`, `t=cp-audit`, `t=<event type>`, `e` when a source event is known, and a deterministic `fact` id that makes a republish idempotent (see `docs/nostr-event-implementation-guide.md`).
 
-Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review. Bahia tags projected audit events with `protected=true` as semantic metadata but does not add the NIP-70 `-` tag, which governs authenticated author publication rather than read visibility. Relay queryability lasts only through the configured `event_retention`; compliance-grade preservation requires a suitable retention policy or archival storage.
+Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review. Bahia tags projected audit events with `protected=true` as semantic metadata but does not add the NIP-70 `-` tag, which governs authenticated author publication rather than read visibility. The Bahia sidecar keeps regular events such as audits durably unless an operator sets an `event_retention` cap; compliance-grade preservation requires leaving it unset or archival storage.
 
 ## Delivery, Replay, and Retention
 

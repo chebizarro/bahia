@@ -276,7 +276,7 @@ Use Bahia audit.
 - Never add `d`. 4903 is a regular kind, and every audit is its own fact. The retired addressable audit kinds `31000`-`31099` were published with `d=<entity>`, so each audit of an entity replaced the previous one (audit C-16).
 - Correlate a fact with tags instead: `state=<d of the audited entity's cp-state record>`, a single-letter topic (`t=cp-audit` for projector facts, plus `t=<event type>`), and `e=<source event id>` when the fact has a Nostr source.
 - Make publication idempotent per source fact. Projector facts carry `fact=<sha256(type, entity, canonical content)>`. The projector signs each fact id once and remembers ids hydrated from retained 4903 records across restarts, so a republished bus event does not create a duplicate fact. Consumers may also drop a second event with a `fact` they have already seen.
-- Audit events should be treated as protected and long-retention. They are not normal delete targets, but relay availability is still bounded by configured `event_retention`; compliance evidence needs appropriate retention or archival storage.
+- Audit events should be treated as protected and long-retention. They are not normal delete targets. The sidecar keeps regular events durably by default; an operator-set `event_retention` cap bounds that, so compliance evidence needs the cap left unset or archival storage.
 - `protected=true` is Bahia audit metadata. Projected audits currently omit the NIP-70 `-` tag; that tag governs authenticated author publication, not read visibility.
 
 Use NIP-58 badges for permission or capability grants; use `4903` for the audit trail describing the grant or revocation.
@@ -595,8 +595,8 @@ Do not rely on relay indexing for multi-character tags unless the sidecar or tar
 - For service-authored events using `internal/adapters/nostr.Publisher`, persist the fully signed event as a pending `nostr_events` outbox row before relay delivery. Mark it published only after an accepted or duplicate relay `OK`; retain and retry failures with backoff.
 - Do not generalize that outbox guarantee to every relay pool or client publisher. A caller request with zero accepted relays is not accepted, and a ContextVM receipt is not terminal business truth.
 - Sidecar persistence precedes `OK`. Subscriber fanout must remain off the acknowledgment path so a slow subscriber cannot stall writes.
-- Replay filters for IDs, kinds, authors, `since`, and `until` should be scoped in storage before full filter matching. Keep replay reads isolated from the write connection and enforce `max_query_limit`; `EOSE` ends only the bounded query, so clients that may hit the cap must narrow resource/time filters, overlap windows, and deduplicate.
-- Retain ContextVM transport (`25910`, `1059`, `21059`) according to `request_retention`; retain observables and all other kinds according to `event_retention`.
+- Replay filters are answered from the eventstore's kind, author, tag and time indexes, and each query is capped at `max_query_limit`; `EOSE` ends only the bounded query, so clients that may hit the cap must narrow resource/time filters, overlap windows, and deduplicate, or reconcile with NIP-77.
+- Retain ContextVM transport (`request_retention_kinds`, default `25910`, `1059`, `21059`) according to `request_retention`. Regular events such as `4903` audits are durable unless `event_retention` caps them; replaceable, addressable and kind-5 events are never age-swept.
 
 ## Migration app rules
 

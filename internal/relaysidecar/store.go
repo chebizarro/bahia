@@ -2,330 +2,680 @@ package relaysidecar
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
-	"github.com/openagentsinc/bahia/internal/kinds"
-	_ "modernc.org/sqlite"
+	"fiatjaf.com/nostr/eventstore/boltdb"
+	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
+	"fiatjaf.com/nostr/nip40"
+	"go.etcd.io/bbolt"
+	"go.uber.org/zap"
 )
 
-// sqliteStore is the durable source of relay history. Nostr subscribers may
+// eventStoreFile is the bbolt database under nostr.sidecar.data_dir. It
+// replaces the hand-rolled events.sqlite table (C-20): fiatjaf's eventstore
+// indexes kinds, authors and tags (#e/#p/#d/#a…), so ContextVM, addressable
+// and FIPS lookups no longer scan the table.
+const eventStoreFile = "events.bolt"
+
+// Buckets Bahia keeps next to the eventstore's own in the same bbolt file.
+var (
+	sidecarMetaBucket   = []byte("bahiaSidecarMeta")
+	sidecarExpiryBucket = []byte("bahiaSidecarExpiry")
+)
+
+const (
+	// unboundedQueryLimit stands in for "no cap" on queries.
+	unboundedQueryLimit = math.MaxInt32
+	// queryPageSize bounds one bbolt query. bbolt preallocates a result buffer
+	// proportional to the limit it is given, so larger reads (negentropy sets,
+	// uncapped internal reads) are paged by scan.
+	queryPageSize = 1000
+	// sweepBatchSize bounds how many events one sweep page reads and deletes.
+	sweepBatchSize = 1000
+)
+
+var errEventDeleted = errors.New("blocked: this event was deleted by its author (NIP-09)")
+
+// eventStore is the durable source of relay history. Nostr subscribers may
 // disconnect and replay at any time, so accepted events must survive relay
 // process and container restarts.
-type sqliteStore struct {
-	db     *sql.DB
-	readDB *sql.DB
+//
+// Every handle to one data_dir shares a single bbolt database. bbolt holds an
+// exclusive file lock, and cmd/relay prepares a SIGHUP replacement runtime
+// before it stops the active one, so a second open of the same file must reuse
+// the first instead of waiting for a lock its own process holds.
+type eventStore struct {
+	shared    *sharedEventStore
+	closeOnce sync.Once
+	closeErr  error
 }
 
-func newSQLiteStore(dataDir string) (*sqliteStore, error) {
+type sharedEventStore struct {
+	path    string
+	backend *boltdb.BoltBackend
+	refs    int
+	// replaceMu serialises Replace so that its read of the current version
+	// and the write that supersedes it are not interleaved with another
+	// replace of the same coordinate.
+	replaceMu sync.Mutex
+}
+
+var openEventStores = struct {
+	sync.Mutex
+	byPath map[string]*sharedEventStore
+}{byPath: make(map[string]*sharedEventStore)}
+
+// openEventStore opens (or shares) the bbolt event store under dataDir. On the
+// first open of a data_dir that still holds the pre-eventstore events.sqlite,
+// it imports that history once (see migrateLegacySQLite).
+func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*eventStore, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("relay sidecar data_dir is required")
+	}
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create relay sidecar data directory: %w", err)
 	}
-	// Connection PRAGMAs belong in the DSN so database/sql applies them to
-	// every lazily opened connection, not just the first one.
-	dsn := filepath.Join(dataDir, "events.sqlite") +
-		"?_pragma=busy_timeout%3d30000&_pragma=journal_mode%3dWAL&_pragma=synchronous%3dFULL"
-	db, err := sql.Open("sqlite", dsn)
+	path, err := filepath.Abs(filepath.Join(dataDir, eventStoreFile))
 	if err != nil {
-		return nil, fmt.Errorf("open relay sidecar event store: %w", err)
+		return nil, fmt.Errorf("resolve relay sidecar event store path: %w", err)
 	}
-	// Keep writes on their own connection pool. Relay replay queries can be
-	// long-running, and must never consume the connection needed to persist a
-	// publisher event and return its OK.
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`
-		PRAGMA journal_mode=WAL;
-		PRAGMA synchronous=FULL;
-		PRAGMA busy_timeout=5000;
-		CREATE TABLE IF NOT EXISTS events (
-			id TEXT PRIMARY KEY,
-			created_at INTEGER NOT NULL,
-			kind INTEGER NOT NULL,
-			pubkey TEXT NOT NULL,
-			replaceable_key TEXT,
-			event_json BLOB NOT NULL
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS events_replaceable_key
-			ON events(replaceable_key) WHERE replaceable_key IS NOT NULL;
-		CREATE INDEX IF NOT EXISTS events_created_at ON events(created_at DESC);
-	`); err != nil {
-		return nil, errors.Join(fmt.Errorf("initialize relay sidecar event store: %w", err), db.Close())
+
+	openEventStores.Lock()
+	defer openEventStores.Unlock()
+	if shared := openEventStores.byPath[path]; shared != nil {
+		shared.refs++
+		return &eventStore{shared: shared}, nil
 	}
-	readDB, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("open relay sidecar read pool: %w", err), db.Close())
+
+	backend := &boltdb.BoltBackend{Path: path}
+	if err := backend.Init(); err != nil {
+		if backend.DB != nil {
+			_ = backend.DB.Close()
+		}
+		return nil, fmt.Errorf("open relay sidecar event store %s (is another relay process using this data_dir?): %w", path, err)
 	}
-	readDB.SetMaxOpenConns(32)
-	return &sqliteStore{db: db, readDB: readDB}, nil
+	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		_ = backend.DB.Close()
+		return nil, fmt.Errorf("initialize relay sidecar event store buckets: %w", err)
+	}
+	shared := &sharedEventStore{path: path, backend: backend, refs: 1}
+	store := &eventStore{shared: shared}
+	if _, err := migrateLegacySQLite(ctx, store, dataDir, logger); err != nil {
+		_ = backend.DB.Close()
+		return nil, err
+	}
+	openEventStores.byPath[path] = shared
+	return store, nil
 }
 
-func (s *sqliteStore) Save(ctx context.Context, event nostr.Event) error {
-	encoded, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("encode relay event: %w", err)
+func (s *eventStore) backend() *boltdb.BoltBackend { return s.shared.backend }
+
+// Close releases this handle. The database closes with its last handle.
+// Closing a handle twice is a no-op.
+func (s *eventStore) Close() error {
+	s.closeOnce.Do(func() {
+		openEventStores.Lock()
+		defer openEventStores.Unlock()
+		s.shared.refs--
+		if s.shared.refs > 0 {
+			return
+		}
+		delete(openEventStores.byPath, s.shared.path)
+		s.closeErr = s.shared.backend.DB.Close()
+	})
+	return s.closeErr
+}
+
+// ping reports whether the database is still open and readable.
+func (s *eventStore) ping() error {
+	return s.backend().DB.View(func(*bbolt.Tx) error { return nil })
+}
+
+// Save stores a regular event. Saving a kind-5 deletion request also applies
+// it (NIP-09).
+func (s *eventStore) Save(ctx context.Context, event nostr.Event) error {
+	if err := storableEvent(event); err != nil {
+		return err
 	}
-	result, err := s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO events (id, created_at, kind, pubkey, replaceable_key, event_json)
-		VALUES (?, ?, ?, ?, NULL, ?)`,
-		event.ID.Hex(), int64(event.CreatedAt), int(event.Kind), event.PubKey.Hex(), encoded)
-	if err != nil {
+	if err := s.checkNotDeleted(event); err != nil {
+		return err
+	}
+	if err := s.backend().SaveEvent(event); err != nil {
+		if errors.Is(err, eventstore.ErrDupEvent) {
+			return eventstore.ErrDupEvent // khatru compares the sentinel with ==
+		}
 		return fmt.Errorf("store relay event: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check stored relay event: %w", err)
-	}
-	if affected == 0 {
-		return eventstore.ErrDupEvent
-	}
-	return nil
+	return s.afterWrite(ctx, event)
 }
 
-func (s *sqliteStore) Replace(ctx context.Context, event nostr.Event) error {
-	key := replaceableKey(event)
-	if key == "" {
+// Replace stores a replaceable or addressable event if it is newer than the
+// version held for its coordinate (NIP-01: higher created_at, then lower id).
+// It returns eventstore.ErrDupEvent when the event is not stored, so khatru
+// neither acknowledges it as new nor dispatches it.
+func (s *eventStore) Replace(ctx context.Context, event nostr.Event) error {
+	if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
 		return s.Save(ctx, event)
 	}
-	encoded, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("encode replaceable relay event: %w", err)
+	if err := storableEvent(event); err != nil {
+		return err
 	}
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO events (id, created_at, kind, pubkey, replaceable_key, event_json)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(replaceable_key) WHERE replaceable_key IS NOT NULL DO UPDATE SET
-			id = excluded.id,
-			created_at = excluded.created_at,
-			kind = excluded.kind,
-			pubkey = excluded.pubkey,
-			event_json = excluded.event_json
-		WHERE excluded.created_at > events.created_at
-		   OR (excluded.created_at = events.created_at AND excluded.id < events.id)`,
-		event.ID.Hex(), int64(event.CreatedAt), int(event.Kind), event.PubKey.Hex(), key, encoded)
+	if err := s.checkNotDeleted(event); err != nil {
+		return err
+	}
+	s.shared.replaceMu.Lock()
+	current, found := s.latest(coordinateFilter(event.Kind, event.PubKey, event.Tags.GetD()))
+	if found && !nostr.IsOlder(current, event) {
+		s.shared.replaceMu.Unlock()
+		return eventstore.ErrDupEvent
+	}
+	_, err := s.backend().ReplaceEvent(event)
+	s.shared.replaceMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("replace relay event: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check replaced relay event: %w", err)
+	return s.afterWrite(ctx, event)
+}
+
+// afterWrite indexes the event's NIP-40 expiration and closes the race with a
+// concurrent deletion: a kind 5 saved after checkNotDeleted but before this
+// write was applied before the write landed, so recheck and undo.
+func (s *eventStore) afterWrite(ctx context.Context, event nostr.Event) error {
+	if err := s.indexExpiration(event); err != nil {
+		return err
 	}
-	if affected == 0 {
-		return eventstore.ErrDupEvent
+	if event.Kind == nostr.KindDeletion {
+		if _, err := s.applyDeletion(ctx, event); err != nil {
+			return fmt.Errorf("apply deletion request: %w", err)
+		}
+		return nil
+	}
+	if err := s.checkNotDeleted(event); err != nil {
+		if deleteErr := s.backend().DeleteEvent(event.ID); deleteErr != nil {
+			return errors.Join(err, deleteErr)
+		}
+		return err
 	}
 	return nil
 }
 
-// latestByReplaceableKey returns the event currently stored under a replaceable
-// or addressable key. Unlike Query, it reports store failures, so callers that
-// must not lose a change can retry.
-func (s *sqliteStore) latestByReplaceableKey(ctx context.Context, key string) (nostr.Event, bool, error) {
-	var encoded []byte
-	err := s.readDB.QueryRowContext(ctx, `SELECT event_json FROM events WHERE replaceable_key = ?`, key).Scan(&encoded)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nostr.Event{}, false, nil
+// checkNotDeleted rejects an event its author already asked to delete: by id
+// (an `e` reference), or, for replaceable and addressable events, by
+// coordinate (an `a` reference) at or after the event's created_at. Stored
+// kind-5 requests are the tombstones, so a deleted event is never re-accepted.
+func (s *eventStore) checkNotDeleted(event nostr.Event) error {
+	if event.Kind == nostr.KindDeletion {
+		return nil // deleting a deletion request has no effect (NIP-09)
 	}
-	if err != nil {
-		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: %w", key, err)
+	byID := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.KindDeletion},
+		Authors: []nostr.PubKey{event.PubKey},
+		Tags:    nostr.TagMap{"e": []string{event.ID.Hex()}},
 	}
-	var event nostr.Event
-	if err := json.Unmarshal(encoded, &event); err != nil {
-		return nostr.Event{}, false, fmt.Errorf("decode replaceable relay event %s: %w", key, err)
+	if _, found := s.latest(byID); found {
+		return errEventDeleted
 	}
-	return event, true, nil
-}
-
-func (s *sqliteStore) Delete(ctx context.Context, id nostr.ID) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id.Hex()); err != nil {
-		return fmt.Errorf("delete relay event: %w", err)
+	if event.Kind.IsReplaceable() || event.Kind.IsAddressable() {
+		byAddress := nostr.Filter{
+			Kinds:   []nostr.Kind{nostr.KindDeletion},
+			Authors: []nostr.PubKey{event.PubKey},
+			Tags:    nostr.TagMap{"a": []string{addressOf(event.Kind, event.PubKey, event.Tags.GetD())}},
+			Since:   event.CreatedAt,
+		}
+		if _, found := s.latest(byAddress); found {
+			return errEventDeleted
+		}
 	}
 	return nil
 }
 
-func (s *sqliteStore) SweepRetention(ctx context.Context, now time.Time, eventRetention, requestRetention time.Duration) (int64, error) {
-	requestCutoff := now.Add(-requestRetention).Unix()
-	eventCutoff := now.Add(-eventRetention).Unix()
-	// ContextVM messages contain both requests and responses, while kinds 1059
-	// and 21059 are their persistent and ephemeral gift-wrap transports. These
-	// request-scoped transport kinds use the shorter request retention; durable
-	// observables and every other event kind use the general event retention.
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM events
-		WHERE (kind IN (?, ?, ?) AND created_at < ?)
-		   OR (kind NOT IN (?, ?, ?) AND replaceable_key IS NULL AND created_at < ?)`,
-		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, requestCutoff,
-		kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap, eventCutoff)
-	if err != nil {
-		return 0, fmt.Errorf("sweep relay event retention: %w", err)
+// applyDeletion executes a stored kind-5 request (NIP-09). `e` references are
+// deleted when they have the requester as author; `a` references delete every
+// version of the requester's coordinate up to the request's created_at.
+// References to other authors' events and to deletion requests are ignored.
+// Khatru's own handler is not used: it cannot address plain replaceable events
+// (whose coordinate has an empty d), and it fails the whole request on the
+// first foreign reference.
+func (s *eventStore) applyDeletion(ctx context.Context, request nostr.Event) (int, error) {
+	deleted := 0
+	remove := func(target nostr.Event) error {
+		if target.PubKey != request.PubKey || target.Kind == nostr.KindDeletion {
+			return nil
+		}
+		if err := s.backend().DeleteEvent(target.ID); err != nil {
+			return err
+		}
+		deleted++
+		return nil
 	}
-	deleted, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("count swept relay events: %w", err)
+	for _, tag := range request.Tags {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "e":
+			id, err := nostr.IDFromHex(tag[1])
+			if err != nil {
+				continue
+			}
+			// Collect before deleting: no bbolt write may run inside a read.
+			for _, target := range slices.Collect(s.Query(ctx, nostr.Filter{IDs: []nostr.ID{id}}, 1)) {
+				if err := remove(target); err != nil {
+					return deleted, err
+				}
+			}
+		case "a":
+			kind, author, d, ok := parseAddress(tag[1])
+			if !ok || author != request.PubKey || (!kind.IsReplaceable() && !kind.IsAddressable()) {
+				continue
+			}
+			filter := coordinateFilter(kind, author, d)
+			filter.Until = request.CreatedAt
+			for _, target := range slices.Collect(s.scan(filter, unboundedQueryLimit)) {
+				if err := remove(target); err != nil {
+					return deleted, err
+				}
+			}
+		}
 	}
 	return deleted, nil
 }
 
-func (s *sqliteStore) Count(ctx context.Context, filter nostr.Filter) (uint32, error) {
-	if filter.LimitZero {
-		return 0, nil
-	}
-	query, args := relayQuerySQL(filter)
-	rows, err := s.readDB.QueryContext(ctx, query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("count relay events: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var count uint32
-	for rows.Next() {
-		var encoded []byte
-		var event nostr.Event
-		if err := rows.Scan(&encoded); err != nil {
-			return 0, fmt.Errorf("scan relay event for count: %w", err)
-		}
-		if err := json.Unmarshal(encoded, &event); err != nil {
-			return 0, fmt.Errorf("decode relay event for count: %w", err)
-		}
-		if !filter.Matches(event) {
-			continue
-		}
-		count++
-		if filter.Limit > 0 && count >= uint32(filter.Limit) {
-			return count, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("count relay events: %w", err)
-	}
-	return count, nil
-}
-
-func (s *sqliteStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
-	limit := maxLimit
-	if filter.Limit > 0 && (limit <= 0 || filter.Limit < limit) {
-		limit = filter.Limit
-	}
+// Query yields events matching filter, newest first, at most maxLimit (or the
+// filter's lower limit); maxLimit <= 0 means uncapped. Events past their NIP-40
+// expiration are never yielded, even before the sweep removes them.
+func (s *eventStore) Query(ctx context.Context, filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
 	if filter.LimitZero {
 		return func(func(nostr.Event) bool) {}
 	}
-
-	query, args := relayQuerySQL(filter)
+	limit := maxLimit
+	if limit <= 0 || limit > unboundedQueryLimit {
+		limit = unboundedQueryLimit
+	}
+	if filter.Limit > 0 && filter.Limit < limit {
+		limit = filter.Limit
+	}
 	return func(yield func(nostr.Event) bool) {
-		rows, err := s.readDB.QueryContext(ctx, query, args...)
-		if err != nil {
-			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		matched := 0
-		for rows.Next() {
-			var encoded []byte
-			var event nostr.Event
-			if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil || !filter.Matches(event) {
+		now := nostr.Now()
+		emitted := 0
+		for event := range s.scan(filter, limit) {
+			if ctx.Err() != nil {
+				return
+			}
+			// An ids filter is answered from the raw store by id alone, so the
+			// other conditions still have to be checked.
+			if filter.IDs != nil && !filter.Matches(event) {
+				continue
+			}
+			if expired(event, now) {
 				continue
 			}
 			if !yield(event) {
 				return
 			}
-			matched++
-			if limit > 0 && matched >= limit {
+			emitted++
+			if emitted >= limit {
 				return
 			}
 		}
 	}
 }
 
-func relayQuerySQL(filter nostr.Filter) (string, []any) {
-	clauses := make([]string, 0, 5)
-	args := make([]any, 0, len(filter.IDs)+len(filter.Kinds)+len(filter.Authors)+2)
-	addSet := func(column string, values []string) {
-		if values == nil {
+// scan reads up to limit events matching filter, newest first. It reads in
+// pages of at most queryPageSize and copies each page out of its bbolt read
+// transaction before yielding, for two reasons: bbolt preallocates a buffer
+// proportional to the limit it is given, and a read transaction held while the
+// consumer blocks (a slow websocket, or a caller deleting what it reads) can
+// stall or deadlock writers that need to remap the file. Each page resumes at
+// the oldest created_at of the previous one (until is inclusive) and skips the
+// ids already yielded at that timestamp; a page holding nothing new is retried
+// larger, so ties wider than a page still make progress.
+func (s *eventStore) scan(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
+	return func(yield func(nostr.Event) bool) {
+		if matchesNothing(filter) {
 			return
 		}
-		if len(values) == 0 {
-			clauses = append(clauses, "1 = 0")
-			return
-		}
-		placeholders := make([]string, len(values))
-		for i, value := range values {
-			placeholders[i] = "?"
-			args = append(args, value)
-		}
-		clauses = append(clauses, column+" IN ("+strings.Join(placeholders, ",")+")")
-	}
-
-	if filter.IDs != nil {
-		ids := make([]string, len(filter.IDs))
-		for i, id := range filter.IDs {
-			ids[i] = id.Hex()
-		}
-		addSet("id", ids)
-	}
-
-	if filter.Kinds != nil {
-		if len(filter.Kinds) == 0 {
-			clauses = append(clauses, "1 = 0")
-		} else {
-			placeholders := make([]string, len(filter.Kinds))
-			for i, kind := range filter.Kinds {
-				placeholders[i] = "?"
-				args = append(args, int(kind))
+		if filter.IDs != nil {
+			for _, event := range slices.Collect(s.backend().QueryEvents(filter, limit)) {
+				if !yield(event) {
+					return
+				}
 			}
-			clauses = append(clauses, "kind IN ("+strings.Join(placeholders, ",")+")")
+			return
+		}
+		page := filter
+		page.Limit = 0
+		pageSize := queryPageSize
+		emitted := 0
+		resuming := false
+		var until nostr.Timestamp
+		var seen map[nostr.ID]struct{} // ids already yielded at created_at == until
+		for {
+			if resuming {
+				page.Until = until
+			}
+			pageLimit := min(pageSize, limit-emitted+len(seen))
+			events := slices.Collect(s.backend().QueryEvents(page, pageLimit))
+			fresh := 0
+			oldest, oldestIDs, haveOldest := until, seen, resuming
+			for _, event := range events {
+				if resuming && event.CreatedAt == until {
+					if _, dup := seen[event.ID]; dup {
+						continue
+					}
+				}
+				if !haveOldest || event.CreatedAt != oldest {
+					oldest, oldestIDs, haveOldest = event.CreatedAt, map[nostr.ID]struct{}{}, true
+				}
+				oldestIDs[event.ID] = struct{}{}
+				fresh++
+				if !yield(event) {
+					return
+				}
+				emitted++
+				if emitted >= limit {
+					return
+				}
+			}
+			switch {
+			case len(events) < pageLimit:
+				return // exhausted
+			case fresh == 0:
+				pageSize *= 2 // a page of ties already yielded: read further
+			case oldest == 0:
+				return // until=0 would mean "no bound"; nothing older exists
+			default:
+				resuming, until, seen = true, oldest, oldestIDs
+			}
 		}
 	}
+}
 
-	if filter.Authors != nil {
-		authors := make([]string, len(filter.Authors))
-		for i, author := range filter.Authors {
-			authors[i] = author.Hex()
+// matchesNothing reports a filter with an explicitly empty condition, which
+// NIP-01 matches against no event (bbolt would treat it as absent).
+func matchesNothing(filter nostr.Filter) bool {
+	if (filter.IDs != nil && len(filter.IDs) == 0) ||
+		(filter.Kinds != nil && len(filter.Kinds) == 0) ||
+		(filter.Authors != nil && len(filter.Authors) == 0) {
+		return true
+	}
+	for _, values := range filter.Tags {
+		if len(values) == 0 {
+			return true
 		}
-		addSet("pubkey", authors)
 	}
-
-	if filter.Since != 0 {
-		clauses = append(clauses, "created_at >= ?")
-		args = append(args, int64(filter.Since))
-	}
-	if filter.Until != 0 {
-		clauses = append(clauses, "created_at <= ?")
-		args = append(args, int64(filter.Until))
-	}
-
-	query := "SELECT event_json FROM events"
-	if len(clauses) > 0 {
-		query += " WHERE " + strings.Join(clauses, " AND ")
-	}
-	query += " ORDER BY created_at DESC, id"
-	return query, args
+	return false
 }
 
-func (s *sqliteStore) Close() error {
-	readErr := s.readDB.Close()
-	writeErr := s.db.Close()
-	if writeErr != nil {
-		return writeErr
+// Count answers NIP-45 COUNT from the indexes.
+func (s *eventStore) Count(ctx context.Context, filter nostr.Filter) (uint32, error) {
+	if filter.LimitZero || matchesNothing(filter) {
+		return 0, nil
 	}
-	return readErr
+	if filter.IDs != nil {
+		if err := s.ping(); err != nil {
+			return 0, fmt.Errorf("count relay events: %w", err)
+		}
+		var count uint32
+		for range s.Query(ctx, filter, 0) {
+			count++
+		}
+		return count, nil
+	}
+	count, err := s.backend().CountEvents(filter)
+	if err != nil {
+		return 0, fmt.Errorf("count relay events: %w", err)
+	}
+	return count, nil
 }
 
+// latest returns the newest event matching filter.
+func (s *eventStore) latest(filter nostr.Filter) (nostr.Event, bool) {
+	filter.Limit = 1
+	for event := range s.scan(filter, 1) {
+		return event, true
+	}
+	return nostr.Event{}, false
+}
+
+// latestByReplaceableKey returns the event currently stored under a replaceable
+// or addressable key (see replaceableKey). Unlike Query, it reports store
+// failures, so callers that must not lose a change can retry.
+func (s *eventStore) latestByReplaceableKey(_ context.Context, key string) (nostr.Event, bool, error) {
+	kind, author, d, ok := parseAddress(key)
+	if !ok {
+		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: malformed key", key)
+	}
+	if err := s.ping(); err != nil {
+		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: %w", key, err)
+	}
+	event, found := s.latest(coordinateFilter(kind, author, d))
+	return event, found, nil
+}
+
+// indexExpiration records a NIP-40 expiration so the sweep finds expired
+// events without scanning the store.
+func (s *eventStore) indexExpiration(event nostr.Event) error {
+	expiresAt := nip40.GetExpiration(event.Tags)
+	if expiresAt <= 0 {
+		return nil
+	}
+	if err := s.backend().DB.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(sidecarExpiryBucket).Put(expiryKey(expiresAt, event.ID), nil)
+	}); err != nil {
+		return fmt.Errorf("index relay event expiration: %w", err)
+	}
+	return nil
+}
+
+func expiryKey(expiresAt nostr.Timestamp, id nostr.ID) []byte {
+	key := make([]byte, 8+len(id))
+	binary.BigEndian.PutUint64(key, uint64(expiresAt))
+	copy(key[8:], id[:])
+	return key
+}
+
+func expired(event nostr.Event, now nostr.Timestamp) bool {
+	expiresAt := nip40.GetExpiration(event.Tags)
+	return expiresAt > 0 && expiresAt <= now
+}
+
+// storableEvent enforces the eventstore codec's limits (betterbinary uses
+// 16-bit lengths) so an oversize event is refused with a clear OK reason
+// instead of failing inside the store or, for the tag section, being encoded
+// with a wrapped length. NIP-11 advertises max_content_length accordingly.
+func storableEvent(event nostr.Event) error {
+	if len(event.Content) > betterbinary.MaxContentSize {
+		return fmt.Errorf("invalid: content is %d bytes; this relay stores at most %d", len(event.Content), betterbinary.MaxContentSize)
+	}
+	if len(event.Tags) > betterbinary.MaxTagCount {
+		return fmt.Errorf("invalid: event has %d tags; this relay stores at most %d", len(event.Tags), betterbinary.MaxTagCount)
+	}
+	section := 4 + 2*len(event.Tags)
+	for _, tag := range event.Tags {
+		if len(tag) > betterbinary.MaxTagItemCount {
+			return fmt.Errorf("invalid: a tag has %d items; this relay stores at most %d", len(tag), betterbinary.MaxTagItemCount)
+		}
+		section++
+		for _, item := range tag {
+			section += 2 + len(item)
+		}
+	}
+	if section > math.MaxUint16 {
+		return fmt.Errorf("invalid: tags encode to %d bytes; this relay stores at most %d", section, math.MaxUint16)
+	}
+	return nil
+}
+
+// replaceableKey is the latest-wins coordinate of a replaceable or addressable
+// event: "<kind>:<pubkey>:<d>", with an empty d for replaceable kinds. It is
+// the NIP-01/NIP-09 address format, so parseAddress reads it back.
 func replaceableKey(event nostr.Event) string {
-	if event.Kind.IsReplaceable() {
-		return fmt.Sprintf("%d:%s", event.Kind, event.PubKey.Hex())
+	if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
+		return ""
 	}
-	if event.Kind.IsAddressable() {
-		return fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey.Hex(), event.Tags.GetD())
+	return addressOf(event.Kind, event.PubKey, event.Tags.GetD())
+}
+
+func addressOf(kind nostr.Kind, author nostr.PubKey, d string) string {
+	return strconv.Itoa(int(kind)) + ":" + author.Hex() + ":" + d
+}
+
+func parseAddress(address string) (nostr.Kind, nostr.PubKey, string, bool) {
+	parts := strings.SplitN(address, ":", 3)
+	if len(parts) != 3 {
+		return 0, nostr.ZeroPK, "", false
 	}
-	return ""
+	kind, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		return 0, nostr.ZeroPK, "", false
+	}
+	author, err := nostr.PubKeyFromHex(parts[1])
+	if err != nil {
+		return 0, nostr.ZeroPK, "", false
+	}
+	return nostr.Kind(kind), author, parts[2], true
+}
+
+// coordinateFilter selects the versions stored under one coordinate. Plain
+// replaceable kinds ignore d.
+func coordinateFilter(kind nostr.Kind, author nostr.PubKey, d string) nostr.Filter {
+	filter := nostr.Filter{Kinds: []nostr.Kind{kind}, Authors: []nostr.PubKey{author}}
+	if kind.IsAddressable() {
+		filter.Tags = nostr.TagMap{"d": []string{d}}
+	}
+	return filter
+}
+
+// sweepMatching deletes, page by page, the events matching filter that
+// eligible accepts. filter.Until must be set: pages walk backwards from it.
+func (s *eventStore) sweepMatching(ctx context.Context, filter nostr.Filter, eligible func(nostr.Event) bool) (int64, error) {
+	var deleted int64
+	for filter.Until > 0 {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		var ids []nostr.ID
+		scanned := 0
+		var oldest nostr.Timestamp
+		for _, event := range slices.Collect(s.backend().QueryEvents(filter, sweepBatchSize)) {
+			scanned++
+			oldest = event.CreatedAt
+			if eligible(event) {
+				ids = append(ids, event.ID)
+			}
+		}
+		for _, id := range ids {
+			if err := s.backend().DeleteEvent(id); err != nil {
+				return deleted, fmt.Errorf("delete swept relay event: %w", err)
+			}
+			deleted++
+		}
+		if scanned < sweepBatchSize {
+			return deleted, nil
+		}
+		// A full page: older matches may remain. Re-read from the oldest
+		// timestamp seen (events sharing it may be left), or step past it when
+		// the page held nothing eligible, so every round makes progress.
+		if len(ids) == 0 {
+			oldest--
+		}
+		filter.Until = oldest
+	}
+	return deleted, nil
+}
+
+// sweepExpired deletes events whose NIP-40 expiration is at or before now.
+func (s *eventStore) sweepExpired(ctx context.Context, now nostr.Timestamp) (int64, error) {
+	var deleted int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		var keys [][]byte
+		if err := s.backend().DB.View(func(tx *bbolt.Tx) error {
+			cursor := tx.Bucket(sidecarExpiryBucket).Cursor()
+			for key, _ := cursor.First(); key != nil && len(keys) < sweepBatchSize; key, _ = cursor.Next() {
+				if nostr.Timestamp(binary.BigEndian.Uint64(key[:8])) > now {
+					break
+				}
+				keys = append(keys, append([]byte(nil), key...))
+			}
+			return nil
+		}); err != nil {
+			return deleted, fmt.Errorf("read relay event expirations: %w", err)
+		}
+		if len(keys) == 0 {
+			return deleted, nil
+		}
+		for _, key := range keys {
+			id := nostr.ID(key[8:])
+			if event, stored := s.latest(nostr.Filter{IDs: []nostr.ID{id}}); stored && event.ID == id {
+				if err := s.backend().DeleteEvent(id); err != nil {
+					return deleted, fmt.Errorf("delete expired relay event: %w", err)
+				}
+				deleted++
+			}
+		}
+		if err := s.backend().DB.Update(func(tx *bbolt.Tx) error {
+			bucket := tx.Bucket(sidecarExpiryBucket)
+			for _, key := range keys {
+				if err := bucket.Delete(key); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return deleted, fmt.Errorf("clear relay event expirations: %w", err)
+		}
+	}
+}
+
+// SweepRetention applies the retention policy at now (see retentionPolicy).
+func (s *eventStore) SweepRetention(ctx context.Context, now time.Time, policy retentionPolicy) (sweepResult, error) {
+	var result sweepResult
+	var err error
+	if result.Expired, err = s.sweepExpired(ctx, nostr.Timestamp(now.Unix())); err != nil {
+		return result, err
+	}
+	if kinds := policy.storedRequestKinds(); len(kinds) > 0 {
+		filter := nostr.Filter{Kinds: kinds, Until: nostr.Timestamp(now.Add(-policy.request).Unix())}
+		if result.Request, err = s.sweepMatching(ctx, filter, func(nostr.Event) bool { return true }); err != nil {
+			return result, err
+		}
+	}
+	if policy.regular > 0 {
+		filter := nostr.Filter{Until: nostr.Timestamp(now.Add(-policy.regular).Unix())}
+		eligible := func(event nostr.Event) bool { return policy.classOf(event.Kind) == retentionRegular }
+		if result.Regular, err = s.sweepMatching(ctx, filter, eligible); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }

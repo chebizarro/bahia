@@ -202,7 +202,7 @@ func TestConfigStatusAppliedSurvivesReplay(t *testing.T) {
 				require.True(t, retained["applied"], "terminal truth lost; retained statuses: %v", retained)
 				// Restart the durable store, then build a fresh production replay reader.
 				require.NoError(t, server.store.Close())
-				server.store, err = newSQLiteStore(server.cfg.DataDir)
+				server.store, err = openEventStore(t.Context(), server.cfg.DataDir, nil)
 				require.NoError(t, err)
 				replay = service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
 				after, err := replay.ListDrift(t.Context())
@@ -228,7 +228,7 @@ func statusNameForTest(t *testing.T, event nostr.Event) string {
 // publication capture. A fresh reader therefore has no memory of evicted events.
 type configStatusReplayRepository struct {
 	repository.NostrEventRepository
-	store *sqliteStore
+	store *eventStore
 }
 
 func (r configStatusReplayRepository) ListByKind(ctx context.Context, kind, limit int) ([]repository.NostrEventRecord, error) {
@@ -344,7 +344,7 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 			assertApplied(next, false)
 
 			require.NoError(t, server.store.Close())
-			server.store, err = newSQLiteStore(server.cfg.DataDir)
+			server.store, err = openEventStore(t.Context(), server.cfg.DataDir, nil)
 			require.NoError(t, err)
 			replay = service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
 			assertApplied(next, false)
@@ -406,7 +406,7 @@ func TestConfigStatusMixedSchemaReplay(t *testing.T) {
 	require.Equal(t, 1, accepted)
 	assertReplay(next, false)
 	require.NoError(t, server.store.Close())
-	server.store, err = newSQLiteStore(server.cfg.DataDir)
+	server.store, err = openEventStore(t.Context(), server.cfg.DataDir, nil)
 	require.NoError(t, err)
 	assertReplay(next, false)
 }

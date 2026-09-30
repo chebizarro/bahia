@@ -1624,6 +1624,10 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	return core.Request(ctx, req.Method, req.Payload, req.Tags, onStatus)
 }
 
+// maxStoredGiftWrapContentBytes is the largest event content Bahia's relay
+// sidecar stores (NIP-11 limitation.max_content_length).
+const maxStoredGiftWrapContentBytes = 65535
+
 func (c *ContextVMRequestClient) prepareOperatorAttempt(ctx context.Context, inner *nostr.Event, priorOuterIDs []string) (*nostr.Event, []nostr.Filter, []string, error) {
 	if !c.encrypted {
 		filter := nostr.Filter{
@@ -1640,6 +1644,13 @@ func (c *ContextVMRequestClient) prepareOperatorAttempt(ctx context.Context, inn
 		return inner, []nostr.Filter{filter}, priorOuterIDs, nil
 	}
 	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, nip59KeyerAdapter{c.cipher}, c.servicePubkey, inner, cascontextvm.StoredGiftWrap)
+	if err == nil && len(outer.Content) > maxStoredGiftWrapContentBytes {
+		// Bahia's relay stores at most maxStoredGiftWrapContentBytes of
+		// content, so a larger request travels as an ephemeral 21059 wrap:
+		// relayed live to the daemon, never stored. The reply filter below
+		// already covers both wrap kinds.
+		outer, rumor, err = cascontextvm.WrapEventNIP59(ctx, nip59KeyerAdapter{c.cipher}, c.servicePubkey, inner, cascontextvm.EphemeralGiftWrap)
+	}
 	if err != nil {
 		return nil, nil, priorOuterIDs, err
 	}
