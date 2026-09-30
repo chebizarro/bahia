@@ -10,10 +10,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
 	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip11"
 	"github.com/openagentsinc/bahia/internal/config"
 	"go.uber.org/zap"
 )
@@ -39,7 +42,9 @@ func (p relayConfigPublisher) Publish(ctx context.Context, event nostr.Event) (i
 type Server struct {
 	cfg         config.RelaySidecarConfig
 	relay       *khatru.Relay
-	store       *sqliteStore
+	store       *eventStore
+	retention   retentionPolicy
+	swept       sweepCounters
 	policy      *adminPolicy
 	httpServer  *http.Server
 	logger      *zap.Logger
@@ -47,6 +52,11 @@ type Server struct {
 	fanout      *liveFanout
 	configDirty *configDirtySet
 	wg          sync.WaitGroup
+}
+
+// sweepCounters are the events retention sweeps deleted, by cause.
+type sweepCounters struct {
+	expired, request, regular atomic.Uint64
 }
 
 // New creates a Khatru sidecar relay backed by durable storage.
@@ -63,6 +73,10 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	if nostrCfg.Sidecar.SubscriberQueueSize <= 0 {
 		nostrCfg.Sidecar.SubscriberQueueSize = defaultSubscriberQueueSize
 	}
+	if nostrCfg.Sidecar.NegentropyMaxEvents <= 0 {
+		nostrCfg.Sidecar.NegentropyMaxEvents = config.DefaultRelaySidecarNegentropyMaxEvents
+	}
+	retention := newRetentionPolicy(nostrCfg.Sidecar)
 
 	pol, err := newPolicy(nostrCfg)
 	if err != nil {
@@ -73,7 +87,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 	pol.admin = admin
-	store, err := newSQLiteStore(nostrCfg.Sidecar.DataDir)
+	store, err := openEventStore(context.Background(), nostrCfg.Sidecar.DataDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +99,26 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.Info.Description = state.Metadata.Description
 	relay.Info.Icon = state.Metadata.Icon
 	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
-	relay.Info.SupportedNIPs = []any{1, 11, 17, 40, 42, 44, 51, 59, 65, 70}
+	// 9: kind-5 deletions are applied and kept as tombstones (store.go).
+	// 40: expired events are refused, hidden and swept. 45: COUNT from the
+	// indexes. 77: negentropy.
+	relay.Info.SupportedNIPs = []any{1, 9, 11, 17, 40, 42, 44, 45, 51, 59, 65, 70, 77}
+	relay.Info.Limitation = &nip11.RelayLimitationDocument{
+		MaxMessageLength:    int(relay.MaxMessageSize),
+		MaxLimit:            nostrCfg.Sidecar.MaxQueryLimit,
+		DefaultLimit:        nostrCfg.Sidecar.MaxQueryLimit, // a REQ without limit gets the cap
+		MaxContentLength:    betterbinary.MaxContentSize,
+		CreatedAtLowerLimit: int64(maxEventAge / time.Second),
+		CreatedAtUpperLimit: int64(maxEventFutureSkew / time.Second),
+	}
+	relay.Info.Retention = retention.nip11()
+	relay.OverwriteRelayInformation = func(_ context.Context, _ *http.Request, info nip11.RelayInformationDocument) nip11.RelayInformationDocument {
+		limitation := *info.Limitation
+		limitation.RestrictedWrites = admin.restrictsWrites()
+		info.Limitation = &limitation
+		return info
+	}
+	relay.Negentropy = true
 
 	if servicePubkey, ok, err := deriveFiatjafPubkey(nostrCfg.PrivateKey); err != nil {
 		return nil, err
@@ -109,15 +142,26 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		if reject, msg := pol.acceptFilter(ctx, filter); reject {
 			return reject, msg
 		}
+		if khatru.IsNegentropySession(ctx) {
+			return negentropyTooLarge(ctx, store, filter, nostrCfg.Sidecar.NegentropyMaxEvents)
+		}
 		fanout.beginRequest(ctx, filter)
 		return false, ""
 	}
 	relay.OnCount = pol.acceptFilter
 	relay.StoreEvent = store.Save
 	relay.ReplaceEvent = store.Replace
-	relay.DeleteEvent = store.Delete
+	// DeleteEvent stays nil: the store applies kind-5 requests itself when it
+	// saves them (NIP-09 `e` and `a` semantics), and a nil hook makes
+	// khatru's weaker handler a no-op. NIP-11 advertises 9 explicitly.
 	relay.QueryStored = func(ctx context.Context, filter nostr.Filter) iter.Seq[nostr.Event] {
-		return fanout.trackStored(ctx, store.Query(ctx, filter, nostrCfg.Sidecar.MaxQueryLimit))
+		limit := nostrCfg.Sidecar.MaxQueryLimit
+		if khatru.IsNegentropySession(ctx) {
+			// NIP-77 reconciles the whole set; OnRequest already refused a
+			// filter matching more than this.
+			limit = nostrCfg.Sidecar.NegentropyMaxEvents
+		}
+		return fanout.trackStored(ctx, store.Query(ctx, filter, limit))
 	}
 	relay.Count = store.Count
 	var consumer *ConfigConsumer
@@ -173,6 +217,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		cfg:         nostrCfg.Sidecar,
 		relay:       relay,
 		store:       store,
+		retention:   retention,
 		policy:      admin,
 		logger:      logger,
 		consumer:    consumer,
@@ -308,17 +353,44 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	return nil
 }
 
+// negentropyTooLarge refuses a NIP-77 NEG-OPEN whose filter matches more
+// events than one session reconciles, instead of reconciling a truncated set.
+func negentropyTooLarge(ctx context.Context, store *eventStore, filter nostr.Filter, maxEvents int) (bool, string) {
+	if filter.Limit > 0 && filter.Limit <= maxEvents {
+		return false, ""
+	}
+	count, err := store.Count(ctx, filter)
+	if err != nil {
+		return true, "error: could not size the negentropy set"
+	}
+	if int64(count) > int64(maxEvents) {
+		return true, fmt.Sprintf("blocked: filter matches %d events, more than the %d this relay reconciles in one NIP-77 session; narrow it with since/until", count, maxEvents)
+	}
+	return false, ""
+}
+
+func (s *Server) sweepRetention(ctx context.Context, now time.Time) (sweepResult, error) {
+	result, err := s.store.SweepRetention(ctx, now, s.retention)
+	s.swept.expired.Add(uint64(result.Expired))
+	s.swept.request.Add(uint64(result.Request))
+	s.swept.regular.Add(uint64(result.Regular))
+	return result, err
+}
+
 func (s *Server) runRetentionSweeps(ctx context.Context) {
 	sweep := func() {
-		deleted, err := s.store.SweepRetention(ctx, time.Now(), s.cfg.EventRetention, s.cfg.RequestRetention)
+		result, err := s.sweepRetention(ctx, time.Now())
 		if err != nil {
 			if ctx.Err() == nil {
 				s.logger.Warn("relay sidecar retention sweep failed", zap.Error(err))
 			}
 			return
 		}
-		if deleted > 0 {
-			s.logger.Info("relay sidecar retention sweep completed", zap.Int64("deleted_events", deleted))
+		if result.total() > 0 {
+			s.logger.Info("relay sidecar retention sweep completed",
+				zap.Int64("expired_events", result.Expired),
+				zap.Int64("request_events", result.Request),
+				zap.Int64("regular_events", result.Regular))
 		}
 	}
 

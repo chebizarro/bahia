@@ -544,31 +544,13 @@ func TestSidecarCountReportsStoreFailure(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 	t.Cleanup(func() { _ = server.Close() })
-	if err := server.store.readDB.Close(); err != nil {
-		t.Fatalf("close read pool: %v", err)
+	if err := server.store.backend().DB.Close(); err != nil {
+		t.Fatalf("close event store database: %v", err)
 	}
 
 	count, err := server.Relay().Count(context.Background(), nostr.Filter{})
 	if err == nil {
 		t.Fatalf("Count() = %d, nil error after store failure", count)
-	}
-}
-
-func TestSidecarCountReportsCorruptStoredEvent(t *testing.T) {
-	server, err := New(sidecarTestConfig(t), zap.NewNop())
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-	if _, err := server.store.db.Exec(`
-		INSERT INTO events (id, created_at, kind, pubkey, event_json)
-		VALUES ('corrupt', 1, 1, 'author', '{')`); err != nil {
-		t.Fatalf("insert corrupt event: %v", err)
-	}
-
-	count, err := server.Relay().Count(context.Background(), nostr.Filter{})
-	if err == nil {
-		t.Fatalf("Count() = %d, nil error for malformed stored event", count)
 	}
 }
 
@@ -583,7 +565,7 @@ func TestSidecarRunClosesStoreWhenListenFails(t *testing.T) {
 	if err := server.Run(context.Background()); err == nil {
 		t.Fatal("Run() error = nil, want listen failure")
 	}
-	if err := server.store.db.Ping(); err == nil {
+	if err := server.store.ping(); err == nil {
 		t.Fatal("relay store remained open after ListenAndServe failure")
 	}
 }

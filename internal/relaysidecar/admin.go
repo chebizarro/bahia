@@ -272,6 +272,14 @@ func (p *adminPolicy) authorize(event nostr.Event) error {
 	return nil
 }
 
+// restrictsWrites reports whether an allow list limits who may publish, for
+// NIP-11 limitation.restricted_writes.
+func (p *adminPolicy) restrictsWrites() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.state.AllowedPubkeys) > 0
+}
+
 func (p *adminPolicy) admits(pubkey string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
