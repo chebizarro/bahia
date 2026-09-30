@@ -24,13 +24,16 @@ import (
 // across EVERY projection the Projector signs. It is the P0 relay-storm fix on
 // the projector side: unchanged replaceable coordinates emit no new event,
 // burst triggers for the same coordinate coalesce into a single publish, and a
-// synchronous relay rejection opens one bounded, jittered backoff shared by the
-// whole projector path. Tombstones and real changes are never suppressed, and
-// the append-only audit log is never deduplicated.
+// publish the outbox could not queue opens one bounded, jittered backoff shared
+// by the whole projector path. Relay-level failures are not the projector's
+// concern: the outbox publisher keeps the signed event and retries each relay.
+// Tombstones and real changes are never suppressed, and the append-only audit
+// log is never deduplicated.
 
 // ErrProjectorBackoff is returned when a publish is skipped because the shared
-// projector backoff window is open after a relay rejection. Callers already
-// log-and-continue; the periodic repair loop retries after the window closes.
+// projector backoff window is open after a publish that was not queued.
+// Callers already log-and-continue; the periodic repair loop retries after the
+// window closes.
 var ErrProjectorBackoff = errors.New("projector publish suppressed: relay backoff window open")
 
 // ErrProjectorHydrationBackoff means retained state is still unavailable.
@@ -75,9 +78,12 @@ type projectionKey struct {
 
 // ProjectionFamilyMetrics are per-family publish counters. They are exposed
 // for telemetry and tests; the umbrella restart gate reads the same numbers.
+// Queued counts publishes the outbox kept below the publish quorum (still
+// being retried per relay); Rejected counts publishes that were not queued.
 type ProjectionFamilyMetrics struct {
 	Attempted int64 `json:"attempted"`
 	Accepted  int64 `json:"accepted"`
+	Queued    int64 `json:"queued"`
 	Rejected  int64 `json:"rejected"`
 	Deduped   int64 `json:"deduped"`
 	Coalesced int64 `json:"coalesced"`
@@ -336,6 +342,11 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		if servicePubkey != "" && record.PubKey != servicePubkey {
 			continue
 		}
+		if record.PublishState == repository.NostrPublishStateFailed {
+			// Abandoned by the outbox: never reached the quorum, so it must
+			// not suppress the next publish of the same content.
+			continue
+		}
 		tags := recordTags(record)
 		key := projectionKeyOf(record.Kind, tags)
 		if _, dup := seen[key]; dup {
@@ -456,15 +467,45 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	if dedupable {
 		createdAt = p.nextProjectionCreatedAt(key)
 	}
-	if err := p.publishSignedDirect(ctx, kind, createdAt, tags, content, entityType, entityID); err != nil {
+	queued, err := p.publishSignedDirect(ctx, kind, createdAt, tags, content, entityType, entityID)
+	if err != nil {
 		s.count(family, func(m *ProjectionFamilyMetrics) { m.Rejected++ })
 		p.noteProjectionRejection()
 		return err
 	}
-	s.count(family, func(m *ProjectionFamilyMetrics) { m.Accepted++ })
+	// A queued event is kept by the outbox, which retries the relays that
+	// have not accepted it; it is remembered exactly like an accepted one so
+	// neither a bus event nor the periodic repair re-signs it.
+	if queued {
+		s.count(family, func(m *ProjectionFamilyMetrics) { m.Queued++ })
+	} else {
+		s.count(family, func(m *ProjectionFamilyMetrics) { m.Accepted++ })
+	}
 	p.resetProjectionBackoff()
 	if dedupable {
 		p.rememberProjection(key, fingerprint, createdAt)
 	}
 	return nil
+}
+
+// ForgetAbandonedProjection is the outbox publisher's abandon hook (see
+// Publisher.OnDeliveryAbandoned). When the abandoned event is still the latest
+// one signed on its coordinate, its dedupe entry is dropped so the next
+// trigger or repair re-signs the content instead of assuming it was
+// delivered. The per-coordinate created_at floor is kept, so the replacement
+// is still strictly newer. Events that are not this projector's, or that a
+// newer publish has superseded, are ignored.
+func (p *Projector) ForgetAbandonedProjection(ev gonostr.Event) {
+	wireKind := int(ev.Kind)
+	if p == nil || wireKind == KindCASAudit {
+		return
+	}
+	key := projectionKeyOf(wireKind, ev.Tags)
+	fingerprint := projectionFingerprint(wireKind, ev.Tags, ev.Content)
+	s := p.projection()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.createdAt[key] == ev.CreatedAt && s.published[key] == fingerprint {
+		delete(s.published, key)
+	}
 }

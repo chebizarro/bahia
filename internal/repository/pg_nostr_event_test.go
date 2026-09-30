@@ -28,6 +28,43 @@ func TestPgNostrEventRepositoryCountUnpublished(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgNostrEventRepositoryCountPublishFailedUsesPartialIndex(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgNostrEventRepositoryWithDB(mock)
+	mock.ExpectQuery(`indexes\.indisvalid AND indexes\.indisready`).
+		WithArgs(nostrPublishFailedIndex).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM nostr_events WHERE publish_state = \$1`).
+		WithArgs(NostrPublishStateFailed).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(3)))
+
+	count, err := repo.CountPublishFailed(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgNostrEventRepositoryCountPublishFailedRefusesFullScan(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := newPgNostrEventRepositoryWithDB(mock)
+	mock.ExpectQuery(`indexes\.indisvalid AND indexes\.indisready`).
+		WithArgs(nostrPublishFailedIndex).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
+
+	_, err = repo.CountPublishFailed(ctx)
+	require.ErrorIs(t, err, ErrNostrPublishFailedIndexNotReady)
+	// No COUNT query was issued without the index.
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgNostrEventRepositoryRecordReportsInserted(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

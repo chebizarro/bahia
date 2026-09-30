@@ -67,7 +67,7 @@ func TestProjectionUnchangedServiceStateEmitsNoNewEvent(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	source.states[stateKeyForTest(serviceID, envID)] = state
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 
 	for i := 0; i < 3; i++ {
 		if err := projector.RepublishSnapshot(ctx); err != nil {
@@ -104,7 +104,7 @@ func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, now)
 	source.states[stateKeyForTest(serviceID, envID)] = state
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 func TestProjectionUnchangedDNSEndpointEmitsNoNewEvent(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	endpoint := domain.DNSEndpoint{Coordinate: "svc:api", FQDN: "api.example", MaterializedAt: time.Now().UTC()}
 	for i := 0; i < 3; i++ {
 		endpoint.MaterializedAt = endpoint.MaterializedAt.Add(time.Minute)
@@ -163,7 +163,7 @@ func TestProjectionStartupRepairAndSystemDiscoveryDoNotRepeat(t *testing.T) {
 	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("first repair: %v", err)
@@ -193,7 +193,7 @@ func TestProjectionTombstonesNeverSuppressedAndRecreateRepublishes(t *testing.T)
 	serviceID, envID := uuid.New(), uuid.New()
 	sink := &captureProjectionPublisher{}
 	source := newFakeProjectionSource()
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	res := events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String()}
 
 	for i := 0; i < 2; i++ {
@@ -221,7 +221,7 @@ func TestProjectionRejectionOpensSharedBackoffThenRecovers(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	clock := time.Unix(1_800_000_000, 0).UTC()
 	s := projector.projection()
 	s.now = func() time.Time { return clock }
@@ -283,7 +283,7 @@ func TestProjectionBurstCoalescesToSinglePublish(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
 	const burst = 24
@@ -317,14 +317,14 @@ func TestProjectionDedupeHydratesAcrossRestart(t *testing.T) {
 	repo := &memoryNostrEventRepo{records: map[string]repository.NostrEventRecord{}}
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
-	first := NewProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, repo, zap.NewNop())
+	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, repo, zap.NewNop())
 	if err := first.publishState(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
 	// Restart: new instance, same retained store, empty in-memory cache.
 	sink := &captureProjectionPublisher{}
-	restarted := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	restarted := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
 	if err := restarted.publishState(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	serviceID, envID := uuid.New(), uuid.New()
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	retained := newMemoryNostrEventRepo()
-	first := NewProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
+	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
 	if err := first.publishState(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	readErr := errors.New("retained-state read unavailable")
 	repo := &transientHydrationRepo{memoryNostrEventRepo: retained, loadErr: readErr, failures: 1}
 	sink := &captureProjectionPublisher{}
-	restarted := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	restarted := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
 	clock := time.Unix(1_800_000_000, 0).UTC()
 	restarted.projection().now = func() time.Time { return clock }
 
@@ -431,7 +431,7 @@ func TestProjectionHydrationFailureDoesNotSuppressTombstones(t *testing.T) {
 	readErr := errors.New("retained-state read unavailable")
 	repo := &transientHydrationRepo{memoryNostrEventRepo: newMemoryNostrEventRepo(), loadErr: readErr, failures: 2}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
 	clock := time.Unix(1_800_000_000, 0).UTC()
 	projector.projection().now = func() time.Time { return clock }
 	res := events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String()}
@@ -480,14 +480,14 @@ func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
 	serviceID, envID := uuid.New(), uuid.New()
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	retained := newMemoryNostrEventRepo()
-	first := NewProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
+	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
 	if err := first.publishState(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
 	repo := &blockingHydrationRepo{memoryNostrEventRepo: retained, release: make(chan struct{}), entered: make(chan struct{})}
 	sink := &captureProjectionPublisher{}
-	restarted := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	restarted := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
 
 	const workers = 16
 	errs := make(chan error, workers)
@@ -525,7 +525,7 @@ func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
 func TestProjectionAuditLogIsNeverDeduped(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	ev := events.Event{
 		Type: events.EventEnvironmentServiceStateChanged, EntityID: "svc:env",
 		Data: events.ResourceData{ServiceID: uuid.NewString(), EnvironmentID: uuid.NewString()},

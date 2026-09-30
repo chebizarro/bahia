@@ -123,6 +123,19 @@ func (r *InMemoryNostrEventRepository) CountUnpublished(_ context.Context) (int6
 	return count, nil
 }
 
+// CountPublishFailed returns how many in-memory rows delivery gave up on.
+func (r *InMemoryNostrEventRepository) CountPublishFailed(_ context.Context) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var count int64
+	for _, rec := range r.records {
+		if rec.PublishState == NostrPublishStateFailed {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // MarkPublished records that the event reached its required relay acceptance
 // (duplicate OK counts as acceptance) and every relay has settled.
 func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id string, publishedAt time.Time) error {

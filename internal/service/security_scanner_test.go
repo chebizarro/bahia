@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	securityadapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -96,10 +98,32 @@ func TestSecurityScannerPublicationRetryStateWhenRelayRejects(t *testing.T) {
 
 	err = scanner.executeRun(ctx, run.ID)
 
+	// A relay rejection leaves the signed event queued in the outbox, which
+	// owns the retry: the publications stay pending, never a Security-side
+	// retry state.
 	require.NoError(t, err)
 	require.Equal(t, domain.SecurityScanCompleted, repo.runs[run.ID].Status)
-	require.Equal(t, domain.SecurityPublicationFailedRetryable, repo.runs[run.ID].PublishState)
-	require.True(t, repo.hasPublicationState(domain.SecurityPublicationFailedRetryable))
+	require.True(t, repo.hasPublicationState(domain.SecurityPublicationPending))
+	require.False(t, repo.hasPublicationState(domain.SecurityPublicationFailedTerminal))
+}
+
+// An event that never reached the outbox (signing or recording failed) has
+// nothing that could retry it, so the publication is terminal.
+func TestSecurityScannerUnqueuedPublishFailureIsTerminal(t *testing.T) {
+	ctx := context.Background()
+	target, err := domain.NewPackageSecurityTarget("npm", "lodash", "4.17.21")
+	require.NoError(t, err)
+	target.ID = uuid.New()
+	run := &domain.SecurityScanRun{ID: uuid.New(), TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Status: domain.SecurityScanAccepted, Trigger: domain.SecurityTriggerManual, PublishState: domain.SecurityPublicationPending, UnsupportedReasons: map[string]int{}, Metadata: map[string]any{}}
+	repo := newMemorySecurityRepo(target, run)
+	publisher := &recordingSecurityPublisher{secret: "1111111111111111111111111111111111111111111111111111111111111111", err: errors.New("persist signed nostr event before publish: database unavailable")}
+	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, OSV: &recordingOSVClient{}, Publisher: publisher, Logger: zap.NewNop()})
+
+	require.NoError(t, scanner.executeRun(ctx, run.ID))
+	require.Equal(t, domain.SecurityScanCompleted, repo.runs[run.ID].Status)
+	require.Equal(t, domain.SecurityPublicationFailedTerminal, repo.runs[run.ID].PublishState)
+	require.True(t, repo.hasPublicationState(domain.SecurityPublicationFailedTerminal))
+	require.False(t, repo.hasPublicationState(domain.SecurityPublicationPending))
 }
 
 func TestSecurityScannerCancelRunMarksTerminal(t *testing.T) {
@@ -551,9 +575,6 @@ func (r *memorySecurityRepo) UpdateSecurityPublicationState(_ context.Context, i
 	}
 	return nil
 }
-func (r *memorySecurityRepo) ListRetryableSecurityPublications(context.Context, time.Time, int) ([]domain.SecurityObservablePublication, error) {
-	return nil, nil
-}
 
 func (r *memorySecurityRepo) hasPublicationState(state domain.SecurityPublicationState) bool {
 	r.mu.Lock()
@@ -584,9 +605,13 @@ func (c *recordingOSVClient) QueryBatch(_ context.Context, queries []securityada
 	return make([]securityadapter.OSVQueryResult, len(queries)), nil
 }
 
+// recordingSecurityPublisher follows the outbox publisher's contract: err (if
+// set) is a failure before the outbox, and a round no relay accepted returns
+// the results with ErrPublishIncomplete (queued).
 type recordingSecurityPublisher struct {
 	secret  string
 	results []sbomadapter.PublishOKResult
+	err     error
 	events  []nostr.Event
 }
 
@@ -598,8 +623,16 @@ func (p *recordingSecurityPublisher) PublishSignedEventWithResults(_ context.Con
 	if err := ev.Sign(secret); err != nil {
 		return nil, err
 	}
+	if p.err != nil {
+		return nil, p.err
+	}
 	p.events = append(p.events, *ev)
-	return p.results, nil
+	for _, result := range p.results {
+		if result.Accepted {
+			return p.results, nil
+		}
+	}
+	return p.results, fmt.Errorf("%w: no relay accepted", nostrutil.ErrPublishIncomplete)
 }
 func (p *recordingSecurityPublisher) hasKind(kind int) bool {
 	for _, ev := range p.events {

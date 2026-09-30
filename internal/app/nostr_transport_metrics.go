@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -17,6 +18,9 @@ type nostrTransportMetricsRunner struct {
 	pools    []*nostrAdapter.RelayPool
 	interval time.Duration
 	logger   *zap.Logger
+	// failedIndexWarned limits the missing failed-row index warning to once;
+	// only the Run goroutine touches it.
+	failedIndexWarned bool
 }
 
 type nostrEventStorageStatsSource interface {
@@ -31,6 +35,25 @@ func newNostrTransportMetricsRunner(metrics *telemetry.Metrics, outbox repositor
 		logger = zap.NewNop()
 	}
 	return &nostrTransportMetricsRunner{metrics: metrics, outbox: outbox, pools: pools, interval: interval, logger: logger}
+}
+
+// refreshOutboxFailed samples the abandoned outbox row count. Until the online
+// failed-row index exists the gauge reads -1 (unknown) and one warning names
+// the maintenance command, rather than scanning nostr_events every interval.
+func (r *nostrTransportMetricsRunner) refreshOutboxFailed(ctx context.Context) {
+	failed, err := r.outbox.CountPublishFailed(ctx)
+	switch {
+	case errors.Is(err, repository.ErrNostrPublishFailedIndexNotReady):
+		r.metrics.SetNostrOutboxFailed(-1)
+		if !r.failedIndexWarned {
+			r.failedIndexWarned = true
+			r.logger.Warn("Nostr outbox failed-row metric unavailable until `bahia-event-archive --action ensure-indexes` builds its index")
+		}
+	case err != nil:
+		r.logger.Warn("failed to refresh Nostr outbox failed-row metric", zap.Error(err))
+	default:
+		r.metrics.SetNostrOutboxFailed(failed)
+	}
 }
 
 func (r *nostrTransportMetricsRunner) setStorageSource(source nostrEventStorageStatsSource) {
@@ -106,6 +129,7 @@ func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 		} else {
 			r.metrics.SetNostrOutboxDepth(depth)
 		}
+		r.refreshOutboxFailed(ctx)
 	}
 	if r.storage == nil {
 		return

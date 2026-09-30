@@ -10,7 +10,6 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -150,10 +149,13 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 	}
 	publisher.idleInterval = time.Millisecond
 
-	publisher.publishEvent(ctx, KindBuildRegistered, "build.registered", events.Event{
-		EntityID: "build-1",
-		Data:     map[string]any{"status": "registered"},
+	_, err := publisher.PublishSignedEventWithResults(ctx, &gonostr.Event{
+		Kind:      gonostr.Kind(KindCASAudit),
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"t", "build.registered"}, {"d", "build-1"}},
+		Content:   `{"status":"registered"}`,
 	})
+	require.ErrorIs(t, err, ErrPublishIncomplete, "a failed first round leaves the event queued")
 
 	pending, err := repo.ListUnpublished(ctx, 10)
 	require.NoError(t, err)

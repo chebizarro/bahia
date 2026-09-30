@@ -89,3 +89,50 @@ func TestPgNostrEventOutboxTargetsAndFailedState(t *testing.T) {
 		})
 	}
 }
+
+// The failed-row count refuses to scan nostr_events until ensure-indexes has
+// built its partial index, then counts through it. The same ensure-indexes run
+// validates the 000071 publish-state check that startup added NOT VALID.
+func TestPgNostrEventCountPublishFailedAfterEnsureIndexes(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping PostgreSQL failed-row count test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer pool.Close()
+	require.NoError(t, db.Migrate(ctx, pool, zap.NewNop()))
+	_, err = pool.Exec(ctx, `TRUNCATE nostr_events, nostr_event_archive_batches CASCADE`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `DROP INDEX IF EXISTS idx_nostr_events_publish_failed`)
+	require.NoError(t, err)
+
+	repo := repository.NewPgNostrEventRepository(pool)
+	now := time.Now().UTC()
+	for _, row := range []struct{ id, state string }{
+		{"failed-1", repository.NostrPublishStatePending},
+		{"failed-2", repository.NostrPublishStatePending},
+		{"pending-1", repository.NostrPublishStatePending},
+	} {
+		_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: row.id, Kind: 30900, PubKey: "pub", Content: "{}", Sig: "sig", CreatedAt: now, PublishState: row.state, PublishTarget: repository.NostrPublishTargetControlPlane})
+		require.NoError(t, err)
+	}
+	require.NoError(t, repo.AbandonPublish(ctx, "failed-1", "abandoned: test"))
+	require.NoError(t, repo.AbandonPublish(ctx, "failed-2", "abandoned: test"))
+
+	_, err = repo.CountPublishFailed(ctx)
+	require.ErrorIs(t, err, repository.ErrNostrPublishFailedIndexNotReady)
+
+	require.NoError(t, repository.NewPgNostrEventArchiveRepository(pool).EnsureOnlineIndexes(ctx))
+	failed, err := repo.CountPublishFailed(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), failed)
+	depth, err := repo.CountUnpublished(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), depth)
+
+	var validated bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'nostr_events_publish_state_check'`).Scan(&validated))
+	require.True(t, validated, "ensure-indexes validates the 000071 publish-state check")
+}

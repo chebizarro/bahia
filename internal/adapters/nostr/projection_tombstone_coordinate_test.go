@@ -198,7 +198,7 @@ func TestDNSTombstonesLandOnLiveCoordinate(t *testing.T) {
 	ctx := context.Background()
 	sources := fullDNSTestSources(uuid.New())
 	relay := newReplaceableRelay()
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop(), sources.options()...)
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop(), sources.options()...)
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -232,7 +232,7 @@ func TestDNSSnapshotRepairTombstonesRowsRemovedWhileDown(t *testing.T) {
 	sources := fullDNSTestSources(uuid.New())
 	sources.endpoints.endpoints = append(sources.endpoints.endpoints, testDNSEndpoint("web"))
 
-	before := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), sources.options()...)
+	before := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), sources.options()...)
 	if err := before.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot before restart: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDNSSnapshotRepairTombstonesRowsRemovedWhileDown(t *testing.T) {
 		backends:  &fakeDNSBackendProjectionSource{},
 		policies:  &fakeDNSPolicyProjectionSource{},
 	}
-	after := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
+	after := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
 	if err := after.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot after restart: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestDNSSnapshotRepairTombstonesRowsRemovedWhileDown(t *testing.T) {
 	assertNoLegacyDNSKinds(t, relay)
 
 	// Repair is idempotent: a third process has nothing left to tombstone.
-	again := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
+	again := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
 	if err := again.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot on second restart: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestDNSSnapshotRepairSupersedesLegacyKindTombstone(t *testing.T) {
 	repo := newMemoryNostrEventRepo()
 	relay := newReplaceableRelay()
 	source := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{testDNSEndpoint("api")}}
-	before := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(source))
+	before := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(source))
 	if err := before.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestDNSSnapshotRepairSupersedesLegacyKindTombstone(t *testing.T) {
 		t.Fatal("precondition: a legacy-kind tombstone must not touch the live coordinate")
 	}
 
-	after := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
+	after := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
 	if err := after.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot after restart: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestServiceStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
 	relay := newReplaceableRelay()
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	if err := projector.publishState(ctx, &state); err != nil {
@@ -363,7 +363,7 @@ func TestLLMRouteStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	ctx := context.Background()
 	routeID, envID := uuid.New(), uuid.New()
 	relay := newReplaceableRelay()
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
 	state := domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync, UpdatedAt: time.Now().UTC()}
 	if err := projector.publishLLMRouteState(ctx, &state); err != nil {

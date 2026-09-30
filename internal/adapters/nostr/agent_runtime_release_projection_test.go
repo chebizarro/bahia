@@ -17,7 +17,7 @@ func TestAgentRuntimeReleaseAndBindingProjectionsPreserveProvenanceAndSeparation
 	source := domain.AgentRuntimeSource{ID: sourceID, OrgID: orgID, Repository: "git.example/runtime/metiq", Branch: "release/2026.09", ReleaseChannel: "stable"}
 	release := domain.AgentRuntimeRelease{ID: releaseID, OrgID: orgID, SourceID: sourceID, ImageRepo: "registry.example/metiq", ImageDigest: digest, VerifiedAt: time.Unix(1_800_000_000, 0).UTC(), Provenance: domain.RuntimeReleaseProvenance{Provider: "metiq-hiveci", ReleaseEventID: "release-event", WorkflowRunEventID: "run-event", ManifestDigest: digest, SBOMDigest: digest, ProvenanceDigest: digest, AttestorPubkey: "attestor"}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	if err := projector.PublishAgentRuntimeRelease(context.Background(), release, source); err != nil {
 		t.Fatal(err)
 	}

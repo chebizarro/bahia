@@ -227,7 +227,6 @@ type SecurityRepository interface {
 
 	UpsertSecurityPublication(ctx context.Context, publication *domain.SecurityObservablePublication) error
 	UpdateSecurityPublicationState(ctx context.Context, id uuid.UUID, state domain.SecurityPublicationState, eventID, lastError string, nextRetryAt *time.Time, publishedAt *time.Time) error
-	ListRetryableSecurityPublications(ctx context.Context, now time.Time, limit int) ([]domain.SecurityObservablePublication, error)
 }
 
 // PaymentRecordRepository manages Cashu payment records.

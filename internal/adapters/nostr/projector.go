@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/version"
@@ -163,9 +164,17 @@ const (
 	eventDNSEndpointDeregistered events.EventType = "dns.endpoint_deregistered"
 )
 
-// ProjectionPublisher publishes signed Nostr events to relay-visible storage.
+// ProjectionPublisher durably queues and delivers the signed events the
+// Projector produces. In production it is the control-plane outbox Publisher,
+// which records the row (publish_target=control-plane) before the first relay
+// attempt and retries every control-plane relay that has not accepted it.
+//
+// A nil error means the publish quorum accepted the event. An error wrapping
+// nostrutil.ErrPublishIncomplete means the event is durably queued and still
+// being retried: the Projector treats it as published for dedupe and never
+// re-signs it. Any other error means the event was not queued.
 type ProjectionPublisher interface {
-	Publish(ctx context.Context, ev gonostr.Event) (int, error)
+	PublishProjection(ctx context.Context, ev gonostr.Event, entityType string, entityID *uuid.UUID) error
 }
 
 // Projector republishes Bahia's authoritative DB state into canonical Nostr
@@ -173,7 +182,6 @@ type ProjectionPublisher interface {
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
 	source                ProjectionSource
-	projectorSource       ProjectorSource
 	llmSource             LLMProjectionSource
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
@@ -224,10 +232,6 @@ func WithBackupProjectionStaleTimeout(timeout time.Duration) ProjectorOption {
 			p.backupStaleTimeout = timeout
 		}
 	}
-}
-
-func WithProjectorSource(source ProjectorSource) ProjectorOption {
-	return func(p *Projector) { p.projectorSource = source }
 }
 
 func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
@@ -299,7 +303,6 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 	for _, opt := range opts {
 		opt(p)
 	}
-	p.enabled = cfg.PublishEnabled && cfg.PrivateKey != "" && publisher != nil && (source != nil || p.projectorSource != nil)
 	return p
 }
 
@@ -421,7 +424,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		return fmt.Errorf("publish system discovery projection: %w", err)
 	}
 
-	snapshotSource := p.snapshotSource()
+	snapshotSource := p.source
 	services, err := snapshotSource.ListServices(ctx)
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
@@ -442,7 +445,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 
-	states, err := snapshotSource.ListStates(ctx)
+	states, err := snapshotSource.ListAllStates(ctx)
 	if err != nil {
 		return fmt.Errorf("list states: %w", err)
 	}
@@ -855,7 +858,7 @@ func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uu
 	}
 }
 
-func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, snapshotSource ProjectorSource, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
+func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, snapshotSource ProjectionSource, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
 	const pageSize = 1000
 	buildsPublished, artifactsPublished, intentsPublished, runsPublished := 0, 0, 0, 0
 	for i := range services {
@@ -1022,8 +1025,8 @@ func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, ve
 			}
 		}
 	}
-	if workerSnapshotSource := p.workerSnapshotSource(); workerSnapshotSource != nil {
-		workers, err := workerSnapshotSource.ListWorkers(ctx, "", 1000)
+	if p.workerSource != nil {
+		workers, err := p.workerSource.List(ctx, "", 1000)
 		if err != nil {
 			p.logger.Warn("list workers for ML capability projection failed", zap.Error(err))
 		} else {
@@ -1986,12 +1989,9 @@ func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
 			continue
 		}
 
-		if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
-			p.logger.Warn("sign SBOM reference event failed",
-				zap.String("manifest_id", m.ID.String()), zap.Error(err))
-			continue
-		}
-		if _, err := p.publisher.Publish(ctx, *ev); err != nil {
+		// Through the dedupe gate: an unchanged reference is neither re-signed
+		// nor re-queued on every repair pass.
+		if err := p.publishSigned(ctx, int(ev.Kind), ev.Tags, ev.Content, "sbom_reference.projection", &m.ID); err != nil {
 			p.logger.Warn("publish SBOM reference event failed",
 				zap.String("manifest_id", m.ID.String()), zap.Error(err))
 			continue
@@ -2021,24 +2021,26 @@ func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
 	// Publish 30004 availability lists, one per subject.
 	availPublished := 0
 	for _, g := range groups {
-		createdAt := time.Now().UTC()
+		// The list's updatedAt is its newest entry, not the repair time, so
+		// an unchanged list has identical content and is deduped.
+		var updatedAt *time.Time
+		for i := range g.entries {
+			if ts := g.entries[i].Timestamp; !ts.IsZero() && (updatedAt == nil || ts.After(*updatedAt)) {
+				updatedAt = &ts
+			}
+		}
 		ev, _, err := sbom.BuildSBOMAvailabilityListEvent(sbom.BuildSBOMAvailabilityListEventInput{
 			Subject:         g.subject,
 			Entries:         g.entries,
 			PublisherPubkey: pubkey,
-			CreatedAt:       &createdAt,
+			CreatedAt:       updatedAt,
 		})
 		if err != nil {
 			p.logger.Warn("build SBOM availability list for projection failed",
 				zap.String("subject_id", g.subject.ID), zap.Error(err))
 			continue
 		}
-		if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
-			p.logger.Warn("sign SBOM availability list failed",
-				zap.String("subject_id", g.subject.ID), zap.Error(err))
-			continue
-		}
-		if _, err := p.publisher.Publish(ctx, *ev); err != nil {
+		if err := p.publishSigned(ctx, int(ev.Kind), ev.Tags, ev.Content, "sbom_availability.projection", nil); err != nil {
 			p.logger.Warn("publish SBOM availability list failed",
 				zap.String("subject_id", g.subject.ID), zap.Error(err))
 			continue
@@ -2349,7 +2351,7 @@ func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool
 }
 
 func (p *Projector) observedDeployments(ctx context.Context) ([]observedDeploymentDiscovery, error) {
-	source := p.snapshotSource()
+	source := p.source
 	services, err := source.ListServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list services for observed deployments: %w", err)
@@ -2358,7 +2360,7 @@ func (p *Projector) observedDeployments(ctx context.Context) ([]observedDeployme
 	if err != nil {
 		return nil, fmt.Errorf("list environments for observed deployments: %w", err)
 	}
-	states, err := source.ListStates(ctx)
+	states, err := source.ListAllStates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list states for observed deployments: %w", err)
 	}
@@ -3568,15 +3570,12 @@ func (p *Projector) latestObservation(ctx context.Context, state *domain.Environ
 	if p == nil || state == nil || state.CurrentObservationID == nil {
 		return nil
 	}
-	for _, source := range []any{p.snapshotSource(), p.source} {
-		obsSource, ok := source.(latestObservationSource)
-		if !ok || obsSource == nil {
-			continue
-		}
-		obs, err := obsSource.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
-		if err == nil && obs != nil && obs.ID == *state.CurrentObservationID {
-			return obs
-		}
+	if p.source == nil {
+		return nil
+	}
+	obs, err := p.source.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
+	if err == nil && obs != nil && obs.ID == *state.CurrentObservationID {
+		return obs
 	}
 	return nil
 }
@@ -3659,9 +3658,12 @@ func isLLMEvent(t events.EventType) bool {
 	}
 }
 
-// publishSignedDirect signs, publishes, and records one event with no dedupe,
-// coalescing, or backoff. Only publishSigned (the gated choke point) calls it.
-func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt gonostr.Timestamp, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+// publishSignedDirect signs one event and hands it to the outbox publisher,
+// with no dedupe, coalescing, or backoff. Only publishSigned (the gated choke
+// point) calls it. queued reports that the publish quorum has not accepted the
+// event yet but the outbox holds it and keeps retrying: the event is kept, so
+// the caller must not re-sign it.
+func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt gonostr.Timestamp, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) (queued bool, err error) {
 	ev := gonostr.Event{
 		Kind:      canonicalKind(kind),
 		CreatedAt: createdAt,
@@ -3669,34 +3671,18 @@ func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt
 		Content:   content,
 	}
 	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
-		return err
+		return false, err
 	}
-	published, err := p.publisher.Publish(ctx, ev)
-	if err != nil {
-		return fmt.Errorf("publish event: %w", err)
+	err = p.publisher.PublishProjection(ctx, ev, entityType, entityID)
+	switch {
+	case nostrutil.IsPublishQueued(err):
+		p.logger.Debug("projected Nostr event queued for outbox retry", zap.Int("kind", kind), zap.String("event_id", eventIDHex(&ev)), zap.Error(err))
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("publish event: %w", err)
 	}
-	if published == 0 {
-		return fmt.Errorf("publish event: no relays accepted event kind %d", kind)
-	}
-	if p.eventRepo != nil {
-		tagsJSON, _ := json.Marshal(ev.Tags)
-		if _, err := p.eventRepo.Record(ctx, &repository.NostrEventRecord{
-			ID:         eventIDHex(&ev),
-			Kind:       eventKindInt(&ev),
-			PubKey:     eventPubKeyHex(&ev),
-			Content:    ev.Content,
-			Tags:       tagsJSON,
-			Sig:        eventSignatureHex(&ev),
-			CreatedAt:  ev.CreatedAt.Time(),
-			ReceivedAt: time.Now().UTC(),
-			EntityType: entityType,
-			EntityID:   entityID,
-		}); err != nil {
-			p.logger.Warn("failed to record projected Nostr event", zap.String("event_id", eventIDHex(&ev)), zap.Int("kind", eventKindInt(&ev)), zap.Error(err))
-		}
-	}
-	p.logger.Debug("projected Nostr event published", zap.Int("kind", kind), zap.String("event_id", eventIDHex(&ev)), zap.Int("relays", published))
-	return nil
+	p.logger.Debug("projected Nostr event published", zap.Int("kind", kind), zap.String("event_id", eventIDHex(&ev)))
+	return false, nil
 }
 
 func auditKindForEvent(t events.EventType) int {
