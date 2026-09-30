@@ -1456,15 +1456,47 @@ func (p *Projector) publishMLProvenanceForEdge(ctx context.Context, edge *domain
 
 func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
 	content, _ := json.Marshal(value)
-	publishKind := kind
-	baseTags := gonostr.Tags{{kinds.CASControlStateTagD, dTag}, {"deleted", "false"}}
-	if domain, entity := canonicalStateDomain(kind); domain != "" {
-		publishKind = KindCASControlState
-		baseTags = gonostr.Tags{{kinds.CASControlStateTagD, canonicalStateDTag(domain, entity, dTag)}, {kinds.CASControlStateTagDomain, domain}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(kind)}, {"deleted", "false"}}
-	}
-	baseTags = append(baseTags, tags...)
-	return p.publishSigned(ctx, publishKind, baseTags, string(content), entityType, entityID)
+	return p.publishControlState(ctx, kind, dTag, false, tags, string(content), entityType, entityID)
 }
+
+// publishReplaceableTombstone publishes the deletion marker for a record that
+// was projected with publishReplaceableJSON(kind, dTag, ...). Both go through
+// controlStateEnvelope, so the tombstone replaces the live event on the relay.
+func (p *Projector) publishReplaceableTombstone(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
+	content, _ := json.Marshal(value)
+	return p.publishControlState(ctx, kind, dTag, true, tags, string(content), entityType, entityID)
+}
+
+// publishControlState signs one projected replaceable record (live or
+// tombstone) on the coordinate controlStateEnvelope derives for it.
+func (p *Projector) publishControlState(ctx context.Context, legacyKind int, id string, deleted bool, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+	wireKind, baseTags := controlStateEnvelope(legacyKind, id, deleted)
+	return p.publishSigned(ctx, wireKind, append(baseTags, tags...), content, entityType, entityID)
+}
+
+// controlStateEnvelope is the single coordinate builder for projected
+// replaceable state. It returns the wire kind and the envelope tags (d, domain,
+// schema, legacy_kind, deleted) for the record identified by (legacyKind, id).
+// Relays replace an addressable event only with a newer event on the exact
+// same (kind, pubkey, d) coordinate, so a live record and its tombstone must
+// both be built here; deriving either one separately is how deletions ended up
+// on a coordinate nobody reads (B-18, B-19).
+func controlStateEnvelope(legacyKind int, id string, deleted bool) (wireKind int, tags gonostr.Tags) {
+	deletedValue := strconv.FormatBool(deleted)
+	domainName, entity := canonicalStateDomain(legacyKind)
+	if domainName == "" {
+		return legacyKind, gonostr.Tags{{kinds.CASControlStateTagD, id}, {"deleted", deletedValue}}
+	}
+	return KindCASControlState, gonostr.Tags{
+		{kinds.CASControlStateTagD, canonicalStateDTag(domainName, entity, id)},
+		{kinds.CASControlStateTagDomain, domainName},
+		{kinds.CASControlStateTagSchema, controlStateSchema},
+		{"legacy_kind", strconv.Itoa(legacyKind)},
+		{"deleted", deletedValue},
+	}
+}
+
+const controlStateSchema = "bahia.cp-state.v1"
 
 func canonicalStateDomain(kind int) (domainName string, entity string) {
 	switch kind {
@@ -1629,14 +1661,16 @@ func (p *Projector) publishDNSEndpoint(ctx context.Context, endpoint domain.DNSE
 	return p.publishReplaceableJSON(ctx, KindDNSEndpointState, endpoint.Coordinate, tags, endpoint, "dns_endpoint.projection", &endpoint.ID)
 }
 
+// publishDNSEndpointTombstone supersedes the live endpoint record whose d-tag
+// is coordinate (the same value publishDNSEndpoint used as its d).
 func (p *Projector) publishDNSEndpointTombstone(ctx context.Context, coordinate, fqdn string) error {
 	now := time.Now().UTC()
-	content, _ := json.Marshal(map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": formatTime(now)})
-	tags := gonostr.Tags{{"d", coordinate}, {"deleted", "true"}, {"t", "dns-endpoint"}, {"t", "bahia"}}
+	content := map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": formatTime(now)}
+	tags := gonostr.Tags{{"t", "dns-endpoint"}, {"t", "bahia"}}
 	if strings.TrimSpace(fqdn) != "" {
 		tags = append(tags, gonostr.Tag{"dns", strings.TrimSpace(fqdn)})
 	}
-	return p.publishSigned(ctx, KindDNSEndpointState, tags, string(content), "dns_endpoint.projection", nil)
+	return p.publishReplaceableTombstone(ctx, KindDNSEndpointState, coordinate, tags, content, "dns_endpoint.projection", nil)
 }
 
 func (p *Projector) publishDNSZoneSnapshot(ctx context.Context) (int, int, error) {
@@ -1645,8 +1679,8 @@ func (p *Projector) publishDNSZoneSnapshot(ctx context.Context) (int, int, error
 	}
 	p.dnsPublishMu.Lock()
 	defer p.dnsPublishMu.Unlock()
-	if p.dnsPublishedZones == nil {
-		p.dnsPublishedZones = map[string]dnsPublishedZone{}
+	if err := p.hydrateDNSPublishedCache(ctx); err != nil {
+		return 0, 0, err
 	}
 	zones := p.dnsZoneSource.ListDNSZones()
 	current := make(map[string]dnsPublishedZone, len(zones))
@@ -1679,7 +1713,7 @@ func (p *Projector) publishDNSZoneSnapshot(ctx context.Context) (int, int, error
 		if _, stillCurrent := current[dTag]; stillCurrent {
 			continue
 		}
-		if err := p.publishDNSZoneTombstone(ctx, previous); err != nil {
+		if err := p.publishDNSZoneTombstone(ctx, dTag, previous); err != nil {
 			failures = append(failures, fmt.Sprintf("tombstone %s: %v", dTag, err))
 			p.logger.Warn("publish DNS zone tombstone failed", zap.String("d_tag", dTag), zap.Error(err))
 			current[dTag] = previous
@@ -1701,11 +1735,12 @@ func (p *Projector) publishDNSZone(ctx context.Context, zone domain.DNSZone, del
 	return p.publishReplaceableJSON(ctx, KindDNSZoneState, dnsZoneDTag(zone.Name), tags, content, "dns_zone.projection", nil)
 }
 
-func (p *Projector) publishDNSZoneTombstone(ctx context.Context, previous dnsPublishedZone) error {
+// publishDNSZoneTombstone supersedes the live zone record published on dTag.
+func (p *Projector) publishDNSZoneTombstone(ctx context.Context, dTag string, previous dnsPublishedZone) error {
 	now := time.Now().UTC()
-	content, _ := json.Marshal(map[string]any{"name": previous.Name, "visibility": previous.Visibility, "backend_ref": previous.BackendRef, "deleted": true, "updated_at": formatTime(now)})
-	tags := gonostr.Tags{{"d", dnsZoneDTag(previous.Name)}, {"deleted", "true"}, {"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", "dns-zone"}, {"t", "bahia"}}
-	return p.publishSigned(ctx, KindDNSZoneState, tags, string(content), "dns_zone.projection", nil)
+	content := map[string]any{"name": previous.Name, "visibility": previous.Visibility, "backend_ref": previous.BackendRef, "deleted": true, "updated_at": formatTime(now)}
+	tags := gonostr.Tags{{"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", "dns-zone"}, {"t", "bahia"}}
+	return p.publishReplaceableTombstone(ctx, KindDNSZoneState, dTag, tags, content, "dns_zone.projection", nil)
 }
 
 func (p *Projector) publishDNSBackendSnapshot(ctx context.Context) (int, int, error) {
@@ -1714,8 +1749,8 @@ func (p *Projector) publishDNSBackendSnapshot(ctx context.Context) (int, int, er
 	}
 	p.dnsPublishMu.Lock()
 	defer p.dnsPublishMu.Unlock()
-	if p.dnsPublishedBackends == nil {
-		p.dnsPublishedBackends = map[string]dnsPublishedBackend{}
+	if err := p.hydrateDNSPublishedCache(ctx); err != nil {
+		return 0, 0, err
 	}
 	backends := p.dnsBackendSource.ListDNSBackendStates(ctx)
 	current := make(map[string]dnsPublishedBackend, len(backends))
@@ -1756,7 +1791,7 @@ func (p *Projector) publishDNSBackendSnapshot(ctx context.Context) (int, int, er
 		if _, stillCurrent := current[dTag]; stillCurrent {
 			continue
 		}
-		if err := p.publishDNSBackendTombstone(ctx, previous); err != nil {
+		if err := p.publishDNSBackendTombstone(ctx, dTag, previous); err != nil {
 			failures = append(failures, fmt.Sprintf("tombstone %s: %v", dTag, err))
 			p.logger.Warn("publish DNS backend tombstone failed", zap.String("d_tag", dTag), zap.Error(err))
 			current[dTag] = previous
@@ -1789,11 +1824,12 @@ func (p *Projector) publishDNSBackend(ctx context.Context, backend domain.DNSBac
 	return p.publishReplaceableJSON(ctx, KindDNSBackendState, dnsBackendDTag(backend.Ref), tags, content, "dns_backend.projection", nil)
 }
 
-func (p *Projector) publishDNSBackendTombstone(ctx context.Context, previous dnsPublishedBackend) error {
+// publishDNSBackendTombstone supersedes the live backend record published on dTag.
+func (p *Projector) publishDNSBackendTombstone(ctx context.Context, dTag string, previous dnsPublishedBackend) error {
 	now := time.Now().UTC()
-	content, _ := json.Marshal(map[string]any{"ref": previous.Ref, "type": previous.Type, "health": previous.Health, "deleted": true, "updated_at": formatTime(now)})
-	tags := gonostr.Tags{{"d", dnsBackendDTag(previous.Ref)}, {"deleted", "true"}, {"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", "dns-backend"}, {"t", "bahia"}}
-	return p.publishSigned(ctx, KindDNSBackendState, tags, string(content), "dns_backend.projection", nil)
+	content := map[string]any{"ref": previous.Ref, "type": previous.Type, "health": previous.Health, "deleted": true, "updated_at": formatTime(now)}
+	tags := gonostr.Tags{{"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", "dns-backend"}, {"t", "bahia"}}
+	return p.publishReplaceableTombstone(ctx, KindDNSBackendState, dTag, tags, content, "dns_backend.projection", nil)
 }
 
 func (p *Projector) publishDNSPolicySnapshot(ctx context.Context) (int, int, error) {
@@ -1802,8 +1838,8 @@ func (p *Projector) publishDNSPolicySnapshot(ctx context.Context) (int, int, err
 	}
 	p.dnsPublishMu.Lock()
 	defer p.dnsPublishMu.Unlock()
-	if p.dnsPublishedPolicies == nil {
-		p.dnsPublishedPolicies = map[string]dnsPublishedPolicy{}
+	if err := p.hydrateDNSPublishedCache(ctx); err != nil {
+		return 0, 0, err
 	}
 	policies, err := p.dnsPolicySource.ListEnabledDNSPolicies(ctx)
 	if err != nil {
@@ -1845,7 +1881,7 @@ func (p *Projector) publishDNSPolicySnapshot(ctx context.Context) (int, int, err
 		if _, stillCurrent := current[dTag]; stillCurrent {
 			continue
 		}
-		if err := p.publishDNSPolicyTombstone(ctx, previous); err != nil {
+		if err := p.publishDNSPolicyTombstone(ctx, dTag, previous); err != nil {
 			failures = append(failures, fmt.Sprintf("tombstone %s: %v", dTag, err))
 			p.logger.Warn("publish DNS policy tombstone failed", zap.String("d_tag", dTag), zap.Error(err))
 			current[dTag] = previous
@@ -2038,14 +2074,15 @@ func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolic
 	return p.publishReplaceableJSON(ctx, KindDNSPolicyState, dnsPolicyDTag(policy.ID), tags, content, "dns_policy.projection", &policy.ID)
 }
 
-func (p *Projector) publishDNSPolicyTombstone(ctx context.Context, previous dnsPublishedPolicy) error {
+// publishDNSPolicyTombstone supersedes the live policy record published on dTag.
+func (p *Projector) publishDNSPolicyTombstone(ctx context.Context, dTag string, previous dnsPublishedPolicy) error {
 	now := time.Now().UTC()
-	content, _ := json.Marshal(map[string]any{"id": previous.ID, "name": previous.Name, "zone_id": previous.ZoneID, "enabled": previous.Enabled, "deleted": true, "updated_at": formatTime(now)})
-	tags := gonostr.Tags{{"d", "dnspolicy:" + previous.ID}, {"deleted", "true"}, {"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
+	content := map[string]any{"id": previous.ID, "name": previous.Name, "zone_id": previous.ZoneID, "enabled": previous.Enabled, "deleted": true, "updated_at": formatTime(now)}
+	tags := gonostr.Tags{{"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
 	if previous.ZoneID != "" {
 		tags = append(tags, gonostr.Tag{"zone", previous.ZoneID})
 	}
-	return p.publishSigned(ctx, KindDNSPolicyState, tags, string(content), "dns_policy.projection", nil)
+	return p.publishReplaceableTombstone(ctx, KindDNSPolicyState, dTag, tags, content, "dns_policy.projection", nil)
 }
 
 func dnsZoneDTag(name string) string {
@@ -2060,18 +2097,119 @@ func dnsPolicyDTag(id uuid.UUID) string {
 	return "dnspolicy:" + id.String()
 }
 
+// dnsStateLegacyKinds are the DNS read-model families the projector derives
+// (and therefore must tombstone) itself.
+var dnsStateLegacyKinds = []int{KindDNSEndpointState, KindDNSZoneState, KindDNSBackendState, KindDNSPolicyState}
+
+// hydrateDNSPublishedCache rebuilds, once per process, the set of DNS records
+// that are still live on the relay coordinate so snapshot repair can tombstone
+// rows that disappeared while the daemon was down. It reads the retained copies
+// of this projector's own events on the live wire coordinate (the kind and d
+// controlStateEnvelope produces, selected by legacy_kind), keeps the newest per
+// d exactly as a relay would, and skips coordinates already tombstoned.
+// Records on the legacy 3197x kinds are ignored on purpose: they never occupied
+// the live coordinate, so an old tombstone there did not delete anything.
 func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 	if p.dnsCacheHydrated {
 		return nil
 	}
-	p.dnsPublished = map[string]dnsPublishedEndpoint{}
+	if p.dnsPublished == nil {
+		p.dnsPublished = map[string]dnsPublishedEndpoint{}
+	}
+	if p.dnsPublishedZones == nil {
+		p.dnsPublishedZones = map[string]dnsPublishedZone{}
+	}
+	if p.dnsPublishedBackends == nil {
+		p.dnsPublishedBackends = map[string]dnsPublishedBackend{}
+	}
+	if p.dnsPublishedPolicies == nil {
+		p.dnsPublishedPolicies = map[string]dnsPublishedPolicy{}
+	}
 	if p.eventRepo == nil {
 		p.dnsCacheHydrated = true
 		return nil
 	}
-	records, err := p.eventRepo.ListByKind(ctx, KindDNSEndpointState, 10000)
+	servicePubkey := ""
+	if p.privateKey != "" {
+		var deriveErr error
+		servicePubkey, deriveErr = publicKeyHexFromPrivateKeyHex(p.privateKey)
+		if deriveErr != nil {
+			return fmt.Errorf("derive DNS projection service pubkey: %w", deriveErr)
+		}
+	}
+	live := make(map[int]map[string]dnsRetainedRecord, len(dnsStateLegacyKinds))
+	for _, legacyKind := range dnsStateLegacyKinds {
+		records, err := p.liveRetainedControlState(ctx, legacyKind, servicePubkey)
+		if err != nil {
+			return fmt.Errorf("hydrate DNS projection cache (legacy kind %d): %w", legacyKind, err)
+		}
+		live[legacyKind] = records
+	}
+	// In-memory knowledge is at least as new as the retained copy; only fill gaps.
+	for d, record := range live[KindDNSEndpointState] {
+		if _, ok := p.dnsPublished[d]; !ok {
+			p.dnsPublished[d] = dnsPublishedEndpoint{FQDN: record.field("dns", "fqdn")}
+		}
+	}
+	for d, record := range live[KindDNSZoneState] {
+		if _, ok := p.dnsPublishedZones[d]; !ok {
+			p.dnsPublishedZones[d] = dnsPublishedZone{Name: record.field("zone", "name"), BackendRef: record.field("backend", "backend_ref"), Visibility: record.field("visibility", "visibility")}
+		}
+	}
+	for d, record := range live[KindDNSBackendState] {
+		if _, ok := p.dnsPublishedBackends[d]; !ok {
+			p.dnsPublishedBackends[d] = dnsPublishedBackend{Ref: record.field("backend", "ref"), Type: record.field("type", "type"), Health: record.field("health", "health")}
+		}
+	}
+	for d, record := range live[KindDNSPolicyState] {
+		if _, ok := p.dnsPublishedPolicies[d]; !ok {
+			enabled := record.field("enabled", "enabled")
+			p.dnsPublishedPolicies[d] = dnsPublishedPolicy{ID: record.field("policy", "id"), Name: record.field("", "name"), ZoneID: record.field("zone", "zone_id"), Enabled: enabled == "true"}
+		}
+	}
+	p.dnsCacheHydrated = true
+	return nil
+}
+
+// dnsRetainedRecord is the newest retained event on one live coordinate.
+type dnsRetainedRecord struct {
+	tags    gonostr.Tags
+	content map[string]any
+}
+
+// field returns the tag value, falling back to the JSON content field.
+func (r dnsRetainedRecord) field(tagName, contentKey string) string {
+	if tagName != "" {
+		if value := strings.TrimSpace(tagValue(r.tags, tagName)); value != "" {
+			return value
+		}
+	}
+	switch value := r.content[contentKey].(type) {
+	case string:
+		return value
+	case bool:
+		return strconv.FormatBool(value)
+	default:
+		return ""
+	}
+}
+
+// liveRetainedControlState returns, per d-tag, the newest retained event this
+// projector signed on the live wire coordinate for legacyKind, omitting d-tags
+// whose newest event is a tombstone. Ordering matches relay replacement
+// semantics: newest created_at wins, ties go to the lowest event id.
+func (p *Projector) liveRetainedControlState(ctx context.Context, legacyKind int, servicePubkey string) (map[string]dnsRetainedRecord, error) {
+	wireKind, envelope := controlStateEnvelope(legacyKind, "", false)
+	legacyValue := tagValue(envelope, "legacy_kind")
+	var records []repository.NostrEventRecord
+	var err error
+	if legacyValue != "" {
+		records, err = p.eventRepo.FindByTag(ctx, "legacy_kind", legacyValue, []int{wireKind}, projectionHydrateLimit)
+	} else {
+		records, err = p.eventRepo.ListByKind(ctx, wireKind, projectionHydrateLimit)
+	}
 	if err != nil {
-		return fmt.Errorf("hydrate DNS endpoint projection cache: %w", err)
+		return nil, err
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
@@ -2079,34 +2217,35 @@ func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 		}
 		return records[i].CreatedAt.After(records[j].CreatedAt)
 	})
-	p.dnsCacheHydrated = true
-	servicePubkey := ""
-	if p.privateKey != "" {
-		var deriveErr error
-		servicePubkey, deriveErr = publicKeyHexFromPrivateKeyHex(p.privateKey)
-		if deriveErr != nil {
-			return fmt.Errorf("derive DNS endpoint projection service pubkey: %w", deriveErr)
-		}
-	}
 	seen := map[string]struct{}{}
+	live := map[string]dnsRetainedRecord{}
 	for _, record := range records {
-		if servicePubkey != "" && record.PubKey != servicePubkey {
+		if record.Kind != wireKind || (servicePubkey != "" && record.PubKey != servicePubkey) {
 			continue
 		}
-		coordinate, fqdn, deleted := dnsProjectionRecordState(record)
-		if coordinate == "" {
+		tags := recordTags(record)
+		if legacyValue != "" && tagValue(tags, "legacy_kind") != legacyValue {
 			continue
 		}
-		if _, ok := seen[coordinate]; ok {
+		d := tagValue(tags, kinds.CASControlStateTagD)
+		if d == "" {
 			continue
 		}
-		seen[coordinate] = struct{}{}
-		if deleted {
+		if _, ok := seen[d]; ok {
 			continue
 		}
-		p.dnsPublished[coordinate] = dnsPublishedEndpoint{FQDN: fqdn}
+		seen[d] = struct{}{}
+		retained := dnsRetainedRecord{tags: tags}
+		_ = json.Unmarshal([]byte(record.Content), &retained.content)
+		if isTombstoneTags(tags) {
+			continue
+		}
+		if deleted, ok := retained.content["deleted"].(bool); ok && deleted {
+			continue
+		}
+		live[d] = retained
 	}
-	return nil
+	return live, nil
 }
 
 func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
@@ -2153,37 +2292,6 @@ func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
 		}
 	}
 	return tags
-}
-
-func dnsProjectionRecordState(record repository.NostrEventRecord) (coordinate, fqdn string, deleted bool) {
-	var tags gonostr.Tags
-	_ = json.Unmarshal(record.Tags, &tags)
-	for _, tag := range tags {
-		if len(tag) < 2 {
-			continue
-		}
-		switch tag[0] {
-		case "d":
-			coordinate = tag[1]
-		case "dns":
-			fqdn = tag[1]
-		case "deleted":
-			deleted = tag[1] == "true"
-		}
-	}
-	var content map[string]any
-	if err := json.Unmarshal([]byte(record.Content), &content); err == nil {
-		if coordinate == "" {
-			coordinate, _ = content["coordinate"].(string)
-		}
-		if fqdn == "" {
-			fqdn, _ = content["fqdn"].(string)
-		}
-		if value, ok := content["deleted"].(bool); ok {
-			deleted = value
-		}
-	}
-	return coordinate, fqdn, deleted
 }
 
 func shouldRefreshDNSProjection(eventType events.EventType) bool {
@@ -3335,12 +3443,9 @@ func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMR
 		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	dTag := fmt.Sprintf("%s:%s", state.RouteID, state.EnvironmentID)
 	tags := gonostr.Tags{
-		{kinds.CASControlStateTagD, dTag},
 		{"route", state.RouteID.String()},
 		{"environment", state.EnvironmentID.String()},
-		{"deleted", "false"},
 		{"drift_status", string(state.DriftStatus)},
 		{"gateway_status", string(state.GatewayStatus)},
 	}
@@ -3356,8 +3461,7 @@ func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMR
 	if state.BackendKind != "" {
 		tags = append(tags, gonostr.Tag{"backend", string(state.BackendKind)})
 	}
-	tags[0] = gonostr.Tag{kinds.CASControlStateTagD, canonicalStateDTag("llm", "state", dTag)}
-	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{kinds.CASControlStateTagDomain, "llm"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteState)}}, tags...), string(contentJSON), "llm_route_state.projection", &state.RouteID)
+	return p.publishControlState(ctx, KindLLMRouteState, llmRouteStateDTag(state.RouteID, state.EnvironmentID), false, tags, string(contentJSON), "llm_route_state.projection", &state.RouteID)
 }
 
 func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res events.ResourceData) error {
@@ -3366,11 +3470,9 @@ func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res event
 	if !routeOK || !envOK {
 		return nil
 	}
-	content, _ := json.Marshal(map[string]any{"deleted": true, "route_id": routeID.String(), "environment_id": envID.String(), "updated_at": formatTime(time.Now().UTC())})
-	dTag := fmt.Sprintf("%s:%s", routeID, envID)
-	tags := gonostr.Tags{{kinds.CASControlStateTagD, dTag}, {"route", routeID.String()}, {"environment", envID.String()}, {"deleted", "true"}}
-	tags[0] = gonostr.Tag{kinds.CASControlStateTagD, canonicalStateDTag("llm", "state", dTag)}
-	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{kinds.CASControlStateTagDomain, "llm"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteState)}}, tags...), string(content), "llm_route_state.projection", &routeID)
+	content := map[string]any{"deleted": true, "route_id": routeID.String(), "environment_id": envID.String(), "updated_at": formatTime(time.Now().UTC())}
+	tags := gonostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}}
+	return p.publishReplaceableTombstone(ctx, KindLLMRouteState, llmRouteStateDTag(routeID, envID), tags, content, "llm_route_state.projection", &routeID)
 }
 
 func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentServiceState) error {
@@ -3427,13 +3529,10 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	}
 
 	contentJSON, _ := json.Marshal(content)
-	dTag := fmt.Sprintf("service:%s:environment:%s", state.ServiceID, state.EnvironmentID)
 	tags := gonostr.Tags{
-		{kinds.CASControlStateTagD, dTag},
 		{"service", state.ServiceID.String()},
 		{"environment", state.EnvironmentID.String()},
 		{"unit", unitTagValue(state.DeploymentUnitID)},
-		{"deleted", "false"},
 		{"drift_status", string(state.DriftStatus)},
 	}
 	if state.DesiredArtifactID != nil {
@@ -3451,8 +3550,18 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if observedHash != "" {
 		tags = append(tags, gonostr.Tag{"observed_hash", observedHash})
 	}
-	tags[0] = gonostr.Tag{kinds.CASControlStateTagD, canonicalStateDTag("service", "state", dTag)}
-	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{kinds.CASControlStateTagDomain, "service"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}, tags...), string(contentJSON), "state.projection", &state.ServiceID)
+	return p.publishControlState(ctx, KindServiceState, serviceStateDTag(state.ServiceID, state.EnvironmentID), false, tags, string(contentJSON), "state.projection", &state.ServiceID)
+}
+
+// serviceStateDTag is the one coordinate builder for service state: the live
+// record and its tombstone both use it, so they share one relay coordinate.
+func serviceStateDTag(serviceID, environmentID uuid.UUID) string {
+	return fmt.Sprintf("service:%s:environment:%s", serviceID, environmentID)
+}
+
+// llmRouteStateDTag is the one coordinate builder for LLM route state.
+func llmRouteStateDTag(routeID, environmentID uuid.UUID) string {
+	return fmt.Sprintf("%s:%s", routeID, environmentID)
 }
 
 func (p *Projector) latestObservation(ctx context.Context, state *domain.EnvironmentServiceState) *domain.RuntimeObservation {
@@ -3478,22 +3587,18 @@ func (p *Projector) publishStateTombstone(ctx context.Context, res events.Resour
 	if !serviceOK || !envOK {
 		return nil
 	}
-	content, _ := json.Marshal(map[string]any{
+	content := map[string]any{
 		"deleted":        true,
 		"service_id":     serviceID.String(),
 		"environment_id": envID.String(),
 		"updated_at":     formatTime(time.Now().UTC()),
-	})
-	dTag := fmt.Sprintf("service:%s", serviceID)
+	}
 	tags := gonostr.Tags{
-		{kinds.CASControlStateTagD, dTag},
 		{"service", serviceID.String()},
 		{"environment", envID.String()},
 		{"unit", domain.DefaultDeploymentUnitKey},
-		{"deleted", "true"},
 	}
-	tags[0] = gonostr.Tag{kinds.CASControlStateTagD, canonicalStateDTag("service", "state", dTag)}
-	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{kinds.CASControlStateTagDomain, "service"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}, tags...), string(content), "state.projection", &serviceID)
+	return p.publishReplaceableTombstone(ctx, KindServiceState, serviceStateDTag(serviceID, envID), tags, content, "state.projection", &serviceID)
 }
 
 func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
@@ -3556,10 +3661,10 @@ func isLLMEvent(t events.EventType) bool {
 
 // publishSignedDirect signs, publishes, and records one event with no dedupe,
 // coalescing, or backoff. Only publishSigned (the gated choke point) calls it.
-func (p *Projector) publishSignedDirect(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt gonostr.Timestamp, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
 	ev := gonostr.Event{
 		Kind:      canonicalKind(kind),
-		CreatedAt: gonostr.Now(),
+		CreatedAt: createdAt,
 		Tags:      tags,
 		Content:   content,
 	}
