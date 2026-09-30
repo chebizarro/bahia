@@ -68,7 +68,6 @@
 1	internal/adapters/nostr/catalog.go kinds.WorkerUncordonRequest
 1	internal/adapters/nostr/catalog.go kinds.WorkerUndrainRequest
 1	internal/adapters/nostr/catalog.go kinds.WorkloadPinRequest
-1	internal/adapters/nostr/projector.go kinds.CASControlStateTagLegacyKind
 1	internal/adapters/nostr/projector.go nostr.KindAdoptionAudit
 1	internal/adapters/nostr/projector.go nostr.KindArtifactRegistered
 1	internal/adapters/nostr/projector.go nostr.KindBuildRegistered
@@ -127,11 +126,6 @@
 1	internal/adapters/nostr/publisher.go kinds.RuntimeActionAudit
 1	internal/adapters/nostr/publisher.go kinds.ServiceRegistryAudit
 1	internal/adapters/nostr/publisher.go kinds.StateChangedAudit
-1	internal/adapters/nostr/publisher.go nostr.KindArtifactRegistered
-1	internal/adapters/nostr/publisher.go nostr.KindBuildRegistered
-1	internal/adapters/nostr/publisher.go nostr.KindDeploymentComplete
-1	internal/adapters/nostr/publisher.go nostr.KindDeploymentCreated
-1	internal/adapters/nostr/publisher.go nostr.KindDriftDetected
 1	internal/adapters/nostr/subscriber.go literal 31100
 1	internal/adapters/nostr/subscriber.go literal 5941
 1	internal/adapters/nostr/subscriber.go literal 5999
@@ -260,8 +254,6 @@
 1	internal/domain/soul.go literal 5950
 1	internal/domain/soul.go literal 6950
 1	internal/domain/soul.go literal 7950
-1	internal/fipsbridge/bridge.go kinds.CASControlStateTagLegacyKind
-1	internal/fipsbridge/bridge.go kinds.DNSEndpointState
 1	internal/kinds/policy.go kinds.AdoptionImportRequest
 1	internal/kinds/policy.go kinds.AdoptionScanRequest
 1	internal/kinds/policy.go kinds.ArtifactRegister
@@ -332,7 +324,7 @@
 2	internal/soulfactory/memory_config.go domain.KindProvisioningStatus
 2	internal/soulfactory/nostr_client.go domain.KindProvisioningRequest
 4	internal/soulfactory/nostr_client.go domain.KindProvisioningResult
-5	internal/soulfactory/nostr_client.go domain.KindProvisioningStatus
+4	internal/soulfactory/nostr_client.go domain.KindProvisioningStatus
 1	internal/soulfactory/nostr_client.go domain.KindSoulActionLegacyResult
 1	internal/soulfactory/operator_assistant_bootstrap.go controlplane.KindDeployRequest
 1	internal/soulfactory/operator_assistant_bootstrap.go controlplane.KindLLMDeployRequest
@@ -346,5 +338,3 @@
 1	internal/soulfactory/reactor.go domain.KindProvisioningResult
 1	internal/soulfactory/runtime_validation.go domain.KindProvisioningRequest
 2	internal/soulfactory/runtime_validation.go domain.KindProvisioningResult
-2	pkg/discovery/resolver.go discovery.KindDNSEndpointState
-1	pkg/discovery/resolver.go literal 31976

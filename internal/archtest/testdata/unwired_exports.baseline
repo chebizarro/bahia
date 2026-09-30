@@ -33,7 +33,6 @@
 1	internal/adapters/llm.IsContextTooLarge
 1	internal/adapters/llm.WithHTTPClient
 1	internal/adapters/llm.WithRuntimeFactory
-1	internal/adapters/nostr.CacheProjectorSource.RelayProjectionCache
 1	internal/adapters/nostr.DecodeBahiaIdentity
 1	internal/adapters/nostr.DecodeReadinessStatus
 1	internal/adapters/nostr.DecodeReplayCheckpoint
@@ -53,8 +52,6 @@
 1	internal/adapters/nostr.KindCatalog.LiveGroups
 1	internal/adapters/nostr.KindCatalog.SnapshotGroups
 1	internal/adapters/nostr.KindSystemDiscovery
-1	internal/adapters/nostr.NewCacheProjectorSource
-1	internal/adapters/nostr.NewDBProjectorSource
 1	internal/adapters/nostr.NewProcessor
 1	internal/adapters/nostr.Projector.ProjectionMetrics
 1	internal/adapters/nostr.Projector.PublishAgentRuntimeRelease
@@ -79,7 +76,6 @@
 1	internal/adapters/nostr.WithAuthorizedAuthors
 1	internal/adapters/nostr.WithBackfillLimit
 1	internal/adapters/nostr.WithKinds
-1	internal/adapters/nostr.WithProjectorSource
 1	internal/adapters/qdrant.Client.CollectionExists
 1	internal/adapters/qdrant.Client.DeleteCollection
 1	internal/adapters/qdrant.Client.Search
@@ -332,11 +328,6 @@
 1	internal/service.NewMLProvenanceService
 1	internal/service.NewMLRecipeCoordinator
 1	internal/service.NewRKNNServerProvisioner
-1	internal/service.NewRelayFirstBackup
-1	internal/service.NewRelayFirstDNS
-1	internal/service.NewRelayFirstLLM
-1	internal/service.NewRelayFirstML
-1	internal/service.NewRelayFirstPackage
 1	internal/service.NewUsageLedgerService
 1	internal/service.PackageRKNNArtifact
 1	internal/service.ParseAssistantHookDocument
@@ -394,7 +385,9 @@
 1	internal/soulfactory.NewOpenClawReadinessVerifier
 1	internal/soulfactory.NewOpenClawRuntimeAdapter
 1	internal/soulfactory.NewStatusSyncHandler
+1	internal/soulfactory.NostrClient.AwaitSoulActionResult
 1	internal/soulfactory.NostrClient.WithExpectedFactoryPubkey
+1	internal/soulfactory.NostrClient.WithReplyTimeout
 1	internal/soulfactory.OrderedSteps
 1	internal/soulfactory.StatusSyncHandler.HandleEvent
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
