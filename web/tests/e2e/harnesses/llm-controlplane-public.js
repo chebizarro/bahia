@@ -130,8 +130,7 @@ export async function installPublicLLMControlplaneHarness(
         pubkey,
         created_at,
         tags,
-        content: serialized,
-        sig: '0'.repeat(128)
+        content: serialized
       };
       if (kind === KIND_CONTROL_STATE) {
         event.id = `${id}-${created_at}`;
@@ -226,11 +225,13 @@ export async function installPublicLLMControlplaneHarness(
 
     function emitToMatchingSubscriptions(socket, event) {
       const subs = socket.__bahiaSubs || new Map();
-      for (const [subId, filters] of subs.entries()) {
-        if (Array.isArray(filters) && filters.some((filter) => matchesFilter(event, filter))) {
-          socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
-        }
-      }
+      const matchingSubIds = Array.from(subs.entries())
+        .filter(([, filters]) => Array.isArray(filters) && filters.some((filter) => matchesFilter(event, filter)))
+        .map(([subId]) => subId);
+      if (matchingSubIds.length === 0) return;
+      void window.__bahiaE2ENormalizeAndSign(event).then((signedEvent) => {
+        for (const subId of matchingSubIds) socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, signedEvent]) });
+      });
     }
 
     function emitToAllMatchingSubscriptions(event) {

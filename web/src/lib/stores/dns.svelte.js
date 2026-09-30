@@ -30,10 +30,11 @@ import {
   DNS_STATE_DOMAIN,
   DNS_STATE_SCHEMA_BY_LEGACY_KIND,
   DNS_STATE_SCHEMAS,
+  DNS_STATE_TOPICS,
   DNS_ZONE_CREATE_RESULT
 } from '$lib/nostr/kinds.gen.js';
 
-// DNS state keeps its own domain-scoped subscription rather than reading the
+// DNS state keeps its own topic-scoped subscription rather than reading the
 // shared controlplane collections (A-22): that REQ multiplexes every 30900
 // domain under one limit, so DNS records would be truncated by unrelated state
 // in larger fleets, and /dns availability is gated on this subscription's EOSE.
@@ -336,7 +337,9 @@ export function dnsReadModelFilters(pubkey = dnsState.connection.servicePubkey, 
   const authorFilter = servicePubkey ? { authors: [servicePubkey] } : {};
   const temporal = since ? { since } : { limit: DNS_READ_MODEL_LIMIT };
   return [
-    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': [DNS_STATE_DOMAIN], ...temporal, ...authorFilter },
+    // #t is single-letter, so relays index it (A-27); the multi-letter
+    // domain/schema/legacy_kind tags are checked locally on each event.
+    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [...DNS_STATE_TOPICS], ...temporal, ...authorFilter },
     {
       kinds: DNS_OPERATION_KINDS,
       since: since || Math.floor(Date.now() / 1000) - DNS_OPERATION_BACKFILL_SECONDS,

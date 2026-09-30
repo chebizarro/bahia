@@ -116,7 +116,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledTimes(1);
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith([
-      { kinds: [30900], '#domain': ['dns'], limit: 5000, authors: ['b'.repeat(64)] },
+      { kinds: [30900], '#t': ['dns-zone', 'dns-endpoint', 'dns-policy', 'dns-backend'], limit: 5000, authors: ['b'.repeat(64)] },
       { kinds: [6941, 7941, 7942, 7943, 7944, 7945], since: expect.any(Number), limit: 1000, authors: ['b'.repeat(64)] }
     ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
   });

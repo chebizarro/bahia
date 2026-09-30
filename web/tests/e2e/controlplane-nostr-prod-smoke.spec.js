@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks } from './helpers.js';
+import { installE2EMocks, e2eTestPubkey } from './helpers.js';
 import { E2E_SERVICE_PUBKEY } from './helpers.js';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
-const WORKER_PUBKEY = 'c'.repeat(64);
+const WORKER_PUBKEY = e2eTestPubkey('worker');
 const now = Math.floor(Date.now() / 1000);
 
 function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags = [], content = {} }) {
