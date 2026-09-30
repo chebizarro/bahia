@@ -121,11 +121,17 @@ const (
 
 // Publisher bridges internal events to Nostr relay publication.
 //
-// Delivery is tracked per relay: an event is delivered only once every
-// configured write relay (or the configured nostr.publish_quorum) has accepted
-// it, and relays that have not accepted keep being retried with backoff up to a
-// bounded attempt budget. Duplicate OK counts as acceptance; blocked:, invalid:
-// and pow: rejections are terminal for the relay that sent them.
+// Two thresholds apply to every outbound event:
+//   - Caller success: a publish call succeeds once nostr.publish_quorum write
+//     relays (default 1; -1 = all) have accepted. Below the quorum it returns
+//     ErrPublishIncomplete, and the event stays queued for retry either way.
+//   - Delivery completion: acceptance is tracked per relay, and relays that
+//     have not accepted keep being retried with backoff up to a bounded attempt
+//     budget. The outbox row is marked published only once every write relay
+//     has accepted or reached a terminal state.
+//
+// Duplicate OK counts as acceptance; blocked:, invalid: and pow: rejections
+// are terminal for the relay that sent them.
 type Publisher struct {
 	pool         *RelayPool
 	privateKey   string
@@ -141,6 +147,9 @@ type Publisher struct {
 	quorum       int
 	maxAttempts  int
 	pageSize     int
+	// inlineOnly marks a publisher that has no redelivery runner of its own
+	// (see WithInlineDeliveryOnly).
+	inlineOnly bool
 
 	// deliveriesMu guards the deliveries map and each delivery's nextAt.
 	deliveriesMu sync.Mutex
@@ -155,11 +164,25 @@ type Publisher struct {
 	outboxCursor *repository.NostrOutboxCursor
 }
 
+// PublisherOption configures a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithInlineDeliveryOnly marks a publisher whose Run is not registered and
+// whose pool differs from the outbox runner's pool (for example a
+// control-plane-only publisher sharing the daemon outbox). It cannot retry, and
+// its pending rows must not be adopted by the runner of a different relay set,
+// so once an inline round reaches the publish quorum the row is marked
+// published and relays that have not accepted are logged, not retried. Rows
+// below the quorum stay pending for the outbox runner, as before.
+func WithInlineDeliveryOnly() PublisherOption {
+	return func(p *Publisher) { p.inlineOnly = true }
+}
+
 // NewPublisher creates a new Nostr event publisher.
 // It shares a RelayPool for persistent connections. If pool is nil, a new one
 // is created from config (for backward compatibility).
 // eventRepo is optional; when non-nil, all published events are recorded to the audit table.
-func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger) *Publisher {
+func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger, opts ...PublisherOption) *Publisher {
 	if pool == nil {
 		poolOpts := []RelayPoolOption(nil)
 		if cfg.PrivateKey != "" {
@@ -187,6 +210,11 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 		wake:         make(chan struct{}, 1),
 	}
 	publisher.outboxRepo, _ = eventRepo.(repository.NostrEventOutboxRepository)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(publisher)
+		}
+	}
 	return publisher
 }
 
@@ -295,14 +323,17 @@ func nostrEventRecordFromEvent(ev nostr.Event, entityType string) *repository.No
 	}
 }
 
-// publishOutboxEvent runs a delivery round for ev. It returns nil error only
-// when the required relays have accepted the event. Relays that have not
-// accepted are retried by Run (in memory, and from the durable outbox when one
-// is configured).
+// publishOutboxEvent runs a delivery round for ev. It returns nil error once
+// the publish quorum has accepted the event. Relays that have not accepted are
+// retried by Run (in memory, and from the durable outbox when one is
+// configured).
 func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publishAttempt {
 	d, _ := p.trackDelivery(ev, 0)
 	d.mu.Lock()
 	report := p.deliverRound(ctx, d)
+	if p.inlineOnly && report.delivered && !d.settled {
+		p.settleInlineDelivery(ctx, d, report.detail)
+	}
 	settled := d.settled
 	d.mu.Unlock()
 	if settled || !p.running.Load() {
@@ -313,6 +344,24 @@ func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publ
 		p.nudge()
 	}
 	return publishAttempt{results: report.results, accepted: report.accepted, rateLimited: report.rateLimited, err: report.err}
+}
+
+// settleInlineDelivery finishes a quorum-accepted event for an inline-only
+// publisher, which has no runner to retry the remaining relays. The caller
+// must hold d.mu.
+func (p *Publisher) settleInlineDelivery(ctx context.Context, d *outboxDelivery, detail string) {
+	eventID := d.event.ID.Hex()
+	if p.outboxRepo != nil {
+		if err := p.outboxRepo.MarkPublished(ctx, eventID, p.now().UTC()); err != nil {
+			p.logger.Warn("failed to persist nostr publish state", zap.String("event_id", eventID), zap.Error(err))
+			return
+		}
+	}
+	d.settled = true
+	p.logger.Warn("nostr event accepted by publish quorum; inline-only publisher will not retry remaining relays",
+		zap.String("event_id", eventID),
+		zap.String("detail", detail),
+	)
 }
 
 func (p *Publisher) nudge() {

@@ -81,12 +81,22 @@ func WithRelayBusBackoff(backoff relayBusBackoff) RelayBusOption {
 	}
 }
 
+// Relay bus publish quorum values for WithRelayBusPublishQuorum.
+const (
+	// RelayBusPublishQuorumDefault succeeds once one relay has accepted.
+	RelayBusPublishQuorumDefault = 1
+	// RelayBusPublishQuorumAll succeeds only once every relay has accepted.
+	RelayBusPublishQuorumAll = -1
+)
+
 // WithRelayBusPublishQuorum sets how many relays must accept (OK true or
-// duplicate) a published event for Publish to succeed. The default, 0, requires
-// every configured relay.
+// duplicate) a published event for Publish to succeed: N > 0 relays (capped at
+// the relay count) or RelayBusPublishQuorumAll. The default is
+// RelayBusPublishQuorumDefault (one relay). Every relay's result is collected
+// regardless of the quorum.
 func WithRelayBusPublishQuorum(quorum int) RelayBusOption {
 	return func(b *SoulFactoryRelayBus) {
-		if quorum > 0 {
+		if quorum > 0 || quorum == RelayBusPublishQuorumAll {
 			b.publishQuorum = quorum
 		}
 	}
@@ -134,6 +144,7 @@ func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...R
 		logger:        slog.Default().With("component", "soulfactory-relay-bus"),
 		backoff:       defaultRelayBusBackoff,
 		validateEvent: validSignedEvent,
+		publishQuorum: RelayBusPublishQuorumDefault,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -144,9 +155,11 @@ func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...R
 }
 
 // Publish sends ev to every relay and waits for each relay's OK. It returns the
-// number of relays that accepted (OK true or duplicate) and an error unless the
-// required acceptance was reached: every relay, or the WithRelayBusPublishQuorum
-// count. One relay's OK never cancels the publishes still in flight to others.
+// number of relays that accepted (OK true or duplicate) and an error only when
+// fewer than the publish quorum accepted (default one relay; see
+// WithRelayBusPublishQuorum). One relay's OK never cancels the publishes still
+// in flight to others. The bus has no durable retry: relays that did not accept
+// are logged, and PublishWithResults returns every relay's outcome.
 func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int, error) {
 	results, err := b.PublishWithResults(ctx, ev)
 	return countRelayBusAccepted(results), err
@@ -154,6 +167,7 @@ func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int,
 
 // PublishWithResults sends ev to every relay concurrently and returns every
 // relay's outcome, in endpoint order, once all relays have answered (or failed).
+// The error is non-nil only when fewer than the publish quorum accepted.
 func (b *SoulFactoryRelayBus) PublishWithResults(ctx context.Context, ev nostr.Event) ([]RelayPublishResult, error) {
 	if b == nil || len(b.endpoints) == 0 {
 		return nil, fmt.Errorf("soul factory relay bus is not configured")
@@ -175,13 +189,7 @@ func (b *SoulFactoryRelayBus) PublishWithResults(ctx context.Context, ev nostr.E
 	wg.Wait()
 
 	accepted := countRelayBusAccepted(results)
-	required := len(b.endpoints)
-	if b.publishQuorum > 0 && b.publishQuorum < required {
-		required = b.publishQuorum
-	}
-	if accepted >= required {
-		return results, nil
-	}
+	required := b.requiredAcceptances()
 
 	var failures []string
 	for _, result := range results {
@@ -198,10 +206,37 @@ func (b *SoulFactoryRelayBus) PublishWithResults(ctx context.Context, ev nostr.E
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", result.RelayURL, reason))
 	}
+	if accepted >= required {
+		if len(failures) > 0 {
+			b.log().Warn("event accepted by publish quorum; some relays did not accept and will not be retried by the bus",
+				"event_id", ev.ID.Hex(), "accepted", accepted, "relays", len(b.endpoints), "failures", strings.Join(failures, "; "))
+		}
+		return results, nil
+	}
 	if accepted == 0 {
 		return results, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
 	}
 	return results, fmt.Errorf("event accepted by %d of %d required relays: %s", accepted, required, strings.Join(failures, "; "))
+}
+
+// requiredAcceptances resolves the publish quorum against the relay count. A
+// zero value (bus built without the constructor) means the default of one.
+func (b *SoulFactoryRelayBus) requiredAcceptances() int {
+	required := b.publishQuorum
+	switch {
+	case required == RelayBusPublishQuorumAll:
+		required = len(b.endpoints)
+	case required <= 0:
+		required = RelayBusPublishQuorumDefault
+	}
+	return min(required, len(b.endpoints))
+}
+
+func (b *SoulFactoryRelayBus) log() *slog.Logger {
+	if b.logger != nil {
+		return b.logger
+	}
+	return slog.Default()
 }
 
 // relayBusAccepted treats a duplicate OK as acceptance: the relay has the event.

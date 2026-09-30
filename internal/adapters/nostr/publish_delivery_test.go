@@ -167,7 +167,7 @@ func testSignedEvent(content string) *gonostr.Event {
 	}
 }
 
-func TestPublisherRelayAOKRelayBFailingIsNotDeliveredAndRetriesOnlyB(t *testing.T) {
+func TestPublisherDefaultQuorumRelayBDownSucceedsKeepsRowPendingAndRetriesB(t *testing.T) {
 	ctx := context.Background()
 	outbox := newSignalingOutbox()
 	relays := newScriptedRelays(map[string][]PublishResult{
@@ -181,19 +181,15 @@ func TestPublisherRelayAOKRelayBFailingIsNotDeliveredAndRetriesOnlyB(t *testing.
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 	startRunner(t, publisher, outbox)
 
-	event := testSignedEvent("a-ok-b-failing")
+	event := testSignedEvent("a-ok-b-down")
 	results, err := publisher.PublishSignedEventWithResults(ctx, event)
-	require.ErrorIs(t, err, ErrPublishIncomplete, "one relay OK must not count as delivered")
-	var incomplete *PublishIncompleteError
-	require.ErrorAs(t, err, &incomplete)
-	require.Equal(t, 1, incomplete.Accepted)
-	require.Equal(t, 2, incomplete.Required)
+	require.NoError(t, err, "default publish quorum is one relay: the caller succeeds while relay B is down")
 	require.Len(t, results, 2)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 
 	rec, err := outbox.GetByID(ctx, event.ID.Hex())
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "event must stay in the outbox after only relay A accepted")
+	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "one relay OK must not complete delivery")
 	require.Contains(t, rec.LastPublishError, relayB)
 
 	// Relay B is retried (and relay A is not re-sent) until B accepts.
@@ -207,6 +203,53 @@ func TestPublisherRelayAOKRelayBFailingIsNotDeliveredAndRetriesOnlyB(t *testing.
 	require.Equal(t, 3, rec.PublishAttempts)
 	require.Empty(t, rec.LastPublishError)
 	require.False(t, publisher.isTracked(event.ID.Hex()), "fully delivered events are no longer tracked")
+	relays.requireNoPendingCalls(t)
+}
+
+func TestPublisherExplicitQuorumTwoWithRelayDownIsIncomplete(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Accepted: true}},
+		relayB: {{Error: errors.New("connection refused")}, {Accepted: true}},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 2, relayA, relayB)
+	startRunner(t, publisher, outbox)
+
+	event := testSignedEvent("quorum-two")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.ErrorIs(t, err, ErrPublishIncomplete)
+	var incomplete *PublishIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, 1, incomplete.Accepted)
+	require.Equal(t, 2, incomplete.Required)
+	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+
+	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "the event stays queued below quorum")
+
+	require.Equal(t, []string{relayB}, relays.nextCall(t))
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "event published once relay B accepted"))
+	relays.requireNoPendingCalls(t)
+}
+
+func TestPublisherDefaultQuorumPermanentRejectionCompletesWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Accepted: true}},
+		relayB: {{Reason: "pow: difficulty 8 is less than 20"}},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	startRunner(t, publisher, outbox)
+
+	event := testSignedEvent("pow-reject")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "delivery complete: A accepted, B terminal"))
+	require.False(t, publisher.isTracked(event.ID.Hex()))
 	relays.requireNoPendingCalls(t)
 }
 
@@ -243,7 +286,7 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 		relayA: {{Accepted: true}},
 		relayB: {{Reason: "blocked: pubkey not allowed"}},
 	})
-	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	publisher := newDeliveryTestPublisher(t, outbox, relays, config.PublishQuorumAllRelays, relayA, relayB)
 	startRunner(t, publisher, outbox)
 
 	event := testSignedEvent("blocked")
@@ -271,12 +314,12 @@ func TestPublisherQuorumMetReturnsDeliveredAndStillRetriesRemainder(t *testing.T
 		relayA: {{Reason: "duplicate: already have this event"}},
 		relayB: {{Error: errors.New("connection reset")}, {Accepted: true}},
 	})
-	publisher := newDeliveryTestPublisher(t, outbox, relays, 1, relayA, relayB)
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 	startRunner(t, publisher, outbox)
 
 	event := testSignedEvent("quorum")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
-	require.NoError(t, err, "duplicate OK from relay A meets the configured quorum of 1")
+	require.NoError(t, err, "duplicate OK from relay A meets the default quorum of 1")
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 
 	require.Equal(t, []string{relayB}, relays.nextCall(t), "relay B is still retried after quorum")
@@ -284,7 +327,34 @@ func TestPublisherQuorumMetReturnsDeliveredAndStillRetriesRemainder(t *testing.T
 	relays.requireNoPendingCalls(t)
 }
 
-func TestPublisherAbandonsAfterAttemptBudget(t *testing.T) {
+func TestPublisherAbandonsAfterAttemptBudgetWhenQuorumNeverMet(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Error: errors.New("relay down")}},
+		relayB: {{Error: errors.New("relay down")}},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	publisher.maxAttempts = 3
+	startRunner(t, publisher, outbox)
+
+	event := testSignedEvent("budget")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.ErrorIs(t, err, ErrPublishIncomplete)
+	for range 3 {
+		require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+	}
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.abandoned, "event abandoned after budget"))
+
+	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStateNotApplicable, rec.PublishState)
+	require.Contains(t, rec.LastPublishError, "abandoned after 3 publish attempts")
+	require.Equal(t, 3, rec.PublishAttempts)
+	relays.requireNoPendingCalls(t)
+}
+
+func TestPublisherBudgetExhaustedAfterQuorumPublishesRow(t *testing.T) {
 	ctx := context.Background()
 	outbox := newSignalingOutbox()
 	relays := newScriptedRelays(map[string][]PublishResult{
@@ -295,20 +365,52 @@ func TestPublisherAbandonsAfterAttemptBudget(t *testing.T) {
 	publisher.maxAttempts = 3
 	startRunner(t, publisher, outbox)
 
-	event := testSignedEvent("budget")
+	event := testSignedEvent("budget-after-quorum")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
-	require.ErrorIs(t, err, ErrPublishIncomplete)
+	require.NoError(t, err)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
-	require.Equal(t, event.ID.Hex(), receive(t, outbox.abandoned, "event abandoned after budget"))
-
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
-	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStateNotApplicable, rec.PublishState)
-	require.Contains(t, rec.LastPublishError, "abandoned after 3 publish attempts")
-	require.Equal(t, 3, rec.PublishAttempts)
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "row published once relay B's budget ran out"))
 	relays.requireNoPendingCalls(t)
+}
+
+func TestPublisherInlineOnlySettlesAtQuorumWithoutLeavingRowForAnotherRunner(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Accepted: true}},
+		relayB: {{Error: errors.New("relay down")}},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	WithInlineDeliveryOnly()(publisher)
+
+	event := testSignedEvent("inline-only")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "inline-only row settled at quorum"))
+	depth, err := outbox.CountUnpublished(ctx)
+	require.NoError(t, err)
+	require.Zero(t, depth, "no pending row is left for a runner on a different relay set")
+	require.False(t, publisher.isTracked(event.ID.Hex()))
+}
+
+func TestPublisherRequiredAcceptances(t *testing.T) {
+	cases := []struct {
+		quorum, configured, want int
+	}{
+		{0, 3, 1},
+		{1, 3, 1},
+		{2, 3, 2},
+		{5, 3, 3},
+		{config.PublishQuorumAllRelays, 3, 3},
+		{0, 0, 0},
+	}
+	for _, tc := range cases {
+		publisher := &Publisher{quorum: tc.quorum}
+		require.Equal(t, tc.want, publisher.requiredAcceptances(tc.configured), "quorum=%d configured=%d", tc.quorum, tc.configured)
+	}
 }
 
 func TestPublisherRunnerDiscoversPendingRowsPastABlockedPage(t *testing.T) {

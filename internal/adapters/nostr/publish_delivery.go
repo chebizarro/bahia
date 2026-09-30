@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -33,11 +34,11 @@ var deliveryUnscheduled = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 // discovery pass.
 const defaultOutboxPageSize = 100
 
-// ErrPublishIncomplete reports that an event has not (yet) been accepted by the
-// required relays. When the publisher has a runner or an outbox, relays that
-// have not accepted are still being retried; errors.As a *PublishIncompleteError
-// for the counts.
-var ErrPublishIncomplete = errors.New("nostr event not accepted by the required relays")
+// ErrPublishIncomplete reports that fewer relays than the caller-facing publish
+// quorum (nostr.publish_quorum, default 1) accepted an event. The event remains
+// queued and relays that have not accepted are still retried; errors.As a
+// *PublishIncompleteError for the counts.
+var ErrPublishIncomplete = errors.New("nostr event not accepted by the publish quorum")
 
 // PublishIncompleteError describes a publish that did not reach its required
 // relay acceptance.
@@ -119,6 +120,7 @@ type outboxDelivery struct {
 
 // deliveryReport is the outcome of one delivery round.
 type deliveryReport struct {
+	detail      string // relays that have not accepted, and why
 	results     []PublishResult
 	accepted    int
 	required    int
@@ -205,20 +207,29 @@ func (p *Publisher) dueDeliveries(now time.Time) (due []*outboxDelivery, next ti
 	return due, next
 }
 
-// requiredAcceptances is the relay acceptance count that makes an event
-// delivered: every configured write relay unless a smaller quorum is configured.
+// requiredAcceptances is the caller-facing publish quorum for the configured
+// write relay count: nostr.publish_quorum relays (0/unset means 1, -1 means
+// every relay), capped at the number of write relays. It decides whether a
+// publish call succeeds and whether a settled row is published or abandoned;
+// it never cuts delivery short, which always waits for every write relay to
+// accept or reach a terminal state.
 func (p *Publisher) requiredAcceptances(configured int) int {
-	if p.quorum > 0 && p.quorum < configured {
-		return p.quorum
+	required := p.quorum
+	switch {
+	case required == config.PublishQuorumAllRelays:
+		required = configured
+	case required <= 0:
+		required = config.PublishQuorumDefault
 	}
-	return configured
+	return min(required, configured)
 }
 
 // deliverRound runs one delivery round for d. The caller must hold d.mu. Only
 // relays that have neither accepted nor permanently rejected the event are
-// contacted. The outbox row stays pending until every relay has settled; it is
-// then marked published if the required acceptance was reached, otherwise
-// abandoned.
+// contacted. The round reports caller success once the publish quorum has
+// accepted. The outbox row stays pending until every write relay has accepted
+// or reached a terminal state (permanent rejection, attempt budget); it is then
+// marked published if the quorum was reached, otherwise abandoned.
 func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliveryReport {
 	eventID := d.event.ID.Hex()
 	configured := normalizeRelayURLs(p.relayURLs())
@@ -289,6 +300,7 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	}
 
 	report := deliveryReport{
+		detail:      detail,
 		results:     results,
 		accepted:    accepted,
 		required:    required,
@@ -356,7 +368,7 @@ func (p *Publisher) logRound(d *outboxDelivery, report deliveryReport, detail st
 	case report.settled && report.delivered && detail == "":
 		p.logger.Debug("nostr event delivered to every write relay", fields...)
 	case report.settled && report.delivered:
-		p.logger.Warn("nostr event delivered to quorum; remaining relays gave up", append(fields, zap.String("detail", detail))...)
+		p.logger.Warn("nostr event delivered to quorum; remaining relays gave up after retries", append(fields, zap.String("detail", detail))...)
 	case report.settled:
 		p.logger.Warn("nostr event abandoned; required relay acceptance not reached", append(fields, zap.String("detail", detail))...)
 	}

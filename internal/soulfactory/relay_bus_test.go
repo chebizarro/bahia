@@ -136,7 +136,7 @@ func newEOSEOnlyRelayBus(t *testing.T) *SoulFactoryRelayBus {
 	return bus
 }
 
-func TestRelayBusPublishRequiresEveryRelayByDefault(t *testing.T) {
+func TestRelayBusPublishDefaultQuorumSucceedsAndCollectsFailures(t *testing.T) {
 	accepted := newFakeRelayEndpoint("wss://accepted.example")
 	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
 	rejected := newFakeRelayEndpoint("wss://rejected.example")
@@ -147,14 +147,30 @@ func TestRelayBusPublishRequiresEveryRelayByDefault(t *testing.T) {
 	}
 
 	results, err := bus.PublishWithResults(t.Context(), nostr.Event{ID: soulTestID("event-1")})
-	if err == nil {
-		t.Fatal("PublishWithResults() error = nil, want failure: one relay OK is not delivery")
-	}
-	if !containsAll(err.Error(), "accepted by 1 of 2", "blocked: policy") {
-		t.Fatalf("PublishWithResults() error = %q, want per-relay failure detail", err.Error())
+	if err != nil {
+		t.Fatalf("PublishWithResults() error = %v, want default quorum of one relay to succeed", err)
 	}
 	if len(results) != 2 || !results[0].Accepted || results[1].Reason != "blocked: policy" {
 		t.Fatalf("PublishWithResults() results = %+v, want both relay outcomes", results)
+	}
+}
+
+func TestRelayBusPublishAllRelaysQuorumReportsFailures(t *testing.T) {
+	accepted := newFakeRelayEndpoint("wss://accepted.example")
+	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
+	rejected := newFakeRelayEndpoint("wss://rejected.example")
+	rejected.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: policy"}}
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, rejected}, WithRelayBusPublishQuorum(RelayBusPublishQuorumAll))
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+
+	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-all")})
+	if err == nil {
+		t.Fatal("Publish() error = nil, want failure below the all-relays quorum")
+	}
+	if count != 1 || !containsAll(err.Error(), "accepted by 1 of 2", "blocked: policy") {
+		t.Fatalf("Publish() = %d, %q; want count 1 and per-relay failure detail", count, err.Error())
 	}
 }
 
@@ -163,14 +179,14 @@ func TestRelayBusPublishQuorumAndDuplicateOK(t *testing.T) {
 	duplicate.publishResults = []RelayPublishResult{{Accepted: false, Reason: "duplicate: already have it"}}
 	down := newFakeRelayEndpoint("wss://down.example")
 	down.publishResults = []RelayPublishResult{{Error: errors.New("connection refused")}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{duplicate, down}, WithRelayBusPublishQuorum(1))
+	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{duplicate, down})
 	if err != nil {
 		t.Fatalf("new bus: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("quorum")})
 	if err != nil {
-		t.Fatalf("Publish() error = %v, want duplicate OK to satisfy quorum 1", err)
+		t.Fatalf("Publish() error = %v, want duplicate OK to satisfy the default quorum", err)
 	}
 	if count != 1 {
 		t.Fatalf("Publish() accepted count = %d, want 1", count)
