@@ -673,6 +673,11 @@ type NostrConfig struct {
 
 	AuthorizedPubkeys []string `koanf:"authorized_pubkeys" secret:"false"`
 	PublishEnabled    bool     `koanf:"publish_enabled" secret:"false"`
+	// PublishQuorum is the number of configured write relays that must accept
+	// (OK true or duplicate) an outbound event before the daemon treats it as
+	// delivered. 0 (the default) requires every configured write relay. Relays
+	// that have not accepted are still retried after the quorum is met.
+	PublishQuorum int `koanf:"publish_quorum" yaml:"publish_quorum" secret:"false"`
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
 	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
@@ -3369,6 +3374,9 @@ func validatePressureRatio(name string, value float64) error {
 func (c *Config) validateNostrRelayPolicy() error {
 	if c.Nostr.StaleRunAfter <= 0 {
 		return fmt.Errorf("config validation failed: nostr.stale_run_after must be > 0")
+	}
+	if c.Nostr.PublishQuorum < 0 {
+		return fmt.Errorf("config validation failed: nostr.publish_quorum must be >= 0 (0 requires every write relay)")
 	}
 	switch c.Nostr.RelayAuthUnavailablePolicy {
 	case RelayAuthUnavailableExcludeAndFail:

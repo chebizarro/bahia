@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,17 @@ func WithRelayBusBackoff(backoff relayBusBackoff) RelayBusOption {
 	}
 }
 
+// WithRelayBusPublishQuorum sets how many relays must accept (OK true or
+// duplicate) a published event for Publish to succeed. The default, 0, requires
+// every configured relay.
+func WithRelayBusPublishQuorum(quorum int) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) {
+		if quorum > 0 {
+			b.publishQuorum = quorum
+		}
+	}
+}
+
 func WithRelayBusEventValidator(validator func(*nostr.Event) bool) RelayBusOption {
 	return func(b *SoulFactoryRelayBus) {
 		if validator != nil {
@@ -98,6 +110,7 @@ type SoulFactoryRelayBus struct {
 	logger        *slog.Logger
 	backoff       relayBusBackoff
 	validateEvent func(*nostr.Event) bool
+	publishQuorum int
 }
 
 func NewSoulFactoryRelayBus(relays []string, opts ...RelayBusOption) (*SoulFactoryRelayBus, error) {
@@ -130,31 +143,50 @@ func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...R
 	return b, nil
 }
 
+// Publish sends ev to every relay and waits for each relay's OK. It returns the
+// number of relays that accepted (OK true or duplicate) and an error unless the
+// required acceptance was reached: every relay, or the WithRelayBusPublishQuorum
+// count. One relay's OK never cancels the publishes still in flight to others.
 func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int, error) {
-	if b == nil || len(b.endpoints) == 0 {
-		return 0, fmt.Errorf("soul factory relay bus is not configured")
-	}
-	publishCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	results, err := b.PublishWithResults(ctx, ev)
+	return countRelayBusAccepted(results), err
+}
 
-	results := make(chan RelayPublishResult, len(b.endpoints))
-	for _, endpoint := range b.endpoints {
-		endpoint := endpoint
+// PublishWithResults sends ev to every relay concurrently and returns every
+// relay's outcome, in endpoint order, once all relays have answered (or failed).
+func (b *SoulFactoryRelayBus) PublishWithResults(ctx context.Context, ev nostr.Event) ([]RelayPublishResult, error) {
+	if b == nil || len(b.endpoints) == 0 {
+		return nil, fmt.Errorf("soul factory relay bus is not configured")
+	}
+
+	results := make([]RelayPublishResult, len(b.endpoints))
+	var wg sync.WaitGroup
+	for i, endpoint := range b.endpoints {
+		wg.Add(1)
 		go func() {
-			result := endpoint.Publish(publishCtx, ev)
+			defer wg.Done()
+			result := endpoint.Publish(ctx, ev)
 			if result.RelayURL == "" {
 				result.RelayURL = endpoint.URL()
 			}
-			results <- result
+			results[i] = result
 		}()
+	}
+	wg.Wait()
+
+	accepted := countRelayBusAccepted(results)
+	required := len(b.endpoints)
+	if b.publishQuorum > 0 && b.publishQuorum < required {
+		required = b.publishQuorum
+	}
+	if accepted >= required {
+		return results, nil
 	}
 
 	var failures []string
-	for range b.endpoints {
-		result := <-results
-		if result.Accepted {
-			cancel()
-			return 1, nil
+	for _, result := range results {
+		if relayBusAccepted(result) {
+			continue
 		}
 		if result.Error != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
@@ -166,10 +198,25 @@ func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int,
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", result.RelayURL, reason))
 	}
-	if len(failures) == 0 {
-		return 0, fmt.Errorf("event was not accepted by any relay")
+	if accepted == 0 {
+		return results, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
 	}
-	return 0, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
+	return results, fmt.Errorf("event accepted by %d of %d required relays: %s", accepted, required, strings.Join(failures, "; "))
+}
+
+// relayBusAccepted treats a duplicate OK as acceptance: the relay has the event.
+func relayBusAccepted(result RelayPublishResult) bool {
+	return result.Accepted || (result.Error == nil && strings.HasPrefix(strings.TrimSpace(result.Reason), "duplicate:"))
+}
+
+func countRelayBusAccepted(results []RelayPublishResult) int {
+	accepted := 0
+	for _, result := range results {
+		if relayBusAccepted(result) {
+			accepted++
+		}
+	}
+	return accepted
 }
 
 // Authenticate establishes each relay connection and completes NIP-42 before
@@ -545,7 +592,9 @@ func (e *goNostrRelayEndpoint) Subscribe(ctx context.Context, filters []nostr.Fi
 	ctx, cancel := context.WithCancel(ctx)
 	subs := make([]*nostr.Subscription, 0, len(filters))
 	for _, filter := range filters {
-		sub, err := relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{})
+		// Completion is the relay's real EOSE: math.MaxInt64 disables the
+		// library's synthetic 7-second EOSE timer.
+		sub, err := relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{MaxWaitForEOSE: time.Duration(math.MaxInt64)})
 		if err != nil {
 			cancel()
 			for _, existing := range subs {
