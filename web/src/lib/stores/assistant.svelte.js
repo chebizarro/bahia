@@ -27,6 +27,7 @@ import {
   ASSISTANT_EXECUTION_TERMINAL_PHASES as TERMINAL_PHASES,
   ASSISTANT_EXECUTION_CANCELLABLE_PHASES as CANCELLABLE_PHASES
 } from '../nostr/client.js';
+import { ASSISTANT_STATUS_TOPIC } from '../nostr/kinds.gen.js';
 
 const { STALE, INVALID, REJECTED } = ASSISTANT_REQUEST_ERROR_KINDS;
 
@@ -589,7 +590,9 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   const since = nowSeconds() - RECENT_TRANSCRIPT_SECONDS;
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1', 'bahia.assistant-session.v2'], limit: SESSION_LIMIT },
-    { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since, limit: TRANSCRIPT_LIMIT },
+    // Assistant status (30315) carries t=assistant-status; the parser checks
+    // the schema locally (bahia-irsry.37).
+    { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#t': [ASSISTANT_STATUS_TOPIC], since, limit: TRANSCRIPT_LIMIT },
     // Only single-letter tags are relay-indexed (audit A-27): the service's
     // 30316 events addressed to this operator are the transcript; the parser
     // checks the schema locally.

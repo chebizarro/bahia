@@ -927,16 +927,41 @@ var workerCPStateDecoders = map[string]DecodeFunc{
 
 // decodeCPStateProjection routes canonical 30900 cp-state records whose family
 // has a daemon read model to that family's decoder; every other 30900 record
-// keeps the fallback (state_snapshot no-op) decoder.
+// keeps the fallback (state_snapshot no-op) decoder. A worker record that is
+// not on its family's coordinate is skipped (nil, nil): before bahia-irsry.36
+// the projector published assignment and drain on the same bare-pubkey d, so a
+// relay kept only whichever family was published last, and that survivor is
+// neither family's current state. The projector republishes both families on
+// their own coordinates at startup.
 func decodeCPStateProjection(fallback DecodeFunc) DecodeFunc {
 	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		if ev != nil && tagValueLocal(ev.Tags, kinds.CASControlStateTagSchema) == kinds.CASControlStateSchema {
-			if decode, ok := workerCPStateDecoders[tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind)]; ok {
+			legacyKind := tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind)
+			if decode, ok := workerCPStateDecoders[legacyKind]; ok {
+				if _, onCoordinate := workerRecordID(ev); !onCoordinate {
+					return nil, nil
+				}
 				return decode(ev)
 			}
 		}
 		return fallback(ev)
 	}
+}
+
+// workerRecordID returns the record id a worker cp-state record's d carries
+// after its family's prefix (kinds.CPStateFamily WorkerDTag), and false when
+// the record is not on its family's coordinate.
+func workerRecordID(ev *gonostr.Event) (string, bool) {
+	legacyKind, err := strconv.Atoi(tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind))
+	if err != nil {
+		return "", false
+	}
+	prefix, ok := kinds.CPStateFamily(legacyKind).WorkerDPrefix()
+	if !ok {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(tagValueLocal(ev.Tags, "d"), prefix)
+	return id, ok && id != ""
 }
 
 // cpStateDeleted reports whether a cp-state record is a tombstone: the deleted
@@ -957,7 +982,8 @@ func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &worker); err != nil {
 		return nil, err
 	}
-	worker.PubKey = firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"))
+	recordID, _ := workerRecordID(ev)
+	worker.PubKey = firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), recordID)
 	if worker.PubKey == "" {
 		return nil, fmt.Errorf("worker state record %s names no worker", eventIDHex(ev))
 	}
@@ -971,7 +997,8 @@ func decodeWorkerAssignmentProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if err := decodeContent(ev, &state); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerAssignment, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerAssignment, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker"), recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{AssignmentState: &state}
 	}), nil
 }
@@ -981,7 +1008,8 @@ func decodeWorkerDrainProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err := decodeContent(ev, &status); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerDrain, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerDrain, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker"), recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{DrainStatus: &status}
 	}), nil
 }
@@ -991,7 +1019,8 @@ func decodeWorkerEligibilityProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err := decodeContent(ev, &preview); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerEligibility, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerEligibility, firstNonBlank(preview.PreviewID, recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{EligibilityPreview: &preview}
 	}), nil
 }

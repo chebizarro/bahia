@@ -220,6 +220,31 @@ Use canonical state.
 - Strongly recommended tags: `entity`, `status`, resource tags.
 - The projector's cp-state envelope stamps `t=<domain>-<entity>` on every live record and tombstone, for example `service-registry`, `deployment-run`, `backup-run` or `dns-zone` (`internal/kinds/tags.go` `CPStateTopic*` and `DNS*Topic`; `CP_STATE_TOPICS` in `kinds.gen.js`). NIP-01 relays index only single-letter tags, so consumers scope 30900 REQs with `#t`, never `#domain` or `#schema`. The web control-plane read model subscribes to `{kinds:[30900], authors:[service], "#t":[...]}` for exactly the families it routes. Other producers of a routed family (for example the package handlers and the worker-state publisher) must stamp the same topic.
 - Content must be a complete current-state snapshot, not a patch.
+- Two families published by one author must never share a `d`. A relay keeps one event per `(kind, pubkey, d)`, so families that share a coordinate replace each other.
+
+#### Worker cp-state coordinates
+
+Worker read models are `30900` cp-state records in `domain=worker` whose family is the `legacy_kind` discriminator (`kinds.CPStateFamilyWorker*`, `32000`-`32004`, never wire kinds). Every worker family addresses its records under its own prefix, built only by the canonical worker d builder (`kinds.CPStateFamily.WorkerDTag`; the projector's `canonicalStateDTag` and the control plane's worker publishers both call it):
+
+| Family | `legacy_kind` | `t` | `d` |
+|---|---|---|---|
+| Worker state | `32000` | `worker-state` | `worker:state:<worker pubkey>` |
+| Assignment | `32001` | `worker-assignment` | `worker:assignment:<worker pubkey>` |
+| Drain | `32002` | `worker-drain` | `worker:drain:<worker pubkey>` |
+| Eligibility preview | `32003` | `worker-eligibility` | `worker:eligibility:<preview id>` |
+| Cleanup execution | `32004` | `worker-cleanup` | `worker:cleanup:<worker pubkey>:<loom job or start time>` |
+
+A tombstone uses the same coordinate as its live record. The web mirrors the prefixes as `WORKER_*_D_PREFIX` in `kinds.gen.js`, and a drift test keeps them equal. Consumers read a record's id (the worker pubkey or preview id) from the coordinate when the content and `worker` tag omit it, never from the raw `d`.
+
+Before `bahia-irsry.36`, the projector published assignment and drain with a bare `d=<worker pubkey>` under the same author, so on a relay each replaced the other. **Old records on that shared coordinate are ignored, not re-keyed.** The daemon catalog skips a worker record that is not on its family's coordinate. The web applies assignment and drain records only from their family coordinates.
+
+- At most one of the two families survived on each relay, and which one is arbitrary, so the survivor is not trustworthy current state for either family.
+- The projector republishes every assignment and drain snapshot from the repository on its own coordinate at startup.
+- Re-keying in `internal/nostrmigration` would copy a stale record onto the new coordinate and compete with the fresh snapshot. It would also turn a canonical-to-canonical rewrite into migration work, and migration exists for legacy kinds.
+
+The orphaned records stay on relays (addressable events are never swept) until an operator deletes them.
+
+**Workers are never removed, so nothing publishes worker tombstones.** Bahia has no worker removal flow: `WorkerRepository` has no delete and no `worker/*` ContextVM method retires a worker. `offline` is not a removal. Readers derive it from the age of the last advertisement (`domain.Worker`), and the worker comes back online when it advertises again. A tombstone makes consumers drop the worker (the web deletes it and the daemon cache marks it offline), which would be wrong for a worker that returns. If a decommission flow is added, it must publish tombstones on every coordinate of the worker (state, assignment and drain) through the same builder. The consumer paths for such tombstones already exist and are tested.
 
 Use NIP-78 kind `30078` instead when the object is app-specific data, user/application settings, local UI state, or a registry whose semantics are not a fleet-wide control-plane projection.
 
@@ -262,7 +287,9 @@ v1 applied events cannot be reconstructed from accepted status: no migration
 may invent activation evidence.
 
 
-Relay settings operator policy uses canonical state kind `30900` with `d=relay-settings:operator`, `domain=relay-settings`, and `schema=bahia.relay-settings.v1`. The state records the current service-authored browser, ContextVM, service, DM, NIP-66 monitor, and NIP-86 managed-target policy after a `settings/relay-policy.apply` ContextVM intent is accepted.
+Relay settings operator policy uses canonical state kind `30900` with `d=relay-settings:operator`, `domain=relay-settings`, `schema=bahia.relay-settings.v1` and `t=relay-settings` (`kinds.RelaySettingsTopic`). The state records the current service-authored browser, ContextVM, service, DM, NIP-66 monitor, and NIP-86 managed-target policy after a `settings/relay-policy.apply` ContextVM intent is accepted.
+
+Readers (the daemon hydrator and the web settings store) REQ the policy with `{kinds:[30900], authors:[service], "#d":["relay-settings:operator"]}` and check `domain` and `schema` locally. They never send `#domain` or `#schema`. The policy is one exact addressable coordinate, so `#d` is the narrowest indexed filter. Adding `#t` would AND with it and miss a policy retained from before the topic was stamped.
 
 ### 4. Is this an immutable audit fact or attestation?
 
@@ -273,7 +300,7 @@ Use Bahia audit.
 - Include `e` for source/correlation when possible.
 - Include `p` for responsible or requesting actors where appropriate.
 - Include resource tags such as `service`, `environment`, `artifact`, `worker`, `package`, `dns_zone`, or `run`.
-- Never add `d`. 4903 is a regular kind, and every audit is its own fact. The retired addressable audit kinds `31000`-`31099` were published with `d=<entity>`, so each audit of an entity replaced the previous one (audit C-16).
+- Never add `d`. 4903 is a regular kind, and every audit is its own fact. The retired addressable audit kinds `31000`-`31099` were published with `d=<entity>`, so each audit of an entity replaced the previous one (audit C-16). Their constants are deleted from `internal/kinds`, the publisher aliases and `kinds.gen.js` (`bahia-irsry.37`). Only `internal/nostrmigration` still names the range, to migrate old audit events onto 4903.
 - Correlate a fact with tags instead: `state=<d of the audited entity's cp-state record>`, a single-letter topic (`t=cp-audit` for projector facts, plus `t=<event type>`), and `e=<source event id>` when the fact has a Nostr source.
 - Make publication idempotent per source fact. Projector facts carry `fact=<sha256(type, entity, canonical content)>`. The projector signs each fact id once and remembers ids hydrated from retained 4903 records across restarts, so a republished bus event does not create a duplicate fact. Consumers may also drop a second event with a `fact` they have already seen.
 - Audit events should be treated as protected and long-retention. They are not normal delete targets. The sidecar keeps regular events durably by default; an operator-set `event_retention` cap bounds that, so compliance evidence needs the cap left unset or archival storage.
@@ -516,7 +543,13 @@ Assistant transcript messages stay on addressable `30316`. A retried publish mus
 - `d=bahia.assistant-transcript.v1:<session>:msg:<logical id>` when the message has a logical id (every production append does), or
 - `d=bahia.assistant-transcript.v1:<session>:seq:<20-digit sequence>` otherwise.
 
-The logical id is preferred to the sequence. `AppendMessageOnce` derives the sequence from a replay, so a retry can compute a different sequence, and two concurrent appends can compute the same sequence for different messages. Never mint a random `d`. Readers keep the NIP-01 winner per coordinate (newest `created_at`, then lowest id) and then one record per logical id. REQs use `authors`, `#p` and the kind only; the schema is checked locally.
+The logical id is preferred to the sequence. `AppendMessageOnce` derives the sequence from a replay, so a retry can compute a different sequence, and two concurrent appends can compute the same sequence for different messages. Never mint a random `d`. Readers keep the NIP-01 winner per coordinate (newest `created_at`, then lowest id) and then one record per logical id.
+
+Every message carries two single-letter topics: `t=assistant-transcript` (`kinds.AssistantTranscriptTopic`) and `t=assistant-transcript:<session>` (`kinds.AssistantTranscriptSessionTopic`). The browser REQs its transcript with `authors`, `#p` (the operator) and the kind. The daemon's session replay (`AssistantTranscriptStore.Replay`) REQs `{kinds:[30316], authors:[service], "#t":["assistant-transcript:<session>"]}`. Schema, domain, session, turn and role are checked locally after decryption and are never sent as multi-letter tag filters, because relays index only single-letter tags.
+
+Messages published before the topic was stamped (before `bahia-irsry.37`) do not match the daemon's replay REQ, so a session that predates it rebuilds model history only from messages appended since. The browser's `#p` REQ still shows them.
+
+Assistant status (`30315`, `schema=bahia.assistant-status.v1`) carries `t=assistant-status` (`kinds.AssistantStatusTopic`). The browser REQs it with `{kinds:[30315], authors:[service], "#t":["assistant-status"], since}` and checks the schema locally.
 
 ### ContextVM discovery
 
@@ -647,7 +680,7 @@ Implementation rules:
 
 1. Legacy subscriptions, decoders, and transforms belong in `internal/nostrmigration` or tests for that module.
 2. The migration must be idempotent. Re-running startup must not duplicate canonical events.
-3. Migrated events must publish canonical `kind` values and may include metadata tags such as `legacy_kind`, `migrated-from`, `migration`, and `schema`.
+3. Migrated events must publish canonical `kind` values and may include metadata tags such as `legacy_kind`, `migrated-from`, `migration`, and `schema`. Migrated worker read models (retired `32000`-`32003` and the `Legacy*Worker*` aliases) land on their family's canonical coordinate (`worker:<entity>:<id>`, see "Worker cp-state coordinates"). They compete with the live record under NIP-01 replacement instead of sitting on a per-event `worker:migrated:<id>` coordinate. A record that names no worker keeps the per-event coordinate.
 4. Runtime publishers and subscribers should not include legacy kind support just to ease rollout.
 5. The relay sidecar accepts every valid Nostr event kind. Canonical-versus-legacy distinctions are application semantics enforced by Bahia consumers, never relay admission policy.
 6. If a new migration transform is added, update `docs/control-planes.md`, `docs/event-spec.md`, `docs/nostr-commands.md`, `docs/protocol-compatibility.md`, and the PSTF verification evidence for the migration feature.

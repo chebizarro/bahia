@@ -52,6 +52,28 @@ const (
 	WorkerCleanupTopic     = "worker-cleanup"
 )
 
+// Assistant and relay-settings topics (bahia-irsry.37). NIP-01 relays index
+// single-letter tags only, so these records carry a "t" topic and REQs scope on
+// #t (or on an exact #d coordinate) rather than #schema, #domain or #session.
+const (
+	// AssistantTranscriptTopic is on every 30316 transcript message.
+	AssistantTranscriptTopic = "assistant-transcript"
+	// AssistantTranscriptSessionTopicPrefix prefixes the per-session topic
+	// every transcript message also carries (AssistantTranscriptSessionTopic),
+	// so a session replay is an indexed REQ.
+	AssistantTranscriptSessionTopicPrefix = "assistant-transcript:"
+	// AssistantStatusTopic is on every 30315 assistant status.
+	AssistantStatusTopic = "assistant-status"
+	// RelaySettingsTopic is on the relay-settings operator policy (30900).
+	RelaySettingsTopic = "relay-settings"
+)
+
+// AssistantTranscriptSessionTopic is the "t" topic scoping one session's
+// transcript messages.
+func AssistantTranscriptSessionTopic(sessionID string) string {
+	return AssistantTranscriptSessionTopicPrefix + sessionID
+}
+
 // CPStateTopic* are the single-letter "t" topics the projector's
 // controlStateEnvelope stamps on every canonical cp-state record (bahia-irsry.9.3,
 // audit A-27). The value is "<domain>-<entity>" of the record family, the same

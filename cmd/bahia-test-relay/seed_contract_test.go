@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,7 +90,17 @@ func TestSeedControlStateMatchesProducerEnvelope(t *testing.T) {
 			}
 			continue
 		}
-		wireKind, envelope := nostradapter.ControlStateEnvelope(legacyKind, firstTag(ev, "d"), false)
+		recordID := firstTag(ev, "d")
+		if prefix, worker := kinds.CPStateFamily(legacyKind).WorkerDPrefix(); worker {
+			// Worker families sit on their own coordinate (bahia-irsry.36);
+			// the envelope builder takes the record id and adds the prefix.
+			id, onCoordinate := strings.CutPrefix(recordID, prefix)
+			if !onCoordinate {
+				t.Errorf("worker legacy_kind %d seed d=%q is not on its family coordinate %q", legacyKind, recordID, prefix)
+			}
+			recordID = id
+		}
+		wireKind, envelope := nostradapter.ControlStateEnvelope(legacyKind, recordID, false)
 		if wireKind != int(ev.Kind) {
 			t.Errorf("legacy_kind %d: wire kind %d, projector uses %d", legacyKind, ev.Kind, wireKind)
 		}
@@ -252,5 +263,60 @@ func TestSeedProjectedRecordsDecodeThroughCatalog(t *testing.T) {
 	}
 	if !decodedWorker {
 		t.Fatal("worker state seed was not decoded")
+	}
+}
+
+// TestSeedWorkerFamiliesCoexistOnRelay pins bahia-irsry.36 for the seed
+// corpus: no two seeded cp-state (30900) records share a (kind, pubkey, d)
+// coordinate, so a relay that keeps the latest event per coordinate serves
+// every worker family the corpus seeds.
+func TestSeedWorkerFamiliesCoexistOnRelay(t *testing.T) {
+	type coordinate struct {
+		kind   nostr.Kind
+		pubkey nostr.PubKey
+		d      string
+	}
+	seen := map[coordinate]string{}
+	workerFamilies := map[string]bool{}
+	for _, ev := range seedEvents(t) {
+		if int(ev.Kind) != kinds.CASControlState {
+			continue
+		}
+		c := coordinate{ev.Kind, ev.PubKey, firstTag(ev, "d")}
+		legacyKind := firstTag(ev, kinds.CASControlStateTagLegacyKind)
+		if previous, dup := seen[c]; dup {
+			t.Errorf("seeds legacy_kind %s and %s share coordinate %d:%s:%q; a relay keeps only one", previous, legacyKind, c.kind, c.pubkey.Hex(), c.d)
+		}
+		seen[c] = legacyKind
+		if firstTag(ev, kinds.CASControlStateTagDomain) == kinds.WorkerDomain {
+			workerFamilies[legacyKind] = true
+		}
+	}
+	for _, family := range []kinds.CPStateFamily{kinds.CPStateFamilyWorkerState, kinds.CPStateFamilyWorkerAssignment, kinds.CPStateFamilyWorkerDrain, kinds.CPStateFamilyWorkerEligibility, kinds.CPStateFamilyWorkerCleanup} {
+		if !workerFamilies[family.TagValue()] {
+			t.Errorf("seed corpus serves no worker record for legacy_kind %s", family.TagValue())
+		}
+	}
+}
+
+// TestSeedAssistantStatusMatchesTopicFilter runs the web assistant store's
+// status REQ shape (bahia-irsry.37): author, kind 30315 and #t only.
+func TestSeedAssistantStatusMatchesTopicFilter(t *testing.T) {
+	filter := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.NIP38Status)},
+		Authors: []nostr.PubKey{seedServicePubkey()},
+		Tags:    nostr.TagMap{"t": {kinds.AssistantStatusTopic}},
+	}
+	matched := 0
+	for _, ev := range seedEvents(t) {
+		if filter.Matches(ev) {
+			if firstTag(ev, "schema") != "bahia.assistant-status.v1" {
+				t.Errorf("#t=%s matched a non-assistant status: %v", kinds.AssistantStatusTopic, ev.Tags)
+			}
+			matched++
+		}
+	}
+	if matched == 0 {
+		t.Fatalf("no seeded assistant status matches the #t=%s REQ", kinds.AssistantStatusTopic)
 	}
 }

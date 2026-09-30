@@ -279,42 +279,6 @@ const (
 )
 
 // =============================================================================
-// Audit Event Kinds (31000-31099)
-// =============================================================================
-
-const (
-	BuildRegistered              = 31000
-	ArtifactRegistered           = 31001
-	DeploymentCreated            = 31002
-	DeploymentComplete           = 31003
-	DriftDetected                = 31004
-	Observation                  = 31005
-	ServiceRegistryAudit         = 31006
-	EnvironmentRegistryAudit     = 31007
-	StateChangedAudit            = 31008
-	RuntimeActionAudit           = 31009
-	ReconcileAudit               = 31010
-	AdoptionAudit                = 31011
-	DeploymentApprovalAudit      = 31012
-	DeploymentRunAudit           = 31013
-	LLMRouteRegistryAudit        = 31014
-	LLMReleaseRegisteredAudit    = 31015
-	LLMDeploymentAudit           = 31016
-	LLMRunAudit                  = 31017
-	LLMRouteStateAudit           = 31018
-	LLMGatewayAudit              = 31019
-	DNSZoneSyncedAudit           = 31020
-	DNSRecordChangedAudit        = 31021
-	DNSDriftDetectedAudit        = 31022
-	DNSEndpointRegisteredAudit   = 31023
-	DNSEndpointDeregisteredAudit = 31024
-
-	// Audit kind range bounds
-	AuditMin = 31000
-	AuditMax = 31099
-)
-
-// =============================================================================
 // Deprecated Legacy Command Kinds (31100-31105)
 // =============================================================================
 

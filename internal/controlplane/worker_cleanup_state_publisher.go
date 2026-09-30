@@ -85,16 +85,19 @@ func (p *WorkerCleanupStatePublisher) Publish(ctx context.Context, cleanup event
 	return nil
 }
 
+// workerCleanupStateID is the cleanup record's coordinate, built by the
+// canonical worker d builder: "worker:cleanup:<pubkey>:<loom job or start>".
 func workerCleanupStateID(cleanup events.WorkerCleanupEvent) string {
 	workerPubKey := strings.TrimSpace(cleanup.WorkerPubKey)
-	if cleanup.LoomJobID != "" {
-		return "worker:cleanup:" + workerPubKey + ":" + cleanup.LoomJobID
+	run := cleanup.LoomJobID
+	if run == "" {
+		run = cleanup.StartedAt.UTC().Format(time.RFC3339Nano)
+		if run == "0001-01-01T00:00:00Z" {
+			run = cleanup.Status
+		}
 	}
-	startedAt := cleanup.StartedAt.UTC().Format(time.RFC3339Nano)
-	if startedAt == "0001-01-01T00:00:00Z" {
-		startedAt = cleanup.Status
-	}
-	return "worker:cleanup:" + workerPubKey + ":" + startedAt
+	d, _ := kinds.CPStateFamilyWorkerCleanup.WorkerDTag(workerPubKey + ":" + run)
+	return d
 }
 
 func workerCleanupStateContent(id string, cleanup events.WorkerCleanupEvent) map[string]any {

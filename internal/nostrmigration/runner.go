@@ -354,6 +354,13 @@ func BuildCanonicalEvent(rec repository.NostrEventRecord, disp Disposition) (*go
 		return nil, fmt.Errorf("marshal migration payload for %s: %w", rec.ID, err)
 	}
 	tags := disp.Tags(rec.ID)
+	if workerD, ok := disp.workerDTag(translatedObject(translated), rec.Tags); ok {
+		for i, tag := range tags {
+			if len(tag) >= 2 && tag[0] == "d" {
+				tags[i] = []string{"d", workerD}
+			}
+		}
+	}
 	if len(rec.Tags) > 0 {
 		var legacyTags [][]string
 		if err := json.Unmarshal(rec.Tags, &legacyTags); err == nil {

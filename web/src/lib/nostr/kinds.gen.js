@@ -162,33 +162,6 @@ export const SBOM_INDEX = 30079;
 export const BAHIA_READINESS_STATUS = 30360;
 export const BAHIA_IDENTITY_DEFINITION = 31410;
 export const BAHIA_REPLAY_CHECKPOINT = 31411;
-export const BUILD_REGISTERED = 31000;
-export const ARTIFACT_REGISTERED = 31001;
-export const DEPLOYMENT_CREATED = 31002;
-export const DEPLOYMENT_COMPLETE = 31003;
-export const DRIFT_DETECTED = 31004;
-export const OBSERVATION = 31005;
-export const SERVICE_REGISTRY_AUDIT = 31006;
-export const ENVIRONMENT_REGISTRY_AUDIT = 31007;
-export const STATE_CHANGED_AUDIT = 31008;
-export const RUNTIME_ACTION_AUDIT = 31009;
-export const RECONCILE_AUDIT = 31010;
-export const ADOPTION_AUDIT = 31011;
-export const DEPLOYMENT_APPROVAL_AUDIT = 31012;
-export const DEPLOYMENT_RUN_AUDIT = 31013;
-export const LLM_ROUTE_REGISTRY_AUDIT = 31014;
-export const LLM_RELEASE_REGISTERED_AUDIT = 31015;
-export const LLM_DEPLOYMENT_AUDIT = 31016;
-export const LLM_RUN_AUDIT = 31017;
-export const LLM_ROUTE_STATE_AUDIT = 31018;
-export const LLM_GATEWAY_AUDIT = 31019;
-export const DNS_ZONE_SYNCED_AUDIT = 31020;
-export const DNS_RECORD_CHANGED_AUDIT = 31021;
-export const DNS_DRIFT_DETECTED_AUDIT = 31022;
-export const DNS_ENDPOINT_REGISTERED_AUDIT = 31023;
-export const DNS_ENDPOINT_DEREGISTERED_AUDIT = 31024;
-export const AUDIT_MIN = 31000;
-export const AUDIT_MAX = 31099;
 export const CMD_BUILD_REGISTER = 31100;
 export const CMD_ARTIFACT_REGISTER = 31101;
 export const CMD_INTENT_CREATE = 31102;
@@ -402,6 +375,20 @@ export const WORKER_DRAIN_STATUS_TOPIC = 'worker-drain';
 export const WORKER_ELIGIBILITY_PREVIEW_TOPIC = 'worker-eligibility';
 export const WORKER_CLEANUP_EXECUTION_TOPIC = 'worker-cleanup';
 export const WORKER_STATE_TOPICS = Object.freeze([WORKER_STATE_TOPIC, WORKER_ASSIGNMENT_STATE_TOPIC, WORKER_DRAIN_STATUS_TOPIC, WORKER_ELIGIBILITY_PREVIEW_TOPIC, WORKER_CLEANUP_EXECUTION_TOPIC]);
+// Worker cp-state coordinates (internal/kinds Worker*DPrefix, bahia-irsry.36).
+// Each family addresses its records under its own d prefix, so assignment and
+// drain for one worker never share an addressable (kind, pubkey, d) coordinate.
+export const WORKER_STATE_D_PREFIX = 'worker:state:';
+export const WORKER_ASSIGNMENT_STATE_D_PREFIX = 'worker:assignment:';
+export const WORKER_DRAIN_STATUS_D_PREFIX = 'worker:drain:';
+export const WORKER_ELIGIBILITY_PREVIEW_D_PREFIX = 'worker:eligibility:';
+export const WORKER_CLEANUP_EXECUTION_D_PREFIX = 'worker:cleanup:';
+// Assistant and relay-settings single-letter t topics (internal/kinds
+// Assistant*Topic, RelaySettingsTopic; bahia-irsry.37).
+export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
+export const ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX = 'assistant-transcript:';
+export const ASSISTANT_STATUS_TOPIC = 'assistant-status';
+export const RELAY_SETTINGS_TOPIC = 'relay-settings';
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,
   [DNS_ENDPOINT_STATE]: DNS_STATE_SCHEMAS.ENDPOINT,

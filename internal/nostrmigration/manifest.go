@@ -41,6 +41,16 @@ const (
 	retiredWorkerEligibilityPreviewKind = 32003
 )
 
+// Retired addressable audit kinds (bahia-irsry.37). Audits are regular 4903
+// facts; older producers published one addressable kind per audit type in
+// 31000-31024 (31000-31099 reserved), with d=<entity>, so each audit replaced
+// the previous one. The kinds are decoded here, and nowhere else, so old audit
+// events still migrate onto 4903.
+const (
+	retiredAuditFirstKind = 31000
+	retiredAuditLastKind  = 31024
+)
+
 type EventLayer string
 
 const (
@@ -66,6 +76,11 @@ type Disposition struct {
 	// Topic is the single-letter t tag canonical consumers REQ on; set for
 	// families whose readers filter on #t (worker state).
 	Topic string
+	// WorkerFamily is set for worker read models. Their migrated record is
+	// addressed on the family's canonical coordinate (kinds.CPStateFamily
+	// WorkerDTag) rather than a per-legacy-event d, so it competes with the
+	// live record under NIP-01 replacement and never shadows current state.
+	WorkerFamily kinds.CPStateFamily
 }
 
 func (d Disposition) DTag(legacyEventID string) string {
@@ -77,6 +92,43 @@ func (d Disposition) DTag(legacyEventID string) string {
 		prefix = "event"
 	}
 	return fmt.Sprintf("%s:migrated:%s", prefix, legacyEventID)
+}
+
+// workerDTag returns the canonical family coordinate for a migrated worker
+// record: the family's d prefix plus the record id (the preview id for
+// eligibility, otherwise the worker pubkey) read from the legacy content or
+// its worker tag. It returns false for non-worker dispositions and for records
+// that name no id, which keep the per-legacy-event d.
+func (d Disposition) workerDTag(content map[string]any, legacyTagsJSON []byte) (string, bool) {
+	if d.WorkerFamily == 0 {
+		return "", false
+	}
+	fields := []string{"worker_pubkey", "pubkey"}
+	if d.WorkerFamily == kinds.CPStateFamilyWorkerEligibility {
+		fields = []string{"preview_id"}
+	}
+	id := ""
+	for _, field := range fields {
+		if value, ok := content[field].(string); ok && strings.TrimSpace(value) != "" {
+			id = strings.TrimSpace(value)
+			break
+		}
+	}
+	if id == "" && d.WorkerFamily != kinds.CPStateFamilyWorkerEligibility {
+		var legacyTags [][]string
+		if json.Unmarshal(legacyTagsJSON, &legacyTags) == nil {
+			for _, tag := range legacyTags {
+				if len(tag) >= 2 && tag[0] == "worker" && strings.TrimSpace(tag[1]) != "" {
+					id = strings.TrimSpace(tag[1])
+					break
+				}
+			}
+		}
+	}
+	if id == "" {
+		return "", false
+	}
+	return d.WorkerFamily.WorkerDTag(id)
 }
 
 func (d Disposition) Tags(legacyEventID string) [][]string {
@@ -249,8 +301,6 @@ var constantJustifications = map[string]KindJustification{
 	"NostrSignature":                 omitted("NostrSignature", kinds.NostrSignature, "custom-support", "signature support event is not part of the legacy control-plane/read-model migration inventory"),
 	"FIPSOverlayAdvert":              omitted("FIPSOverlayAdvert", kinds.FIPSOverlayAdvert, "custom-interop", "FIPS overlay advertisement is handled by the FIPS overlay path, not the Bahia legacy migration"),
 	"HTTPAuth":                       omitted("HTTPAuth", kinds.HTTPAuth, "standard", "standard NIP-98 HTTP auth event; never a Bahia legacy migration input"),
-	"AuditMin":                       omitted("AuditMin", kinds.AuditMin, "range-bound", "audit range lower-bound sentinel; BuildRegistered is the emitted event kind at this numeric value"),
-	"AuditMax":                       omitted("AuditMax", kinds.AuditMax, "range-bound", "audit range sentinel, not an emitted event constant"),
 	"LegacyWorkerState":              omitted("LegacyWorkerState", kinds.LegacyWorkerState, "conflicting-alias", "shares 31974 with SystemDiscovery; ResolveDisposition maps worker-tagged/worker-shaped events to worker state"),
 	"LegacyWorkerAssignmentState":    omitted("LegacyWorkerAssignmentState", kinds.LegacyWorkerAssignmentState, "conflicting-alias", "shares 31991 with BackupDefinitionRegistry; ResolveDisposition maps worker assignment events to worker state"),
 	"LegacyWorkerDrainStatus":        omitted("LegacyWorkerDrainStatus", kinds.LegacyWorkerDrainStatus, "conflicting-alias", "shares 31992 with BackupPolicyRegistry; ResolveDisposition maps worker drain events to worker state"),
@@ -262,20 +312,20 @@ func omitted(name string, kind int, category, reason string) KindJustification {
 }
 
 func legacyWorkerAliasDisposition(kind int) (Disposition, bool) {
-	schema, topic := "", ""
+	schema, topic, family := "", "", kinds.CPStateFamily(0)
 	switch kind {
 	case kinds.LegacyWorkerState:
-		schema, topic = "bahia.state.worker.v1", kinds.WorkerStateTopic
+		schema, topic, family = "bahia.state.worker.v1", kinds.WorkerStateTopic, kinds.CPStateFamilyWorkerState
 	case kinds.LegacyWorkerAssignmentState:
-		schema, topic = "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic
+		schema, topic, family = "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic, kinds.CPStateFamilyWorkerAssignment
 	case kinds.LegacyWorkerDrainStatus:
-		schema, topic = "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic
+		schema, topic, family = "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic, kinds.CPStateFamilyWorkerDrain
 	case kinds.LegacyWorkerEligibilityPreview:
-		schema, topic = "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic
+		schema, topic, family = "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic, kinds.CPStateFamilyWorkerEligibility
 	default:
 		return Disposition{}, false
 	}
-	return Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: kinds.WorkerDomain, Operation: "state", Schema: schema, DTagPrefix: "worker", Topic: topic}, true
+	return Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: kinds.WorkerDomain, Operation: "state", Schema: schema, DTagPrefix: "worker", Topic: topic, WorkerFamily: family}, true
 }
 
 func hasLegacyWorkerEvidence(kind int, tagsJSON []byte, content string) bool {
@@ -396,10 +446,12 @@ func buildManifest() map[int]Disposition {
 	for _, item := range []struct {
 		kind          int
 		schema, topic string
-	}{{retiredWorkerStateKind, "bahia.state.worker.v1", kinds.WorkerStateTopic}, {retiredWorkerAssignmentStateKind, "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic}, {retiredWorkerDrainStatusKind, "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic}, {retiredWorkerEligibilityPreviewKind, "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic}} {
+		family        kinds.CPStateFamily
+	}{{retiredWorkerStateKind, "bahia.state.worker.v1", kinds.WorkerStateTopic, kinds.CPStateFamilyWorkerState}, {retiredWorkerAssignmentStateKind, "bahia.state.worker-assignment.v1", kinds.WorkerAssignmentTopic, kinds.CPStateFamilyWorkerAssignment}, {retiredWorkerDrainStatusKind, "bahia.state.worker-drain.v1", kinds.WorkerDrainTopic, kinds.CPStateFamilyWorkerDrain}, {retiredWorkerEligibilityPreviewKind, "bahia.state.worker-eligibility.v1", kinds.WorkerEligibilityTopic, kinds.CPStateFamilyWorkerEligibility}} {
 		addState(item.kind, kinds.WorkerDomain, item.schema)
 		disposition := m[item.kind]
 		disposition.Topic = item.topic
+		disposition.WorkerFamily = item.family
 		m[item.kind] = disposition
 	}
 
@@ -408,7 +460,7 @@ func buildManifest() map[int]Disposition {
 	m[kinds.SBOMReference] = Disposition{LegacyKind: kinds.SBOMReference, CanonicalKind: CanonicalNIP78AppData, Layer: LayerAppData, Domain: "sbom", Operation: "reference", Schema: "bahia.sbom.ref.v1", DTagPrefix: "sbom:ref"}
 	m[kinds.LegacySBOMIndex] = Disposition{LegacyKind: kinds.LegacySBOMIndex, CanonicalKind: CanonicalNIP51AvailabilityList, Layer: LayerCollection, Domain: "sbom", Operation: "available-list", Schema: "bahia.sbom.available-list.v1", DTagPrefix: "sbom:available"}
 
-	for kind := kinds.AuditMin; kind <= kinds.DNSEndpointDeregisteredAudit; kind++ {
+	for kind := retiredAuditFirstKind; kind <= retiredAuditLastKind; kind++ {
 		addAudit(kind, "audit", "bahia.audit.v1")
 	}
 	addAudit(kinds.BackupRunAttestation, "backup", "bahia.audit.backup-run-attestation.v1")

@@ -256,10 +256,10 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 
 | Kind | Contract | Filtering guidance |
 |------|----------|--------------------|
-| `30900` | Canonical control-plane state projection | Scope by service author, `#d`, `#domain`, `#schema`, resource tags (`#service`, `#environment`, `#artifact`, `#dns`, `#worker`, etc.) |
+| `30900` | Canonical control-plane state projection | Scope by service author and single-letter tags only: the family's `#t` topic or an exact `#d` coordinate. Relays do not index `#domain`, `#schema` or other multi-letter resource tags; check those locally |
 | `4903` | Canonical audit fact | Scope by service author, requester `#p`, resource tags, and correlation `#e` where present |
 | `30315` | NIP-38 operational status | Scope by service author, `#d`, `#domain`, `#status`, resource tags, and correlation `#e`; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags rather than a separate `30350` kind |
-| `30316` | Assistant transcript | Scope by service author, `#schema=bahia.assistant-transcript.v1`, `#session`, `#turn`, `#role`, and sequence/key tags; content is service-held symmetric-key AEAD ciphertext |
+| `30316` | Assistant transcript | Scope by service author plus `#p` (operator, browser) or `#t=assistant-transcript:<session>` (daemon replay); schema, session, turn and role are checked locally; content is service-held symmetric-key AEAD ciphertext |
 | `11316`-`11320` | ContextVM server/tool/resource/prompt/template discovery | Scope by Bahia service pubkey; use for bootstrap before mutation or state subscriptions |
 | `30002` | NIP-51 relay set | Scope by Bahia service pubkey and relay-set `#d` tags |
 | `30004` | NIP-51 Curation Set | Scope by Bahia service pubkey, `#d`, `#domain=sbom`, `#schema=bahia.sbom.available-list.v1`, and subject tags |

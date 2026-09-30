@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
+import { workerStateFixture } from './cp-state-fixtures.js';
 
 // Mock data
 const mockWorkers = [
@@ -121,38 +122,22 @@ function mockNostrActivityEvents(events) {
   }));
 }
 
+// Worker state as the control plane's worker-state publisher emits it: a
+// cp-state 30900 record on d=worker:state:<pubkey> with t=worker-state and the
+// full worker as content (see cp-state-fixtures.js).
 function mockNostrWorkerEvents(workers) {
   const base = Math.floor(Date.now() / 1000);
-  const pubkey = E2E_SERVICE_PUBKEY;
-  return workers.map((worker, index) => ({
-    id: `nostr-worker-${index}`,
-    pubkey,
-    created_at: base - index,
-    kind: 30900,
-    tags: [
-      ['domain', 'controlplane'],
-      ['schema', 'bahia.state.worker.v1'],
-      ['d', worker.pubkey],
-      ['worker', worker.pubkey],
-      ['status', worker.status],
-      ['endpoint', worker.relay_url || ''],
-      ['deleted', 'false']
-    ],
-    content: JSON.stringify({
-      schema: 'bahia.state.worker.v1',
-      worker_pubkey: worker.pubkey,
-      pubkey: worker.pubkey,
-      status: worker.status,
-      capabilities: { runtimes: worker.capabilities || [] },
-      metadata: worker.metadata || {},
-      relay_url: worker.relay_url,
-      preferred_relays: worker.relay_url ? [worker.relay_url] : [],
-      pricing: worker.pubkey === 'npub1worker1abc123def456' ? mockWorkerPricing : [],
-      software: Object.entries(worker.metadata || {}).map(([name, version]) => ({ name, version })),
-      last_seen: worker.last_seen,
-      deleted: false
-    })
-  }));
+  return workers.map((worker, index) => workerStateFixture({
+    pubkey: worker.pubkey,
+    status: worker.status,
+    capabilities: { runtimes: worker.capabilities || [] },
+    metadata: worker.metadata || {},
+    relay_url: worker.relay_url,
+    preferred_relays: worker.relay_url ? [worker.relay_url] : [],
+    pricing: worker.pubkey === 'npub1worker1abc123def456' ? mockWorkerPricing : [],
+    software: Object.entries(worker.metadata || {}).map(([name, version]) => ({ name, version })),
+    last_seen: worker.last_seen
+  }, { id: `nostr-worker-${index}`, createdAt: base - index, tags: [['endpoint', worker.relay_url || '']] }));
 }
 
 test.beforeEach(async ({ page }) => {

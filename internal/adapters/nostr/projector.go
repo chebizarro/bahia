@@ -1487,12 +1487,12 @@ func (p *Projector) publishControlState(ctx context.Context, legacyKind int, id 
 // on a coordinate nobody reads (B-18, B-19).
 func controlStateEnvelope(legacyKind int, id string, deleted bool) (wireKind int, tags gonostr.Tags) {
 	deletedValue := strconv.FormatBool(deleted)
-	domainName, entity := canonicalStateDomain(legacyKind)
+	domainName, _ := canonicalStateDomain(legacyKind)
 	if domainName == "" {
 		return legacyKind, gonostr.Tags{{kinds.CASControlStateTagD, id}, {kinds.CASControlStateTagDeleted, deletedValue}}
 	}
 	return KindCASControlState, gonostr.Tags{
-		{kinds.CASControlStateTagD, canonicalStateDTag(domainName, entity, id)},
+		{kinds.CASControlStateTagD, canonicalStateDTag(legacyKind, id)},
 		{kinds.CASControlStateTagDomain, domainName},
 		{kinds.CASControlStateTagSchema, controlStateSchema},
 		{kinds.CASControlStateTagLegacyKind, strconv.Itoa(legacyKind)},
@@ -1563,7 +1563,15 @@ func canonicalStateDomain(kind int) (domainName string, entity string) {
 	return family.domain, family.entity
 }
 
-func canonicalStateDTag(_, _, id string) string {
+// canonicalStateDTag is the cp-state d builder. A record is addressed by its
+// id, except that worker families prefix it per family (kinds.CPStateFamily
+// WorkerDTag, "worker:<entity>:<id>"): assignment and drain are both keyed by
+// the worker pubkey, and on one bare-pubkey d each replaced the other on the
+// relay (bahia-irsry.36).
+func canonicalStateDTag(legacyKind int, id string) string {
+	if d, ok := kinds.CPStateFamily(legacyKind).WorkerDTag(id); ok {
+		return d
+	}
 	return id
 }
 
