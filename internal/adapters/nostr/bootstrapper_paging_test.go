@@ -91,8 +91,8 @@ func TestBootstrapperPagesLiveCatchup(t *testing.T) {
 	now := gonostr.Now()
 	var live []gonostr.Event
 	for i := 0; i < 5; i++ {
-		// Inside the catch-up window (since = attempt start) and within the
-		// inbound future-skew allowance.
+		// Newer than the attempt start and within the inbound future-skew
+		// allowance.
 		live = append(live, signedBootstrapEventBy(t, testNostrPrivateKey, testKindTier1Live, fmt.Sprintf("live-%d", i), now+1+gonostr.Timestamp(i)))
 	}
 	snapshots := []gonostr.Event{
@@ -111,7 +111,7 @@ func TestBootstrapperPagesLiveCatchup(t *testing.T) {
 		if len(filter.Kinds) == 1 && int(filter.Kinds[0]) == testKindTier1Live {
 			livePages++
 			require.Equal(t, 2, filter.Limit)
-			require.NotZero(t, filter.Since)
+			require.Zero(t, filter.Since, "an addressable live group is replayed in full, never from the attempt start (C-3)")
 		}
 	}
 	require.GreaterOrEqual(t, livePages, 3)

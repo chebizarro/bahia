@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
@@ -185,71 +187,15 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyProductionKinds(t *testing
 			Adoption:      []string{"adoption-a", "shared"},
 			DirectRuntime: []string{"runtime-a", "shared"},
 		}),
-		WithBackfillLimit(10),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
 	)
 
-	filters, err := sub.buildSubscriptionFilters(context.Background())
+	filters, err := sub.buildSubscriptionFilters()
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
-	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].Kinds)
-	require.Empty(t, filters[0].Authors, "legacy production kinds must be omitted from runtime subscriptions")
-	require.Equal(t, int64(500), int64(filters[0].Since))
-	require.Equal(t, 10, filters[0].Limit)
-}
-
-func TestSubscriberBuildSubscriptionFiltersUsesPersistedAndLastSeenCursor(t *testing.T) {
-	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
-	_, err := repo.Record(ctx, &repository.NostrEventRecord{
-		ID:        "persisted",
-		Kind:      5101,
-		PubKey:    "worker",
-		Content:   "{}",
-		Tags:      json.RawMessage("[]"),
-		Sig:       "sig",
-		CreatedAt: time.Unix(100, 0).UTC(),
-	})
-	require.NoError(t, err)
-
-	sub := NewSubscriber(nil, repo, zap.NewNop(),
-		WithKinds([]int{5101}),
-		WithBackfillLimit(25),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
-	)
-
-	filters, err := sub.buildSubscriptionFilters(ctx)
-	require.NoError(t, err)
-	require.Len(t, filters, 1)
-	require.Equal(t, int64(99), int64(filters[0].Since), "persisted cursor should be replayed with one-second overlap")
-	require.Equal(t, 25, filters[0].Limit)
-
-	sub.recordLastSeen(5101, time.Unix(125, 0).UTC())
-	filters, err = sub.buildSubscriptionFilters(ctx)
-	require.NoError(t, err)
-	require.Equal(t, int64(124), int64(filters[0].Since), "in-memory cursor should win over older persisted cursor")
-}
-
-func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.T) {
-	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
-	_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: "open-newer", Kind: 5101, PubKey: "worker", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(200, 0).UTC()})
-	require.NoError(t, err)
-	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "legacy-command", Kind: 5961, PubKey: "operator", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(120, 0).UTC()})
-	require.NoError(t, err)
-
-	sub := NewSubscriber(nil, repo, zap.NewNop(),
-		WithKinds([]int{5101, 5961}),
-		WithAuthorizedAuthors([]string{"operator"}),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
-	)
-
-	filters, err := sub.buildSubscriptionFilters(ctx)
-	require.NoError(t, err)
-	require.Len(t, filters, 1)
-	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].Kinds)
-	require.Empty(t, filters[0].Authors)
-	require.Equal(t, int64(199), int64(filters[0].Since), "legacy command rows must not create runtime cursors")
+	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, filters[0].filter.Kinds)
+	require.Empty(t, filters[0].filter.Authors, "legacy production kinds must be omitted from runtime subscriptions")
+	require.Zero(t, filters[0].filter.Since, "a REQ's since comes from its relay's cursor, not from the filter")
+	require.Zero(t, filters[0].filter.Limit)
 }
 
 func TestSubscriberBuildSubscriptionFiltersScopesConfigDesiredAuthors(t *testing.T) {
@@ -257,29 +203,42 @@ func TestSubscriberBuildSubscriptionFiltersScopesConfigDesiredAuthors(t *testing
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithKinds([]int{kinds.ConfigACLList, kinds.ConfigPolicy, kinds.CASControlState}),
 		WithAuthorizedAuthors([]string{strings.Repeat("a", 64)}),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
 	)
 
-	filters, err := sub.buildSubscriptionFilters(context.Background())
+	filters, err := sub.buildSubscriptionFilters()
 	require.NoError(t, err)
 	require.Len(t, filters, 2)
-	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.CASControlState)}, filters[0].Kinds)
-	require.Empty(t, filters[0].Authors)
-	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.ConfigACLList), canonicalKind(kinds.ConfigPolicy)}, filters[1].Kinds)
-	require.Len(t, filters[1].Authors, 1)
+	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.CASControlState)}, filters[0].filter.Kinds)
+	require.Empty(t, filters[0].filter.Authors)
+	require.ElementsMatch(t, []gonostr.Kind{canonicalKind(kinds.ConfigACLList), canonicalKind(kinds.ConfigPolicy)}, filters[1].filter.Kinds)
+	require.Len(t, filters[1].filter.Authors, 1)
 }
 
-func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testing.T) {
-	repo := newMemoryNostrEventRepo()
-	sub := NewSubscriber(nil, repo, zap.NewNop(),
-		WithKinds([]int{5101}),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
-	)
+// Replaceable/addressable kinds and regular kinds catch up differently (full
+// NIP-77 reconcile vs cursor + until paging), so they never share a filter,
+// and each filter has its own cursor hash.
+func TestSubscriberBuildSubscriptionFiltersSplitsPersistentAndRegularKinds(t *testing.T) {
+	sub := NewSubscriber(nil, nil, zap.NewNop())
 
-	filters, err := sub.buildSubscriptionFilters(context.Background())
+	filters, err := sub.buildSubscriptionFilters()
 	require.NoError(t, err)
-	require.Len(t, filters, 1)
-	require.Equal(t, int64(500), int64(filters[0].Since))
+	hashes := make(map[string]struct{})
+	var persistent, regular []gonostr.Kind
+	for _, filter := range filters {
+		hashes[filter.hash] = struct{}{}
+		for _, kind := range filter.filter.Kinds {
+			require.Equal(t, filter.persistent, kind.IsReplaceable() || kind.IsAddressable(), "kind %d is in the wrong class of filter", kind)
+			if filter.persistent {
+				persistent = append(persistent, kind)
+			} else {
+				regular = append(regular, kind)
+			}
+		}
+	}
+	require.Len(t, hashes, len(filters))
+	require.ElementsMatch(t, []gonostr.Kind{KindCASAudit, KindHiveCIWorkflowRun, KindHiveCIWorkflowResult, KindLoomJobResult, KindLoomJobCancellation}, regular)
+	require.Contains(t, persistent, gonostr.Kind(kinds.ConfigACLList))
+	require.Contains(t, persistent, gonostr.Kind(KindLoomWorkerAdvertisement))
 }
 
 func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T) {
@@ -287,19 +246,15 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T)
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithKinds([]int{5961, 38390, 38394, 31980, 31986, 31100, 5101}),
 		WithAuthorizedAuthors([]string{"operator-a", "operator-b"}),
-		WithBackfillLimit(10),
-		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
 	)
 
-	filters, err := sub.buildSubscriptionFilters(context.Background())
+	filters, err := sub.buildSubscriptionFilters()
 	require.NoError(t, err)
 	require.Len(t, filters, 1)
 
-	open := filters[0]
+	open := filters[0].filter
 	require.Equal(t, []gonostr.Kind{canonicalKind(5101)}, open.Kinds)
 	require.Empty(t, open.Authors)
-	require.Equal(t, int64(500), int64(open.Since))
-	require.Equal(t, 10, open.Limit)
 }
 
 func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *testing.T) {
@@ -323,7 +278,6 @@ func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *tes
 
 	sub.handleEvent(ctx, ev)
 	require.Equal(t, []string{eventIDHex(ev)}, handled)
-	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
 func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t *testing.T) {
@@ -346,16 +300,15 @@ func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t 
 	sub.handleEvent(ctx, ev)
 	require.Equal(t, []string{"ml:endpoint-state:qwen:prod"}, handled)
 	require.Equal(t, 1, repo.inserted)
-	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{KindCASControlState}))
 	require.False(t, sub.IsCaughtUp())
-	backoff := DefaultBackoff()
-	backoff.Next()
-	backoff.Next()
-	require.Equal(t, 2, backoff.Attempt())
 
-	sub.handleEOSE(backoff)
-	require.True(t, sub.IsCaughtUp(), "EOSE marks historical ML read-model catch-up complete without sleeps or polling")
-	require.Zero(t, backoff.Attempt(), "a healthy EOSE session resets reconnect backoff")
+	progress := map[string]relayProgress{"wss://a.example": {}, "wss://b.example": {}}
+	progress["wss://a.example"] = relayProgress{caughtUp: true}
+	sub.updateCaughtUp(progress)
+	require.False(t, sub.IsCaughtUp(), "a relay still catching up holds back caught-up")
+	progress["wss://b.example"] = relayProgress{failed: true}
+	sub.updateCaughtUp(progress)
+	require.True(t, sub.IsCaughtUp(), "caught up once every relay synced or failed its first attempt")
 }
 
 func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *testing.T) {
@@ -388,7 +341,6 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 	newEvent := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
 	sub.handleEvent(ctx, newEvent)
 	require.Equal(t, []string{eventIDHex(newEvent)}, handled)
-	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
 // A self-published observable is persisted by the publisher before its relay
@@ -457,8 +409,6 @@ func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *test
 	sub.handleEvent(ctx, legacy)
 	require.Empty(t, handled)
 	require.Equal(t, 0, repo.inserted)
-	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5961}))
-	require.False(t, sub.dedup.IsDuplicate(eventIDHex(legacy)))
 }
 
 func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {
@@ -479,6 +429,72 @@ func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testin
 	sub.handleEvent(ctx, &invalid)
 	require.Empty(t, handled)
 	require.Equal(t, 0, repo.inserted)
-	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5101}))
-	require.False(t, sub.dedup.IsDuplicate(eventIDHex(valid)))
+}
+
+// C-14: the local store is the idempotency gate, so a restarted subscriber
+// with no Postgres (here no audit repository at all) does not re-run handlers
+// for events it already handled, while observers still see the redelivery.
+func TestSubscriberHandleEventDedupsAgainstTheLocalStoreAcrossRestarts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "daemon.bolt")
+	now := time.Now().UTC()
+	ev := signedTestEvent(t, 5101, now.Add(-time.Minute))
+
+	var handled, observed int
+	newSub := func(store *localstore.Store) *Subscriber {
+		return NewSubscriber(nil, nil, zap.NewNop(),
+			WithLocalStore(store),
+			WithHandler(func(context.Context, *gonostr.Event) { handled++ }),
+			WithObserver(func(context.Context, *gonostr.Event) { observed++ }),
+		)
+	}
+	first := openTestLocalStore(t, path)
+	require.Equal(t, ingestNew, newSub(first).handleEvent(ctx, ev))
+	require.NoError(t, first.Close())
+
+	restarted := openTestLocalStore(t, path)
+	require.Equal(t, ingestDuplicate, newSub(restarted).handleEvent(ctx, ev))
+	require.Equal(t, 1, handled)
+	require.Equal(t, 2, observed)
+}
+
+// With an audit repository configured, a failed audit write undoes the local
+// store write, so the redelivery is still new and its handlers run exactly
+// once when the write succeeds.
+func TestSubscriberHandleEventRollsBackTheLocalStoreWhenTheAuditWriteFails(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	store := openTestLocalStore(t, "")
+	ev := signedTestEvent(t, 5101, time.Now().UTC().Add(-time.Minute))
+	repo.failRecordID = eventIDHex(ev)
+	var handled int
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithLocalStore(store),
+		WithHandler(func(context.Context, *gonostr.Event) { handled++ }),
+	)
+
+	require.Equal(t, ingestFailed, sub.handleEvent(ctx, ev))
+	require.False(t, localStoreHas(store, ev.ID))
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, ev))
+	require.Equal(t, ingestDuplicate, sub.handleEvent(ctx, ev))
+	require.Equal(t, 1, handled)
+}
+
+// The daemon's own events reach observers but never side-effect handlers,
+// whether or not the publisher pre-recorded them in Postgres.
+func TestSubscriberHandleEventKeepsSelfAuthoredEventsFromHandlers(t *testing.T) {
+	ctx := context.Background()
+	store := openTestLocalStore(t, "")
+	own := signedTestEvent(t, KindCASControlState, time.Now().UTC().Add(-time.Minute))
+	var handled, observed int
+	sub := NewSubscriber(nil, nil, zap.NewNop(),
+		WithLocalStore(store),
+		WithSelfAuthors(eventPubKeyHex(own)),
+		WithHandler(func(context.Context, *gonostr.Event) { handled++ }),
+		WithObserver(func(context.Context, *gonostr.Event) { observed++ }),
+	)
+
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, own))
+	require.Zero(t, handled)
+	require.Equal(t, 1, observed)
 }

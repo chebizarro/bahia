@@ -34,6 +34,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	routingAdapter "github.com/openagentsinc/bahia/internal/adapters/routing"
@@ -93,6 +94,7 @@ type App struct {
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
 	hiveCIInitiator           *giteaAdapter.Initiator
+	localEventStore           *localstore.Store
 	reloadMu                  sync.Mutex
 }
 
@@ -629,7 +631,18 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	catalog := nostrAdapter.NewKindCatalog()
-	cursorPlanner := nostrAdapter.NewReplayCursorPlanner(time.Second, nostrAdapter.NewNostrEventRepositoryCursorSource(nostrEventRepo))
+	// Local event store: the inbound subscriptions' rebuildable cache, dedup
+	// set and per-(relay, filter) cursors (bahia-irsry.10.1).
+	localEventStore, err := localstore.Open(cfg.Nostr.LocalStore.Path)
+	if err != nil {
+		return nil, fmt.Errorf("opening local Nostr event store: %w", err)
+	}
+	localEventStoreReleased := false
+	defer func() {
+		if !localEventStoreReleased {
+			_ = localEventStore.Close()
+		}
+	}()
 
 	// Relay projection cache: applies decoded relay events to local repositories.
 	// When DB is unavailable, appliers are skipped (tier1-only mode has no
@@ -666,10 +679,13 @@ func New(cfg *config.Config) (*App, error) {
 	// Request no more than the constructed dependencies support: without
 	// Postgres the tier2/tier3 repositories are nil, so the bootstrapper must
 	// neither report nor raise a tier above policy.MaxTier().
-	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
+	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
+	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, localEventStore, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
 		RequestedTier:       int(policy.MaxTier()),
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
-		ControlPlaneAuthors: compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys),
+		ControlPlaneAuthors: controlPlaneAuthors,
+		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
+		Resume:              inboundSyncConfig(cfg.Nostr.LocalStore),
 	})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
@@ -1434,6 +1450,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
+		nostrAdapter.WithLocalStore(localEventStore),
+		nostrAdapter.WithSelfAuthors(servicePubkey),
+		nostrAdapter.WithInboundSync(inboundSyncConfig(cfg.Nostr.LocalStore)),
+		// NIP-09 deletions from the control-plane authors reach the
+		// projection cache live, as the bootstrapper's deletion group does.
+		nostrAdapter.WithDeletionAuthors(controlPlaneAuthors),
+		nostrAdapter.WithObserver(bootstrapper.ApplyDeletion),
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
 		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
@@ -1851,8 +1874,10 @@ func New(cfg *config.Config) (*App, error) {
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 		hiveCIInitiator:           hiveCIInitiator,
+		localEventStore:           localEventStore,
 	}
 	soulFactoryRuntimeReleased = true
+	localEventStoreReleased = true
 	return application, nil
 }
 
@@ -2591,6 +2616,11 @@ func (a *App) RunContext(ctx context.Context) error {
 
 	// Close Nostr relay connections.
 	closeRelayPools(a.relayPools...)
+	if a.localEventStore != nil {
+		if err := a.localEventStore.Close(); err != nil {
+			a.Logger.Warn("local Nostr event store close failed", zap.Error(err))
+		}
+	}
 
 	if a.DB != nil {
 		a.DB.Close()
