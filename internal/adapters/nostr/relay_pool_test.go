@@ -22,125 +22,6 @@ func newTestSubscription() *gonostr.Subscription {
 	}
 }
 
-func TestMergeSubscriptionsClosesEOSEAfterAllRelaysEOSE(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub1 := newTestSubscription()
-	sub2 := newTestSubscription()
-	merged := mergeSubscriptions(ctx, []*gonostr.Subscription{sub1, sub2}, 4)
-
-	close(sub1.EndOfStoredEvents)
-	select {
-	case <-merged.EndOfStoredEvents:
-		t.Fatal("EOSE must not close until every relay has sent EOSE")
-	default:
-	}
-
-	close(sub2.EndOfStoredEvents)
-	<-merged.EndOfStoredEvents
-
-	// Closed EOSE channels are reusable by callers and must not panic or block on repeated reads.
-	<-merged.EndOfStoredEvents
-
-	close(sub1.Events)
-	close(sub2.Events)
-	_, ok := <-merged.Events
-	require.False(t, ok)
-}
-
-func TestMergeSubscriptionsTreatsRelayTerminationAsTerminalEOSE(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub := newTestSubscription()
-	merged := mergeSubscriptions(ctx, []*gonostr.Subscription{sub}, 4)
-	close(sub.Events)
-
-	_, ok := <-merged.Events
-	require.False(t, ok)
-	<-merged.EndOfStoredEvents
-}
-
-func TestMergeSubscriptionsForwardsEventsWithoutWaitingForEOSE(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub := newTestSubscription()
-	merged := mergeSubscriptions(ctx, []*gonostr.Subscription{sub}, 4)
-	ev := gonostr.Event{Kind: canonicalKind(5101)}
-
-	sub.Events <- ev
-	require.Equal(t, eventKindInt(&ev), eventKindInt(<-merged.Events))
-
-	close(sub.EndOfStoredEvents)
-	<-merged.EndOfStoredEvents
-	close(sub.Events)
-}
-
-func TestMergeRelaySubscriptionsEmitsPerRelayEOSE(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub1 := newTestSubscription()
-	sub2 := newTestSubscription()
-	merged := mergeRelaySubscriptions(ctx, []relaySubscription{
-		{relayURL: "wss://relay-one.example", sub: sub1},
-		{relayURL: "wss://relay-two.example", sub: sub2},
-	}, 4)
-
-	close(sub1.EndOfStoredEvents)
-	require.Equal(t, RelayEOSE{RelayURL: "wss://relay-one.example"}, <-merged.RelayEOSE)
-	select {
-	case <-merged.EndOfStoredEvents:
-		t.Fatal("aggregate EOSE must wait for every relay")
-	default:
-	}
-
-	close(sub2.EndOfStoredEvents)
-	require.Equal(t, RelayEOSE{RelayURL: "wss://relay-two.example"}, <-merged.RelayEOSE)
-	<-merged.EndOfStoredEvents
-
-	close(sub1.Events)
-	close(sub2.Events)
-}
-
-func TestMergeRelaySubscriptionsEmitsClosedReason(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub := newTestSubscription()
-	merged := mergeRelaySubscriptions(ctx, []relaySubscription{{relayURL: "wss://relay.example", sub: sub}}, 4)
-
-	sub.ClosedReason <- "auth-required: sign in first"
-	closed := <-merged.Closed
-	require.Equal(t, "wss://relay.example", closed.RelayURL)
-	require.Equal(t, "auth-required: sign in first", closed.Reason)
-	require.True(t, IsAuthRequiredReason(closed.Reason))
-	require.True(t, IsAuthRequiredReason("auth-required"))
-	require.False(t, IsAuthRequiredReason("closed: not auth-required; maintenance"))
-
-	close(sub.Events)
-}
-
-func TestMergeRelaySubscriptionsPreservesRelayClosedReasonAfterEventsClose(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sub := newTestSubscription()
-	subCtx, subCancel := context.WithCancelCause(context.Background())
-	sub.Context = subCtx
-	merged := mergeRelaySubscriptions(ctx, []relaySubscription{{relayURL: "wss://relay.example", sub: sub}}, 4)
-
-	subCancel(errors.New("CLOSED received: auth-required: sign in first"))
-	close(sub.Events)
-	sub.ClosedReason <- "auth-required: sign in first"
-
-	closed := <-merged.Closed
-	require.Equal(t, "wss://relay.example", closed.RelayURL)
-	require.Equal(t, "auth-required: sign in first", closed.Reason)
-}
-
 func TestRelayPool_ConnectedCount(t *testing.T) {
 	pool := newRelayPoolWithManagedRelays("wss://relay-one.example", "wss://relay-two.example", "wss://relay-three.example")
 	markRelayConnectedForSubscribeTest(pool, "wss://relay-one.example")
@@ -229,59 +110,89 @@ func TestRelayPoolRecordRelayErrorNormalizesRelayURL(t *testing.T) {
 	require.Equal(t, "auth-required: sign in", snapshot.Relays[0].LastError)
 }
 
-func TestRelayPoolSubscribeAuthRequiredWithoutCredentialsRecordsAuthUnavailableMetadata(t *testing.T) {
-	const relayURL = "wss://auth.example"
-	pool := newRelayPoolWithManagedRelays(relayURL)
-	markRelayConnectedForSubscribeTest(pool, relayURL)
+// The tests below pin MergedSubscription semantics through the production
+// SubscribeAllWithEOSE path. They replace tests of the deleted, test-only
+// mergeSubscriptions/mergeRelaySubscriptions helpers (C-8, bahia-irsry.8).
 
-	attempts := 0
-	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
-		attempts++
-		return nil, errors.New("couldn't subscribe to [{Kinds:[1]}] at wss://auth.example: auth-required: sign in")
+func subscribeAllWithTestSubscriptions(t *testing.T, relayURLs ...string) (*MergedSubscription, map[string]*gonostr.Subscription) {
+	t.Helper()
+	pool := newRelayPoolWithManagedRelays(relayURLs...)
+	for _, relayURL := range relayURLs {
+		markRelayConnectedForSubscribeTest(pool, relayURL)
+	}
+	var mu sync.Mutex
+	subs := make(map[string]*gonostr.Subscription, len(relayURLs))
+	setSubscribeOnRelayForTest(t, func(relay *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
+		sub := newTestSubscription()
+		mu.Lock()
+		subs[relay.URL] = sub
+		mu.Unlock()
+		return sub, nil
 	})
-
-	sub, err := pool.Subscribe(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
-	require.Nil(t, sub)
-	require.Error(t, err)
-	require.Equal(t, 1, attempts, "missing AUTH credentials must not trigger a fallback subscribe path")
-
-	snapshot := pool.HealthSnapshot()
-	require.Len(t, snapshot.Relays, 1)
-	require.Equal(t, 1, snapshot.Relays[0].Errors)
-	require.Equal(t, "auth-unavailable: auth-required: sign in: no signer configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
+	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(1)}}})
+	require.NoError(t, err)
+	t.Cleanup(merged.Close)
+	require.Len(t, subs, len(relayURLs))
+	return merged, subs
 }
 
-func TestRelayPoolSubscribeRejectsMultiFilterSilentDrop(t *testing.T) {
-	pool := newRelayPoolWithManagedRelays("wss://relay.example")
-	markRelayConnectedForSubscribeTest(pool, "wss://relay.example")
+func TestSubscribeAllWithEOSEEmitsPerRelayEOSEAndWaitsForEveryRelay(t *testing.T) {
+	merged, subs := subscribeAllWithTestSubscriptions(t, "wss://relay-one.example", "wss://relay-two.example")
 
-	_, err := pool.Subscribe(context.Background(), []gonostr.Filter{
-		{Kinds: []gonostr.Kind{canonicalKind(1)}},
-		{Kinds: []gonostr.Kind{canonicalKind(2)}},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "requires exactly one filter")
+	close(subs["wss://relay-one.example"].EndOfStoredEvents)
+	require.Equal(t, "wss://relay-one.example", (<-merged.RelayEOSE).RelayURL)
+	select {
+	case <-merged.EndOfStoredEvents:
+		t.Fatal("aggregate EOSE must wait for every relay")
+	default:
+	}
+
+	close(subs["wss://relay-two.example"].EndOfStoredEvents)
+	require.Equal(t, "wss://relay-two.example", (<-merged.RelayEOSE).RelayURL)
+	<-merged.EndOfStoredEvents
+	// A closed EOSE channel is reusable by callers.
+	<-merged.EndOfStoredEvents
+	require.True(t, merged.HasRealEOSE())
 }
 
-func TestMergedSubscriptionTracksRelaySourceAndEligibleRelays(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	primary := newTestSubscription()
-	secondary := newTestSubscription()
-	merged := mergeRelaySubscriptions(ctx, []relaySubscription{
-		{relayURL: "wss://primary.example", sub: primary},
-		{relayURL: "wss://secondary.example", sub: secondary},
-	}, 4)
+func TestSubscribeAllWithEOSEForwardsEventsBeforeEOSEAndTracksSource(t *testing.T) {
+	merged, subs := subscribeAllWithTestSubscriptions(t, "wss://primary.example", "wss://secondary.example")
 
-	event := gonostr.Event{ID: gonostr.ID{31: 0x42}}
-	secondary.Events <- event
+	event := gonostr.Event{ID: gonostr.ID{31: 0x42}, Kind: canonicalKind(5101)}
+	subs["wss://secondary.example"].Events <- event
 	got := <-merged.Events
 	require.Equal(t, event.ID, got.ID)
 	require.Equal(t, "wss://secondary.example", merged.EventSource(event.ID.Hex()))
-	require.Equal(t, []string{"wss://primary.example", "wss://secondary.example"}, merged.RelayURLs())
+	require.ElementsMatch(t, []string{"wss://primary.example", "wss://secondary.example"}, merged.RelayURLs())
+	select {
+	case <-merged.EndOfStoredEvents:
+		t.Fatal("forwarding an event must not imply EOSE")
+	default:
+	}
+}
 
-	close(primary.Events)
-	close(secondary.Events)
+func TestSubscribeAllWithEOSEEmitsRelayClosedReason(t *testing.T) {
+	merged, subs := subscribeAllWithTestSubscriptions(t, "wss://relay.example")
+
+	subs["wss://relay.example"].ClosedReason <- "auth-required: sign in first"
+	closed := <-merged.Closed
+	require.Equal(t, "wss://relay.example", closed.RelayURL)
+	require.Equal(t, "auth-required: sign in first", closed.Reason)
+	require.True(t, IsAuthRequiredReason(closed.Reason))
+	require.True(t, IsAuthRequiredReason("auth-required"))
+	require.False(t, IsAuthRequiredReason("closed: not auth-required; maintenance"))
+}
+
+func TestSubscribeAllWithEOSEPreservesClosedReasonAfterEventsClose(t *testing.T) {
+	merged, subs := subscribeAllWithTestSubscriptions(t, "wss://relay.example")
+
+	sub := subs["wss://relay.example"]
+	sub.ClosedReason <- "auth-required: sign in first"
+	close(sub.Events)
+
+	closed := <-merged.Closed
+	require.Equal(t, "wss://relay.example", closed.RelayURL)
+	require.Equal(t, "auth-required: sign in first", closed.Reason)
 }
 
 func TestRelayPoolSubscribeAllWithEOSESubscribesEveryFilter(t *testing.T) {

@@ -1,0 +1,7 @@
+{
+  "comment": "Pre-existing violations only; entries may shrink, never grow. Regenerate with: make arch-baseline",
+  "violations": {
+    "src/lib/stores/auth.svelte.js import:api/client.js": 2,
+    "src/lib/stores/souls.svelte.js import:api/client.js": 1
+  }
+}
