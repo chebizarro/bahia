@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -139,7 +140,10 @@ func (p *ManagedInstanceHealthProjector) publishAll(ctx context.Context, list []
 			continue
 		}
 		if p.publisher != nil {
-			if err := p.publisher.PublishSignedEvent(ctx, &list[i]); err != nil {
+			// A queued publish (nostrutil.ErrPublishIncomplete) is kept and
+			// retried by the outbox; it must not make the bus redeliver and
+			// re-sign the transition.
+			if err := p.publisher.PublishSignedEvent(ctx, &list[i]); err != nil && !nostrutil.IsPublishQueued(err) {
 				return fmt.Errorf("publish managed instance kind %d: %w", list[i].Kind, err)
 			}
 		}

@@ -28,8 +28,8 @@ func (s relayConfigFabricTestSigner) Sign(_ context.Context, event *nostr.Event)
 
 type relayConfigFabricTestPublisher struct{}
 
-func (relayConfigFabricTestPublisher) Publish(context.Context, nostr.Event) (int, error) {
-	return 1, nil
+func (relayConfigFabricTestPublisher) PublishPresignedEvent(context.Context, nostr.Event, string) error {
+	return nil
 }
 
 type failingRelayPolicyPublisher struct{}

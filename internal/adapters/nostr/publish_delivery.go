@@ -11,6 +11,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -37,8 +38,9 @@ const defaultOutboxPageSize = 100
 // ErrPublishIncomplete reports that fewer relays than the caller-facing publish
 // quorum (nostr.publish_quorum, default 1) accepted an event. The event remains
 // queued and relays that have not accepted are still retried; errors.As a
-// *PublishIncompleteError for the counts.
-var ErrPublishIncomplete = errors.New("nostr event not accepted by the publish quorum")
+// *PublishIncompleteError for the counts. It aliases nostrutil's sentinel so
+// callers outside this package match it without an import cycle.
+var ErrPublishIncomplete = nostrutil.ErrPublishIncomplete
 
 // PublishIncompleteError describes a publish that did not reach its required
 // relay acceptance.
@@ -100,6 +102,9 @@ type relayDeliveryState struct {
 	accepted bool
 	rejected string // permanent OK=false reason; terminal for this relay
 	lastErr  string // most recent retryable failure
+	// seenDialFailure is the pool dial failure (RelayReconnectBackoffError
+	// FailedAt) this event has already counted against its attempt budget.
+	seenDialFailure time.Time
 }
 
 // outboxDelivery tracks per-relay acceptance of one signed event. mu serializes
@@ -254,6 +259,13 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 			results, callErr = p.publishFn(ctx, d.event, targets)
 		}
 	}
+	// A round only counts against the attempt budget if it learned something:
+	// a relay was actually contacted, or a relay in reconnect backoff reported
+	// a dial failure this event has not counted yet. Rounds that only hit the
+	// pool's fail-fast backoff are skipped and rescheduled for when the relay
+	// may be dialed again.
+	countable := len(targets) == 0 || len(results) == 0
+	var backoffUntil time.Time
 	answered := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		state, ok := d.relays[result.RelayURL]
@@ -261,6 +273,18 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 			continue
 		}
 		answered[result.RelayURL] = struct{}{}
+		var backoffErr *RelayReconnectBackoffError
+		if result.Error != nil && errors.As(result.Error, &backoffErr) {
+			if backoffErr.FailedAt.After(state.seenDialFailure) {
+				state.seenDialFailure = backoffErr.FailedAt
+				countable = true
+			}
+			if backoffUntil.IsZero() || backoffErr.RetryAt.Before(backoffUntil) {
+				backoffUntil = backoffErr.RetryAt
+			}
+		} else {
+			countable = true
+		}
 		switch classifyPublishResult(result) {
 		case relayPublishAccepted:
 			state.accepted = true
@@ -281,8 +305,12 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 			missing = callErr.Error()
 		}
 		d.relays[url].lastErr = missing
+		countable = true
 	}
-	d.rounds++
+	skipped := !countable
+	if !skipped {
+		d.rounds++
+	}
 
 	accepted := d.acceptedCount(configured)
 	retryable := len(d.retryableRelays(configured))
@@ -312,7 +340,12 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 		report.err = &PublishIncompleteError{EventID: eventID, Accepted: accepted, Required: required, Detail: detail}
 	}
 
-	if persistErr := p.persistRound(ctx, eventID, delivered, settled, exhausted, detail); persistErr != nil {
+	var persistErr error
+	if !skipped || settled {
+		// A skipped round records nothing: publish_attempts is the budget.
+		persistErr = p.persistRound(ctx, eventID, delivered, settled, exhausted, detail)
+	}
+	if persistErr != nil {
 		// Keep the delivery open so the next round retries the bookkeeping;
 		// relays that already accepted are not contacted again. A delivered
 		// event stays delivered: callers must not re-sign and republish it.
@@ -325,7 +358,13 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	}
 	d.settled = settled
 	d.delivered = delivered
-	if !settled {
+	switch {
+	case settled:
+	case skipped:
+		// Retry when the relay may be dialed again, without growing this
+		// event's own backoff.
+		p.scheduleDelivery(d, maxTime(backoffUntil, p.now()))
+	default:
 		p.scheduleDelivery(d, p.now().Add(d.backoff.Next()))
 	}
 	p.logRound(d, report, detail)
@@ -471,15 +510,15 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 	return rateLimited
 }
 
-// discoverPending reads one keyset page of pending outbox rows and starts
-// delivery for rows this publisher is not already tracking (rows recorded by
-// other producers, or left pending by a previous process). It reports whether
-// the page was full, meaning more rows follow the cursor.
+// discoverPending reads one keyset page of this publisher's target's pending
+// outbox rows and starts delivery for rows it is not already tracking (rows
+// recorded by other producers, or left pending by a previous process). It
+// reports whether the page was full, meaning more rows follow the cursor.
 func (p *Publisher) discoverPending(ctx context.Context) (more bool, err error) {
 	if p.outboxRepo == nil {
 		return false, nil
 	}
-	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.outboxCursor, p.pageSize)
+	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, p.outboxCursor, p.pageSize)
 	if err != nil {
 		return false, err
 	}
@@ -518,4 +557,11 @@ func (p *Publisher) discoverPending(ctx context.Context) (more bool, err error) 
 		}
 	}
 	return len(records) == p.pageSize, nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

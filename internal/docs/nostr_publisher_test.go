@@ -2,6 +2,7 @@ package docs
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -267,5 +269,36 @@ func writeTestDoc(t *testing.T, baseDir, relPath, content string) {
 
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// queuedEventPublisher records every event and reports it durably queued below
+// the publish quorum, as the outbox publisher does.
+type queuedEventPublisher struct {
+	mu     sync.Mutex
+	events []*nostr.Event
+}
+
+func (m *queuedEventPublisher) PublishSignedEvent(_ context.Context, ev *nostr.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, ev)
+	return fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)
+}
+
+func TestNostrDocsPublisher_SyncToRelay_QueuedTopicsAreNotRepublished(t *testing.T) {
+	dir := t.TempDir()
+	writeTestDoc(t, dir, "getting-started.md", "# Getting Started\n\nWelcome to Bahia.")
+	writeTestDoc(t, dir, "features/services.md", "# Services\n\nManage your services.")
+	pub := &queuedEventPublisher{}
+	publisher := NewNostrDocsPublisher(New(dir), pub, nil, zap.NewNop())
+
+	if err := publisher.SyncToRelay(context.Background()); err != nil {
+		t.Fatalf("SyncToRelay failed: %v", err)
+	}
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.events) != 2 {
+		t.Fatalf("expected each topic signed exactly once, got %d publishes", len(pub.events))
 	}
 }

@@ -18,11 +18,15 @@ import (
 
 // RelayPool manages persistent connections to a set of Nostr relays.
 // It provides automatic reconnection and shared access across publishers and clients.
+//
+// Lock order: p.mu (topology) is only held to read or change the relay maps,
+// never across network I/O; publishes and subscriptions snapshot the relays
+// they need and release it. A managedRelay's mu guards its connection state and
+// is not held while dialing (see ensureRelayConnected).
 type RelayPool struct {
 	mu sync.RWMutex
-	// subscriptionsMu is deliberately separate from mu: subscription setup must
-	// remain possible while a publisher holds the topology read lock during
-	// network I/O.
+	// subscriptionsMu is deliberately separate from mu so subscription
+	// bookkeeping never waits on topology changes.
 	subscriptionsMu     sync.Mutex
 	reconfigureMu       sync.Mutex
 	relays              map[string]*managedRelay
@@ -38,6 +42,15 @@ type RelayPool struct {
 	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner          nostr.Signer
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
+	// now and newReconnectBackoff pace reconnects to failing relays; both are
+	// replaceable in tests.
+	now                 func() time.Time
+	newReconnectBackoff func() *Backoff
+	// connectTimeout bounds an explicit connect (Connect, reconfigure,
+	// subscription setup); reconnectTimeout bounds the on-demand reconnect a
+	// publish or single-relay subscribe performs.
+	connectTimeout   time.Duration
+	reconnectTimeout time.Duration
 
 	// connectedMu guards relay (re)connection listeners. It is never held
 	// while calling out, and notification never blocks the pool.
@@ -52,6 +65,55 @@ type managedRelay struct {
 	connected bool
 	lastErr   error
 	mu        sync.Mutex
+
+	// dialing is non-nil while a connect is in flight and is closed when it
+	// finishes; concurrent callers wait for that outcome instead of dialing
+	// again. Guarded by mu.
+	dialing chan struct{}
+	// reconnectBackoff and retryAt pace on-demand reconnects to a relay that
+	// keeps failing: until retryAt, publishes fail fast instead of each waiting
+	// out another connect timeout. A successful connect resets both. Guarded
+	// by mu.
+	reconnectBackoff *Backoff
+	retryAt          time.Time
+	// failedAt is when the most recent dial failed. Guarded by mu.
+	failedAt time.Time
+	// closed is set once the pool has closed this relay for good (retired and
+	// pruned, or pool Close); it is never reconnected afterwards. Guarded by mu.
+	closed bool
+}
+
+// RelayReconnectBackoffError is returned for a relay whose recent connect
+// attempts failed while its reconnect backoff is running. It is retryable: the
+// caller should try again after RetryAt. No dial was made for this call;
+// FailedAt identifies the dial failure the caller is being told about, so a
+// caller can tell a fresh failure from one it has already seen.
+type RelayReconnectBackoffError struct {
+	RelayURL string
+	RetryAt  time.Time
+	FailedAt time.Time
+	LastErr  error
+}
+
+func (e *RelayReconnectBackoffError) Error() string {
+	msg := fmt.Sprintf("relay %s reconnect backing off until %s", e.RelayURL, e.RetryAt.UTC().Format(time.RFC3339))
+	if e.LastErr != nil {
+		msg += ": last connect error: " + e.LastErr.Error()
+	}
+	return msg
+}
+
+func (e *RelayReconnectBackoffError) Unwrap() error { return e.LastErr }
+
+const (
+	defaultRelayConnectTimeout   = 10 * time.Second
+	defaultRelayReconnectTimeout = 5 * time.Second
+)
+
+// defaultReconnectBackoff paces reconnects to a failing relay: 1s doubling to
+// a 1 minute cap, with jitter.
+func defaultReconnectBackoff() *Backoff {
+	return &Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0.2}
 }
 
 // RelayPoolOption configures a RelayPool.
@@ -98,6 +160,10 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		ctx:                 ctx,
 		cancel:              cancel,
 		connectRelay:        nostr.RelayConnect,
+		now:                 time.Now,
+		newReconnectBackoff: defaultReconnectBackoff,
+		connectTimeout:      defaultRelayConnectTimeout,
+		reconnectTimeout:    defaultRelayReconnectTimeout,
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -284,51 +350,134 @@ func sameRelayURLOrder(a, b []string) bool {
 	return true
 }
 
-// Connect establishes connections to all configured relays.
+// Connect establishes connections to all configured relays concurrently.
 // Failed connections are logged but not fatal; they will be retried on use.
 func (p *RelayPool) Connect(ctx context.Context) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
+	relays := make([]*managedRelay, 0, len(p.urls))
 	for _, url := range p.urls {
 		mr, exists := p.relays[url]
 		if !exists {
 			mr = &managedRelay{url: url}
 			p.relays[url] = mr
 		}
-		p.connectOne(ctx, mr)
+		relays = append(relays, mr)
 	}
+	p.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, mr := range relays {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.connectOne(ctx, mr)
+		}()
+	}
+	wg.Wait()
 }
 
+// connectOne is an explicit connect: it ignores the reconnect backoff (but
+// still shares an in-flight dial and records its outcome in the backoff).
 func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
-	mr.mu.Lock()
-	defer mr.mu.Unlock()
-
-	if mr.connected && mr.relay != nil {
-		return
-	}
-
-	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// Build relay options with AUTH handler if private key is configured.
-	opts := p.buildRelayOptions(mr.url)
-
-	relay, err := p.connectRelay(connectCtx, mr.url, opts)
-	if err != nil {
-		mr.connected = false
-		mr.lastErr = err
-		p.recordRelayConnectionState(mr.url, false)
-		p.recordRelayError(mr.url, err.Error())
+	if _, err := p.ensureRelayConnected(ctx, mr, p.connectTimeout, false); err != nil {
 		p.logger.Warn("failed to connect to relay", zap.String("relay", mr.url), zap.Error(err))
 		return
 	}
+	p.logger.Debug("connected to relay", zap.String("relay", mr.url))
+}
 
+// reconnectRelay returns mr's live connection, reconnecting on demand. While
+// the relay's reconnect backoff is running it fails fast with a
+// *RelayReconnectBackoffError instead of dialing, so a relay that keeps failing
+// costs at most one connect timeout per backoff window rather than one per
+// publish.
+func (p *RelayPool) reconnectRelay(ctx context.Context, mr *managedRelay) (*nostr.Relay, error) {
+	return p.ensureRelayConnected(ctx, mr, p.reconnectTimeout, true)
+}
+
+// ensureRelayConnected returns mr's connection, dialing if needed. At most one
+// dial per relay is in flight: concurrent callers wait for its outcome (bounded
+// by their own ctx) instead of dialing again. mr.mu is not held while dialing,
+// so a slow or unreachable relay never blocks callers that only need its
+// state. reconnect selects the on-demand path: it honours the reconnect
+// backoff and counts the dial as a reconnect.
+func (p *RelayPool) ensureRelayConnected(ctx context.Context, mr *managedRelay, timeout time.Duration, reconnect bool) (*nostr.Relay, error) {
+	for {
+		mr.mu.Lock()
+		if mr.connected && mr.relay != nil {
+			relay := mr.relay
+			mr.mu.Unlock()
+			return relay, nil
+		}
+		if mr.closed {
+			mr.mu.Unlock()
+			return nil, fmt.Errorf("relay %s was removed from the pool", mr.url)
+		}
+		if wait := mr.dialing; wait != nil {
+			mr.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		if reconnect && p.now().Before(mr.retryAt) {
+			err := &RelayReconnectBackoffError{RelayURL: mr.url, RetryAt: mr.retryAt, FailedAt: mr.failedAt, LastErr: mr.lastErr}
+			mr.mu.Unlock()
+			return nil, err
+		}
+		done := make(chan struct{})
+		mr.dialing = done
+		mr.mu.Unlock()
+
+		if reconnect {
+			p.recordRelayReconnect(mr.url)
+		}
+		connectCtx, cancel := context.WithTimeout(ctx, timeout)
+		relay, err := p.connectRelay(connectCtx, mr.url, p.buildRelayOptions(mr.url))
+		cancel()
+		return p.finishDial(ctx, mr, done, relay, err)
+	}
+}
+
+// finishDial records the outcome of the dial that owns done and wakes waiters.
+func (p *RelayPool) finishDial(ctx context.Context, mr *managedRelay, done chan struct{}, relay *nostr.Relay, err error) (*nostr.Relay, error) {
+	mr.mu.Lock()
+	mr.dialing = nil
+	close(done)
+	if err == nil && mr.closed {
+		mr.mu.Unlock()
+		_ = relay.Close()
+		return nil, fmt.Errorf("relay %s was removed from the pool", mr.url)
+	}
+	if err != nil {
+		mr.connected = false
+		mr.lastErr = err
+		// A dial cut short by the caller's own cancellation says nothing
+		// about the relay, so it does not extend the backoff.
+		if ctx.Err() == nil {
+			if mr.reconnectBackoff == nil {
+				mr.reconnectBackoff = p.newReconnectBackoff()
+			}
+			mr.failedAt = p.now()
+			mr.retryAt = mr.failedAt.Add(mr.reconnectBackoff.Next())
+		}
+		mr.mu.Unlock()
+		p.recordRelayConnectionState(mr.url, false)
+		p.recordRelayError(mr.url, err.Error())
+		return nil, err
+	}
 	mr.relay = relay
 	mr.connected = true
 	mr.lastErr = nil
+	mr.retryAt = time.Time{}
+	if mr.reconnectBackoff != nil {
+		mr.reconnectBackoff.Reset()
+	}
+	mr.mu.Unlock()
 	p.recordRelayConnectionState(mr.url, true)
-	p.logger.Debug("connected to relay", zap.String("relay", mr.url))
+	return relay, nil
 }
 
 // Publish publishes an event to all connected relays.
@@ -355,12 +504,13 @@ func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]P
 // relayURLs (every configured relay when relayURLs is nil). Relays are contacted
 // concurrently so one slow or half-open relay does not delay the others; results
 // are returned in configured relay order. URLs that are not configured in the
-// pool are ignored and produce no result.
+// pool are ignored and produce no result. The topology lock is only held to
+// snapshot the target relays, never during the sends, so a slow relay cannot
+// hold up reconfiguration; a relay retired mid-send fails that send.
 func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Event, relayURLs []string) ([]PublishResult, error) {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	relays := p.orderedRelaysLocked()
+	p.mu.RUnlock()
 	if relayURLs != nil {
 		wanted := relayURLSet(normalizeRelayURLs(relayURLs))
 		selected := relays[:0]
@@ -475,38 +625,20 @@ func (r PublishResult) IsDuplicate() bool {
 }
 
 func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRelay, ev nostr.Event) PublishResult {
-	mr.mu.Lock()
 	result := PublishResult{RelayURL: mr.url}
 
-	// Reconnect if needed.
-	if !mr.connected || mr.relay == nil {
-		p.recordRelayReconnect(mr.url)
-		connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		opts := p.buildRelayOptions(mr.url)
-		relay, err := p.connectRelay(connectCtx, mr.url, opts)
-		if err != nil {
-			mr.connected = false
-			mr.lastErr = err
-			p.recordRelayConnectionState(mr.url, false)
-			p.recordRelayError(mr.url, err.Error())
-			result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
-			mr.mu.Unlock()
-			return result
-		}
-		mr.relay = relay
-		mr.connected = true
-		mr.lastErr = nil
-		p.recordRelayConnectionState(mr.url, true)
+	// Reconnect if needed; a relay in reconnect backoff fails fast.
+	relay, err := p.reconnectRelay(ctx, mr)
+	if err != nil {
+		result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
+		return result
 	}
-	relay := mr.relay
-	mr.mu.Unlock()
 
 	// Do not hold the per-relay state lock across network I/O. Bootstrap and
 	// live-catchup subscriptions need this lock to attach to the same relay and
 	// must not be starved by a slow publish.
 	startedAt := time.Now()
-	err := publishOnRelay(relay, ctx, ev)
+	err = publishOnRelay(relay, ctx, ev)
 	if err != nil {
 		if reason, ok := publishRejectionReason(err); ok {
 			if IsAuthRequiredReason(reason) {
@@ -711,28 +843,17 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 	}
 
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	relays := p.orderedRelaysLocked()
+	p.mu.RUnlock()
 
-	for _, mr := range p.relays {
+	for _, mr := range relays {
+		if _, err := p.reconnectRelay(ctx, mr); err != nil {
+			continue
+		}
 		mr.mu.Lock()
 		if !mr.connected || mr.relay == nil {
-			p.recordRelayReconnect(mr.url)
-			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			opts := p.buildRelayOptions(mr.url)
-			relay, err := p.connectRelay(connectCtx, mr.url, opts)
-			cancel()
-			if err != nil {
-				mr.connected = false
-				mr.lastErr = err
-				p.recordRelayConnectionState(mr.url, false)
-				p.recordRelayError(mr.url, err.Error())
-				mr.mu.Unlock()
-				continue
-			}
-			mr.relay = relay
-			mr.connected = true
-			mr.lastErr = nil
-			p.recordRelayConnectionState(mr.url, true)
+			mr.mu.Unlock()
+			continue
 		}
 
 		filter := filters[0]
@@ -1357,6 +1478,7 @@ func closeManagedRelay(pool *RelayPool, mr *managedRelay) {
 			pool.logger.Warn("close relay connection failed", zap.String("relay", mr.url), zap.Error(err))
 		}
 	}
+	mr.closed = true
 	mr.connected = false
 	mr.lastErr = nil
 	pool.recordRelayConnectionState(mr.url, false)

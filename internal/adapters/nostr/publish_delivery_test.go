@@ -90,8 +90,8 @@ func newSignalingOutbox() *signalingOutbox {
 	}
 }
 
-func (o *signalingOutbox) ListUnpublishedAfter(ctx context.Context, after *repository.NostrOutboxCursor, limit int) ([]repository.NostrEventRecord, error) {
-	records, err := o.InMemoryNostrEventRepository.ListUnpublishedAfter(ctx, after, limit)
+func (o *signalingOutbox) ListUnpublishedAfter(ctx context.Context, target string, after *repository.NostrOutboxCursor, limit int) ([]repository.NostrEventRecord, error) {
+	records, err := o.InMemoryNostrEventRepository.ListUnpublishedAfter(ctx, target, after, limit)
 	select {
 	case o.listed <- struct{}{}:
 	default:
@@ -297,7 +297,7 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 
 	rec, err := outbox.GetByID(ctx, event.ID.Hex())
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStateNotApplicable, rec.PublishState, "abandoned rows leave the outbox")
+	require.Equal(t, repository.NostrPublishStateFailed, rec.PublishState, "abandoned rows leave the outbox as failed")
 	require.Contains(t, rec.LastPublishError, "abandoned")
 	require.Contains(t, rec.LastPublishError, "blocked: pubkey not allowed")
 	depth, err := outbox.CountUnpublished(ctx)
@@ -348,7 +348,7 @@ func TestPublisherAbandonsAfterAttemptBudgetWhenQuorumNeverMet(t *testing.T) {
 
 	rec, err := outbox.GetByID(ctx, event.ID.Hex())
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStateNotApplicable, rec.PublishState)
+	require.Equal(t, repository.NostrPublishStateFailed, rec.PublishState)
 	require.Contains(t, rec.LastPublishError, "abandoned after 3 publish attempts")
 	require.Equal(t, 3, rec.PublishAttempts)
 	relays.requireNoPendingCalls(t)
@@ -373,27 +373,6 @@ func TestPublisherBudgetExhaustedAfterQuorumPublishesRow(t *testing.T) {
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "row published once relay B's budget ran out"))
 	relays.requireNoPendingCalls(t)
-}
-
-func TestPublisherInlineOnlySettlesAtQuorumWithoutLeavingRowForAnotherRunner(t *testing.T) {
-	ctx := context.Background()
-	outbox := newSignalingOutbox()
-	relays := newScriptedRelays(map[string][]PublishResult{
-		relayA: {{Accepted: true}},
-		relayB: {{Error: errors.New("relay down")}},
-	})
-	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
-	WithInlineDeliveryOnly()(publisher)
-
-	event := testSignedEvent("inline-only")
-	_, err := publisher.PublishSignedEventWithResults(ctx, event)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
-	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "inline-only row settled at quorum"))
-	depth, err := outbox.CountUnpublished(ctx)
-	require.NoError(t, err)
-	require.Zero(t, depth, "no pending row is left for a runner on a different relay set")
-	require.False(t, publisher.isTracked(event.ID.Hex()))
 }
 
 func TestPublisherRequiredAcceptances(t *testing.T) {
@@ -474,4 +453,45 @@ func TestClassifyPublishResult(t *testing.T) {
 	for _, tc := range cases {
 		require.Equal(t, tc.want, classifyPublishResult(tc.result), "%+v", tc.result)
 	}
+}
+
+// Rounds that only hit the pool's fail-fast reconnect backoff for a dial
+// failure the event has already counted do not consume the attempt budget and
+// are not recorded; a fresh dial failure does count.
+func TestPublisherFailFastBackoffRoundsDoNotConsumeAttemptBudget(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	failedAt := time.Unix(1_800_000_000, 0)
+	backoff := func(at time.Time) PublishResult {
+		// RetryAt in the past keeps the retries immediate in this test.
+		return PublishResult{Error: &RelayReconnectBackoffError{RelayURL: relayB, RetryAt: time.Unix(1, 0), FailedAt: at, LastErr: errors.New("connection refused")}}
+	}
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Accepted: true}},
+		relayB: {
+			backoff(failedAt),                                                                             // inline round: relay A is contacted, counts (1)
+			backoff(failedAt), backoff(failedAt), backoff(failedAt), backoff(failedAt), backoff(failedAt), // same failure: skipped
+			backoff(failedAt.Add(time.Minute)), // a fresh dial failure counts (2)
+			{Accepted: true},                   // counts (3)
+		},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	publisher.maxAttempts = 3
+	startRunner(t, publisher, outbox)
+
+	event := testSignedEvent("fail-fast-budget")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+	for range 7 {
+		require.Equal(t, []string{relayB}, relays.nextCall(t))
+	}
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "relay B accepted within the budget"))
+
+	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
+	require.Empty(t, rec.LastPublishError, "relay B accepted: nothing was given up on")
+	require.Equal(t, 3, rec.PublishAttempts, "only rounds that contacted a relay or saw a fresh dial failure count")
+	relays.requireNoPendingCalls(t)
 }
