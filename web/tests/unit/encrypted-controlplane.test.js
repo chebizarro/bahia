@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { finalizeEvent, getPublicKey } from 'nostr-tools';
 
 const authMock = vi.hoisted(() => ({
   authState: { status: 'authenticated', pubkey: 'a'.repeat(64) },
@@ -18,7 +19,11 @@ const nostrClientMock = vi.hoisted(() => ({
     .map((tag) => tag[1])
 }));
 
-const SERVICE_PUBKEY = 'a70a59980b1be3070959800f94f4221d54ef77a71d686ac85fedadfc586813a0';
+// ContextVM results are really signed with a throwaway service key; inbound
+// validation has no test bypass.
+const SERVICE_SECRET_KEY = Uint8Array.from({ length: 32 }, () => 0x5a);
+const SERVICE_PUBKEY = getPublicKey(SERVICE_SECRET_KEY);
+const FORGER_SECRET_KEY = Uint8Array.from({ length: 32 }, () => 0x6b);
 
 const canonicalDiscoveryFixture = JSON.parse(
   readFileSync(resolve(process.cwd(), '../test/fixtures/system_discovery_sidecar_first.json'), 'utf8')
@@ -73,15 +78,12 @@ async function flushAsync() {
 }
 
 function resultEvent(module, requestEventId, payload) {
-  const inner = {
-    id: `inner-${Math.random()}`,
+  const inner = finalizeEvent({
     kind: module.CONTEXTVM_MESSAGE_KIND,
-    pubkey: SERVICE_PUBKEY,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', requestEventId, '', 'reply'], ['p', authMock.authState.pubkey], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION]],
-    content: JSON.stringify(payload),
-    sig: '0'.repeat(128)
-  };
+    content: JSON.stringify(payload)
+  }, SERVICE_SECRET_KEY);
   return {
     id: `result-${Math.random()}`,
     kind: module.CONTEXTVM_GIFT_WRAP_KIND,
@@ -117,7 +119,6 @@ describe('encrypted controlplane transport', () => {
     systemMock.currentSystemInfo.mockReturnValue(legacyDiscovery());
     client = fakeClient();
     nostrClientMock.activeClient = client;
-    globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS = true;
     module = await import('../../src/lib/nostr/encrypted-controlplane.js');
   });
 
@@ -125,7 +126,6 @@ describe('encrypted controlplane transport', () => {
     vi.useRealTimers();
     module?.disconnectEncryptedControlplane?.();
     nostrClientMock.activeClient = null;
-    delete globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS;
     delete globalThis.location;
   });
 
@@ -397,18 +397,45 @@ describe('encrypted controlplane transport', () => {
       kind: module.CONTEXTVM_GIFT_WRAP_KIND,
       pubkey: 'c'.repeat(64),
       tags: [['e', 'req-spoofed'], ['p', 'a'.repeat(64)]],
-      content: `cipher:${JSON.stringify({
-        id: 'inner-spoofed',
+      content: `cipher:${JSON.stringify(finalizeEvent({
         kind: module.CONTEXTVM_MESSAGE_KIND,
-        pubkey: 'b'.repeat(64),
         created_at: Math.floor(Date.now() / 1000),
         tags: [['e', 'req-spoofed'], ['p', 'a'.repeat(64)]],
-        content: '{"jsonrpc":"2.0","id":"req-spoofed","result":{"ok":true}}',
-        sig: '0'.repeat(128)
-      })}`
+        content: '{"jsonrpc":"2.0","id":"req-spoofed","result":{"ok":true}}'
+      }, FORGER_SECRET_KEY))}`
     });
 
     await expect(promise).rejects.toThrow('inner event was not signed by the expected service pubkey');
+  });
+
+  it('rejects service-attributed inner results whose signature does not verify', async () => {
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: SERVICE_PUBKEY });
+    const signed = finalizeEvent({
+      kind: module.CONTEXTVM_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['e', 'req-forged-sig'], ['p', 'a'.repeat(64)]],
+      content: '{"jsonrpc":"2.0","id":"req-forged-sig","result":{"ok":true}}'
+    }, SERVICE_SECRET_KEY);
+
+    for (const [requestEventId, inner] of [
+      ['req-forged-sig', { ...signed, sig: '0'.repeat(128) }],
+      ['req-forged-sig', { ...signed, sig: `${signed.sig.slice(0, -2)}${signed.sig.endsWith('00') ? '11' : '00'}` }]
+    ]) {
+      const promise = transport.awaitEncryptedResult({ requestEventId });
+      await handlers.onEvent({
+        id: `result-${requestEventId}`,
+        kind: module.CONTEXTVM_GIFT_WRAP_KIND,
+        pubkey: SERVICE_PUBKEY,
+        tags: [['e', requestEventId], ['p', 'a'.repeat(64)]],
+        content: `cipher:${JSON.stringify(inner)}`
+      });
+      await expect(promise).rejects.toThrow('event signature is invalid');
+    }
   });
 
   it('rejects on decrypt failures for correlated result events', async () => {

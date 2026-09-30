@@ -381,6 +381,20 @@ export const DNS_STATE_SCHEMAS = Object.freeze({
 // kind it came from; consumers resolve the family through legacy_kind.
 export const BAHIA_CP_STATE_SCHEMA = 'bahia.cp-state.v1';
 export const DNS_STATE_DOMAIN = 'dns';
+// Single-letter t topics the projector stamps on live and tombstone DNS state.
+// NIP-01 relays index single-letter tags, so DNS REQs filter on #t, not #domain.
+export const DNS_ZONE_TOPIC = 'dns-zone';
+export const DNS_ENDPOINT_TOPIC = 'dns-endpoint';
+export const DNS_POLICY_TOPIC = 'dns-policy';
+export const DNS_BACKEND_TOPIC = 'dns-backend';
+export const DNS_STATE_TOPICS = Object.freeze([DNS_ZONE_TOPIC, DNS_ENDPOINT_TOPIC, DNS_POLICY_TOPIC, DNS_BACKEND_TOPIC]);
+// Catalog kinds (internal/kinds WorkerState...) for the worker read models.
+// WORKER_STATE and its siblings above alias the 30900 wire kind; producers
+// stamp these catalog values in the 30900 record's legacy_kind tag.
+export const WORKER_STATE_CATALOG_KIND = 32000;
+export const WORKER_ASSIGNMENT_STATE_CATALOG_KIND = 32001;
+export const WORKER_DRAIN_STATUS_CATALOG_KIND = 32002;
+export const WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND = 32003;
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,
   [DNS_ENDPOINT_STATE]: DNS_STATE_SCHEMAS.ENDPOINT,

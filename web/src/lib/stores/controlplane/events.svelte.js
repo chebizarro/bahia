@@ -6,7 +6,6 @@ import {
   BAHIA_STATE_SCHEMAS,
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
-  DNS_STATE_SCHEMA_BY_LEGACY_KIND,
   LOOM_WORKER_ADVERTISEMENT,
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
@@ -15,6 +14,7 @@ import {
   SBOM_REFERENCE,
   parseJsonContent
 } from '../../nostr/client.js';
+import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../nostr/cp-state.js';
 import { controlplaneConnection } from './connection.svelte.js';
 import { applyServiceEvent } from '../collections/services.svelte.js';
 import { applyEnvironmentEvent } from '../collections/environments.svelte.js';
@@ -143,41 +143,11 @@ function eventLegacyKind(event) {
   return firstTagValue(event, 'legacy_kind') || '';
 }
 
-const legacyKindSchemaRoutes = new Map([
-  ['31961', BAHIA_STATE_SCHEMAS.SERVICE_STATE],
-  ['31962', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY],
-  ['31963', BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY],
-  ['31964', BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY],
-  ['31965', BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE],
-  ['31966', BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY],
-  ['31967', BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY],
-  ['31968', BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY],
-  ['31969', BAHIA_STATE_SCHEMAS.BUILD_REGISTRY],
-  // DNS routes resolve to the DNS family schemas but deliberately have no
-  // handler here: /dns state is owned by stores/dns.svelte.js, which keeps its
-  // own domain-scoped subscription and applies the same resolution.
-  ...Object.entries(DNS_STATE_SCHEMA_BY_LEGACY_KIND),
-  ['31980', BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY],
-  ['31981', BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY],
-  ['31982', BAHIA_STATE_SCHEMAS.ML_DATASET_REGISTRY],
-  ['31983', BAHIA_STATE_SCHEMAS.ML_RECIPE_REGISTRY],
-  ['31984', BAHIA_STATE_SCHEMAS.ML_RECIPE_RUN_STATE],
-  ['31985', BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY],
-  ['31986', BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE],
-  ['31987', BAHIA_STATE_SCHEMAS.ML_EVALUATION_EXPERIMENT_STATE],
-  ['31988', BAHIA_STATE_SCHEMAS.ML_ARTIFACT_PROVENANCE_GRAPH],
-  ['31989', BAHIA_STATE_SCHEMAS.ML_RUNTIME_CAPABILITY_PROFILE],
-  ['31990', BAHIA_STATE_SCHEMAS.ASSISTANT_SESSION],
-  ['31991', BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY],
-  ['31992', BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY],
-  ['31993', BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY],
-  ['31994', BAHIA_STATE_SCHEMAS.BACKUP_RETENTION_REGISTRY],
-  ['31995', BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY],
-  ['31996', BAHIA_STATE_SCHEMAS.BACKUP_RUN_STATE],
-  ['31997', BAHIA_STATE_SCHEMAS.BACKUP_VERIFICATION_STATE],
-  ['31998', BAHIA_STATE_SCHEMAS.BACKUP_RESTORE_STATE],
-  ['31999', BAHIA_STATE_SCHEMAS.BACKUP_RUNTIME_OBSERVATION_STATE],
-]);
+// legacy_kind → family schema, generated from kinds.gen.js (nostr/cp-state.js).
+// DNS routes resolve to the DNS family schemas but deliberately have no
+// handler here: /dns state is owned by stores/dns.svelte.js, which keeps its
+// own topic-scoped subscription and applies the same resolution.
+const legacyKindSchemaRoutes = new Map(Object.entries(CP_STATE_SCHEMA_BY_LEGACY_KIND));
 
 function semanticRoute(event) {
   if (event?.kind === CASCADIA_CONTROLPLANE_STATE) {

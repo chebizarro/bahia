@@ -79,9 +79,30 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 	for jsName, goValue := range map[string]string{
 		"BAHIA_CP_STATE_SCHEMA": CASControlStateSchema,
 		"DNS_STATE_DOMAIN":      DNSDomain,
+		"DNS_ZONE_TOPIC":        DNSZoneTopic,
+		"DNS_ENDPOINT_TOPIC":    DNSEndpointTopic,
+		"DNS_POLICY_TOPIC":      DNSPolicyTopic,
+		"DNS_BACKEND_TOPIC":     DNSBackendTopic,
 	} {
 		if got, ok := jsStrings[jsName]; !ok || got != goValue {
 			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)
+		}
+	}
+}
+
+// TestGeneratedFrontendWorkerCatalogKindsMatchGo keeps the web's legacy_kind
+// values for the worker read models (whose JS names alias the 30900 wire
+// kind) equal to the catalog kinds producers stamp.
+func TestGeneratedFrontendWorkerCatalogKindsMatchGo(t *testing.T) {
+	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js"))
+	for jsName, goValue := range map[string]int{
+		"WORKER_STATE_CATALOG_KIND":               WorkerState,
+		"WORKER_ASSIGNMENT_STATE_CATALOG_KIND":    WorkerAssignmentState,
+		"WORKER_DRAIN_STATUS_CATALOG_KIND":        WorkerDrainStatus,
+		"WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND": WorkerEligibilityPreview,
+	} {
+		if got, ok := jsKinds[jsName]; !ok || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %d (present=%t), want internal/kinds value %d", jsName, got, ok, goValue)
 		}
 	}
 }

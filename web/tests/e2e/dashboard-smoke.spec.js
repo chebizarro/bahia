@@ -335,13 +335,15 @@ async function installEncryptedDashboardPaymentHarness(page) {
           socket.emitEvent(resultEvent);
           continue;
         }
-        for (const [subId, filters] of socket.subscriptions?.entries() || []) {
-          if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
-            const messageEvent = { type: 'message', data: JSON.stringify(['EVENT', subId, resultEvent]), target: socket };
-            socket.onmessage?.(messageEvent);
-            socket.dispatchEvent?.(messageEvent);
+        void window.__bahiaE2ESignMockEvent(resultEvent, servicePubkey).then((signedEvent) => {
+          for (const [subId, filters] of socket.subscriptions?.entries() || []) {
+            if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
+              const messageEvent = { type: 'message', data: JSON.stringify(['EVENT', subId, signedEvent]), target: socket };
+              socket.onmessage?.(messageEvent);
+              socket.dispatchEvent?.(messageEvent);
+            }
           }
-        }
+        });
       }
       return delivered;
     }
@@ -385,8 +387,7 @@ async function installEncryptedDashboardPaymentHarness(page) {
           pubkey: servicePubkey,
           created_at: Math.floor(Date.now() / 1000),
           tags: [['e', event.id], ['p', operatorPubkey]],
-          content: `enc44:${JSON.stringify(paymentResultPayloadForWorker(worker, event.id))}`,
-          sig: '0'.repeat(128)
+          content: `enc44:${JSON.stringify(paymentResultPayloadForWorker(worker, event.id))}`
         };
 
         const sent = originalSend.call(this, data);
@@ -430,17 +431,18 @@ async function installEncryptedDashboardPaymentHarness(page) {
             tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1']],
             content: String(event.content || '').startsWith('mock-nip44:')
               ? `mock-nip44:${btoa(unescape(encodeURIComponent(JSON.stringify(resultEnvelope))))}`
-              : `enc44:${JSON.stringify(resultEnvelope)}`,
-            sig: '0'.repeat(128)
+              : `enc44:${JSON.stringify(resultEnvelope)}`
           };
 
           const sent = originalSend.call(this, data);
           if (this.readyState !== window.WebSocket.OPEN) return sent;
-          for (const [subId, filters] of this.subscriptions?.entries() || []) {
-            if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
-              this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
+          void window.__bahiaE2ESignMockEvent(resultEvent, servicePubkey).then((signedEvent) => {
+            for (const [subId, filters] of this.subscriptions?.entries() || []) {
+              if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
+                this.onmessage?.({ data: JSON.stringify(['EVENT', subId, signedEvent]) });
+              }
             }
-          }
+          });
           return sent;
         }
       }

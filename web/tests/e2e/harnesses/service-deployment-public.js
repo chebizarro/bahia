@@ -247,11 +247,6 @@ export async function installPublicServiceDeploymentHarness(
       });
     }
 
-    async function sha256Hex(input) {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-
     async function normalizeRelayEventForDelivery(event) {
       const normalized = {
         ...event,
@@ -259,10 +254,9 @@ export async function installPublicServiceDeploymentHarness(
         created_at: Number.isInteger(event?.created_at) ? event.created_at : nowSeconds,
         tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
         content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
-        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
       };
-      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
-      return normalized;
+      // Signed as its author by the E2E test keyring (helpers.js).
+      return window.__bahiaE2ESignMockEvent(normalized, servicePubkey);
     }
 
     function deliverRelayEvent(socket, subId, event) {

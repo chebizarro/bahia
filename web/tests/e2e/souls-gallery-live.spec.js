@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
 
 const FACTORY_PUBKEY = E2E_SERVICE_PUBKEY;
-const AGENT_PUBKEY = 'c'.repeat(64);
+const AGENT_PUBKEY = e2eTestPubkey('agent');
 
 function soulEvent({ id, agentId, name, purpose, status = 'active', deployStatus = '', createdAt }) {
   const tags = [

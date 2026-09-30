@@ -1,5 +1,66 @@
-export const TEST_PUBKEY = 'f'.repeat(64);
-export const E2E_SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+import { createHash } from 'node:crypto';
+import { finalizeEvent, getPublicKey } from 'nostr-tools';
+
+// Every event the mock relay delivers is really signed (nostr-tools
+// finalizeEvent) with a throwaway test key, so the app's inbound signature
+// verification runs unmodified in E2E. The keyring maps each fixture pubkey to
+// its secret; fixtures must derive author pubkeys with e2eTestPubkey().
+const HEX_PUBKEY = /^[0-9a-f]{64}$/;
+const e2eKeyring = new Map();
+
+function rememberSecretKey(secretKey) {
+  const pubkey = getPublicKey(secretKey);
+  e2eKeyring.set(pubkey, secretKey);
+  return pubkey;
+}
+
+function secretKeyFromHex(hex) {
+  return Uint8Array.from(hex.match(/.{2}/g).map((byte) => Number.parseInt(byte, 16)));
+}
+
+/** Deterministic test secret key for a fixture identity label. */
+export function e2eTestSecretKey(label) {
+  const secretKey = new Uint8Array(createHash('sha256').update(`bahia-e2e:${label}`).digest());
+  rememberSecretKey(secretKey);
+  return secretKey;
+}
+
+/** Pubkey of the e2eTestSecretKey(label) identity; events it authors are signable. */
+export function e2eTestPubkey(label) {
+  return getPublicKey(e2eTestSecretKey(label));
+}
+
+// The service identity is secret key 1 (pubkey = secp256k1 G.x), and the
+// relay-backed harness operator is 0x33..33 (relay-harness.js).
+export const E2E_SERVICE_PUBKEY = rememberSecretKey(secretKeyFromHex(`${'0'.repeat(63)}1`));
+rememberSecretKey(secretKeyFromHex('3'.repeat(64)));
+export const TEST_PUBKEY = e2eTestPubkey('operator');
+
+/**
+ * Sign an event template as its (test-keyring) author. Events without a hex
+ * pubkey are authored by fallbackPubkey (the mock relay's service identity).
+ */
+export function signE2EEvent(event, fallbackPubkey = E2E_SERVICE_PUBKEY) {
+  const pubkey = typeof event?.pubkey === 'string' && HEX_PUBKEY.test(event.pubkey) ? event.pubkey : fallbackPubkey;
+  const secretKey = e2eKeyring.get(pubkey);
+  if (!secretKey) {
+    throw new Error(`E2E mock relay has no test key for pubkey ${pubkey}; derive fixture pubkeys with e2eTestPubkey(label)`);
+  }
+  return finalizeEvent({
+    kind: event.kind,
+    created_at: event.created_at,
+    tags: event.tags,
+    content: event.content
+  }, secretKey);
+}
+
+const signerPages = new WeakSet();
+
+async function exposeE2ESigner(page) {
+  if (signerPages.has(page)) return;
+  signerPages.add(page);
+  await page.exposeFunction('__bahiaE2ESignMockEvent', (event, fallbackPubkey) => signE2EEvent(event, fallbackPubkey));
+}
 
 const DEFAULT_DISCOVERY_INFO = {
   nostr: {
@@ -46,22 +107,22 @@ export async function installE2EMocks(
     ...discoveryInfo,
     features: { direct_nostr_http_auth: true, ...discoveryInfo.features }
   };
+  await exposeE2ESigner(page);
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
     }
-    const servicePubkey = systemInfo?.nostr?.service_pubkey || '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+    const servicePubkey = systemInfo?.nostr?.service_pubkey || defaultServicePubkey;
     const browserRelays = systemInfo?.nostr?.browser_relays || [];
     window.__BAHIA_BOOTSTRAP__ = {
       schema: 'bahia.bootstrap.v1',
       relay_urls: browserRelays,
       service_pubkeys: [servicePubkey]
     };
-    window.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS = true;
     const discoveryEvents = [
       {
         id: 'e2e-system-discovery',
@@ -69,8 +130,7 @@ export async function installE2EMocks(
         pubkey: servicePubkey,
         created_at: 1,
         tags: [['d', 'bahia-system-v1']],
-        content: JSON.stringify({ ...systemInfo, schema: 'bahia.system-discovery.v1' }),
-        sig: '0'.repeat(128)
+        content: JSON.stringify({ ...systemInfo, schema: 'bahia.system-discovery.v1' })
       },
       {
         id: 'e2e-browser-relays',
@@ -78,8 +138,7 @@ export async function installE2EMocks(
         pubkey: servicePubkey,
         created_at: 1,
         tags: [['d', 'bahia-browser-v1'], ...browserRelays.map((relay) => ['relay', relay])],
-        content: '',
-        sig: '0'.repeat(128)
+        content: ''
       }
     ];
     const serviceRelays = systemInfo?.nostr?.service_relays || browserRelays;
@@ -89,8 +148,7 @@ export async function installE2EMocks(
       pubkey: servicePubkey,
       created_at: 1,
       tags: [['d', 'bahia-service-v1'], ...serviceRelays.map((relay) => ['relay', relay])],
-      content: '',
-      sig: '0'.repeat(128)
+      content: ''
     });
     const existingNostrEvents = localStorage.getItem('__bahia_e2e_nostr_events');
     const seedAlreadyApplied = sessionStorage.getItem('__bahia_e2e_nostr_seeded') === 'true';
@@ -126,12 +184,7 @@ export async function installE2EMocks(
       const decodeMockCiphertext = (ciphertext) => decodeURIComponent(escape(atob(String(ciphertext).replace(/^mock-nip44:/, ''))));
       window.nostr = {
         getPublicKey: async () => pubkey,
-        signEvent: async (event) => ({
-          ...event,
-          pubkey,
-          id: `mock-event-id-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          sig: `mock-signature-${Math.random().toString(36).slice(2)}`
-        }),
+        signEvent: async (event) => window.__bahiaE2ESignMockEvent({ ...event, pubkey }, pubkey),
         getRelays: async () => ({
           'wss://relay.example.com': { read: true, write: true }
         }),
@@ -170,27 +223,24 @@ export async function installE2EMocks(
 
     window.__BAHIA_E2E_WS_CONNECTIONS = [];
 
-    async function sha256Hex(input) {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-
+    // Fixtures are templates: the relay normalizes them and has the test
+    // keyring (Node side, nostr-tools finalizeEvent) sign them as their author.
     async function normalizeMockEventForDelivery(event) {
       const now = Math.floor(Date.now() / 1000);
       const createdAt = Number.isInteger(event?.created_at) && event.created_at > now - 365 * 24 * 60 * 60 && event.created_at <= now + 600
         ? event.created_at
         : now;
-      const normalized = {
-        ...event,
-        pubkey: typeof event?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(event.pubkey) ? event.pubkey : servicePubkey,
+      return window.__bahiaE2ESignMockEvent({
+        kind: event.kind,
+        pubkey: event?.pubkey,
         created_at: createdAt,
         tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
-        content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
-        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
-      };
-      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
-      return normalized;
+        content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {})
+      }, servicePubkey);
     }
+
+    // Custom sockets in individual specs deliver through the same signer.
+    window.__bahiaE2ENormalizeAndSign = normalizeMockEventForDelivery;
 
     function deliverMockEvent(socket, subId, event) {
       if (socket.readyState !== MockWebSocket.OPEN) return;
@@ -286,8 +336,7 @@ export async function installE2EMocks(
         pubkey: servicePubkey,
         created_at: Math.floor(Date.now() / 1000),
         tags: [['e', event.id], ['p', event.kind === 1059 ? pubkey : event.pubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ...tags],
-        content: JSON.stringify(response),
-        sig: 'mock-service-signature'
+        content: JSON.stringify(response)
       };
     }
 
@@ -383,7 +432,6 @@ export async function installE2EMocks(
         created_at: now,
         tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.status.v1'], ['d', statusDTag], ['artifact', artifactId], ['subject', digest], ['status', 'completed']],
         content: JSON.stringify({ schema: 'bahia.sbom.status.v1', run_id: runId, artifact_id: artifactId, subject_digest: digest, status: 'completed' }),
-        sig: '0'.repeat(128)
       };
       publishMockNostrEvent(statusEvent);
 
@@ -397,8 +445,7 @@ export async function installE2EMocks(
           created_at: now,
           tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
           content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: locationUri }, payload_sha256: payloadSha, generator, packages: [{ name: `${format}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }] }),
-          sig: '0'.repeat(128)
-        };
+          };
         referenceEventIds.push(referenceEvent.id);
         publishMockNostrEvent(referenceEvent);
       }
@@ -410,7 +457,6 @@ export async function installE2EMocks(
         created_at: now,
         tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
         content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://${sourcePath}/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator, referenceEventId: referenceEventIds[formats.indexOf(format)] })) }),
-        sig: '0'.repeat(128)
       };
       publishMockNostrEvent(availabilityEvent);
 
@@ -421,7 +467,6 @@ export async function installE2EMocks(
         created_at: now,
         tags: [['domain', 'sbom'], ['schema', 'bahia.audit.v1'], ['type', auditType], ['event_type', auditType], ['artifact', artifactId]],
         content: JSON.stringify({ schema: 'bahia.audit.v1', type: auditType, event_type: auditType, entity_id: artifactId, data: { formats, generator } }),
-        sig: '0'.repeat(128)
       };
       publishMockNostrEvent(auditEvent);
 
@@ -433,8 +478,7 @@ export async function installE2EMocks(
           created_at: now,
           tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifactId], ['artifact', artifactId], ['deleted', 'false']],
           content: JSON.stringify({ schema: 'bahia.registry.artifact.v1', id: artifactId, name: artifactId, artifact_type: 'container_image', digest, sbom: { artifact_id: artifactId, format: formats[0], generator: { id: generator }, source_url: `blossom://${sourcePath}/${artifactId}.${formats[0]}.json`, raw_hash: payloadSha, package_count: 1 }, sbom_packages: [{ name: `${formats[0]}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }], deleted: false }),
-          sig: '0'.repeat(128)
-        });
+          });
       }
 
       window.dispatchEvent(new CustomEvent(operation === 'sbom/import' ? '__bahia_e2e_sbom_imported' : '__bahia_e2e_sbom_generated', {
@@ -637,7 +681,8 @@ export async function installE2EMocks(
     nostrEvents,
     systemInfo: effectiveSystemInfo,
     routeRoleRequirements,
-    contextVMOperations
+    contextVMOperations,
+    defaultServicePubkey: E2E_SERVICE_PUBKEY
   });
 }
 
