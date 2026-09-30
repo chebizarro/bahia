@@ -738,25 +738,6 @@ func (r *PgSecurityRepository) UpdateSecurityPublicationState(ctx context.Contex
 	return nil
 }
 
-func (r *PgSecurityRepository) ListRetryableSecurityPublications(ctx context.Context, now time.Time, limit int) ([]domain.SecurityObservablePublication, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT `+securityPublicationColumns+`
-		FROM security_observable_publications
-		WHERE publish_state = 'failed_retryable'
-		  AND (next_retry_at IS NULL OR next_retry_at <= $1)
-		ORDER BY COALESCE(next_retry_at, created_at) ASC
-		LIMIT $2
-	`, now, limit)
-	if err != nil {
-		return nil, fmt.Errorf("listing retryable security publications: %w", err)
-	}
-	defer rows.Close()
-	return scanSecurityPublicationRows(rows)
-}
-
 func (r *PgSecurityRepository) updateBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) error {
 	metadataJSON, violatedJSON, osvIDsJSON, err := marshalBreachJSON(breach)
 	if err != nil {
@@ -997,39 +978,6 @@ func scanOSVCache(row scanner) (*domain.OSVVulnerabilityCache, error) {
 		return nil, err
 	}
 	return &cache, nil
-}
-
-func scanSecurityPublication(row scanner) (*domain.SecurityObservablePublication, error) {
-	var pub domain.SecurityObservablePublication
-	var targetKeyHash, eventID, lastError pgtype.Text
-	var runID, findingID, breachID pgtype.UUID
-	var nextRetryAt, publishedAt pgtype.Timestamptz
-	if err := row.Scan(&pub.ID, &pub.ObservableType, &runID, &targetKeyHash, &findingID, &breachID,
-		&pub.EventKind, &pub.DTag, &pub.Schema, &pub.PublishState, &eventID, &pub.AttemptCount, &lastError,
-		&nextRetryAt, &publishedAt, &pub.CreatedAt, &pub.UpdatedAt); err != nil {
-		return nil, mapNotFound(err)
-	}
-	pub.RunID = uuidPtrFromPG(runID)
-	pub.TargetKeyHash = textValue(targetKeyHash)
-	pub.FindingID = uuidPtrFromPG(findingID)
-	pub.BreachID = uuidPtrFromPG(breachID)
-	pub.EventID = textValue(eventID)
-	pub.LastError = textValue(lastError)
-	pub.NextRetryAt = timePtrFromPG(nextRetryAt)
-	pub.PublishedAt = timePtrFromPG(publishedAt)
-	return &pub, nil
-}
-
-func scanSecurityPublicationRows(rows pgx.Rows) ([]domain.SecurityObservablePublication, error) {
-	out := make([]domain.SecurityObservablePublication, 0)
-	for rows.Next() {
-		pub, err := scanSecurityPublication(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *pub)
-	}
-	return out, rows.Err()
 }
 
 func mapNotFound(err error) error {

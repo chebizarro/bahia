@@ -77,12 +77,17 @@ Online indexes cover:
 - archive batch membership;
 - recent kind queries `(kind,created_at DESC,id DESC)`;
 - author-aware replay `(kind,pubkey,created_at DESC,id DESC)`;
-- entity history `(entity_type,entity_id,created_at DESC,id DESC)`.
+- entity history `(entity_type,entity_id,created_at DESC,id DESC)`;
+- abandoned outbox rows `(received_at,id) WHERE publish_state='failed'`
+  (metrics only; archival readiness does not wait on it).
 
 Metrics expose hot relation bytes, estimated live/dead rows, oldest hot event,
-claimed/exported/protected batch counts, and pending outbox depth. Alerts should
-fire on sustained hot-byte growth, a protected batch that cannot prune, oldest
-hot age exceeding policy, or any pending outbox growth.
+claimed/exported/protected batch counts, pending outbox depth, and the failed
+(abandoned) outbox row count (`-1` until its index exists). Alerts should fire
+on sustained hot-byte growth, a protected batch that cannot prune, oldest hot
+age exceeding policy, any pending outbox growth, or any increase in failed
+rows. The runbook (`docs/runbooks/nostr-event-store-lifecycle.md`) covers the
+post-000071 `ensure-indexes` run that validates the publish-state check.
 
 ## Rollout and rollback
 

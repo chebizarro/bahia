@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -133,6 +133,15 @@ const (
 // Duplicate OK counts as acceptance; blocked:, invalid: and pow: rejections
 // are terminal for the relay that sent them.
 //
+// Per-relay acceptance is kept in memory only. After a restart, discovery
+// resends a pending row to every write relay, including relays that had
+// already accepted it; they answer OK "duplicate:", which counts as
+// acceptance. The cost is one extra EVENT frame per already-accepting relay per
+// pending row per restart. The event is never re-signed (it is the stored
+// signed event), so relays see the same id and no second copy exists. That
+// bounded resend is preferred over persisting per-relay state, which would put
+// relay topology into Postgres and add a write per relay per round.
+//
 // Every outbox row a Publisher writes carries its publish target (see
 // WithPublishTarget), and its Run only drains rows for that target, so each
 // row is retried to the relays of the pool it was written for. Run one
@@ -167,6 +176,9 @@ type Publisher struct {
 	// outboxCursor is the runner's keyset position in the pending outbox. It
 	// is only touched by the Run goroutine.
 	outboxCursor *repository.NostrOutboxCursor
+	// onAbandoned, when set, is told about every event whose delivery this
+	// publisher gave up on (see OnDeliveryAbandoned).
+	onAbandoned atomic.Pointer[func(nostr.Event)]
 }
 
 // PublisherOption configures a Publisher.
@@ -230,90 +242,38 @@ func (p *Publisher) Pool() *RelayPool {
 	return p.pool
 }
 
-// SetupSubscriptions registers the Nostr publisher as a handler for internal events.
-func (p *Publisher) SetupSubscriptions(pub events.Publisher) {
-	if !p.enabled {
-		p.logger.Info("nostr publishing disabled")
+// OnDeliveryAbandoned registers fn to be called, synchronously and while the
+// delivery is still locked, for every event this publisher abandons: the row
+// moved to publish_state=failed because the publish quorum can no longer be
+// reached. fn must be fast and must not publish. The Projector uses it to drop
+// the dedupe entry for a coordinate whose latest event never reached the
+// quorum, so the next repair re-signs it instead of treating it as delivered.
+// A later registration replaces an earlier one.
+func (p *Publisher) OnDeliveryAbandoned(fn func(nostr.Event)) {
+	if fn == nil {
+		p.onAbandoned.Store(nil)
 		return
 	}
-
-	pub.Subscribe(events.EventBuildRegistered, func(ctx context.Context, e events.Event) {
-		p.publishEvent(ctx, KindBuildRegistered, "build.registered", e)
-	})
-	pub.Subscribe(events.EventArtifactRegistered, func(ctx context.Context, e events.Event) {
-		p.publishEvent(ctx, KindArtifactRegistered, "artifact.registered", e)
-	})
-	pub.Subscribe(events.EventDeploymentIntentCreated, func(ctx context.Context, e events.Event) {
-		p.publishEvent(ctx, KindDeploymentCreated, "deployment.created", e)
-	})
-	pub.Subscribe(events.EventDeploymentRunCompleted, func(ctx context.Context, e events.Event) {
-		p.publishEvent(ctx, KindDeploymentComplete, "deployment.completed", e)
-	})
-	pub.Subscribe(events.EventDriftDetected, func(ctx context.Context, e events.Event) {
-		p.publishEvent(ctx, KindDriftDetected, "drift.detected", e)
-	})
+	p.onAbandoned.Store(&fn)
 }
 
-func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e events.Event) {
-	content, err := json.Marshal(e.Data)
-	if err != nil {
-		p.logger.Error("failed to marshal event data", zap.Error(err))
-		return
+func (p *Publisher) notifyAbandoned(ev nostr.Event) {
+	if fn := p.onAbandoned.Load(); fn != nil {
+		(*fn)(ev)
 	}
-
-	ev := nostr.Event{
-		Kind:      canonicalKind(kind),
-		Content:   string(content),
-		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags: nostr.Tags{
-			{"t", label},
-			{"d", e.EntityID},
-		},
-	}
-
-	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
-		p.logger.Error("failed to sign nostr event", zap.Error(err))
-		return
-	}
-
-	rec := nostrEventRecordFromEvent(ev, label)
-	if p.eventRepo != nil {
-		p.markOutbound(rec)
-		if _, recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
-			p.logger.Warn("failed to persist nostr event before publish",
-				zap.String("event_id", ev.ID.Hex()),
-				zap.Error(recordErr),
-			)
-			return
-		}
-	}
-
-	attempt := p.publishOutboxEvent(ctx, ev)
-	if attempt.err != nil {
-		p.logger.Warn("failed to publish nostr event; retained for redelivery",
-			zap.String("event_type", label),
-			zap.String("event_id", ev.ID.Hex()),
-			zap.Bool("rate_limited", attempt.rateLimited),
-			zap.Error(attempt.err),
-		)
-		return
-	}
-
-	p.logger.Debug("nostr event published",
-		zap.String("event_type", label),
-		zap.String("event_id", ev.ID.Hex()),
-		zap.Int("relays", attempt.accepted),
-	)
 }
 
 type publishAttempt struct {
 	results     []PublishResult
 	accepted    int
 	rateLimited bool
-	err         error
+	// settled reports that delivery finished in this round: every relay
+	// accepted or reached a terminal state, so nothing is left to retry.
+	settled bool
+	err     error
 }
 
-func nostrEventRecordFromEvent(ev nostr.Event, entityType string) *repository.NostrEventRecord {
+func nostrEventRecordFromEvent(ev nostr.Event, entityType string, entityID *uuid.UUID) *repository.NostrEventRecord {
 	tagsJSON, _ := json.Marshal(ev.Tags)
 	return &repository.NostrEventRecord{
 		ID:         ev.ID.Hex(),
@@ -325,6 +285,7 @@ func nostrEventRecordFromEvent(ev nostr.Event, entityType string) *repository.No
 		CreatedAt:  ev.CreatedAt.Time(),
 		ReceivedAt: time.Now().UTC(),
 		EntityType: entityType,
+		EntityID:   entityID,
 	}
 }
 
@@ -355,7 +316,7 @@ func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publ
 	} else {
 		p.nudge()
 	}
-	return publishAttempt{results: report.results, accepted: report.accepted, rateLimited: report.rateLimited, err: report.err}
+	return publishAttempt{results: report.results, accepted: report.accepted, rateLimited: report.rateLimited, settled: settled, err: report.err}
 }
 
 func (p *Publisher) nudge() {
@@ -474,55 +435,6 @@ func (p *Publisher) Run(ctx context.Context) error {
 	}
 }
 
-// Subscribe listens for incoming Nostr events on all connected relays.
-// Deprecated: use Subscriber for production inbound handling; it supports scoped filters,
-// EOSE state, persistence, and duplicate-safe handler invocation.
-func (p *Publisher) Subscribe(ctx context.Context, kinds []int, handler func(ev *nostr.Event)) error {
-	if !p.enabled {
-		return nil
-	}
-
-	since := nostr.Timestamp(time.Now().Unix())
-	if p.eventRepo != nil {
-		latest, err := p.eventRepo.LatestCreatedAtForKinds(ctx, kinds)
-		if err != nil {
-			return err
-		}
-		if latest != nil {
-			since = nostr.Timestamp(latest.Unix() - 1)
-		}
-	}
-
-	filters := []nostr.Filter{{
-		Kinds: filterKindsFromInts(kinds),
-		Since: since,
-	}}
-
-	merged, err := p.pool.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		eoseCh := merged.EndOfStoredEvents
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-eoseCh:
-				eoseCh = nil
-			case ev, ok := <-merged.Events:
-				if !ok {
-					return
-				}
-				handler(ev)
-			}
-		}
-	}()
-
-	return nil
-}
-
 // PublishWithResults publishes an already-signed event through the underlying relay pool.
 func (p *Publisher) PublishWithResults(ctx context.Context, ev nostr.Event) ([]PublishResult, error) {
 	if p == nil || p.pool == nil {
@@ -551,7 +463,11 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
 		return nil, err
 	}
-	return p.enqueueAndDeliver(ctx, *ev, signedEventAuditLabel(*ev))
+	attempt, err := p.enqueueAndDeliver(ctx, *ev, signedEventAuditLabel(*ev), nil)
+	if err != nil {
+		return nil, err
+	}
+	return attempt.results, attempt.err
 }
 
 // PublishPresignedEvent delivers an event that was signed elsewhere (for
@@ -570,23 +486,50 @@ func (p *Publisher) PublishPresignedEvent(ctx context.Context, ev nostr.Event, e
 	if strings.TrimSpace(entityType) == "" {
 		entityType = signedEventAuditLabel(ev)
 	}
-	return p.enqueueAndDeliver(ctx, ev, entityType)
+	attempt, err := p.enqueueAndDeliver(ctx, ev, entityType, nil)
+	if err != nil {
+		return nil, err
+	}
+	return attempt.results, attempt.err
+}
+
+// PublishProjection delivers a read-model event the Projector signed with the
+// daemon key through this publisher's outbox, recording the projected entity
+// on the row. It implements ProjectionPublisher: nil means the publish quorum
+// accepted; an error wrapping ErrPublishIncomplete means the row is pending
+// and relays that have not accepted are still being retried; any other error
+// means the event is not being retried. That includes ErrPublishAbandoned,
+// when the first round already made the quorum unreachable (permanent relay
+// rejections) and the row is failed.
+func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) error {
+	if p == nil {
+		return fmt.Errorf("nostr publisher not configured")
+	}
+	attempt, err := p.enqueueAndDeliver(ctx, ev, entityType, entityID)
+	switch {
+	case err != nil:
+		return err
+	case attempt.err != nil && attempt.settled:
+		return fmt.Errorf("%w: %s", ErrPublishAbandoned, attempt.err.Error())
+	}
+	return attempt.err
 }
 
 // enqueueAndDeliver records a signed event as a pending outbox row for this
 // publisher's target (durable before the first relay attempt) and runs the
-// first delivery round.
-func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string) ([]PublishResult, error) {
+// first delivery round. Recording is idempotent by event id: re-enqueueing an
+// event that is already stored adds no row.
+// The returned error covers only recording; the delivery outcome is in the
+// attempt.
+func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) (publishAttempt, error) {
 	if p.eventRepo != nil {
-		rec := nostrEventRecordFromEvent(ev, entityType)
+		rec := nostrEventRecordFromEvent(ev, entityType, entityID)
 		p.markOutbound(rec)
 		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
-			return nil, fmt.Errorf("persist signed nostr event before publish: %w", err)
+			return publishAttempt{}, fmt.Errorf("persist signed nostr event before publish: %w", err)
 		}
 	}
-
-	attempt := p.publishOutboxEvent(ctx, ev)
-	return attempt.results, attempt.err
+	return p.publishOutboxEvent(ctx, ev), nil
 }
 
 func signedEventAuditLabel(ev nostr.Event) string {

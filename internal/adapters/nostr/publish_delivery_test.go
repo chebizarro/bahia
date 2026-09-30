@@ -406,7 +406,7 @@ func TestPublisherRunnerDiscoversPendingRowsPastABlockedPage(t *testing.T) {
 	// Two rows recorded pending by another producer (no inline publish).
 	for i, ev := range []*gonostr.Event{stuck, fresh} {
 		require.NoError(t, signEventWithPrivateKeyHex(ev, publisher.privateKey))
-		rec := nostrEventRecordFromEvent(*ev, "delivery.test")
+		rec := nostrEventRecordFromEvent(*ev, "delivery.test", nil)
 		rec.PublishState = repository.NostrPublishStatePending
 		rec.ReceivedAt = time.Unix(int64(1000+i), 0).UTC()
 		_, err := outbox.Record(ctx, rec)

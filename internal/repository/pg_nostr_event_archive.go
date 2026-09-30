@@ -74,7 +74,21 @@ func NostrEventArchiveOnlineIndexStatements() []string {
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_nostr_events_kind_created ON nostr_events(kind, created_at DESC, id DESC)`,
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_nostr_events_kind_author_created ON nostr_events(kind, pubkey, created_at DESC, id DESC)`,
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_nostr_events_entity_created ON nostr_events(entity_type, entity_id, created_at DESC, id DESC) WHERE entity_type IS NOT NULL AND entity_id IS NOT NULL`,
+		// Keeps the bahia_nostr_outbox_failed gauge an index-only count of the
+		// few abandoned outbound rows instead of a full-table scan.
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS ` + nostrPublishFailedIndex + ` ON nostr_events(received_at, id) WHERE publish_state = 'failed'`,
 	}
+}
+
+// nostrEventArchiveRequiredIndexes are the online indexes archival depends on;
+// claim-export fails closed until each is valid. The failed-row index is not
+// one of them: it only serves the outbox failure metric.
+var nostrEventArchiveRequiredIndexes = []string{
+	"idx_nostr_events_archive_eligible",
+	"idx_nostr_events_archive_batch",
+	"idx_nostr_events_kind_created",
+	"idx_nostr_events_kind_author_created",
+	"idx_nostr_events_entity_created",
 }
 
 func (r *PgNostrEventArchiveRepository) EnsureOnlineIndexes(ctx context.Context) error {
@@ -106,17 +120,11 @@ func (r *PgNostrEventArchiveRepository) OnlineIndexesReady(ctx context.Context) 
 		FROM pg_class classes
 		JOIN pg_index indexes ON indexes.indexrelid = classes.oid
 		WHERE classes.relname = ANY($1)
-	`, []string{
-		"idx_nostr_events_archive_eligible",
-		"idx_nostr_events_archive_batch",
-		"idx_nostr_events_kind_created",
-		"idx_nostr_events_kind_author_created",
-		"idx_nostr_events_entity_created",
-	}).Scan(&count, &constraintValid)
+	`, nostrEventArchiveRequiredIndexes).Scan(&count, &constraintValid)
 	if err != nil {
 		return false, fmt.Errorf("checking Nostr archive online indexes: %w", err)
 	}
-	if count != len(NostrEventArchiveOnlineIndexStatements()) || !constraintValid {
+	if count != len(nostrEventArchiveRequiredIndexes) || !constraintValid {
 		return false, nil
 	}
 	if err := r.pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'nostr_events_archive_batch_id_fkey'`).Scan(&constraintValid); err != nil {

@@ -288,9 +288,9 @@ func TestPgSecurityRepositoryUpsertAndUpdatePublicationState(t *testing.T) {
 	require.NoError(t, repo.UpsertSecurityPublication(ctx, publication))
 
 	mock.ExpectExec("UPDATE security_observable_publications").
-		WithArgs(publication.ID, domain.SecurityPublicationFailedRetryable, nil, "relay closed", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(publication.ID, domain.SecurityPublicationFailedTerminal, nil, "relay closed", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	require.NoError(t, repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedRetryable, "", "relay closed", &nextRetry, nil))
+	require.NoError(t, repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedTerminal, "", "relay closed", &nextRetry, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -319,7 +319,7 @@ func TestPgSecurityRepositoryLatestForArtifactAndDisableSchedules(t *testing.T) 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSecurityRepositoryCacheRetentionAndPublicationRetry(t *testing.T) {
+func TestPgSecurityRepositoryCacheRetention(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -339,16 +339,5 @@ func TestPgSecurityRepositoryCacheRetentionAndPublicationRetry(t *testing.T) {
 	deleted, err := repo.PruneExpiredOSVVulnerabilityCache(ctx, now)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, deleted)
-
-	pubID := uuid.New()
-	nextRetry := now.Add(-time.Minute)
-	mock.ExpectQuery("SELECT "+regexp.QuoteMeta(securityPublicationColumns)).
-		WithArgs(now, 50).
-		WillReturnRows(pgxmock.NewRows(splitColumns(securityPublicationColumns)).
-			AddRow(pubID, "scan_status", nil, "target-hash", nil, nil, 30315, "security:scan:run", "bahia.status.security-scan.v1", domain.SecurityPublicationFailedRetryable, "", 1, "relay closed", nextRetry, nil, now, now))
-	pubs, err := repo.ListRetryableSecurityPublications(ctx, now, 50)
-	require.NoError(t, err)
-	require.Len(t, pubs, 1)
-	require.Equal(t, domain.SecurityPublicationFailedRetryable, pubs[0].PublishState)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

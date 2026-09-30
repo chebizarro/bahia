@@ -67,7 +67,7 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 			publish: func(t *testing.T, publisher *Publisher, repo repository.NostrEventRepository) string {
 				ev := testSignedEvent("config-desired")
 				require.NoError(t, ev.Sign(operator))
-				rec := nostrEventRecordFromEvent(*ev, "config-fabric.desired")
+				rec := nostrEventRecordFromEvent(*ev, "config-fabric.desired", nil)
 				rec.PublishState = repository.NostrPublishStatePending
 				rec.PublishTarget = repository.NostrPublishTargetControlPlane
 				_, err := repo.Record(context.Background(), rec)
@@ -155,7 +155,7 @@ func TestPublisherRunnerOnlyDiscoversItsOwnTarget(t *testing.T) {
 	record := func(content, target string) string {
 		ev := testSignedEvent(content)
 		require.NoError(t, ev.Sign(privateKey))
-		rec := nostrEventRecordFromEvent(*ev, "delivery.test")
+		rec := nostrEventRecordFromEvent(*ev, "delivery.test", nil)
 		rec.PublishState = repository.NostrPublishStatePending
 		rec.PublishTarget = target
 		_, err := repo.Record(ctx, rec)

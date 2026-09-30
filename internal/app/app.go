@@ -325,9 +325,10 @@ func New(cfg *config.Config) (*App, error) {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
-	// Control-plane outbox publisher shared by docs, SBOM and config-fabric.
-	// Its rows carry the control-plane publish target and its own runner
-	// retries them, so they are never redelivered to the interop relays.
+	// Control-plane outbox publisher shared by the read-model projector, docs,
+	// SBOM and config-fabric. Its rows carry the control-plane publish target
+	// and its own runner retries them, so they are never redelivered to the
+	// interop relays.
 	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger,
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane))
 
@@ -895,8 +896,9 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Nostr read-model projector. This owns canonical 3196x projections and
-	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
-	// retained for relay pool lifecycle compatibility.
+	// the 310xx audit/activity feed for relay consumers. It publishes through
+	// the control-plane outbox publisher, so every projection gets an outbox
+	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
 		nostrAdapter.WithPolicyProjectionSource(policySvc),
 		nostrAdapter.WithBackupProjectionSource(backupRegistry),
@@ -921,7 +923,8 @@ func New(cfg *config.Config) (*App, error) {
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
 	}
-	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, nostrEventRepo, logger, projectorOpts...)
+	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))

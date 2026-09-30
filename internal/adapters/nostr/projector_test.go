@@ -490,7 +490,7 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, source, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, source, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestProjectorSystemDiscoveryDoesNotInferDMRelayListFromPublicRelaySets(t *t
 	cfg.Notifications.NostrDM = true
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestProjectorPublishesExplicitNotificationDMRelayListOnly(t *testing.T) {
 	cfg.Notifications.NostrDM = true
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestProjectorPublishesExplicitDMRelayListWithoutBrowserDiscovery(t *testing
 	cfg.Notifications.NostrDM = true
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -717,7 +717,7 @@ func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	err := projector.RepublishSnapshot(ctx)
 	if err == nil || !strings.Contains(err.Error(), "nostr.browser_relays") {
 		t.Fatalf("republish snapshot error = %v, want missing browser relay policy failure", err)
@@ -740,7 +740,7 @@ func TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure(t *testing.T) {
 
 	rejected := errors.New("failed to publish to any relay: wss://contextvm.example rejected event: auth-required: restricted write")
 	sink := &captureProjectionPublisher{errorsByRelayD: map[string]error{"bahia-contextvm-v1": rejected}}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	err := projector.RepublishSnapshot(ctx)
 	if err == nil || !strings.Contains(err.Error(), rejected.Error()) {
 		t.Fatalf("republish snapshot error = %v, want relay publish rejection surfaced", err)
@@ -764,7 +764,7 @@ func TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays(t *testing
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{zeroAcceptedRelayD: map[string]bool{"bahia-browser-v1": true}}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	err := projector.RepublishSnapshot(ctx)
 	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 30002") {
 		t.Fatalf("republish snapshot error = %v, want no accepted relay failure", err)
@@ -788,7 +788,7 @@ func TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRel
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{zeroAcceptedKind: map[int]bool{kinds.NIP65RelayList: true}}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 	err := projector.RepublishSnapshot(ctx)
 	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 10002") {
 		t.Fatalf("republish snapshot error = %v, want no accepted NIP-65 failure", err)
@@ -838,7 +838,7 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -877,7 +877,7 @@ func TestProjectorPublishesMLReadModelSnapshot(t *testing.T) {
 	source.workers["worker-pk"] = domain.Worker{PubKey: "worker-pk", Status: domain.WorkerStatusOnline, MLCapabilities: domain.WorkerMLCapabilities{Runtimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, ArtifactFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}, Tasks: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Accelerators: []string{"gpu_nvidia_cuda"}}}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithMLProjectionSource(source), WithWorkerProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithMLProjectionSource(source), WithWorkerProjectionSource(source))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -937,7 +937,7 @@ func TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations(t *testi
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 
 	projector.handleEvent(ctx, events.Event{
 		Type:     events.EventServiceCreated,
@@ -975,7 +975,7 @@ func TestProjectorRepublishesLLMRouteAndState(t *testing.T) {
 	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusInSync, GatewayStatus: domain.GatewayRouteStatusSynced, BackendKind: domain.LLMBackendKindVLLM, BackendHealth: domain.HealthStatusHealthy, UpdatedAt: now}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1005,7 +1005,7 @@ func TestProjectorPublishesLLMAuditAndStateFromRunEvent(t *testing.T) {
 	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusDeploying, GatewayStatus: domain.GatewayRouteStatusPending, UpdatedAt: time.Now().UTC()}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
 	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunStatusChanged, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
 	audit := assertOneSignedKind(t, sink, KindLLMRunAudit)
@@ -1020,7 +1020,7 @@ func TestProjectorPublishesStateTombstoneForDeletedState(t *testing.T) {
 	serviceID := uuid.New()
 	envID := uuid.New()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
 	projector.handleEvent(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
@@ -1094,7 +1094,7 @@ func TestProjectorPublishesDNSZoneStateSnapshot(t *testing.T) {
 		TTL:        60,
 	}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1127,7 +1127,7 @@ func TestProjectorPublishesDNSBackendStateSnapshot(t *testing.T) {
 		UpdatedAt:  now,
 	}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSBackendProjectionSource(backendSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSBackendProjectionSource(backendSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1163,7 +1163,7 @@ func TestProjectorPublishesDNSPolicyStateSnapshotAndTombstone(t *testing.T) {
 		UpdatedAt: now,
 	}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSPolicyProjectionSource(policySource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSPolicyProjectionSource(policySource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1202,7 +1202,7 @@ func TestProjectorPublishesDNSZoneAndBackendTombstones(t *testing.T) {
 	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{Name: "prod.cascadia", Visibility: domain.ZoneVisibilityInternal, BackendRef: "fs-primary", TTL: 60}}}
 	backendSource := &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{Ref: "fs-primary", Type: domain.DNSBackendTypeFilesystem, Health: domain.HealthStatusHealthy, ZoneRefs: []string{"prod.cascadia"}, UpdatedAt: time.Now().UTC()}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource), WithDNSBackendProjectionSource(backendSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource), WithDNSBackendProjectionSource(backendSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1233,7 +1233,7 @@ func TestProjectorPublishesDNSZoneAndBackendTombstones(t *testing.T) {
 func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
 	projector.handleEvent(ctx, events.Event{Type: eventDNSZoneSynced, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSRecordChanged, EntityID: "api.prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "fqdn": "api.prod.cascadia", "record_type": "A", "operation": "add"}})
@@ -1272,7 +1272,7 @@ func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 		Source:      "test",
 	}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1327,7 +1327,7 @@ func TestProjectorPublishesDNSEndpointFIPSTagsWhenWorkerPubkeyPresent(t *testing
 		Source:       "test",
 	}}}
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -1365,7 +1365,7 @@ func TestProjectorSystemDiscoveryAdvertisesAssistantWorkflows(t *testing.T) {
 			cfg.Assistant.LLMModel = tc.llmModel
 			cfg.Assistant.Agentic.Enabled = tc.agentic
 			sink := &captureProjectionPublisher{}
-			projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+			projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 			if err := projector.RepublishSnapshot(context.Background()); err != nil {
 				t.Fatalf("republish snapshot: %v", err)
 			}
@@ -1395,7 +1395,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}), WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}), WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1826,7 +1826,7 @@ func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1863,7 +1863,7 @@ func TestProjectorStateOmitsDesiredMetadataWhenAbsent(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1914,7 +1914,7 @@ func TestProjectorIntentRegistryCarriesDesiredHash(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1957,7 +1957,7 @@ func TestProjectorRunRegistryCarriesApplyMetadata(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -1994,7 +1994,7 @@ func TestProjectorRunRegistryOmitsApplyMetadataWhenNil(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -2044,7 +2044,7 @@ func TestProjectorStateSecretPlaintextNeverProjected(t *testing.T) {
 	}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}

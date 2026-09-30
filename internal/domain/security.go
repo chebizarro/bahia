@@ -58,14 +58,18 @@ const (
 	SecuritySeverityCritical SecuritySeverity = "critical"
 )
 
-// SecurityPublicationState records relay publication retry state for Security observables.
+// SecurityPublicationState mirrors the relay publication outcome of a Security
+// observable. Relay retries are owned by the Nostr publish outbox, which holds
+// the signed event: pending means the outbox is still delivering it, and
+// failed_terminal means the event never reached the outbox (or was signed by
+// the wrong key). Rows written before the outbox may still carry the retired
+// value "failed_retryable"; nothing writes or retries it any more.
 type SecurityPublicationState string
 
 const (
-	SecurityPublicationPending         SecurityPublicationState = "pending"
-	SecurityPublicationPublished       SecurityPublicationState = "published"
-	SecurityPublicationFailedRetryable SecurityPublicationState = "failed_retryable"
-	SecurityPublicationFailedTerminal  SecurityPublicationState = "failed_terminal"
+	SecurityPublicationPending        SecurityPublicationState = "pending"
+	SecurityPublicationPublished      SecurityPublicationState = "published"
+	SecurityPublicationFailedTerminal SecurityPublicationState = "failed_terminal"
 )
 
 // SecurityBreachNotificationStatus records notification lifecycle for policy-breach fingerprints.

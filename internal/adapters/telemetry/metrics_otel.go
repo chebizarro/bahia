@@ -55,6 +55,7 @@ type appMetricInstruments struct {
 	nostrRelayReREQAttempts metric.Int64Counter
 	nostrRelayReconnects    metric.Int64Counter
 	nostrOutboxDepth        metric.Int64Gauge
+	nostrOutboxFailed       metric.Int64Gauge
 	nostrEventStoreBytes    metric.Int64Gauge
 	nostrEventStoreRows     metric.Int64Gauge
 	nostrEventStoreOldest   metric.Int64Gauge
@@ -151,6 +152,7 @@ func newAppMetricInstruments(provider metric.MeterProvider) (*appMetricInstrumen
 		nostrRelayReREQAttempts: b.int64Counter("bahia_nostr_relay_rereq_attempts_total", "Relay subscription recovery REQ attempts"),
 		nostrRelayReconnects:    b.int64Counter("bahia_nostr_relay_reconnect_attempts_total", "Relay transport reconnect attempts"),
 		nostrOutboxDepth:        b.int64Gauge("bahia_nostr_outbox_depth", "Unpublished events in the durable Nostr publish outbox"),
+		nostrOutboxFailed:       b.int64Gauge("bahia_nostr_outbox_failed", nostrOutboxFailedHelp),
 		nostrEventStoreBytes:    b.int64Gauge("bahia_nostr_event_store_bytes", "PostgreSQL Nostr event relation bytes by component"),
 		nostrEventStoreRows:     b.int64Gauge("bahia_nostr_event_store_rows", "Estimated PostgreSQL Nostr event rows by state"),
 		nostrEventStoreOldest:   b.int64Gauge("bahia_nostr_event_store_oldest_hot_timestamp_seconds", "Oldest eligible hot Nostr event Unix timestamp; zero until the online archive index exists"),
@@ -194,6 +196,7 @@ func (m *Metrics) initializeOTelGauges(ctx context.Context) {
 	}
 	m.otel.reconcileStatesChecked.Record(ctx, 0)
 	m.otel.nostrOutboxDepth.Record(ctx, 0)
+	m.otel.nostrOutboxFailed.Record(ctx, 0)
 	m.otel.nostrEventStoreOldest.Record(ctx, 0)
 	m.otel.nostrRelaysHealthy.Record(ctx, 0)
 	m.otel.nostrRelaysDegraded.Record(ctx, 0)

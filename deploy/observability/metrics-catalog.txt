@@ -10,6 +10,7 @@
 #     deploy/observability/bahia-alerts.yml still exists. An alert on a metric
 #     that no longer exists never fires, which is worse than a noisy one.
 #
+
 bahia_adoption_candidates_total
 bahia_adoption_import_duration_seconds
 bahia_adoption_import_failure_total
@@ -61,6 +62,7 @@ bahia_nostr_event_store_rows
 bahia_nostr_events_published_total
 bahia_nostr_events_received_total
 bahia_nostr_outbox_depth
+bahia_nostr_outbox_failed
 bahia_nostr_publish_failed_total
 bahia_nostr_publish_latency_seconds
 bahia_nostr_publish_ok_total

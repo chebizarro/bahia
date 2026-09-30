@@ -42,6 +42,11 @@ const defaultOutboxPageSize = 100
 // callers outside this package match it without an import cycle.
 var ErrPublishIncomplete = nostrutil.ErrPublishIncomplete
 
+// ErrPublishAbandoned reports that delivery of an event was given up on: its
+// outbox row is failed and nothing retries it. Unlike ErrPublishIncomplete it
+// is not "kept, still retrying". Only PublishProjection returns it today.
+var ErrPublishAbandoned = errors.New("nostr event delivery abandoned")
+
 // PublishIncompleteError describes a publish that did not reach its required
 // relay acceptance.
 type PublishIncompleteError struct {
@@ -360,6 +365,10 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	d.delivered = delivered
 	switch {
 	case settled:
+		if !delivered {
+			// The row is now durably failed; tell the owner of the content.
+			p.notifyAbandoned(d.event)
+		}
 	case skipped:
 		// Retry when the relay may be dialed again, without growing this
 		// event's own backoff.
