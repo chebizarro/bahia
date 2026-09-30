@@ -9,6 +9,8 @@ import {
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
   LOOM_JOB_RESULT,
+  SBOM_AVAILABILITY_LIST,
+  SBOM_REFERENCE,
   parseJsonContent
 } from '../../nostr/client.js';
 import { controlplaneConnection } from './connection.svelte.js';
@@ -44,7 +46,13 @@ import {
   applyOperationStatusEvent
 } from '../collections/operations.svelte.js';
 import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
-import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
+import {
+  readCachedControlplaneEvents,
+  recordPersistedEvent,
+  refreshCollections,
+  scheduleRefreshCollections,
+  schedulePersistCachedCollections
+} from '../collections/index.svelte.js';
 
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
@@ -238,24 +246,84 @@ const handlers = new Map([
   }]
 ]);
 
-export function applyControlplaneEvent(event) {
+// Routes whose events feed a persisted (cached) collection. The cache stores
+// these raw events so hydration can replay them through applyControlplaneEvent.
+const PERSISTED_ROUTE_COLLECTIONS = new Map([
+  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, 'services'],
+  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, 'environments'],
+  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, 'states'],
+  [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, 'llmRoutes'],
+  [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, 'artifacts'],
+  [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, 'deploymentIntents'],
+  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, 'policies'],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, 'packageRepositories'],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, 'packageArtifacts'],
+  [LOOM_WORKER_ADVERTISEMENT, 'workers'],
+  [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
+  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],
+  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, 'workerDrainStatuses'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, 'backupRepositories'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, 'backupPolicies'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, 'backupRecipes'],
+  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, 'backupDefinitions'],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, 'mlModels'],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, 'mlModelVersions'],
+  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, 'mlEndpoints'],
+  [SBOM_REFERENCE, 'sbomRefs'],
+  [SBOM_AVAILABILITY_LIST, 'sbomAvailability']
+]);
+
+export const persistedRouteCollections = Object.freeze(Array.from(new Set(PERSISTED_ROUTE_COLLECTIONS.values())));
+
+/**
+ * Apply one relay (or cached) event to the backing Maps.
+ *
+ * - `deferRefresh`: coalesce the collection rebuild into one batched refresh
+ *   (used by the streaming subscription; avoids O(n^2) catch-up rebuilds).
+ * - `fromCache`: the event is being replayed from the local cache; skip the
+ *   per-event refresh, persist and liveness side effects.
+ */
+export function applyControlplaneEvent(event, { deferRefresh = false, fromCache = false } = {}) {
   if (!event?.id || typeof event.kind !== 'number') return false;
   if (!shouldAcceptControlplaneEvent(event)) return false;
   if (seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
   const route = semanticRoute(event);
+  const persistedCollection = PERSISTED_ROUTE_COLLECTIONS.get(route);
+  if (persistedCollection) recordPersistedEvent(persistedCollection, event);
+
   const handler = handlers.get(route);
   const changed = handler
     ? handler(event, replaceableEvents)
     : (ACTIVITY_KINDS.includes(event.kind) ? applyActivityEvent(event) : false);
 
-  if (changed) {
+  if (changed && !fromCache) {
     controlplaneConnection.lastEventAt = new Date().toISOString();
-    refreshCollections();
+    if (deferRefresh) scheduleRefreshCollections();
+    else refreshCollections();
     schedulePersistCachedCollections();
   }
   return changed;
+}
+
+/**
+ * Hydrate collections from the local event cache by replaying cached events
+ * through applyControlplaneEvent, then rebuild once. Because the backing Maps
+ * and replaceable index are populated, later relay events merge by the same
+ * coordinates and newer-wins rules instead of wiping hydrated state.
+ */
+export async function hydrateCachedControlplane(options = {}) {
+  const cachedEvents = await readCachedControlplaneEvents(options);
+  if (cachedEvents.length === 0) return false;
+
+  cachedEvents.sort((left, right) => Number(left.created_at || 0) - Number(right.created_at || 0));
+  let hydrated = false;
+  for (const event of cachedEvents) {
+    if (applyControlplaneEvent(event, { fromCache: true })) hydrated = true;
+  }
+  refreshCollections();
+  return hydrated;
 }
 
 export const controlplaneEventRouting = Object.freeze({
