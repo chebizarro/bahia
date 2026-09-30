@@ -6,23 +6,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	KindDNSEndpointState        = 31976
 	DefaultHostsPath            = "/etc/fips/hosts"
 	DefaultManagedSectionMarker = "# bahia-managed"
 )
+
+// Bahia publishes DNS endpoint state (live and tombstone) only through the
+// projector's canonical control-state envelope: kind 30900 with domain=dns,
+// schema=bahia.cp-state.v1, legacy_kind=31976, deleted=true|false and
+// t=dns-endpoint. Legacy kind 31976 is no longer published, and its
+// tombstones now land on 30900, so a 31976 subscription would only replay
+// stale endpoints that can never be removed.
+var endpointLegacyKind = strconv.Itoa(kinds.DNSEndpointState)
 
 // Config controls the standalone Bahia endpoint to FIPS hosts bridge.
 type Config struct {
@@ -124,18 +134,38 @@ func (c Config) validate() error {
 
 // Bridge subscribes to Bahia endpoint events and rewrites the managed FIPS hosts section.
 type Bridge struct {
-	cfg     Config
-	pool    relayPool
-	writer  HostsWriter
-	logger  *slog.Logger
-	now     func() time.Time
+	cfg    Config
+	pool   relayPool
+	writer hostsWriter
+	logger *slog.Logger
+	now    func() time.Time
+	// latest is the newest accepted event per (kind, pubkey, d) coordinate.
+	latest map[string]replaceableCursor
+	// routes holds the hosts entry each coordinate currently contributes.
+	// Keying by coordinate lets a tombstone (which carries no service tag)
+	// remove exactly what its live record added.
+	routes map[string]hostRoute
+	// entries is the managed hosts section derived from routes.
 	entries map[string]string
-	latest  map[string]replaceableCursor
+	// caughtUp is set once the relays report EOSE; until then backfill only
+	// updates state and pendingFlush records that a write is owed.
+	caughtUp     bool
+	pendingFlush bool
+}
+
+type hostsWriter interface {
+	Write(ctx context.Context, entries map[string]string) error
 }
 
 type replaceableCursor struct {
 	CreatedAt nostr.Timestamp
 	EventID   string
+}
+
+type hostRoute struct {
+	Label  string
+	Npub   string
+	Cursor replaceableCursor
 }
 
 type relayPool interface {
@@ -169,8 +199,9 @@ func newBridgeWithPool(cfg Config, pool relayPool, logger *slog.Logger) *Bridge 
 		writer:  NewHostsWriter(cfg.HostsPath, cfg.ManagedSectionMarker),
 		logger:  logger.With("component", "fips-bahia-bridge"),
 		now:     func() time.Time { return time.Now().UTC() },
-		entries: make(map[string]string),
 		latest:  make(map[string]replaceableCursor),
+		routes:  make(map[string]hostRoute),
+		entries: make(map[string]string),
 	}
 }
 
@@ -244,7 +275,13 @@ func (b *Bridge) subscriptionFilter() nostr.Filter {
 	if pubkey, err := nostrutil.PubKeyFromHex(b.cfg.BahiaPubkey); err == nil {
 		authors = []nostr.PubKey{pubkey}
 	}
-	return nostr.Filter{Kinds: []nostr.Kind{KindDNSEndpointState}, Authors: authors}
+	// #t is a single-letter tag, so NIP-01 relays index it; the envelope's
+	// domain/schema/legacy_kind tags are multi-letter and are checked locally.
+	return nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+		Authors: authors,
+		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
+	}
 }
 
 func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
@@ -265,6 +302,9 @@ func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscri
 		case <-merged.EndOfStoredEvents:
 			b.logger.Info("all relays sent EOSE; historical endpoint catch-up complete")
 			merged.EndOfStoredEvents = nil
+			if err := b.markCaughtUp(ctx); err != nil {
+				b.logger.Warn("hosts write after catch-up failed", "error", err)
+			}
 		case closed, ok := <-merged.Closed:
 			if ok {
 				if b.handleClosed(ctx, closed, authAttempted) {
@@ -304,13 +344,24 @@ func (b *Bridge) handleClosed(ctx context.Context, closed nostradapter.RelayClos
 	return true
 }
 
+// markCaughtUp ends the backfill phase and writes the hosts section once if
+// backfill changed anything, instead of rewriting it per stored event.
+func (b *Bridge) markCaughtUp(ctx context.Context) error {
+	b.caughtUp = true
+	if !b.pendingFlush {
+		return nil
+	}
+	b.pendingFlush = false
+	return b.writer.Write(ctx, b.entries)
+}
+
 // HandleEvent validates and applies a single Bahia endpoint event.
 func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 	if err := nostradapter.ValidateInboundEvent(ev, b.now(), nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return err
 	}
-	if int(ev.Kind) != KindDNSEndpointState {
-		return fmt.Errorf("unexpected kind %d", ev.Kind)
+	if err := validateEndpointEnvelope(ev); err != nil {
+		return err
 	}
 	pubkey := nostrutil.EventPubKeyHex(ev)
 	if pubkey != b.cfg.BahiaPubkey {
@@ -331,33 +382,72 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 	if err != nil {
 		return err
 	}
-	if !b.endpointAllowed(endpoint) {
+
+	cursor := replaceableCursor{CreatedAt: ev.CreatedAt, EventID: eventID}
+	b.latest[coordinate] = cursor
+	if b.routable(endpoint) {
+		b.routes[coordinate] = hostRoute{Label: endpoint.ServiceLabel, Npub: endpoint.Npub, Cursor: cursor}
+	} else {
+		delete(b.routes, coordinate)
+	}
+	changed := b.rebuildEntries()
+
+	if !b.caughtUp {
+		b.pendingFlush = true
 		return nil
 	}
-
-	changed := false
-	if endpoint.ShouldRemove(b.cfg.HealthFilter) {
-		if _, exists := b.entries[endpoint.ServiceLabel]; exists {
-			delete(b.entries, endpoint.ServiceLabel)
-			changed = true
-		}
-	} else {
-		if endpoint.Npub == "" {
-			return fmt.Errorf("healthy endpoint lacks npub")
-		}
-		if current, exists := b.entries[endpoint.ServiceLabel]; !exists || current != endpoint.Npub {
-			b.entries[endpoint.ServiceLabel] = endpoint.Npub
-			changed = true
-		}
-	}
-
-	b.latest[coordinate] = replaceableCursor{CreatedAt: ev.CreatedAt, EventID: eventID}
 	if changed {
-		if err := b.writer.Write(ctx, b.entries); err != nil {
-			return err
-		}
+		return b.writer.Write(ctx, b.entries)
 	}
 	return nil
+}
+
+// validateEndpointEnvelope accepts only the projector's canonical DNS
+// endpoint envelope; relays that ignore #t may hand back other 30900 state.
+func validateEndpointEnvelope(ev *nostr.Event) error {
+	if int(ev.Kind) != kinds.CASControlState {
+		return fmt.Errorf("unexpected kind %d", ev.Kind)
+	}
+	if domain := tagValue(ev, kinds.CASControlStateTagDomain); domain != kinds.DNSDomain {
+		return fmt.Errorf("unexpected domain %q", domain)
+	}
+	if schema := tagValue(ev, kinds.CASControlStateTagSchema); schema != kinds.CASControlStateSchema {
+		return fmt.Errorf("unexpected schema %q", schema)
+	}
+	if legacyKind := tagValue(ev, kinds.CASControlStateTagLegacyKind); legacyKind != endpointLegacyKind {
+		return fmt.Errorf("not a DNS endpoint record (legacy_kind %q)", legacyKind)
+	}
+	if tagValue(ev, kinds.CASControlStateTagD) == "" {
+		return fmt.Errorf("missing d tag")
+	}
+	return nil
+}
+
+func (b *Bridge) routable(endpoint Endpoint) bool {
+	return !endpoint.ShouldRemove(b.cfg.HealthFilter) && endpoint.Npub != "" && b.endpointAllowed(endpoint)
+}
+
+// rebuildEntries derives the hosts section from the per-coordinate routes.
+// When two coordinates map to the same label, the newest event wins (lowest
+// event id on a created_at tie) so the result is independent of arrival order.
+func (b *Bridge) rebuildEntries() bool {
+	winners := make(map[string]hostRoute, len(b.routes))
+	for _, route := range b.routes {
+		current, ok := winners[route.Label]
+		if !ok || route.Cursor.CreatedAt > current.Cursor.CreatedAt ||
+			(route.Cursor.CreatedAt == current.Cursor.CreatedAt && route.Cursor.EventID < current.Cursor.EventID) {
+			winners[route.Label] = route
+		}
+	}
+	entries := make(map[string]string, len(winners))
+	for label, route := range winners {
+		entries[label] = route.Npub
+	}
+	if maps.Equal(entries, b.entries) {
+		return false
+	}
+	b.entries = entries
+	return true
 }
 
 func (b *Bridge) endpointAllowed(endpoint Endpoint) bool {
@@ -401,7 +491,9 @@ func (e Endpoint) ShouldRemove(healthFilter bool) bool {
 	return e.Health != "healthy"
 }
 
-// ParseEndpointEvent extracts FQDN, health, npub, filters, and service label from Kind 31976.
+// ParseEndpointEvent extracts FQDN, health, npub, filters, and service label
+// from a DNS endpoint record (the projector's domain.DNSEndpoint content and
+// dnsEndpointTags, or its tombstone).
 func ParseEndpointEvent(ev *nostr.Event) (Endpoint, error) {
 	if ev == nil {
 		return Endpoint{}, fmt.Errorf("nil event")
@@ -411,13 +503,12 @@ func ParseEndpointEvent(ev *nostr.Event) (Endpoint, error) {
 		DNS          string   `json:"dns"`
 		Service      string   `json:"service"`
 		Route        string   `json:"route"`
-		Environment  string   `json:"env"`
+		Environment  string   `json:"environment"`
 		Health       string   `json:"health"`
 		Npub         string   `json:"npub"`
 		WorkerPubkey string   `json:"worker_pubkey"`
 		Capabilities []string `json:"capabilities"`
 		Deleted      bool     `json:"deleted"`
-		Tombstone    bool     `json:"tombstone"`
 	}
 	if strings.TrimSpace(ev.Content) != "" {
 		if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
@@ -429,11 +520,12 @@ func ParseEndpointEvent(ev *nostr.Event) (Endpoint, error) {
 		FQDN:         firstNonEmpty(tagValue(ev, "dns"), content.FQDN, content.DNS),
 		Service:      firstNonEmpty(tagValue(ev, "service"), content.Service),
 		Route:        firstNonEmpty(tagValue(ev, "route"), content.Route),
-		Environment:  firstNonEmpty(tagValue(ev, "env"), content.Environment),
+		Environment:  firstNonEmpty(tagValue(ev, "environment"), content.Environment),
 		Health:       strings.ToLower(firstNonEmpty(tagValue(ev, "health"), content.Health)),
 		Npub:         firstNonEmpty(tagValue(ev, "npub"), content.Npub, content.WorkerPubkey),
 		Capabilities: append([]string{}, content.Capabilities...),
-		Tombstone:    content.Deleted || content.Tombstone || tagExists(ev, "deleted") || tagExists(ev, "tombstone"),
+		// Live records carry deleted=false, so compare the value.
+		Tombstone: content.Deleted || tagValue(ev, kinds.CASControlStateTagDeleted) == "true",
 	}
 	for _, tag := range ev.Tags {
 		if len(tag) >= 2 && tag[0] == "capability" {
@@ -551,18 +643,6 @@ func tagValue(ev *nostr.Event, key string) string {
 		}
 	}
 	return ""
-}
-
-func tagExists(ev *nostr.Event, key string) bool {
-	if ev == nil {
-		return false
-	}
-	for _, tag := range ev.Tags {
-		if len(tag) >= 1 && tag[0] == key {
-			return true
-		}
-	}
-	return false
 }
 
 func eventID(ev *nostr.Event) string {

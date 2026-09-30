@@ -1,10 +1,12 @@
 import {
   BAHIA_AUDIT_KINDS,
+  BAHIA_CP_STATE_SCHEMA,
   BAHIA_READ_MODEL_KINDS,
   BAHIA_SBOM_KINDS,
   BAHIA_STATE_SCHEMAS,
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
+  DNS_STATE_SCHEMA_BY_LEGACY_KIND,
   LOOM_WORKER_ADVERTISEMENT,
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
@@ -64,7 +66,6 @@ const OPERATION_LIMIT = 1000;
 const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
-const CP_STATE_SCHEMA = 'bahia.cp-state.v1';
 
 const replaceableEvents = new Map();
 const seenEventIds = new Set();
@@ -152,10 +153,10 @@ const legacyKindSchemaRoutes = new Map([
   ['31967', BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY],
   ['31968', BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY],
   ['31969', BAHIA_STATE_SCHEMAS.BUILD_REGISTRY],
-  ['31975', BAHIA_STATE_SCHEMAS.DNS_ZONE_STATE],
-  ['31976', BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE],
-  ['31977', BAHIA_STATE_SCHEMAS.DNS_POLICY_STATE],
-  ['31978', BAHIA_STATE_SCHEMAS.DNS_BACKEND_STATE],
+  // DNS routes resolve to the DNS family schemas but deliberately have no
+  // handler here: /dns state is owned by stores/dns.svelte.js, which keeps its
+  // own domain-scoped subscription and applies the same resolution.
+  ...Object.entries(DNS_STATE_SCHEMA_BY_LEGACY_KIND),
   ['31980', BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY],
   ['31981', BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY],
   ['31982', BAHIA_STATE_SCHEMAS.ML_DATASET_REGISTRY],
@@ -181,7 +182,7 @@ const legacyKindSchemaRoutes = new Map([
 function semanticRoute(event) {
   if (event?.kind === CASCADIA_CONTROLPLANE_STATE) {
     const schema = eventSchema(event);
-    if (schema !== CP_STATE_SCHEMA) return schema;
+    if (schema !== BAHIA_CP_STATE_SCHEMA) return schema;
     return legacyKindSchemaRoutes.get(eventLegacyKind(event)) || schema;
   }
   return event?.kind;

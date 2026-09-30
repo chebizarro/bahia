@@ -20,15 +20,23 @@ import {
 } from '$lib/nostr/client.js';
 
 import {
+  BAHIA_CP_STATE_SCHEMA,
   CASCADIA_CONTROLPLANE_STATE,
   DNS_BACKEND_REGISTER_RESULT,
   DNS_DRIFT_REMEDIATE_RESULT,
   DNS_OPERATION_STATUS,
   DNS_POLICY_APPLY_RESULT,
   DNS_RECORD_OVERRIDE_RESULT,
+  DNS_STATE_DOMAIN,
+  DNS_STATE_SCHEMA_BY_LEGACY_KIND,
   DNS_STATE_SCHEMAS,
   DNS_ZONE_CREATE_RESULT
 } from '$lib/nostr/kinds.gen.js';
+
+// DNS state keeps its own domain-scoped subscription rather than reading the
+// shared controlplane collections (A-22): that REQ multiplexes every 30900
+// domain under one limit, so DNS records would be truncated by unrelated state
+// in larger fleets, and /dns availability is gated on this subscription's EOSE.
 
 export const DNS_READ_MODEL_SCHEMAS = DNS_STATE_SCHEMAS;
 export const DNS_READ_MODEL_KINDS = Object.freeze({
@@ -328,7 +336,7 @@ export function dnsReadModelFilters(pubkey = dnsState.connection.servicePubkey, 
   const authorFilter = servicePubkey ? { authors: [servicePubkey] } : {};
   const temporal = since ? { since } : { limit: DNS_READ_MODEL_LIMIT };
   return [
-    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': ['dns'], '#schema': DNS_SCHEMA_LIST, ...temporal, ...authorFilter },
+    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': [DNS_STATE_DOMAIN], ...temporal, ...authorFilter },
     {
       kinds: DNS_OPERATION_KINDS,
       since: since || Math.floor(Date.now() / 1000) - DNS_OPERATION_BACKFILL_SECONDS,
@@ -437,16 +445,24 @@ function normalizeBackendEvent(event, content) {
   };
 }
 
+// The projector publishes DNS state in the canonical envelope
+// (schema=bahia.cp-state.v1, family in legacy_kind); per-family schema tags
+// resolve to themselves.
 function dnsEventSchema(event, content) {
-  return getTagValue(event, 'schema', content.schema || '');
+  const schema = getTagValue(event, 'schema', content.schema || '');
+  if (schema !== BAHIA_CP_STATE_SCHEMA) return schema;
+  return DNS_STATE_SCHEMA_BY_LEGACY_KIND[getTagValue(event, 'legacy_kind')] || '';
 }
 
 function validateDNSReadModelEvent(event, content) {
   if (!event?.id || typeof event.kind !== 'number') return 'DNS read-model event is missing id or kind';
   if (event.kind !== CASCADIA_CONTROLPLANE_STATE) return `Unsupported DNS read-model kind ${event.kind}; expected canonical CAS state kind`;
-  if (getTagValue(event, 'domain', content.domain || '') !== 'dns') return 'DNS read-model event is missing required dns domain tag';
+  if (getTagValue(event, 'domain', content.domain || '') !== DNS_STATE_DOMAIN) return 'DNS read-model event is missing required dns domain tag';
   const schema = dnsEventSchema(event, content);
-  if (!DNS_SCHEMA_LIST.includes(schema)) return `Unsupported DNS read-model schema ${schema || '(missing)'}`;
+  if (!DNS_SCHEMA_LIST.includes(schema)) {
+    const legacyKind = getTagValue(event, 'legacy_kind');
+    return `Unsupported DNS read-model schema ${getTagValue(event, 'schema') || '(missing)'}${legacyKind ? ` (legacy_kind ${legacyKind})` : ''}`;
+  }
   if (dnsState.connection.servicePubkey && event.pubkey !== dnsState.connection.servicePubkey) {
     return 'DNS read-model event author does not match configured Bahia service pubkey';
   }
