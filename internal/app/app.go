@@ -170,8 +170,9 @@ func New(cfg *config.Config) (*App, error) {
 	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger, policy)
 
 	// Repositories. When DB is unavailable, PG-backed repositories are nil.
-	// Route gating prevents tier2/tier3 routes from being accessed, so nil repos
-	// won't be hit on those paths. Tier1 uses in-memory stores exclusively.
+	// connectOptionalDatabase caps the policy at tier1, and SetActiveTier can
+	// never exceed that cap, so route gating keeps tier2/tier3 routes (and
+	// their nil repos) unreachable. Tier1 uses in-memory stores exclusively.
 	var serviceRepo repository.ServiceRepository
 	var envRepo repository.EnvironmentRepository
 	var buildRepo repository.BuildRepository
@@ -655,8 +656,11 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
+	// Request no more than the constructed dependencies support: without
+	// Postgres the tier2/tier3 repositories are nil, so the bootstrapper must
+	// neither report nor raise a tier above policy.MaxTier().
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
-		RequestedTier:       int(policy.RequestedTier),
+		RequestedTier:       int(policy.MaxTier()),
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys),
 	})
@@ -1955,16 +1959,16 @@ func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *za
 	pool, err := dbConnect(ctx, cfg.DB, logger)
 	if err != nil {
 		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
-		if policy != nil && policy.ActiveTier > Tier1 {
-			policy.SetActiveTier(Tier1)
+		if policy != nil {
+			policy.CapTier(Tier1)
 		}
 		return nil, false
 	}
 	if err := dbMigrate(ctx, pool, logger); err != nil {
 		pool.Close()
 		logger.Warn("postgres cache migration failed; continuing with relay-first reduced tier", zap.Error(err))
-		if policy != nil && policy.ActiveTier > Tier1 {
-			policy.SetActiveTier(Tier1)
+		if policy != nil {
+			policy.CapTier(Tier1)
 		}
 		return nil, false
 	}

@@ -63,3 +63,20 @@ func TestModePolicySetActiveTierAndIsDegraded(t *testing.T) {
 	policy.SetActiveTier(Tier3)
 	require.False(t, policy.IsDegraded())
 }
+func TestModePolicyDependencyCapStillAllowsLoweringAndRaisingWithinCap(t *testing.T) {
+	policy := NewModePolicy(ModeFull)
+	policy.CapTier(Tier2)
+	require.Equal(t, Tier2, policy.ActiveTier)
+	require.Equal(t, Tier2, policy.MaxTier())
+
+	policy.SetActiveTier(Tier0)
+	require.Equal(t, Tier0, policy.ActiveTier)
+	policy.SetActiveTier(Tier3)
+	require.Equal(t, Tier2, policy.ActiveTier)
+
+	// A later, lower cap wins; a higher cap never loosens an earlier one.
+	policy.CapTier(Tier1)
+	policy.CapTier(Tier3)
+	require.Equal(t, Tier1, policy.MaxTier())
+	require.Equal(t, Tier1, policy.ActiveTier)
+}

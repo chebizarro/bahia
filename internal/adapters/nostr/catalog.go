@@ -121,6 +121,35 @@ type ReplayGroup struct {
 	Tier     int
 	Snapshot bool
 	Required bool
+	// Authors selects the trusted author set the bootstrapper applies to the
+	// group's REQs and to every event it receives. It is mandatory: a group
+	// without a known scope fails bootstrap rather than replaying any pubkey.
+	Authors ReplayAuthorScope
+}
+
+// ReplayAuthorScope names the author trust set for a replay group.
+type ReplayAuthorScope string
+
+const (
+	// ReplayAuthorsProjection trusts only Bahia's own service key: state the
+	// daemon itself projected to relays.
+	ReplayAuthorsProjection ReplayAuthorScope = "projection"
+	// ReplayAuthorsControlPlane trusts the service key plus configured
+	// operator and bootstrap-owner keys.
+	ReplayAuthorsControlPlane ReplayAuthorScope = "control_plane"
+	// ReplayAuthorsAny is for groups whose publishers are external (workers,
+	// CI runners, overlay peers); their decoders own authorization.
+	ReplayAuthorsAny ReplayAuthorScope = "any"
+)
+
+// Valid reports whether the scope is one the bootstrapper knows how to apply.
+func (s ReplayAuthorScope) Valid() bool {
+	switch s {
+	case ReplayAuthorsProjection, ReplayAuthorsControlPlane, ReplayAuthorsAny:
+		return true
+	default:
+		return false
+	}
 }
 
 type KindCatalog struct {
@@ -433,13 +462,13 @@ type DecodedFIPS struct{}
 
 func NewKindCatalog() *KindCatalog {
 	groups := []ReplayGroup{
-		{Name: "discovery_snapshot", Kinds: []int{KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement, kinds.ContextVMToolsList, kinds.ContextVMResourcesList, kinds.ContextVMResourceTemplatesList, kinds.ContextVMPromptsList, KindBahiaIdentityDefinition, KindBahiaReplayCheckpoint, KindBahiaReadinessStatus}, Tier: 0, Snapshot: true, Required: true},
-		{Name: "state_snapshot", Kinds: []int{KindCASControlState}, Tier: 1, Snapshot: true, Required: true},
-		{Name: "status_live", Kinds: []int{KindNIP38Status}, Tier: 1, Snapshot: false, Required: true},
-		{Name: "audit_live", Kinds: []int{KindCASAudit}, Tier: 1, Snapshot: false, Required: true},
-		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false},
-		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false},
-		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false},
+		{Name: "discovery_snapshot", Kinds: []int{KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement, kinds.ContextVMToolsList, kinds.ContextVMResourcesList, kinds.ContextVMResourceTemplatesList, kinds.ContextVMPromptsList, KindBahiaIdentityDefinition, KindBahiaReplayCheckpoint, KindBahiaReadinessStatus}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		{Name: "state_snapshot", Kinds: []int{KindCASControlState}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		{Name: "status_live", Kinds: []int{KindNIP38Status}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+		{Name: "audit_live", Kinds: []int{KindCASAudit}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
+		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
+		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
 	}
 
 	catalog := &KindCatalog{
