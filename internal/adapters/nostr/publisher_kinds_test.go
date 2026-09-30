@@ -88,39 +88,16 @@ func TestContinuityPublisherKindConstantsUnique(t *testing.T) {
 	}
 }
 
+// The retired 31000-31099 audit kinds are not listed: audit facts are regular
+// 4903 events (bahia-irsry.9.3), so no live kind shares their range.
 func TestDNSPublisherKindConstantsUnique(t *testing.T) {
 	dnsKinds := map[string]int{
-		"KindDNSZoneSyncedAudit":           KindDNSZoneSyncedAudit,
-		"KindDNSRecordChangedAudit":        KindDNSRecordChangedAudit,
-		"KindDNSDriftDetectedAudit":        KindDNSDriftDetectedAudit,
-		"KindDNSEndpointRegisteredAudit":   KindDNSEndpointRegisteredAudit,
-		"KindDNSEndpointDeregisteredAudit": KindDNSEndpointDeregisteredAudit,
-		"KindDNSZoneState":                 KindDNSZoneState,
-		"KindDNSEndpointState":             KindDNSEndpointState,
-		"KindDNSPolicyState":               KindDNSPolicyState,
-		"KindDNSBackendState":              KindDNSBackendState,
+		"KindDNSZoneState":     KindDNSZoneState,
+		"KindDNSEndpointState": KindDNSEndpointState,
+		"KindDNSPolicyState":   KindDNSPolicyState,
+		"KindDNSBackendState":  KindDNSBackendState,
 	}
 	existing := map[int]string{
-		KindBuildRegistered:             "KindBuildRegistered",
-		KindArtifactRegistered:          "KindArtifactRegistered",
-		KindDeploymentCreated:           "KindDeploymentCreated",
-		KindDeploymentComplete:          "KindDeploymentComplete",
-		KindDriftDetected:               "KindDriftDetected",
-		KindObservation:                 "KindObservation",
-		KindServiceRegistryAudit:        "KindServiceRegistryAudit",
-		KindEnvironmentRegistryAudit:    "KindEnvironmentRegistryAudit",
-		KindStateChangedAudit:           "KindStateChangedAudit",
-		KindRuntimeActionAudit:          "KindRuntimeActionAudit",
-		KindReconcileAudit:              "KindReconcileAudit",
-		KindAdoptionAudit:               "KindAdoptionAudit",
-		KindDeploymentApprovalAudit:     "KindDeploymentApprovalAudit",
-		KindDeploymentRunAudit:          "KindDeploymentRunAudit",
-		KindLLMRouteRegistryAudit:       "KindLLMRouteRegistryAudit",
-		KindLLMReleaseRegisteredAudit:   "KindLLMReleaseRegisteredAudit",
-		KindLLMDeploymentAudit:          "KindLLMDeploymentAudit",
-		KindLLMRunAudit:                 "KindLLMRunAudit",
-		KindLLMRouteStateAudit:          "KindLLMRouteStateAudit",
-		KindLLMGatewayAudit:             "KindLLMGatewayAudit",
 		KindServiceState:                "KindServiceState",
 		KindServiceRegistry:             "KindServiceRegistry",
 		KindEnvironmentRegistry:         "KindEnvironmentRegistry",

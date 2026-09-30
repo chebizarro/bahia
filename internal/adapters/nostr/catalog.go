@@ -1171,6 +1171,9 @@ func noopProjectionFamily(group string) ProjectionFamily {
 func noopProjectionDTag(ev *gonostr.Event) string {
 	return firstNonBlank(
 		tagValueLocal(ev.Tags, "d"),
+		// Audit facts (regular 4903) have no d; state names the audited
+		// entity's cp-state coordinate.
+		tagValueLocal(ev.Tags, "state"),
 		tagValueLocal(ev.Tags, "service"),
 		tagValueLocal(ev.Tags, "environment"),
 		tagValueLocal(ev.Tags, "artifact"),

@@ -2307,7 +2307,7 @@ func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.Depl
 			tags = append(tags, nostr.Tag{"environment", policy.EnvironmentID.String()})
 		}
 	}
-	tags = append(tags, nostr.Tag{"domain", "policy"}, nostr.Tag{"schema", "bahia.cp-state.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPolicyRegistry)})
+	tags = append(tags, nostr.Tag{"domain", "policy"}, nostr.Tag{"schema", "bahia.cp-state.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPolicyRegistry)}, nostr.Tag{"t", kinds.CPStateTopicPolicyRegistry})
 	r.mu.Lock()
 	if r.lastPolicyPublishedAt == nil {
 		r.lastPolicyPublishedAt = make(map[uuid.UUID]nostr.Timestamp)

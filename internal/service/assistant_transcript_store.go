@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"github.com/google/uuid"
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -68,7 +67,8 @@ func (p StaticAssistantTranscriptKeyProvider) TranscriptKey(_ context.Context, k
 }
 
 // AssistantTranscriptAppend describes one append-only assistant transcript
-// message to encrypt and publish as kind 30316.
+// message to encrypt and publish as kind 30316 on the deterministic coordinate
+// assistantTranscriptDTag derives from it.
 type AssistantTranscriptAppend struct {
 	LogicalID      string
 	SessionID      string
@@ -261,7 +261,7 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 			return nil, fmt.Errorf("assistant transcript replay subscription closed: relay=%s reason=%s", closed.RelayURL, closed.Reason)
 		case ev, ok := <-eventsCh:
 			if !ok {
-				return truncateAssistantTranscriptRecords(dedupeAssistantLogicalRecords(records), query.Limit), nil
+				return truncateAssistantTranscriptRecords(dedupeAssistantTranscriptRecords(records), query.Limit), nil
 			}
 			record, err := s.decryptEvent(ctx, ev, query)
 			if err != nil {
@@ -276,7 +276,7 @@ func (s *AssistantTranscriptStore) Replay(ctx context.Context, query AssistantTr
 			seen[record.EventID] = struct{}{}
 			records = append(records, *record)
 		case <-eoseCh:
-			return truncateAssistantTranscriptRecords(dedupeAssistantLogicalRecords(records), query.Limit), nil
+			return truncateAssistantTranscriptRecords(dedupeAssistantTranscriptRecords(records), query.Limit), nil
 		}
 	}
 }
@@ -311,6 +311,37 @@ func (s *AssistantTranscriptStore) AppendMessageOnce(ctx context.Context, append
 func assistantTranscriptLogicalID(record AssistantTranscriptRecord) string {
 	logical, _ := record.Payload.Metadata["logical_id"].(string)
 	return logical
+}
+
+// dedupeAssistantTranscriptRecords collapses replayed copies of one message:
+// first per addressable coordinate (several relays, or a relay that has not
+// applied a replacement yet), then per logical id.
+func dedupeAssistantTranscriptRecords(records []AssistantTranscriptRecord) []AssistantTranscriptRecord {
+	return dedupeAssistantLogicalRecords(dedupeAssistantCoordinateRecords(records))
+}
+
+// dedupeAssistantCoordinateRecords keeps the NIP-01 winner per d tag: the
+// newest created_at, ties broken by the lowest event id.
+func dedupeAssistantCoordinateRecords(records []AssistantTranscriptRecord) []AssistantTranscriptRecord {
+	chosen := map[string]int{}
+	out := make([]AssistantTranscriptRecord, 0, len(records))
+	for _, record := range records {
+		if record.DTag == "" {
+			out = append(out, record)
+			continue
+		}
+		idx, ok := chosen[record.DTag]
+		if !ok {
+			chosen[record.DTag] = len(out)
+			out = append(out, record)
+			continue
+		}
+		current := out[idx]
+		if record.CreatedAt.After(current.CreatedAt) || (record.CreatedAt.Equal(current.CreatedAt) && record.EventID < current.EventID) {
+			out[idx] = record
+		}
+	}
+	return out
 }
 
 // dedupeAssistantLogicalRecords keeps one record per logical ID, choosing the
@@ -568,18 +599,25 @@ func assistantTranscriptAssociatedData(payload domain.AssistantTranscriptPayload
 	return ad
 }
 
-func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKey, identity AssistantIdentity, operatorPubkey string) nostr.Tags {
-	dTagParts := []string{domain.AssistantTranscriptDTagPrefix + payload.SessionID, fmt.Sprintf("%020d", payload.Sequence)}
-	if payload.TurnID != "" {
-		dTagParts = append(dTagParts, payload.TurnID)
-	}
+// assistantTranscriptDTag is the deterministic coordinate of one transcript
+// message (audit C-41): <schema>:<session>:msg:<logical id>, or
+// <schema>:<session>:seq:<sequence> for a message without a logical id. A
+// retried publish of the same message lands on the same addressable
+// coordinate and replaces the earlier copy instead of adding a duplicate. The
+// logical id is preferred over the sequence because AppendMessageOnce derives
+// the sequence from a replay, so a retry can compute a different one, and two
+// concurrent appends can compute the same one for different messages.
+func assistantTranscriptDTag(payload domain.AssistantTranscriptPayload) string {
+	prefix := domain.AssistantTranscriptDTagPrefix + payload.SessionID
 	if logicalID, ok := payload.Metadata["logical_id"].(string); ok && logicalID != "" {
-		dTagParts = append(dTagParts, logicalID)
-	} else {
-		dTagParts = append(dTagParts, uuid.NewString())
+		return prefix + ":msg:" + logicalID
 	}
+	return prefix + fmt.Sprintf(":seq:%020d", payload.Sequence)
+}
+
+func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKey, identity AssistantIdentity, operatorPubkey string) nostr.Tags {
 	tags := nostr.Tags{
-		{"d", strings.Join(dTagParts, ":")},
+		{"d", assistantTranscriptDTag(payload)},
 		{domain.AssistantTranscriptTagSchema, domain.AssistantTranscriptSchema},
 		{domain.AssistantTranscriptTagDomain, domain.AssistantDomain},
 		{domain.AssistantTranscriptTagSession, payload.SessionID},

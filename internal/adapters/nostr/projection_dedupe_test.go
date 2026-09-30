@@ -520,29 +520,6 @@ func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
 	}
 }
 
-// TestProjectionAuditLogIsNeverDeduped proves the append-only audit path is
-// excluded from dedupe: identical audits are distinct records.
-func TestProjectionAuditLogIsNeverDeduped(t *testing.T) {
-	ctx := context.Background()
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-	ev := events.Event{
-		Type: events.EventEnvironmentServiceStateChanged, EntityID: "svc:env",
-		Data: events.ResourceData{ServiceID: uuid.NewString(), EnvironmentID: uuid.NewString()},
-	}
-	for i := 0; i < 2; i++ {
-		if err := projector.publishAudit(ctx, ev); err != nil {
-			t.Fatalf("audit %d: %v", i, err)
-		}
-	}
-	if got := countWireKind(sink, KindCASAudit); got != 2 {
-		t.Fatalf("audit events = %d, want 2 (never deduped)", got)
-	}
-	if m := projector.ProjectionMetrics()[projectionFamilyAudit]; m.Accepted != 2 || m.Deduped != 0 {
-		t.Fatalf("audit metrics = %+v, want accepted=2 deduped=0", m)
-	}
-}
-
 // TestProjectionFingerprintIsStableAndStripsVolatileKeys unit-tests the hash.
 func TestProjectionFingerprintIsStableAndStripsVolatileKeys(t *testing.T) {
 	tags := gonostr.Tags{{"d", "x"}, {"legacy_kind", "1"}}

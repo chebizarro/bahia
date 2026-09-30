@@ -367,14 +367,38 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 		{"sequence", strconv.FormatUint(obs.Sequence, 10)},
 		{"interval_ms", strconv.FormatInt(obs.Interval.Milliseconds(), 10)},
 	}
-	if obs.ExpiresAfter > 0 {
-		tags = append(tags, gonostr.Tag{"expires_after_ms", strconv.FormatInt(obs.ExpiresAfter.Milliseconds(), 10)})
-	}
 	event := continuityEventBase(KindNIP38Status, tags, "")
 	if !obs.ObservedAt.IsZero() {
 		event.CreatedAt = gonostr.Timestamp(obs.ObservedAt.Unix())
 	}
+	if obs.ExpiresAfter > 0 {
+		// NIP-40: relays and generic clients drop the heartbeat once it is
+		// stale, instead of a Bahia-only expires_after_ms sweep (audit C-42).
+		// Rounded up to whole seconds so a heartbeat never expires early.
+		ttl := gonostr.Timestamp((obs.ExpiresAfter + time.Second - 1) / time.Second)
+		event.Tags = append(event.Tags, gonostr.Tag{"expiration", strconv.FormatInt(int64(event.CreatedAt+ttl), 10)})
+	}
 	return event, nil
+}
+
+// heartbeatExpiresAfter is the heartbeat's freshness window: the NIP-40
+// expiration relative to created_at, else the legacy expires_after_ms tag
+// that heartbeats from producers predating NIP-40 carry.
+func heartbeatExpiresAfter(event *gonostr.Event) (time.Duration, error) {
+	if raw := continuityTagValue(event.Tags, "expiration"); raw != "" {
+		expiration, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid heartbeat expiration %q: %w", raw, err)
+		}
+		if expiration <= int64(event.CreatedAt) {
+			return 0, fmt.Errorf("heartbeat expiration %d is not after created_at %d", expiration, event.CreatedAt)
+		}
+		return time.Duration(expiration-int64(event.CreatedAt)) * time.Second, nil
+	}
+	if continuityTagValue(event.Tags, "expires_after_ms") != "" {
+		return parseDurationMillisTag(event.Tags, "expires_after_ms")
+	}
+	return 0, nil
 }
 
 // DecodeHeartbeatObservationEvent deserializes a canonical NIP-38 heartbeat status.
@@ -402,12 +426,9 @@ func DecodeHeartbeatObservationEvent(event *gonostr.Event) (*domain.HeartbeatObs
 	if err != nil {
 		return nil, err
 	}
-	expiresAfter := time.Duration(0)
-	if continuityTagValue(event.Tags, "expires_after_ms") != "" {
-		expiresAfter, err = parseDurationMillisTag(event.Tags, "expires_after_ms")
-		if err != nil {
-			return nil, err
-		}
+	expiresAfter, err := heartbeatExpiresAfter(event)
+	if err != nil {
+		return nil, err
 	}
 	obs := &domain.HeartbeatObservation{
 		WorkerPubKey: firstNonEmpty(continuityTagValue(event.Tags, "worker"), continuityTagValue(event.Tags, "p"), eventPubKeyHex(event)),

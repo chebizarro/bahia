@@ -417,6 +417,29 @@ describe('assistant store', () => {
     expect(localStorage.getItem(cacheKey)).not.toContain('SECRET-ARG');
   });
 
+  it('keeps one transcript item per deterministic coordinate when a publish is retried', async () => {
+    await store.bootstrapAssistant({ force: true });
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const operator = authMock.authState.pubkey;
+    const transcriptFilter = nostrMock.subscribeWithRecovery.mock.calls.at(-1)[0]
+      .find((filter) => filter.kinds.includes(ASSISTANT_KINDS.TRANSCRIPT));
+    expect(transcriptFilter).toMatchObject({ authors: [service], '#p': [operator] });
+    expect(Object.keys(transcriptFilter).filter((key) => key.startsWith('#') && key.length > 2)).toEqual([]);
+
+    // Producer-shaped retry: same d (session + logical id), new event id.
+    const dTag = 'bahia.assistant-transcript.v1:retry-1:msg:message-7';
+    const transcript = (id, createdAt, text) => event({ id, kind: ASSISTANT_KINDS.TRANSCRIPT, pubkey: service, created_at: createdAt,
+      tags: [['d', dTag], ['schema', 'bahia.assistant-transcript.v1'], ['domain', 'assistant'], ['session', 'retry-1'], ['seq', '4'], ['role', 'assistant'], ['p', operator, '', 'operator']],
+      content: { session_id: 'retry-1', seq: 4, message: { role: 'assistant', text } } });
+    liveHandlers.onEvent(transcript('retry-b', 160, 'second copy'));
+    liveHandlers.onEvent(transcript('retry-a', 150, 'first copy'));
+    liveHandlers.onEvent(transcript('retry-c', 170, 'final copy'));
+
+    const items = sessionById('retry-1').transcript.filter((item) => item.type === 'transcript');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'retry-c', coordinate: `${ASSISTANT_KINDS.TRANSCRIPT}:${service}:${dTag}` });
+  });
+
   it('cancels a hashless run while its prompt RPC remains pending, without inventing failure', async () => {
     const pending = deferred();
     encryptedControlplaneMock.requestEncryptedResult.mockReturnValueOnce(pending.promise);
