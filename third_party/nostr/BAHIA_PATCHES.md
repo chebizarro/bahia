@@ -6,6 +6,24 @@ wired in via `replace fiatjaf.com/nostr => ./third_party/nostr` in the root
 `go.mod`. `libsecp256k1/` is excluded by the module's own `.gitignore`; it is
 only compiled under the `libsecp256k1` build tag, which Bahia does not use.
 
+## Build and test wiring
+
+- `Dockerfile` copies `third_party/nostr/go.mod` and `go.sum` before
+  `go mod download`, because the replacement module's go.mod must exist at
+  that step. Every image build in CI (`.github/workflows/*`,
+  `.gitea/workflows/release.yml`, `make docker`) uses that Dockerfile with the
+  repository root as context. There is no root `.dockerignore`.
+- This directory is its own Go module, so the repo's `./...` patterns
+  (`go build/vet/test ./...`, `make test`/`race`/`lint`, Go CI) never include
+  it. Its upstream tests, some of which fail as noted below, only run if
+  invoked explicitly (`go test fiatjaf.com/nostr/...`). `make fmt` excludes
+  `third_party/`.
+- Dependabot ignores `fiatjaf.com/nostr`: a bump would not take effect behind
+  the `replace`.
+- To re-vendor: copy the new module version from the module cache, reapply
+  the patches below, keep the `Dockerfile` COPY line, and rerun the regression
+  tests.
+
 ## Why a local copy (bahia-irsry.17)
 
 `Subscription.dispatchEvent` sent on `sub.Events` from per-event goroutines
