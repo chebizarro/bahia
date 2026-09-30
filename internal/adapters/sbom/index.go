@@ -335,6 +335,11 @@ func (p *IndexPublisher) publishSignedEventVerified(ctx context.Context, ev *nos
 		return fmt.Errorf("%s publisher is required", label)
 	}
 	results, err := publishSignedEventWithOKResults(ctx, p.publisher, ev)
+	if nostrutil.IsPublishQueued(err) {
+		// Below the publish quorum but durably queued: the outbox runner
+		// keeps retrying this signed event, so it must not be re-signed.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("publishing %s event: %w", label, err)
 	}

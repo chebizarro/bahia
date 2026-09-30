@@ -319,8 +319,8 @@ func (r *PgNostrEventArchiveRepository) RestoreArchiveBatchJSON(ctx context.Cont
 	var inserted int64
 	for i, row := range rows {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at)
-			SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at
+			INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at, publish_target)
+			SELECT id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id, direction, processing_status, processing_error, processed_at, publish_state, publish_attempts, last_publish_error, published_at, COALESCE(publish_target, '')
 			FROM jsonb_populate_record(NULL::nostr_events, $1::jsonb)
 			ON CONFLICT (id) DO NOTHING
 		`, row)

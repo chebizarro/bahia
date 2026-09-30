@@ -11,6 +11,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -37,8 +38,9 @@ const defaultOutboxPageSize = 100
 // ErrPublishIncomplete reports that fewer relays than the caller-facing publish
 // quorum (nostr.publish_quorum, default 1) accepted an event. The event remains
 // queued and relays that have not accepted are still retried; errors.As a
-// *PublishIncompleteError for the counts.
-var ErrPublishIncomplete = errors.New("nostr event not accepted by the publish quorum")
+// *PublishIncompleteError for the counts. It aliases nostrutil's sentinel so
+// callers outside this package match it without an import cycle.
+var ErrPublishIncomplete = nostrutil.ErrPublishIncomplete
 
 // PublishIncompleteError describes a publish that did not reach its required
 // relay acceptance.
@@ -471,15 +473,15 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 	return rateLimited
 }
 
-// discoverPending reads one keyset page of pending outbox rows and starts
-// delivery for rows this publisher is not already tracking (rows recorded by
-// other producers, or left pending by a previous process). It reports whether
-// the page was full, meaning more rows follow the cursor.
+// discoverPending reads one keyset page of this publisher's target's pending
+// outbox rows and starts delivery for rows it is not already tracking (rows
+// recorded by other producers, or left pending by a previous process). It
+// reports whether the page was full, meaning more rows follow the cursor.
 func (p *Publisher) discoverPending(ctx context.Context) (more bool, err error) {
 	if p.outboxRepo == nil {
 		return false, nil
 	}
-	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.outboxCursor, p.pageSize)
+	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, p.outboxCursor, p.pageSize)
 	if err != nil {
 		return false, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/redact"
 )
 
@@ -389,7 +390,10 @@ func (p *RouteCanaryProjector) publish(ctx context.Context, obs routeCanaryObser
 				continue
 			}
 		}
-		if err := p.publisher.PublishSignedEvent(ctx, &item.event); err != nil {
+		// A queued publish (nostrutil.ErrPublishIncomplete) is kept and
+		// retried by the outbox, so it counts as recorded: the bus must not
+		// redeliver the transition and re-sign it.
+		if err := p.publisher.PublishSignedEvent(ctx, &item.event); err != nil && !nostrutil.IsPublishQueued(err) {
 			errs = append(errs, fmt.Errorf("publish route canary kind %d for %s: %w", item.event.Kind, obs.state.Coordinate(), err))
 			continue
 		}

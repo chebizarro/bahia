@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -526,5 +527,24 @@ func TestFilterForAttestations(t *testing.T) {
 	subjectTags := filter.Tags[TagSubjectDigest]
 	if len(subjectTags) != 1 || subjectTags[0] != "sha256:def456" {
 		t.Errorf("Expected subject tag filter, got %v", subjectTags)
+	}
+}
+
+// Below the publish quorum the event is durably queued and retried by the
+// outbox runner; the index publisher returns its ID instead of failing, so the
+// caller has no reason to re-sign it.
+func TestIndexPublisher_QueuedPublishIsKept(t *testing.T) {
+	mock := &mockNostrPublisher{
+		results: []PublishOKResult{{RelayURL: "wss://relay.example", Error: errors.New("connection refused")}},
+		err:     fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete),
+	}
+	pub := NewIndexPublisher(mock)
+
+	eventID, err := pub.PublishAttestation(context.Background(), PublishAttestationInput{Subject: testSubject(), Attestation: testAttestation()})
+	if err != nil {
+		t.Fatalf("PublishAttestation error = %v, want queued event kept", err)
+	}
+	if len(mock.events) != 1 || eventID != mock.events[0].ID.Hex() {
+		t.Fatalf("expected the single queued event ID, got %q after %d publishes", eventID, len(mock.events))
 	}
 }

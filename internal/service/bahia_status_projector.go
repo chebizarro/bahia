@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -111,7 +112,10 @@ func (p *BahiaStatusProjector) publishIfChanged(ctx context.Context, ev gonostr.
 		return nil
 	}
 	if p.publisher != nil {
-		if err := p.publisher.PublishSignedEvent(ctx, &ev); err != nil {
+		// A queued publish (nostrutil.ErrPublishIncomplete) is kept and
+		// retried by the outbox; remembering it stops the next projection
+		// from re-signing the same status.
+		if err := p.publisher.PublishSignedEvent(ctx, &ev); err != nil && !nostrutil.IsPublishQueued(err) {
 			return fmt.Errorf("publish Bahia status kind %d: %w", ev.Kind, err)
 		}
 	}

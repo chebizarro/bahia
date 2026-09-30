@@ -169,14 +169,46 @@ func TestInMemoryNostrEventRepositoryListUnpublishedAfterPagesByKeyset(t *testin
 	_, err := repo.Record(ctx, &NostrEventRecord{ID: "done", ReceivedAt: base, PublishState: NostrPublishStatePublished})
 	require.NoError(t, err)
 
-	first, err := repo.ListUnpublishedAfter(ctx, nil, 2)
+	first, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, nil, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, nostrRecordIDs(first))
 
 	last := first[len(first)-1]
-	rest, err := repo.ListUnpublishedAfter(ctx, &NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}, 2)
+	rest, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, &NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"c"}, nostrRecordIDs(rest))
+}
+
+func TestInMemoryNostrEventRepositoryListUnpublishedAfterIsPartitionedByTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := NewInMemoryNostrEventRepository()
+	base := time.Unix(1000, 0).UTC()
+	rows := []NostrEventRecord{
+		{ID: "interop-1", ReceivedAt: base, PublishState: NostrPublishStatePending},
+		{ID: "cp-1", ReceivedAt: base.Add(time.Second), PublishState: NostrPublishStatePending, PublishTarget: NostrPublishTargetControlPlane},
+		{ID: "interop-2", ReceivedAt: base.Add(2 * time.Second), PublishState: NostrPublishStatePending},
+		{ID: "cp-done", ReceivedAt: base, PublishState: NostrPublishStatePublished, PublishTarget: NostrPublishTargetControlPlane},
+	}
+	for i := range rows {
+		_, err := repo.Record(ctx, &rows[i])
+		require.NoError(t, err)
+	}
+
+	interop, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, nil, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"interop-1", "interop-2"}, nostrRecordIDs(interop))
+
+	controlPlane, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetControlPlane, nil, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"cp-1"}, nostrRecordIDs(controlPlane))
+	require.Equal(t, NostrPublishTargetControlPlane, controlPlane[0].PublishTarget)
+
+	all, err := repo.ListUnpublished(ctx, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"interop-1", "cp-1", "interop-2"}, nostrRecordIDs(all), "ListUnpublished spans every target")
+	depth, err := repo.CountUnpublished(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, depth)
 }
 
 func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *testing.T) {
@@ -193,7 +225,7 @@ func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *tes
 
 	pending, err := repo.GetByID(ctx, "pending")
 	require.NoError(t, err)
-	require.Equal(t, NostrPublishStateNotApplicable, pending.PublishState)
+	require.Equal(t, NostrPublishStateFailed, pending.PublishState)
 	require.Equal(t, "abandoned: blocked: no", pending.LastPublishError)
 	require.Equal(t, 1, pending.PublishAttempts)
 

@@ -37,12 +37,15 @@ func (s *configTestSigner) Sign(ctx context.Context, event *nostr.Event) error {
 }
 
 type configTestPublisher struct {
-	events []nostr.Event
+	events      []nostr.Event
+	entityTypes []string
+	err         error
 }
 
-func (p *configTestPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {
+func (p *configTestPublisher) PublishPresignedEvent(_ context.Context, event nostr.Event, entityType string) error {
 	p.events = append(p.events, event)
-	return 1, nil
+	p.entityTypes = append(p.entityTypes, entityType)
+	return p.err
 }
 
 func validPolicyRequest(version int) ConfigPublishRequest {

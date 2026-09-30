@@ -15,6 +15,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
@@ -43,9 +44,25 @@ type ConfigFabricSigner interface {
 	Sign(ctx context.Context, event *nostr.Event) error
 }
 
+// ConfigFabricPublisher delivers an operator-signed config-fabric event through
+// the control-plane publish outbox without re-signing it. A nil error means the
+// publish quorum accepted it; an error matching nostrutil.ErrPublishIncomplete
+// means the event is durably queued and its runner keeps retrying the relays
+// that have not accepted. Relays that have not accepted are retried either way.
 type ConfigFabricPublisher interface {
-	Publish(ctx context.Context, event nostr.Event) (int, error)
+	PublishPresignedEvent(ctx context.Context, event nostr.Event, entityType string) error
 }
+
+// Config-fabric delivery states reported on a publish receipt.
+const (
+	// ConfigDeliveryAccepted: the publish quorum of control-plane relays
+	// accepted the event (remaining relays are still retried).
+	ConfigDeliveryAccepted = "accepted"
+	// ConfigDeliveryQueued: fewer relays than the publish quorum have accepted
+	// yet; the signed event is durable and still being retried. Do not
+	// republish it.
+	ConfigDeliveryQueued = "queued"
+)
 
 type ConfigListItem struct {
 	Tag   string `json:"tag"`
@@ -70,6 +87,8 @@ type ConfigPublishReceipt struct {
 	Kind    int    `json:"kind"`
 	Version int    `json:"version"`
 	DTag    string `json:"d_tag"`
+	// Delivery is ConfigDeliveryAccepted or ConfigDeliveryQueued.
+	Delivery string `json:"delivery"`
 }
 
 type ConfigRollbackRequest struct {
@@ -168,19 +187,18 @@ func (s *ConfigFabricService) publishLocked(ctx context.Context, request ConfigP
 	if err := s.persistDesired(ctx, *event); err != nil {
 		return nil, err
 	}
-	published, err := s.publisher.Publish(ctx, *event)
-	if err != nil {
-		return nil, fmt.Errorf("publish config-fabric event: %w", err)
-	}
-	if published < 1 {
-		return nil, fmt.Errorf("publish config-fabric event: no relay accepted the event")
-	}
-	if outbox, ok := s.repo.(repository.NostrEventOutboxRepository); ok {
-		if err := outbox.MarkPublished(ctx, event.ID.Hex(), s.now()); err != nil {
-			return nil, fmt.Errorf("record config-fabric publish acceptance: %w", err)
+	// The publisher owns delivery state from here: the row stays pending until
+	// every control-plane relay has accepted or reached a terminal state.
+	delivery := ConfigDeliveryAccepted
+	if err := s.publisher.PublishPresignedEvent(ctx, *event, configEntityType); err != nil {
+		if !nostrutil.IsPublishQueued(err) {
+			return nil, fmt.Errorf("publish config-fabric event: %w", err)
 		}
+		// Durable and still being retried: report it as queued rather than
+		// failing, so callers do not re-sign a second desired version.
+		delivery = ConfigDeliveryQueued
 	}
-	return &ConfigPublishReceipt{EventID: event.ID.Hex(), PubKey: pubkey, Kind: request.Kind, Version: request.Version, DTag: configDTag(request.ServiceID, request.PolicyName)}, nil
+	return &ConfigPublishReceipt{EventID: event.ID.Hex(), PubKey: pubkey, Kind: request.Kind, Version: request.Version, DTag: configDTag(request.ServiceID, request.PolicyName), Delivery: delivery}, nil
 }
 
 func (s *ConfigFabricService) Rollback(ctx context.Context, eventID string) (*ConfigPublishReceipt, error) {
@@ -439,6 +457,9 @@ func (s *ConfigFabricService) persistDesired(ctx context.Context, event nostr.Ev
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(), Content: event.Content,
 		Tags: tags, Sig: hex.EncodeToString(event.Sig[:]), CreatedAt: event.CreatedAt.Time(), ReceivedAt: s.now(),
 		EntityType: configEntityType, PublishState: repository.NostrPublishStatePending,
+		// Config-fabric desired state is delivered to the control-plane
+		// relays; only that pool's runner may retry it.
+		PublishTarget: repository.NostrPublishTargetControlPlane,
 	}
 	if _, err := s.repo.Record(ctx, record); err != nil {
 		return fmt.Errorf("persist config-fabric desired event before publish: %w", err)

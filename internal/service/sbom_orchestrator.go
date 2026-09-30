@@ -681,6 +681,15 @@ func (s *SBOMOrchestrator) publishAudit(ctx context.Context, subject domain.SBOM
 
 func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event, label string) (string, error) {
 	results, err := s.Publisher.PublishSignedEventWithResults(ctx, ev)
+	if nostrutil.IsPublishQueued(err) {
+		// Below the publish quorum but durably queued: the control-plane
+		// runner keeps retrying this exact signed event. Treat it as kept so
+		// the run neither fails nor re-signs it.
+		if s.Pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.Pubkey) {
+			return "", fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
+		}
+		return nostrutil.EventIDHex(ev), nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("publishing %s event: %w", label, err)
 	}
