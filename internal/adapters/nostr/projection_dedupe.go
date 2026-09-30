@@ -16,6 +16,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -104,6 +105,9 @@ type projectionState struct {
 	keyLocks  map[projectionKey]*sync.Mutex
 	hydration map[int]*projectionHydrationState
 	metrics   map[string]*ProjectionFamilyMetrics
+	// auditFacts are the fact ids of audit events already signed (or retained
+	// from before a restart), so a republished source fact is not signed twice.
+	auditFacts auditFactSet
 
 	backoffMu    sync.Mutex
 	retryAfter   time.Time
@@ -348,6 +352,10 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 			continue
 		}
 		tags := recordTags(record)
+		if record.Kind == KindCASAudit {
+			s.auditFacts.add(tagValue(tags, kinds.CPAuditTagFact))
+			continue
+		}
 		key := projectionKeyOf(record.Kind, tags)
 		if _, dup := seen[key]; dup {
 			continue
@@ -497,7 +505,12 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 // newer publish has superseded, are ignored.
 func (p *Projector) ForgetAbandonedProjection(ev gonostr.Event) {
 	wireKind := int(ev.Kind)
-	if p == nil || wireKind == KindCASAudit {
+	if p == nil {
+		return
+	}
+	if wireKind == KindCASAudit {
+		// The fact never reached the quorum: a republish must sign it again.
+		p.releaseAuditFact(tagValue(ev.Tags, kinds.CPAuditTagFact))
 		return
 	}
 	key := projectionKeyOf(wireKind, ev.Tags)

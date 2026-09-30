@@ -413,6 +413,17 @@ function standbyDefinitionsFromWorkerState(event: ContinuityNostrEvent): Continu
     .filter((value: ContinuityStandbyDefinition | null): value is ContinuityStandbyDefinition => Boolean(value));
 }
 
+// A heartbeat is fresh until its NIP-40 expiration (seconds). Heartbeats from
+// producers that predate NIP-40 carry expires_after_ms relative to created_at.
+function heartbeatExpiresAtMs(event: ContinuityNostrEvent, content: Record<string, any>): number {
+  const expiration = numberValue(eventTagValue(event, 'expiration'));
+  if (expiration > 0) return expiration * 1000;
+  const expiresAfterMs = numberValue(eventTagValue(event, 'expires_after_ms') || content.expires_after_ms);
+  const createdAt = numberValue(event.created_at);
+  if (expiresAfterMs > 0 && createdAt > 0) return createdAt * 1000 + expiresAfterMs;
+  return Number.POSITIVE_INFINITY;
+}
+
 function healthyHeartbeatWorker(event: ContinuityNostrEvent): string {
   if (event?.kind !== HEARTBEAT_OBSERVATION) return '';
   const domain = eventTagValue(event, 'domain') || text(contentObject(event).domain);
@@ -421,9 +432,7 @@ function healthyHeartbeatWorker(event: ContinuityNostrEvent): string {
   const status = (eventTagValue(event, 'status') || text(content.status) || 'online').toLowerCase();
   if (!['online', 'fresh', 'healthy'].includes(status)) return '';
 
-  const expiresAfterMs = numberValue(eventTagValue(event, 'expires_after_ms') || content.expires_after_ms);
-  const createdAt = numberValue(event.created_at);
-  if (expiresAfterMs > 0 && createdAt > 0 && Date.now() > createdAt * 1000 + expiresAfterMs) return '';
+  if (Date.now() >= heartbeatExpiresAtMs(event, content)) return '';
   return eventTagValue(event, 'worker') || eventTagValue(event, 'p') || text(content.worker_pubkey) || text(event.pubkey);
 }
 

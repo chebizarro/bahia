@@ -1479,7 +1479,8 @@ func (p *Projector) publishControlState(ctx context.Context, legacyKind int, id 
 
 // controlStateEnvelope is the single coordinate builder for projected
 // replaceable state. It returns the wire kind and the envelope tags (d, domain,
-// schema, legacy_kind, deleted) for the record identified by (legacyKind, id).
+// schema, legacy_kind, deleted, and the family's single-letter t topic) for the
+// record identified by (legacyKind, id).
 // Relays replace an addressable event only with a newer event on the exact
 // same (kind, pubkey, d) coordinate, so a live record and its tombstone must
 // both be built here; deriving either one separately is how deletions ended up
@@ -1496,96 +1497,70 @@ func controlStateEnvelope(legacyKind int, id string, deleted bool) (wireKind int
 		{kinds.CASControlStateTagSchema, controlStateSchema},
 		{kinds.CASControlStateTagLegacyKind, strconv.Itoa(legacyKind)},
 		{kinds.CASControlStateTagDeleted, deletedValue},
+		{"t", cpStateFamilies[legacyKind].topic},
 	}
 }
 
 const controlStateSchema = kinds.CASControlStateSchema
 
+// cpStateFamily is one projected cp-state family: the 30900 domain and entity
+// of its records and the single-letter "t" topic ("<domain>-<entity>") each
+// record carries so consumers can REQ it by #t (audit A-27).
+type cpStateFamily struct {
+	domain string
+	entity string
+	topic  string
+}
+
+// cpStateFamilies is the projector's single table of cp-state families, keyed
+// by the catalog kind stamped in legacy_kind. The worker topics are the worker
+// contract's (bahia-irsry.9.2).
+var cpStateFamilies = map[int]cpStateFamily{
+	KindServiceState:                  {"service", "state", kinds.CPStateTopicServiceState},
+	KindServiceRegistry:               {"service", "registry", kinds.CPStateTopicServiceRegistry},
+	KindEnvironmentRegistry:           {"environment", "registry", kinds.CPStateTopicEnvironmentRegistry},
+	KindLLMRouteRegistry:              {"llm", "route", kinds.CPStateTopicLLMRoute},
+	KindLLMRouteState:                 {"llm", "state", kinds.CPStateTopicLLMState},
+	KindArtifactRegistry:              {"artifact", "registry", kinds.CPStateTopicArtifactRegistry},
+	KindDeploymentIntentRegistry:      {"deployment", "intent", kinds.CPStateTopicDeploymentIntent},
+	KindDeploymentRunRegistry:         {"deployment", "run", kinds.CPStateTopicDeploymentRun},
+	KindBuildRegistry:                 {"build", "registry", kinds.CPStateTopicBuildRegistry},
+	KindPolicyRegistry:                {"policy", "registry", kinds.CPStateTopicPolicyRegistry},
+	KindPackageRepositoryRegistry:     {"package", "repository", kinds.CPStateTopicPackageRepository},
+	KindPackageArtifactRegistry:       {"package", "artifact", kinds.CPStateTopicPackageArtifact},
+	KindPackagePromotionRegistry:      {"package", "promotion", kinds.CPStateTopicPackagePromotion},
+	KindWorkerState:                   {"worker", "state", "worker-state"},
+	KindWorkerAssignmentState:         {"worker", "assignment", "worker-assignment"},
+	KindWorkerDrainStatus:             {"worker", "drain", "worker-drain"},
+	KindWorkerEligibilityPreview:      {"worker", "eligibility", "worker-eligibility"},
+	KindDNSZoneState:                  {kinds.DNSDomain, "zone", kinds.DNSZoneTopic},
+	KindDNSEndpointState:              {kinds.DNSDomain, "endpoint", kinds.DNSEndpointTopic},
+	KindDNSPolicyState:                {kinds.DNSDomain, "policy", kinds.DNSPolicyTopic},
+	KindDNSBackendState:               {kinds.DNSDomain, "backend", kinds.DNSBackendTopic},
+	KindMLModelRegistry:               {"ml", "model", kinds.CPStateTopicMLModel},
+	KindMLModelVersionRegistry:        {"ml", "model-version", kinds.CPStateTopicMLModelVersion},
+	KindMLDatasetRegistry:             {"ml", "dataset", kinds.CPStateTopicMLDataset},
+	KindMLRecipeRegistry:              {"ml", "recipe", kinds.CPStateTopicMLRecipe},
+	KindMLRecipeRunState:              {"ml", "recipe-run", kinds.CPStateTopicMLRecipeRun},
+	KindMLInferenceEndpointRegistry:   {"ml", "endpoint", kinds.CPStateTopicMLEndpoint},
+	KindMLInferenceEndpointState:      {"ml", "endpoint-state", kinds.CPStateTopicMLEndpointState},
+	KindMLEvaluationExperimentState:   {"ml", "evaluation", kinds.CPStateTopicMLEvaluation},
+	KindMLArtifactProvenanceGraph:     {"ml", "provenance", kinds.CPStateTopicMLProvenance},
+	KindMLRuntimeCapabilityProfile:    {"ml", "runtime-capability", kinds.CPStateTopicMLRuntimeCapability},
+	KindBackupDefinitionRegistry:      {"backup", "definition", kinds.CPStateTopicBackupDefinition},
+	KindBackupPolicyRegistry:          {"backup", "policy", kinds.CPStateTopicBackupPolicy},
+	KindBackupRepositoryRegistry:      {"backup", "repository", kinds.CPStateTopicBackupRepository},
+	KindBackupRetentionRegistry:       {"backup", "retention", kinds.CPStateTopicBackupRetention},
+	KindBackupRecipeRegistry:          {"backup", "recipe", kinds.CPStateTopicBackupRecipe},
+	KindBackupRunState:                {"backup", "run", kinds.CPStateTopicBackupRun},
+	KindBackupVerificationState:       {"backup", "verification", kinds.CPStateTopicBackupVerification},
+	KindBackupRestoreState:            {"backup", "restore", kinds.CPStateTopicBackupRestore},
+	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
+}
+
 func canonicalStateDomain(kind int) (domainName string, entity string) {
-	switch kind {
-	case KindServiceState:
-		return "service", "state"
-	case KindServiceRegistry:
-		return "service", "registry"
-	case KindEnvironmentRegistry:
-		return "environment", "registry"
-	case KindLLMRouteRegistry:
-		return "llm", "route"
-	case KindLLMRouteState:
-		return "llm", "state"
-	case KindArtifactRegistry:
-		return "artifact", "registry"
-	case KindDeploymentIntentRegistry:
-		return "deployment", "intent"
-	case KindDeploymentRunRegistry:
-		return "deployment", "run"
-	case KindBuildRegistry:
-		return "build", "registry"
-	case KindPolicyRegistry:
-		return "policy", "registry"
-	case KindPackageRepositoryRegistry:
-		return "package", "repository"
-	case KindPackageArtifactRegistry:
-		return "package", "artifact"
-	case KindPackagePromotionRegistry:
-		return "package", "promotion"
-	case KindWorkerState:
-		return "worker", "state"
-	case KindWorkerAssignmentState:
-		return "worker", "assignment"
-	case KindWorkerDrainStatus:
-		return "worker", "drain"
-	case KindWorkerEligibilityPreview:
-		return "worker", "eligibility"
-	case KindDNSZoneState:
-		return kinds.DNSDomain, "zone"
-	case KindDNSEndpointState:
-		return kinds.DNSDomain, "endpoint"
-	case KindDNSPolicyState:
-		return kinds.DNSDomain, "policy"
-	case KindDNSBackendState:
-		return kinds.DNSDomain, "backend"
-	case KindMLModelRegistry:
-		return "ml", "model"
-	case KindMLModelVersionRegistry:
-		return "ml", "model-version"
-	case KindMLDatasetRegistry:
-		return "ml", "dataset"
-	case KindMLRecipeRegistry:
-		return "ml", "recipe"
-	case KindMLRecipeRunState:
-		return "ml", "recipe-run"
-	case KindMLInferenceEndpointRegistry:
-		return "ml", "endpoint"
-	case KindMLInferenceEndpointState:
-		return "ml", "endpoint-state"
-	case KindMLEvaluationExperimentState:
-		return "ml", "evaluation"
-	case KindMLArtifactProvenanceGraph:
-		return "ml", "provenance"
-	case KindMLRuntimeCapabilityProfile:
-		return "ml", "runtime-capability"
-	case KindBackupDefinitionRegistry:
-		return "backup", "definition"
-	case KindBackupPolicyRegistry:
-		return "backup", "policy"
-	case KindBackupRepositoryRegistry:
-		return "backup", "repository"
-	case KindBackupRetentionRegistry:
-		return "backup", "retention"
-	case KindBackupRecipeRegistry:
-		return "backup", "recipe"
-	case KindBackupRunState:
-		return "backup", "run"
-	case KindBackupVerificationState:
-		return "backup", "verification"
-	case KindBackupRestoreState:
-		return "backup", "restore"
-	case KindBackupRuntimeObservationState:
-		return "backup", "runtime"
-	default:
-		return "", ""
-	}
+	family := cpStateFamilies[kind]
+	return family.domain, family.entity
 }
 
 func canonicalStateDTag(_, _, id string) string {
@@ -1669,7 +1644,7 @@ func (p *Projector) publishDNSEndpoint(ctx context.Context, endpoint domain.DNSE
 func (p *Projector) publishDNSEndpointTombstone(ctx context.Context, coordinate, fqdn string) error {
 	now := time.Now().UTC()
 	content := map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"t", kinds.DNSEndpointTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"t", "bahia"}}
 	if strings.TrimSpace(fqdn) != "" {
 		tags = append(tags, gonostr.Tag{"dns", strings.TrimSpace(fqdn)})
 	}
@@ -1734,7 +1709,7 @@ func (p *Projector) publishDNSZoneSnapshot(ctx context.Context) (int, int, error
 func (p *Projector) publishDNSZone(ctx context.Context, zone domain.DNSZone, deleted bool) error {
 	now := time.Now().UTC()
 	content := map[string]any{"name": zone.Name, "visibility": string(zone.Visibility), "backend_ref": zone.BackendRef, "ttl": zone.TTL, "deleted": deleted, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}, {"visibility", string(zone.Visibility)}, {"t", kinds.DNSZoneTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}, {"visibility", string(zone.Visibility)}, {"t", "bahia"}}
 	return p.publishReplaceableJSON(ctx, KindDNSZoneState, dnsZoneDTag(zone.Name), tags, content, "dns_zone.projection", nil)
 }
 
@@ -1742,7 +1717,7 @@ func (p *Projector) publishDNSZone(ctx context.Context, zone domain.DNSZone, del
 func (p *Projector) publishDNSZoneTombstone(ctx context.Context, dTag string, previous dnsPublishedZone) error {
 	now := time.Now().UTC()
 	content := map[string]any{"name": previous.Name, "visibility": previous.Visibility, "backend_ref": previous.BackendRef, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", kinds.DNSZoneTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"zone", previous.Name}, {"backend", previous.BackendRef}, {"visibility", previous.Visibility}, {"t", "bahia"}}
 	return p.publishReplaceableTombstone(ctx, KindDNSZoneState, dTag, tags, content, "dns_zone.projection", nil)
 }
 
@@ -1818,7 +1793,7 @@ func (p *Projector) publishDNSBackend(ctx context.Context, backend domain.DNSBac
 	if backend.LastSyncAt != nil {
 		content["last_sync_at"] = formatTime(*backend.LastSyncAt)
 	}
-	tags := gonostr.Tags{{"backend", backend.Ref}, {"type", string(backend.Type)}, {"health", string(backend.Health)}, {"t", kinds.DNSBackendTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"backend", backend.Ref}, {"type", string(backend.Type)}, {"health", string(backend.Health)}, {"t", "bahia"}}
 	for _, zone := range backend.ZoneRefs {
 		if strings.TrimSpace(zone) != "" {
 			tags = append(tags, gonostr.Tag{"zone", strings.TrimSpace(zone)})
@@ -1831,7 +1806,7 @@ func (p *Projector) publishDNSBackend(ctx context.Context, backend domain.DNSBac
 func (p *Projector) publishDNSBackendTombstone(ctx context.Context, dTag string, previous dnsPublishedBackend) error {
 	now := time.Now().UTC()
 	content := map[string]any{"ref": previous.Ref, "type": previous.Type, "health": previous.Health, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", kinds.DNSBackendTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"backend", previous.Ref}, {"type", previous.Type}, {"health", previous.Health}, {"t", "bahia"}}
 	return p.publishReplaceableTombstone(ctx, KindDNSBackendState, dTag, tags, content, "dns_backend.projection", nil)
 }
 
@@ -2069,7 +2044,7 @@ func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolic
 		updatedAt = time.Now().UTC()
 	}
 	content := map[string]any{"id": policy.ID.String(), "name": policy.Name, "zone_id": uuidStringPtr(policy.ZoneID), "environment_id": uuidStringPtr(policy.EnvironmentID), "rules": policy.Rules, "enabled": policy.Enabled, "deleted": deleted, "created_at": formatTime(policy.CreatedAt), "updated_at": formatTime(updatedAt)}
-	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", fmt.Sprintf("%t", policy.Enabled)}, {"t", kinds.DNSPolicyTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", fmt.Sprintf("%t", policy.Enabled)}, {"t", "bahia"}}
 	if policy.ZoneID != nil {
 		tags = append(tags, gonostr.Tag{"zone", policy.ZoneID.String()})
 	}
@@ -2080,7 +2055,7 @@ func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolic
 func (p *Projector) publishDNSPolicyTombstone(ctx context.Context, dTag string, previous dnsPublishedPolicy) error {
 	now := time.Now().UTC()
 	content := map[string]any{"id": previous.ID, "name": previous.Name, "zone_id": previous.ZoneID, "enabled": previous.Enabled, "deleted": true, "updated_at": formatTime(now)}
-	tags := gonostr.Tags{{"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", kinds.DNSPolicyTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", "bahia"}}
 	if previous.ZoneID != "" {
 		tags = append(tags, gonostr.Tag{"zone", previous.ZoneID})
 	}
@@ -2251,7 +2226,7 @@ func (p *Projector) liveRetainedControlState(ctx context.Context, legacyKind int
 }
 
 func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
-	tags := gonostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", kinds.DNSEndpointTopic}, {"t", "bahia"}}
+	tags := gonostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", "bahia"}}
 	if endpoint.Environment != "" {
 		tags = append(tags, gonostr.Tag{"environment", endpoint.Environment})
 	}
@@ -2812,7 +2787,7 @@ func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domai
 
 func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
 	content := map[string]any{"deleted": deleted, "id": policy.ID.String(), "updated_at": formatTime(policy.UpdatedAt)}
-	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	tags := gonostr.Tags{{"policy", policy.ID.String()}}
 	if !deleted {
 		content["name"] = policy.Name
 		if policy.EnvironmentID != nil {
@@ -2827,8 +2802,7 @@ func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.De
 		tags = append(tags, gonostr.Tag{"name", policy.Name}, gonostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, gonostr.Tag{"enforcement", string(policy.Enforcement)})
 	}
 	contentJSON, _ := json.Marshal(content)
-	baseTags := gonostr.Tags{{kinds.CASControlStateTagD, canonicalStateDTag("policy", "registry", policy.ID.String())}, {kinds.CASControlStateTagDomain, "policy"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindPolicyRegistry)}}
-	return p.publishSigned(ctx, KindCASControlState, append(baseTags, tags...), string(contentJSON), "policy.projection", &policy.ID)
+	return p.publishControlState(ctx, KindPolicyRegistry, policy.ID.String(), deleted, tags, string(contentJSON), "policy.projection", &policy.ID)
 }
 
 func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
@@ -2848,20 +2822,14 @@ func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Serv
 		content["updated_at"] = formatTime(svc.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{
-		{kinds.CASControlStateTagD, canonicalStateDTag("service", "registry", svc.ID.String())},
-		{kinds.CASControlStateTagDomain, "service"},
-		{kinds.CASControlStateTagSchema, "bahia.cp-state.v1"},
-		{"legacy_kind", strconv.Itoa(KindServiceRegistry)},
-		{"deleted", fmt.Sprintf("%t", deleted)},
-	}
+	tags := gonostr.Tags{}
 	if !deleted {
 		tags = append(tags,
 			gonostr.Tag{"name", svc.Name},
 			gonostr.Tag{"runtime", string(svc.RuntimeType)},
 		)
 	}
-	return p.publishSigned(ctx, KindCASControlState, tags, string(contentJSON), "service.projection", &svc.ID)
+	return p.publishControlState(ctx, KindServiceRegistry, svc.ID.String(), deleted, tags, string(contentJSON), "service.projection", &svc.ID)
 }
 
 func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
@@ -2885,13 +2853,7 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 		content["updated_at"] = formatTime(env.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{
-		{kinds.CASControlStateTagD, canonicalStateDTag("environment", "registry", env.ID.String())},
-		{kinds.CASControlStateTagDomain, "environment"},
-		{kinds.CASControlStateTagSchema, "bahia.cp-state.v1"},
-		{"legacy_kind", strconv.Itoa(KindEnvironmentRegistry)},
-		{"deleted", fmt.Sprintf("%t", deleted)},
-	}
+	tags := gonostr.Tags{}
 	if !deleted {
 		tags = append(tags,
 			gonostr.Tag{"name", env.Name},
@@ -2900,7 +2862,7 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 			gonostr.Tag{"reconcile_mode", string(env.Targeting.DefaultReconcileMode)},
 		)
 	}
-	return p.publishSigned(ctx, KindCASControlState, tags, string(contentJSON), "environment.projection", &env.ID)
+	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, string(contentJSON), "environment.projection", &env.ID)
 }
 
 func (p *Projector) publishBackupRecipeRegistry(ctx context.Context, recipe *domain.BackupRecipe) error {
@@ -3406,14 +3368,14 @@ func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.L
 		content["updated_at"] = formatTime(route.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{{kinds.CASControlStateTagD, canonicalStateDTag("llm", "route", route.ID.String())}, {"route", route.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	tags := gonostr.Tags{{"route", route.ID.String()}}
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", route.Name})
 		if route.GatewayConfig != nil && route.GatewayConfig.PublicModel != "" {
 			tags = append(tags, gonostr.Tag{"model", route.GatewayConfig.PublicModel})
 		}
 	}
-	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{kinds.CASControlStateTagDomain, "llm"}, {kinds.CASControlStateTagSchema, "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteRegistry)}}, tags...), string(contentJSON), "llm_route.projection", &route.ID)
+	return p.publishControlState(ctx, KindLLMRouteRegistry, route.ID.String(), deleted, tags, string(contentJSON), "llm_route.projection", &route.ID)
 }
 
 func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMRouteState) error {
@@ -3600,36 +3562,6 @@ func (p *Projector) publishStateTombstone(ctx context.Context, res events.Resour
 	return p.publishReplaceableTombstone(ctx, KindServiceState, serviceStateDTag(serviceID, envID), tags, content, "state.projection", &serviceID)
 }
 
-func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
-	legacyKind := auditKindForEvent(e.Type)
-	if legacyKind == 0 {
-		return nil
-	}
-	res := resourceFromEvent(e)
-	content, _ := json.Marshal(map[string]any{
-		"event_type": string(e.Type),
-		"entity_id":  e.EntityID,
-		"data":       e.Data,
-	})
-	domainName := auditDomainForEvent(e.Type)
-	tags := gonostr.Tags{
-		{"domain", domainName},
-		{"type", string(e.Type)},
-		{"schema", "bahia.audit.v1"},
-		{"legacy_kind", strconv.Itoa(legacyKind)},
-		{"protected", "true"},
-		{"t", string(e.Type)},
-		{"event_type", string(e.Type)},
-	}
-	if e.EntityID != "" {
-		tags = append(tags, gonostr.Tag{"d", e.EntityID})
-	}
-	tags = appendResourceTags(tags, res)
-	tags = appendDNSAuditTags(tags, e.Data)
-	entityID := auditEntityID(e.Type, e.EntityID, res)
-	return p.publishSigned(ctx, KindCASAudit, tags, string(content), string(e.Type), entityID)
-}
-
 func auditDomainForEvent(t events.EventType) string {
 	s := string(t)
 	if idx := strings.Index(s, "."); idx > 0 {
@@ -3683,63 +3615,6 @@ func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt
 	}
 	p.logger.Debug("projected Nostr event published", zap.Int("kind", kind), zap.String("event_id", eventIDHex(&ev)))
 	return false, nil
-}
-
-func auditKindForEvent(t events.EventType) int {
-	switch t {
-	case events.EventBuildRegistered:
-		return KindBuildRegistered
-	case events.EventArtifactRegistered:
-		return KindArtifactRegistered
-	case events.EventDeploymentIntentCreated:
-		return KindDeploymentCreated
-	case events.EventDeploymentRunCompleted:
-		return KindDeploymentComplete
-	case events.EventDriftDetected:
-		return KindDriftDetected
-	case events.EventRuntimeObservation:
-		return KindObservation
-	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted:
-		return KindServiceRegistryAudit
-	case events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted:
-		return KindEnvironmentRegistryAudit
-	case events.EventEnvironmentServiceStateChanged:
-		return KindStateChangedAudit
-	case events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop:
-		return KindRuntimeActionAudit
-	case events.EventReconcileCompleted:
-		return KindReconcileAudit
-	case events.EventAdoptionImported:
-		return KindAdoptionAudit
-	case events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected:
-		return KindDeploymentApprovalAudit
-	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged:
-		return KindDeploymentRunAudit
-	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated:
-		return KindLLMRouteRegistryAudit
-	case events.EventLLMReleaseRegistered:
-		return KindLLMReleaseRegisteredAudit
-	case events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected:
-		return KindLLMDeploymentAudit
-	case events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted:
-		return KindLLMRunAudit
-	case events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected:
-		return KindLLMRouteStateAudit
-	case events.EventLLMGatewayRouteSynced:
-		return KindLLMGatewayAudit
-	case eventDNSZoneSynced:
-		return KindDNSZoneSyncedAudit
-	case eventDNSRecordChanged:
-		return KindDNSRecordChangedAudit
-	case eventDNSDriftDetected:
-		return KindDNSDriftDetectedAudit
-	case eventDNSEndpointRegistered:
-		return KindDNSEndpointRegisteredAudit
-	case eventDNSEndpointDeregistered:
-		return KindDNSEndpointDeregisteredAudit
-	default:
-		return 0
-	}
 }
 
 func resourceFromEvent(e events.Event) events.ResourceData {

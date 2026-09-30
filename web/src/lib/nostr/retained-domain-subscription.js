@@ -32,7 +32,9 @@ export function domainLiveFilters({ domain, servicePubkey, kinds = DOMAIN_LIVE_E
   return [{
     kinds,
     authors: [normalizedAuthor],
-    '#domain': [normalizedDomain],
+    // Relays index single-letter tags only (audit A-27): a live domain is
+    // scoped by its t topic, which the domain's producers stamp as the domain.
+    '#t': [normalizedDomain],
     limit: DOMAIN_EVENT_LIMIT
   }];
 }

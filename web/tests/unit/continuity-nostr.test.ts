@@ -188,3 +188,23 @@ describe('continuity Nostr read models', () => {
     }]);
   });
 });
+
+describe('continuity heartbeat expiry', () => {
+  const standby = (worker: string) => event({ id: `standby-${worker}`, kind: 31402, tags: [['d', `standby-node:${SERVICE}:${worker}`], ['service', SERVICE], ['worker', worker], ['profile', 'full']] });
+  const heartbeat = (worker: string, tags: string[][], createdAt = Math.floor(Date.now() / 1000)) =>
+    event({ id: `heartbeat-${worker}`, kind: 30315, pubkey: WORKER_AUTHOR, created_at: createdAt, tags: [['d', `continuity:heartbeat:${worker}`], ['domain', 'continuity'], ['worker', worker], ['status', 'online'], ...tags] });
+  const active = (events: any[]) => deriveContinuityAssessments(events)[0].heartbeat_active;
+
+  it('honours the NIP-40 expiration tag', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now + 30)]])])).toBe(true);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)]], now - 60)])).toBe(false);
+  });
+
+  it('prefers expiration over the legacy expires_after_ms and still reads the legacy tag alone', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)], ['expires_after_ms', '600000']], now - 60)])).toBe(false);
+    expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '1000']], now - 60)])).toBe(false);
+    expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '600000']], now - 60)])).toBe(true);
+  });
+});

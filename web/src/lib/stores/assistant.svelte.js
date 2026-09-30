@@ -85,6 +85,8 @@ export function activeAssistantSession() {
 
 const sessionMap = new Map();
 const eventMap = new Map();
+// Transcript coordinate (kind:pubkey:d) -> the eventMap id holding it.
+const transcriptCoordinates = new Map();
 const pendingMap = new Map();
 const seenEventIds = new Set();
 
@@ -194,6 +196,7 @@ function restoreAssistantTranscriptCache(operatorPubkey, servicePubkey) {
       if (!sessionId || !itemId || item?.pending) continue;
       const session = ensureSession(sessionId);
       const { event: _rawEvent, content: _rawContent, ...displayItem } = item;
+      if (!claimTranscriptCoordinate(displayItem)) continue;
       eventMap.set(itemId, withoutPrivateCommandScope(displayItem));
       session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || item.event?.created_at || 0);
       rememberSeenTranscriptIds(item);
@@ -439,9 +442,27 @@ function withoutPrivateCommandScope(value) {
   return clean;
 }
 
+// A transcript message is addressable on a deterministic coordinate: a retried
+// publish is a new event on the same coordinate. Keep only the NIP-01 winner
+// (newest created_at, then lowest id). Returns false when item is superseded.
+function claimTranscriptCoordinate(item) {
+  if (item?.type !== 'transcript' || !item.coordinate) return true;
+  const currentId = transcriptCoordinates.get(item.coordinate);
+  const current = currentId ? eventMap.get(currentId) : null;
+  if (current && current.id !== item.id) {
+    const itemAt = item.createdAt || 0;
+    const currentAt = current.createdAt || 0;
+    if (itemAt < currentAt || (itemAt === currentAt && String(item.id) > String(current.id))) return false;
+    eventMap.delete(currentId);
+  }
+  transcriptCoordinates.set(item.coordinate, item.id);
+  return true;
+}
+
 function recordAssistantItem(item) {
   if (!item?.sessionId || !item.id) return false;
   item = withoutPrivateCommandScope({ ...item, event: item.event ? { ...item.event, content: '' } : null });
+  if (!claimTranscriptCoordinate(item)) return false;
   ensureSession(item.sessionId);
 
   if (item.type === 'status' && item.streaming) {
@@ -569,7 +590,10 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1', 'bahia.assistant-session.v2'], limit: SESSION_LIMIT },
     { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#schema': ['bahia.assistant-status.v1'], since, limit: TRANSCRIPT_LIMIT },
-    { kinds: [ASSISTANT_KINDS.TRANSCRIPT], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-transcript.v1'], '#domain': ['assistant'], since, limit: TRANSCRIPT_LIMIT }
+    // Only single-letter tags are relay-indexed (audit A-27): the service's
+    // 30316 events addressed to this operator are the transcript; the parser
+    // checks the schema locally.
+    { kinds: [ASSISTANT_KINDS.TRANSCRIPT], authors: [servicePubkey], '#p': [operatorPubkey], since, limit: TRANSCRIPT_LIMIT }
   ];
 }
 
@@ -613,6 +637,7 @@ export function resetAssistantStore() {
   restoredTranscriptCacheKey = '';
   sessionMap.clear();
   eventMap.clear();
+  transcriptCoordinates.clear();
   pendingMap.clear();
   seenEventIds.clear();
   assistantSessions.length = 0;

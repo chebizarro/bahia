@@ -6,6 +6,7 @@ import {
   BAHIA_STATE_SCHEMAS,
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
+  CP_STATE_TOPIC_BY_SCHEMA,
   LOOM_WORKER_ADVERTISEMENT,
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
@@ -65,6 +66,7 @@ const OPERATION_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const OPERATION_LIMIT = 1000;
 const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
+const NON_STATE_READ_MODEL_KINDS = CANONICAL_READ_MODEL_KINDS.filter((kind) => kind !== CASCADIA_CONTROLPLANE_STATE);
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 
 const replaceableEvents = new Map();
@@ -75,10 +77,24 @@ function canonicalAuthorFilter() {
   return servicePubkey ? { authors: [servicePubkey] } : {};
 }
 
+// The t topics of the cp-state families this store routes. 30900 carries every
+// Bahia state family, so the REQ is scoped by the single-letter topic the
+// producers stamp (relays index single-letter tags only; audit A-27), never by
+// #domain/#schema.
+export function controlplaneStateTopics() {
+  const topics = new Set();
+  for (const route of handlers.keys()) {
+    const topic = CP_STATE_TOPIC_BY_SCHEMA[route];
+    if (topic) topics.add(topic);
+  }
+  return [...topics].sort();
+}
+
 export function readModelFilters() {
   const authorFilter = canonicalAuthorFilter();
   return [
-    { kinds: CANONICAL_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
+    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': controlplaneStateTopics(), limit: READ_MODEL_LIMIT, ...authorFilter },
+    { kinds: NON_STATE_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
     {
       kinds: LOOM_JOB_KINDS,

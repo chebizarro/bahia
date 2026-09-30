@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -377,7 +378,7 @@ func packageReplyTags(requestEvent *nostr.Event, intent *domain.PackageIntent, s
 }
 
 func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository) error {
-	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:repository:" + repo.ID.String()}, {"domain", "package"}, {"entity", "repository"}, {"schema", "bahia.state.package-repository.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageRepositoryRegistry)}, {"repository", repo.ID.String()}, {"name", repo.Name}, {"backend_ref", repo.BackendRef}, {"format", string(repo.Format)}, {"status", string(repo.Status)}, {"deleted", fmt.Sprintf("%t", repo.Deleted)}}, Content: mustJSON(repo)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:repository:" + repo.ID.String()}, {"domain", "package"}, {"entity", "repository"}, {"schema", "bahia.state.package-repository.v1"}, {"t", kinds.CPStateTopicPackageRepository}, {"legacy_kind", fmt.Sprintf("%d", KindPackageRepositoryRegistry)}, {"repository", repo.ID.String()}, {"name", repo.Name}, {"backend_ref", repo.BackendRef}, {"format", string(repo.Format)}, {"status", string(repo.Status)}, {"deleted", fmt.Sprintf("%t", repo.Deleted)}}, Content: mustJSON(repo)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return err
 	}
@@ -391,7 +392,7 @@ func (r *Reactor) publishPackageRepositoryRegistry(ctx context.Context, repo *do
 
 func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact) error {
 	d := fmt.Sprintf("%s:%s:%s:%s:%s", artifact.RepositoryID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
-	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:artifact:" + d}, {"domain", "package"}, {"entity", "artifact"}, {"schema", "bahia.state.package-artifact.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackageArtifactRegistry)}, {"artifact", artifact.ID.String()}, {"repository", artifact.RepositoryID.String()}, {"repository_name", artifact.RepositoryName}, {"package", artifact.PackageName}, {"version", artifact.Version}, {"filename", artifact.Filename}, {"sha256", artifact.SHA256}, {"status", string(artifact.Status)}, {"deleted", fmt.Sprintf("%t", artifact.Deleted)}}, Content: mustJSON(artifact)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:artifact:" + d}, {"domain", "package"}, {"entity", "artifact"}, {"schema", "bahia.state.package-artifact.v1"}, {"t", kinds.CPStateTopicPackageArtifact}, {"legacy_kind", fmt.Sprintf("%d", KindPackageArtifactRegistry)}, {"artifact", artifact.ID.String()}, {"repository", artifact.RepositoryID.String()}, {"repository_name", artifact.RepositoryName}, {"package", artifact.PackageName}, {"version", artifact.Version}, {"filename", artifact.Filename}, {"sha256", artifact.SHA256}, {"status", string(artifact.Status)}, {"deleted", fmt.Sprintf("%t", artifact.Deleted)}}, Content: mustJSON(artifact)}
 	// Advance the wire revision even when two changes occur in one second.
 	if last := nostr.Timestamp(artifact.LastEventCreatedAt.Unix()); event.CreatedAt <= last {
 		event.CreatedAt = last + 1
@@ -405,7 +406,7 @@ func (r *Reactor) publishPackageArtifactRegistry(ctx context.Context, artifact *
 }
 
 func (r *Reactor) publishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication) error {
-	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:promotion:" + publication.ID.String()}, {"domain", "package"}, {"entity", "promotion"}, {"schema", "bahia.state.package-promotion.v1"}, {"legacy_kind", fmt.Sprintf("%d", KindPackagePromotionRegistry)}, {"promotion", publication.ID.String()}, {"repository", publication.RepositoryID.String()}, {"artifact", publication.ArtifactID.String()}, {"status", string(publication.Status)}, {"policy_decision", string(publication.PolicyDecision)}}, Content: mustJSON(publication)}
+	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "package:promotion:" + publication.ID.String()}, {"domain", "package"}, {"entity", "promotion"}, {"schema", "bahia.state.package-promotion.v1"}, {"t", kinds.CPStateTopicPackagePromotion}, {"legacy_kind", fmt.Sprintf("%d", KindPackagePromotionRegistry)}, {"promotion", publication.ID.String()}, {"repository", publication.RepositoryID.String()}, {"artifact", publication.ArtifactID.String()}, {"status", string(publication.Status)}, {"policy_decision", string(publication.PolicyDecision)}}, Content: mustJSON(publication)}
 	if publication.TargetRepositoryID != nil {
 		event.Tags = append(event.Tags, nostr.Tag{"target_repository", publication.TargetRepositoryID.String()})
 	}

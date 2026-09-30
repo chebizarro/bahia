@@ -337,3 +337,65 @@ func TestAssistantTranscriptAppendOnceIsIdempotentAndDedupeIsOrderIndependent(t 
 		t.Fatalf("dedupe depends on arrival order: %+v %+v", left, right)
 	}
 }
+
+// A retried publish of one message targets the same addressable coordinate
+// (audit C-41), so the relay keeps a single copy: the d tag is derived from
+// (session, logical id), or (session, sequence) without a logical id, and
+// never from a random value.
+func TestAssistantTranscriptRetryReusesDeterministicCoordinate(t *testing.T) {
+	pub := &assistantTestPublisher{}
+	store := newTestAssistantTranscriptStore(t, pub, nil)
+	ctx := context.Background()
+
+	logical := AssistantTranscriptAppend{SessionID: "s1", TurnID: "t1", Sequence: 4, LogicalID: "msg-7", Message: textAssistantMessage(domain.AssistantAgentMessageRoleAssistant, "done")}
+	if _, err := store.AppendMessage(ctx, logical); err != nil {
+		t.Fatal(err)
+	}
+	// A retry through AppendMessageOnce may compute a different sequence.
+	logical.Sequence = 5
+	if _, err := store.AppendMessage(ctx, logical); err != nil {
+		t.Fatal(err)
+	}
+	unkeyed := AssistantTranscriptAppend{SessionID: "s1", TurnID: "t1", Sequence: 9, Message: textAssistantMessage(domain.AssistantAgentMessageRoleUser, "hi")}
+	for i := 0; i < 2; i++ {
+		if _, err := store.AppendMessage(ctx, unkeyed); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events := pub.eventsOfKind(domain.KindAssistantTranscript)
+	if len(events) != 4 {
+		t.Fatalf("published %d events, want 4", len(events))
+	}
+	wantLogical := domain.AssistantTranscriptDTagPrefix + "s1:msg:msg-7"
+	wantSeq := domain.AssistantTranscriptDTagPrefix + "s1:seq:00000000000000000009"
+	for i, want := range []string{wantLogical, wantLogical, wantSeq, wantSeq} {
+		if got := tagValue(events[i].Tags, "d"); got != want {
+			t.Fatalf("event %d d = %q, want %q", i, got, want)
+		}
+	}
+
+	// Replay of every copy (a relay that has not applied the replacement yet)
+	// still yields one record per message.
+	replay := newTestAssistantTranscriptStore(t, nil, newReplayTranscriptSubscriber(events))
+	records, err := replay.Replay(ctx, AssistantTranscriptReplayQuery{SessionID: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("replayed %d records, want 2", len(records))
+	}
+}
+
+func TestAssistantTranscriptCoordinateDedupeKeepsNIP01Winner(t *testing.T) {
+	now := time.Unix(1710000000, 0).UTC()
+	older := AssistantTranscriptRecord{EventID: "a", DTag: "x", CreatedAt: now}
+	newer := AssistantTranscriptRecord{EventID: "c", DTag: "x", CreatedAt: now.Add(time.Second)}
+	tie := AssistantTranscriptRecord{EventID: "b", DTag: "x", CreatedAt: now.Add(time.Second)}
+	for _, order := range [][]AssistantTranscriptRecord{{older, newer, tie}, {tie, newer, older}} {
+		got := dedupeAssistantCoordinateRecords(order)
+		if len(got) != 1 || got[0].EventID != "b" {
+			t.Fatalf("coordinate dedupe of %v = %+v, want event b", order, got)
+		}
+	}
+}
