@@ -89,6 +89,12 @@ type ProjectionFamilyMetrics struct {
 type projectionState struct {
 	mu        sync.Mutex
 	published map[projectionKey]string
+	// createdAt is the created_at of the newest event signed per coordinate.
+	// Relays keep the newest event on an addressable coordinate and break
+	// created_at ties by lowest id, so a follow-up (typically a tombstone)
+	// signed in the same second as its predecessor could lose. Each publish
+	// on a coordinate is therefore stamped strictly after the previous one.
+	createdAt map[projectionKey]gonostr.Timestamp
 	keyLocks  map[projectionKey]*sync.Mutex
 	hydration map[int]*projectionHydrationState
 	metrics   map[string]*ProjectionFamilyMetrics
@@ -113,6 +119,7 @@ func (p *Projector) projection() *projectionState {
 	p.projInitOnce.Do(func() {
 		p.proj = &projectionState{
 			published:    map[projectionKey]string{},
+			createdAt:    map[projectionKey]gonostr.Timestamp{},
 			keyLocks:     map[projectionKey]*sync.Mutex{},
 			hydration:    map[int]*projectionHydrationState{},
 			metrics:      map[string]*ProjectionFamilyMetrics{},
@@ -248,11 +255,27 @@ func (p *Projector) projectionUnchanged(key projectionKey, fingerprint string) b
 	return ok && previous == fingerprint
 }
 
-func (p *Projector) rememberProjection(key projectionKey, fingerprint string) {
+func (p *Projector) rememberProjection(key projectionKey, fingerprint string, createdAt gonostr.Timestamp) {
 	s := p.projection()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.published[key] = fingerprint
+	if createdAt > s.createdAt[key] {
+		s.createdAt[key] = createdAt
+	}
+}
+
+// nextProjectionCreatedAt returns now, or one second past the last event signed
+// on key when now would not be strictly newer. Callers hold key's lock.
+func (p *Projector) nextProjectionCreatedAt(key projectionKey) gonostr.Timestamp {
+	now := gonostr.Now()
+	s := p.projection()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if last := s.createdAt[key]; now <= last {
+		return last + 1
+	}
+	return now
 }
 
 // hydrateProjectionCache warms the dedupe cache for one wire kind from the
@@ -320,6 +343,9 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		}
 		seen[key] = struct{}{}
 		s.published[key] = projectionFingerprint(record.Kind, tags, record.Content)
+		if createdAt := gonostr.Timestamp(record.CreatedAt.Unix()); createdAt > s.createdAt[key] {
+			s.createdAt[key] = createdAt
+		}
 	}
 	hydration.hydrated = true
 	return nil
@@ -426,7 +452,11 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 		return ErrProjectorBackoff
 	}
 
-	if err := p.publishSignedDirect(ctx, kind, tags, content, entityType, entityID); err != nil {
+	createdAt := gonostr.Now()
+	if dedupable {
+		createdAt = p.nextProjectionCreatedAt(key)
+	}
+	if err := p.publishSignedDirect(ctx, kind, createdAt, tags, content, entityType, entityID); err != nil {
 		s.count(family, func(m *ProjectionFamilyMetrics) { m.Rejected++ })
 		p.noteProjectionRejection()
 		return err
@@ -434,7 +464,7 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	s.count(family, func(m *ProjectionFamilyMetrics) { m.Accepted++ })
 	p.resetProjectionBackoff()
 	if dedupable {
-		p.rememberProjection(key, fingerprint)
+		p.rememberProjection(key, fingerprint, createdAt)
 	}
 	return nil
 }
