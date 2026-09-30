@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -52,10 +53,21 @@ type cliSoulFactoryClient interface {
 	PublishProvisionRequest(context.Context, domain.ProvisioningRequest) (*soulfactory.SoulFactoryRequestReceipt, error)
 	AwaitProvisioningResult(context.Context, *soulfactory.SoulFactoryRequestReceipt, func(soulfactory.SoulFactoryStatusEvent)) (*domain.ProvisioningRun, error)
 	ExecuteSoulAction(context.Context, string, domain.SoulActionType, string, string) (*nostr.Event, error)
+	AwaitSoulActionResult(context.Context, string) (*nostr.Event, error)
 }
 
-var newCLISoulFactoryClient = func(relays []string, privateKey string) (cliSoulFactoryClient, error) {
-	return soulfactory.NewNostrClientFromPrivateKey(relays, privateKey)
+// soulReplyTimeoutEnv is the environment form of soul_factory.reply_timeout,
+// the same variable the daemon's config loader maps to that key.
+const soulReplyTimeoutEnv = "BAHIA_SOUL_FACTORY_REPLY_TIMEOUT"
+
+// newCLISoulFactoryClient builds the relay-backed client. replyTimeout bounds
+// each wait for a terminal result; zero uses the client default.
+var newCLISoulFactoryClient = func(relays []string, privateKey string, replyTimeout time.Duration) (cliSoulFactoryClient, error) {
+	client, err := soulfactory.NewNostrClientFromPrivateKey(relays, privateKey)
+	if err != nil {
+		return nil, err
+	}
+	return client.WithReplyTimeout(replyTimeout), nil
 }
 
 func soulFactoryCommands() *cobra.Command {
@@ -64,6 +76,8 @@ func soulFactoryCommands() *cobra.Command {
 		Short:   "Soul Factory agent provisioning",
 		Aliases: []string{"soul", "sf"},
 	}
+
+	cmd.PersistentFlags().Duration("reply-timeout", 0, fmt.Sprintf("Maximum time to wait for a terminal provisioning or soul action result (env %s, config soul_factory.reply_timeout; default %s)", soulReplyTimeoutEnv, soulfactory.DefaultSoulFactoryReplyTimeout))
 
 	cmd.AddCommand(
 		soulsListCommand(),
@@ -74,10 +88,61 @@ func soulFactoryCommands() *cobra.Command {
 		soulsRevokeCommand(),
 		soulsRedeployCommand(),
 		soulsRegenerateCommand(),
+		soulsAwaitCommand(),
 		templatesCommand(),
 	)
 
 	return cmd
+}
+
+// resolveSoulReplyTimeout returns --reply-timeout when set, else
+// BAHIA_SOUL_FACTORY_REPLY_TIMEOUT, else zero (the client default).
+func resolveSoulReplyTimeout(cmd *cobra.Command) (time.Duration, error) {
+	timeout := time.Duration(0)
+	if flag := cmd.Flags().Lookup("reply-timeout"); flag != nil && flag.Changed {
+		parsed, err := cmd.Flags().GetDuration("reply-timeout")
+		if err != nil {
+			return 0, err
+		}
+		timeout = parsed
+	} else if raw := strings.TrimSpace(os.Getenv(soulReplyTimeoutEnv)); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return 0, fmt.Errorf("parse %s: %w", soulReplyTimeoutEnv, err)
+		}
+		timeout = parsed
+	}
+	if timeout < 0 {
+		return 0, fmt.Errorf("reply timeout must be >= 0, got %s", timeout)
+	}
+	return timeout, nil
+}
+
+func soulsAwaitCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "await [request-id]",
+		Short: "Wait for the terminal result of an already published soul action",
+		Long: "Resume waiting for a soul action whose earlier wait ended without a terminal result. " +
+			"The result is a stored Nostr event, so it is picked up whether it was published before or after this command starts.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			resultEvent, err := cli.AwaitSoulActionResult(cmd.Context(), args[0])
+			if err != nil {
+				return soulActionWaitError("soul action", args[0], err)
+			}
+			action := firstNonEmpty(firstTagValue(resultEvent.Tags, "action"), "soul action")
+			if !actionResultAccepted(resultEvent) {
+				return soulActionResultError(action, resultEvent)
+			}
+			return outputSoulActionResult(action, firstTagValue(resultEvent.Tags, "agent-id"), resultEvent)
+		},
+	}
 }
 
 func soulsListCommand() *cobra.Command {
@@ -404,7 +469,11 @@ func buildCLISoulFactoryClient(cmd *cobra.Command) (cliSoulFactoryClient, error)
 	if err != nil {
 		return nil, err
 	}
-	return newCLISoulFactoryClient(relays, key)
+	replyTimeout, err := resolveSoulReplyTimeout(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return newCLISoulFactoryClient(relays, key, replyTimeout)
 }
 
 func soulProvisionStatusCallback(cmd *cobra.Command) func(soulfactory.SoulFactoryStatusEvent) {
@@ -440,18 +509,35 @@ func runSoulActionCommand(cmd *cobra.Command, agentID string, action domain.Soul
 
 	resultEvent, err := cli.ExecuteSoulAction(cmd.Context(), soul.AgentID, action, reason, newBrief)
 	if err != nil {
+		var noResult *soulfactory.NoTerminalResultError
+		if errors.As(err, &noResult) {
+			return soulActionWaitError(string(action), noResult.RequestID, err)
+		}
 		return err
 	}
 	if !actionResultAccepted(resultEvent) {
 		return soulActionResultError(string(action), resultEvent)
 	}
+	return outputSoulActionResult(string(action), soul.AgentID, resultEvent)
+}
+
+func outputSoulActionResult(action, agentID string, resultEvent *nostr.Event) error {
 	return outputSingle(map[string]any{
 		"action":   action,
-		"agent_id": soul.AgentID,
+		"agent_id": agentID,
 		"event_id": resultEvent.ID,
 		"status":   firstTagValue(resultEvent.Tags, "status"),
 		"result":   decodeJSONContent(resultEvent.Content),
 	})
+}
+
+// soulActionWaitError explains a wait that ended without a terminal result:
+// the action's outcome is unknown, not failed, and can still be awaited.
+func soulActionWaitError(action, requestID string, err error) error {
+	if !errors.Is(err, soulfactory.ErrNoTerminalResult) {
+		return err
+	}
+	return fmt.Errorf("%s outcome unknown: %w; the action may still complete, run `bahia souls await %s` to keep waiting", action, err, requestID)
 }
 
 func actionResultAccepted(event *nostr.Event) bool {

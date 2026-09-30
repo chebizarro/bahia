@@ -459,11 +459,16 @@ export function parseAssistantTranscriptEvent(event) {
   const metadata = payload?.metadata || content?.metadata || {};
   const seq = Number(getTagValue(event, 'seq', payload?.seq ?? payload?.sequence ?? 0));
 
+  const dTag = getDTag(event);
+
   return {
     id: event.id,
     kind: event.kind,
     pubkey: event.pubkey,
     createdAt: event.created_at,
+    // Transcript messages are addressable on a deterministic d, so a retried
+    // publish replaces the earlier copy; consumers keep one item per coordinate.
+    coordinate: dTag ? `${event.kind}:${event.pubkey}:${dTag}` : '',
     sessionId: getTagValue(event, 'session', payload?.session_id || payload?.sessionId || ''),
     assistantId: getTagValue(event, 'agent', payload?.assistant_id || ''),
     turnId: getTagValue(event, 'turn', payload?.turn_id || payload?.turnId || ''),

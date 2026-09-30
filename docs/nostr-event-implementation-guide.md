@@ -203,6 +203,7 @@ Use NIP-38 status.
 - Include `status`, `domain`, and `schema` tags.
 - Include `e` when the status is correlated with a ContextVM request or other source event.
 - Include resource tags such as `service`, `environment`, `worker`, `artifact`, or `run` when available.
+- A status with a freshness window (a heartbeat) carries a NIP-40 `["expiration", "<unix seconds>"]` tag, rounded up to whole seconds, so relays and generic clients drop it when it goes stale. Do not add a custom TTL tag. Consumers treat a status as stale from its `expiration`. They read the retired `expires_after_ms` (milliseconds after `created_at`) only from heartbeats whose producers predate NIP-40.
 
 Status events are for short-lived operational state such as `running`, `healthy`, `degraded`, `available`, `draining`, `failed`, or `completed`.
 
@@ -215,8 +216,9 @@ Use canonical state.
 - Kind: `30900`
 - Parameterized replaceable by `(kind, pubkey, d)`.
 - `d` must be stable and scoped: `<domain>:<entity>:<id>` or the narrower convention already used by the feature.
-- Required tags: `d`, `domain`, `schema`.
+- Required tags: `d`, `domain`, `schema`, and a single-letter `t` topic naming the record family.
 - Strongly recommended tags: `entity`, `status`, resource tags.
+- The projector's cp-state envelope stamps `t=<domain>-<entity>` on every live record and tombstone, for example `service-registry`, `deployment-run`, `backup-run` or `dns-zone` (`internal/kinds/tags.go` `CPStateTopic*` and `DNS*Topic`; `CP_STATE_TOPICS` in `kinds.gen.js`). NIP-01 relays index only single-letter tags, so consumers scope 30900 REQs with `#t`, never `#domain` or `#schema`. The web control-plane read model subscribes to `{kinds:[30900], authors:[service], "#t":[...]}` for exactly the families it routes. Other producers of a routed family (for example the package handlers and the worker-state publisher) must stamp the same topic.
 - Content must be a complete current-state snapshot, not a patch.
 
 Use NIP-78 kind `30078` instead when the object is app-specific data, user/application settings, local UI state, or a registry whose semantics are not a fleet-wide control-plane projection.
@@ -271,7 +273,10 @@ Use Bahia audit.
 - Include `e` for source/correlation when possible.
 - Include `p` for responsible or requesting actors where appropriate.
 - Include resource tags such as `service`, `environment`, `artifact`, `worker`, `package`, `dns_zone`, or `run`.
-- Audit events should be treated as protected and long-retention. They are not normal delete targets, but relay availability is still bounded by configured `event_retention`; compliance evidence needs appropriate retention or archival storage.
+- Never add `d`. 4903 is a regular kind, and every audit is its own fact. The retired addressable audit kinds `31000`-`31099` were published with `d=<entity>`, so each audit of an entity replaced the previous one (audit C-16).
+- Correlate a fact with tags instead: `state=<d of the audited entity's cp-state record>`, a single-letter topic (`t=cp-audit` for projector facts, plus `t=<event type>`), and `e=<source event id>` when the fact has a Nostr source.
+- Make publication idempotent per source fact. Projector facts carry `fact=<sha256(type, entity, canonical content)>`. The projector signs each fact id once and remembers ids hydrated from retained 4903 records across restarts, so a republished bus event does not create a duplicate fact. Consumers may also drop a second event with a `fact` they have already seen.
+- Audit events should be treated as protected and long-retention. They are not normal delete targets. The sidecar keeps regular events durably by default; an operator-set `event_retention` cap bounds that, so compliance evidence needs the cap left unset or archival storage.
 - `protected=true` is Bahia audit metadata. Projected audits currently omit the NIP-70 `-` tag; that tag governs authenticated author publication, not read visibility.
 
 Use NIP-58 badges for permission or capability grants; use `4903` for the audit trail describing the grant or revocation.
@@ -375,8 +380,8 @@ These are the main event kinds production runtime code should publish or subscri
 | `25910` | ContextVM message | JSON-RPC mutation intent and direct ContextVM responses |
 | `1059` | NIP-59 gift wrap | Stored encrypted ContextVM envelope |
 | `21059` | ephemeral gift wrap | Ephemeral encrypted ContextVM envelope when supported |
-| `30315` | NIP-38 status | Operational status/progress; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, and heartbeat `d`/`worker` tags |
-| `30316` | Assistant transcript | Service-authored append-only assistant transcript entries; content is a service-held symmetric-key AEAD envelope with `key_ref`/rotation metadata mirrored in tags |
+| `30315` | NIP-38 status | Operational status/progress; continuity heartbeat observations use `#domain=continuity`, `schema=bahia.status.continuity-heartbeat.v1`, heartbeat `d`/`worker` tags, and a NIP-40 `expiration` tag |
+| `30316` | Assistant transcript | Service-authored assistant transcript messages on a deterministic `d` (see "Transcript messages" below); content is a service-held symmetric-key AEAD envelope with `key_ref`/rotation metadata mirrored in tags |
 | `30900` | Cascadia/Bahia control state | Durable state/read-model projection |
 | `4903` | Cascadia/Bahia audit | Immutable audit facts and attestations |
 | `11316`-`11320` | ContextVM discovery | Server/tool/resource/prompt/template discovery |
@@ -504,6 +509,15 @@ Desired-state runtime metadata is additive on existing service/deployment observ
 }
 ```
 
+### Transcript messages
+
+Assistant transcript messages stay on addressable `30316`. A retried publish must not duplicate a message, and a regular kind cannot give that guarantee: every copy is AEAD-encrypted with a fresh random nonce, so a retry is a new event id, and the relay would keep both copies. On an addressable kind, a deterministic coordinate makes the relay replace the earlier copy. The coordinate is:
+
+- `d=bahia.assistant-transcript.v1:<session>:msg:<logical id>` when the message has a logical id (every production append does), or
+- `d=bahia.assistant-transcript.v1:<session>:seq:<20-digit sequence>` otherwise.
+
+The logical id is preferred to the sequence. `AppendMessageOnce` derives the sequence from a replay, so a retry can compute a different sequence, and two concurrent appends can compute the same sequence for different messages. Never mint a random `d`. Readers keep the NIP-01 winner per coordinate (newest `created_at`, then lowest id) and then one record per logical id. REQs use `authors`, `#p` and the kind only; the schema is checked locally.
+
 ### ContextVM discovery
 
 ```json
@@ -581,8 +595,8 @@ Do not rely on relay indexing for multi-character tags unless the sidecar or tar
 - For service-authored events using `internal/adapters/nostr.Publisher`, persist the fully signed event as a pending `nostr_events` outbox row before relay delivery. Mark it published only after an accepted or duplicate relay `OK`; retain and retry failures with backoff.
 - Do not generalize that outbox guarantee to every relay pool or client publisher. A caller request with zero accepted relays is not accepted, and a ContextVM receipt is not terminal business truth.
 - Sidecar persistence precedes `OK`. Subscriber fanout must remain off the acknowledgment path so a slow subscriber cannot stall writes.
-- Replay filters for IDs, kinds, authors, `since`, and `until` should be scoped in storage before full filter matching. Keep replay reads isolated from the write connection and enforce `max_query_limit`; `EOSE` ends only the bounded query, so clients that may hit the cap must narrow resource/time filters, overlap windows, and deduplicate.
-- Retain ContextVM transport (`25910`, `1059`, `21059`) according to `request_retention`; retain observables and all other kinds according to `event_retention`.
+- Replay filters are answered from the eventstore's kind, author, tag and time indexes, and each query is capped at `max_query_limit`; `EOSE` ends only the bounded query, so clients that may hit the cap must narrow resource/time filters, overlap windows, and deduplicate, or reconcile with NIP-77.
+- Retain ContextVM transport (`request_retention_kinds`, default `25910`, `1059`, `21059`) according to `request_retention`. Regular events such as `4903` audits are durable unless `event_retention` caps them; replaceable, addressable and kind-5 events are never age-swept.
 
 ## Migration app rules
 

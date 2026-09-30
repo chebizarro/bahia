@@ -232,7 +232,9 @@ Audit events are append-only facts for provenance, compliance, deployment eviden
 }
 ```
 
-Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review. Bahia tags projected audit events with `protected=true` as semantic metadata but does not add the NIP-70 `-` tag, which governs authenticated author publication rather than read visibility. Relay queryability lasts only through the configured `event_retention`; compliance-grade preservation requires a suitable retention policy or archival storage.
+Audit facts never carry `d`: 4903 is a regular kind, so repeated audits of one entity coexist. The control-plane projector's facts use `schema=bahia.audit.v1` and correlate by `state=<cp-state d of the entity>`, `t=cp-audit`, `t=<event type>`, `e` when a source event is known, and a deterministic `fact` id that makes a republish idempotent (see `docs/nostr-event-implementation-guide.md`).
+
+Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review. Bahia tags projected audit events with `protected=true` as semantic metadata but does not add the NIP-70 `-` tag, which governs authenticated author publication rather than read visibility. The Bahia sidecar keeps regular events such as audits durably unless an operator sets an `event_retention` cap; compliance-grade preservation requires leaving it unset or archival storage.
 
 ## Delivery, Replay, and Retention
 
@@ -414,7 +416,7 @@ This is idempotent and safe to run every startup. If the migration fails because
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
 | `30079` | historical SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
-| worker cleanup lifecycle | resource-pressure cleanup state | `30900` with `schema=bahia.state.worker-cleanup.v1`, `domain=worker`, and narrow `worker`/`status` tags |
+| `32000`-`32003` worker read models, worker cleanup lifecycle | worker state, assignment, drain, eligibility preview, resource-pressure cleanup | `30900` cp-state envelope (`schema=bahia.cp-state.v1`, `domain=worker`, `deleted`) with `legacy_kind` = `kinds.CPStateFamilyWorker*` (`32000`-`32004`, discriminators only, never wire kinds) and `t` = `worker-state`, `worker-assignment`, `worker-drain`, `worker-eligibility`, `worker-cleanup`; REQ on `#t` |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |

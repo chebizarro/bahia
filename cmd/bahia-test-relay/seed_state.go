@@ -13,6 +13,7 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -106,9 +107,9 @@ func controlStateSeeds(workerPubkey string, seededAt time.Time) ([]controlStateS
 	drain := domain.WorkerDrainStatus{WorkerPubKey: workerPubkey, RemainingAssignments: []domain.WorkerAssignment{}, PinnedBlockers: []domain.WorkerAssignment{}, SchedulingState: domain.WorkerSchedulingActive, SafeToEnterMaintenance: true, SafeToDisable: true, UpdatedAt: seededAt}
 	eligibility := domain.WorkerEligibilityPreview{PreviewID: "eligibility-1", WorkloadType: "service", EligibleWorkers: []domain.WorkerEligibilityCandidate{{WorkerPubKey: workerPubkey, WorkerName: "worker-one", Eligible: true, Score: 1, Reason: "capacity available"}}, RejectedWorkers: []domain.WorkerEligibilityCandidate{}, RankingScores: []domain.WorkerEligibilityCandidate{}, UpdatedAt: seededAt}
 	seeds = append(seeds,
-		controlStateSeed{kinds.WorkerAssignmentState, workerPubkey, assignment, nostr.Tags{{"worker", workerPubkey}, {"workload", "svc-1"}, {"status", "assigned"}}},
-		controlStateSeed{kinds.WorkerDrainStatus, workerPubkey, drain, nostr.Tags{{"worker", workerPubkey}, {"scheduling_state", string(drain.SchedulingState)}}},
-		controlStateSeed{kinds.WorkerEligibilityPreview, eligibility.PreviewID, eligibility, nostr.Tags{{"worker", workerPubkey}}},
+		controlStateSeed{kinds.CPStateFamilyWorkerAssignment.LegacyKind(), workerPubkey, assignment, nostr.Tags{{"worker", workerPubkey}, {"workload", "svc-1"}, {"status", "assigned"}}},
+		controlStateSeed{kinds.CPStateFamilyWorkerDrain.LegacyKind(), workerPubkey, drain, nostr.Tags{{"worker", workerPubkey}, {"scheduling_state", string(drain.SchedulingState)}}},
+		controlStateSeed{kinds.CPStateFamilyWorkerEligibility.LegacyKind(), eligibility.PreviewID, eligibility, nostr.Tags{{"worker", workerPubkey}}},
 	)
 
 	dnsSeeds, err := dnsStateSeeds(workerPubkey, seededAt)
@@ -180,6 +181,32 @@ func workerStateEvent(ctx context.Context, worker *domain.Worker, author nostr.S
 	}
 	if len(capture.events) != 1 {
 		return nostr.Event{}, fmt.Errorf("worker state publisher emitted %d events, want 1", len(capture.events))
+	}
+	return capture.events[0], nil
+}
+
+// workerCleanupStateEvent runs controlplane.WorkerCleanupStatePublisher, the
+// real cleanup-execution producer, and returns the signed event it would
+// publish for one completed cleanup.
+func workerCleanupStateEvent(ctx context.Context, workerPubkey string, seededAt time.Time, author nostr.SecretKey) (nostr.Event, error) {
+	capture := &capturePublisher{}
+	publisher := controlplane.NewWorkerCleanupStatePublisher(capture, keyer.NewPlainKeySigner(author))
+	completedAt := seededAt.UTC()
+	cleanup := events.WorkerCleanupEvent{
+		WorkerPubKey: workerPubkey,
+		CleanupMode:  "reclaimable_only",
+		Reason:       "disk pressure",
+		LoomJobID:    "cleanup-job-1",
+		TargetFreeGB: 20,
+		Status:       "completed",
+		StartedAt:    completedAt.Add(-time.Minute),
+		CompletedAt:  &completedAt,
+	}
+	if err := publisher.Publish(ctx, cleanup); err != nil {
+		return nostr.Event{}, fmt.Errorf("publish worker cleanup state: %w", err)
+	}
+	if len(capture.events) != 1 {
+		return nostr.Event{}, fmt.Errorf("worker cleanup state publisher emitted %d events, want 1", len(capture.events))
 	}
 	return capture.events[0], nil
 }

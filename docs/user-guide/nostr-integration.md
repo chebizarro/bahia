@@ -713,21 +713,23 @@ Bahia persists signed outbound events before publishing them when the event repo
 
 Terminal ContextVM responses use a separate idempotency cache keyed by requester pubkey, method, and progress token. Completed responses are cached in memory and persisted in PostgreSQL for 24 hours. A duplicate request within that window republishes the cached JSON-RPC response without re-running the handler; this recovers a completed command when its first ephemeral response was lost.
 
-The sidecar stores accepted non-ephemeral events in SQLite with WAL and full synchronous writes, so retained relay history survives process and container restarts until its retention window expires. Replaceable events retain only the newest event for their replaceable key. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay.
+The sidecar stores accepted non-ephemeral events in a bbolt `fiatjaf.com/nostr/eventstore` with tag indexes, so retained relay history survives process and container restarts. Replaceable and addressable events retain only the newest event for their coordinate. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay. Kind-5 deletions (NIP-09) remove the author's referenced events and keep them from being re-accepted; NIP-40 `expiration` is honoured.
 
 Backend subscribers resume from the newest persisted cursor with a one-second overlap and suppress duplicate event IDs. Their default catch-up limit is 1,000. Browser long-lived subscriptions use the same one-second overlap principle and preserve each original filter's cap. The Events view separately caps canonical read models at 1,000 and seven-day activity at 100.
 
-The sidecar applies a hard query ceiling through `nostr.sidecar.max_query_limit` (default 2,000), even if a client asks for more. Retention sweeps run at startup and every 15 minutes. Defaults are:
+The sidecar applies a hard query ceiling through `nostr.sidecar.max_query_limit` (default 2,000), even if a client asks for more; NIP-77 negentropy reconciles a whole filter's set instead (up to `negentropy_max_events`). Retention sweeps run at startup and every 15 minutes. Defaults are:
 
 ```yaml
 nostr:
   sidecar:
-    event_retention: 168h
+    event_retention: 0s          # regular events (e.g. 4903 audits) are durable; set a duration to cap them
     request_retention: 24h
+    request_retention_kinds: [25910, 1059, 21059]
+    negentropy_max_events: 1000000
     max_query_limit: 2000
 ```
 
-The retention sweep classifies stored ContextVM gift-wrap kind `1059` under the shorter request window. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. Other stored observables use general event retention. Retention settings must be positive when the sidecar is enabled.
+The retention sweep deletes stored request/transport kinds (in practice gift wrap `1059`) after `request_retention`. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. Replaceable, addressable and kind-5 events are never age-swept. `event_retention` must be `0` or at least `1h`, and `request_retention` at least `1m`.
 
 ## Authentication
 

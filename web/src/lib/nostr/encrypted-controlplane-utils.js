@@ -7,6 +7,22 @@ export const CONTEXTVM_PROGRESS_ACK_WIRE_VERSION = 'contextvm-jsonrpc-v2';
 export const CONTEXTVM_PROGRESS_METHOD = 'notifications/progress';
 export const CONTEXTVM_PROGRESS_STATUS_PROCESSING = 'processing';
 
+/** Size in bytes of the ["EVENT", event] frame a relay receives. */
+export function relayMessageBytes(event) {
+  return new TextEncoder().encode(JSON.stringify(['EVENT', event])).length;
+}
+
+/**
+ * Refuse, before publishing, a ContextVM request the relay could only drop:
+ * Bahia's relay closes the connection on an oversized frame without an OK.
+ */
+export function assertRelayMessageFits(event, maxBytes) {
+  const size = relayMessageBytes(event);
+  if (size > maxBytes) {
+    throw new Error(`ContextVM request is ${size} bytes, over the ${maxBytes}-byte relay message limit; send large documents by reference (upload them to Blossom and pass the location).`);
+  }
+}
+
 export function normalizeTags(tags) {
   if (!Array.isArray(tags)) return [];
   return tags

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -266,6 +267,24 @@ func (r *PgSBOMRepository) UpdateManifestPublishState(ctx context.Context, id uu
 		return fmt.Errorf("updating SBOM manifest publish state: %w", err)
 	}
 	return nil
+}
+
+// FailManifestByReferenceEvent implements SBOMManifestRepository.
+// Abandonment is rare, so matching on reference_event_id without a dedicated
+// index is acceptable.
+func (r *PgSBOMRepository) FailManifestByReferenceEvent(ctx context.Context, referenceEventID, reason string) (int64, error) {
+	if strings.TrimSpace(referenceEventID) == "" {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE sbom_manifests
+			SET publish_state = $2, publish_error = $3, updated_at = $4
+			WHERE reference_event_id = $1 AND publish_state = $5`,
+		referenceEventID, string(domain.SBOMPublishFailed), nilIfEmpty(reason), time.Now().UTC(), string(domain.SBOMPublishPublished))
+	if err != nil {
+		return 0, fmt.Errorf("failing SBOM manifest for abandoned reference %s: %w", referenceEventID, err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // ListPublishedManifests returns all manifests with publish_state = 'published',

@@ -12,7 +12,7 @@ describe('retained domain subscriptions', () => {
     })).toEqual([{
       kinds: [30900, 4903, 30315, 30078],
       authors: ['b'.repeat(64)],
-      '#domain': ['notifications'],
+      '#t': ['notifications'],
       limit: 500
     }]);
   });

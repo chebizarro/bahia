@@ -11,12 +11,14 @@ import {
   RECOVERY_WORKFLOW,
   REPLICATION_POLICY,
   STANDBY_NODE_DEFINITION,
+  WORKER_STATE_TOPIC,
   dedupeReplaceableEvents,
   getDTag,
   getTagValue,
   getTagValues,
   parseJsonContent
 } from '$lib/nostr/client.js';
+import { controlStateSchema } from '$lib/nostr/cp-state.js';
 import { subscribeToRetainedEvents } from '$lib/nostr/retained-domain-subscription.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
@@ -122,12 +124,9 @@ export function continuityNostrFilters() {
     { kinds: CONTINUITY_DEFINITION_KINDS, limit: CONTINUITY_EVENT_LIMIT },
     { kinds: CONTINUITY_COMMAND_KINDS, limit: CONTINUITY_EVENT_LIMIT },
     { kinds: [HEARTBEAT_OBSERVATION], '#domain': ['continuity'], limit: CONTINUITY_EVENT_LIMIT },
-    {
-      kinds: [CASCADIA_CONTROLPLANE_STATE],
-      '#domain': ['worker'],
-      '#schema': [WORKER_STATE_SCHEMA],
-      limit: CONTINUITY_EVENT_LIMIT
-    }
+    // Worker state is canonical cp-state; its single-letter topic is
+    // relay-indexed, and the family is re-checked locally.
+    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], limit: CONTINUITY_EVENT_LIMIT }
   ];
 }
 
@@ -349,10 +348,16 @@ function buildTopologyState(events: ContinuityNostrEvent[], statuses: Continuity
     }
   }
 
-  for (const event of events) {
+  // Only each worker's newest live state counts: superseded records and
+  // tombstones must not keep standby assignments alive.
+  const latestWorkerStateEvents = dedupeReplaceableEvents(events.filter(isWorkerStateRecord)) as ContinuityNostrEvent[];
+  for (const event of latestWorkerStateEvents) {
     for (const standby of standbyDefinitionsFromWorkerState(event)) {
       standbys.set(`${standby.serviceKey}:${standby.workerPubKey}`, standby);
     }
+  }
+
+  for (const event of events) {
     const healthyWorker = healthyHeartbeatWorker(event);
     if (healthyWorker) healthyWorkers.add(healthyWorker);
   }
@@ -395,11 +400,12 @@ function parseStandbyDefinition(event: ContinuityNostrEvent): ContinuityStandbyD
   };
 }
 
+function isWorkerStateRecord(event: ContinuityNostrEvent): boolean {
+  return event?.kind === CASCADIA_CONTROLPLANE_STATE && controlStateSchema(event, contentObject(event)) === WORKER_STATE_SCHEMA;
+}
+
 function standbyDefinitionsFromWorkerState(event: ContinuityNostrEvent): ContinuityStandbyDefinition[] {
-  if (event?.kind !== CASCADIA_CONTROLPLANE_STATE) return [];
   const content = contentObject(event);
-  if ((eventTagValue(event, 'domain') || text(content.domain)) !== 'worker') return [];
-  if ((eventTagValue(event, 'schema') || text(content.schema)) !== WORKER_STATE_SCHEMA) return [];
 
   const workerPubKey = text(content.worker_pubkey) || text(content.pubkey) || eventTagValue(event, 'worker') || getDTag(event);
   if (!workerPubKey || !Array.isArray(content.standby_assignments)) return [];
@@ -413,6 +419,17 @@ function standbyDefinitionsFromWorkerState(event: ContinuityNostrEvent): Continu
     .filter((value: ContinuityStandbyDefinition | null): value is ContinuityStandbyDefinition => Boolean(value));
 }
 
+// A heartbeat is fresh until its NIP-40 expiration (seconds). Heartbeats from
+// producers that predate NIP-40 carry expires_after_ms relative to created_at.
+function heartbeatExpiresAtMs(event: ContinuityNostrEvent, content: Record<string, any>): number {
+  const expiration = numberValue(eventTagValue(event, 'expiration'));
+  if (expiration > 0) return expiration * 1000;
+  const expiresAfterMs = numberValue(eventTagValue(event, 'expires_after_ms') || content.expires_after_ms);
+  const createdAt = numberValue(event.created_at);
+  if (expiresAfterMs > 0 && createdAt > 0) return createdAt * 1000 + expiresAfterMs;
+  return Number.POSITIVE_INFINITY;
+}
+
 function healthyHeartbeatWorker(event: ContinuityNostrEvent): string {
   if (event?.kind !== HEARTBEAT_OBSERVATION) return '';
   const domain = eventTagValue(event, 'domain') || text(contentObject(event).domain);
@@ -421,9 +438,7 @@ function healthyHeartbeatWorker(event: ContinuityNostrEvent): string {
   const status = (eventTagValue(event, 'status') || text(content.status) || 'online').toLowerCase();
   if (!['online', 'fresh', 'healthy'].includes(status)) return '';
 
-  const expiresAfterMs = numberValue(eventTagValue(event, 'expires_after_ms') || content.expires_after_ms);
-  const createdAt = numberValue(event.created_at);
-  if (expiresAfterMs > 0 && createdAt > 0 && Date.now() > createdAt * 1000 + expiresAfterMs) return '';
+  if (Date.now() >= heartbeatExpiresAtMs(event, content)) return '';
   return eventTagValue(event, 'worker') || eventTagValue(event, 'p') || text(content.worker_pubkey) || text(event.pubkey);
 }
 

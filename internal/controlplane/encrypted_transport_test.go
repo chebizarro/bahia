@@ -583,13 +583,15 @@ func TestContextVMSubscriptionFiltersAllowBackdatedNIP59OuterEvents(t *testing.T
 	if len(filters) != 2 {
 		t.Fatalf("filter count = %d, want 2", len(filters))
 	}
-	if len(filters[0].Kinds) != 2 || filters[0].Kinds[0] != KindContextVMMessage || filters[0].Kinds[1] != KindContextVMEphemeralWrap {
-		t.Fatalf("unexpected direct/ephemeral filter kinds: %v", filters[0].Kinds)
+	if len(filters[0].Kinds) != 1 || filters[0].Kinds[0] != KindContextVMMessage {
+		t.Fatalf("unexpected direct filter kinds: %v", filters[0].Kinds)
 	}
 	if filters[0].Since != nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix()) {
 		t.Fatalf("direct filter since = %d", filters[0].Since)
 	}
-	if len(filters[1].Kinds) != 1 || filters[1].Kinds[0] != KindContextVMGiftWrap {
+	// 21059 shares the NIP-59 lookback: a request too large for a stored 1059
+	// wrap arrives as a (backdated) NIP-59 21059.
+	if len(filters[1].Kinds) != 2 || filters[1].Kinds[0] != KindContextVMGiftWrap || filters[1].Kinds[1] != KindContextVMEphemeralWrap {
 		t.Fatalf("unexpected NIP-59 filter kinds: %v", filters[1].Kinds)
 	}
 	if filters[1].Since != nostr.Timestamp(now.Add(-contextVMNIP59OuterLookback).Unix()) {

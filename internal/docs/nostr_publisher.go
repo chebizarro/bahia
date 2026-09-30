@@ -125,6 +125,17 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 				queued++
 				continue
 			}
+			if nostrutil.IsPublishAbandoned(err) {
+				// Every relay rejected it permanently: terminal for this
+				// signed event. The next sync compares relay hashes and
+				// signs a new event if the topic is still missing.
+				p.logger.Warn("doc publish abandoned by relays",
+					zap.String("topic", topic.Topic),
+					zap.Error(err),
+				)
+				failed++
+				continue
+			}
 			p.logger.Warn("failed to publish doc to relay",
 				zap.String("topic", topic.Topic),
 				zap.Error(err),

@@ -42,6 +42,19 @@ const (
 	reactorHandlerWorkers = 8
 	reactorHandlerQueue   = 64
 	reactorHandlerShards  = 32
+
+	// reactorRuntimeResultLimit bounds the stored kind:38386 results each relay
+	// returns for the reactor's REQ: at startup the newest results, after a
+	// reconnect the results since the relay's resume cursor.
+	reactorRuntimeResultLimit = 500
+	// reactorResumeOverlap is how far before a relay's resume cursor a reissued
+	// REQ starts, so events published while the relay was unreachable (and
+	// modestly backdated ones) are still delivered. See subscribeResumable.
+	reactorResumeOverlap = 10 * time.Minute
+
+	// fleetHandlerShardKey serializes fleet config revisions and the fleet
+	// apply continuations they park.
+	fleetHandlerShardKey = "\x00fleet-config"
 )
 
 // Reactor subscribes to Nostr events and dispatches handlers.
@@ -63,6 +76,9 @@ type Reactor struct {
 	listSoulsFn              func(context.Context) ([]*domain.AgentSoul, error)
 	findLifecycleResultFn    func(context.Context, string) (*nostr.Event, error)
 	findProvisioningResultFn func(context.Context, string) (*nostr.Event, error)
+	// runtimeResults parks lifecycle and fleet operations whose runtime result
+	// wait ended before the terminal kind:38386; see runtimeResultWaiters.
+	runtimeResults *runtimeResultWaiters
 
 	mu            sync.Mutex
 	runs          map[string]*domain.ProvisioningRun // requestID -> run
@@ -143,6 +159,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 		logger:      logger.With("component", "soulfactory"),
 		runs:        make(map[string]*domain.ProvisioningRun),
 	}
+	r.runtimeResults = newRuntimeResultWaiters(r.logger)
 	if allRelays := normalizeSoulRelays(append(append([]string{}, config.Relays...), config.AdditionalRelays...)); len(allRelays) > 0 && signer != nil {
 		if bus, err := NewSoulFactoryRelayBus(allRelays, WithRelayBusSigner(signer), WithRelayBusLogger(r.logger)); err == nil {
 			r.relayBus = bus
@@ -167,6 +184,16 @@ func (r *Reactor) lifecycle() *LifecycleHandler {
 	return r.lifecycleHandler
 }
 
+// resultWaiters returns the reactor's late runtime-result registry.
+func (r *Reactor) resultWaiters() *runtimeResultWaiters {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.runtimeResults == nil {
+		r.runtimeResults = newRuntimeResultWaiters(r.logger)
+	}
+	return r.runtimeResults
+}
+
 func (r *Reactor) fleetReconciler() *FleetConfigReconciler {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -186,6 +213,15 @@ func (r *Reactor) Run(ctx context.Context) error {
 	// Backfill the queued request/action backlog so accepted events resume after
 	// a reactor or signer outage. Existing terminal-result checks make replay
 	// idempotent; the subscription remains open for subsequent live events.
+	// kind:38386 runtime results addressed to the controller feed late-result
+	// reconciliation (runtimeResultWaiters, handleLateRuntimeResult).
+	resultFilter := nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
+		Limit: reactorRuntimeResultLimit,
+	}
+	if controller := strings.TrimSpace(r.config.SoulFactoryPubkey); controller != "" {
+		resultFilter.Tags = nostr.TagMap{tagPubkey: []string{controller}}
+	}
 	filters := []nostr.Filter{
 		{
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
@@ -195,10 +231,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 			Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulAction)},
 			Limit: 1000,
 		},
-		{
-			Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlResult)},
-			Limit: 100,
-		},
+		resultFilter,
 	}
 	if r.config.FleetConfigEnabled {
 		authors := make([]nostr.PubKey, 0, len(r.config.AuthorizedPubkeys))
@@ -232,7 +265,11 @@ func (r *Reactor) Run(ctx context.Context) error {
 		}
 	}
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, filters)
+	// Resumable: after a relay reconnects, its REQ resumes from the newest event
+	// it delivered (less reactorResumeOverlap) instead of replaying the whole
+	// backfill, and a runtime result published while it was unreachable is not
+	// lost.
+	sub, err := bus.subscribeResumable(ctx, filters, reactorResumeOverlap)
 	if err != nil {
 		return err
 	}
@@ -306,6 +343,9 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	case nostr.Kind(domain.KindSoulAction):
 		r.handleSoulAction(ctx, event)
 	case nostr.Kind(domain.KindRuntimeControlResult):
+		if r.resultWaiters().deliver(ctx, event) {
+			return
+		}
 		r.handleLateRuntimeResult(ctx, event)
 	case nostr.Kind(domain.KindSoulFleetConfig):
 		r.handleFleetConfigUpdate(ctx, event)
@@ -315,21 +355,41 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 }
 
 func (r *Reactor) handlerShard(event *nostr.Event) *sync.Mutex {
-	key := ""
-	if event != nil {
-		if event.Kind == nostr.Kind(domain.KindSoulFleetConfig) {
-			return &r.handlerShards[0]
+	if event != nil && event.Kind == nostr.Kind(domain.KindRuntimeControlResult) {
+		// A late result resumes its parked operation under that operation's
+		// shard, serialized with the work it continues.
+		if key, parked := r.resultWaiters().shardKey(tagValue(event.Tags, tagEvent)); parked {
+			return r.shardFor(key)
 		}
-		key = tagValue(event.Tags, tagAgentID)
-		if key == "" {
-			key = tagValue(event.Tags, tagSoul)
-		}
-		if key == "" {
-			key = tagValue(event.Tags, tagEvent)
-		}
-		if key == "" {
-			key = event.ID.Hex()
-		}
+	}
+	return r.shardFor(r.handlerShardKey(event))
+}
+
+// handlerShardKey names the handler shard for event: one shard for fleet
+// config revisions, otherwise the agent, soul, or referenced event.
+func (r *Reactor) handlerShardKey(event *nostr.Event) string {
+	if event == nil {
+		return ""
+	}
+	if event.Kind == nostr.Kind(domain.KindSoulFleetConfig) {
+		return fleetHandlerShardKey
+	}
+	key := tagValue(event.Tags, tagAgentID)
+	if key == "" {
+		key = tagValue(event.Tags, tagSoul)
+	}
+	if key == "" {
+		key = tagValue(event.Tags, tagEvent)
+	}
+	if key == "" {
+		key = event.ID.Hex()
+	}
+	return key
+}
+
+func (r *Reactor) shardFor(key string) *sync.Mutex {
+	if key == fleetHandlerShardKey {
+		return &r.handlerShards[0]
 	}
 	var hash uint32 = 2166136261
 	for i := 0; i < len(key); i++ {
@@ -757,15 +817,9 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 		return nil, nil
 	}
 
-	relays := normalizeUsablePublishRelays(r.config.Relays)
-	if len(relays) == 0 {
-		return nil, fmt.Errorf("no Soul Factory relays configured for soul lookup")
+	if r.relayBus == nil {
+		return nil, fmt.Errorf("soul Factory relay bus is not configured for soul lookup")
 	}
-	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
-	if err != nil {
-		return nil, err
-	}
-	defer bus.Close()
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
 		Tags:  nostr.TagMap{tagParameterizedD: {agentID}},
@@ -781,7 +835,7 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 	// Fail closed: GetSoul feeds read-modify-write callers (lifecycle actions,
 	// the full provisioner, late-runtime projection) and absence checks, where a
 	// stale or missing soul is unsafe. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
+	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
 	if err != nil {
 		return nil, err
 	}

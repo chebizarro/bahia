@@ -71,11 +71,21 @@ func TestSeedControlStateMatchesProducerEnvelope(t *testing.T) {
 		if got := firstTag(ev, kinds.CASControlStateTagDeleted); got != "false" {
 			t.Errorf("legacy_kind %d seed deleted=%q, want \"false\"", legacyKind, got)
 		}
-		if legacyKind == kinds.WorkerState {
-			// controlplane.WorkerStatePublisher, the real worker-state
-			// producer, stamps its per-family schema on the 30900 record.
-			if got := firstTag(ev, kinds.CASControlStateTagSchema); got != "bahia.state.worker.v1" {
-				t.Errorf("worker state schema = %q", got)
+		if topic, ok := controlPlaneWorkerTopics[legacyKind]; ok {
+			// The control plane's worker publishers stamp the cp-state
+			// envelope themselves, including the family's t topic.
+			want := nostr.Tags{
+				{kinds.CASControlStateTagD, firstTag(ev, "d")},
+				{kinds.CASControlStateTagDomain, kinds.WorkerDomain},
+				{kinds.CASControlStateTagSchema, kinds.CASControlStateSchema},
+				{kinds.CASControlStateTagLegacyKind, legacyValue},
+				{kinds.CASControlStateTagDeleted, "false"},
+				{"t", topic},
+			}
+			for i, tag := range want {
+				if i >= len(ev.Tags) || !slices.Equal(ev.Tags[i], tag) {
+					t.Errorf("worker legacy_kind %d: tag[%d] = %v, want %v", legacyKind, i, ev.Tags, tag)
+				}
 			}
 			continue
 		}
@@ -95,9 +105,42 @@ func TestSeedControlStateMatchesProducerEnvelope(t *testing.T) {
 			t.Errorf("legacy_kind %d: schema %q, want %q", legacyKind, got, kinds.CASControlStateSchema)
 		}
 	}
-	for _, want := range []int{kinds.WorkerState, kinds.WorkerAssignmentState, kinds.ServiceRegistry, kinds.DNSZoneState, kinds.DNSEndpointState, kinds.DNSPolicyState, kinds.DNSBackendState} {
+	for _, want := range []int{kinds.CPStateFamilyWorkerState.LegacyKind(), kinds.CPStateFamilyWorkerAssignment.LegacyKind(), kinds.CPStateFamilyWorkerDrain.LegacyKind(), kinds.CPStateFamilyWorkerEligibility.LegacyKind(), kinds.CPStateFamilyWorkerCleanup.LegacyKind(), kinds.ServiceRegistry, kinds.DNSZoneState, kinds.DNSEndpointState, kinds.DNSPolicyState, kinds.DNSBackendState} {
 		if !seededLegacyKinds[want] {
 			t.Errorf("seed corpus has no record for legacy_kind %d", want)
+		}
+	}
+}
+
+// controlPlaneWorkerTopics are the worker families the control plane (not the
+// projector) publishes, with the t topic each carries.
+var controlPlaneWorkerTopics = map[int]string{
+	kinds.CPStateFamilyWorkerState.LegacyKind():   kinds.WorkerStateTopic,
+	kinds.CPStateFamilyWorkerCleanup.LegacyKind(): kinds.WorkerCleanupTopic,
+}
+
+// TestSeedWorkerStateMatchesTopicFilter runs the web fips-mesh and cleanup
+// REQ shapes: worker state and cleanup execution are found by author and
+// single-letter t topic, each topic matching exactly its own family.
+func TestSeedWorkerStateMatchesTopicFilter(t *testing.T) {
+	for legacyKind, topic := range controlPlaneWorkerTopics {
+		filter := nostr.Filter{
+			Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+			Authors: []nostr.PubKey{seedServicePubkey()},
+			Tags:    nostr.TagMap{"t": {topic}},
+		}
+		matched := 0
+		for _, ev := range seedEvents(t) {
+			if !filter.Matches(ev) {
+				continue
+			}
+			matched++
+			if got := firstTag(ev, kinds.CASControlStateTagLegacyKind); got != strconv.Itoa(legacyKind) {
+				t.Errorf("#t=%s matched legacy_kind %s", topic, got)
+			}
+		}
+		if matched != 1 {
+			t.Errorf("#t=%s matched %d seeds, want 1", topic, matched)
 		}
 	}
 }
@@ -181,7 +224,8 @@ func TestSeedDNSEndpointsAcceptedByFIPSBridge(t *testing.T) {
 }
 
 // TestSeedProjectedRecordsDecodeThroughCatalog decodes each projected record
-// with the Go replay catalog's decoder for its legacy kind.
+// the way the replay bootstrapper does: with the catalog decoder for its wire
+// kind, which routes worker cp-state families by legacy_kind.
 func TestSeedProjectedRecordsDecodeThroughCatalog(t *testing.T) {
 	catalog := nostradapter.NewKindCatalog()
 	decodedWorker := false
@@ -190,16 +234,16 @@ func TestSeedProjectedRecordsDecodeThroughCatalog(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		decode, ok := catalog.Decoder(legacyKind)
+		decode, ok := catalog.Decoder(int(ev.Kind))
 		if !ok {
-			continue
+			t.Fatalf("no catalog decoder for wire kind %d", ev.Kind)
 		}
 		decoded, err := decode(&ev)
 		if err != nil {
-			t.Errorf("catalog decoder for legacy_kind %d rejected seed d=%q: %v", legacyKind, firstTag(ev, "d"), err)
+			t.Errorf("catalog decoder rejected legacy_kind %d seed d=%q: %v", legacyKind, firstTag(ev, "d"), err)
 			continue
 		}
-		if legacyKind == kinds.WorkerState {
+		if legacyKind == kinds.CPStateFamilyWorkerState.LegacyKind() {
 			if decoded.Worker == nil || decoded.Worker.Worker == nil || decoded.Worker.Worker.Name != "worker-one" {
 				t.Fatalf("decoded worker = %+v", decoded.Worker)
 			}

@@ -39,9 +39,11 @@ func TestNostrPublishTargetMigrationRoundTrip(t *testing.T) {
 	require.NoError(t, Migrate(ctx, pool, logger))
 	var outboxIndexBefore string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_nostr_events_publish_outbox' AND schemaname = current_schema()`).Scan(&outboxIndexBefore))
-	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	// 000072 is newer; rolling back to 000070 unwinds it and 000071.
+	toBefore071 := DownOptions{Confirm: true, To: "000070_hiveci_initiations"}
+	rolled, err := Down(ctx, pool, logger, toBefore071)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000071_nostr_publish_target"}, rolled)
+	require.Equal(t, []string{"000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
 
 	insert := func(id, entityType, state, lastError string) {
 		_, err := pool.Exec(ctx, `INSERT INTO nostr_events (id, kind, pubkey, content, sig, created_at, entity_type, publish_state, last_publish_error)
@@ -70,9 +72,9 @@ func TestNostrPublishTargetMigrationRoundTrip(t *testing.T) {
 	_, err = pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_publish_state_check`)
 	require.NoError(t, err, "online validation accepts every existing row")
 
-	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
+	rolled, err = Down(ctx, pool, logger, toBefore071)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000071_nostr_publish_target"}, rolled)
+	require.Equal(t, []string{"000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
 	var hasTarget bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nostr_events' AND column_name = 'publish_target')`).Scan(&hasTarget))
 	require.False(t, hasTarget)

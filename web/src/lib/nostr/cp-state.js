@@ -31,8 +31,8 @@ function buildSchemaRoutes() {
 export const CP_STATE_SCHEMA_BY_LEGACY_KIND = buildSchemaRoutes();
 
 // controlStateSchema resolves a 30900 record's family schema: canonical
-// envelope records through legacy_kind, per-family records (for example the
-// control plane's worker-state publisher) to their own schema tag.
+// envelope records through legacy_kind, per-family records (for example
+// internal/nostrmigration output for retired kinds) to their own schema tag.
 export function controlStateSchema(event, content = null) {
   const schema = getTagValue(event, 'schema', content?.schema || '');
   if (schema !== BAHIA_CP_STATE_SCHEMA) return schema;

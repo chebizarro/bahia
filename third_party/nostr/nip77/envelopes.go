@@ -2,6 +2,7 @@ package nip77
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -25,7 +26,7 @@ func ParseNegMessage(message string) nostr.Envelope {
 		v = &MessageEnvelope{}
 	case "NEG-OPEN":
 		v = &OpenEnvelope{}
-	case "NEG-ERR":
+	case "NEG-ERR", "NEG-ERROR": // NIP-77 names it NEG-ERR; older khatru sent NEG-ERROR
 		v = &ErrorEnvelope{}
 	case "NEG-CLOSE":
 		v = &CloseEnvelope{}
@@ -155,7 +156,7 @@ type ErrorEnvelope struct {
 	Reason         string
 }
 
-func (_ ErrorEnvelope) Label() string { return "NEG-ERROR" }
+func (_ ErrorEnvelope) Label() string { return "NEG-ERR" }
 func (v ErrorEnvelope) String() string {
 	b, _ := v.MarshalJSON()
 	return string(b)
@@ -165,7 +166,7 @@ func (v *ErrorEnvelope) FromJSON(data string) error {
 	r := gjson.Parse(data)
 	arr := r.Array()
 	if len(arr) < 3 {
-		return fmt.Errorf("failed to decode NEG-ERROR envelope")
+		return fmt.Errorf("failed to decode NEG-ERR envelope")
 	}
 	v.SubscriptionID = arr[1].Str
 	v.Reason = arr[2].Str
@@ -173,11 +174,6 @@ func (v *ErrorEnvelope) FromJSON(data string) error {
 }
 
 func (v ErrorEnvelope) MarshalJSON() ([]byte, error) {
-	res := bytes.NewBuffer(make([]byte, 0, 19+len(v.SubscriptionID)+len(v.Reason)))
-	res.WriteString(`["NEG-ERROR","`)
-	res.WriteString(v.SubscriptionID)
-	res.WriteString(`","`)
-	res.WriteString(v.Reason)
-	res.WriteString(`"]`)
-	return res.Bytes(), nil
+	// json.Marshal escapes the reason, which is free text.
+	return json.Marshal([3]string{"NEG-ERR", v.SubscriptionID, v.Reason})
 }

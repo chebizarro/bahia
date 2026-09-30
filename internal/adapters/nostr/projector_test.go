@@ -950,9 +950,9 @@ func TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations(t *testi
 		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
 	})
 
-	assertOneSignedKind(t, sink, KindServiceRegistryAudit)
+	assertOneAudit(t, sink, events.EventServiceCreated)
 	assertOneSignedKind(t, sink, KindServiceRegistry)
-	assertOneSignedKind(t, sink, KindDeploymentRunAudit)
+	assertOneAudit(t, sink, events.EventDeploymentRunStatusChanged)
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	assertTag(t, stateEvent, "service", serviceID.String())
 	assertTag(t, stateEvent, "environment", envID.String())
@@ -1008,7 +1008,7 @@ func TestProjectorPublishesLLMAuditAndStateFromRunEvent(t *testing.T) {
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
 	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunStatusChanged, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
-	audit := assertOneSignedKind(t, sink, KindLLMRunAudit)
+	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunStatusChanged)
 	assertTag(t, audit, "run", runID.String())
 	stateEvent := assertOneSignedKind(t, sink, KindLLMRouteState)
 	assertTag(t, stateEvent, "route", routeID.String())
@@ -1032,7 +1032,8 @@ func TestProjectorPublishesStateTombstoneForDeletedState(t *testing.T) {
 		},
 	})
 
-	assertOneSignedKind(t, sink, KindStateChangedAudit)
+	stateAudit := assertOneAudit(t, sink, events.EventEnvironmentServiceStateChanged)
+	assertTag(t, stateAudit, kinds.CPAuditTagState, serviceStateDTag(serviceID, envID))
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	assertTag(t, stateEvent, "service", serviceID.String())
 	assertTag(t, stateEvent, "environment", envID.String())
@@ -1241,17 +1242,17 @@ func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointRegistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointDeregistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
 
-	zoneSynced := assertOneSignedKind(t, sink, KindDNSZoneSyncedAudit)
+	zoneSynced := assertOneAudit(t, sink, eventDNSZoneSynced)
 	assertTag(t, zoneSynced, "event_type", "dns.zone_synced")
 	assertTag(t, zoneSynced, "zone", "prod.cascadia")
 	assertTag(t, zoneSynced, "backend", "fs-primary")
-	recordChanged := assertOneSignedKind(t, sink, KindDNSRecordChangedAudit)
+	recordChanged := assertOneAudit(t, sink, eventDNSRecordChanged)
 	assertTag(t, recordChanged, "fqdn", "api.prod.cascadia")
 	assertTag(t, recordChanged, "record_type", "A")
 	assertTag(t, recordChanged, "operation", "add")
-	assertOneSignedKind(t, sink, KindDNSDriftDetectedAudit)
-	assertOneSignedKind(t, sink, KindDNSEndpointRegisteredAudit)
-	assertOneSignedKind(t, sink, KindDNSEndpointDeregisteredAudit)
+	assertOneAudit(t, sink, eventDNSDriftDetected)
+	assertOneAudit(t, sink, eventDNSEndpointRegistered)
+	assertOneAudit(t, sink, eventDNSEndpointDeregistered)
 }
 
 func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {

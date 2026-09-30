@@ -10,7 +10,7 @@ nostr:
     backend_url: "ws://relay:3334/relay"
     data_dir: "/var/lib/bahia/relay-sidecar"
     mirror_external: false
-    event_retention: 168h
+    event_retention: 0s # regular events (e.g. 4903 audits) are durable; set a duration to cap them
     request_retention: 24h
     max_query_limit: 2000
 

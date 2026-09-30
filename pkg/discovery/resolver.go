@@ -92,6 +92,20 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
+// WithServiceKeys trusts additional Bahia service keys besides the author key
+// passed to New, so endpoint state keeps resolving across a key rotation: the
+// REQ asks for every trusted author and events from any of them are accepted.
+// The keys are one logical publisher: a d-tag coordinate is shared across
+// them, so the newest record wins whichever key signed it (a record from the
+// new key supersedes the old key's, and a tombstone from either removes it).
+// Keys must be 64-character hex; Start rejects invalid ones. Duplicates are
+// ignored.
+func WithServiceKeys(pubkeys ...string) Option {
+	return func(r *Resolver) {
+		r.extraAuthors = append(r.extraAuthors, pubkeys...)
+	}
+}
+
 // WithPrivateKey configures the resolver to answer NIP-42 AUTH challenges from relays.
 func WithPrivateKey(privateKeyHex string) Option {
 	return func(r *Resolver) {
@@ -114,6 +128,11 @@ type relayPoolFactory func([]string, *zap.Logger, string) relayPool
 type Resolver struct {
 	relayURLs    []string
 	authorPubkey string
+	// extraAuthors are the WithServiceKeys keys as given; authors is the
+	// normalized, de-duplicated trusted set (authorPubkey first).
+	extraAuthors []string
+	authors      []string
+	authorSet    map[string]struct{}
 
 	logger      *zap.Logger
 	privateKey  string
@@ -175,6 +194,18 @@ func New(relayURLs []string, authorPubkey string, opts ...Option) *Resolver {
 	for _, opt := range opts {
 		opt(r)
 	}
+	r.authorSet = make(map[string]struct{})
+	for _, key := range append([]string{authorPubkey}, r.extraAuthors...) {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		if _, ok := r.authorSet[key]; ok {
+			continue
+		}
+		r.authorSet[key] = struct{}{}
+		r.authors = append(r.authors, key)
+	}
 	return r
 }
 
@@ -189,8 +220,10 @@ func (r *Resolver) Start(ctx context.Context) error {
 	if strings.TrimSpace(r.authorPubkey) == "" {
 		return errors.New("discovery resolver start: author pubkey is required")
 	}
-	if _, err := nostrutil.PubKeyFromHex(r.authorPubkey); err != nil {
-		return fmt.Errorf("discovery resolver start: author pubkey must be valid hex: %w", err)
+	for _, author := range r.authors {
+		if _, err := nostrutil.PubKeyFromHex(author); err != nil {
+			return fmt.Errorf("discovery resolver start: service pubkey %q must be valid hex: %w", author, err)
+		}
 	}
 
 	r.lifecycleMu.Lock()
@@ -521,11 +554,16 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 			}
 		case ev, ok := <-merged.Events:
 			if !ok {
-				merged.Events = nil
+				// The event stream is the subscription: once it closes
+				// nothing more can arrive, whether or not EOSE did. Waiting
+				// on the other channels here could block forever when EOSE
+				// is still pending, so end the subscription and let run
+				// reconnect (a backfill cut short is redone in full, since
+				// the cursor only moves after EOSE).
 				if ctx.Err() != nil {
 					return false, ctx.Err()
 				}
-				continue
+				return false, errors.New("subscription event stream closed")
 			}
 			if err := r.applyEvent(ev); err != nil {
 				if errors.Is(err, errNotDNSEndpoint) {
@@ -573,15 +611,20 @@ func (r *Resolver) markSynced(createdAt nostr.Timestamp) {
 }
 
 // subscriptionFilter scopes the REQ to canonical DNS endpoint state from the
-// Bahia service key. #t is a single-letter tag, so NIP-01 relays index it; the
+// trusted Bahia service keys. #t is a single-letter tag, so NIP-01 relays index it; the
 // envelope's domain/schema/legacy_kind tags are multi-letter and are checked
 // locally. After a completed backfill, resubscribes start from the newest seen
 // created_at minus resolverSinceOverlap instead of re-downloading everything.
 func (r *Resolver) subscriptionFilter() nostr.Filter {
-	pubkey, _ := nostrutil.PubKeyFromHex(r.authorPubkey)
+	authors := make([]nostr.PubKey, 0, len(r.authors))
+	for _, author := range r.authors {
+		if pubkey, err := nostrutil.PubKeyFromHex(author); err == nil {
+			authors = append(authors, pubkey)
+		}
+	}
 	filter := nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-		Authors: []nostr.PubKey{pubkey},
+		Authors: authors,
 		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
 	}
 	r.mu.RLock()
@@ -593,15 +636,16 @@ func (r *Resolver) subscriptionFilter() nostr.Filter {
 	return filter
 }
 
-// applyEvent folds one DNS endpoint record into the cache. Per (pubkey, d) the
-// newest created_at wins and equal created_at is broken by the lowest event
-// id (NIP-01), so the result does not depend on arrival order. A tombstone is
+// applyEvent folds one DNS endpoint record into the cache. Per d coordinate
+// (shared by every trusted service key, see WithServiceKeys) the newest
+// created_at wins and equal created_at is broken by the lowest event id
+// (NIP-01), so the result does not depend on arrival order. A tombstone is
 // kept as a deleted record so older live events cannot resurrect it.
 func (r *Resolver) applyEvent(event *nostr.Event) error {
 	if err := r.validateEnvelope(event); err != nil {
 		return err
 	}
-	coordinate := nostrutil.EventPubKeyHex(event) + ":" + event.Tags.GetD()
+	coordinate := event.Tags.GetD()
 	id := nostrutil.EventIDHex(event)
 
 	r.mu.RLock()
@@ -630,6 +674,11 @@ func (r *Resolver) applyEvent(event *nostr.Event) error {
 	return nil
 }
 
+func (r *Resolver) trustsAuthor(pubkey string) bool {
+	_, ok := r.authorSet[strings.ToLower(pubkey)]
+	return ok
+}
+
 func supersedes(createdAt nostr.Timestamp, id string, current endpointRecord) bool {
 	if createdAt != current.createdAt {
 		return createdAt > current.createdAt
@@ -638,7 +687,7 @@ func supersedes(createdAt nostr.Timestamp, id string, current endpointRecord) bo
 }
 
 // validateEnvelope accepts only signed canonical DNS endpoint records from the
-// configured Bahia service key; relays that ignore #t may return other 30900
+// trusted Bahia service keys; relays that ignore #t may return other 30900
 // state, and relays do not enforce authors on our behalf.
 func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 	if event == nil {
@@ -650,7 +699,7 @@ func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 	if int(event.Kind) != kinds.CASControlState {
 		return fmt.Errorf("unexpected kind %d", event.Kind)
 	}
-	if pubkey := nostrutil.EventPubKeyHex(event); pubkey != r.authorPubkey {
+	if pubkey := nostrutil.EventPubKeyHex(event); !r.trustsAuthor(pubkey) {
 		return fmt.Errorf("unexpected author %s", pubkey)
 	}
 	if domain := firstTagValue(event.Tags, kinds.CASControlStateTagDomain); domain != kinds.DNSDomain {

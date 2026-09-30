@@ -145,7 +145,6 @@
 1	internal/api/middleware.RequireOperator
 1	internal/api/middleware.RequireRole
 1	internal/api/router.New
-1	internal/app.BackgroundManager.Count
 1	internal/app.HealthProvider.Liveness
 1	internal/app.ModePolicy.RouteEnabled
 1	internal/auth.Middleware
@@ -385,9 +384,7 @@
 1	internal/soulfactory.NewOpenClawReadinessVerifier
 1	internal/soulfactory.NewOpenClawRuntimeAdapter
 1	internal/soulfactory.NewStatusSyncHandler
-1	internal/soulfactory.NostrClient.AwaitSoulActionResult
 1	internal/soulfactory.NostrClient.WithExpectedFactoryPubkey
-1	internal/soulfactory.NostrClient.WithReplyTimeout
 1	internal/soulfactory.OrderedSteps
 1	internal/soulfactory.StatusSyncHandler.HandleEvent
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul

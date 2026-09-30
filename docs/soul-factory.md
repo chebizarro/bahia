@@ -81,9 +81,24 @@ Runtime success is not inferred from timeout, EOSE, or relay closure. The termin
 
 The reactor keeps a live multi-relay subscription with reconnect/backoff behavior and uses EOSE only to mark completion of the stored-event phase.
 
-At startup it requests the newest `5950`, newest `1950`, and up to 100 stored `38386` events. Existing terminal-result checks prevent repeated side effects. This backfill is intentionally bounded to the newest request and newest action globally; it is not a full historical queue scan.
+At startup it requests the newest `5950`, newest `1950`, and up to 500 stored `38386` events addressed (`#p`) to the controller. Existing terminal-result checks prevent repeated side effects. This backfill is intentionally bounded to the newest request and newest action globally; it is not a full historical queue scan.
+
+The subscription is resumable: each relay keeps a cursor, the newest `created_at` it delivered, committed only after that relay's EOSE. When a relay reconnects (dropped connection or `CLOSED`), the reissued REQ asks for events since the cursor minus a 10-minute overlap, so a result published while the relay was unreachable still arrives and the full backfill is not replayed. Future-dated events cannot advance the cursor past the local clock.
 
 If a runtime operation first produces a deploy-stage timeout/error but a valid success `38386` arrives later, the reactor validates the full correlation chain, restores the public-safe soul checkpoint embedded in `38384`, republishes active `31951`, and replaces the terminal provisioning result. It does not repeat Signet, avatar, memory, workspace, or runtime side effects.
+
+### Outcome unknown: awaiting a terminal result
+
+Each runtime-control wait is bounded by `soul_factory.runtime_result_timeout` (default 5m). A wait that ends before the correlated `38386` arrives is neither success nor failure. For lifecycle actions (update, hot-reload, rollback) and fleet config reloads:
+
+- SoulFactory publishes a `6950` progress event with status `awaiting_terminal` and publishes no terminal `7950` yet.
+- Nothing is rolled back on a timeout. Rollback happens only on an observed terminal failure, or on an explicit operator action (a `rollback` soul action or a newer fleet revision).
+- When the late `38386` arrives, it is correlated with the parked request (runtime author, request event, operator request, method and idempotency key) and applied exactly as a timely result would have been. A success runs the remaining steps and publishes the updated `31951` and a completed `7950`. A failure rolls back and publishes an error `7950`.
+- A multi-section hot-reload rollback runs every section even when one rollback request fails or times out. A rollback whose own result is not observed is reported as `rollback_status: outcome_unknown`.
+- While a soul's lifecycle action awaits its result, later soul actions for that soul are deferred and run in arrival order once it finishes, as they would have queued behind a timely result.
+- While a soul's fleet apply awaits its result, newer fleet revisions defer that soul. Once the late result is reconciled, the soul is re-driven to the latest revision, so revisions reach a runtime in order and never overlap.
+
+Parked operations are held in memory. After a restart the backfill re-drives them with the same runtime idempotency keys: the `1950` has no terminal result, and the soul's applied fleet revision is not the latest.
 
 ## NIP-29 group assignment and NIP-42
 
@@ -284,6 +299,8 @@ soul_factory:
   llm_model: <model-name>
   llm_api_key: <secret>
   llm_timeout: 2m
+  runtime_result_timeout: 5m # per 38384 wait; a timeout leaves the operation awaiting_terminal
+  reply_timeout: 15m         # client (bahia souls) wait for a terminal result
 ```
 
 When enabled outside development mode, validation requires at least one relay, a Signet bunker URI, at least one authorized pubkey, positive timeouts, and a valid LLM origin/model/key. Workspace fields are optional but jointly constrained when `workspace_gitea_url` is set.
@@ -325,6 +342,10 @@ Bahia starts its HTTP listener and non-signing relay consumers without waiting f
 ### Late runtime success
 
 A later valid success `38386` can reconcile a deploy-stage runtime timeout. The original `5950`, `38384`, and `38386` must remain queryable and signatures must match.
+
+### Action or fleet reload stuck in `awaiting_terminal`
+
+The runtime accepted the `38384` but its `38386` has not been observed. Check the runtime's health and whether it published a correlated result to a controller relay. The result is reconciled whenever it arrives, and nothing is rolled back meanwhile. To abandon the change, publish a `rollback` soul action or a newer fleet revision. On the client, `bahia souls await <request-id>` keeps waiting for a soul action's terminal result, bounded by `--reply-timeout` or `BAHIA_SOUL_FACTORY_REPLY_TIMEOUT`.
 
 ### NIP-29 failure
 

@@ -308,6 +308,13 @@ type DNSProjectionConfig struct {
 	MeshZone          string            `koanf:"mesh_zone" secret:"false"`
 }
 
+// SoulFactory wait bounds; they match soulfactory.DefaultRuntimeControlResultTimeout
+// and soulfactory.DefaultSoulFactoryReplyTimeout.
+const (
+	defaultSoulFactoryRuntimeResultTimeout = 5 * time.Minute
+	defaultSoulFactoryReplyTimeout         = 15 * time.Minute
+)
+
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled" secret:"false"`
@@ -355,6 +362,17 @@ type SoulFactoryConfig struct {
 	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path" secret:"false"`
 	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file" secret:"false"`
 	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey" secret:"false"`
+	// RuntimeResultTimeout bounds each runtime adapter's wait for the kind:38386
+	// result of a kind:38384 control request (default 5m). A wait that ends
+	// first leaves the operation awaiting its terminal result: it is neither a
+	// failure nor a reason to roll back, and the late result is reconciled when
+	// it arrives.
+	RuntimeResultTimeout time.Duration `koanf:"runtime_result_timeout" yaml:"runtime_result_timeout" secret:"false"`
+	// ReplyTimeout bounds how long SoulFactory clients (the bahia souls CLI
+	// commands) wait for a provisioning or soul action terminal result (default
+	// 15m). The CLI reads the same key from BAHIA_SOUL_FACTORY_REPLY_TIMEOUT or
+	// its --reply-timeout flag.
+	ReplyTimeout time.Duration `koanf:"reply_timeout" yaml:"reply_timeout" secret:"false"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
@@ -747,6 +765,21 @@ type RelaySidecarConfig struct {
 	// connection. A subscription that would overflow it is CLOSED so the client
 	// re-subscribes from its cursor, instead of silently missing events.
 	SubscriberQueueSize int `koanf:"subscriber_queue_size" yaml:"subscriber_queue_size" secret:"false"`
+	// Retention is by kind class (C-19). EventRetention caps the age of stored
+	// regular events that are not RequestRetentionKinds (for example 4903
+	// audit facts); zero, the default, keeps them durably. RequestRetention
+	// bounds RequestRetentionKinds. Replaceable and addressable events and
+	// NIP-09 deletion requests are never age-swept: latest-wins bounds the
+	// former and the latter must outlive what they delete. Ephemeral kinds are
+	// never stored. NIP-40 expiration is honoured for every stored event.
+	//
+	// RequestRetentionKinds defaults to ContextVM 25910 and gift wraps
+	// 1059/21059. Replaceable, addressable and kind-5 entries are rejected.
+	RequestRetentionKinds []int `koanf:"request_retention_kinds" yaml:"request_retention_kinds" secret:"false"`
+	// NegentropyMaxEvents bounds the set a single NIP-77 session reconciles.
+	// A NEG-OPEN whose filter matches more is refused with NEG-ERR instead of
+	// being silently truncated, so the client narrows the filter.
+	NegentropyMaxEvents int `koanf:"negentropy_max_events" yaml:"negentropy_max_events" secret:"false"`
 }
 
 // Bounds for RelaySidecarConfig.SubscriberQueueSize. Each slot costs two words
@@ -755,6 +788,52 @@ const (
 	DefaultRelaySidecarSubscriberQueueSize = 1024
 	MaxRelaySidecarSubscriberQueueSize     = 1 << 16
 )
+
+// Relay sidecar retention and NIP-77 defaults and bounds. The minimum
+// retentions reject unit-less values (a bare 168 is 168ns) that would sweep
+// everything.
+const (
+	DefaultRelaySidecarRequestRetention    = 24 * time.Hour
+	MinRelaySidecarRequestRetention        = time.Minute
+	MinRelaySidecarEventRetention          = time.Hour
+	DefaultRelaySidecarNegentropyMaxEvents = 1_000_000
+	MaxRelaySidecarNegentropyMaxEvents     = 10_000_000
+)
+
+// DefaultRelaySidecarRequestRetentionKinds are ContextVM messages (25910) and
+// their persistent (1059) and ephemeral (21059) gift-wrap transports.
+func DefaultRelaySidecarRequestRetentionKinds() []int {
+	return []int{25910, 1059, 21059}
+}
+
+// validateRelaySidecarRetention checks the sidecar's per-kind-class retention.
+func validateRelaySidecarRetention(sidecar *RelaySidecarConfig) error {
+	if sidecar.EventRetention < 0 || (sidecar.EventRetention > 0 && sidecar.EventRetention < MinRelaySidecarEventRetention) {
+		return fmt.Errorf("config validation failed: nostr.sidecar.event_retention must be 0 (durable) or at least %s when sidecar is enabled", MinRelaySidecarEventRetention)
+	}
+	if sidecar.RequestRetention < MinRelaySidecarRequestRetention {
+		return fmt.Errorf("config validation failed: nostr.sidecar.request_retention must be at least %s when sidecar is enabled", MinRelaySidecarRequestRetention)
+	}
+	seen := make(map[int]struct{}, len(sidecar.RequestRetentionKinds))
+	for _, kind := range sidecar.RequestRetentionKinds {
+		switch {
+		case kind < 0 || kind > 65535:
+			return fmt.Errorf("config validation failed: nostr.sidecar.request_retention_kinds: kind %d is outside 0-65535", kind)
+		case kind == 5:
+			return fmt.Errorf("config validation failed: nostr.sidecar.request_retention_kinds: kind 5 deletion requests must outlive the events they delete")
+		case kind == 0 || kind == 3 || (kind >= 10000 && kind < 20000) || (kind >= 30000 && kind < 40000):
+			return fmt.Errorf("config validation failed: nostr.sidecar.request_retention_kinds: kind %d is replaceable or addressable; latest-wins bounds it and it is never age-swept", kind)
+		}
+		if _, dup := seen[kind]; dup {
+			return fmt.Errorf("config validation failed: nostr.sidecar.request_retention_kinds: duplicate kind %d", kind)
+		}
+		seen[kind] = struct{}{}
+	}
+	if sidecar.NegentropyMaxEvents <= 0 || sidecar.NegentropyMaxEvents > MaxRelaySidecarNegentropyMaxEvents {
+		return fmt.Errorf("config validation failed: nostr.sidecar.negentropy_max_events must be between 1 and %d when sidecar is enabled", MaxRelaySidecarNegentropyMaxEvents)
+	}
+	return nil
+}
 
 // RelayAdministrationAuthorization values declare why a NIP-86 target is in
 // scope. They are operator assertions for Bahia-owned/Bahia-authorized relays;
@@ -1289,18 +1368,20 @@ func Defaults() *Config {
 				EmergencyMinHealthy: 1,
 			},
 			Sidecar: RelaySidecarConfig{
-				Enabled:             false,
-				ListenAddr:          "127.0.0.1:3334",
-				PublicURL:           "ws://127.0.0.1:3334",
-				BackendURL:          "ws://127.0.0.1:3334",
-				DataDir:             "./data/relay-sidecar",
-				MirrorExternal:      false,
-				EventRetention:      7 * 24 * time.Hour,
-				RequestRetention:    24 * time.Hour,
-				ServiceID:           "bahia-relay-sidecar",
-				Scope:               "prod",
-				MaxQueryLimit:       2000,
-				SubscriberQueueSize: DefaultRelaySidecarSubscriberQueueSize,
+				Enabled:               false,
+				ListenAddr:            "127.0.0.1:3334",
+				PublicURL:             "ws://127.0.0.1:3334",
+				BackendURL:            "ws://127.0.0.1:3334",
+				DataDir:               "./data/relay-sidecar",
+				MirrorExternal:        false,
+				EventRetention:        0, // durable; see RelaySidecarConfig
+				RequestRetention:      DefaultRelaySidecarRequestRetention,
+				ServiceID:             "bahia-relay-sidecar",
+				Scope:                 "prod",
+				MaxQueryLimit:         2000,
+				SubscriberQueueSize:   DefaultRelaySidecarSubscriberQueueSize,
+				RequestRetentionKinds: DefaultRelaySidecarRequestRetentionKinds(),
+				NegentropyMaxEvents:   DefaultRelaySidecarNegentropyMaxEvents,
 			},
 		},
 		Reconcile: ReconcileConfig{
@@ -1374,12 +1455,14 @@ func Defaults() *Config {
 			OverlayAddressPrefix: "fd00",
 		},
 		SoulFactory: SoulFactoryConfig{
-			Enabled:          false,
-			Relays:           []string{},
-			AdditionalRelays: []string{},
-			NIP05Relays:      []string{},
-			StartupTimeout:   15 * time.Second,
-			LLMTimeout:       120 * time.Second,
+			Enabled:              false,
+			Relays:               []string{},
+			AdditionalRelays:     []string{},
+			NIP05Relays:          []string{},
+			StartupTimeout:       15 * time.Second,
+			LLMTimeout:           120 * time.Second,
+			RuntimeResultTimeout: defaultSoulFactoryRuntimeResultTimeout,
+			ReplyTimeout:         defaultSoulFactoryReplyTimeout,
 		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
@@ -3230,6 +3313,18 @@ func (c *Config) validateSoulFactory() error {
 	if sf.LLMTimeout == 0 {
 		sf.LLMTimeout = 120 * time.Second
 	}
+	if sf.RuntimeResultTimeout < 0 {
+		return fmt.Errorf("config validation failed: soul_factory.runtime_result_timeout must be >= 0 (0 uses the %s default)", defaultSoulFactoryRuntimeResultTimeout)
+	}
+	if sf.RuntimeResultTimeout == 0 {
+		sf.RuntimeResultTimeout = defaultSoulFactoryRuntimeResultTimeout
+	}
+	if sf.ReplyTimeout < 0 {
+		return fmt.Errorf("config validation failed: soul_factory.reply_timeout must be >= 0 (0 uses the %s default)", defaultSoulFactoryReplyTimeout)
+	}
+	if sf.ReplyTimeout == 0 {
+		sf.ReplyTimeout = defaultSoulFactoryReplyTimeout
+	}
 	if !sf.Enabled {
 		return nil
 	}
@@ -3628,11 +3723,8 @@ func (c *Config) validateRelaySidecar() error {
 	if strings.TrimSpace(sidecar.DataDir) == "" {
 		return fmt.Errorf("config validation failed: nostr.sidecar.data_dir is required when sidecar is enabled")
 	}
-	if sidecar.EventRetention <= 0 {
-		return fmt.Errorf("config validation failed: nostr.sidecar.event_retention must be > 0 when sidecar is enabled")
-	}
-	if sidecar.RequestRetention <= 0 {
-		return fmt.Errorf("config validation failed: nostr.sidecar.request_retention must be > 0 when sidecar is enabled")
+	if err := validateRelaySidecarRetention(sidecar); err != nil {
+		return err
 	}
 	if sidecar.MaxQueryLimit <= 0 {
 		return fmt.Errorf("config validation failed: nostr.sidecar.max_query_limit must be > 0 when sidecar is enabled")

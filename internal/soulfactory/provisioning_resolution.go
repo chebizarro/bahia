@@ -310,7 +310,12 @@ func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigS
 	if err != nil {
 		return nil, fmt.Errorf("query fleet config: %w", err)
 	}
-	latest := newestFleetConfigEvent(read.Events)
+	var latest *nostr.Event
+	for _, event := range read.Events {
+		if event != nil && event.Kind == nostr.Kind(domain.KindSoulFleetConfig) {
+			latest = newerRelayEvent(latest, event)
+		}
+	}
 	if latest == nil {
 		return nil, nil
 	}

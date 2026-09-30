@@ -32,7 +32,7 @@ describe('continuity Nostr read models', () => {
       expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404] }),
       expect.objectContaining({ kinds: [38430, 38431] }),
       expect.objectContaining({ kinds: [30315], '#domain': ['continuity'] }),
-      expect.objectContaining({ kinds: [30900], '#domain': ['worker'], '#schema': ['bahia.state.worker.v1'] })
+      { kinds: [30900], '#t': ['worker-state'], limit: 1000 }
     ]));
     expect(continuityNostrFilters()).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ kinds: [30350] })
@@ -186,5 +186,58 @@ describe('continuity Nostr read models', () => {
       replication_configured: true,
       heartbeat_active: false
     }]);
+  });
+
+  // Producer shape: internal/controlplane/worker_state_publisher.go emits the
+  // full worker (standby_assignments included) as 30900 cp-state with
+  // legacy_kind 32000 and t=worker-state; the tombstone keeps d and t.
+  function workerState({ id, created_at, deleted = false, standbys = [] as string[] }: { id: string; created_at: number; deleted?: boolean; standbys?: string[] }) {
+    return event({
+      id,
+      kind: 30900,
+      created_at,
+      tags: [['d', 'worker:state:standby-w'], ['domain', 'worker'], ['schema', 'bahia.cp-state.v1'], ['legacy_kind', '32000'], ['deleted', String(deleted)], ['t', 'worker-state'], ['worker', 'standby-w']],
+      content: {
+        deleted,
+        pubkey: 'standby-w',
+        status: 'online',
+        standby_assignments: standbys.map((serviceKey) => ({ service_key: serviceKey, tier: 'warm', supported_profiles: ['full'], updated_at: '2026-09-30T00:00:00Z' }))
+      }
+    });
+  }
+
+  it('derives standbys only from each worker\'s newest live cp-state record', () => {
+    const status = event({ id: 'status', kind: 30351, tags: [['d', `continuity-status:${SERVICE}`], ['service', SERVICE], ['t', 'continuity'], ['t', 'continuity-status']], content: { service_key: SERVICE, active_profile: 'full', operation_state: 'steady', primary_worker_pubkey: 'primary-a', active_worker_pubkey: 'primary-a' } });
+    const standbyCount = (events: any[]) => deriveContinuityAssessments([status, ...events], continuityStatusesFromEvents([status]))[0].standby_count;
+
+    const live = workerState({ id: 'live', created_at: 100, standbys: [SERVICE] });
+    expect(standbyCount([live])).toBe(1);
+
+    const stale = workerState({ id: 'stale', created_at: 50, standbys: [SERVICE] });
+    const newerWithout = workerState({ id: 'newer', created_at: 200 });
+    expect(standbyCount([stale, newerWithout])).toBe(0);
+
+    const tombstone = workerState({ id: 'tombstone', created_at: 300, deleted: true, standbys: [SERVICE] });
+    expect(standbyCount([live, tombstone])).toBe(0);
+  });
+});
+
+describe('continuity heartbeat expiry', () => {
+  const standby = (worker: string) => event({ id: `standby-${worker}`, kind: 31402, tags: [['d', `standby-node:${SERVICE}:${worker}`], ['service', SERVICE], ['worker', worker], ['profile', 'full']] });
+  const heartbeat = (worker: string, tags: string[][], createdAt = Math.floor(Date.now() / 1000)) =>
+    event({ id: `heartbeat-${worker}`, kind: 30315, pubkey: WORKER_AUTHOR, created_at: createdAt, tags: [['d', `continuity:heartbeat:${worker}`], ['domain', 'continuity'], ['worker', worker], ['status', 'online'], ...tags] });
+  const active = (events: any[]) => deriveContinuityAssessments(events)[0].heartbeat_active;
+
+  it('honours the NIP-40 expiration tag', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now + 30)]])])).toBe(true);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)]], now - 60)])).toBe(false);
+  });
+
+  it('prefers expiration over the legacy expires_after_ms and still reads the legacy tag alone', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)], ['expires_after_ms', '600000']], now - 60)])).toBe(false);
+    expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '1000']], now - 60)])).toBe(false);
+    expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '600000']], now - 60)])).toBe(true);
   });
 });

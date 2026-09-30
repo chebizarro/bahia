@@ -86,6 +86,22 @@ a filter's stored query before it registers the live listener, which leaves a
 gap. The sidecar closes it with `OnRequest` + `QueryStored` hooks. A natural
 upstream fix is to register the listener, or buffer, before `QueryStored`.
 
+## nip77: NEG-ERR label (bahia-irsry.9.1)
+
+`nip77.ErrorEnvelope` marshalled its frame as `["NEG-ERROR", …]`, while NIP-77
+and the package's own `ParseNegMessage` use `NEG-ERR`. Every error khatru sent
+to a negentropy client (a refused filter, an oversize set, a reconcile
+failure) was therefore dropped by spec clients, including
+`nip77.NegentropySync`, which then waited until its context expired. The
+reason was also written unescaped.
+
+- `nip77/envelopes.go`: `ErrorEnvelope` marshals as `NEG-ERR` through
+  `encoding/json`; `ParseNegMessage` still accepts `NEG-ERROR` from older
+  relays.
+
+Tests: `nip77/envelopes_bahia_test.go`, and end to end
+`internal/relaysidecar` `TestSidecarNegentropyRefusesSetsLargerThanTheLimit`.
+
 ## Removal criteria
 
 Drop the `replace` and this directory once upstream carries equivalent fixes

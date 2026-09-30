@@ -397,22 +397,11 @@ const (
 )
 
 // =============================================================================
-// Worker State Kinds (32000-32003)
-// =============================================================================
-
-const (
-	WorkerState              = 32000
-	WorkerAssignmentState    = 32001
-	WorkerDrainStatus        = 32002
-	WorkerEligibilityPreview = 32003
-)
-
-// =============================================================================
 // Legacy Worker State Kinds (deprecated, for mixed-version compatibility)
 // =============================================================================
 
 const (
-	LegacyWorkerState              = 31974 // Conflicts with SystemDiscovery; use WorkerState
+	LegacyWorkerState              = 31974 // Conflicts with SystemDiscovery; worker state is CPStateFamilyWorkerState on 30900
 	LegacyWorkerAssignmentState    = 31991 // Conflicts with BackupDefinitionRegistry
 	LegacyWorkerDrainStatus        = 31992
 	LegacyWorkerEligibilityPreview = 31993

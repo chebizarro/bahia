@@ -539,6 +539,18 @@ func (r *fakeSBOMManifestRepo) ListPublishedManifests(context.Context, int) ([]d
 func (r *fakeSBOMManifestRepo) UpdateManifestPublishState(_ context.Context, id uuid.UUID, state domain.SBOMPublishState, referenceEventID, availabilityEventID, publishError string) error {
 	return nil
 }
+func (r *fakeSBOMManifestRepo) FailManifestByReferenceEvent(_ context.Context, referenceEventID, reason string) (int64, error) {
+	var changed int64
+	for i := range r.projected {
+		manifest := &r.projected[i]
+		if manifest.ReferenceEventID == referenceEventID && manifest.PublishState == domain.SBOMPublishPublished {
+			manifest.PublishState = domain.SBOMPublishFailed
+			manifest.PublishError = reason
+			changed++
+		}
+	}
+	return changed, nil
+}
 func (r *fakeSBOMManifestRepo) CreateManifestPackages(context.Context, []domain.SBOMManifestPackage) error {
 	return nil
 }

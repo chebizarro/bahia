@@ -6,8 +6,11 @@ import { finalizeEvent, getPublicKey } from 'nostr-tools';
 //   dnsEndpointTags on kind 30900 (schema bahia.cp-state.v1, legacy_kind 31976,
 //   deleted=false|true, t=dns-endpoint); content is domain.DNSEndpoint, or
 //   {deleted, coordinate, fqdn, updated_at} for publishDNSEndpointTombstone.
-// - Worker state: internal/controlplane/worker_state_publisher.go
-//   (schema bahia.state.worker.v1, legacy_kind 32000, d=worker:state:<pk>).
+// - Worker state: internal/controlplane/worker_state_publisher.go +
+//   worker_cp_state.go on kind 30900 (d=worker:state:<pk>, domain=worker,
+//   schema bahia.cp-state.v1, legacy_kind 32000, deleted=false|true,
+//   t=worker-state); content is the full domain.Worker JSON (mesh_health
+//   durations in nanoseconds) plus deleted.
 
 const systemInfoMock = vi.hoisted(() => ({
   loadSystemInfo: vi.fn()
@@ -115,18 +118,27 @@ function endpointTombstone({ created_at = 200, d = COORDINATE, fqdn = 'checkout.
   });
 }
 
-function workerState({ created_at = 100, name = 'worker-one', status = 'online', deleted = false } = {}) {
+function workerState({ created_at = 100, name = 'worker-one', status = 'online', deleted = false, mesh = {} } = {}) {
   return signed({
     created_at,
     tags: [
-      ['d', `worker:state:${WORKER}`], ['domain', 'worker'], ['schema', 'bahia.state.worker.v1'], ['legacy_kind', '32000'],
-      ['worker', WORKER], ['deleted', String(deleted)], ['status', status], ['scheduling_state', 'active']
+      ...envelope({ legacyKind: 32000, d: `worker:state:${WORKER}`, deleted, domain: 'worker' }),
+      ['t', 'worker-state'],
+      ['worker', WORKER], ['status', status], ['scheduling_state', 'active']
     ],
-    content: deleted
-      ? { deleted: true, pubkey: WORKER }
-      : { deleted: false, pubkey: WORKER, name, status, scheduling_state: 'active', labels: { zone: 'a' }, capabilities: {} }
+    content: {
+      deleted, pubkey: WORKER, name, status, scheduling_state: 'active', labels: { zone: 'a' }, capabilities: {},
+      max_concurrent_jobs: 4, current_queue_depth: 0, last_advertisement_at: '2026-09-30T00:00:00.000000005Z',
+      ...mesh
+    }
   });
 }
+
+const MESH_FIELDS = {
+  fips_overlay_addr: 'fd00::42',
+  fips_endpoints: [{ transport: 'udp', address: '203.0.113.7:4242' }],
+  mesh_health: { rtt: 40_000_000, loss: 0.01, jitter: 0, goodput: 0, last_report: '2026-09-30T00:00:00Z' }
+};
 
 describe('FIPS mesh store (producer 30900 contract)', () => {
   let store;
@@ -150,13 +162,14 @@ describe('FIPS mesh store (producer 30900 contract)', () => {
     store.fipsMeshState.servicePubkey = SERVICE;
   });
 
-  it('REQs endpoints on the indexed #t topic and worker state by author', () => {
+  it('REQs endpoints and worker state on indexed #t topics by author', () => {
     expect(store.fipsMeshReadModelFilters()).toEqual([
       { kinds: [30900], '#t': ['dns-endpoint'], authors: [SERVICE], limit: 1000 },
-      { kinds: [30900], '#domain': ['worker'], authors: [SERVICE], limit: 1000 }
+      { kinds: [30900], '#t': ['worker-state'], authors: [SERVICE], limit: 1000 }
     ]);
     for (const filter of store.fipsMeshReadModelFilters()) {
       expect(filter).not.toHaveProperty('#schema');
+      expect(filter).not.toHaveProperty('#domain');
     }
   });
 
@@ -284,15 +297,42 @@ describe('FIPS mesh store (producer 30900 contract)', () => {
     expect(store.meshNodes[0].name).not.toBe('worker-one');
   });
 
-  it('also routes worker state published in the canonical cp-state envelope', () => {
-    const projected = signed({
-      created_at: 100,
-      tags: [...envelope({ legacyKind: 32000, d: WORKER, domain: 'worker' }), ['worker', WORKER]],
-      content: { pubkey: WORKER, name: 'projected-worker', status: 'online', fips_overlay_addr: 'fd00::10', mesh_health: { rtt: 500_000_000, loss: 0.01 } }
+  it('builds a mesh node from worker state alone on #t, ignores stale records and drops it on tombstone', () => {
+    const [, workerFilter] = store.fipsMeshReadModelFilters();
+    const live = workerState({ mesh: MESH_FIELDS });
+    expect(live.tags.filter((tag) => tag[0] === 't').map((tag) => tag[1])).toEqual(workerFilter['#t']);
+
+    expect(store.applyFipsMeshEvent(live)).toBe(true);
+    expect(store.meshNodes).toHaveLength(1);
+    expect(store.meshNodes[0]).toMatchObject({
+      pubkey: WORKER,
+      name: 'worker-one',
+      overlayAddress: 'fd00::42',
+      fipsEndpoints: [{ transport: 'udp', address: '203.0.113.7:4242' }],
+      health: 'healthy'
     });
 
-    expect(store.applyFipsMeshEvent(projected)).toBe(true);
-    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'projected-worker', overlayAddress: 'fd00::10', health: 'healthy' });
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 90, name: 'stale-name', mesh: MESH_FIELDS }))).toBe(false);
+    expect(store.meshNodes[0].name).toBe('worker-one');
+
+    const degraded = workerState({ created_at: 150, mesh: { ...MESH_FIELDS, mesh_health: { ...MESH_FIELDS.mesh_health, loss: 0.2 } } });
+    expect(store.applyFipsMeshEvent(degraded)).toBe(true);
+    expect(store.meshNodes[0].health).toBe('degraded');
+
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 200, deleted: true, mesh: MESH_FIELDS }))).toBe(true);
+    expect(store.meshNodes).toEqual([]);
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 180, mesh: MESH_FIELDS }))).toBe(false);
+    expect(store.meshNodes).toEqual([]);
+  });
+
+  it('still routes migrated per-family worker records (nostrmigration keeps t=worker-state)', () => {
+    const migrated = signed({
+      created_at: 100,
+      tags: [['d', 'worker:migrated:legacy-1'], ['schema', 'bahia.state.worker.v1'], ['domain', 'worker'], ['t', 'worker-state'], ['legacy-kind', '32000']],
+      content: { schema: 'bahia.state.worker.v1', pubkey: WORKER, name: 'migrated-worker', status: 'online', ...MESH_FIELDS }
+    });
+    expect(store.applyFipsMeshEvent(migrated)).toBe(true);
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'migrated-worker', overlayAddress: 'fd00::42' });
   });
 
   it('classifies FIPS mesh health deterministically', () => {

@@ -356,3 +356,26 @@ func parseKindsGoConstants(t *testing.T) map[string]int {
 	require.NotEmpty(t, out, "parsed no constants from %s", path)
 	return out
 }
+
+// Retired worker wire kinds 32000-32003 still migrate onto 30900, and the
+// migrated record carries the family's t topic so #t consumers (web fips-mesh,
+// continuity) see it; the retired numbers equal the CPStateFamily discriminators.
+func TestRetiredWorkerKindsMigrateOntoCPStateTopics(t *testing.T) {
+	for kind, family := range map[int]kinds.CPStateFamily{
+		retiredWorkerStateKind:              kinds.CPStateFamilyWorkerState,
+		retiredWorkerAssignmentStateKind:    kinds.CPStateFamilyWorkerAssignment,
+		retiredWorkerDrainStatusKind:        kinds.CPStateFamilyWorkerDrain,
+		retiredWorkerEligibilityPreviewKind: kinds.CPStateFamilyWorkerEligibility,
+	} {
+		require.Equal(t, family.LegacyKind(), kind)
+		disp, ok := ResolveDisposition(kind, []byte(`[["worker","w1"]]`), `{}`)
+		require.Truef(t, ok, "retired worker kind %d has no disposition", kind)
+		require.Equal(t, CanonicalCASCPState, disp.CanonicalKind)
+		require.Equal(t, kinds.WorkerDomain, disp.Domain)
+		require.NotEmpty(t, disp.Topic)
+		require.Contains(t, disp.Tags("legacy-1"), []string{"t", disp.Topic})
+	}
+	alias, ok := ResolveDisposition(kinds.LegacyWorkerState, []byte(`[["worker","w1"]]`), `{}`)
+	require.True(t, ok)
+	require.Equal(t, kinds.WorkerStateTopic, alias.Topic)
+}

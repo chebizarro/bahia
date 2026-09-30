@@ -38,3 +38,71 @@ const (
 	VirtualizationTagClass      = "lifecycle_class"
 	VirtualizationTagJournal    = "journal"
 )
+
+// Worker cp-state contract (bahia-irsry.9.2): worker records are canonical
+// 30900 cp-state (schema CASControlStateSchema, legacy_kind CPStateFamilyWorker*,
+// deleted) in domain WorkerDomain, and live records and tombstones both carry
+// the family's single-letter "t" topic so REQs scope on #t, not #domain/#schema.
+const (
+	WorkerDomain           = "worker"
+	WorkerStateTopic       = "worker-state"
+	WorkerAssignmentTopic  = "worker-assignment"
+	WorkerDrainTopic       = "worker-drain"
+	WorkerEligibilityTopic = "worker-eligibility"
+	WorkerCleanupTopic     = "worker-cleanup"
+)
+
+// CPStateTopic* are the single-letter "t" topics the projector's
+// controlStateEnvelope stamps on every canonical cp-state record (bahia-irsry.9.3,
+// audit A-27). The value is "<domain>-<entity>" of the record family, the same
+// rule the DNS*Topic values above follow. NIP-01 relays index single-letter
+// tags only, so consumers scope 30900 REQs with #t instead of #domain/#schema.
+// The worker families' topics ("worker-state", "worker-assignment", ...) are
+// declared with the worker contract (bahia-irsry.9.2), not here.
+const (
+	CPStateTopicServiceState             = "service-state"
+	CPStateTopicServiceRegistry          = "service-registry"
+	CPStateTopicEnvironmentRegistry      = "environment-registry"
+	CPStateTopicLLMRoute                 = "llm-route"
+	CPStateTopicLLMState                 = "llm-state"
+	CPStateTopicArtifactRegistry         = "artifact-registry"
+	CPStateTopicDeploymentIntent         = "deployment-intent"
+	CPStateTopicDeploymentRun            = "deployment-run"
+	CPStateTopicBuildRegistry            = "build-registry"
+	CPStateTopicPolicyRegistry           = "policy-registry"
+	CPStateTopicPackageRepository        = "package-repository"
+	CPStateTopicPackageArtifact          = "package-artifact"
+	CPStateTopicPackagePromotion         = "package-promotion"
+	CPStateTopicMLModel                  = "ml-model"
+	CPStateTopicMLModelVersion           = "ml-model-version"
+	CPStateTopicMLDataset                = "ml-dataset"
+	CPStateTopicMLRecipe                 = "ml-recipe"
+	CPStateTopicMLRecipeRun              = "ml-recipe-run"
+	CPStateTopicMLEndpoint               = "ml-endpoint"
+	CPStateTopicMLEndpointState          = "ml-endpoint-state"
+	CPStateTopicMLEvaluation             = "ml-evaluation"
+	CPStateTopicMLProvenance             = "ml-provenance"
+	CPStateTopicMLRuntimeCapability      = "ml-runtime-capability"
+	CPStateTopicBackupDefinition         = "backup-definition"
+	CPStateTopicBackupPolicy             = "backup-policy"
+	CPStateTopicBackupRepository         = "backup-repository"
+	CPStateTopicBackupRetention          = "backup-retention"
+	CPStateTopicBackupRecipe             = "backup-recipe"
+	CPStateTopicBackupRun                = "backup-run"
+	CPStateTopicBackupVerification       = "backup-verification"
+	CPStateTopicBackupRestore            = "backup-restore"
+	CPStateTopicBackupRuntimeObservation = "backup-runtime"
+)
+
+// CPAudit* describe the projector's append-only audit facts: regular kind
+// 4903 events (never addressable, no d tag) correlated to the entity's state
+// coordinate and deduplicated per source fact (audit C-16).
+const (
+	// CPAuditTopic is the single-letter "t" topic on every projected audit fact.
+	CPAuditTopic = "cp-audit"
+	// CPAuditTagState carries the audited entity's cp-state coordinate.
+	CPAuditTagState = "state"
+	// CPAuditTagFact is the deterministic source-fact id: republishing the same
+	// fact reuses it, so publishers and consumers can drop the duplicate.
+	CPAuditTagFact = "fact"
+)

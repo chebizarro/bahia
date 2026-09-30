@@ -48,8 +48,11 @@ const (
 // the durable outbox publisher. Its error contract is the outbox's: nil means
 // the publish quorum accepted the event; an error wrapping
 // nostrutil.ErrPublishIncomplete means the signed event is queued and the
-// outbox keeps retrying each relay; any other error means the event was never
-// queued (for example it could not be signed or recorded).
+// outbox keeps retrying each relay; an error wrapping
+// nostrutil.ErrPublishAbandoned means the outbox gave up on the signed event
+// (its row is failed); any other error means the event was never queued (for
+// example it could not be signed or recorded). An event reported as queued
+// that the outbox abandons later reaches HandlePublishAbandoned.
 type SecurityVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 }
@@ -1064,6 +1067,14 @@ func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.Sec
 			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPending, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
 		}
 		return nil
+	case nostrutil.IsPublishAbandoned(err):
+		// The outbox gave up on this signed event (every relay rejected it
+		// permanently): terminal, and recorded under its event ID.
+		err = fmt.Errorf("publishing %s event: %w", observableType, err)
+		if s.repo != nil {
+			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedTerminal, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
+		}
+		return err
 	case err != nil:
 		err = fmt.Errorf("publishing %s event: %w", observableType, err)
 		if s.repo != nil {
@@ -1083,6 +1094,36 @@ func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.Sec
 		_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPublished, nostrutil.EventIDHex(ev), "", nil, &publishedAt)
 	}
 	return nil
+}
+
+// securityAbandonWriteTimeout bounds the publication update made from the
+// outbox's abandonment hook, which runs on the publisher's delivery path.
+const securityAbandonWriteTimeout = 10 * time.Second
+
+// HandlePublishAbandoned is registered with the outbox publisher's
+// OnDeliveryAbandoned hook. It covers Security observables that
+// publishObservable recorded as queued (pending under their event ID) and
+// that the outbox later abandoned: those publications, and their scan runs'
+// publish state, become failed_terminal instead of staying pending forever.
+// Events of other producers (no domain=security tag) are ignored.
+func (s *SecurityScanner) HandlePublishAbandoned(ev nostr.Event) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	if tag := ev.Tags.Find("domain"); len(tag) < 2 || tag[1] != "security" {
+		return
+	}
+	eventID := ev.ID.Hex()
+	ctx, cancel := context.WithTimeout(context.Background(), securityAbandonWriteTimeout)
+	defer cancel()
+	changed, err := s.repo.AbandonSecurityPublication(ctx, eventID, "publishing: "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in nostr_events.last_publish_error")
+	if err != nil {
+		s.logger.Warn("failed to record abandoned security publication", zap.String("event_id", eventID), zap.Error(err))
+		return
+	}
+	if changed > 0 {
+		s.logger.Warn("security publication abandoned by the publish outbox", zap.String("event_id", eventID), zap.Int64("publications", changed))
+	}
 }
 
 func acceptedResponse(runID uuid.UUID, target *domain.SecurityTarget, duplicate, skipped bool) *SecurityScanAccepted {

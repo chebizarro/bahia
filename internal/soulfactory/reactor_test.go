@@ -61,7 +61,7 @@ func TestReactorBackfillsRequestAndActionBacklogBeforeLiveUpdates(t *testing.T) 
 	for _, filter := range filters {
 		wantLimit := 1000
 		if slices.Contains(filter.Kinds, nostr.Kind(domain.KindRuntimeControlResult)) {
-			wantLimit = 100
+			wantLimit = reactorRuntimeResultLimit
 		}
 		if filter.Limit != wantLimit {
 			t.Fatalf("filter limit = %d, want %d", filter.Limit, wantLimit)

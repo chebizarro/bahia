@@ -3,7 +3,8 @@ import { CP_STATE_SCHEMA_BY_LEGACY_KIND, controlStateSchema } from '../../src/li
 import { DNS_STATE_SCHEMA_BY_LEGACY_KIND } from '../../src/lib/nostr/kinds.gen.js';
 
 // legacy_kind values are the internal/kinds catalog kinds the producers stamp
-// (projector controlStateEnvelope, controlplane worker-state publisher).
+// (projector controlStateEnvelope, controlplane worker-state and worker-cleanup
+// publishers).
 const EXPECTED_ROUTES = {
   31961: 'bahia.state.service.v1',
   31962: 'bahia.registry.service.v1',
@@ -45,7 +46,8 @@ const EXPECTED_ROUTES = {
   32000: 'bahia.state.worker.v1',
   32001: 'bahia.state.worker-assignment.v1',
   32002: 'bahia.state.worker-drain.v1',
-  32003: 'bahia.state.worker-eligibility.v1'
+  32003: 'bahia.state.worker-eligibility.v1',
+  32004: 'bahia.state.worker-cleanup.v1'
 };
 
 function cpState(tags) {

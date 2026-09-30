@@ -214,14 +214,14 @@ func TestConcordInboxKeepsLatestRelayList(t *testing.T) {
 		t.Fatalf("re-sign older list: %v", err)
 	}
 
-	if kept := laterConcordEvent(older, newer); kept != newer {
-		t.Fatal("laterConcordEvent kept the stale relay list")
+	if kept := newerRelayEvent(older, newer); kept != newer {
+		t.Fatal("newerRelayEvent kept the stale relay list")
 	}
-	if kept := laterConcordEvent(newer, older); kept != newer {
-		t.Fatal("laterConcordEvent replaced a newer list with a stale one")
+	if kept := newerRelayEvent(newer, older); kept != newer {
+		t.Fatal("newerRelayEvent replaced a newer list with a stale one")
 	}
-	if kept := laterConcordEvent(nil, older); kept != older {
-		t.Fatal("laterConcordEvent dropped the only candidate")
+	if kept := newerRelayEvent(nil, older); kept != older {
+		t.Fatal("newerRelayEvent dropped the only candidate")
 	}
 }
 
@@ -310,7 +310,7 @@ func signedConcordEvent(t *testing.T, author fakeSigner, kind nostr.Kind, tags n
 func TestConcordReplaceableTieKeepsLowestID(t *testing.T) {
 	low := &nostr.Event{ID: nostr.ID{1}, CreatedAt: 100}
 	high := &nostr.Event{ID: nostr.ID{255}, CreatedAt: 100}
-	if laterConcordEvent(low, high) != low || laterConcordEvent(high, low) != low {
+	if newerRelayEvent(low, high) != low || newerRelayEvent(high, low) != low {
 		t.Fatal("same-second relay list must keep lowest ID")
 	}
 }

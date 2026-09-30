@@ -125,7 +125,11 @@ func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	runDone := make(chan error, 1)
+	discovered := signalRunnerDiscovery(publisher)
 	go func() { runDone <- publisher.Run(runCtx) }()
+	// Only an active runner keeps a partially delivered event in memory, so
+	// publish once it is running rather than racing its start.
+	receive(t, discovered, "first outbox discovery pass")
 	defer func() {
 		cancel()
 		<-runDone

@@ -738,6 +738,34 @@ func (r *PgSecurityRepository) UpdateSecurityPublicationState(ctx context.Contex
 	return nil
 }
 
+// AbandonSecurityPublication implements SecurityRepository. Abandonment is
+// rare (it also raises bahia_nostr_outbox_failed), so matching on event_id
+// without a dedicated index is acceptable.
+func (r *PgSecurityRepository) AbandonSecurityPublication(ctx context.Context, eventID, reason string) (int64, error) {
+	if strings.TrimSpace(eventID) == "" {
+		return 0, nil
+	}
+	var changed int64
+	err := r.pool.QueryRow(ctx, `
+		WITH failed AS (
+			UPDATE security_observable_publications
+			SET publish_state = $2, last_error = $3, next_retry_at = NULL, updated_at = $4
+			WHERE event_id = $1 AND publish_state = $5
+			RETURNING run_id
+		), runs AS (
+			UPDATE security_scan_runs
+			SET publish_state = $2, updated_at = $4
+			WHERE id IN (SELECT run_id FROM failed WHERE run_id IS NOT NULL) AND publish_state <> $2
+			RETURNING id
+		)
+		SELECT count(*) FROM failed
+	`, eventID, domain.SecurityPublicationFailedTerminal, nilIfEmpty(reason), time.Now().UTC(), domain.SecurityPublicationPending).Scan(&changed)
+	if err != nil {
+		return 0, fmt.Errorf("abandoning security publication %s: %w", eventID, err)
+	}
+	return changed, nil
+}
+
 func (r *PgSecurityRepository) updateBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) error {
 	metadataJSON, violatedJSON, osvIDsJSON, err := marshalBreachJSON(breach)
 	if err != nil {

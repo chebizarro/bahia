@@ -12,11 +12,12 @@ import (
 const (
 	// DefaultRuntimeControlResultTimeout bounds how long a runtime adapter waits
 	// for the correlated kind:38386 result after its control request was
-	// accepted. RuntimeAdapterConfig.ResultTimeout overrides it.
+	// accepted. RuntimeAdapterConfig.ResultTimeout (soul_factory.runtime_result_timeout)
+	// overrides it.
 	DefaultRuntimeControlResultTimeout = 5 * time.Minute
 	// DefaultSoulFactoryReplyTimeout bounds how long NostrClient waits for a
 	// provisioning or soul action terminal result. NostrClient.WithReplyTimeout
-	// overrides it.
+	// (soul_factory.reply_timeout; the CLI's --reply-timeout) overrides it.
 	DefaultSoulFactoryReplyTimeout = 15 * time.Minute
 )
 
@@ -33,8 +34,9 @@ var ErrNoTerminalResult = errors.New("no terminal result observed")
 //     stored-event backfill returns the result if it has been published.
 //   - Runtime provisioning: Reactor.Run subscribes to kind:38386 results and
 //     handleLateRuntimeResult projects a late provisioning success.
-//   - Runtime lifecycle and fleet config reloads: no late-result projection
-//     exists yet; the next action or fleet revision re-drives the runtime.
+//   - Runtime lifecycle actions and fleet config reloads: the operation is
+//     parked as awaiting_terminal, never rolled back on the timeout alone, and
+//     the late result is reconciled through runtimeResultWaiters.
 type NoTerminalResultError struct {
 	// RequestID is the published request's event id.
 	RequestID string

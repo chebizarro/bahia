@@ -136,7 +136,13 @@ func workerApplier(repo repository.WorkerRepository) FamilyApplier {
 		if boolField(value, "Tombstone") {
 			return repo.UpdateStatus(ctx, worker.PubKey, domain.WorkerStatusOffline)
 		}
-		return repo.Upsert(ctx, worker)
+		if err := repo.Upsert(ctx, worker); err != nil && !errors.Is(err, repository.ErrStaleWrite) {
+			return err
+		}
+		// ErrStaleWrite: the local row already has a newer advertisement than
+		// the relay copy, which is the expected case when replaying state this
+		// daemon published itself.
+		return nil
 	}
 }
 

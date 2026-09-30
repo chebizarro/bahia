@@ -16,12 +16,18 @@ tests:
         values: '1x10'
       - series: 'bahia_nostr_relays_unhealthy_total'
         values: '0x10'
+      - series: 'bahia_nostr_outbox_failed'
+        values: '-1 -1 0 0 2 2 2 2 2 2'
       - series: 'bahia_audit_4903_anomalies_total'
         values: '0 0 0 0 0 1 1 1 1 1'
       - series: 'bahia_authorization_rejections_total{reason="policy"}'
         values: '0 0 0 0 0 12 12 12 12 12'
       - series: 'bahia_tier_rejections_total{tier="3"}'
         values: '0 0 0 0 0 6 6 6 6 6'
+      - series: 'bahia_soulfactory_relay_read_partial{caller="reactor.get_soul",policy="complete",outcome="rejected"}'
+        values: '0+1x25'
+      - series: 'bahia_soulfactory_relay_read_partial{caller="concord.inbox",policy="latest_quorum",outcome="accepted"}'
+        values: '0+1x25'
       - series: 'bahia_openclaw_provisioning_stage_age_seconds{instance="canary-a",build="build-a",request_id="request-a",run_id="run-a",agent_id="agent-a",stage="signer_enrolled"}'
         values: '1000x10'
       - series: 'bahia_openclaw_provisioning_signet_unauthorized_responses{instance="canary-a",build="build-a",request_id="request-a",run_id="run-a",agent_id="agent-a",stage="rolled_back"}'
@@ -92,6 +98,16 @@ tests:
             exp_annotations:
               summary: "Bahia relay connectivity is degraded"
               runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
+      - eval_time: 3m
+        alertname: BahiaNostrOutboxFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: BahiaNostrOutboxFailed
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "2 Nostr outbox event(s) were abandoned by every write relay"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahianostroutboxfailed"
       - eval_time: 6m
         alertname: BahiaAudit4903Anomaly
         exp_alerts:
@@ -113,6 +129,13 @@ tests:
             exp_annotations:
               summary: "Bahia dependency-tier rejection rate has spiked"
               runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - eval_time: 21m
+        alertname: BahiaSoulFactoryRelayReadRejected
+        exp_alerts:
+          - exp_labels: {caller: reactor.get_soul, severity: warning}
+            exp_annotations:
+              summary: "SoulFactory fail-closed relay read reactor.get_soul keeps failing on partial relay answers"
+              runbook_url: "/docs/runbooks/ws6-alerts.md#bahiasoulfactoryrelayreadrejected"
       - eval_time: 6m
         alertname: BahiaOpenClawProvisioningStageStuck
         exp_alerts:

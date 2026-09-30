@@ -296,8 +296,8 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 	}
 
 	// Projected read models carry the producer contract: kind 30900 in the
-	// projector's envelope (see seed_state.go), and worker state exactly as
-	// controlplane.WorkerStatePublisher emits it.
+	// projector's envelope (see seed_state.go), and worker state and worker
+	// cleanup execution exactly as the control plane's publishers emit them.
 	seededAt := now.Time()
 	stateSeeds, err := controlStateSeeds(workerPubkey, seededAt)
 	if err != nil {
@@ -315,10 +315,15 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 		return nil, err
 	}
 	events = append(events, workerState)
+	workerCleanup, err := workerCleanupStateEvent(context.Background(), workerPubkey, seededAt, serviceKey)
+	if err != nil {
+		return nil, err
+	}
+	events = append(events, workerCleanup)
 	if err := add(eventSpec{Kind: kindLoomWorkerAdvertisement, Author: workerKey, Tags: nostr.Tags{{"t", "worker"}}, Content: map[string]any{"name": "worker-one", "description": "relay worker", "pubkey": workerPubkey}}); err != nil {
 		return nil, err
 	}
-	if err := add(eventSpec{Kind: kindAudit, Author: serviceKey, Tags: nostr.Tags{{"domain", "controlplane"}, {"schema", "bahia.audit.v1"}, {"type", "service.created"}, {"event_type", "service.created"}, {"d", "svc-1"}, {"service", "svc-1"}}, Content: map[string]any{"schema": "bahia.audit.v1", "type": "service.created", "event_type": "service.created", "entity_id": "svc-1", "data": map[string]any{"name": "Checkout API"}}}); err != nil {
+	if err := add(eventSpec{Kind: kindAudit, Author: serviceKey, Tags: nostr.Tags{{"domain", "controlplane"}, {"schema", "bahia.audit.v1"}, {"type", "service.created"}, {"event_type", "service.created"}, {"t", kinds.CPAuditTopic}, {kinds.CPAuditTagState, "svc-1"}, {"service", "svc-1"}}, Content: map[string]any{"schema": "bahia.audit.v1", "type": "service.created", "event_type": "service.created", "entity_id": "svc-1", "data": map[string]any{"name": "Checkout API"}}}); err != nil {
 		return nil, err
 	}
 	if err := add(eventSpec{Kind: kindNIP38Status, Author: serviceKey, Tags: nostr.Tags{{"domain", "controlplane"}, {"status", "running"}, {"service", "svc-1"}}, Content: map[string]any{"status": "running", "message": "Checkout API running"}}); err != nil {

@@ -259,6 +259,8 @@ func TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags(t *t
 	require.Equal(t, "workerpubkey", continuityTagValue(event.Tags, "worker"))
 	require.Equal(t, "42", continuityTagValue(event.Tags, "sequence"))
 	require.Equal(t, "15000", continuityTagValue(event.Tags, "interval_ms"))
+	require.Equal(t, "1710000045", continuityTagValue(event.Tags, "expiration"), "NIP-40 expiration = created_at + expires_after")
+	require.Empty(t, continuityTagValue(event.Tags, "expires_after_ms"), "the custom TTL tag is replaced by NIP-40 expiration")
 
 	decoded, err := DecodeHeartbeatObservationEvent(&event)
 	require.NoError(t, err)
@@ -336,4 +338,44 @@ func TestRecoveryRequestSerializationUsesRecoveryKind(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.ContinuityModeFull, decoded.TargetProfile)
 	require.Equal(t, "primarypubkey", decoded.TargetWorkerPubKey)
+}
+
+// Consumers take the heartbeat's freshness window from NIP-40 expiration and
+// still read expires_after_ms from producers that predate it.
+func TestHeartbeatObservationDecodeHonoursNIP40Expiration(t *testing.T) {
+	base := func(extra ...gonostr.Tag) gonostr.Event {
+		tags := gonostr.Tags{
+			{"d", "continuity:heartbeat:w"}, {"domain", "continuity"}, {"schema", heartbeatObservationStatusSchema},
+			{"worker", "w"}, {"sequence", "1"}, {"interval_ms", "10000"},
+		}
+		return gonostr.Event{Kind: canonicalKind(KindNIP38Status), CreatedAt: 1710000000, Tags: append(tags, extra...)}
+	}
+
+	nip40 := base(gonostr.Tag{"expiration", "1710000030"})
+	decoded, err := DecodeHeartbeatObservationEvent(&nip40)
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, decoded.ExpiresAfter)
+
+	both := base(gonostr.Tag{"expiration", "1710000030"}, gonostr.Tag{"expires_after_ms", "90000"})
+	decoded, err = DecodeHeartbeatObservationEvent(&both)
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, decoded.ExpiresAfter, "expiration wins over the legacy tag")
+
+	legacy := base(gonostr.Tag{"expires_after_ms", "45000"})
+	decoded, err = DecodeHeartbeatObservationEvent(&legacy)
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, decoded.ExpiresAfter)
+
+	expired := base(gonostr.Tag{"expiration", "1710000000"})
+	_, err = DecodeHeartbeatObservationEvent(&expired)
+	require.Error(t, err, "a heartbeat that expires at publication is never fresh")
+}
+
+// Sub-second TTLs round up so the relay never drops a heartbeat early.
+func TestHeartbeatObservationExpirationRoundsUp(t *testing.T) {
+	event, err := EncodeHeartbeatObservationEvent(domain.HeartbeatObservation{
+		WorkerPubKey: "w", ObservedAt: time.Unix(1710000000, 0).UTC(), Sequence: 1, Interval: time.Second, ExpiresAfter: 1500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1710000002", continuityTagValue(event.Tags, "expiration"))
 }
