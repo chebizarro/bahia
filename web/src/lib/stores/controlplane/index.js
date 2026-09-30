@@ -5,6 +5,7 @@ export {
 } from './connection.svelte.js';
 export {
   applyControlplaneEvent,
+  hydrateCachedControlplane,
   readModelFilters,
   resetEventRouting
 } from './events.svelte.js';
@@ -56,5 +57,6 @@ export {
   mlEndpoints,
   mlEndpointStates,
   loading,
+  flushCollectionRefresh,
   upsertServiceProjection
 } from '../collections/index.svelte.js';

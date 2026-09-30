@@ -2,8 +2,8 @@ import { browser } from '$app/environment';
 import { nostr } from '../../nostr/client.js';
 import { getBootstrapSeed } from '../discovery.svelte.js';
 import { loadSystemInfo } from '../system.svelte.js';
-import { hydrateCachedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
-import { applyControlplaneEvent, readModelFilters, resetEventRouting } from './events.svelte.js';
+import { clearLoadingForPopulatedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
+import { applyControlplaneEvent, hydrateCachedControlplane, readModelFilters, resetEventRouting } from './events.svelte.js';
 import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 
@@ -44,6 +44,9 @@ function subscribeToConnectionState() {
 
 function completeBootstrapIfCurrent(generation) {
   if (generation !== bootstrapSubscriptionGeneration) return;
+  // Flush any batched streamed events so collections are current when the
+  // status flips to live.
+  refreshCollections();
   markBootstrapComplete();
   setAllLoading(false);
 }
@@ -80,7 +83,7 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
   };
 
   liveUnsubscribe = nostr.subscribeWithRecovery(readModelFilters(), {
-    onEvent: (event) => applyControlplaneEvent(event),
+    onEvent: (event) => applyControlplaneEvent(event, { deferRefresh: true }),
     onEose: (relay) => markRelayEose(relay),
     onHealth: (health) => Object.assign(controlplaneConnection, health),
     onClosed: (reason, relay, meta = {}) => {
@@ -127,17 +130,25 @@ export async function bootstrapControlplane({ force = false } = {}) {
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
     setAllLoading(true);
-    const hydratedFromCache = await hydrateCachedCollections();
+
+    // Resolve the trusted service pubkey first so cached canonical events pass
+    // the same author filter as live relay events.
+    const seed = getBootstrapSeed();
+    const relays = Array.from(new Set((seed?.relay_urls || []).map(toWebSocketUrl).filter(Boolean)));
+    controlplaneConnection.relays = relays;
+    controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
+
+    // Render cached state immediately. Hydration replays cached events into
+    // the backing Maps, so relay events merge into it; loading flags stay set
+    // only for collections that are still empty. EOSE only moves the
+    // connection status from syncing to live.
+    const hydratedFromCache = await hydrateCachedControlplane();
     if (hydratedFromCache) {
       controlplaneConnection.lastEventAt = controlplaneConnection.lastEventAt || new Date().toISOString();
     }
+    clearLoadingForPopulatedCollections();
 
     try {
-      const seed = getBootstrapSeed();
-      const relays = Array.from(new Set((seed?.relay_urls || []).map(toWebSocketUrl).filter(Boolean)));
-      controlplaneConnection.relays = relays;
-      controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
-
       if (relays.length === 0) throw new Error('No browser Nostr relays configured by deployment bootstrap');
       if (!controlplaneConnection.servicePubkey) throw new Error('No trusted Bahia service pubkey configured by deployment bootstrap');
 
@@ -154,7 +165,6 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.bootstrapComplete = false;
       controlplaneConnection.status = 'syncing';
       await startStreamingSubscription(connectedRelays, { waitForEose: true });
-      refreshCollections();
       schedulePersistCachedCollections();
       // Optional discovery metadata may arrive now or later. It must never
       // gate socket connection or relay-backed read models.
