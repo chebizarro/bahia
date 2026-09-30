@@ -89,6 +89,12 @@ func (r *PgNostrEventArchiveRepository) EnsureOnlineIndexes(ctx context.Context)
 	if _, err := r.pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_archive_batch_id_fkey`); err != nil {
 		return fmt.Errorf("validating Nostr archive ownership constraint: %w", err)
 	}
+	// Startup migration 000071 adds the publish-state check NOT VALID so it
+	// never scans the table under ACCESS EXCLUSIVE; validation here only takes
+	// SHARE UPDATE EXCLUSIVE and does not block reads or writes.
+	if _, err := r.pool.Exec(ctx, `ALTER TABLE nostr_events VALIDATE CONSTRAINT nostr_events_publish_state_check`); err != nil {
+		return fmt.Errorf("validating Nostr publish state constraint: %w", err)
+	}
 	return nil
 }
 

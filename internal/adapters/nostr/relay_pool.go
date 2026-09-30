@@ -76,6 +76,8 @@ type managedRelay struct {
 	// by mu.
 	reconnectBackoff *Backoff
 	retryAt          time.Time
+	// failedAt is when the most recent dial failed. Guarded by mu.
+	failedAt time.Time
 	// closed is set once the pool has closed this relay for good (retired and
 	// pruned, or pool Close); it is never reconnected afterwards. Guarded by mu.
 	closed bool
@@ -83,10 +85,13 @@ type managedRelay struct {
 
 // RelayReconnectBackoffError is returned for a relay whose recent connect
 // attempts failed while its reconnect backoff is running. It is retryable: the
-// caller should try again after RetryAt.
+// caller should try again after RetryAt. No dial was made for this call;
+// FailedAt identifies the dial failure the caller is being told about, so a
+// caller can tell a fresh failure from one it has already seen.
 type RelayReconnectBackoffError struct {
 	RelayURL string
 	RetryAt  time.Time
+	FailedAt time.Time
 	LastErr  error
 }
 
@@ -418,7 +423,7 @@ func (p *RelayPool) ensureRelayConnected(ctx context.Context, mr *managedRelay, 
 			}
 		}
 		if reconnect && p.now().Before(mr.retryAt) {
-			err := &RelayReconnectBackoffError{RelayURL: mr.url, RetryAt: mr.retryAt, LastErr: mr.lastErr}
+			err := &RelayReconnectBackoffError{RelayURL: mr.url, RetryAt: mr.retryAt, FailedAt: mr.failedAt, LastErr: mr.lastErr}
 			mr.mu.Unlock()
 			return nil, err
 		}
@@ -455,7 +460,8 @@ func (p *RelayPool) finishDial(ctx context.Context, mr *managedRelay, done chan 
 			if mr.reconnectBackoff == nil {
 				mr.reconnectBackoff = p.newReconnectBackoff()
 			}
-			mr.retryAt = p.now().Add(mr.reconnectBackoff.Next())
+			mr.failedAt = p.now()
+			mr.retryAt = mr.failedAt.Add(mr.reconnectBackoff.Next())
 		}
 		mr.mu.Unlock()
 		p.recordRelayConnectionState(mr.url, false)

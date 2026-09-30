@@ -86,6 +86,7 @@ func TestRelayPoolReconnectBackoffIsBoundedAndFailsFast(t *testing.T) {
 		var backoffErr *RelayReconnectBackoffError
 		require.ErrorAs(t, resultFor(t, results, relayB).Error, &backoffErr)
 		require.Equal(t, relayB, backoffErr.RelayURL)
+		require.Equal(t, clock.Now(), backoffErr.FailedAt, "identifies the dial failure being reported")
 	}
 	require.EqualValues(t, 1, dials.Load(), "no dial while the reconnect backoff runs")
 

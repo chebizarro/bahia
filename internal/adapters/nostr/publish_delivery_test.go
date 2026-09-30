@@ -454,3 +454,44 @@ func TestClassifyPublishResult(t *testing.T) {
 		require.Equal(t, tc.want, classifyPublishResult(tc.result), "%+v", tc.result)
 	}
 }
+
+// Rounds that only hit the pool's fail-fast reconnect backoff for a dial
+// failure the event has already counted do not consume the attempt budget and
+// are not recorded; a fresh dial failure does count.
+func TestPublisherFailFastBackoffRoundsDoNotConsumeAttemptBudget(t *testing.T) {
+	ctx := context.Background()
+	outbox := newSignalingOutbox()
+	failedAt := time.Unix(1_800_000_000, 0)
+	backoff := func(at time.Time) PublishResult {
+		// RetryAt in the past keeps the retries immediate in this test.
+		return PublishResult{Error: &RelayReconnectBackoffError{RelayURL: relayB, RetryAt: time.Unix(1, 0), FailedAt: at, LastErr: errors.New("connection refused")}}
+	}
+	relays := newScriptedRelays(map[string][]PublishResult{
+		relayA: {{Accepted: true}},
+		relayB: {
+			backoff(failedAt),                                                                             // inline round: relay A is contacted, counts (1)
+			backoff(failedAt), backoff(failedAt), backoff(failedAt), backoff(failedAt), backoff(failedAt), // same failure: skipped
+			backoff(failedAt.Add(time.Minute)), // a fresh dial failure counts (2)
+			{Accepted: true},                   // counts (3)
+		},
+	})
+	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
+	publisher.maxAttempts = 3
+	startRunner(t, publisher, outbox)
+
+	event := testSignedEvent("fail-fast-budget")
+	_, err := publisher.PublishSignedEventWithResults(ctx, event)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
+	for range 7 {
+		require.Equal(t, []string{relayB}, relays.nextCall(t))
+	}
+	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "relay B accepted within the budget"))
+
+	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
+	require.Empty(t, rec.LastPublishError, "relay B accepted: nothing was given up on")
+	require.Equal(t, 3, rec.PublishAttempts, "only rounds that contacted a relay or saw a fresh dial failure count")
+	relays.requireNoPendingCalls(t)
+}

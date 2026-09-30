@@ -48,6 +48,9 @@ confirmation.
 
 1. `ensure-indexes` creates archive and replay indexes with `CREATE INDEX
    CONCURRENTLY`; it is not part of Bahia startup migration.
+   It also validates the constraints that startup migrations add `NOT VALID`
+   (the archive ownership foreign key from 000062 and the widened
+   `publish_state` check from 000071).
 2. `export` creates a manifest row and claims at most the configured batch size
    using `(received_at,id)` keyset order and `FOR UPDATE SKIP LOCKED`. Pending
    outbox rows are never eligible.
@@ -68,7 +71,8 @@ over any state in which the only copy can be deleted.
 
 Online indexes cover:
 
-- pending outbox `(received_at,id)` (existing and preserved);
+- pending outbox `(received_at,id)` (existing and preserved; publish runners
+  filter `publish_target` on this small partial set rather than indexing it);
 - archive eligibility `(received_at,id)` excluding pending/claimed rows;
 - archive batch membership;
 - recent kind queries `(kind,created_at DESC,id DESC)`;

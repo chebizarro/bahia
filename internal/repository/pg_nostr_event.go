@@ -206,8 +206,9 @@ func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int)
 }
 
 // ListUnpublishedAfter returns pending outbound events for one publish target
-// after the keyset cursor, oldest first. It is served by the partial
-// idx_nostr_events_publish_outbox (publish_target, received_at, id) index.
+// after the keyset cursor, oldest first. It walks the partial
+// idx_nostr_events_publish_outbox (received_at, id) WHERE pending index and
+// filters publish_target on that small row set; no target index is needed.
 func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
 	if limit <= 0 {
 		limit = 100
