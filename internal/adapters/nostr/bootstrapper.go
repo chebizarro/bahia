@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +54,11 @@ type BootstrapConfig struct {
 	PageLimit           int
 	ProjectionAuthors   []string
 	ControlPlaneAuthors []string
+	// SelfAuthors are the daemon's own pubkeys: their events never advance
+	// a live group's resume cursor (B-15).
+	SelfAuthors []string
+	// Resume sets the overlap and fresh-cursor lookback of live groups.
+	Resume InboundSyncConfig
 }
 
 type BootstrapCacheApplier interface {
@@ -64,14 +71,17 @@ type BootstrapStatusPublisher interface {
 }
 
 type Bootstrapper struct {
-	pool          *RelayPool
-	catalog       *KindCatalog
-	cursorPlanner *ReplayCursorPlanner
-	cache         BootstrapCacheApplier
-	logger        *zap.Logger
-	mu            sync.RWMutex
-	progress      BootstrapProgress
-	config        BootstrapConfig
+	pool    *RelayPool
+	catalog *KindCatalog
+	// cursors holds the per-(relay, filter) resume cursors of live groups; nil
+	// replays every live group from its lookback window.
+	cursors  *localstore.Store
+	self     map[gonostr.PubKey]struct{}
+	cache    BootstrapCacheApplier
+	logger   *zap.Logger
+	mu       sync.RWMutex
+	progress BootstrapProgress
+	config   BootstrapConfig
 }
 
 type bootstrapEventDecodeError struct {
@@ -99,7 +109,9 @@ var bootstrapSubscribeAllWithEOSE = func(pool *RelayPool, ctx context.Context, f
 	return pool.SubscribeAllWithEOSE(ctx, filters)
 }
 
-func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursorPlanner *ReplayCursorPlanner, cache BootstrapCacheApplier, logger *zap.Logger, config BootstrapConfig) *Bootstrapper {
+// NewBootstrapper creates a bootstrapper. cursors (optional) is the local event
+// store keeping live groups' per-relay resume cursors.
+func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursors *localstore.Store, cache BootstrapCacheApplier, logger *zap.Logger, config BootstrapConfig) *Bootstrapper {
 	if catalog == nil {
 		catalog = NewKindCatalog()
 	}
@@ -124,14 +136,22 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursorPlanner *Repla
 	if config.RequestedTier > 3 {
 		config.RequestedTier = 3
 	}
+	config.Resume = config.Resume.normalized()
+	self := make(map[gonostr.PubKey]struct{}, len(config.SelfAuthors))
+	if converted, err := filterAuthorsFromHex(config.SelfAuthors); err == nil {
+		for _, pubkey := range converted {
+			self[pubkey] = struct{}{}
+		}
+	}
 
 	return &Bootstrapper{
-		pool:          pool,
-		catalog:       catalog,
-		cursorPlanner: cursorPlanner,
-		cache:         cache,
-		logger:        logger.Named("bootstrapper"),
-		config:        config,
+		pool:    pool,
+		catalog: catalog,
+		cursors: cursors,
+		self:    self,
+		cache:   cache,
+		logger:  logger.Named("bootstrapper"),
+		config:  config,
 		progress: BootstrapProgress{
 			Phase:         BootstrapPhaseInit,
 			RequestedTier: config.RequestedTier,
@@ -214,13 +234,13 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if filterErr != nil {
 			return b.failAttempt(group.Name, filterErr)
 		}
-		ok, applied, err := b.runGroup(ctx, group, filter, b.config.SnapshotTimeout)
-		decodedEvents += applied
+		synced, err := b.runGroup(ctx, group, filter, b.config.SnapshotTimeout)
+		decodedEvents += synced.applied
 		if err != nil {
 			b.recordGroupFailure(group.Name, err)
 			b.logger.Warn("bootstrap snapshot group failed", zap.String("group", group.Name), zap.Error(err))
 		}
-		if ok {
+		if synced.complete {
 			completed[group.Name] = true
 			b.incrementGroupsComplete()
 		}
@@ -231,17 +251,25 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		if group.Snapshot {
 			continue
 		}
-		filter, filterErr := b.liveFilter(ctx, group, startedAt)
+		filters, filterErr := b.liveFilters(group, startedAt)
 		if filterErr != nil {
 			return b.failAttempt(group.Name, filterErr)
 		}
-		ok, applied, err := b.runGroup(ctx, group, filter, b.config.CatchupTimeout)
-		decodedEvents += applied
-		if err != nil {
-			b.recordGroupFailure(group.Name, err)
-			b.logger.Warn("bootstrap live catch-up group failed", zap.String("group", group.Name), zap.Error(err))
+		groupComplete := true
+		for _, live := range filters {
+			synced, err := b.runGroup(ctx, group, live.req, b.config.CatchupTimeout)
+			decodedEvents += synced.applied
+			if err != nil {
+				b.recordGroupFailure(group.Name, err)
+				b.logger.Warn("bootstrap live catch-up group failed", zap.String("group", group.Name), zap.Error(err))
+			}
+			if !synced.complete {
+				groupComplete = false
+				continue
+			}
+			b.commitLiveCursors(live, synced)
 		}
-		if ok {
+		if groupComplete {
 			completed[group.Name] = true
 			b.incrementGroupsComplete()
 		}
@@ -306,26 +334,52 @@ func (b *Bootstrapper) requiredGroupsAtOrBelowRequestedTier() []ReplayGroup {
 	return b.catalog.RequiredGroupsForTier(b.config.RequestedTier)
 }
 
+// groupSync is the outcome of replaying one filter of a group.
+type groupSync struct {
+	// complete: every page reached a terminal state with at least one EOSE.
+	complete bool
+	// applied counts the events applied to the cache.
+	applied int
+	// eoseRelays are the relays that sent EOSE for every page.
+	eoseRelays map[string]struct{}
+	// newest is the newest created_at, clamped to the local clock, among the
+	// delivered events not authored by the daemon itself.
+	newest gonostr.Timestamp
+}
+
 // runGroup replays one group to completion, paging backwards with `until`
-// whenever a page comes back full. The returned count is events applied.
-func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, base gonostr.Filter, timeout time.Duration) (bool, int, error) {
+// whenever a page comes back full.
+func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, base gonostr.Filter, timeout time.Duration) (groupSync, error) {
 	limit := b.config.PageLimit
 	if limit <= 0 {
 		limit = defaultBootstrapPageLimit
 	}
 	applied := make(map[string]struct{})
+	var synced groupSync
 	until := base.Until
 	for page := 1; ; page++ {
 		filter := base
 		filter.Limit = limit
 		filter.Until = until
 		result, err := b.runPage(ctx, group, filter, timeout, applied)
+		synced.applied = len(applied)
 		if err != nil {
-			return false, len(applied), err
+			return synced, err
 		}
+		if page == 1 {
+			synced.eoseRelays = result.eoseRelays
+		} else {
+			for relayURL := range synced.eoseRelays {
+				if _, ok := result.eoseRelays[relayURL]; !ok {
+					delete(synced.eoseRelays, relayURL)
+				}
+			}
+		}
+		synced.newest = max(synced.newest, result.newest)
 		if len(result.createdAt) < limit {
 			b.clearGroupProgress()
-			return true, len(applied), nil
+			synced.complete = true
+			return synced, nil
 		}
 		// Each relay returns at most `limit` of its newest matching events,
 		// so any relay that filled its page has its oldest returned event at
@@ -334,7 +388,7 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, base gon
 		// already applied are deduplicated by ID.
 		next := result.nthNewest(limit)
 		if until != 0 && next >= until {
-			return false, len(applied), fmt.Errorf("bootstrap group %q page %d: at least %d events share created_at %d; cannot page past them with until", group.Name, page, limit, next)
+			return synced, fmt.Errorf("bootstrap group %q page %d: at least %d events share created_at %d; cannot page past them with until", group.Name, page, limit, next)
 		}
 		b.logger.Debug("bootstrap group page full; requesting older page",
 			zap.String("group", group.Name),
@@ -350,6 +404,11 @@ type bootstrapPageResult struct {
 	// including events that were later rejected, because every delivered
 	// event counts against the relay's limit.
 	createdAt []gonostr.Timestamp
+	// eoseRelays are the relays that sent a real EOSE for the page.
+	eoseRelays map[string]struct{}
+	// newest is the newest clamped created_at among delivered events that
+	// the daemon did not author.
+	newest gonostr.Timestamp
 }
 
 // nthNewest returns the created_at of the n-th newest delivered event.
@@ -366,7 +425,7 @@ func (r bootstrapPageResult) nthNewest(n int) gonostr.Timestamp {
 // never completes the page on behalf of a relay that is still sending
 // stored events. At least one relay must send a real EOSE.
 func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter gonostr.Filter, timeout time.Duration, applied map[string]struct{}) (bootstrapPageResult, error) {
-	var result bootstrapPageResult
+	result := bootstrapPageResult{eoseRelays: make(map[string]struct{})}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -386,7 +445,7 @@ func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter go
 		allowedAuthors[author] = struct{}{}
 	}
 	delivered := make(map[string]struct{})
-	eoseRelays := make(map[string]struct{})
+	eoseRelays := result.eoseRelays
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -405,6 +464,9 @@ func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter go
 		}
 		delivered[id] = struct{}{}
 		result.createdAt = append(result.createdAt, event.CreatedAt)
+		if _, own := b.self[event.PubKey]; !own {
+			result.newest = max(result.newest, clampToClock(event.CreatedAt, time.Now()))
+		}
 		if _, done := applied[id]; done {
 			return nil
 		}
@@ -606,20 +668,99 @@ func (b *Bootstrapper) snapshotFilter(group ReplayGroup, startedAt time.Time) (g
 	return b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Until: until})
 }
 
-func (b *Bootstrapper) liveFilter(ctx context.Context, group ReplayGroup, startedAt time.Time) (gonostr.Filter, error) {
-	since := b.cursorSince(ctx, group.Kinds)
-	if since == nil {
-		fallback := gonostr.Timestamp(startedAt.Unix())
-		since = &fallback
-	}
-	return b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds), Since: *since})
+// liveReplayFilter is one REQ filter of a live group together with the
+// cursor it resumes.
+type liveReplayFilter struct {
+	inboundFilter
+	req gonostr.Filter
 }
 
-func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Timestamp {
-	if b == nil || b.cursorPlanner == nil {
-		return nil
+// liveFilters returns a live group's REQ filters. Replaceable and addressable
+// kinds are replayed in full: they are the state, and the relay keeps only the
+// latest version per coordinate (C-3). Regular kinds resume from the oldest
+// per-relay cursor less the overlap, or from the lookback window when a relay
+// has no cursor yet; never from "now".
+func (b *Bootstrapper) liveFilters(group ReplayGroup, startedAt time.Time) ([]liveReplayFilter, error) {
+	scoped, err := b.scopedFilter(group, gonostr.Filter{Kinds: filterKindsFromInts(group.Kinds)})
+	if err != nil {
+		return nil, err
 	}
-	return b.cursorPlanner.ComputeSince(ctx, kinds)
+	var out []liveReplayFilter
+	for _, filter := range splitInboundFilter(scoped) {
+		req := filter.filter
+		if !filter.persistent {
+			req.Since = b.resumeSince(filter.hash, startedAt)
+		}
+		out = append(out, liveReplayFilter{inboundFilter: filter, req: req})
+	}
+	return out, nil
+}
+
+// resumeSince is the oldest resume point any relay in the pool needs for the
+// filter: one REQ goes to every relay, so it must cover the relay that is
+// furthest behind.
+func (b *Bootstrapper) resumeSince(hash string, startedAt time.Time) gonostr.Timestamp {
+	var relays []string
+	if b.pool != nil {
+		relays = b.pool.URLs()
+	}
+	if b.cursors == nil || len(relays) == 0 {
+		return b.config.Resume.resumeSince(0, startedAt)
+	}
+	since := gonostr.Timestamp(-1)
+	for _, relayURL := range relays {
+		cursor, err := b.cursors.Cursor(relayURL, hash)
+		if err != nil {
+			b.logger.Warn("read live group cursor failed", zap.String("relay", relayURL), zap.Error(err))
+			cursor = 0
+		}
+		relaySince := b.config.Resume.resumeSince(cursor, startedAt)
+		if since < 0 || relaySince < since {
+			since = relaySince
+		}
+	}
+	return since
+}
+
+// commitLiveCursors advances the cursor of every relay that sent EOSE for
+// every page of a regular-kind live filter. A relay that stayed down or
+// CLOSED keeps its old cursor, so the next attempt catches it up.
+func (b *Bootstrapper) commitLiveCursors(live liveReplayFilter, synced groupSync) {
+	if b.cursors == nil || live.persistent {
+		return
+	}
+	to := clampToClock(max(synced.newest, live.req.Since), time.Now())
+	for relayURL := range synced.eoseRelays {
+		if err := b.cursors.AdvanceCursor(relayURL, live.hash, to); err != nil {
+			b.logger.Warn("persist live group cursor failed", zap.String("relay", relayURL), zap.Error(err))
+		}
+	}
+}
+
+// ApplyDeletion applies a NIP-09 deletion request received after bootstrap
+// (the subscriber's live and reconnect sync) to the projection cache, exactly
+// as the deletion replay group does during bootstrap. Requests of another
+// kind, or from authors outside that group's trusted scope, are ignored. It is
+// idempotent, so it can observe redeliveries.
+func (b *Bootstrapper) ApplyDeletion(ctx context.Context, ev *gonostr.Event) {
+	if b == nil || b.cache == nil || ev == nil || ev.Kind != gonostr.KindDeletion {
+		return
+	}
+	for _, group := range b.catalog.Groups {
+		if !slices.Contains(group.Kinds, int(gonostr.KindDeletion)) {
+			continue
+		}
+		scope, err := b.scopedFilter(group, gonostr.Filter{})
+		if err != nil || (len(scope.Authors) > 0 && !slices.Contains(scope.Authors, ev.PubKey)) {
+			b.logger.Debug("deletion request outside the trusted scope ignored",
+				zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", ev.PubKey.Hex()))
+			return
+		}
+		if err := b.decodeAndApply(ctx, group, ev); err != nil {
+			b.logger.Warn("apply live deletion request failed", zap.String("event_id", eventIDHex(ev)), zap.Error(err))
+		}
+		return
+	}
 }
 
 // scopedFilter applies the group's author scope. Scoped groups with no

@@ -492,6 +492,10 @@ func NewKindCatalog() *KindCatalog {
 		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
 		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
 		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
+		// NIP-09 deletion requests from the trusted control-plane authors,
+		// replayed in full after every other group so they reach the cache
+		// after the events they delete (bahia-irsry.10.1).
+		{Name: "deletion_live", Kinds: []int{int(gonostr.KindDeletion)}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 	}
 
 	catalog := &KindCatalog{
@@ -1235,6 +1239,8 @@ func noopProjectionFamily(group string) ProjectionFamily {
 	case strings.HasPrefix(group, "status"):
 		return FamilyControlPlane
 	case strings.HasPrefix(group, "audit"):
+		return FamilyControlPlane
+	case strings.HasPrefix(group, "deletion"):
 		return FamilyControlPlane
 	default:
 		return ProjectionFamily("")

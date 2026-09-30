@@ -26,7 +26,7 @@ func TestGroupsForTierReturnsGroupsAtOrBelowTier(t *testing.T) {
 	catalog := NewKindCatalog()
 	groups := catalog.GroupsForTier(1)
 	got := groupNames(groups)
-	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live"}
+	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live", "deletion_live"}
 	assertStringSetEqual(t, got, want)
 	for _, group := range groups {
 		if group.Tier > 1 {
@@ -98,7 +98,7 @@ func TestAllKindsHaveImplementedDecoders(t *testing.T) {
 func TestRequiredGroupsForTierFiltersByTierAndRequired(t *testing.T) {
 	catalog := NewKindCatalog()
 	got := groupNames(catalog.RequiredGroupsForTier(2))
-	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live"}
+	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live", "deletion_live"}
 	assertStringSetEqual(t, got, want)
 	for _, group := range catalog.RequiredGroupsForTier(2) {
 		if !group.Required {

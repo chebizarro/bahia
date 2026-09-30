@@ -3,11 +3,11 @@ package nostr
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -62,26 +62,46 @@ type IngestionObserver interface {
 	ObserveRelayClosed(relayURL, reason string)
 }
 
-// Subscriber connects to Nostr relays and persists inbound events
-// to the nostr_events audit table. It implements app.BackgroundRunner.
+// Subscriber keeps the daemon's inbound subscriptions in sync with every relay
+// in its pool (bahia-irsry.10.1). It implements app.BackgroundRunner.
+//
+// Each relay is synced independently, so a relay that is down or behind never
+// holds back, or is hidden by, the others (C-23):
+//   - catch-up: each replaceable/addressable filter is reconciled in full with
+//     NIP-77, falling back to paged REQs when the relay refuses (NEG-ERR) or
+//     does not speak NIP-77; each regular-kind filter is paged from that
+//     relay's cursor less the overlap (from a lookback window on a fresh
+//     node, never from "now", C-3), backwards with `until` whenever a page
+//     comes back full, so a large gap is never truncated (C-1);
+//   - live: one REQ per filter from the catch-up start less the overlap.
+//
+// A dropped relay is caught up again the same way on reconnect. Events from all
+// relays go through one consumer, which deduplicates them by id against the
+// local event store so replay after a restart does not depend on Postgres
+// (C-14), and which keeps the per-(relay, filter) cursors (see
+// replay_cursor.go).
 type Subscriber struct {
-	pool                   *RelayPool
+	pool *RelayPool
+	// eventRepo is the optional nostr_events audit table. When set, an event
+	// must also be newly recorded there before handlers run.
 	eventRepo              repository.NostrEventRepository
+	store                  *localstore.Store
 	kinds                  []int
 	handlers               []EventHandler
 	observers              []EventHandler
 	logger                 *zap.Logger
-	dedup                  *EventDeduplicator
-	backfillLimit          int // max events to fetch on catch-up (0 = no limit)
 	authorizedAuthorScopes AuthorizedAuthorScopes
+	deletionAuthors        []string
+	self                   map[nostr.PubKey]struct{}
+	sync                   InboundSyncConfig
 	now                    func() time.Time
 	ingestionObservers     []IngestionObserver
+	newRelayBackoff        func() *Backoff
+	// trace, when set by tests, sees every consumed item after it is applied.
+	trace func(inboundItem)
 
-	// lastSeenByKind tracks newest created_at values processed in this process.
-	lastSeenMu     sync.Mutex
-	lastSeenByKind map[int]int64
-
-	// caughtUp indicates whether EOSE has been received (caught up with stored events).
+	// caughtUp is set once every relay has either finished its first
+	// catch-up or failed its first attempt, and at least one finished.
 	caughtUp atomic.Bool
 }
 
@@ -106,17 +126,16 @@ func WithHandler(h EventHandler) SubscriberOption {
 }
 
 // WithObserver adds an idempotent projection callback invoked for every
-// validated event that is durably persisted, whether this delivery inserted it
-// or it was already recorded.
+// validated event that is durably persisted, whether this delivery stored it
+// or it was already held.
 //
-// Handlers registered with WithHandler run only for newly persisted events so
-// that side effects never repeat. That gate also hides Bahia's own
-// publications: the publisher persists each signed event before its first relay
-// attempt, so the relay echo always arrives as an already-persisted duplicate.
-// Observers exist for read-side projections such as fleet-health telemetry that
-// must see those self-published canonical observables. An observer must be
-// idempotent under redelivery, for example by keeping only the latest event per
-// replaceable coordinate.
+// Handlers registered with WithHandler run only for events that are new to the
+// local store (and, when an audit repository is configured, newly recorded
+// there), and never for the daemon's own events (WithSelfAuthors), so side
+// effects never repeat. Observers exist for read-side projections such as
+// fleet-health telemetry that must see those self-published canonical
+// observables. An observer must be idempotent under redelivery, for example by
+// keeping only the latest event per replaceable coordinate.
 func WithObserver(h EventHandler) SubscriberOption {
 	return func(s *Subscriber) {
 		if h != nil {
@@ -134,16 +153,37 @@ func WithIngestionObserver(observer IngestionObserver) SubscriberOption {
 	}
 }
 
-// WithDeduplicator sets a custom deduplicator. If not set, a default one is created.
-func WithDeduplicator(d *EventDeduplicator) SubscriberOption {
-	return func(s *Subscriber) { s.dedup = d }
+// WithLocalStore sets the local event store that deduplicates inbound events
+// and keeps their resume cursors. Run requires one.
+func WithLocalStore(store *localstore.Store) SubscriberOption {
+	return func(s *Subscriber) { s.store = store }
 }
 
-// WithBackfillLimit sets the maximum number of events to fetch on catch-up.
-// This prevents memory pressure after long disconnections.
-// Default is 1000. Set to 0 for no limit (not recommended).
-func WithBackfillLimit(limit int) SubscriberOption {
-	return func(s *Subscriber) { s.backfillLimit = limit }
+// WithSelfAuthors declares the daemon's own pubkeys. Their events reach
+// observers but never handlers, and never advance an inbound cursor: the
+// daemon's clock and publish timing say nothing about what other authors'
+// events a relay has delivered (B-15).
+func WithSelfAuthors(pubkeys ...string) SubscriberOption {
+	return func(s *Subscriber) {
+		for _, pubkey := range pubkeys {
+			if parsed, err := nostr.PubKeyFromHex(pubkey); err == nil {
+				s.self[parsed] = struct{}{}
+			}
+		}
+	}
+}
+
+// WithDeletionAuthors also subscribes to NIP-09 deletion requests (kind 5)
+// from these trusted authors. Deletions are persistent: they are reconciled in
+// full on every (re)connect, then followed live. Pair it with an observer that
+// applies them, such as Bootstrapper.ApplyDeletion.
+func WithDeletionAuthors(pubkeys []string) SubscriberOption {
+	return func(s *Subscriber) { s.deletionAuthors = cloneStrings(pubkeys) }
+}
+
+// WithInboundSync tunes catch-up (overlap, fresh-cursor lookback, NIP-77).
+func WithInboundSync(cfg InboundSyncConfig) SubscriberOption {
+	return func(s *Subscriber) { s.sync = cfg }
 }
 
 // WithAuthorizedAuthors scopes default Bahia command subscriptions to known operator pubkeys.
@@ -178,173 +218,49 @@ func NewSubscriber(
 	opts ...SubscriberOption,
 ) *Subscriber {
 	s := &Subscriber{
-		pool:           pool,
-		eventRepo:      eventRepo,
-		kinds:          DefaultInboundKinds,
-		logger:         logger.Named("nostr-subscriber"),
-		dedup:          NewEventDeduplicator(10000), // Default: track last 10k events
-		backfillLimit:  1000,                        // Default: limit catch-up to 1000 events
-		now:            func() time.Time { return time.Now().UTC() },
-		lastSeenByKind: make(map[int]int64),
+		pool:            pool,
+		eventRepo:       eventRepo,
+		kinds:           DefaultInboundKinds,
+		logger:          logger.Named("nostr-subscriber"),
+		self:            make(map[nostr.PubKey]struct{}),
+		sync:            DefaultInboundSyncConfig(),
+		now:             func() time.Time { return time.Now().UTC() },
+		newRelayBackoff: DefaultBackoff,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.sync = s.sync.normalized()
 	return s
 }
 
 // Name implements app.BackgroundRunner.
 func (s *Subscriber) Name() string { return "nostr-subscriber" }
 
-// Run implements app.BackgroundRunner. It blocks until ctx is cancelled.
-func (s *Subscriber) Run(ctx context.Context) error {
-	backoff := DefaultBackoff()
-
-	for {
-		err := s.subscribe(ctx, backoff)
-		if ctx.Err() != nil {
-			return nil // clean shutdown
-		}
-
-		delay := backoff.Next()
-		s.logger.Warn("subscription ended, reconnecting with backoff",
-			zap.Error(err),
-			zap.Duration("delay", delay),
-			zap.Int("attempt", backoff.Attempt()),
-		)
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(delay):
-		}
-		s.pool.RecordRelayReREQ()
-	}
-}
-
-// IsCaughtUp returns true if EOSE has been received from all relays.
+// IsCaughtUp reports whether the first catch-up has finished: every relay has
+// either caught up or failed its first attempt, and at least one caught up.
 func (s *Subscriber) IsCaughtUp() bool {
 	return s.caughtUp.Load()
 }
 
-// subscribe opens a subscription to all relays and processes events.
-func (s *Subscriber) subscribe(ctx context.Context, backoff *Backoff) error {
-	// Reset caught-up state on new subscription.
-	s.caughtUp.Store(false)
-	for _, observer := range s.ingestionObservers {
-		observer.ObserveSubscriptionStart()
-	}
-	defer func() {
-		for _, observer := range s.ingestionObservers {
-			observer.ObserveSubscriptionEnd()
-		}
-	}()
+type ingestOutcome int
 
-	filters, err := s.buildSubscriptionFilters(ctx)
-	if err != nil {
-		return err
-	}
+const (
+	// ingestRejected: invalid or out of scope; never stored.
+	ingestRejected ingestOutcome = iota
+	// ingestFailed: valid, but storing it failed; it will be refetched.
+	ingestFailed
+	// ingestDuplicate: already held (or superseded); handlers did not run.
+	ingestDuplicate
+	// ingestNew: stored for the first time.
+	ingestNew
+)
 
-	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return err
-	}
-
-	s.logger.Info("subscribed to relays",
-		zap.Ints("kinds", s.kinds),
-		zap.Strings("relays", s.pool.URLs()),
-	)
-
-	authAttempted := make(map[string]struct{})
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case eose, ok := <-merged.RelayEOSE:
-			if ok {
-				s.handleRelayEOSE(eose)
-			} else {
-				merged.RelayEOSE = nil
-			}
-		case closed, ok := <-merged.Closed:
-			if ok {
-				if s.handleRelayClosed(ctx, closed, authAttempted) {
-					merged.Close()
-					return nil
-				}
-			} else {
-				merged.Closed = nil
-			}
-		case <-merged.EndOfStoredEvents:
-			s.handleEOSE(backoff)
-			merged.EndOfStoredEvents = nil
-		case ev, ok := <-merged.Events:
-			if !ok {
-				return nil // channel closed
-			}
-			s.handleEvent(ctx, ev)
-		}
-	}
-}
-
-func (s *Subscriber) handleRelayEOSE(eose RelayEOSE) {
-	s.logger.Debug("relay sent EOSE",
-		zap.String("relay", eose.RelayURL),
-		zap.String("subscription_id", eose.SubscriptionID),
-		zap.Ints("kinds", s.kinds),
-	)
-}
-
-func (s *Subscriber) handleEOSE(backoff *Backoff) {
-	if backoff != nil {
-		backoff.Reset()
-	}
-	if !s.caughtUp.Load() {
-		s.caughtUp.Store(true)
-		for _, observer := range s.ingestionObservers {
-			observer.ObserveEOSE()
-		}
-		s.logger.Info("EOSE received: caught up with stored events",
-			zap.Ints("kinds", s.kinds),
-		)
-	}
-}
-
-func (s *Subscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, authAttempted map[string]struct{}) bool {
-	if s.pool != nil {
-		s.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
-	}
-	s.logger.Warn("relay closed subscription",
-		zap.String("relay", closed.RelayURL),
-		zap.String("subscription_id", closed.SubscriptionID),
-		zap.String("reason", closed.Reason),
-	)
-	for _, observer := range s.ingestionObservers {
-		observer.ObserveRelayClosed(closed.RelayURL, closed.Reason)
-	}
-	if !IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		s.pool.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
-		s.logger.Warn("relay subscription auth failed",
-			zap.String("relay", closed.RelayURL),
-			zap.String("reason", closed.Reason),
-			zap.Error(err),
-		)
-		return false
-	}
-	return true
-}
-
-// handleEvent persists the event and invokes registered handlers.
-// Repository insert state gates handlers so overlap backfill and multi-relay
-// duplicates cannot re-run side effects across process restarts.
-func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
+// handleEvent stores a delivered event and dispatches it. The local store is
+// the idempotency gate: handlers run only for an event new to it (and, with an
+// audit repository, newly recorded there too), so neither overlap replay, nor
+// another relay's copy, nor a restart re-runs side effects.
+func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) ingestOutcome {
 	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
 		if ev != nil {
@@ -354,18 +270,76 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 			zap.String("event_id", eventID),
 			zap.Error(err),
 		)
-		return
+		return ingestRejected
 	}
 	if isLegacyProductionRuntimeKind(eventKindInt(ev)) {
 		s.logger.Warn("dropping legacy inbound event after migration boundary",
 			zap.String("event_id", eventIDHex(ev)),
 			zap.Int("kind", eventKindInt(ev)),
 		)
-		return
+		return ingestRejected
 	}
 	ctx = telemetry.ExtractTraceContext(ctx, ev.Tags)
 
-	// Serialize tags.
+	fresh := true
+	if s.store != nil {
+		stored, err := s.store.SaveEvent(*ev)
+		if err != nil {
+			s.logger.Warn("failed to store inbound event locally",
+				zap.String("event_id", eventIDHex(ev)),
+				zap.Int("kind", eventKindInt(ev)),
+				zap.Error(err),
+			)
+			return ingestFailed
+		}
+		fresh = stored
+	}
+	if s.eventRepo != nil {
+		inserted, err := s.eventRepo.Record(ctx, s.auditRecord(ev))
+		if err != nil {
+			s.logger.Warn("failed to persist inbound event",
+				zap.String("event_id", eventIDHex(ev)),
+				zap.Int("kind", eventKindInt(ev)),
+				zap.Error(err),
+			)
+			if fresh && s.store != nil {
+				// Undo the local write so the redelivery is still new and
+				// its handlers run once the audit write succeeds.
+				if err := s.store.DeleteEvent(ev.ID); err != nil {
+					s.logger.Warn("roll back local event failed", zap.String("event_id", eventIDHex(ev)), zap.Error(err))
+				}
+			}
+			return ingestFailed
+		}
+		fresh = fresh && inserted
+	}
+	// Observers see validated, persisted events whether or not they are new;
+	// see WithObserver for why self-published echoes must reach them.
+	for _, observe := range s.observers {
+		observe(ctx, ev)
+	}
+	if !fresh {
+		s.logger.Debug("skipping already-persisted event",
+			zap.String("event_id", eventIDHex(ev)),
+			zap.Int("kind", eventKindInt(ev)),
+		)
+		return ingestDuplicate
+	}
+	if _, own := s.self[ev.PubKey]; own {
+		return ingestNew
+	}
+	s.logger.Debug("inbound event persisted",
+		zap.String("event_id", eventIDHex(ev)),
+		zap.Int("kind", eventKindInt(ev)),
+		zap.String("pubkey", eventPubKeyHex(ev)),
+	)
+	for _, h := range s.handlers {
+		h(ctx, ev)
+	}
+	return ingestNew
+}
+
+func (s *Subscriber) auditRecord(ev *nostr.Event) *repository.NostrEventRecord {
 	tagsJSON, err := json.Marshal(ev.Tags)
 	if err != nil {
 		s.logger.Warn("failed to marshal event tags",
@@ -374,8 +348,7 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 		tagsJSON = []byte("[]")
 	}
-
-	rec := &repository.NostrEventRecord{
+	return &repository.NostrEventRecord{
 		ID:         eventIDHex(ev),
 		Kind:       eventKindInt(ev),
 		PubKey:     eventPubKeyHex(ev),
@@ -385,44 +358,11 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		CreatedAt:  ev.CreatedAt.Time(),
 		ReceivedAt: time.Now().UTC(),
 	}
-
-	inserted, err := s.eventRepo.Record(ctx, rec)
-	if err != nil {
-		s.logger.Warn("failed to persist inbound event",
-			zap.String("event_id", eventIDHex(ev)),
-			zap.Int("kind", eventKindInt(ev)),
-			zap.Error(err),
-		)
-		return
-	}
-	// Observers see validated, persisted events regardless of insert state; see
-	// WithObserver for why self-published echoes must reach them.
-	for _, observe := range s.observers {
-		observe(ctx, ev)
-	}
-	if !inserted {
-		s.logger.Debug("skipping already-persisted event",
-			zap.String("event_id", eventIDHex(ev)),
-			zap.Int("kind", eventKindInt(ev)),
-		)
-		return
-	}
-
-	s.recordLastSeen(eventKindInt(ev), ev.CreatedAt.Time())
-	s.dedup.MarkSeen(eventIDHex(ev))
-	s.logger.Debug("inbound event persisted",
-		zap.String("event_id", eventIDHex(ev)),
-		zap.Int("kind", eventKindInt(ev)),
-		zap.String("pubkey", eventPubKeyHex(ev)),
-	)
-
-	// Invoke handlers - only for non-duplicate events.
-	for _, h := range s.handlers {
-		h(ctx, ev)
-	}
 }
 
-func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filter, error) {
+// buildSubscriptionFilters groups the subscribed kinds by author scope and
+// splits each group into its replaceable/addressable and regular kinds.
+func (s *Subscriber) buildSubscriptionFilters() ([]inboundFilter, error) {
 	var openKinds []int
 	var defaultKinds []int
 	var directRuntimeKinds []int
@@ -444,20 +384,20 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 		}
 	}
 
-	filters := make([]nostr.Filter, 0, 4)
+	var filters []inboundFilter
 	addFilter := func(kinds []int, authors []string) error {
 		if len(kinds) == 0 {
 			return nil
 		}
-		since, err := s.subscriptionSince(ctx, kinds, authors)
-		if err != nil {
-			return err
+		filter := nostr.Filter{Kinds: filterKindsFromInts(kinds)}
+		if len(authors) > 0 {
+			converted, err := filterAuthorsFromHex(authors)
+			if err != nil {
+				return err
+			}
+			filter.Authors = converted
 		}
-		filter, err := s.filterForKinds(kinds, since, authors)
-		if err != nil {
-			return err
-		}
-		filters = append(filters, filter)
+		filters = append(filters, splitInboundFilter(filter)...)
 		return nil
 	}
 
@@ -473,71 +413,20 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 	if err := addFilter(adoptionKinds, combineAuthors(s.authorizedAuthorScopes.Default, s.authorizedAuthorScopes.Adoption)); err != nil {
 		return nil, err
 	}
+	if len(s.deletionAuthors) > 0 {
+		if err := addFilter([]int{int(nostr.KindDeletion)}, s.deletionAuthors); err != nil {
+			return nil, err
+		}
+	}
 	return filters, nil
 }
 
-func (s *Subscriber) filterForKinds(kinds []int, since nostr.Timestamp, authors []string) (nostr.Filter, error) {
-	filter := nostr.Filter{Kinds: filterKindsFromInts(kinds), Since: since}
-	if len(authors) > 0 {
-		converted, err := filterAuthorsFromHex(authors)
-		if err != nil {
-			return nostr.Filter{}, err
-		}
-		filter.Authors = converted
-	}
-	if s.backfillLimit > 0 {
-		filter.Limit = s.backfillLimit
-	}
-	return filter, nil
-}
-
-func (s *Subscriber) subscriptionSince(ctx context.Context, kinds []int, authors []string) (nostr.Timestamp, error) {
-	cursorUnix := s.latestSeenForKinds(kinds)
-	if s.eventRepo != nil {
-		var latest *time.Time
-		var err error
-		if len(authors) > 0 {
-			latest, err = s.eventRepo.LatestCreatedAtForKindsAndAuthors(ctx, kinds, authors)
-		} else {
-			latest, err = s.eventRepo.LatestCreatedAtForKinds(ctx, kinds)
-		}
-		if err != nil {
-			return 0, err
-		}
-		if latest != nil && latest.Unix() > cursorUnix {
-			cursorUnix = latest.Unix()
-		}
-	}
-
-	if cursorUnix == 0 {
-		return timestampFromTime(s.now()), nil
-	}
-
-	// Nostr timestamps are second-resolution. Overlap by one second so reconnects
-	// replay the disconnect boundary, then suppress duplicates via repository insert state.
-	return timestampFromUnix(cursorUnix - 1), nil
-}
-
-func (s *Subscriber) latestSeenForKinds(kinds []int) int64 {
-	s.lastSeenMu.Lock()
-	defer s.lastSeenMu.Unlock()
-
-	var latest int64
+func kindsToInts(kinds []nostr.Kind) []int {
+	out := make([]int, 0, len(kinds))
 	for _, kind := range kinds {
-		if seen := s.lastSeenByKind[kind]; seen > latest {
-			latest = seen
-		}
+		out = append(out, int(kind))
 	}
-	return latest
-}
-
-func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
-	unix := createdAt.Unix()
-	s.lastSeenMu.Lock()
-	defer s.lastSeenMu.Unlock()
-	if unix > s.lastSeenByKind[kind] {
-		s.lastSeenByKind[kind] = unix
-	}
+	return out
 }
 
 func isCanonicalControlPlaneRequest(kind int) bool {
@@ -588,12 +477,4 @@ func cloneStrings(in []string) []string {
 		return nil
 	}
 	return append([]string(nil), in...)
-}
-
-func timestampFromTime(t time.Time) nostr.Timestamp {
-	return timestampFromUnix(t.Unix())
-}
-
-func timestampFromUnix(unix int64) nostr.Timestamp {
-	return nostr.Timestamp(unix)
 }

@@ -1,22 +1,11 @@
 package app
 
 import (
-	"context"
 	"testing"
-	"time"
 
-	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
-
-type healthIntegrationCursorSource struct {
-	timestamp time.Time
-}
-
-func (s healthIntegrationCursorSource) LatestEventTimestamp(context.Context, []int) (time.Time, error) {
-	return s.timestamp, nil
-}
 
 func TestHealthIntegrationColdStartWithEmptyDBBecomesReadyFromRelayCanonicalState(t *testing.T) {
 	policy := NewModePolicy(ModeFull)
@@ -77,20 +66,6 @@ func TestHealthIntegrationEmergencyBootWithDBAbsentIsTier1Ready(t *testing.T) {
 	require.True(t, policy.RouteEnabled(Tier1))
 	require.False(t, policy.RouteEnabled(Tier2))
 	require.False(t, policy.RouteEnabled(Tier3))
-}
-
-func TestHealthIntegrationReconnectGapReplayUsesNewestCursorWithOverlap(t *testing.T) {
-	oldCursor := time.Unix(100, 0).UTC()
-	checkpointCursor := time.Unix(250, 0).UTC()
-	planner := nostradapter.NewReplayCursorPlanner(2*time.Second,
-		healthIntegrationCursorSource{timestamp: oldCursor},
-		healthIntegrationCursorSource{timestamp: checkpointCursor},
-	)
-
-	since := planner.ComputeSince(context.Background(), []int{nostradapter.KindControlPlaneDeployRequest})
-
-	require.NotNil(t, since)
-	require.Equal(t, checkpointCursor.Add(-2*time.Second).Unix(), int64(*since))
 }
 
 func TestHealthIntegrationRouteGatingAcrossModes(t *testing.T) {
