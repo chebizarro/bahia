@@ -157,7 +157,7 @@ func (p *HealthProvider) baseSnapshot() HealthSnapshot {
 		Status:        SnapshotStatusUnknown,
 		Mode:          string(policy.RequestedMode),
 		RequestedTier: int(policy.RequestedTier),
-		ActiveTier:    int(policy.ActiveTier),
+		ActiveTier:    int(policy.ActiveTier()),
 	}
 	if p.background != nil {
 		snapshot.RunnerSummary = p.background.RunnerStatuses()
@@ -185,7 +185,7 @@ func currentMode(policy *ModePolicy) Mode {
 	if policy == nil {
 		return ModeFull
 	}
-	switch policy.ActiveTier {
+	switch policy.ActiveTier() {
 	case Tier1:
 		return ModeEmergency
 	case Tier2:

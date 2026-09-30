@@ -197,6 +197,11 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		progress.LastError = ""
 	})
 
+	// A group is completed only when every page reached a terminal state on
+	// every relay with at least one real EOSE (see runPage). Readiness is
+	// "synced", not "non-empty": a brand-new fleet whose relays all answer
+	// EOSE with no stored events is ready, while a group whose relays all
+	// CLOSED or dropped is not completed no matter what they sent.
 	completed := make(map[string]bool, len(groups))
 	decodedEvents := 0
 
@@ -243,7 +248,7 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 	}
 
 	readyTier := b.computeReadyTier(completed)
-	if readyTier < 0 || decodedEvents == 0 {
+	if readyTier < 0 {
 		b.setProgress(func(progress *BootstrapProgress) {
 			progress.Phase = BootstrapPhaseFailed
 			progress.ReadyTier = -1
@@ -258,6 +263,10 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		progress.Phase = BootstrapPhaseReady
 		progress.ReadyTier = readyTier
 	})
+	b.logger.Info("bootstrap ready",
+		zap.Int("ready_tier", readyTier),
+		zap.Int("groups_synced", len(completed)),
+		zap.Int("events_applied", decodedEvents))
 	return nil
 }
 
@@ -639,13 +648,21 @@ func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) (g
 	return filter, nil
 }
 
+// computeReadyTier returns the highest tier at or below the requested tier
+// whose required groups all synced. A tier with no required groups is never
+// ready: with nothing replayed there is no relay EOSE proving anything, and
+// counting it would let an attempt in which every relay failed succeed.
 func (b *Bootstrapper) computeReadyTier(completed map[string]bool) int {
 	if b == nil || b.catalog == nil {
 		return -1
 	}
 	for tier := b.config.RequestedTier; tier >= 0; tier-- {
+		required := b.catalog.RequiredGroupsForTier(tier)
+		if len(required) == 0 {
+			continue
+		}
 		ready := true
-		for _, group := range b.catalog.RequiredGroupsForTier(tier) {
+		for _, group := range required {
 			if !completed[group.Name] {
 				ready = false
 				break

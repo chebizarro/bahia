@@ -47,7 +47,7 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 
 	require.Nil(t, app.DB)
 	require.NotNil(t, app.ModePolicy)
-	require.Equal(t, Tier1, app.ModePolicy.ActiveTier)
+	require.Equal(t, Tier1, app.ModePolicy.ActiveTier())
 	require.NotNil(t, app.Health)
 }
 
@@ -62,7 +62,7 @@ func TestNewKeepsFullModeWhenDatabaseAvailable(t *testing.T) {
 	defer closeRelayPools(app.relayPools...)
 
 	require.NotNil(t, app.ModePolicy)
-	require.Equal(t, Tier3, app.ModePolicy.ActiveTier)
+	require.Equal(t, Tier3, app.ModePolicy.ActiveTier())
 	require.Equal(t, Tier3, app.ModePolicy.RequestedTier)
 	require.NotNil(t, app.Health)
 }

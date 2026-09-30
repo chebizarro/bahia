@@ -27,7 +27,7 @@ func TestNewWithoutDatabaseCapsBootstrapperRequestedTier(t *testing.T) {
 
 	runner := findBootstrapperRunner(t, app)
 	require.Equal(t, Tier3, app.ModePolicy.RequestedTier)
-	require.Equal(t, Tier1, app.ModePolicy.ActiveTier)
+	require.Equal(t, Tier1, app.ModePolicy.ActiveTier())
 	progress := runner.bootstrapper.Progress()
 	require.Equal(t, int(Tier1), progress.RequestedTier,
 		"bootstrapper must not request (and so report) a tier above the database-less dependency cap")
@@ -41,14 +41,14 @@ func TestBootstrapReadyTierCannotRaiseActiveTierOverNilRepositories(t *testing.T
 	pool, available := connectOptionalDatabase(context.Background(), startupTestConfig(ModeFull), zap.NewNop(), policy)
 	require.Nil(t, pool)
 	require.False(t, available)
-	require.Equal(t, Tier1, policy.ActiveTier)
+	require.Equal(t, Tier1, policy.ActiveTier())
 
 	// bootstrapperRunner.Run applies the bootstrapper's ready tier this way.
 	// With the production catalog every tier3 replay group is optional, so a
 	// bootstrapper asked for tier 3 reports 3 once the tier0/1 groups finish.
 	policy.SetActiveTier(Tier3)
 
-	require.Equal(t, Tier1, policy.ActiveTier)
+	require.Equal(t, Tier1, policy.ActiveTier())
 	require.False(t, policy.RouteEnabled(Tier2))
 	require.False(t, policy.RouteEnabled(Tier3))
 
