@@ -1,4 +1,4 @@
-.PHONY: build run test race lint clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
+.PHONY: build run test race lint lint-arch arch-baseline clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
 
 VERSION_BASE ?= 0.1.0
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "dev")
@@ -88,8 +88,31 @@ pstf-soulfactory-coverage:
 	cd web && npm run test:unit:coverage:soulfactory
 
 # Lint
-lint:
+lint: lint-arch
 	golangci-lint run ./...
+
+# Architecture ratchet gates (bahia-irsry.8). Each gate compares against a
+# checked-in baseline of pre-existing violations and fails only on new ones:
+# legacy kinds outside internal/nostrmigration, direct library relay
+# subscriptions outside the pool/bus, unannotated poll tickers in
+# internal/service and internal/reconcile, test-only exported symbols in
+# internal/, the DB-less boot invariants, and web store setInterval /
+# $$lib/api/client.js imports. They also run under `go test ./...` and
+# `pnpm run test:unit`.
+ARCH_GO_GATES = go test ./internal/archtest ./internal/app -run 'TestNoNew|TestArchitecture' -count=1
+ARCH_WEB_GATES = pnpm exec vitest run --config vitest.config.js tests/unit/architecture-gates.test.js
+lint-arch:
+	CGO_ENABLED=0 $(ARCH_GO_GATES)
+	cd web && $(ARCH_WEB_GATES)
+
+# Regenerate every architecture baseline from the current tree. Run after
+# violations are removed (baselines only shrink) or on an integration branch.
+# Prints a "BASELINE SUMMARY" per gate: "+" lines are new or grown debt and
+# need a stated reason; "-" lines were paid down. Review with git diff.
+arch-baseline:
+	CGO_ENABLED=0 ARCHTEST_UPDATE_BASELINE=1 go test ./internal/archtest -count=1 -v -run 'TestNoNew'
+	cd web && ARCHTEST_UPDATE_BASELINE=1 $(ARCH_WEB_GATES)
+	git diff --stat -- internal/archtest/testdata web/tests/unit/architecture-gates.baseline.json
 
 # Format. third_party/ holds a vendored upstream module (a separate Go module,
 # so ./... targets already skip it); keep formatters from rewriting it too.

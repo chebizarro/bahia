@@ -431,7 +431,9 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 	if err != nil {
 		return nil, fmt.Errorf("invalid Soul Factory pubkey for fleet reconciliation: %w", err)
 	}
-	events, err := r.relayBus.Query(ctx, []nostr.Filter{{
+	// Fail closed: reconcile republishes every soul it lists, so a missing or
+	// stale soul would be skipped or overwritten. See RelayReadPolicy.
+	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.fleet_reconcile_souls", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
 		Authors: []nostr.PubKey{factory},
 		Limit:   maxFleetReconcileSouls,
@@ -440,7 +442,7 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 		return nil, err
 	}
 	latest := make(map[string]*nostr.Event)
-	for _, event := range events {
+	for _, event := range read.Events {
 		if event == nil {
 			continue
 		}
@@ -471,7 +473,7 @@ func (r *Reactor) getFleetConfigRevision(ctx context.Context, eventID string) (*
 	if err != nil {
 		return nil, fmt.Errorf("invalid fleet config revision id: %w", err)
 	}
-	events, err := r.relayBus.Query(ctx, []nostr.Filter{{
+	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.fleet_config_revision", RelayReadAllIDs(id), []nostr.Filter{{
 		IDs:   []nostr.ID{id},
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
 		Limit: 1,
@@ -479,8 +481,10 @@ func (r *Reactor) getFleetConfigRevision(ctx context.Context, eventID string) (*
 	if err != nil {
 		return nil, err
 	}
-	if len(events) == 0 {
-		return nil, nil
+	for _, event := range read.Events {
+		if event != nil && event.ID == id {
+			return ParseFleetConfigEvent(event, r.config.AuthorizedPubkeys)
+		}
 	}
-	return ParseFleetConfigEvent(events[0], r.config.AuthorizedPubkeys)
+	return nil, nil
 }

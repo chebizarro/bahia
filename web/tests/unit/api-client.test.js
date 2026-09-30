@@ -111,7 +111,7 @@ describe('BahiaClient', () => {
       json: async () => ({ error: 'SBOM not found' })
     });
 
-    await expect(client.getSBOM('missing')).rejects.toThrow('SBOM not found');
+    await expect(client.fetch('/artifacts/missing')).rejects.toThrow('SBOM not found');
   });
 
   it('throws JSON success envelopes that carry errors', async () => {
@@ -121,7 +121,7 @@ describe('BahiaClient', () => {
       json: async () => ({ error: 'Invalid request' })
     });
 
-    await expect(client.searchSBOMPackages({ q: 'bad' })).rejects.toThrow('Invalid request');
+    await expect(client.listRouteCanaries({ q: 'bad' })).rejects.toThrow('Invalid request');
   });
 
   it('returns null for non-JSON responses', async () => {
@@ -132,14 +132,5 @@ describe('BahiaClient', () => {
     });
 
     await expect(client.fetch('/some-endpoint')).resolves.toBeNull();
-  });
-
-  it('encodes artifact IDs in SBOM URLs', async () => {
-    const artifactId = 'artifact/with/slashes';
-    global.fetch.mockResolvedValueOnce(json({ id: artifactId }));
-
-    await client.getSBOM(artifactId);
-
-    expect(global.fetch).toHaveBeenCalledWith(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/sbom`, expect.any(Object));
   });
 });

@@ -3,130 +3,286 @@ package discovery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
-	secretKey, pubkey := generatedResolverKeyPair(t)
-
+func TestResolverSubscribesToCanonicalDNSEndpointState(t *testing.T) {
+	_, pubkey := generatedResolverKeyPair(t)
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"addr":  "10.0.0.12",
-		"port":  443,
-		"proto": "https",
-	}, nostr.Tags{
-		{"d", "drydock:api:prod"},
-		{"dns", "api.prod.example.com"},
-		{"environment", "prod"},
-		{"zone", "example.com"},
-		{"health", "healthy"},
-		{"capability", "llm"},
-		{"capability", "gpu"},
-		{"runtime", "vllm"},
-		{"hardware", "a100"},
-	})
 
-	require.NoError(t, resolver.applyEvent(event))
+	filter := resolver.subscriptionFilter()
 
-	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
+	author, err := nostrutil.PubKeyFromHex(pubkey)
+	require.NoError(t, err)
+	require.Equal(t, []nostr.Kind{nostr.Kind(kinds.CASControlState)}, filter.Kinds, "must read canonical 30900, not legacy 31976")
+	require.Equal(t, []nostr.PubKey{author}, filter.Authors)
+	require.Equal(t, nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}}, filter.Tags)
+	require.Zero(t, filter.Since, "the first subscription must backfill everything")
+}
+
+func TestResolverAppliesProducerShapedLiveEndpoints(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	createdAt := resolverTestBase()
+	port := 8443
+	llm := domain.DNSEndpoint{
+		Family: domain.DNSEndpointFamilyLLM, Name: "chat", Environment: "prod", Zone: "llm.example.com",
+		FQDN: "chat.llm.example.com", Coordinate: "llm:chat:prod", Protocol: "https", Address: "10.0.0.12",
+		Port: &port, Runtime: "vllm", Hardware: "a100", Capabilities: []string{"llm", "gpu"}, Health: domain.HealthStatusHealthy,
+	}
+	// Service endpoints resolved from an observed host carry no port or protocol.
+	service := domain.DNSEndpoint{
+		Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", Zone: "svc.example.com",
+		FQDN: "api.svc.example.com", Coordinate: "service:api:prod", Address: "10.0.0.13", Runtime: "docker",
+		Health: domain.HealthStatusHealthy,
+	}
+
+	llmEvent := liveEndpointEvent(t, secretKey, llm, createdAt)
+	require.NoError(t, resolver.applyEvent(llmEvent))
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, service, createdAt)))
+
+	endpoint, ok := resolver.ResolveByFQDN("chat.llm.example.com")
 	require.True(t, ok)
 	require.Equal(t, Endpoint{
-		FQDN:         "api.prod.example.com",
-		Name:         "api",
+		FQDN:         "chat.llm.example.com",
+		Name:         "chat",
 		Environment:  "prod",
-		ZoneName:     "example.com",
+		ZoneName:     "llm.example.com",
 		Address:      "10.0.0.12",
-		Port:         443,
+		Port:         8443,
 		Protocol:     "https",
 		Health:       "healthy",
 		Capabilities: []string{"llm", "gpu"},
 		Runtime:      "vllm",
 		Hardware:     "a100",
-		UpdatedAt:    time.Unix(int64(event.CreatedAt), 0).UTC(),
+		UpdatedAt:    time.Unix(int64(llmEvent.CreatedAt), 0).UTC(),
 	}, endpoint)
 
 	endpoint, ok = resolver.Resolve("api", "prod")
 	require.True(t, ok)
-	require.Equal(t, "api.prod.example.com", endpoint.FQDN)
+	require.Equal(t, "api.svc.example.com", endpoint.FQDN)
+	require.Equal(t, "svc.example.com", endpoint.ZoneName)
+	require.Equal(t, "10.0.0.13", endpoint.Address)
+	require.Zero(t, endpoint.Port)
+	require.Empty(t, endpoint.Protocol)
+
+	gpu := resolver.FindByCapability("gpu")
+	require.Len(t, gpu, 1)
+	require.Equal(t, "chat.llm.example.com", gpu[0].FQDN)
+	require.Len(t, resolver.Endpoints(), 2)
 }
 
-func TestResolverFallsBackToContentFQDNAndLegacyContentFields(t *testing.T) {
+func TestResolverTreatsDeletedFalseAsLive(t *testing.T) {
 	secretKey, pubkey := generatedResolverKeyPair(t)
-
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"fqdn":     "api.prod.example.com",
-		"address":  "10.0.0.12",
-		"port":     443,
-		"protocol": "https",
-	}, nostr.Tags{
-		{"d", "drydock:api:prod"},
-		{"env", "prod"},
-		{"zone", "example.com"},
-		{"health", "healthy"},
-		{"capability", "llm"},
-	})
+	event := liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), resolverTestBase())
+	require.Equal(t, "false", firstTagValue(event.Tags, kinds.CASControlStateTagDeleted), "producer stamps deleted=false on live records")
 
 	require.NoError(t, resolver.applyEvent(event))
 
-	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
-	require.True(t, ok)
-	require.Equal(t, "10.0.0.12", endpoint.Address)
-	require.Equal(t, "https", endpoint.Protocol)
-	require.Equal(t, []string{"llm"}, endpoint.Capabilities)
+	endpoint, ok := resolver.ResolveByFQDN("api.svc.example.com")
+	require.True(t, ok, "a deleted tag with value false is not a tombstone")
+	require.Equal(t, "10.0.0.10", endpoint.Address)
 }
 
-func TestResolverAppliesNewestReplaceableEvent(t *testing.T) {
+func TestResolverTombstoneRemovesEndpointAndStaleLiveCannotResurrect(t *testing.T) {
 	secretKey, pubkey := generatedResolverKeyPair(t)
-
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
-	newer := signedEndpointEvent(t, secretKey, "api.prod.example.com", base+10, map[string]any{
-		"addr": "10.0.0.20", "port": 8443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
-	older := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"addr": "10.0.0.10", "port": 443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+	base := resolverTestBase()
+	api := apiEndpoint("10.0.0.10")
 
-	require.NoError(t, resolver.applyEvent(newer))
-	require.NoError(t, resolver.applyEvent(older))
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, api, base)))
+	require.NoError(t, resolver.applyEvent(endpointTombstoneEvent(t, secretKey, api.Coordinate, api.FQDN, base+10)))
 
-	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
-	require.True(t, ok)
-	require.Equal(t, "10.0.0.20", endpoint.Address)
-	require.Equal(t, 8443, endpoint.Port)
-}
-
-func TestResolverHandlesTombstones(t *testing.T) {
-	secretKey, pubkey := generatedResolverKeyPair(t)
-
-	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
-	endpoint := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"addr": "10.0.0.10", "port": 443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
-	tombstone := signedEndpointEvent(t, secretKey, "api.prod.example.com", base+1, map[string]any{
-		"deleted": true,
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "unknown", "llm"))
-	olderLiveEvent := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"addr": "10.0.0.11", "port": 443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
-
-	require.NoError(t, resolver.applyEvent(endpoint))
-	require.NoError(t, resolver.applyEvent(tombstone))
-	require.NoError(t, resolver.applyEvent(olderLiveEvent))
-
-	_, ok := resolver.ResolveByFQDN("api.prod.example.com")
+	_, ok := resolver.ResolveByFQDN(api.FQDN)
 	require.False(t, ok)
 	require.Empty(t, resolver.Endpoints())
+
+	// A stale live record replayed from another relay must not bring it back.
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.11"), base+5)))
+	_, ok = resolver.ResolveByFQDN(api.FQDN)
+	require.False(t, ok)
+
+	// A genuinely newer live record re-creates the endpoint.
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.12"), base+20)))
+	endpoint, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.12", endpoint.Address)
+}
+
+func TestResolverIgnoresStaleEvents(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.20"), base+10)))
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), base)))
+
+	endpoint, ok := resolver.ResolveByFQDN("api.svc.example.com")
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.20", endpoint.Address)
+}
+
+func TestResolverBreaksCreatedAtTiesByLowestEventID(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	createdAt := resolverTestBase()
+	first := liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.31"), createdAt)
+	second := liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.32"), createdAt)
+	winner := "10.0.0.31"
+	if nostrutil.EventIDHex(second) < nostrutil.EventIDHex(first) {
+		winner = "10.0.0.32"
+	}
+
+	for _, order := range [][]*nostr.Event{{first, second}, {second, first}} {
+		resolver := New([]string{"wss://relay.example.test"}, pubkey)
+		for _, event := range order {
+			require.NoError(t, resolver.applyEvent(event))
+		}
+		endpoint, ok := resolver.ResolveByFQDN("api.svc.example.com")
+		require.True(t, ok)
+		require.Equal(t, winner, endpoint.Address, "equal created_at must resolve to the lowest event id regardless of arrival order")
+	}
+}
+
+func TestResolverIgnoresForgedAuthor(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	forgerKey, _ := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+
+	require.ErrorContains(t, resolver.applyEvent(liveEndpointEvent(t, forgerKey, apiEndpoint("10.6.6.6"), base)), "unexpected author")
+	require.Empty(t, resolver.Endpoints())
+
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), base)))
+	require.ErrorContains(t, resolver.applyEvent(liveEndpointEvent(t, forgerKey, apiEndpoint("10.6.6.6"), base+10)), "unexpected author")
+	require.ErrorContains(t, resolver.applyEvent(endpointTombstoneEvent(t, forgerKey, "service:api:prod", "api.svc.example.com", base+10)), "unexpected author")
+
+	endpoint, ok := resolver.ResolveByFQDN("api.svc.example.com")
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.10", endpoint.Address)
+}
+
+func TestResolverRejectsTamperedEvent(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	event := liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), resolverTestBase())
+	event.Content = `{"address":"tampered"}`
+
+	require.Error(t, resolver.applyEvent(event))
+	require.Empty(t, resolver.Endpoints())
+}
+
+func TestResolverSkipsNonEndpointStateAndLegacyKind(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+	content := `{"name":"api","fqdn":"api.svc.example.com","address":"10.0.0.10"}`
+	tags := nostr.Tags{{"t", kinds.DNSEndpointTopic}, {"dns", "api.svc.example.com"}, {"addr", "10.0.0.10"}}
+
+	zone := signedEnvelopeEvent(t, secretKey, kinds.DNSZoneState, "svc.example.com", false, content, tags, base)
+	require.ErrorIs(t, resolver.applyEvent(zone), errNotDNSEndpoint)
+
+	wrongSchema := signedEnvelopeEvent(t, secretKey, kinds.DNSEndpointState, "service:api:prod", false, content, tags, base)
+	setTag(wrongSchema, kinds.CASControlStateTagSchema, "bahia.cp-state.v0")
+	signResolverEvent(t, wrongSchema, secretKey)
+	require.ErrorIs(t, resolver.applyEvent(wrongSchema), errNotDNSEndpoint)
+
+	legacy := signedEnvelopeEvent(t, secretKey, kinds.DNSEndpointState, "service:api:prod", false, content, tags, base)
+	legacy.Kind = nostr.Kind(kinds.DNSEndpointState)
+	signResolverEvent(t, legacy, secretKey)
+	require.ErrorContains(t, resolver.applyEvent(legacy), "unexpected kind 31976")
+
+	require.Empty(t, resolver.Endpoints())
+}
+
+// TestResolverBackfillsThenGoesLiveAndResumesFromCursor drives the
+// subscription with unbuffered channels: each send completes only once the
+// resolver has received the event, and Ready orders the EOSE transition.
+func TestResolverBackfillsThenGoesLiveAndResumesFromCursor(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+	api := apiEndpoint("10.0.0.10")
+	chat := apiEndpoint("10.0.0.20")
+	chat.Name, chat.FQDN, chat.Coordinate = "chat", "chat.svc.example.com", "service:chat:prod"
+
+	events := make(chan *nostr.Event)
+	eose := make(chan struct{})
+	pool := &fakeRelayPool{subs: []*nostradapter.MergedSubscription{{Events: events, EndOfStoredEvents: eose}}}
+	done := make(chan error, 1)
+	go func() { done <- resolver.subscribeUntilClosed(context.Background(), pool) }()
+
+	// Backfill, newest first as relays usually return it.
+	events <- liveEndpointEvent(t, secretKey, chat, base+10)
+	events <- liveEndpointEvent(t, secretKey, api, base)
+	select {
+	case <-resolver.Ready():
+		t.Fatal("resolver reported ready before EOSE")
+	default:
+	}
+	close(eose)
+	waitReady(t, resolver)
+
+	// Live: the api endpoint is removed after catch-up.
+	events <- endpointTombstoneEvent(t, secretKey, api.Coordinate, api.FQDN, base+20)
+	close(events)
+	require.ErrorContains(t, waitDone(t, done), "subscription event stream closed")
+
+	_, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.False(t, ok)
+	endpoint, ok := resolver.ResolveByFQDN(chat.FQDN)
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.20", endpoint.Address)
+
+	// Reconnect resumes from the newest seen created_at with an overlap.
+	resumed := make(chan *nostr.Event)
+	close(resumed)
+	pool.push(&nostradapter.MergedSubscription{Events: resumed})
+	require.Error(t, resolver.subscribeUntilClosed(context.Background(), pool))
+
+	filters := pool.subscribedFilters()
+	require.Len(t, filters, 2)
+	require.Zero(t, filters[0][0].Since)
+	require.Equal(t, base+20-nostr.Timestamp(resolverSinceOverlap/time.Second), filters[1][0].Since)
+}
+
+func TestResolverDoesNotAdvanceCursorBeforeEOSE(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+
+	events := make(chan *nostr.Event)
+	pool := &fakeRelayPool{subs: []*nostradapter.MergedSubscription{{Events: events, EndOfStoredEvents: make(chan struct{})}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- resolver.subscribeUntilClosed(ctx, pool) }()
+
+	// The send completes once the resolver holds the event; it is applied
+	// before the resolver selects again, so cancelling here interrupts the
+	// backfill after the event but before any EOSE.
+	events <- liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), resolverTestBase()+10)
+	cancel()
+	require.ErrorIs(t, waitDone(t, done), context.Canceled)
+
+	select {
+	case <-resolver.Ready():
+		t.Fatal("resolver reported ready without EOSE")
+	default:
+	}
+	require.Zero(t, resolver.subscriptionFilter().Since, "an interrupted backfill must be redone in full")
+	_, ok := resolver.ResolveByFQDN("api.svc.example.com")
+	require.True(t, ok)
 }
 
 func TestResolverPreparesRelayMetadataBeforeConnecting(t *testing.T) {
@@ -189,36 +345,6 @@ func TestResolverNIP11MetadataIsAdvisoryForMissingMalformedAndLimitingRelays(t *
 	require.ElementsMatch(t, []string{"auth-required", "payment-required", "restricted-writes", "max-limit:25"}, limited.Warnings)
 }
 
-func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {
-	secretKey, pubkey := generatedResolverKeyPair(t)
-	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-
-	events := make(chan *nostr.Event, 1)
-	events <- signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"addr": "10.0.0.30", "port": 443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
-	close(events)
-	eose := make(chan struct{})
-	close(eose)
-	relayEOSE := make(chan nostradapter.RelayEOSE, 1)
-	relayEOSE <- nostradapter.RelayEOSE{RelayURL: "wss://relay.example.test", SubscriptionID: "sub-1"}
-	close(relayEOSE)
-	closed := make(chan nostradapter.RelayClosed)
-	close(closed)
-
-	_, err := resolver.consume(context.Background(), &fakeRelayPool{}, &nostradapter.MergedSubscription{
-		Events:            events,
-		EndOfStoredEvents: eose,
-		RelayEOSE:         relayEOSE,
-		Closed:            closed,
-	}, map[string]struct{}{})
-
-	require.ErrorContains(t, err, "subscription event stream closed")
-	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
-	require.True(t, ok)
-	require.Equal(t, "10.0.0.30", endpoint.Address)
-}
-
 func TestResolverRetriesAfterAuthRequiredClosed(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, "author")
 	pool := &fakeRelayPool{}
@@ -233,38 +359,15 @@ func TestResolverRetriesAfterAuthRequiredClosed(t *testing.T) {
 	require.Equal(t, []string{"auth:wss://relay.example.test"}, pool.calls)
 }
 
-func TestResolverFindsByCapability(t *testing.T) {
-	secretKey, pubkey := generatedResolverKeyPair(t)
-
-	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	createdAt := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
-	require.NoError(t, resolver.applyEvent(signedEndpointEvent(t, secretKey, "llm.prod.example.com", createdAt, map[string]any{
-		"addr": "10.0.0.21", "port": 443, "proto": "https",
-	}, endpointTags("drydock:llm:prod", "llm.prod.example.com", "prod", "example.com", "healthy", "llm", "gpu"))))
-	require.NoError(t, resolver.applyEvent(signedEndpointEvent(t, secretKey, "speech.prod.example.com", createdAt, map[string]any{
-		"addr": "10.0.0.22", "port": 443, "proto": "https",
-	}, endpointTags("drydock:speech:prod", "speech.prod.example.com", "prod", "example.com", "healthy", "speech"))))
-
-	gpuEndpoints := resolver.FindByCapability("gpu")
-	require.Len(t, gpuEndpoints, 1)
-	require.Equal(t, "llm.prod.example.com", gpuEndpoints[0].FQDN)
-
-	allEndpoints := resolver.Endpoints()
-	require.Len(t, allEndpoints, 2)
+func resolverTestBase() nostr.Timestamp {
+	return nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
 }
 
-func TestResolverRejectsInvalidEvent(t *testing.T) {
-	secretKey, pubkey := generatedResolverKeyPair(t)
-
-	resolver := New([]string{"wss://relay.example.test"}, pubkey)
-	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"addr": "10.0.0.10", "port": 443, "proto": "https",
-	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
-	event.Content = `{"address":"tampered","port":443,"protocol":"https"}`
-
-	require.Error(t, resolver.applyEvent(event))
-	_, ok := resolver.ResolveByFQDN("api.prod.example.com")
-	require.False(t, ok)
+func apiEndpoint(address string) domain.DNSEndpoint {
+	return domain.DNSEndpoint{
+		Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", Zone: "svc.example.com",
+		FQDN: "api.svc.example.com", Coordinate: "service:api:prod", Address: address, Health: domain.HealthStatusHealthy,
+	}
 }
 
 func generatedResolverKeyPair(t *testing.T) (string, string) {
@@ -275,40 +378,134 @@ func generatedResolverKeyPair(t *testing.T) (string, string) {
 	return secretKey, pubkey
 }
 
-func signedEndpointEvent(t *testing.T, secretKey string, fqdn string, createdAt nostr.Timestamp, content map[string]any, tags nostr.Tags) *nostr.Event {
+// liveEndpointEvent mirrors projector.publishDNSEndpoint: domain.DNSEndpoint
+// JSON content plus dnsEndpointTags, wrapped in controlStateEnvelope tags.
+func liveEndpointEvent(t *testing.T, secretKey string, endpoint domain.DNSEndpoint, createdAt nostr.Timestamp) *nostr.Event {
 	t.Helper()
-	if tags.GetD() == "" {
-		tags = append(tags, nostr.Tag{"d", fqdn})
+	tags := nostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", kinds.DNSEndpointTopic}, {"t", "bahia"}}
+	if endpoint.Environment != "" {
+		tags = append(tags, nostr.Tag{"environment", endpoint.Environment})
 	}
-	body, err := json.Marshal(content)
-	require.NoError(t, err)
-	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(secretKey)
-	require.NoError(t, err)
-	pubkey, err := nostrutil.PubKeyFromHex(pubkeyHex)
-	require.NoError(t, err)
-	event := &nostr.Event{
-		PubKey:    pubkey,
-		CreatedAt: createdAt,
-		Kind:      nostr.Kind(KindDNSEndpointState),
-		Tags:      tags,
-		Content:   string(body),
+	if endpoint.Runtime != "" {
+		tags = append(tags, nostr.Tag{"runtime", endpoint.Runtime})
 	}
-	require.NoError(t, nostrutil.SignEventWithHexKey(event, secretKey))
+	if endpoint.Protocol != "" {
+		tags = append(tags, nostr.Tag{"proto", endpoint.Protocol})
+	}
+	if endpoint.Port != nil {
+		tags = append(tags, nostr.Tag{"port", strconv.Itoa(*endpoint.Port)})
+	}
+	switch endpoint.Family {
+	case domain.DNSEndpointFamilyService:
+		tags = append(tags, nostr.Tag{"service", endpoint.Name})
+	case domain.DNSEndpointFamilyLLM:
+		tags = append(tags, nostr.Tag{"route", endpoint.Name})
+	}
+	for _, capability := range endpoint.Capabilities {
+		tags = append(tags, nostr.Tag{"capability", capability})
+	}
+	content, err := json.Marshal(endpoint)
+	require.NoError(t, err)
+	return signedEnvelopeEvent(t, secretKey, kinds.DNSEndpointState, endpoint.Coordinate, false, string(content), tags, createdAt)
+}
+
+// endpointTombstoneEvent mirrors projector.publishDNSEndpointTombstone.
+func endpointTombstoneEvent(t *testing.T, secretKey, coordinate, fqdn string, createdAt nostr.Timestamp) *nostr.Event {
+	t.Helper()
+	content, err := json.Marshal(map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": time.Unix(int64(createdAt), 0).UTC().Format(time.RFC3339Nano)})
+	require.NoError(t, err)
+	tags := nostr.Tags{{"t", kinds.DNSEndpointTopic}, {"t", "bahia"}, {"dns", fqdn}}
+	return signedEnvelopeEvent(t, secretKey, kinds.DNSEndpointState, coordinate, true, string(content), tags, createdAt)
+}
+
+// signedEnvelopeEvent mirrors controlStateEnvelope for a DNS legacy kind.
+func signedEnvelopeEvent(t *testing.T, secretKey string, legacyKind int, d string, deleted bool, content string, extra nostr.Tags, createdAt nostr.Timestamp) *nostr.Event {
+	t.Helper()
+	tags := nostr.Tags{
+		{kinds.CASControlStateTagD, d},
+		{kinds.CASControlStateTagDomain, kinds.DNSDomain},
+		{kinds.CASControlStateTagSchema, kinds.CASControlStateSchema},
+		{kinds.CASControlStateTagLegacyKind, strconv.Itoa(legacyKind)},
+		{kinds.CASControlStateTagDeleted, strconv.FormatBool(deleted)},
+	}
+	event := &nostr.Event{CreatedAt: createdAt, Kind: nostr.Kind(kinds.CASControlState), Tags: append(tags, extra...), Content: content}
+	signResolverEvent(t, event, secretKey)
 	return event
 }
 
+func signResolverEvent(t *testing.T, event *nostr.Event, secretKey string) {
+	t.Helper()
+	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(secretKey)
+	require.NoError(t, err)
+	event.PubKey, err = nostrutil.PubKeyFromHex(pubkeyHex)
+	require.NoError(t, err)
+	require.NoError(t, nostrutil.SignEventWithHexKey(event, secretKey))
+}
+
+func setTag(event *nostr.Event, key, value string) {
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == key {
+			tag[1] = value
+		}
+	}
+}
+
+// waitReady and waitDone bound a hung test; they do not order anything.
+func waitReady(t *testing.T, resolver *Resolver) {
+	t.Helper()
+	select {
+	case <-resolver.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for resolver EOSE")
+	}
+}
+
+func waitDone(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for subscription to end")
+		return nil
+	}
+}
+
 type fakeRelayPool struct {
-	calls []string
-	infos map[string]*nip11.RelayInformationDocument
+	mu      sync.Mutex
+	calls   []string
+	infos   map[string]*nip11.RelayInformationDocument
+	subs    []*nostradapter.MergedSubscription
+	filters [][]nostr.Filter
+}
+
+func (p *fakeRelayPool) push(sub *nostradapter.MergedSubscription) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.subs = append(p.subs, sub)
+}
+
+func (p *fakeRelayPool) subscribedFilters() [][]nostr.Filter {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([][]nostr.Filter(nil), p.filters...)
 }
 
 func (p *fakeRelayPool) Connect(context.Context) {
 	p.calls = append(p.calls, "connect")
 }
 
-func (p *fakeRelayPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error) {
+func (p *fakeRelayPool) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*nostradapter.MergedSubscription, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.calls = append(p.calls, "subscribe")
-	return nil, fmt.Errorf("no fake subscription configured")
+	p.filters = append(p.filters, filters)
+	if len(p.subs) == 0 {
+		return nil, errors.New("no fake subscription configured")
+	}
+	sub := p.subs[0]
+	p.subs = p.subs[1:]
+	return sub, nil
 }
 
 func (p *fakeRelayPool) FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument {
@@ -323,18 +520,4 @@ func (p *fakeRelayPool) AuthenticateRelay(_ context.Context, relayURL string) er
 
 func (p *fakeRelayPool) Close() {
 	p.calls = append(p.calls, "close")
-}
-
-func endpointTags(coordinate, fqdn, environment, zone, health string, capabilities ...string) nostr.Tags {
-	tags := nostr.Tags{
-		{"d", coordinate},
-		{"dns", fqdn},
-		{"environment", environment},
-		{"zone", zone},
-		{"health", health},
-	}
-	for _, capability := range capabilities {
-		tags = append(tags, nostr.Tag{"capability", capability})
-	}
-	return tags
 }

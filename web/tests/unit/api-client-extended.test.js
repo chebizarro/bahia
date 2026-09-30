@@ -34,13 +34,13 @@ describe('BahiaClient HTTP-native interop contract', () => {
     }));
   });
 
-  it('keeps query serialization for surviving SBOM search endpoints', async () => {
-    global.fetch.mockResolvedValueOnce(jsonResponse({ data: [{ name: 'openssl' }] }));
+  it('keeps query serialization for list endpoints', async () => {
+    global.fetch.mockResolvedValueOnce(jsonResponse({ data: [{ id: 'canary-1' }] }));
 
-    const result = await client.searchSBOMPackages({ q: 'openssl', licenses: ['Apache-2.0', 'MIT'], empty: '' });
+    const result = await client.listRouteCanaries({ q: 'edge', regions: ['us-east', 'eu-west'], empty: '' });
 
-    expect(result).toEqual([{ name: 'openssl' }]);
-    expect(global.fetch).toHaveBeenCalledWith('/api/v1/sbom/search?q=openssl&licenses=Apache-2.0%2CMIT', expect.any(Object));
+    expect(result).toEqual([{ id: 'canary-1' }]);
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/route-canaries?q=edge&regions=us-east%2Ceu-west', expect.any(Object));
   });
 
   it('exposes Blossom HTTP methods used by artifact routes', async () => {
@@ -61,29 +61,6 @@ describe('BahiaClient HTTP-native interop contract', () => {
     }));
   });
 
-  it('exposes SBOM and attestation HTTP methods used by artifact detail routes', async () => {
-    const artifactId = 'artifact/v1';
-    global.fetch
-      .mockResolvedValueOnce(jsonResponse({ data: { bomFormat: 'CycloneDX' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: [{ name: 'pkg' }] }))
-      .mockResolvedValueOnce(jsonResponse({ data: { ingested: true } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { predicateType: 'sbom' } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { compliant: true } }));
-
-    await expect(client.getSBOM(artifactId)).resolves.toEqual({ bomFormat: 'CycloneDX' });
-    await expect(client.getSBOMPackages(artifactId, { limit: 10 })).resolves.toEqual([{ name: 'pkg' }]);
-    await expect(client.ingestSBOM(artifactId, { bom: {} })).resolves.toEqual({ ingested: true });
-    await expect(client.getSBOMAttestation(artifactId)).resolves.toEqual({ predicateType: 'sbom' });
-    await expect(client.getSBOMNTIACompliance(artifactId)).resolves.toEqual({ compliant: true });
-
-    const encoded = encodeURIComponent(artifactId);
-    expect(global.fetch).toHaveBeenNthCalledWith(1, `/api/v1/artifacts/${encoded}/sbom`, expect.any(Object));
-    expect(global.fetch).toHaveBeenNthCalledWith(2, `/api/v1/artifacts/${encoded}/sbom/packages?limit=10`, expect.any(Object));
-    expect(global.fetch).toHaveBeenNthCalledWith(3, `/api/v1/artifacts/${encoded}/sbom`, expect.objectContaining({ method: 'POST' }));
-    expect(global.fetch).toHaveBeenNthCalledWith(4, `/api/v1/artifacts/${encoded}/sbom/attestation`, expect.any(Object));
-    expect(global.fetch).toHaveBeenNthCalledWith(5, `/api/v1/artifacts/${encoded}/sbom/ntia`, expect.any(Object));
-  });
-
   it('exposes only the current HTTP-native interop method surface', () => {
     const methods = Object.getOwnPropertyNames(BahiaClient.prototype).filter((name) => name !== 'constructor').sort();
     expect(methods).toEqual([
@@ -94,12 +71,7 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'getBlossomServers',
       'getBlossomStats',
       'getInstanceHealth',
-      'getSBOM',
-      'getSBOMAttestation',
-      'getSBOMNTIACompliance',
       'getRouteCanary',
-      'getSBOMPackages',
-      'ingestSBOM',
       'listBlossomBlobs',
       'listConfigFabricDrift',
       'listInstanceHealth',
@@ -110,7 +82,6 @@ describe('BahiaClient HTTP-native interop contract', () => {
       'publishConfigFabricEvent',
       'query',
       'rollbackConfigFabricEvent',
-      'searchSBOMPackages',
       'setAuthProvider',
       'setInstanceMaintenance'
     ].sort());
@@ -125,19 +96,19 @@ describe('BahiaClient HTTP-native interop contract', () => {
 
   it('normalizes backend and HTTP errors', async () => {
     global.fetch.mockResolvedValueOnce(jsonResponse({ error: 'SBOM not found' }, { ok: false, status: 404, statusText: 'Not Found' }));
-    await expect(client.getSBOM('missing')).rejects.toThrow('SBOM not found');
+    await expect(client.fetch('/artifacts/missing')).rejects.toThrow('SBOM not found');
   });
 
   it('attaches the HTTP status to thrown errors so callers can detect 404s without parsing the message', async () => {
     // 404 is not in the default retriable status set, so a single mocked response suffices.
     global.fetch.mockResolvedValueOnce(jsonResponse({}, { ok: false, status: 404, statusText: 'Not Found' }));
-    await expect(client.getSBOM('missing')).rejects.toMatchObject({ status: 404 });
+    await expect(client.fetch('/artifacts/missing')).rejects.toMatchObject({ status: 404 });
 
     // 5xx is retried once by default for GET requests, so mock both attempts.
     global.fetch
       .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, { ok: false, status: 500, statusText: 'Internal Server Error' }))
       .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, { ok: false, status: 500, statusText: 'Internal Server Error' }));
-    await expect(client.getSBOM('missing')).rejects.toMatchObject({ status: 500 });
+    await expect(client.fetch('/artifacts/missing')).rejects.toMatchObject({ status: 500 });
   });
 
   it('exposes route canary list, detail, and event-lineage HTTP methods', async () => {

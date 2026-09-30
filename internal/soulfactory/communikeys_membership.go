@@ -266,7 +266,9 @@ func (m *communikeysMembership) Assign(ctx context.Context, pubkey string) ([]st
 // address. Selection is greatest created_at, then lexicographically lowest
 // event ID (Communikeys V2 §Replacement And Deletion).
 func (m *communikeysMembership) latestDefinition(ctx context.Context, community communikeysCommunityTarget) (*nostr.Event, error) {
-	events, err := m.bus.Query(ctx, []nostr.Filter{{
+	// Fail closed: the definition is the authority for a membership grant. See
+	// RelayReadPolicy.
+	read, err := m.bus.QueryWithPolicy(ctx, "communikeys.definition", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{communikeysDefinitionKind},
 		Authors: []nostr.PubKey{community.owner},
 		Tags:    nostr.TagMap{"d": []string{community.communityID}},
@@ -276,7 +278,7 @@ func (m *communikeysMembership) latestDefinition(ctx context.Context, community 
 		return nil, err
 	}
 	var latest *nostr.Event
-	for _, event := range events {
+	for _, event := range read.Events {
 		if !validCommunikeysDefinition(event, community.owner, community.communityID) {
 			continue
 		}
@@ -292,7 +294,9 @@ func (m *communikeysMembership) latestDefinition(ctx context.Context, community 
 // one exact section-scoped coordinate. A missing list is a hard error: bahia's
 // job is to grant, and it must never create an unreferenced list on its own.
 func (m *communikeysMembership) latestProfileList(ctx context.Context, listAuthor nostr.PubKey, identifier string) (*nostr.Event, error) {
-	events, err := m.bus.Query(ctx, []nostr.Filter{{
+	// Fail closed: the grant republishes this list with one more member, so a
+	// stale base would silently drop newer members. See RelayReadPolicy.
+	read, err := m.bus.QueryWithPolicy(ctx, "communikeys.profile_list", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{communikeysProfileListKind},
 		Authors: []nostr.PubKey{listAuthor},
 		Tags:    nostr.TagMap{"d": []string{identifier}},
@@ -302,7 +306,7 @@ func (m *communikeysMembership) latestProfileList(ctx context.Context, listAutho
 		return nil, err
 	}
 	var latest *nostr.Event
-	for _, event := range events {
+	for _, event := range read.Events {
 		if !validCommunikeysProfileList(event, listAuthor, identifier) {
 			continue
 		}

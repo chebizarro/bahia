@@ -158,7 +158,10 @@ var ErrRelayBusIncomplete = errors.New("relay bus stored events are incomplete")
 type RelayBusIncompleteError struct {
 	// Relays lists every relay that did not send EOSE.
 	Relays []RelayStoredEventsOutcome
-	Cause  error
+	// Total is the number of relays the read covered, so Total-len(Relays)
+	// relays sent EOSE. It is zero when the relay set is unknown.
+	Total int
+	Cause error
 }
 
 func (e *RelayBusIncompleteError) Error() string {
@@ -244,7 +247,7 @@ func (t *relayStoredEventsTracker) incomplete(cause error) error {
 	if len(missing) == 0 {
 		return nil
 	}
-	return &RelayBusIncompleteError{Relays: missing, Cause: cause}
+	return &RelayBusIncompleteError{Relays: missing, Total: len(t.outcomes), Cause: cause}
 }
 
 type relayAuthSigner interface {

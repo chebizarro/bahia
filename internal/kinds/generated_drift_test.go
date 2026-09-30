@@ -46,6 +46,14 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 	repo := repositoryRoot(t)
 	goKinds := parseGoKindConstants(t, filepath.Join(repo, "internal", "kinds", "kinds.go"))
 	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repo, "web", "src", "lib", "nostr", "kinds.gen.js"))
+	for jsName := range frontendCanonicalKindOverrides {
+		if !strings.HasPrefix(jsName, "WORKER_") {
+			t.Fatalf("frontendCanonicalKindOverrides may only shrink (C-43, bahia-irsry.9); new override %s", jsName)
+		}
+	}
+	if len(frontendCanonicalKindOverrides) > 4 {
+		t.Fatalf("frontendCanonicalKindOverrides may only shrink (C-43, bahia-irsry.9); has %d entries", len(frontendCanonicalKindOverrides))
+	}
 
 	for name, goValue := range goKinds {
 		jsName := goConstNameToJS(name)
@@ -79,6 +87,10 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 	for jsName, goValue := range map[string]string{
 		"BAHIA_CP_STATE_SCHEMA": CASControlStateSchema,
 		"DNS_STATE_DOMAIN":      DNSDomain,
+		"DNS_ZONE_TOPIC":        DNSZoneTopic,
+		"DNS_ENDPOINT_TOPIC":    DNSEndpointTopic,
+		"DNS_POLICY_TOPIC":      DNSPolicyTopic,
+		"DNS_BACKEND_TOPIC":     DNSBackendTopic,
 	} {
 		if got, ok := jsStrings[jsName]; !ok || got != goValue {
 			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)
@@ -86,6 +98,30 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 	}
 }
 
+// TestGeneratedFrontendWorkerCatalogKindsMatchGo keeps the web's legacy_kind
+// values for the worker read models (whose JS names alias the 30900 wire
+// kind) equal to the catalog kinds producers stamp.
+func TestGeneratedFrontendWorkerCatalogKindsMatchGo(t *testing.T) {
+	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js"))
+	for jsName, goValue := range map[string]int{
+		"WORKER_STATE_CATALOG_KIND":               WorkerState,
+		"WORKER_ASSIGNMENT_STATE_CATALOG_KIND":    WorkerAssignmentState,
+		"WORKER_DRAIN_STATUS_CATALOG_KIND":        WorkerDrainStatus,
+		"WORKER_ELIGIBILITY_PREVIEW_CATALOG_KIND": WorkerEligibilityPreview,
+	} {
+		if got, ok := jsKinds[jsName]; !ok || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %d (present=%t), want internal/kinds value %d", jsName, got, ok, goValue)
+		}
+	}
+}
+
+// frontendCanonicalKindOverrides is a known anti-pattern (audit finding C-43):
+// it makes this drift test pass while Go still defines WorkerState* as
+// 32000-32003 and the web reads worker state from CAS 30900. Removing it needs
+// the WorkerState kinds unified in the Go kind model (catalog, projector,
+// publisher, reactor), which is Phase 1 scope: bahia-irsry.9. Do not add
+// entries; delete the table when .9 aliases the Go constants to
+// CASControlState or removes them.
 var frontendCanonicalKindOverrides = map[string]int{
 	"WORKER_STATE":               30900,
 	"WORKER_ASSIGNMENT_STATE":    30900,

@@ -18,7 +18,7 @@ func TestProjectorPublishesBackupSnapshotReadModelsWithRestoreEligibility(t *tes
 	ctx := context.Background()
 	backupSource, runID := backupProjectionFixture(domain.RunStatusSucceeded, domain.BackupVerificationSkipped, false)
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
 
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
@@ -48,7 +48,7 @@ func TestProjectorBackupMutationPublishesChangedRestore(t *testing.T) {
 	ctx := context.Background()
 	backupSource, _ := backupProjectionFixture(domain.RunStatusSucceeded, domain.BackupVerificationSucceeded, true)
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
 
 	projector.handleEvent(ctx, events.Event{Type: service.EventBackupRestoreChanged, EntityID: backupSource.restore.ID.String(), Data: map[string]any{"restore_id": backupSource.restore.ID.String()}})
 
@@ -71,7 +71,7 @@ func TestProjectorBackupMutationPublishesChangedRunAndVerification(t *testing.T)
 	ctx := context.Background()
 	backupSource, runID := backupProjectionFixture(domain.RunStatusSucceeded, domain.BackupVerificationSucceeded, true)
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithBackupProjectionSource(backupSource))
 
 	projector.handleEvent(ctx, events.Event{Type: service.EventBackupVerificationChanged, EntityID: backupSource.verification.ID.String(), Data: map[string]any{"run_id": runID.String()}})
 

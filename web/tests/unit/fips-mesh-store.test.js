@@ -1,4 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { finalizeEvent, getPublicKey } from 'nostr-tools';
+
+// Producer contract (literals pin the wire shape, not the web constants):
+// - DNS endpoints: internal/adapters/nostr/projector.go controlStateEnvelope +
+//   dnsEndpointTags on kind 30900 (schema bahia.cp-state.v1, legacy_kind 31976,
+//   deleted=false|true, t=dns-endpoint); content is domain.DNSEndpoint, or
+//   {deleted, coordinate, fqdn, updated_at} for publishDNSEndpointTombstone.
+// - Worker state: internal/controlplane/worker_state_publisher.go
+//   (schema bahia.state.worker.v1, legacy_kind 32000, d=worker:state:<pk>).
 
 const systemInfoMock = vi.hoisted(() => ({
   loadSystemInfo: vi.fn()
@@ -41,38 +50,85 @@ vi.mock('../../src/lib/nostr/client.js', async () => {
   };
 });
 
-function event({ id, kind = 30900, pubkey = 'b'.repeat(64), created_at = 100, tags = [], content = {} }) {
-  return {
-    id,
-    kind,
-    pubkey,
-    created_at,
-    tags,
-    content: typeof content === 'string' ? content : JSON.stringify(content)
-  };
+function secretKey(byte) {
+  return Uint8Array.from({ length: 32 }, () => byte);
 }
 
-function meshEndpoint(overrides = {}) {
-  return event({
-    id: overrides.id || 'mesh-endpoint-1',
-    created_at: overrides.created_at || 100,
-    tags: overrides.tags || [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['npub', 'worker-a'], ['dns', 'worker-a.mesh.example'], ['addr', 'fd00::1'], ['health', 'healthy']],
+const SERVICE_SECRET = secretKey(0x11);
+const FORGER_SECRET = secretKey(0x44);
+const WORKER_SECRET = secretKey(0x22);
+const SERVICE = getPublicKey(SERVICE_SECRET);
+const WORKER = getPublicKey(WORKER_SECRET);
+const COORDINATE = `endpoint:service:checkout-api:production`;
+
+function signed(template, secret = SERVICE_SECRET) {
+  return finalizeEvent({ kind: 30900, content: '', ...template, content: JSON.stringify(template.content ?? {}) }, secret);
+}
+
+function envelope({ legacyKind, d, deleted = false, domain }) {
+  return [
+    ['d', d],
+    ['domain', domain],
+    ['schema', 'bahia.cp-state.v1'],
+    ['legacy_kind', String(legacyKind)],
+    ['deleted', String(deleted)]
+  ];
+}
+
+function liveEndpoint({ created_at = 100, fqdn = 'checkout.prod.example.com', workerPubkey = WORKER, family = 'service', d = COORDINATE, secret } = {}) {
+  const meshTags = workerPubkey ? [['npub', workerPubkey], ['mesh', 'fips']] : [];
+  return signed({
+    created_at,
+    tags: [
+      ...envelope({ legacyKind: 31976, d, domain: 'dns' }),
+      ['family', family], ['health', 'healthy'], ['dns', fqdn], ['addr', 'fd00::1'], ['t', 'dns-endpoint'], ['t', 'bahia'],
+      ['environment', 'production'], ['proto', 'https'], ['port', '443'],
+      ...meshTags,
+      ['service', 'checkout-api']
+    ],
     content: {
-      family: 'mesh',
-      worker_pubkey: 'worker-a',
-      name: 'worker-a',
-      fqdn: 'worker-a.mesh.example',
+      id: '5d1c1c42-6f0a-5b2f-9d7e-1f3b2a4c5d6e',
+      worker_pubkey: workerPubkey || undefined,
+      family,
+      name: 'checkout-api',
+      environment: 'production',
+      zone: 'prod.example.com',
+      fqdn,
+      coordinate: d,
+      protocol: 'https',
       address: 'fd00::1',
-      source: 'worker_fips_overlay',
+      port: 443,
       health: 'healthy',
-      metadata: { projection_status: 'projected' },
-      ...overrides.content
-    },
-    ...overrides
+      drift_status: 'in_sync',
+      source: workerPubkey ? 'fips' : 'service_state',
+      metadata: workerPubkey ? { mesh: 'fips', projection_status: 'projected' } : { projection_status: 'projected' },
+      materialized_at: '2026-09-30T00:00:00Z'
+    }
+  }, secret);
+}
+
+function endpointTombstone({ created_at = 200, d = COORDINATE, fqdn = 'checkout.prod.example.com' } = {}) {
+  return signed({
+    created_at,
+    tags: [...envelope({ legacyKind: 31976, d, deleted: true, domain: 'dns' }), ['t', 'dns-endpoint'], ['t', 'bahia'], ['dns', fqdn]],
+    content: { deleted: true, coordinate: d, fqdn, updated_at: '2026-09-30T00:01:00Z' }
   });
 }
 
-describe('FIPS mesh store', () => {
+function workerState({ created_at = 100, name = 'worker-one', status = 'online', deleted = false } = {}) {
+  return signed({
+    created_at,
+    tags: [
+      ['d', `worker:state:${WORKER}`], ['domain', 'worker'], ['schema', 'bahia.state.worker.v1'], ['legacy_kind', '32000'],
+      ['worker', WORKER], ['deleted', String(deleted)], ['status', status], ['scheduling_state', 'active']
+    ],
+    content: deleted
+      ? { deleted: true, pubkey: WORKER }
+      : { deleted: false, pubkey: WORKER, name, status, scheduling_state: 'active', labels: { zone: 'a' }, capabilities: {} }
+  });
+}
+
+describe('FIPS mesh store (producer 30900 contract)', () => {
   let store;
 
   beforeEach(async () => {
@@ -86,140 +142,157 @@ describe('FIPS mesh store', () => {
     systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
         browser_relays: ['http://localhost:10547/relay'],
-        service_pubkey: 'b'.repeat(64)
+        service_pubkey: SERVICE
       }
     });
     store = await import('../../src/lib/stores/fips-mesh.svelte.js');
     store.resetFipsMeshStore();
+    store.fipsMeshState.servicePubkey = SERVICE;
   });
 
-  it('builds narrow mesh read-model filters', () => {
-    store.fipsMeshState.servicePubkey = 'b'.repeat(64);
-
+  it('REQs endpoints on the indexed #t topic and worker state by author', () => {
     expect(store.fipsMeshReadModelFilters()).toEqual([
-      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
-      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['worker'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
-      expect.objectContaining({ kinds: [30900], '#domain': ['worker'], '#schema': ['bahia.state.worker.v1'], authors: ['b'.repeat(64)], limit: 1000 })
+      { kinds: [30900], '#t': ['dns-endpoint'], authors: [SERVICE], limit: 1000 },
+      { kinds: [30900], '#domain': ['worker'], authors: [SERVICE], limit: 1000 }
     ]);
+    for (const filter of store.fipsMeshReadModelFilters()) {
+      expect(filter).not.toHaveProperty('#schema');
+    }
   });
 
   it('bootstraps through a persistent subscription and marks ready on EOSE', async () => {
-    const initial = meshEndpoint();
-
     const result = await store.bootstrapFipsMesh();
-    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
-    callbacks.onEvent(initial, 'relay-a');
+    const [filters, callbacks] = nostrMock.subscribeWithRecovery.mock.calls[0];
+    callbacks.onEvent(liveEndpoint(), 'relay-a');
     callbacks.onEose('relay-a');
 
     expect(result.ok).toBe(true);
+    expect(filters).toEqual(store.fipsMeshReadModelFilters());
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'] })
-    ]), expect.objectContaining({
-      onEvent: expect.any(Function),
-      onEose: expect.any(Function),
-      onHealth: expect.any(Function),
-      onClosed: expect.any(Function)
-    }));
     expect(store.fipsMeshState.bootstrapComplete).toBe(true);
     expect(store.meshEndpoints).toHaveLength(1);
-    expect(store.meshNodes[0]).toMatchObject({ pubkey: 'worker-a', overlayAddress: 'fd00::1', health: 'healthy' });
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, overlayAddress: 'fd00::1', health: 'healthy' });
   });
 
-  it('applies live EVENT, EOSE, and CLOSED callbacks without polling', async () => {
-    await store.bootstrapFipsMesh();
-    const callbacks = nostrMock.subscribeWithRecovery.mock.calls[0][1];
+  it('refuses to bootstrap without a service author to scope on', async () => {
+    systemInfoMock.loadSystemInfo.mockResolvedValue({ nostr: { browser_relays: ['ws://relay.example'] } });
+    store.resetFipsMeshStore();
 
-    callbacks.onEvent(meshEndpoint({ id: 'live-endpoint', created_at: 120, content: { fqdn: 'live.mesh.example' } }), 'relay-a');
-    callbacks.onHealth({
-      lastEoseAt: '2026-07-30T12:00:00.000Z',
-      resubscribeAttempts: 2,
-      lastClosedReason: 'rate-limited'
-    });
-    callbacks.onEose('relay-a');
-    callbacks.onClosed('rate-limited', 'relay-a', { terminal: true, source: 'closed' });
+    const result = await store.bootstrapFipsMesh();
 
-    expect(store.meshEndpoints.map((endpoint) => endpoint.fqdn)).toContain('live.mesh.example');
-    expect(store.fipsMeshState).toMatchObject({
-      lastEoseAt: '2026-07-30T12:00:00.000Z',
-      resubscribeAttempts: 2,
-      lastClosedReason: 'rate-limited'
-    });
-    expect(store.fipsMeshState.lastClosed).toMatchObject({ reason: 'rate-limited', relay: 'relay-a', terminal: true });
-    expect(store.fipsMeshState.status).toBe('degraded');
+    expect(result).toEqual({ ok: false, reason: 'No Bahia service pubkey configured for FIPS mesh read models' });
+    expect(nostrMock.subscribeWithRecovery).not.toHaveBeenCalled();
   });
 
-  it('dedupes parameterized replaceable endpoint events by author and d tag', () => {
-    const older = meshEndpoint({ id: 'older', created_at: 100, content: { fqdn: 'old.mesh.example' } });
-    const stale = meshEndpoint({ id: 'stale', created_at: 90, content: { fqdn: 'stale.mesh.example' } });
-    const newer = meshEndpoint({ id: 'newer', created_at: 120, content: { fqdn: 'new.mesh.example' } });
-
-    expect(store.applyFipsMeshEvent(older)).toBe(true);
-    expect(store.applyFipsMeshEvent(stale)).toBe(false);
-    expect(store.applyFipsMeshEvent(newer)).toBe(true);
+  it('applies a live cp-state endpoint; deleted=false is not a tombstone', () => {
+    expect(store.applyFipsMeshEvent(liveEndpoint())).toBe(true);
 
     expect(store.meshEndpoints).toHaveLength(1);
-    expect(store.meshEndpoints[0].fqdn).toBe('new.mesh.example');
+    expect(store.meshEndpoints[0]).toMatchObject({
+      coordinate: COORDINATE,
+      fqdn: 'checkout.prod.example.com',
+      workerPubkey: WORKER,
+      address: 'fd00::1',
+      port: 443,
+      protocol: 'https',
+      health: 'healthy',
+      projectionStatus: 'projected'
+    });
+    expect(store.meshNodes[0].dnsHostnames).toEqual(['checkout.prod.example.com']);
   });
 
-  it('ignores tombstones and removes older live state', () => {
-    const active = meshEndpoint({ id: 'active', created_at: 100 });
-    const tombstone = meshEndpoint({
-      id: 'deleted',
-      created_at: 130,
-      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['deleted', 'true']],
-      content: { deleted: true, coordinate: 'endpoint:mesh:worker-a:mesh' }
-    });
-    const lateReplay = meshEndpoint({ id: 'late-replay', created_at: 120, content: { fqdn: 'late.mesh.example' } });
+  it('removes the endpoint on its tombstone and rejects an older live replay', () => {
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 100 }))).toBe(true);
+    expect(store.applyFipsMeshEvent(endpointTombstone({ created_at: 200 }))).toBe(true);
+    expect(store.meshEndpoints).toEqual([]);
+    expect(store.meshNodes).toEqual([]);
 
-    expect(store.applyFipsMeshEvent(active)).toBe(true);
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 150, fqdn: 'late.prod.example.com' }))).toBe(false);
+    expect(store.meshEndpoints).toEqual([]);
+
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 300, fqdn: 'back.prod.example.com' }))).toBe(true);
+    expect(store.meshEndpoints.map((endpoint) => endpoint.fqdn)).toEqual(['back.prod.example.com']);
+  });
+
+  it('keeps the newest record per (kind, pubkey, d), lowest id on a created_at tie', () => {
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 100, fqdn: 'old.prod.example.com' }))).toBe(true);
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 90, fqdn: 'stale.prod.example.com' }))).toBe(false);
+    expect(store.meshEndpoints[0].fqdn).toBe('old.prod.example.com');
+
+    const tieA = liveEndpoint({ created_at: 120, fqdn: 'tie-a.prod.example.com' });
+    const tieB = liveEndpoint({ created_at: 120, fqdn: 'tie-b.prod.example.com' });
+    const [lower, higher] = tieA.id < tieB.id ? [tieA, tieB] : [tieB, tieA];
+    expect(store.applyFipsMeshEvent(higher)).toBe(true);
+    expect(store.applyFipsMeshEvent(lower)).toBe(true);
+    expect(store.applyFipsMeshEvent(higher)).toBe(false);
     expect(store.meshEndpoints).toHaveLength(1);
-    expect(store.applyFipsMeshEvent(tombstone)).toBe(true);
+    expect(store.meshEndpoints[0].nostrEventId).toBe(lower.id);
+  });
+
+  it('rejects endpoint and worker records signed by any author but the service', () => {
+    const forgedEndpoint = liveEndpoint({ secret: FORGER_SECRET, fqdn: 'evil.prod.example.com' });
+    expect(forgedEndpoint.pubkey).not.toBe(SERVICE);
+    expect(store.applyFipsMeshEvent(forgedEndpoint)).toBe(false);
+
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 100 }))).toBe(true);
+    const forgedTombstone = finalizeEvent({ ...endpointTombstone({ created_at: 500 }), id: undefined, sig: undefined, pubkey: undefined }, FORGER_SECRET);
+    expect(store.applyFipsMeshEvent(forgedTombstone)).toBe(false);
+    expect(store.meshEndpoints.map((endpoint) => endpoint.fqdn)).toEqual(['checkout.prod.example.com']);
+
+    store.fipsMeshState.servicePubkey = '';
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 600, fqdn: 'unscoped.prod.example.com' }))).toBe(false);
+  });
+
+  it('ignores non-mesh endpoints and drops a mesh coordinate that stops being mesh', () => {
+    expect(store.applyFipsMeshEvent(liveEndpoint({ d: 'endpoint:service:public', workerPubkey: '', fqdn: 'public.example.com' }))).toBe(false);
     expect(store.meshEndpoints).toEqual([]);
-    expect(store.applyFipsMeshEvent(lateReplay)).toBe(false);
+
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 100 }))).toBe(true);
+    expect(store.applyFipsMeshEvent(liveEndpoint({ created_at: 110, workerPubkey: '' }))).toBe(true);
     expect(store.meshEndpoints).toEqual([]);
   });
 
-  it('filters non-mesh DNS endpoint read models locally after relay delivery', () => {
-    const serviceEndpoint = event({
-      id: 'service-endpoint',
-      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['family', 'service'], ['dns', 'api.example']],
-      content: { family: 'service', fqdn: 'api.example', address: '203.0.113.10', source: 'service_state' }
-    });
-
-    expect(store.applyFipsMeshEvent(serviceEndpoint)).toBe(false);
-    expect(store.meshEndpoints).toEqual([]);
-  });
-
-  it('merges worker state overlay fields with DNS/FIPS endpoint state', () => {
-    const worker = event({
-      id: 'worker-state',
-      kind: 30900,
+  it('ignores other cp-state families even on the same REQ', () => {
+    const zone = signed({
       created_at: 100,
-      tags: [['domain', 'worker'], ['schema', 'bahia.state.worker.v1'], ['d', 'worker-a'], ['worker', 'worker-a'], ['status', 'online']],
-      content: {
-        pubkey: 'worker-a',
-        name: 'Worker A',
-        status: 'online',
-        fips_overlay_addr: 'fd00::10',
-        fips_endpoints: [{ transport: 'quic', address: 'fd00::10:443' }],
-        mesh_health: { rtt: 500_000_000, loss: 0.01 }
-      }
+      tags: [...envelope({ legacyKind: 31975, d: 'zone:prod.example.com', domain: 'dns' }), ['t', 'dns-zone']],
+      content: { name: 'prod.example.com', deleted: false }
+    });
+    const assignment = signed({
+      created_at: 100,
+      tags: [...envelope({ legacyKind: 32001, d: WORKER, domain: 'worker' }), ['worker', WORKER]],
+      content: { worker_pubkey: WORKER, active_assignments: [] }
     });
 
-    expect(store.applyFipsMeshEvent(worker)).toBe(true);
-    expect(store.applyFipsMeshEvent(meshEndpoint())).toBe(true);
+    expect(store.applyFipsMeshEvent(zone)).toBe(false);
+    expect(store.applyFipsMeshEvent(assignment)).toBe(false);
+    expect(store.meshNodes).toEqual([]);
+  });
+
+  it('merges publisher worker state with its mesh endpoints and honours worker tombstones', () => {
+    expect(store.applyFipsMeshEvent(workerState())).toBe(true);
+    expect(store.applyFipsMeshEvent(liveEndpoint())).toBe(true);
 
     expect(store.meshNodes).toHaveLength(1);
-    expect(store.meshNodes[0]).toMatchObject({
-      pubkey: 'worker-a',
-      name: 'Worker A',
-      overlayAddress: 'fd00::10',
-      health: 'healthy'
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'worker-one', status: 'online', overlayAddress: 'fd00::1', health: 'healthy' });
+    expect(store.meshNodes[0].dnsHostnames).toEqual(['checkout.prod.example.com']);
+
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 90, name: 'stale-name' }))).toBe(false);
+    expect(store.applyFipsMeshEvent(workerState({ created_at: 200, deleted: true }))).toBe(true);
+    expect(store.meshNodes).toHaveLength(1);
+    expect(store.meshNodes[0].name).not.toBe('worker-one');
+  });
+
+  it('also routes worker state published in the canonical cp-state envelope', () => {
+    const projected = signed({
+      created_at: 100,
+      tags: [...envelope({ legacyKind: 32000, d: WORKER, domain: 'worker' }), ['worker', WORKER]],
+      content: { pubkey: WORKER, name: 'projected-worker', status: 'online', fips_overlay_addr: 'fd00::10', mesh_health: { rtt: 500_000_000, loss: 0.01 } }
     });
-    expect(store.meshNodes[0].transportEndpoints).toEqual(expect.arrayContaining([expect.objectContaining({ transport: 'quic' })]));
-    expect(store.meshNodes[0].dnsHostnames).toEqual(['worker-a.mesh.example']);
+
+    expect(store.applyFipsMeshEvent(projected)).toBe(true);
+    expect(store.meshNodes[0]).toMatchObject({ pubkey: WORKER, name: 'projected-worker', overlayAddress: 'fd00::10', health: 'healthy' });
   });
 
   it('classifies FIPS mesh health deterministically', () => {

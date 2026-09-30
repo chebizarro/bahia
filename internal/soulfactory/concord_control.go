@@ -416,14 +416,15 @@ func (m *concordMembership) fetchConcordControlPlane(
 	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
 		return nil, fmt.Errorf("authenticate Concord relays: %w", err)
 	}
-	events, err := m.bus.Query(ctx, []nostr.Filter{{
+	// Fail closed: the fold decides grants and revocations. See RelayReadPolicy.
+	plane, err := m.bus.QueryWithPolicy(ctx, "concord.control_plane", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.KindGiftWrap},
 		Authors: []nostr.PubKey{address},
 	}})
 	if err != nil {
 		return nil, fmt.Errorf("fetch the Control Plane at epoch %d: %w", bundle.RootEpoch, err)
 	}
-	return foldConcordControlPlane(events, address, read.ConversationKey)
+	return foldConcordControlPlane(plane.Events, address, read.ConversationKey)
 }
 
 // resolveConcordRotationAuthority is the legacy structural citation lookup,

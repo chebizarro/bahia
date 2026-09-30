@@ -136,6 +136,7 @@ type Metrics struct {
 	NostrRelayReREQAttempts     map[string]int64            // key: relay_url
 	NostrRelayReconnectAttempts map[string]int64            // key: relay_url
 	NostrOutboxDepth            int64
+	NostrOutboxFailed           int64 // -1 until the failed-row index exists
 	NostrEventStoreTotalBytes   int64
 	NostrEventStoreHeapBytes    int64
 	NostrEventStoreIndexBytes   int64
@@ -894,6 +895,23 @@ func (m *Metrics) SetNostrOutboxDepth(depth int64) {
 	}
 }
 
+// nostrOutboxFailedHelp describes bahia_nostr_outbox_failed.
+const nostrOutboxFailedHelp = "Outbound events whose delivery the Nostr publish outbox gave up on (publish_state=failed); -1 until the online failed-row index exists"
+
+// SetNostrOutboxFailed updates the abandoned-row gauge. Pass -1 when the count
+// is unavailable (the online failed-row index has not been built).
+func (m *Metrics) SetNostrOutboxFailed(failed int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if failed < -1 {
+		failed = -1
+	}
+	m.NostrOutboxFailed = failed
+	if m.otel != nil {
+		m.otel.nostrOutboxFailed.Record(context.Background(), failed)
+	}
+}
+
 // SetNostrEventStorage records catalog-backed event-store lifecycle gauges.
 func (m *Metrics) SetNostrEventStorage(totalBytes, heapBytes, indexBytes, liveRows, deadRows, oldestUnix int64, batches map[string]int64) {
 	m.mu.Lock()
@@ -1340,6 +1358,10 @@ func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 		writer.println("# HELP bahia_nostr_outbox_depth Unpublished events in the durable Nostr publish outbox")
 		writer.println("# TYPE bahia_nostr_outbox_depth gauge")
 		writer.printf("bahia_nostr_outbox_depth %d\n", m.NostrOutboxDepth)
+
+		writer.printf("# HELP bahia_nostr_outbox_failed %s\n", nostrOutboxFailedHelp)
+		writer.println("# TYPE bahia_nostr_outbox_failed gauge")
+		writer.printf("bahia_nostr_outbox_failed %d\n", m.NostrOutboxFailed)
 
 		writer.println("# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
 		writer.println("# TYPE bahia_nostr_event_store_bytes gauge")

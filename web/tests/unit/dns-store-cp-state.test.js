@@ -146,7 +146,7 @@ describe('DNS store consumes canonical 30900 DNS state (bahia.cp-state.v1)', () 
 
   it('subscribes to the dns domain without pinning a per-family schema the producer never sets', () => {
     const [readModelFilter] = nostrMock.subscribeWithRecovery.mock.calls[0][0];
-    expect(readModelFilter).toEqual({ kinds: [30900], '#domain': ['dns'], limit: 5000, authors: [SERVICE] });
+    expect(readModelFilter).toEqual({ kinds: [30900], '#t': ['dns-zone', 'dns-endpoint', 'dns-policy', 'dns-backend'], limit: 5000, authors: [SERVICE] });
   });
 
   it.each(FAMILIES)('applies live and tombstone $name events from the subscription', (family) => {

@@ -5,16 +5,23 @@ import {
   nostr,
   BAHIA_STATE_SCHEMAS,
   CASCADIA_CONTROLPLANE_STATE,
+  DNS_ENDPOINT_TOPIC,
   getDTag,
   getTagValue,
-  isReplaceableTombstone,
   parseJsonContent,
   upsertReplaceableEvent
 } from '../nostr/client.js';
+import { controlStateSchema } from '../nostr/cp-state.js';
 
+// Producer contract: DNS endpoints are canonical 30900 records (schema
+// bahia.cp-state.v1, legacy_kind 31976, deleted=true|false, t=dns-endpoint)
+// from the projector; worker state is the 30900 record the control plane's
+// worker-state publisher emits (schema bahia.state.worker.v1, domain=worker).
+// controlStateSchema resolves both to their family schema.
 const CAS_STATE_KIND = CASCADIA_CONTROLPLANE_STATE;
 const DNS_ENDPOINT_SCHEMA = BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE;
 const WORKER_STATE_SCHEMA = BAHIA_STATE_SCHEMAS.WORKER_STATE;
+const WORKER_STATE_DOMAIN = 'worker';
 const READ_MODEL_LIMIT = 1000;
 const MAX_HEALTHY_RTT_NS = 1_000_000_000;
 const MAX_PROJECTABLE_RTT_NS = 5_000_000_000;
@@ -65,9 +72,12 @@ function authorFilter() {
 export function fipsMeshReadModelFilters() {
   const scopedAuthor = authorFilter();
   return [
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['mesh'], '#mesh': ['fips'], limit: READ_MODEL_LIMIT, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['worker'], '#mesh': ['fips'], limit: READ_MODEL_LIMIT, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#schema': [WORKER_STATE_SCHEMA], limit: READ_MODEL_LIMIT, ...scopedAuthor }
+    // #t is single-letter, so relays index it. Tombstones carry the same
+    // topic, and mesh membership is decided locally per record.
+    { kinds: [CAS_STATE_KIND], '#t': [DNS_ENDPOINT_TOPIC], limit: READ_MODEL_LIMIT, ...scopedAuthor },
+    // The worker-state publisher stamps no single-letter tag yet, so this REQ
+    // still scopes on the multi-letter domain tag; events are re-checked locally.
+    { kinds: [CAS_STATE_KIND], '#domain': [WORKER_STATE_DOMAIN], limit: READ_MODEL_LIMIT, ...scopedAuthor }
   ];
 }
 
@@ -85,20 +95,10 @@ function asArray(value) {
   return Array.isArray(value) ? value.filter((item) => item !== null && item !== undefined) : [];
 }
 
+// Read models are only trusted from the configured Bahia service author; with
+// no service pubkey configured nothing is accepted.
 function isCanonicalAuthor(event) {
-  return !fipsMeshState.servicePubkey || event.pubkey === fipsMeshState.servicePubkey;
-}
-
-function eventSchema(event, content = null) {
-  return getTagValue(event, 'schema', content?.schema || '');
-}
-
-function eventDomain(event, content = null) {
-  return getTagValue(event, 'domain', content?.domain || '');
-}
-
-function hasDeletedTagOrContent(event, content) {
-  return isReplaceableTombstone(event) || content?.deleted === true;
+  return Boolean(fipsMeshState.servicePubkey) && event?.pubkey === fipsMeshState.servicePubkey;
 }
 
 function contentWithMeta(event) {
@@ -112,11 +112,19 @@ function contentWithMeta(event) {
   };
 }
 
+function isDNSEndpointRecord(event, content) {
+  return event?.kind === CAS_STATE_KIND && controlStateSchema(event, content) === DNS_ENDPOINT_SCHEMA;
+}
+
+function isWorkerStateRecord(event, content) {
+  return event?.kind === CAS_STATE_KIND && controlStateSchema(event, content) === WORKER_STATE_SCHEMA;
+}
+
+// isMeshEndpointEvent reports whether a live DNS endpoint record is part of
+// the FIPS mesh (tombstones carry no mesh markers and are handled by d).
 export function isMeshEndpointEvent(event) {
-  if (!event || event.kind !== CAS_STATE_KIND) return false;
   const content = parseJsonContent(event, {});
-  if (eventDomain(event, content) !== 'dns' || eventSchema(event, content) !== DNS_ENDPOINT_SCHEMA) return false;
-  if (hasDeletedTagOrContent(event, content)) return true;
+  if (!isDNSEndpointRecord(event, content)) return false;
   const family = trimString(getTagValue(event, 'family', content.family || '')).toLowerCase();
   const meshTags = tagValues(event, 'mesh').map((value) => value.toLowerCase());
   const source = trimString(content.source || getTagValue(event, 'source', '')).toLowerCase();
@@ -125,8 +133,8 @@ export function isMeshEndpointEvent(event) {
   return family === 'mesh' || meshTags.includes('fips') || source.includes('fips') || metadataMesh === 'fips';
 }
 
-function endpointCoordinate(event, content) {
-  return trimString(getDTag(event) || content.coordinate || content.id || content.fqdn || content.name);
+function endpointCoordinate(event) {
+  return trimString(getDTag(event));
 }
 
 function workerPubkeyFromEndpoint(event, content) {
@@ -142,7 +150,7 @@ function workerPubkeyFromEndpoint(event, content) {
 
 function normalizeEndpoint(event) {
   const content = contentWithMeta(event);
-  const coordinate = endpointCoordinate(event, content);
+  const coordinate = endpointCoordinate(event);
   if (!coordinate) return null;
   const workerPubkey = workerPubkeyFromEndpoint(event, content);
   const metadata = content.metadata && typeof content.metadata === 'object' ? content.metadata : {};
@@ -300,60 +308,53 @@ function refreshCollections() {
   replaceArray(meshNodes, Array.from(nodesByPubkey.values()).sort((a, b) => String(a.name || a.pubkey).localeCompare(String(b.name || b.pubkey))));
 }
 
-function removeEndpoint(event) {
-  const content = parseJsonContent(event, {});
-  const coordinate = endpointCoordinate(event, content);
-  if (coordinate) endpointMap.delete(coordinate);
-}
-
+// applyEndpointEvent keeps the newest record per (kind, pubkey, d), lowest id
+// on a created_at tie. Tombstones and non-mesh records are retained too, so an
+// older live record replayed later cannot resurrect the coordinate.
 function applyEndpointEvent(event) {
-  if (!isCanonicalAuthor(event) || !isMeshEndpointEvent(event)) return false;
+  const coordinate = endpointCoordinate(event);
+  if (!coordinate) return false;
   const result = upsertReplaceableEvent(endpointEvents, event);
   if (!result.accepted) return false;
-  if (result.deleted) {
-    removeEndpoint(event);
-    refreshCollections();
-    return true;
+  if (result.deleted || !isMeshEndpointEvent(event)) {
+    const removed = endpointMap.delete(coordinate);
+    if (removed) refreshCollections();
+    return result.deleted || removed;
   }
   const endpoint = normalizeEndpoint(event);
   if (!endpoint) return false;
-  endpointMap.set(endpoint.coordinate, endpoint);
+  endpointMap.set(coordinate, endpoint);
   refreshCollections();
   return true;
 }
 
 function applyWorkerEvent(event) {
-  if (event?.kind !== CAS_STATE_KIND || !isCanonicalAuthor(event)) return false;
-  const content = parseJsonContent(event, {});
-  if (eventDomain(event, content) !== 'worker' || eventSchema(event, content) !== WORKER_STATE_SCHEMA) return false;
-  const pubkey = trimString(content.pubkey || content.worker_pubkey || getTagValue(event, 'worker', '') || getDTag(event));
-  if (!pubkey) return false;
+  const d = getDTag(event);
+  if (!d) return false;
   const result = upsertReplaceableEvent(workerEvents, event);
   if (!result.accepted) return false;
   if (result.deleted) {
-    workerMap.delete(pubkey);
+    workerMap.delete(d);
     refreshCollections();
     return true;
   }
   const worker = normalizeWorker(event);
   if (!worker) return false;
-  workerMap.set(worker.pubkey, worker);
+  workerMap.set(d, worker);
   refreshCollections();
   return true;
 }
 
 export function applyFipsMeshEvent(event) {
   if (!event?.id || seenEventIds.has(event.id)) return false;
+  if (!isCanonicalAuthor(event)) return false;
   const content = parseJsonContent(event, {});
-  const domain = eventDomain(event, content);
-  const schema = eventSchema(event, content);
-  const accepted = domain === 'dns' && schema === DNS_ENDPOINT_SCHEMA
-    ? applyEndpointEvent(event)
-    : applyWorkerEvent(event);
-  if (accepted) {
-    seenEventIds.add(event.id);
-    fipsMeshState.lastEventAt = Date.now();
-  }
+  let accepted = false;
+  if (isDNSEndpointRecord(event, content)) accepted = applyEndpointEvent(event);
+  else if (isWorkerStateRecord(event, content)) accepted = applyWorkerEvent(event);
+  else return false;
+  seenEventIds.add(event.id);
+  if (accepted) fipsMeshState.lastEventAt = Date.now();
   return accepted;
 }
 
@@ -431,6 +432,7 @@ export async function bootstrapFipsMesh({ relays = null, servicePubkey = null, s
       fipsMeshState.relays = resolvedRelays;
       fipsMeshState.servicePubkey = resolvedServicePubkey;
       if (resolvedRelays.length === 0) throw new Error('No browser Nostr relays available for FIPS mesh read models');
+      if (!resolvedServicePubkey) throw new Error('No Bahia service pubkey configured for FIPS mesh read models');
 
       subscribeToConnectionState();
       fipsMeshState.status = 'connecting';

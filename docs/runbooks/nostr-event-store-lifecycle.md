@@ -24,7 +24,53 @@ bahia-event-archive --config /etc/bahia/config.yaml --action ensure-indexes
 
 The command creates each large index concurrently and validates the archive
 ownership foreign key outside the startup migration. `claim-export` fails
-closed until every index and the constraint are ready.
+closed until every archive index and the constraint are ready.
+
+### After deploying migration 000071 (publish target and `failed` state)
+
+Migration 000071 adds `nostr_events_publish_state_check` as `NOT VALID`, so
+startup never scans `nostr_events` under an exclusive lock. Run
+`ensure-indexes` again once the new binary is live:
+
+```sh
+bahia-event-archive --config /etc/bahia/config.yaml --action ensure-indexes
+```
+
+It runs `ALTER TABLE nostr_events VALIDATE CONSTRAINT
+nostr_events_publish_state_check`, which holds only `SHARE UPDATE EXCLUSIVE`
+(reads and writes continue) while it checks existing rows. The same run
+builds `idx_nostr_events_publish_failed` concurrently (a partial index over
+`publish_state = 'failed'` rows). It is idempotent; rerun it if interrupted.
+Verify:
+
+```sql
+SELECT convalidated FROM pg_constraint
+WHERE conname = 'nostr_events_publish_state_check';          -- expect t
+SELECT indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+WHERE c.relname = 'idx_nostr_events_publish_failed';          -- expect t
+```
+
+## Publish outbox health
+
+- `bahia_nostr_outbox_depth`: pending outbound rows (all publish targets). The
+  control-plane target carries the read-model projector, docs, SBOM and
+  config-fabric; the default target carries daemon interop events. Sustained
+  growth means a write relay is not accepting.
+- `bahia_nostr_outbox_failed`: rows whose delivery was abandoned
+  (`publish_state = 'failed'`, reason in `last_publish_error`). It reads `-1`
+  until `idx_nostr_events_publish_failed` exists, and the daemon logs one
+  warning naming `ensure-indexes`; it never counts by scanning the table.
+  Alert on any increase. Abandoned projector rows are republished by the next
+  projector repair once relays accept again; other producers do not
+  resubmit automatically.
+- Per-relay acceptance is held in memory only. After a daemon restart each
+  pending row is resent to every write relay, including relays that had
+  already accepted it; they answer OK `duplicate:`, which counts as
+  acceptance. The event is the stored signed event (same id), so this costs
+  one extra EVENT frame per already-accepting relay per pending row and never
+  creates a second copy. Persisting per-relay state was rejected because it
+  would put relay topology into Postgres and add a write per relay per
+  delivery round.
 
 ## Canary export
 

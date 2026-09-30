@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
 import { SOUL_FACTORY_PROVISIONING_REQUEST } from '../../src/lib/nostr/kinds.gen.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
-const RUNTIME_PUBKEY = 'd'.repeat(64);
+const RUNTIME_PUBKEY = e2eTestPubkey('runtime');
 const BROWSER_RELAY = 'ws://relay.test.local';
 const systemInfo = {
   nostr: {
@@ -138,13 +138,12 @@ test.describe('Soul Signing Smoke Test', () => {
             if (Array.isArray(message) && message[0] === 'REQ') {
               const subId = message[1];
               const filters = message.slice(2);
-              const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
-              for (const storedEvent of events) {
-                if (filters.some((filter) => !Array.isArray(filter.kinds) || filter.kinds.includes(storedEvent.kind))) {
-                  this.onmessage({ data: JSON.stringify(['EVENT', subId, storedEvent]) });
-                }
-              }
-              this.onmessage({ data: JSON.stringify(['EOSE', subId]) });
+              const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]')
+                .filter((storedEvent) => filters.some((filter) => !Array.isArray(filter.kinds) || filter.kinds.includes(storedEvent.kind)));
+              void Promise.all(events.map((storedEvent) => window.__bahiaE2ENormalizeAndSign(storedEvent))).then((signedEvents) => {
+                for (const signedEvent of signedEvents) this.onmessage?.({ data: JSON.stringify(['EVENT', subId, signedEvent]) });
+                this.onmessage?.({ data: JSON.stringify(['EOSE', subId]) });
+              });
               return;
             }
             if (Array.isArray(message) && message[0] === 'EVENT') {

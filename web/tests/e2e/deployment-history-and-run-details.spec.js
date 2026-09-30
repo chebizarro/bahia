@@ -253,8 +253,7 @@ async function installEncryptedRunLogHarness(page) {
           ],
           content: String(event.content || '').startsWith('mock-nip44:')
             ? `mock-nip44:${btoa(unescape(encodeURIComponent(responsePlaintext)))}`
-            : `enc44:${responsePlaintext}`,
-          sig: '0'.repeat(128)
+            : `enc44:${responsePlaintext}`
         };
 
         if (typeof window.__bahiaPushNostrEvent === 'function') {
@@ -263,11 +262,13 @@ async function installEncryptedRunLogHarness(page) {
           this.emitEvent(resultEvent);
         } else {
           const subs = this.__bahiaSubs || new Map();
-          for (const [subId, filters] of subs.entries()) {
-            if (Array.isArray(filters) && filters.some((filter) => matchesFilter(resultEvent, filter))) {
-              this.dispatchEvent?.(new MessageEvent('message', { data: JSON.stringify(['EVENT', subId, resultEvent]) }));
+          void window.__bahiaE2ESignMockEvent(resultEvent, servicePubkey).then((signedEvent) => {
+            for (const [subId, filters] of subs.entries()) {
+              if (Array.isArray(filters) && filters.some((filter) => matchesFilter(resultEvent, filter))) {
+                this.dispatchEvent?.(new MessageEvent('message', { data: JSON.stringify(['EVENT', subId, signedEvent]) }));
+              }
             }
-          }
+          });
         }
 
         return;

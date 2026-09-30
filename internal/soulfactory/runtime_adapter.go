@@ -94,6 +94,12 @@ type RuntimeAdapterConfig struct {
 	// announcement may be dated before it is rejected. Zero uses
 	// DefaultMaxCapabilityFutureSkew.
 	MaxCapabilityFutureSkew time.Duration
+	// ResultTimeout bounds how long Execute waits for the correlated kind:38386
+	// result after the control request was accepted. Zero uses
+	// DefaultRuntimeControlResultTimeout; an earlier context deadline wins. A
+	// wait that ends first returns *NoTerminalResultError (see its doc for how a
+	// late result is still picked up).
+	ResultTimeout time.Duration
 }
 
 // RuntimeCapability is the normalized kind:30317 SoulFactory runtime capability
@@ -193,6 +199,7 @@ type runtimeControlAdapter struct {
 	capabilityLimit       int
 	maxCapabilityAge      time.Duration
 	maxFutureSkew         time.Duration
+	resultTimeout         time.Duration
 }
 
 func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapter, error) {
@@ -243,6 +250,7 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 		relays:                normalizeSoulRelays(config.Relays),
 		transport:             config.Transport,
 		factory:               factory,
+		resultTimeout:         config.ResultTimeout,
 		logger:                logger.With("component", "soulfactory-runtime-adapter", "runtime", string(config.Target)),
 		now:                   firstNowFunc(config.Now),
 		capabilityLimit:       limit,
@@ -299,7 +307,7 @@ func (a *runtimeControlAdapter) DiscoverCapabilities(ctx context.Context, policy
 			filters[0].Authors = append(filters[0].Authors, parsed)
 		}
 	}
-	events, err := collectRuntimeAdapterEvents(ctx, transport, filters)
+	events, err := collectRuntimeAdapterEvents(ctx, a.logger, "runtime_adapter.capabilities", transport, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +414,7 @@ func (a *runtimeControlAdapter) Execute(ctx context.Context, req RuntimeAdapterR
 		return nil, fmt.Errorf("runtime control request was not accepted by any relay")
 	}
 
-	result, err := awaitRuntimeControlResult(ctx, sub, event, req, a.controllerPubkey)
+	result, err := awaitRuntimeControlResult(ctx, sub, event, req, a.controllerPubkey, a.resultTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +527,7 @@ func (a *runtimeControlAdapter) fetchRuntimeNIP65Policy(ctx context.Context, run
 		a.logger.Warn("skip NIP-65 runtime relay discovery", "runtime_pubkey", runtimePubkey, "error", err)
 		return domain.SoulRelayPolicySpec{}
 	}
-	events, err := collectRuntimeAdapterEvents(ctx, transport, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(kindNIP65RelayListMetadata)}, Authors: []nostr.PubKey{parsedRuntimePubkey}, Limit: 1}})
+	events, err := collectRuntimeAdapterEvents(ctx, a.logger, "runtime_adapter.relay_list", transport, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(kindNIP65RelayListMetadata)}, Authors: []nostr.PubKey{parsedRuntimePubkey}, Limit: 1}})
 	if err != nil {
 		a.logger.Warn("NIP-65 runtime relay discovery failed", "runtime_pubkey", runtimePubkey, "error", err)
 		return domain.SoulRelayPolicySpec{}
@@ -676,18 +684,21 @@ func BuildProvisionRuntimeParamsFromDraft(draft domain.SoulDraftContent) map[str
 }
 
 // collectRuntimeAdapterEvents returns the valid stored events matching filters.
-// The read is complete only when every relay sent EOSE; see CollectStoredEvents.
-func collectRuntimeAdapterEvents(ctx context.Context, transport RuntimeAdapterTransport, filters []nostr.Filter) ([]*nostr.Event, error) {
+// Both adapter reads (kind:30317 capabilities and the runtime's NIP-65 relay
+// list) are latest-wins lookups, so a partial read is accepted under
+// RelayReadLatestQuorum and logged as degraded; see RelayReadPolicy.
+func collectRuntimeAdapterEvents(ctx context.Context, logger *slog.Logger, caller string, transport RuntimeAdapterTransport, filters []nostr.Filter) ([]*nostr.Event, error) {
 	sub, err := transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, err
 	}
 	defer sub.Close()
 	stored, err := sub.CollectStoredEvents(ctx)
+	read, err := resolveRelayRead(ctx, logger, caller, RelayReadLatestQuorum(), stored, err)
 	if err != nil {
 		return nil, err
 	}
-	return uniqueValidRelayEvents(stored), nil
+	return uniqueValidRelayEvents(read.Events), nil
 }
 
 // uniqueValidRelayEvents keeps the first copy of each validly signed event.
@@ -707,31 +718,25 @@ func uniqueValidRelayEvents(events []*nostr.Event) []*nostr.Event {
 	return out
 }
 
-func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, requestEvent *nostr.Event, req RuntimeAdapterRequest, controllerPubkey string) (*RuntimeControlResultEnvelope, error) {
-	seen := map[string]struct{}{}
-	eose := sub.EndOfStoredEvents
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-eose:
-			eose = nil
-		case event, ok := <-sub.Events:
-			if !ok {
-				return nil, fmt.Errorf("runtime result subscription closed before correlated result")
-			}
-			eventID := event.ID.Hex()
-			if _, duplicate := seen[eventID]; duplicate {
-				continue
-			}
-			seen[eventID] = struct{}{}
-			result, ok := parseRuntimeControlResultEvent(event)
-			if !ok || !runtimeResultCorrelates(result, requestEvent, req, controllerPubkey) {
-				continue
-			}
-			return result, nil
+// awaitRuntimeControlResult waits on sub for the result correlated with
+// requestEvent, bounded by timeout (DefaultRuntimeControlResultTimeout when not
+// positive) or ctx's earlier deadline. Reactor handler contexts carry no
+// deadline, so this bound is what ends a wait on a runtime that never answers.
+// A wait that ends first returns *NoTerminalResultError.
+func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, requestEvent *nostr.Event, req RuntimeAdapterRequest, controllerPubkey string, timeout time.Duration) (*RuntimeControlResultEnvelope, error) {
+	var result *RuntimeControlResultEnvelope
+	_, err := awaitTerminalReply(ctx, sub, requestEvent.ID.Hex(), timeout, DefaultRuntimeControlResultTimeout, func(event *nostr.Event) replyClass {
+		parsed, ok := parseRuntimeControlResultEvent(event)
+		if !ok || !runtimeResultCorrelates(parsed, requestEvent, req, controllerPubkey) {
+			return replyIgnore
 		}
+		result = parsed
+		return replyTerminal
+	}, nil)
+	if err != nil {
+		return nil, err
 	}
+	return result, nil
 }
 
 func parseRuntimeControlResultEvent(event *nostr.Event) (*RuntimeControlResultEnvelope, bool) {

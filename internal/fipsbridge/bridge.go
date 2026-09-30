@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +31,7 @@ const (
 // t=dns-endpoint. Legacy kind 31976 is no longer published, and its
 // tombstones now land on 30900, so a 31976 subscription would only replay
 // stale endpoints that can never be removed.
-var endpointLegacyKind = strconv.Itoa(kinds.DNSEndpointState)
+var endpointLegacyKind = kinds.CPStateFamilyDNSEndpoint.TagValue()
 
 // Config controls the standalone Bahia endpoint to FIPS hosts bridge.
 type Config struct {

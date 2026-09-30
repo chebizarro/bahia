@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { test, expect } from '@playwright/test';
-import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
-const WORKER_PUBKEY = 'c'.repeat(64);
+const WORKER_PUBKEY = e2eTestPubkey('worker');
 const now = Math.floor(Date.now() / 1000);
 
 const canonicalSchemaByLegacyKind = {

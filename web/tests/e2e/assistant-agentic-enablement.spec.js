@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
-import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
+import { installE2EMocks, TEST_PUBKEY, e2eTestPubkey } from './helpers.js';
 
 const PUBLIC_RELAY = 'ws://relay.test.local';
-const SERVICE_PUBKEY = '68680737c76dabb801cb2204f57dbe4e4579e4f710cd67dc1b4227592c81e9b5';
+const SERVICE_PUBKEY = e2eTestPubkey('assistant-service');
 
 const systemInfo = {
   nostr: {

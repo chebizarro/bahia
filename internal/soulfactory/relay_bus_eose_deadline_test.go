@@ -163,11 +163,11 @@ func TestRelayBusCallersReportPartialWhenRelayNeverSendsEOSE(t *testing.T) {
 		},
 		"soul client collect": func(ctx context.Context, bus *SoulFactoryRelayBus) error {
 			client := &NostrClient{transport: bus}
-			_, err := client.collectEvents(ctx, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
+			_, err := client.collectEvents(ctx, "test", []nostr.Filter{{Kinds: []nostr.Kind{1}}})
 			return err
 		},
 		"runtime adapter collect": func(ctx context.Context, bus *SoulFactoryRelayBus) error {
-			_, err := collectRuntimeAdapterEvents(ctx, bus, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
+			_, err := collectRuntimeAdapterEvents(ctx, slog.Default(), "test", bus, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
 			return err
 		},
 		"runtime validation load": func(ctx context.Context, bus *SoulFactoryRelayBus) error {

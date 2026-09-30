@@ -57,7 +57,7 @@ export async function installEncryptedNotificationHarness(
     window.nostr = {
       ...(window.nostr || {}),
       signEvent: async (event) => {
-        const signed = originalSignEvent ? await originalSignEvent(event) : { ...event, pubkey: operatorPubkey, id: `mock-event-id-${Date.now()}-${Math.random().toString(36).slice(2)}`, sig: '0'.repeat(128) };
+        const signed = originalSignEvent ? await originalSignEvent(event) : await window.__bahiaE2ESignMockEvent({ ...event, pubkey: operatorPubkey }, operatorPubkey);
         if (signed?.kind === 25910) {
           try {
             const parsed = parseContextVMRequest(signed);
@@ -111,11 +111,6 @@ export async function installEncryptedNotificationHarness(
       return true;
     }
 
-    async function sha256Hex(input) {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-
     async function normalizeEncryptedEventForDelivery(event) {
       const normalized = {
         ...event,
@@ -123,10 +118,9 @@ export async function installEncryptedNotificationHarness(
         created_at: Number.isInteger(event?.created_at) ? event.created_at : Math.floor(Date.now() / 1000),
         tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
         content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
-        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
       };
-      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
-      return normalized;
+      // Signed as its author by the E2E test keyring (helpers.js).
+      return window.__bahiaE2ESignMockEvent(normalized, servicePubkey);
     }
 
     function deliverEncryptedResult(candidate, subId, event) {

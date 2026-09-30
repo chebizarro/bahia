@@ -44,6 +44,12 @@ const (
 	maxSecurityBackoff                = 30 * time.Second
 )
 
+// SecurityVerifiedPublisher signs and publishes Security observables through
+// the durable outbox publisher. Its error contract is the outbox's: nil means
+// the publish quorum accepted the event; an error wrapping
+// nostrutil.ErrPublishIncomplete means the signed event is queued and the
+// outbox keeps retrying each relay; any other error means the event was never
+// queued (for example it could not be signed or recorded).
 type SecurityVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 }
@@ -455,7 +461,7 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	run.FinishedAt = &finished
 	run.PublishState = domain.SecurityPublicationPublished
 	if err := s.publishCompletionObservables(ctx, run, target, outcome.findings); err != nil {
-		run.PublishState = domain.SecurityPublicationFailedRetryable
+		run.PublishState = domain.SecurityPublicationFailedTerminal
 		run.Error = "security observables publish failed: " + err.Error()
 	}
 	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
@@ -481,10 +487,10 @@ func (s *SecurityScanner) failRun(ctx context.Context, run *domain.SecurityScanR
 	run.FinishedAt = &finished
 	run.PublishState = domain.SecurityPublicationPublished
 	if err := s.publishStatus(ctx, run, target, domain.SecurityScanFailed, "failed", cause.Error()); err != nil {
-		run.PublishState = domain.SecurityPublicationFailedRetryable
+		run.PublishState = domain.SecurityPublicationFailedTerminal
 	}
 	if err := s.publishAudit(ctx, run, target, "security.scan.failed", cause.Error()); err != nil {
-		run.PublishState = domain.SecurityPublicationFailedRetryable
+		run.PublishState = domain.SecurityPublicationFailedTerminal
 	}
 	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
 		return err
@@ -1044,65 +1050,39 @@ func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.Sec
 	if s.repo != nil {
 		_ = s.repo.UpsertSecurityPublication(ctx, publication)
 	}
-	results, err := s.publisher.PublishSignedEventWithResults(ctx, ev)
-	if nostrutil.IsPublishQueued(err) {
-		// Below the publish quorum but durably queued: the outbox runner keeps
-		// retrying this exact signed event. Record it as pending under its
-		// event ID rather than as a failure that invites a re-sign.
+	// Relay delivery and its retries belong to the outbox, which holds the
+	// signed event; this row only mirrors the outcome. There is no separate
+	// Security retry state: a queued event stays pending here while the outbox
+	// retries it, and an event that never reached the outbox cannot be retried
+	// from this row (it does not hold the event), so that failure is terminal.
+	_, err := s.publisher.PublishSignedEventWithResults(ctx, ev)
+	switch {
+	case nostrutil.IsPublishQueued(err):
+		// Below the publish quorum but durably queued: record it as pending
+		// under its event ID rather than as a failure that invites a re-sign.
 		if s.repo != nil {
 			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPending, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
 		}
 		return nil
-	}
-	if err != nil {
+	case err != nil:
+		err = fmt.Errorf("publishing %s event: %w", observableType, err)
 		if s.repo != nil {
-			next := time.Now().UTC().Add(time.Minute)
-			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedRetryable, "", err.Error(), &next, nil)
+			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedTerminal, "", err.Error(), nil, nil)
 		}
 		return err
 	}
-	if len(results) == 0 {
-		err = fmt.Errorf("publishing %s event: no relay OK results", observableType)
+	if s.pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.pubkey) {
+		err = fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", observableType, ev.PubKey.Hex(), s.pubkey)
 		if s.repo != nil {
-			next := time.Now().UTC().Add(time.Minute)
-			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedRetryable, "", err.Error(), &next, nil)
+			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedTerminal, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
 		}
 		return err
 	}
-	var rejections []string
-	for _, result := range results {
-		if result.Accepted {
-			if s.pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.pubkey) {
-				err = fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", observableType, ev.PubKey.Hex(), s.pubkey)
-				if s.repo != nil {
-					_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedTerminal, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
-				}
-				return err
-			}
-			publishedAt := time.Now().UTC()
-			if s.repo != nil {
-				_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPublished, nostrutil.EventIDHex(ev), "", nil, &publishedAt)
-			}
-			return nil
-		}
-		relay := result.RelayURL
-		if relay == "" {
-			relay = "unknown relay"
-		}
-		if result.Reason != "" {
-			rejections = append(rejections, relay+" rejected event: "+result.Reason)
-		} else if result.Error != nil {
-			rejections = append(rejections, fmt.Sprintf("%s publish error: %v", relay, result.Error))
-		} else {
-			rejections = append(rejections, relay+" returned OK accepted=false without reason")
-		}
-	}
-	err = fmt.Errorf("publishing %s event: no relay accepted event: %s", observableType, strings.Join(rejections, "; "))
+	publishedAt := time.Now().UTC()
 	if s.repo != nil {
-		next := time.Now().UTC().Add(time.Minute)
-		_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationFailedRetryable, nostrutil.EventIDHex(ev), err.Error(), &next, nil)
+		_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPublished, nostrutil.EventIDHex(ev), "", nil, &publishedAt)
 	}
-	return err
+	return nil
 }
 
 func acceptedResponse(runID uuid.UUID, target *domain.SecurityTarget, duplicate, skipped bool) *SecurityScanAccepted {

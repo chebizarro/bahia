@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -112,6 +113,11 @@ type NostrEventOutboxRepository interface {
 	// pending row for that target.
 	ListUnpublishedAfter(ctx context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error)
 	CountUnpublished(ctx context.Context) (int64, error)
+	// CountPublishFailed returns how many outbound rows are in the failed
+	// state. It returns ErrNostrPublishFailedIndexNotReady until the online
+	// partial index that keeps the count cheap exists (see
+	// NostrEventArchiveOnlineIndexStatements); it never scans the full table.
+	CountPublishFailed(ctx context.Context) (int64, error)
 	MarkPublished(ctx context.Context, id string, publishedAt time.Time) error
 	RecordPublishFailure(ctx context.Context, id, publishError string) error
 	// AbandonPublish removes a still-pending row from the outbox after a
@@ -236,6 +242,37 @@ func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, e
 	var count int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1`, NostrPublishStatePending).Scan(&count); err != nil {
 		return 0, fmt.Errorf("counting unpublished nostr events: %w", err)
+	}
+	return count, nil
+}
+
+// ErrNostrPublishFailedIndexNotReady means the failed-row count is unavailable
+// because idx_nostr_events_publish_failed has not been built yet (run
+// `bahia-event-archive --action ensure-indexes`). Counting without it would
+// scan the whole nostr_events table.
+var ErrNostrPublishFailedIndexNotReady = errors.New("nostr publish failed-row index is not ready")
+
+// nostrPublishFailedIndex is the online partial index over failed rows.
+const nostrPublishFailedIndex = "idx_nostr_events_publish_failed"
+
+// CountPublishFailed counts publish_state=failed rows through the partial
+// failed-row index, after checking the catalog that the index is usable.
+func (r *PgNostrEventRepository) CountPublishFailed(ctx context.Context) (int64, error) {
+	var ready bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_class classes
+			JOIN pg_index indexes ON indexes.indexrelid = classes.oid
+			WHERE classes.relname = $1 AND indexes.indisvalid AND indexes.indisready
+		)`, nostrPublishFailedIndex).Scan(&ready); err != nil {
+		return 0, fmt.Errorf("checking nostr publish failed-row index: %w", err)
+	}
+	if !ready {
+		return 0, ErrNostrPublishFailedIndexNotReady
+	}
+	var count int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1`, NostrPublishStateFailed).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting failed nostr events: %w", err)
 	}
 	return count, nil
 }

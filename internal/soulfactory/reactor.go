@@ -391,15 +391,10 @@ func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *Ru
 	if err != nil {
 		return nil, nil, false
 	}
-	controls, err := r.relayBus.Query(ctx, []nostr.Filter{{
-		IDs:   []nostr.ID{controlID},
-		Kinds: []nostr.Kind{nostr.Kind(domain.KindRuntimeControlRequest)},
-		Limit: 1,
-	}})
-	if err != nil || len(controls) == 0 || controls[0] == nil || !validSignedEvent(controls[0]) {
+	controlEvent, ok := r.lookupEventByID(ctx, "reactor.runtime_recovery_control", controlID, domain.KindRuntimeControlRequest)
+	if !ok {
 		return nil, nil, false
 	}
-	controlEvent := controls[0]
 	if controlEvent.PubKey.Hex() != strings.TrimSpace(r.config.SoulFactoryPubkey) ||
 		result.Event.PubKey.Hex() != tagValue(controlEvent.Tags, tagPubkey) {
 		return nil, nil, false
@@ -420,19 +415,33 @@ func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *Ru
 	if err != nil {
 		return nil, nil, false
 	}
-	requests, err := r.relayBus.Query(ctx, []nostr.Filter{{
-		IDs:   []nostr.ID{operatorID},
-		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningRequest)},
-		Limit: 1,
-	}})
-	if err != nil || len(requests) == 0 || requests[0] == nil || !validSignedEvent(requests[0]) {
+	requestEvent, ok := r.lookupEventByID(ctx, "reactor.runtime_recovery_request", operatorID, domain.KindProvisioningRequest)
+	if !ok {
 		return nil, nil, false
 	}
-	requestEvent := requests[0]
 	if requestEvent.PubKey.Hex() != control.Operator.Pubkey || !r.isAuthorizedProvisioner(requestEvent.PubKey.Hex()) {
 		return nil, nil, false
 	}
 	return requestEvent, &control, true
+}
+
+// lookupEventByID fetches one content-addressed event under RelayReadAllIDs:
+// any relay's validly signed copy is the event, and absence fails closed.
+func (r *Reactor) lookupEventByID(ctx context.Context, caller string, id nostr.ID, kind int) (*nostr.Event, bool) {
+	read, err := r.relayBus.QueryWithPolicy(ctx, caller, RelayReadAllIDs(id), []nostr.Filter{{
+		IDs:   []nostr.ID{id},
+		Kinds: []nostr.Kind{nostr.Kind(kind)},
+		Limit: 1,
+	}})
+	if err != nil {
+		return nil, false
+	}
+	for _, event := range read.Events {
+		if event != nil && event.ID == id && event.Kind == nostr.Kind(kind) && validSignedEvent(event) {
+			return event, true
+		}
+	}
+	return nil, false
 }
 
 func soulFromRuntimeCheckpoint(control *RuntimeControlEnvelope, result *RuntimeControlResultEnvelope) (*domain.AgentSoul, error) {
@@ -769,14 +778,28 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 		}
 		filter.Authors = []nostr.PubKey{parsed}
 	}
-	events, err := bus.Query(ctx, []nostr.Filter{filter})
+	// Fail closed: GetSoul feeds read-modify-write callers (lifecycle actions,
+	// the full provisioner, late-runtime projection) and absence checks, where a
+	// stale or missing soul is unsafe. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
 	if err != nil {
 		return nil, err
 	}
-	if len(events) == 0 || events[0] == nil {
+	// Each relay answers with its own newest copy; keep the newest overall.
+	var latest *nostr.Event
+	for _, event := range read.Events {
+		if event == nil || event.Kind != nostr.Kind(domain.KindAgentSoul) || tagValue(event.Tags, tagParameterizedD) != agentID {
+			continue
+		}
+		if len(filter.Authors) > 0 && event.PubKey != filter.Authors[0] {
+			continue
+		}
+		latest = newerRelayEvent(latest, event)
+	}
+	if latest == nil {
 		return nil, nil
 	}
-	return r.parseSoulEvent(events[0]), nil
+	return r.parseSoulEvent(latest), nil
 }
 
 func normalizeSoulLookupRef(value string) string {

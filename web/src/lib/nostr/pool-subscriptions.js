@@ -42,7 +42,7 @@ export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, on
       const handleRelayEvent = (event) => {
         client.enqueueRelayCallback(queues, callbackRelay, async () => {
           if (!active) return;
-          if (client.validateEvent && !(globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS === true && event?.sig === '0'.repeat(128))) {
+          if (client.validateEvent) {
             try {
               await client.validateEvent(event);
             } catch (validationError) {
@@ -77,10 +77,6 @@ export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, on
           });
         },
         oninvalidevent: (event) => {
-          if (globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS === true && event?.sig === '0'.repeat(128)) {
-            handleRelayEvent(event);
-            return;
-          }
           console.warn(`[nostr] Dropping invalid EVENT from ${callbackRelay}:`, event);
         }
       });

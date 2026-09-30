@@ -25,9 +25,6 @@ export async function sha256Hex(input) {
 }
 
 export async function validateInboundNostrEvent(event, { now = currentUnixTime() } = {}) {
-  if (globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS === true && event?.sig === '0'.repeat(128)) {
-    return true;
-  }
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error('event must be an object');
   }
@@ -75,10 +72,6 @@ export async function validateInboundNostrEvent(event, { now = currentUnixTime()
   const computedId = await sha256Hex(serialized);
   if (computedId !== event.id) {
     throw new Error('event id does not match NIP-01 hash');
-  }
-
-  if (globalThis.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS === true && event.sig === '0'.repeat(128)) {
-    return true;
   }
 
   if (!verifyEvent(event)) {
