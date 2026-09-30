@@ -308,6 +308,13 @@ type DNSProjectionConfig struct {
 	MeshZone          string            `koanf:"mesh_zone" secret:"false"`
 }
 
+// SoulFactory wait bounds; they match soulfactory.DefaultRuntimeControlResultTimeout
+// and soulfactory.DefaultSoulFactoryReplyTimeout.
+const (
+	defaultSoulFactoryRuntimeResultTimeout = 5 * time.Minute
+	defaultSoulFactoryReplyTimeout         = 15 * time.Minute
+)
+
 // SoulFactoryConfig controls the Nostr-native Soul Factory provisioning reactor.
 type SoulFactoryConfig struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled" secret:"false"`
@@ -355,6 +362,17 @@ type SoulFactoryConfig struct {
 	OpenClawSignetConfigPath        string                 `koanf:"openclaw_signet_config_path" yaml:"openclaw_signet_config_path" secret:"false"`
 	OpenClawSignetProvisionerFile   string                 `koanf:"openclaw_signet_provisioner_file" yaml:"openclaw_signet_provisioner_file" secret:"false"`
 	OpenClawSignetProvisionerPubkey string                 `koanf:"openclaw_signet_provisioner_pubkey" yaml:"openclaw_signet_provisioner_pubkey" secret:"false"`
+	// RuntimeResultTimeout bounds each runtime adapter's wait for the kind:38386
+	// result of a kind:38384 control request (default 5m). A wait that ends
+	// first leaves the operation awaiting its terminal result: it is neither a
+	// failure nor a reason to roll back, and the late result is reconciled when
+	// it arrives.
+	RuntimeResultTimeout time.Duration `koanf:"runtime_result_timeout" yaml:"runtime_result_timeout" secret:"false"`
+	// ReplyTimeout bounds how long SoulFactory clients (the bahia souls CLI
+	// commands) wait for a provisioning or soul action terminal result (default
+	// 15m). The CLI reads the same key from BAHIA_SOUL_FACTORY_REPLY_TIMEOUT or
+	// its --reply-timeout flag.
+	ReplyTimeout time.Duration `koanf:"reply_timeout" yaml:"reply_timeout" secret:"false"`
 }
 
 // NIP29Group identifies a fleet group that newly provisioned souls join.
@@ -1374,12 +1392,14 @@ func Defaults() *Config {
 			OverlayAddressPrefix: "fd00",
 		},
 		SoulFactory: SoulFactoryConfig{
-			Enabled:          false,
-			Relays:           []string{},
-			AdditionalRelays: []string{},
-			NIP05Relays:      []string{},
-			StartupTimeout:   15 * time.Second,
-			LLMTimeout:       120 * time.Second,
+			Enabled:              false,
+			Relays:               []string{},
+			AdditionalRelays:     []string{},
+			NIP05Relays:          []string{},
+			StartupTimeout:       15 * time.Second,
+			LLMTimeout:           120 * time.Second,
+			RuntimeResultTimeout: defaultSoulFactoryRuntimeResultTimeout,
+			ReplyTimeout:         defaultSoulFactoryReplyTimeout,
 		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
@@ -3229,6 +3249,18 @@ func (c *Config) validateSoulFactory() error {
 	}
 	if sf.LLMTimeout == 0 {
 		sf.LLMTimeout = 120 * time.Second
+	}
+	if sf.RuntimeResultTimeout < 0 {
+		return fmt.Errorf("config validation failed: soul_factory.runtime_result_timeout must be >= 0 (0 uses the %s default)", defaultSoulFactoryRuntimeResultTimeout)
+	}
+	if sf.RuntimeResultTimeout == 0 {
+		sf.RuntimeResultTimeout = defaultSoulFactoryRuntimeResultTimeout
+	}
+	if sf.ReplyTimeout < 0 {
+		return fmt.Errorf("config validation failed: soul_factory.reply_timeout must be >= 0 (0 uses the %s default)", defaultSoulFactoryReplyTimeout)
+	}
+	if sf.ReplyTimeout == 0 {
+		sf.ReplyTimeout = defaultSoulFactoryReplyTimeout
 	}
 	if !sf.Enabled {
 		return nil

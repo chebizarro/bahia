@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -416,13 +417,16 @@ func (a *runtimeControlAdapter) Execute(ctx context.Context, req RuntimeAdapterR
 
 	result, err := awaitRuntimeControlResult(ctx, sub, event, req, a.controllerPubkey, a.resultTimeout)
 	if err != nil {
+		var noResult *NoTerminalResultError
+		if errors.As(err, &noResult) {
+			// Outcome unknown: callers park the operation for the late result
+			// instead of treating the timeout as a failure.
+			return nil, &runtimeResultPending{noResult: noResult, requestEvent: event, req: req, controllerPubkey: a.controllerPubkey}
+		}
 		return nil, err
 	}
-	if result.Status != "success" {
-		if result.Error != nil {
-			return result, fmt.Errorf("runtime %s response: %s: %s", result.Status, result.Error.Code, result.Error.Message)
-		}
-		return result, fmt.Errorf("runtime %s response", result.Status)
+	if err := runtimeResultFailure(result); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -537,9 +541,7 @@ func (a *runtimeControlAdapter) fetchRuntimeNIP65Policy(ctx context.Context, run
 		if event.Kind != nostr.Kind(kindNIP65RelayListMetadata) || event.PubKey.Hex() != runtimePubkey || !validSignedEvent(event) {
 			continue
 		}
-		if latest == nil || event.CreatedAt > latest.CreatedAt || (event.CreatedAt == latest.CreatedAt && event.ID.Hex() < latest.ID.Hex()) {
-			latest = event
-		}
+		latest = newerRelayEvent(latest, event)
 	}
 	return parseNIP65RelayPolicy(latest)
 }

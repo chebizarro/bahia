@@ -55,9 +55,9 @@ func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient n
 		}
 		switch event.Kind {
 		case concordDMRelayListKind:
-			dmRelayList = laterConcordEvent(dmRelayList, event)
+			dmRelayList = newerRelayEvent(dmRelayList, event)
 		case concordRelayListKind:
-			relayListMetadata = laterConcordEvent(relayListMetadata, event)
+			relayListMetadata = newerRelayEvent(relayListMetadata, event)
 		}
 	}
 
@@ -70,19 +70,6 @@ func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient n
 		}
 	}
 	return concordInbox{}, nil
-}
-
-// laterConcordEvent keeps the newer of two replaceable events, breaking a
-// created_at tie on the lower event id per NIP-01 so every reader converges.
-func laterConcordEvent(current, candidate *nostr.Event) *nostr.Event {
-	if current == nil {
-		return candidate
-	}
-	if candidate.CreatedAt > current.CreatedAt ||
-		(candidate.CreatedAt == current.CreatedAt && candidate.ID.Hex() < current.ID.Hex()) {
-		return candidate
-	}
-	return current
 }
 
 func concordDMRelayTags(event *nostr.Event) []string {

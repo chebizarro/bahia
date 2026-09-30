@@ -62,6 +62,14 @@ groups:
         annotations:
           summary: "Bahia dependency-tier rejection rate has spiked"
           runbook_url: "/docs/runbooks/ws6-alerts.md#bahiatierrejectionspike"
+      - alert: BahiaSoulFactoryRelayReadRejected
+        expr: sum by (caller) (increase(bahia_soulfactory_relay_read_partial{outcome="rejected"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoulFactory fail-closed relay read {{ $labels.caller }} keeps failing on partial relay answers"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiasoulfactoryrelayreadrejected"
       - alert: BahiaOpenClawProvisioningStageStuck
         expr: bahia_openclaw_provisioning_stage_age_seconds{stage!~"running|rolled_back|failed_terminal"} > 900
         for: 5m

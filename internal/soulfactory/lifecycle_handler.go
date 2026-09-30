@@ -48,6 +48,11 @@ type LifecycleHandler struct {
 
 	mu               sync.Mutex
 	processedActions map[string]struct{}
+	// awaiting holds, per agent with an action parked on a runtime terminal
+	// result, the later actions deferred until that action finishes. A timely
+	// result would have kept them waiting on the handler shard; deferring keeps
+	// the same order across the park.
+	awaiting map[string][]*nostr.Event
 }
 
 // NewLifecycleHandler creates a new lifecycle handler.
@@ -66,6 +71,7 @@ func NewLifecycleHandler(
 		statusSync:       statusSync,
 		logger:           logger,
 		processedActions: make(map[string]struct{}),
+		awaiting:         make(map[string][]*nostr.Event),
 	}
 	h.engine = &localLifecycleEngine{
 		reactor:          reactor,
@@ -128,6 +134,11 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		return nil
 	}
 
+	if h.deferBehindAwaiting(soul.AgentID, event) {
+		logger.Info("deferring lifecycle action until the soul's action awaiting a runtime terminal result finishes")
+		return nil
+	}
+
 	if !h.beginAction(action.EventID) {
 		logger.Info("ignoring replayed lifecycle action")
 		return nil
@@ -148,6 +159,132 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		result, err = h.handleUpdate(ctx, soul, action)
 	default:
 		result, err = h.engine.ExecuteLifecycleAction(ctx, soul, action)
+	}
+	return h.finishAction(ctx, h.reactor.handlerShardKey(event), action, soul, result, err, false)
+}
+
+// deferBehindAwaiting queues event when its soul has an action awaiting a
+// runtime terminal result, and reports whether it did.
+func (h *LifecycleHandler) deferBehindAwaiting(agentID string, event *nostr.Event) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	deferred, awaiting := h.awaiting[agentID]
+	if !awaiting {
+		return false
+	}
+	for _, queued := range deferred {
+		if queued.ID == event.ID {
+			return true
+		}
+	}
+	h.awaiting[agentID] = append(deferred, event)
+	return true
+}
+
+func (h *LifecycleHandler) markAwaiting(agentID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.awaiting == nil {
+		h.awaiting = make(map[string][]*nostr.Event)
+	}
+	if _, exists := h.awaiting[agentID]; !exists {
+		h.awaiting[agentID] = nil
+	}
+}
+
+// releaseAwaiting ends agentID's awaiting state and runs the actions deferred
+// behind it, in arrival order. One of them may park again, deferring the rest.
+func (h *LifecycleHandler) releaseAwaiting(ctx context.Context, agentID string) {
+	h.mu.Lock()
+	deferred := h.awaiting[agentID]
+	delete(h.awaiting, agentID)
+	h.mu.Unlock()
+	for _, event := range deferred {
+		if err := h.HandleAction(ctx, event); err != nil {
+			h.logger.Error("deferred lifecycle action failed", "event_id", event.ID, "error", err)
+		}
+	}
+}
+
+// awaitingRuntimeResult is a lifecycle step's error when a runtime request was
+// accepted but its terminal kind:38386 was not observed within the wait. The
+// outcome is unknown, so the step neither failed nor rolled back. resume
+// continues the action with the terminal result once it is observed, exactly
+// as the step would have with a timely result.
+type awaitingRuntimeResult struct {
+	cause   error
+	pending *runtimeResultPending
+	resume  func(context.Context, *RuntimeControlResultEnvelope) (*LifecycleExecutionResult, error)
+}
+
+func (e *awaitingRuntimeResult) Error() string {
+	return "runtime outcome unknown, awaiting terminal result: " + e.cause.Error()
+}
+
+func (e *awaitingRuntimeResult) Unwrap() error { return e.cause }
+
+// then returns e with f applied to whatever resume eventually returns.
+func (e *awaitingRuntimeResult) then(f func(*LifecycleExecutionResult, error) (*LifecycleExecutionResult, error)) *awaitingRuntimeResult {
+	next := *e
+	next.resume = func(ctx context.Context, late *RuntimeControlResultEnvelope) (*LifecycleExecutionResult, error) {
+		return f(e.resume(ctx, late))
+	}
+	return &next
+}
+
+// awaitRuntimeStep turns an Execute outcome-unknown error into an
+// awaitingRuntimeResult whose resume hands the late result to next.
+func awaitRuntimeStep(executeErr error, next func(context.Context, *RuntimeControlResultEnvelope) (*LifecycleExecutionResult, error)) (*awaitingRuntimeResult, bool) {
+	pending, unknown := runtimeOutcomeUnknown(executeErr)
+	if !unknown {
+		return nil, false
+	}
+	return &awaitingRuntimeResult{cause: executeErr, pending: pending, resume: next}, true
+}
+
+// finishAction publishes an action's outcome. An action waiting on a runtime
+// terminal result publishes awaiting_terminal progress and is parked: it gets
+// no terminal result and no rollback until the late result is observed, and
+// the reactor's result subscription then resumes it under shardKey. Later
+// actions for the soul are deferred until a parked action finishes. resumed
+// reports that this call continues a parked action.
+func (h *LifecycleHandler) finishAction(ctx context.Context, shardKey string, action *domain.SoulAction, soul *domain.AgentSoul, result *LifecycleExecutionResult, err error, resumed bool) error {
+	logger := h.logger.With("event_id", action.EventID, "action", action.Action, "agent_id", soul.AgentID)
+	parked := resumed
+	defer func() {
+		if parked {
+			h.releaseAwaiting(ctx, soul.AgentID)
+		}
+	}()
+	for {
+		var awaiting *awaitingRuntimeResult
+		if !errors.As(err, &awaiting) {
+			break
+		}
+		message := fmt.Sprintf("%s: %v; no rollback without an observed runtime failure", actionStatusAwaitingTerminal, awaiting.cause)
+		if publishErr := h.publishActionProgress(ctx, action, actionStatusAwaitingTerminal, message, soul.AgentID); publishErr != nil {
+			logger.Warn("failed to publish awaiting_terminal progress", "error", publishErr)
+		}
+		if awaiting.pending == nil {
+			logger.Warn("runtime outcome unknown and not correlatable; the action stays awaiting_terminal until re-driven", "error", awaiting.cause)
+			return nil
+		}
+		// Mark before parking: the continuation may run as soon as park returns.
+		h.markAwaiting(soul.AgentID)
+		late, observed := h.reactor.resultWaiters().park(awaiting.pending, shardKey, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+			result, err := awaiting.resume(ctx, late)
+			if err := h.finishAction(ctx, shardKey, action, soul, result, err, true); err != nil {
+				logger.Error("lifecycle action failed after late runtime result", "error", err)
+			}
+		})
+		if !observed {
+			logger.Info("lifecycle action awaiting runtime terminal result", "request_event", awaiting.pending.requestID())
+			// The continuation owns the awaiting state from here.
+			parked = false
+			return nil
+		}
+		parked = true
+		result, err = awaiting.resume(ctx, late)
 	}
 	if err != nil {
 		logger.Error("lifecycle action failed", "error", err)
@@ -431,59 +568,82 @@ func (h *LifecycleHandler) handleUpdate(ctx context.Context, soul *domain.AgentS
 	applied := make([]map[string]interface{}, 0, len(calls))
 	updateApplied := false
 	personaAttempted := false
-	withRollback := func(cause error) error {
+	// Rollback runs only on an observed failure; a step whose result was not
+	// observed parks the update instead (awaitRuntimeStep).
+	withRollback := func(ctx context.Context, cause error) error {
 		rollbackErr := h.rollbackRuntimeUpdate(ctx, soul, action, adapter, target, runtimePubkey, previousSpecHash, newSpecHash, rollbackDraftRef, rollbackDraftEventID, current.RelayPolicy, rollbackParams, rollbackPersonaParams, updateApplied, personaAttempted)
 		if rollbackErr != nil {
 			return fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
 		}
 		return cause
 	}
-	for _, call := range calls {
-		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applying update via %s", call.Method), soul.AgentID); err != nil {
-			progressErr := fmt.Errorf("publish %s update progress: %w", call.Section, err)
-			if updateApplied {
-				return nil, withRollback(progressErr)
-			}
-			return nil, progressErr
-		}
-		if call.Method == RuntimeMethodPersonaUpdate {
-			personaAttempted = true
-		}
-		result, executeErr := adapter.Execute(ctx, RuntimeAdapterRequest{
-			Method:      call.Method,
-			Operator:    RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
-			Soul:        RuntimeSoulRef{ID: soul.AgentID, Draft: proposedDraftEventID, SpecHash: newSpecHash},
-			Target:      RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
-			Params:      call.Params,
-			DraftPolicy: proposed.RelayPolicy,
-			RequestKind: domain.KindSoulAction,
-			Action:      domain.SoulActionUpdate,
-		})
+	// record applies call i's terminal result, whether observed in time or late.
+	record := func(ctx context.Context, i int, result *RuntimeControlResultEnvelope, executeErr error) error {
+		call := calls[i]
 		if executeErr == nil && result == nil {
 			executeErr = fmt.Errorf("runtime returned no result")
 		}
 		if executeErr != nil {
-			return nil, withRollback(fmt.Errorf("update %s via %s: %w", call.Section, call.Method, executeErr))
+			return withRollback(ctx, fmt.Errorf("update %s via %s: %w", call.Section, call.Method, executeErr))
 		}
 		if call.Method == RuntimeMethodUpdate {
 			updateApplied = true
 		}
 		applied = append(applied, map[string]interface{}{"section": call.Section, "method": call.Method, "status": result.Status, "result": result.Result})
 		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applied update via %s", call.Method), soul.AgentID); err != nil {
-			return nil, withRollback(fmt.Errorf("publish %s update applied progress: %w", call.Section, err))
+			return withRollback(ctx, fmt.Errorf("publish %s update applied progress: %w", call.Section, err))
 		}
+		return nil
 	}
+	var runFrom func(ctx context.Context, start int) (*LifecycleExecutionResult, error)
+	runFrom = func(ctx context.Context, start int) (*LifecycleExecutionResult, error) {
+		for i := start; i < len(calls); i++ {
+			call := calls[i]
+			if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applying update via %s", call.Method), soul.AgentID); err != nil {
+				progressErr := fmt.Errorf("publish %s update progress: %w", call.Section, err)
+				if updateApplied {
+					return nil, withRollback(ctx, progressErr)
+				}
+				return nil, progressErr
+			}
+			if call.Method == RuntimeMethodPersonaUpdate {
+				personaAttempted = true
+			}
+			result, executeErr := adapter.Execute(ctx, RuntimeAdapterRequest{
+				Method:      call.Method,
+				Operator:    RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
+				Soul:        RuntimeSoulRef{ID: soul.AgentID, Draft: proposedDraftEventID, SpecHash: newSpecHash},
+				Target:      RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
+				Params:      call.Params,
+				DraftPolicy: proposed.RelayPolicy,
+				RequestKind: domain.KindSoulAction,
+				Action:      domain.SoulActionUpdate,
+			})
+			if awaiting, ok := awaitRuntimeStep(executeErr, func(ctx context.Context, late *RuntimeControlResultEnvelope) (*LifecycleExecutionResult, error) {
+				if err := record(ctx, i, late, runtimeResultFailure(late)); err != nil {
+					return nil, err
+				}
+				return runFrom(ctx, i+1)
+			}); ok {
+				return nil, awaiting
+			}
+			if err := record(ctx, i, result, executeErr); err != nil {
+				return nil, err
+			}
+		}
 
-	applyUpdateDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
-	return &LifecycleExecutionResult{
-		PublishSoul: true,
-		Data: map[string]interface{}{
-			"updated": true, "draft_ref": proposedDraftRef, "draft_event_id": proposedDraftEventID,
-			"spec_hash": newSpecHash, "previous_spec_hash": previousSpecHash,
-			"changed_sections": diff.ChangedSections, "persona_updated": diff.Persona,
-			"applied_changes": applied, "applied_change_count": len(applied),
-		},
-	}, nil
+		applyUpdateDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
+		return &LifecycleExecutionResult{
+			PublishSoul: true,
+			Data: map[string]interface{}{
+				"updated": true, "draft_ref": proposedDraftRef, "draft_event_id": proposedDraftEventID,
+				"spec_hash": newSpecHash, "previous_spec_hash": previousSpecHash,
+				"changed_sections": diff.ChangedSections, "persona_updated": diff.Persona,
+				"applied_changes": applied, "applied_change_count": len(applied),
+			},
+		}, nil
+	}
+	return runFrom(ctx, 0)
 }
 
 func buildLifecycleUpdateParams(content domain.SoulDraftContent, previousSpecHash, newSpecHash, draftRef, draftEventID string, changedSections []string) map[string]interface{} {
@@ -531,7 +691,7 @@ func (h *LifecycleHandler) rollbackRuntimeUpdate(
 		Params: rollbackParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
 	})
 	if err != nil {
-		rollbackErrors = append(rollbackErrors, fmt.Errorf("rollback update: %w", err))
+		rollbackErrors = append(rollbackErrors, rollbackStepError("rollback update", err))
 	} else if result == nil {
 		rollbackErrors = append(rollbackErrors, fmt.Errorf("runtime returned no rollback update result"))
 	}
@@ -546,12 +706,21 @@ func (h *LifecycleHandler) rollbackRuntimeUpdate(
 			Params: personaParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
 		})
 		if err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("rollback persona: %w", err))
+			rollbackErrors = append(rollbackErrors, rollbackStepError("rollback persona", err))
 		} else if result == nil {
 			rollbackErrors = append(rollbackErrors, fmt.Errorf("runtime returned no rollback persona result"))
 		}
 	}
 	return errors.Join(rollbackErrors...)
+}
+
+// rollbackStepError names a failed rollback request, distinguishing one whose
+// terminal result was not observed: that rollback's outcome is unknown.
+func rollbackStepError(step string, err error) error {
+	if _, unknown := runtimeOutcomeUnknown(err); unknown {
+		return fmt.Errorf("%s: %s: %w", step, rollbackStatusOutcomeUnknown, err)
+	}
+	return fmt.Errorf("%s: %w", step, err)
 }
 
 func applyUpdateDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, proposed domain.SoulDraftContent, action *domain.SoulAction, newSpecHash, previousSpecHash string, applied []map[string]interface{}) {
@@ -638,16 +807,63 @@ func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.Age
 	calls := buildHotReloadRuntimeCalls(current, proposed, diff, proposedDraft, action, newSpecHash, previousSpecHash)
 	applied := make([]map[string]interface{}, 0, len(calls))
 
-	if len(calls) > 0 {
-		adapter, target, runtimePubkey, err := h.selectHotReloadRuntime(soul, proposed)
-		if err != nil {
-			return nil, err
+	finish := func() (*LifecycleExecutionResult, error) {
+		applyHotReloadDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
+		data := map[string]interface{}{
+			"hot_reload":           true,
+			"draft_ref":            firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, proposedDraft.CreatedBy, proposedDraft.AgentID)),
+			"draft_event_id":       proposedDraft.EventID,
+			"spec_hash":            newSpecHash,
+			"previous_spec_hash":   previousSpecHash,
+			"changed_sections":     diff.ChangedSections,
+			"applied_changes":      applied,
+			"applied_change_count": len(applied),
 		}
-		for _, call := range calls {
+		return &LifecycleExecutionResult{PublishSoul: true, Data: data}, nil
+	}
+	if len(calls) == 0 {
+		return finish()
+	}
+
+	adapter, target, runtimePubkey, err := h.selectHotReloadRuntime(soul, proposed)
+	if err != nil {
+		return nil, err
+	}
+	// record applies call i's terminal result, whether observed in time or
+	// late. Rollback runs only on an observed failure; a call whose result was
+	// not observed parks the hot-reload instead (awaitRuntimeStep).
+	record := func(ctx context.Context, i int, result *RuntimeControlResultEnvelope, executeErr error) error {
+		call := calls[i]
+		if executeErr == nil && result == nil {
+			executeErr = fmt.Errorf("runtime returned no result")
+		}
+		if executeErr != nil {
+			rollbackSpecHash := firstNonEmpty(previousSpecHash, current.SpecHash, computeDraftContentHash(current))
+			rollbackErr := h.rollbackRuntimeHotReload(ctx, soul, action, adapter, target, runtimePubkey, proposedDraft, current, proposed, diff, rollbackSpecHash)
+			if rollbackErr != nil {
+				return fmt.Errorf("hot-reload %s via %s: %w; rollback failed: %v", call.Section, call.Method, executeErr, rollbackErr)
+			}
+			return fmt.Errorf("hot-reload %s via %s: %w", call.Section, call.Method, executeErr)
+		}
+		applied = append(applied, map[string]interface{}{
+			"section": call.Section,
+			"method":  call.Method,
+			"status":  result.Status,
+			"result":  result.Result,
+		})
+		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applied %s hot-reload", call.Section), soul.AgentID); err != nil {
+			return fmt.Errorf("publish %s hot-reload applied progress: %w", call.Section, err)
+		}
+		return nil
+	}
+	var runFrom func(ctx context.Context, start int) (*LifecycleExecutionResult, error)
+	runFrom = func(ctx context.Context, start int) (*LifecycleExecutionResult, error) {
+		for i := start; i < len(calls); i++ {
+			call := calls[i]
 			if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applying %s hot-reload via %s", call.Section, call.Method), soul.AgentID); err != nil {
 				return nil, fmt.Errorf("publish %s hot-reload progress: %w", call.Section, err)
 			}
-			result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
+			result, executeErr := adapter.Execute(ctx, RuntimeAdapterRequest{
 				Method: call.Method,
 				Operator: RuntimeOperatorRef{
 					Pubkey:       action.Initiator,
@@ -668,38 +884,21 @@ func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.Age
 				RequestKind: domain.KindSoulAction,
 				Action:      action.Action,
 			})
-			if err != nil {
-				rollbackSpecHash := firstNonEmpty(previousSpecHash, current.SpecHash, computeDraftContentHash(current))
-				rollbackErr := h.rollbackRuntimeHotReload(ctx, soul, action, adapter, target, runtimePubkey, proposedDraft, current, proposed, diff, rollbackSpecHash)
-				if rollbackErr != nil {
-					return nil, fmt.Errorf("hot-reload %s via %s: %w; rollback failed: %v", call.Section, call.Method, err, rollbackErr)
+			if awaiting, ok := awaitRuntimeStep(executeErr, func(ctx context.Context, late *RuntimeControlResultEnvelope) (*LifecycleExecutionResult, error) {
+				if err := record(ctx, i, late, runtimeResultFailure(late)); err != nil {
+					return nil, err
 				}
-				return nil, fmt.Errorf("hot-reload %s via %s: %w", call.Section, call.Method, err)
+				return runFrom(ctx, i+1)
+			}); ok {
+				return nil, awaiting
 			}
-			applied = append(applied, map[string]interface{}{
-				"section": call.Section,
-				"method":  call.Method,
-				"status":  result.Status,
-				"result":  result.Result,
-			})
-			if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applied %s hot-reload", call.Section), soul.AgentID); err != nil {
-				return nil, fmt.Errorf("publish %s hot-reload applied progress: %w", call.Section, err)
+			if err := record(ctx, i, result, executeErr); err != nil {
+				return nil, err
 			}
 		}
+		return finish()
 	}
-
-	applyHotReloadDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
-	data := map[string]interface{}{
-		"hot_reload":           true,
-		"draft_ref":            firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, proposedDraft.CreatedBy, proposedDraft.AgentID)),
-		"draft_event_id":       proposedDraft.EventID,
-		"spec_hash":            newSpecHash,
-		"previous_spec_hash":   previousSpecHash,
-		"changed_sections":     diff.ChangedSections,
-		"applied_changes":      applied,
-		"applied_change_count": len(applied),
-	}
-	return &LifecycleExecutionResult{PublishSoul: true, Data: data}, nil
+	return runFrom(ctx, 0)
 }
 
 func (h *LifecycleHandler) handleRollback(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
@@ -714,17 +913,24 @@ func (h *LifecycleHandler) handleRollback(ctx context.Context, soul *domain.Agen
 	rollbackAction.DraftEventID = rollbackDraftEventID
 	rollbackAction.SpecHash = firstNonEmpty(action.SpecHash, soul.PreviousSpecHash)
 	rollbackAction.PreviousSpecHash = firstNonEmpty(action.PreviousSpecHash, soul.SpecHash)
-	result, err := h.handleHotReload(ctx, soul, &rollbackAction)
-	if err != nil {
-		return nil, err
+	var markRollback func(*LifecycleExecutionResult, error) (*LifecycleExecutionResult, error)
+	markRollback = func(result *LifecycleExecutionResult, err error) (*LifecycleExecutionResult, error) {
+		var awaiting *awaitingRuntimeResult
+		if errors.As(err, &awaiting) {
+			return nil, awaiting.then(markRollback)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if result.Data == nil {
+			result.Data = map[string]interface{}{}
+		}
+		result.Data["rollback"] = true
+		result.Data["rollback_draft_ref"] = rollbackDraftRef
+		result.Data["rollback_draft_event_id"] = rollbackDraftEventID
+		return result, nil
 	}
-	if result.Data == nil {
-		result.Data = map[string]interface{}{}
-	}
-	result.Data["rollback"] = true
-	result.Data["rollback_draft_ref"] = rollbackDraftRef
-	result.Data["rollback_draft_event_id"] = rollbackDraftEventID
-	return result, nil
+	return markRollback(h.handleHotReload(ctx, soul, &rollbackAction))
 }
 
 func (h *LifecycleHandler) rollbackRuntimeHotReload(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction, adapter RuntimeAdapter, target domain.RuntimeTarget, runtimePubkey string, draft *domain.SoulDraft, previous, failed domain.SoulDraftContent, diff HotReloadDraftDiff, rollbackSpecHash string) error {
@@ -732,9 +938,12 @@ func (h *LifecycleHandler) rollbackRuntimeHotReload(ctx context.Context, soul *d
 		return fmt.Errorf("rollback requires a runtime adapter")
 	}
 	calls := buildHotReloadRuntimeCalls(failed, previous, diff, draft, action, rollbackSpecHash, failed.SpecHash)
+	// Every section is rolled back even when one rollback fails or its outcome
+	// is unknown, so a rollback is never abandoned half-applied.
+	var rollbackErrors []error
 	for _, call := range calls {
 		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("rolling back %s hot-reload via %s", call.Section, call.Method), soul.AgentID); err != nil {
-			return err
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("publish %s rollback progress: %w", call.Section, err))
 		}
 		_, err := adapter.Execute(ctx, RuntimeAdapterRequest{
 			Method:      call.Method,
@@ -747,10 +956,10 @@ func (h *LifecycleHandler) rollbackRuntimeHotReload(ctx context.Context, soul *d
 			Action:      domain.SoulActionRollback,
 		})
 		if err != nil {
-			return err
+			rollbackErrors = append(rollbackErrors, rollbackStepError("rollback "+call.Section, err))
 		}
 	}
-	return nil
+	return errors.Join(rollbackErrors...)
 }
 
 func (h *LifecycleHandler) lookupHotReloadDraft(ctx context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {

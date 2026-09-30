@@ -282,7 +282,7 @@ func (m *communikeysMembership) latestDefinition(ctx context.Context, community 
 		if !validCommunikeysDefinition(event, community.owner, community.communityID) {
 			continue
 		}
-		latest = pickCommunikeysAuthorityEvent(latest, event)
+		latest = newerRelayEvent(latest, event)
 	}
 	if latest == nil {
 		return nil, fmt.Errorf("no valid owner-signed community definition was found; the branch definition must exist before provisioning can grant section membership")
@@ -310,24 +310,12 @@ func (m *communikeysMembership) latestProfileList(ctx context.Context, listAutho
 		if !validCommunikeysProfileList(event, listAuthor, identifier) {
 			continue
 		}
-		latest = pickCommunikeysAuthorityEvent(latest, event)
+		latest = newerRelayEvent(latest, event)
 	}
 	if latest == nil {
 		return nil, fmt.Errorf("no valid list-author-signed profile list was found at this coordinate; the delegated list author must publish it and the definition must reference it before provisioning can grant into it")
 	}
 	return latest, nil
-}
-
-// pickCommunikeysAuthorityEvent applies the authority replacement rule:
-// greatest created_at wins, then the lexicographically lowest event ID
-// (Communikeys V2 §Authority Event Replacement).
-func pickCommunikeysAuthorityEvent(current, candidate *nostr.Event) *nostr.Event {
-	if current == nil ||
-		candidate.CreatedAt > current.CreatedAt ||
-		(candidate.CreatedAt == current.CreatedAt && candidate.ID.Hex() < current.ID.Hex()) {
-		return candidate
-	}
-	return current
 }
 
 func validCommunikeysDefinition(event *nostr.Event, owner nostr.PubKey, communityID string) bool {

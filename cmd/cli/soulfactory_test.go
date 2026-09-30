@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -17,7 +19,12 @@ type fakeCLISoulFactoryClient struct {
 	publishProvisionFn  func(context.Context, domain.ProvisioningRequest) (*soulfactory.SoulFactoryRequestReceipt, error)
 	awaitProvisioningFn func(context.Context, *soulfactory.SoulFactoryRequestReceipt, func(soulfactory.SoulFactoryStatusEvent)) (*domain.ProvisioningRun, error)
 	executeSoulActionFn func(context.Context, string, domain.SoulActionType, string, string) (*nostr.Event, error)
+	awaitSoulActionFn   func(context.Context, string) (*nostr.Event, error)
 	closeCalls          int
+}
+
+func (f *fakeCLISoulFactoryClient) AwaitSoulActionResult(ctx context.Context, requestID string) (*nostr.Event, error) {
+	return f.awaitSoulActionFn(ctx, requestID)
 }
 
 func (f *fakeCLISoulFactoryClient) Close() {
@@ -223,8 +230,18 @@ func setupSoulFactoryCLIEnv(t *testing.T) {
 
 func withFakeCLISoulFactoryClient(t *testing.T, client cliSoulFactoryClient) {
 	t.Helper()
+	withFakeCLISoulFactoryClientTimeout(t, client, nil)
+}
+
+// withFakeCLISoulFactoryClientTimeout also records the reply timeout each
+// client is built with.
+func withFakeCLISoulFactoryClientTimeout(t *testing.T, client cliSoulFactoryClient, replyTimeouts *[]time.Duration) {
+	t.Helper()
 	previous := newCLISoulFactoryClient
-	newCLISoulFactoryClient = func(relays []string, privateKey string) (cliSoulFactoryClient, error) {
+	newCLISoulFactoryClient = func(relays []string, privateKey string, replyTimeout time.Duration) (cliSoulFactoryClient, error) {
+		if replyTimeouts != nil {
+			*replyTimeouts = append(*replyTimeouts, replyTimeout)
+		}
 		if len(relays) != 1 || relays[0] != "wss://relay.example" {
 			t.Fatalf("newCLISoulFactoryClient() relays = %+v", relays)
 		}
@@ -237,4 +254,84 @@ func withFakeCLISoulFactoryClient(t *testing.T, client cliSoulFactoryClient) {
 		newCLISoulFactoryClient = previous
 		outputFormat = "table"
 	})
+}
+
+// The reply timeout comes from --reply-timeout, else the env form of
+// soul_factory.reply_timeout, else zero (the client default).
+func TestSoulFactoryCLIReplyTimeoutFromFlagOrEnv(t *testing.T) {
+	setupSoulFactoryCLIEnv(t)
+	var timeouts []time.Duration
+	client := &fakeCLISoulFactoryClient{
+		listSoulsFn: func(context.Context, int, string) ([]domain.AgentSoul, error) { return nil, nil },
+	}
+	withFakeCLISoulFactoryClientTimeout(t, client, &timeouts)
+
+	run := func(args ...string) error {
+		cmd := soulFactoryCommands()
+		cmd.SetArgs(args)
+		return cmd.Execute()
+	}
+	if err := run("list"); err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	t.Setenv(soulReplyTimeoutEnv, "90s")
+	if err := run("list"); err != nil {
+		t.Fatalf("list with env error = %v", err)
+	}
+	if err := run("list", "--reply-timeout", "2m"); err != nil {
+		t.Fatalf("list with flag error = %v", err)
+	}
+	want := []time.Duration{0, 90 * time.Second, 2 * time.Minute}
+	if len(timeouts) != len(want) {
+		t.Fatalf("reply timeouts = %v, want %v", timeouts, want)
+	}
+	for i := range want {
+		if timeouts[i] != want[i] {
+			t.Fatalf("reply timeouts = %v, want %v", timeouts, want)
+		}
+	}
+
+	t.Setenv(soulReplyTimeoutEnv, "soon")
+	if err := run("list"); err == nil || !strings.Contains(err.Error(), soulReplyTimeoutEnv) {
+		t.Fatalf("invalid env error = %v, want a parse error naming %s", err, soulReplyTimeoutEnv)
+	}
+	if err := run("list", "--reply-timeout", "-1s"); err == nil {
+		t.Fatal("negative --reply-timeout was accepted")
+	}
+}
+
+// A soul action whose wait ends without a terminal result is reported as an
+// unknown outcome naming the request, and souls await picks the late result up.
+func TestSoulFactoryCLIActionTimeoutIsOutcomeUnknownAndAwaitPicksUpResult(t *testing.T) {
+	setupSoulFactoryCLIEnv(t)
+	var awaited []string
+	client := &fakeCLISoulFactoryClient{
+		getSoulFn: func(_ context.Context, agentID string) (*domain.AgentSoul, error) {
+			return &domain.AgentSoul{AgentID: agentID, Status: domain.SoulStatusActive}, nil
+		},
+		executeSoulActionFn: func(context.Context, string, domain.SoulActionType, string, string) (*nostr.Event, error) {
+			return nil, &soulfactory.NoTerminalResultError{RequestID: "request-1", Timeout: time.Minute, Cause: context.DeadlineExceeded}
+		},
+		awaitSoulActionFn: func(_ context.Context, requestID string) (*nostr.Event, error) {
+			awaited = append(awaited, requestID)
+			return &nostr.Event{ID: nostr.ID{0x02}, Tags: nostr.Tags{{"status", "completed"}, {"action", "suspend"}, {"agent-id", "scout"}}, Content: "{}"}, nil
+		},
+	}
+	withFakeCLISoulFactoryClient(t, client)
+
+	cmd := soulFactoryCommands()
+	cmd.SetArgs([]string{"suspend", "scout"})
+	err := cmd.Execute()
+	if !errors.Is(err, soulfactory.ErrNoTerminalResult) || !strings.Contains(err.Error(), "outcome unknown") || !strings.Contains(err.Error(), "bahia souls await request-1") {
+		t.Fatalf("suspend error = %v, want an outcome-unknown error naming souls await request-1", err)
+	}
+
+	cmd = soulFactoryCommands()
+	cmd.SetArgs([]string{"await", "request-1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("await Execute() error = %v", err)
+	}
+	if len(awaited) != 1 || awaited[0] != "request-1" {
+		t.Fatalf("AwaitSoulActionResult() calls = %v, want [request-1]", awaited)
+	}
 }

@@ -519,6 +519,27 @@ func (b *SoulFactoryRelayBus) Authenticate(ctx context.Context) error {
 }
 
 func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*RelayBusSubscription, error) {
+	return b.subscribe(ctx, filters, 0)
+}
+
+// subscribeResumable is SubscribeAllWithEOSE for a long-lived subscription
+// that must not lose events across reconnects. Each relay keeps a resume cursor
+// (see relayResumeCursor): once that relay has sent EOSE, a REQ reissued after
+// a dropped connection or a CLOSED asks only for events since the newest one
+// it delivered, less overlap. Events published while the relay was unreachable
+// therefore arrive in the reissued REQ's backfill, without replaying the whole
+// original backfill. The bus deduplication window and idempotent handlers
+// absorb the overlap. Until a relay's first EOSE its reissues repeat filters.
+func (b *SoulFactoryRelayBus) subscribeResumable(ctx context.Context, filters []nostr.Filter, overlap time.Duration) (*RelayBusSubscription, error) {
+	if overlap <= 0 {
+		return nil, fmt.Errorf("resumable subscription overlap must be positive")
+	}
+	return b.subscribe(ctx, filters, overlap)
+}
+
+// subscribe opens filters on every relay. overlap > 0 gives each relay a
+// resume cursor; zero reissues the original filters after every reconnect.
+func (b *SoulFactoryRelayBus) subscribe(ctx context.Context, filters []nostr.Filter, overlap time.Duration) (*RelayBusSubscription, error) {
 	if b == nil || len(b.endpoints) == 0 {
 		return nil, fmt.Errorf("soul factory relay bus is not configured")
 	}
@@ -538,10 +559,13 @@ func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters 
 	var seenMu sync.Mutex
 	var wg sync.WaitGroup
 
-	dispatch := func(ev *nostr.Event) {
+	dispatch := func(ev *nostr.Event, cursor *relayResumeCursor) {
 		if ev == nil || !b.validateEvent(ev) {
 			return
 		}
+		// The cursor counts every valid event its relay delivered, including
+		// ones another relay delivered first.
+		cursor.observe(ev)
 		seenMu.Lock()
 		eventID := ev.ID.Hex()
 		if _, duplicate := seen[eventID]; duplicate {
@@ -565,10 +589,15 @@ func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters 
 
 	wg.Add(len(b.endpoints))
 	for i, endpoint := range b.endpoints {
+		var cursor *relayResumeCursor
+		if overlap > 0 {
+			cursor = newRelayResumeCursor(overlap)
+		}
 		go func() {
 			defer wg.Done()
 			settle := func(status RelayStoredEventsStatus, reason string) { stored.settle(i, status, reason) }
-			b.runRelaySubscription(subCtx, endpoint, cloneRelayBusFilters(filters), dispatch, settle)
+			relayDispatch := func(ev *nostr.Event) { dispatch(ev, cursor) }
+			b.runRelaySubscription(subCtx, endpoint, cloneRelayBusFilters(filters), cursor, relayDispatch, settle)
 		}()
 	}
 
@@ -606,15 +635,19 @@ func (b *SoulFactoryRelayBus) Close() {
 // runRelaySubscription keeps one relay's REQ alive until ctx ends. settle
 // records the relay's terminal answer to the initial REQ: EOSE, or a CLOSED
 // that authentication did not recover. Reissues after a dropped connection or
-// a CLOSED keep realtime delivery going; they wait for the backoff first.
-func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint relayBusEndpoint, filters []nostr.Filter, dispatch func(*nostr.Event), settle func(RelayStoredEventsStatus, string)) {
+// a CLOSED keep realtime delivery going; they wait for the backoff first. A
+// non-nil cursor narrows each reissue to the events the relay may not have
+// delivered yet (see subscribeResumable).
+func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint relayBusEndpoint, filters []nostr.Filter, cursor *relayResumeCursor, dispatch func(*nostr.Event), settle func(RelayStoredEventsStatus, string)) {
 	relayURL := endpoint.URL()
 	attempt := 0
 	// authRetried stops an authenticated relay that still answers
 	// "auth-required:" from being reissued in a loop without backoff.
 	authRetried := false
 	for ctx.Err() == nil {
-		sub, err := endpoint.Subscribe(ctx, filters)
+		reqFilters := cursor.resume(filters)
+		cursor.begin()
+		sub, err := endpoint.Subscribe(ctx, reqFilters)
 		if err != nil {
 			attempt++
 			b.log().Warn("relay subscription failed", "relay", relayURL, "attempt", attempt, "error", err)
@@ -625,7 +658,10 @@ func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint
 		}
 
 		attempt = 0
-		end := b.consumeRelaySubscription(ctx, sub, dispatch, func() { settle(RelayStoredEventsEOSE, "") })
+		end := b.consumeRelaySubscription(ctx, sub, dispatch, func() {
+			cursor.eose()
+			settle(RelayStoredEventsEOSE, "")
+		})
 		sub.Close()
 		if ctx.Err() != nil {
 			return
@@ -634,7 +670,7 @@ func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint
 			authRetried = false
 		}
 		if end.closed {
-			if isRelayAuthRequired(end.reason) && !authRetried && b.authenticateRelaySubscription(ctx, endpoint, end.reason, filters) {
+			if isRelayAuthRequired(end.reason) && !authRetried && b.authenticateRelaySubscription(ctx, endpoint, end.reason, reqFilters) {
 				authRetried = true
 				continue
 			}
@@ -806,6 +842,105 @@ func cloneRelayBusFilters(filters []nostr.Filter) []nostr.Filter {
 	cloned := make([]nostr.Filter, len(filters))
 	copy(cloned, filters)
 	return cloned
+}
+
+// relayResumeCursor is one relay's position in a resumable subscription: the
+// newest created_at among the valid events that relay delivered. Stored events
+// arrive in no guaranteed order, so a generation's events count only once its
+// EOSE proves the backfill below them complete; after EOSE, realtime events
+// advance the cursor as they arrive. Timestamps are clamped to the local clock
+// so a future-dated event cannot push the cursor past events not yet seen. All
+// methods are nil-safe: a nil cursor means "reissue the original filters".
+type relayResumeCursor struct {
+	overlap nostr.Timestamp
+
+	mu sync.Mutex
+	// since is the committed cursor; zero until the relay first sends EOSE.
+	since nostr.Timestamp
+	// generation is the newest created_at the current REQ delivered before its
+	// EOSE; live reports whether the current REQ has sent EOSE.
+	generation nostr.Timestamp
+	live       bool
+}
+
+func newRelayResumeCursor(overlap time.Duration) *relayResumeCursor {
+	seconds := nostr.Timestamp(overlap / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return &relayResumeCursor{overlap: seconds}
+}
+
+// begin starts a new REQ generation.
+func (c *relayResumeCursor) begin() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation = 0
+	c.live = false
+}
+
+// observe records one valid event delivered by this relay.
+func (c *relayResumeCursor) observe(ev *nostr.Event) {
+	if c == nil || ev == nil {
+		return
+	}
+	createdAt := ev.CreatedAt
+	if now := nostr.Now(); createdAt > now {
+		createdAt = now
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.live {
+		if createdAt > c.since {
+			c.since = createdAt
+		}
+		return
+	}
+	if createdAt > c.generation {
+		c.generation = createdAt
+	}
+}
+
+// eose commits the current generation's backfill.
+func (c *relayResumeCursor) eose() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation > c.since {
+		c.since = c.generation
+	}
+	c.live = true
+}
+
+// resume returns the filters for the next REQ: the originals until the relay
+// has sent EOSE, then each filter with Since raised to the cursor less the
+// overlap.
+func (c *relayResumeCursor) resume(filters []nostr.Filter) []nostr.Filter {
+	resumed := cloneRelayBusFilters(filters)
+	if c == nil {
+		return resumed
+	}
+	c.mu.Lock()
+	since := c.since
+	c.mu.Unlock()
+	if since == 0 {
+		return resumed
+	}
+	from := since - c.overlap
+	if from < 1 {
+		from = 1
+	}
+	for i := range resumed {
+		if resumed[i].Since < from {
+			resumed[i].Since = from
+		}
+	}
+	return resumed
 }
 
 // goNostrRelayEndpoint is one relay behind the bus, backed by fiatjaf.com/nostr.
