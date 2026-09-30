@@ -50,6 +50,22 @@ SELECT indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
 WHERE c.relname = 'idx_nostr_events_publish_failed';          -- expect t
 ```
 
+### After deploying migration 000072 (Security `failed_retryable` retired)
+
+Migration 000072 converts leftover `failed_retryable` Security publications to
+`failed_terminal` (through the retry partial index, before dropping it) and
+narrows `security_observable_publications_publish_state_check` and
+`security_scan_runs_publish_state_check` as `NOT VALID`. The same
+`ensure-indexes` run then converts leftover `failed_retryable` scan runs
+(`security_scan_runs` has no `publish_state` index, so this is not done at
+startup) and validates both checks under `SHARE UPDATE EXCLUSIVE`. Verify:
+
+```sql
+SELECT conname, convalidated FROM pg_constraint
+WHERE conname IN ('security_observable_publications_publish_state_check',
+                  'security_scan_runs_publish_state_check');   -- expect t, t
+```
+
 ## Publish outbox health
 
 - `bahia_nostr_outbox_depth`: pending outbound rows (all publish targets). The
@@ -60,9 +76,16 @@ WHERE c.relname = 'idx_nostr_events_publish_failed';          -- expect t
   (`publish_state = 'failed'`, reason in `last_publish_error`). It reads `-1`
   until `idx_nostr_events_publish_failed` exists, and the daemon logs one
   warning naming `ensure-indexes`; it never counts by scanning the table.
-  Alert on any increase. Abandoned projector rows are republished by the next
-  projector repair once relays accept again; other producers do not
-  resubmit automatically.
+  `BahiaNostrOutboxFailed` fires while it is above zero (see
+  `docs/runbooks/ws6-alerts.md#bahianostroutboxfailed`). Every producer learns
+  of the abandonment: a publish call whose first round already makes the
+  quorum unreachable returns `ErrPublishAbandoned` (never the queued
+  `ErrPublishIncomplete`), and a later abandonment by the runner reaches the
+  publisher's `OnDeliveryAbandoned` handlers. Abandoned projector rows are
+  republished by the next projector repair once relays accept again; Security
+  publications (and their runs) become `failed_terminal`, SBOM manifests
+  `failed`, config-fabric versions drop out of desired state, and docs are
+  re-signed on the next sync. Nothing resets a failed row to pending.
 - Per-relay acceptance is held in memory only. After a daemon restart each
   pending row is resent to every write relay, including relays that had
   already accepted it; they answer OK `duplicate:`, which counts as

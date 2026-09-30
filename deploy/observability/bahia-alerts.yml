@@ -41,6 +41,16 @@ groups:
         annotations:
           summary: "Bahia relay connectivity is degraded"
           runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
+      - alert: BahiaNostrOutboxFailed
+        # Durable count of outbox rows whose delivery was abandoned
+        # (publish_state=failed). -1 means the count is unavailable until
+        # ensure-indexes builds its index, so it never fires this rule.
+        expr: bahia_nostr_outbox_failed > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} Nostr outbox event(s) were abandoned by every write relay"
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahianostroutboxfailed"
       - alert: BahiaAudit4903Anomaly
         expr: increase(bahia_audit_4903_anomalies_total[5m]) > 0
         labels:

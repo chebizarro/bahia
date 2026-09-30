@@ -62,10 +62,16 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	_, err := Down(ctx, pool, logger, DownOptions{})
 	require.ErrorContains(t, err, "confirmation")
 
-	// 000071 (outbox publish target + failed state) is the newest migration.
-	// Its data round trip is covered by TestNostrPublishTargetMigrationRoundTrip;
-	// roll it back so 000070's guard is the latest below.
+	// 000072 (Security failed_retryable retired) is the newest migration and
+	// 000071 (outbox publish target + failed state) the one before it. Their
+	// data round trips are covered by
+	// TestSecurityRetireFailedRetryableMigrationRoundTrip and
+	// TestNostrPublishTargetMigrationRoundTrip; roll both back so 000070's
+	// guard is the latest below.
 	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000072_security_retire_failed_retryable"}, rolled)
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000071_nostr_publish_target"}, rolled)
 
@@ -99,6 +105,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"000072_security_retire_failed_retryable",
 		"000071_nostr_publish_target", "000070_hiveci_initiations", "000069_package_authorization",
 		"000068_relay_projection_wire_time", "000067_vm_measured_adoption", "000066_vm_control_plane",
 	}, rolled)
@@ -127,7 +134,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	require.Equal(t, len(migrationVersions(t)), count)
 
 	files = migrationFileCopy(t)
-	files["migrations/000071_nostr_publish_target.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
+	files["migrations/000072_security_retire_failed_retryable.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
 	_, err = downWithFS(ctx, pool, logger, files, DownOptions{Confirm: true})
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -135,7 +142,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('down_failure_marker') IS NOT NULL").Scan(&exists))
 	require.False(t, exists, "failed down SQL must roll back its DDL")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000071_nostr_publish_target'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000072_security_retire_failed_retryable'").Scan(&count))
 	require.Equal(t, 1, count)
 }
 
@@ -204,6 +211,6 @@ func TestMigrationDownSharesStartupLock(t *testing.T) {
 	cancelWait()
 	require.ErrorIs(t, <-result, context.Canceled)
 	var count int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000071_nostr_publish_target'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000072_security_retire_failed_retryable'").Scan(&count))
 	require.Equal(t, 1, count)
 }

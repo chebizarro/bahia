@@ -49,8 +49,9 @@ confirmation.
 1. `ensure-indexes` creates archive and replay indexes with `CREATE INDEX
    CONCURRENTLY`; it is not part of Bahia startup migration.
    It also validates the constraints that startup migrations add `NOT VALID`
-   (the archive ownership foreign key from 000062 and the widened
-   `publish_state` check from 000071).
+   (the archive ownership foreign key from 000062, the widened
+   `publish_state` check from 000071, and the narrowed Security publish-state
+   checks from 000072, after converting leftover `failed_retryable` scan runs).
 2. `export` creates a manifest row and claims at most the configured batch size
    using `(received_at,id)` keyset order and `FOR UPDATE SKIP LOCKED`. Pending
    outbox rows are never eligible.

@@ -124,7 +124,8 @@ const (
 // Two thresholds apply to every outbound event:
 //   - Caller success: a publish call succeeds once nostr.publish_quorum write
 //     relays (default 1; -1 = all) have accepted. Below the quorum it returns
-//     ErrPublishIncomplete, and the event stays queued for retry either way.
+//     ErrPublishIncomplete while the event stays queued for retry, or
+//     ErrPublishAbandoned once the quorum is unreachable and the row is failed.
 //   - Delivery completion: acceptance is tracked per relay, and relays that
 //     have not accepted keep being retried with backoff up to a bounded attempt
 //     budget. The outbox row is marked published only once every write relay
@@ -140,7 +141,12 @@ const (
 // pending row per restart. The event is never re-signed (it is the stored
 // signed event), so relays see the same id and no second copy exists. That
 // bounded resend is preferred over persisting per-relay state, which would put
-// relay topology into Postgres and add a write per relay per round.
+// relay topology into Postgres and add a write per relay per round. The same
+// applies to an event published before this publisher's Run is active (for
+// example during startup, where background runners start concurrently): only
+// an active runner keeps a partial delivery in memory, so the runner's first
+// discovery pass resends that row to every write relay, and relays that
+// already accepted it answer OK "duplicate:".
 //
 // Every outbox row a Publisher writes carries its publish target (see
 // WithPublishTarget), and its Run only drains rows for that target, so each
@@ -176,9 +182,10 @@ type Publisher struct {
 	// outboxCursor is the runner's keyset position in the pending outbox. It
 	// is only touched by the Run goroutine.
 	outboxCursor *repository.NostrOutboxCursor
-	// onAbandoned, when set, is told about every event whose delivery this
+	// abandonedHandlers are told about every event whose delivery this
 	// publisher gave up on (see OnDeliveryAbandoned).
-	onAbandoned atomic.Pointer[func(nostr.Event)]
+	abandonedMu       sync.RWMutex
+	abandonedHandlers []func(nostr.Event)
 }
 
 // PublisherOption configures a Publisher.
@@ -242,24 +249,35 @@ func (p *Publisher) Pool() *RelayPool {
 	return p.pool
 }
 
-// OnDeliveryAbandoned registers fn to be called, synchronously and while the
-// delivery is still locked, for every event this publisher abandons: the row
-// moved to publish_state=failed because the publish quorum can no longer be
-// reached. fn must be fast and must not publish. The Projector uses it to drop
-// the dedupe entry for a coordinate whose latest event never reached the
-// quorum, so the next repair re-signs it instead of treating it as delivered.
-// A later registration replaces an earlier one.
+// OnDeliveryAbandoned registers fn to be called for every event this
+// publisher abandons: the row moved to publish_state=failed because the
+// publish quorum can no longer be reached. Every registered handler is called,
+// in registration order, synchronously and while the delivery is still
+// locked, whether the abandonment happened in the caller's first round (which
+// also returns ErrPublishAbandoned) or later in Run. A handler receives every
+// abandoned event of this publisher and must ignore events it does not own;
+// it must be quick and must not publish.
+//
+// The Projector uses it to drop the dedupe entry for a coordinate whose latest
+// event never reached the quorum, so the next repair re-signs it; producers
+// that keep publish state of their own (Security publications, SBOM
+// manifests) use it to record a terminal failure for an event they were told
+// was queued. A nil fn is ignored.
 func (p *Publisher) OnDeliveryAbandoned(fn func(nostr.Event)) {
 	if fn == nil {
-		p.onAbandoned.Store(nil)
 		return
 	}
-	p.onAbandoned.Store(&fn)
+	p.abandonedMu.Lock()
+	defer p.abandonedMu.Unlock()
+	p.abandonedHandlers = append(p.abandonedHandlers, fn)
 }
 
 func (p *Publisher) notifyAbandoned(ev nostr.Event) {
-	if fn := p.onAbandoned.Load(); fn != nil {
-		(*fn)(ev)
+	p.abandonedMu.RLock()
+	handlers := p.abandonedHandlers
+	p.abandonedMu.RUnlock()
+	for _, fn := range handlers {
+		fn(ev)
 	}
 }
 
@@ -453,6 +471,13 @@ func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) err
 // returning per-relay publish outcomes from the underlying relay pool. When an
 // outbox repository is configured, the signed event is durable before the first
 // relay attempt and failed delivery is left pending for the Publisher runner.
+//
+// Error contract (shared by PublishPresignedEvent and PublishProjection): nil
+// means the publish quorum accepted; an error wrapping ErrPublishIncomplete
+// means the row is pending and relays that have not accepted are still being
+// retried; an error wrapping ErrPublishAbandoned means the first round already
+// made the quorum unreachable (permanent relay rejections) and the row is
+// failed; any other error means the event was never queued.
 func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]PublishResult, error) {
 	if p == nil || ev == nil {
 		return nil, nil
@@ -495,22 +520,16 @@ func (p *Publisher) PublishPresignedEvent(ctx context.Context, ev nostr.Event, e
 
 // PublishProjection delivers a read-model event the Projector signed with the
 // daemon key through this publisher's outbox, recording the projected entity
-// on the row. It implements ProjectionPublisher: nil means the publish quorum
-// accepted; an error wrapping ErrPublishIncomplete means the row is pending
-// and relays that have not accepted are still being retried; any other error
-// means the event is not being retried. That includes ErrPublishAbandoned,
-// when the first round already made the quorum unreachable (permanent relay
-// rejections) and the row is failed.
+// on the row. It implements ProjectionPublisher with the error contract of
+// PublishSignedEventWithResults: any error other than ErrPublishIncomplete
+// means the event is not being retried, including ErrPublishAbandoned.
 func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) error {
 	if p == nil {
 		return fmt.Errorf("nostr publisher not configured")
 	}
 	attempt, err := p.enqueueAndDeliver(ctx, ev, entityType, entityID)
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
-	case attempt.err != nil && attempt.settled:
-		return fmt.Errorf("%w: %s", ErrPublishAbandoned, attempt.err.Error())
 	}
 	return attempt.err
 }
@@ -521,11 +540,20 @@ func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entit
 // event that is already stored adds no row.
 // The returned error covers only recording; the delivery outcome is in the
 // attempt.
+//
+// The in-memory delivery is registered before the row becomes durable, so a
+// concurrent runner discovery pass that lists the new row sees it as tracked
+// and skips it, instead of starting a second delivery with empty per-relay
+// state that would resend to relays the first round has already covered.
 func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) (publishAttempt, error) {
+	d, created := p.trackDelivery(ev, 0)
 	if p.eventRepo != nil {
 		rec := nostrEventRecordFromEvent(ev, entityType, entityID)
 		p.markOutbound(rec)
 		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
+			if created {
+				p.forgetDelivery(d)
+			}
 			return publishAttempt{}, fmt.Errorf("persist signed nostr event before publish: %w", err)
 		}
 	}

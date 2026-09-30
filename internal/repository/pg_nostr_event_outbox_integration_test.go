@@ -92,7 +92,8 @@ func TestPgNostrEventOutboxTargetsAndFailedState(t *testing.T) {
 
 // The failed-row count refuses to scan nostr_events until ensure-indexes has
 // built its partial index, then counts through it. The same ensure-indexes run
-// validates the 000071 publish-state check that startup added NOT VALID.
+// validates the checks that startup added NOT VALID (000071 publish state,
+// 000072 Security publish states).
 func TestPgNostrEventCountPublishFailedAfterEnsureIndexes(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -135,4 +136,8 @@ func TestPgNostrEventCountPublishFailedAfterEnsureIndexes(t *testing.T) {
 	var validated bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'nostr_events_publish_state_check'`).Scan(&validated))
 	require.True(t, validated, "ensure-indexes validates the 000071 publish-state check")
+	for _, name := range []string{"security_scan_runs_publish_state_check", "security_observable_publications_publish_state_check"} {
+		require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = $1`, name).Scan(&validated))
+		require.True(t, validated, "ensure-indexes validates the 000072 check %s", name)
+	}
 }

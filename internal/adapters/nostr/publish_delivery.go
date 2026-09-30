@@ -44,8 +44,11 @@ var ErrPublishIncomplete = nostrutil.ErrPublishIncomplete
 
 // ErrPublishAbandoned reports that delivery of an event was given up on: its
 // outbox row is failed and nothing retries it. Unlike ErrPublishIncomplete it
-// is not "kept, still retrying". Only PublishProjection returns it today.
-var ErrPublishAbandoned = errors.New("nostr event delivery abandoned")
+// is not "kept, still retrying". Every publish entry point returns it (as a
+// *PublishAbandonedError) when the first delivery round already makes the
+// publish quorum unreachable; abandonment in a later runner round is reported
+// through OnDeliveryAbandoned. It aliases nostrutil's sentinel.
+var ErrPublishAbandoned = nostrutil.ErrPublishAbandoned
 
 // PublishIncompleteError describes a publish that did not reach its required
 // relay acceptance.
@@ -65,6 +68,26 @@ func (e *PublishIncompleteError) Error() string {
 }
 
 func (e *PublishIncompleteError) Unwrap() error { return ErrPublishIncomplete }
+
+// PublishAbandonedError describes a publish whose delivery was given up on:
+// the outbox row is failed and no relay is retried. It matches
+// ErrPublishAbandoned and never ErrPublishIncomplete.
+type PublishAbandonedError struct {
+	EventID  string
+	Accepted int
+	Required int
+	Detail   string
+}
+
+func (e *PublishAbandonedError) Error() string {
+	msg := fmt.Sprintf("nostr event %s delivery abandoned: accepted by %d of %d required relays", e.EventID, e.Accepted, e.Required)
+	if e.Detail != "" {
+		msg += ": " + e.Detail
+	}
+	return msg
+}
+
+func (e *PublishAbandonedError) Unwrap() error { return ErrPublishAbandoned }
 
 // permanentPublishRejectionPrefixes are NIP-01 OK=false machine-readable
 // prefixes that cannot change for the same signed event on the same relay, so
@@ -245,7 +268,14 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	configured := normalizeRelayURLs(p.relayURLs())
 	required := p.requiredAcceptances(len(configured))
 	if d.settled {
-		return deliveryReport{accepted: d.acceptedCount(configured), required: required, delivered: d.delivered, settled: true}
+		report := deliveryReport{accepted: d.acceptedCount(configured), required: required, delivered: d.delivered, settled: true}
+		if !d.delivered {
+			// Another round already abandoned this event (the delivery is
+			// about to be forgotten); a caller that raced in must not read
+			// that as success.
+			report.err = &PublishAbandonedError{EventID: eventID, Accepted: report.accepted, Required: required, Detail: d.failureDetail(configured)}
+		}
+		return report
 	}
 
 	p.scheduleDelivery(d, deliveryUnscheduled)
@@ -360,6 +390,9 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 		if !delivered {
 			report.err = fmt.Errorf("%w; %v", report.err, persistErr)
 		}
+	} else if settled && !delivered {
+		// The row is durably failed: report abandonment, not "queued".
+		report.err = &PublishAbandonedError{EventID: eventID, Accepted: accepted, Required: required, Detail: detail}
 	}
 	d.settled = settled
 	d.delivered = delivered

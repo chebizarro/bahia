@@ -49,6 +49,8 @@ type ConfigFabricSigner interface {
 // publish quorum accepted it; an error matching nostrutil.ErrPublishIncomplete
 // means the event is durably queued and its runner keeps retrying the relays
 // that have not accepted. Relays that have not accepted are retried either way.
+// An error matching nostrutil.ErrPublishAbandoned means the outbox gave up on
+// the event: its row is failed and it is not desired state.
 type ConfigFabricPublisher interface {
 	PublishPresignedEvent(ctx context.Context, event nostr.Event, entityType string) error
 }
@@ -192,6 +194,9 @@ func (s *ConfigFabricService) publishLocked(ctx context.Context, request ConfigP
 	delivery := ConfigDeliveryAccepted
 	if err := s.publisher.PublishPresignedEvent(ctx, *event, configEntityType); err != nil {
 		if !nostrutil.IsPublishQueued(err) {
+			// Includes nostrutil.ErrPublishAbandoned: every control-plane
+			// relay rejected the event permanently, its outbox row is failed
+			// and ListDrift does not treat it as desired state.
 			return nil, fmt.Errorf("publish config-fabric event: %w", err)
 		}
 		// Durable and still being retried: report it as queued rather than
@@ -512,6 +517,12 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 	for _, record := range records {
 		switch record.Kind {
 		case ConfigFabricListKind, ConfigFabricPolicyKind:
+			if record.PublishState == repository.NostrPublishStateFailed {
+				// The outbox abandoned this version (at publish time or
+				// later in its runner): no relay holds it, so it is not
+				// desired state. Versions stay monotonic past it.
+				continue
+			}
 			item, err := desiredFromRecord(record)
 			if err != nil {
 				continue

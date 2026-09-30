@@ -1017,6 +1017,9 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey: servicePubkey,
 			Logger: logger,
 		})
+		// Manifests recorded as published on a queued reference are failed
+		// if the control-plane outbox later abandons that reference.
+		controlPlanePub.OnDeliveryAbandoned(sbomOrchestrator.HandlePublishAbandoned)
 	}
 
 	// OCI Registry wiring.
@@ -1209,6 +1212,9 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey:     servicePubkey,
 			Logger:     logger,
 		})
+		// Publications recorded as queued become failed_terminal if the
+		// outbox later abandons their event.
+		nostrPub.OnDeliveryAbandoned(securityScanner.HandlePublishAbandoned)
 		bgManager.RegisterWithOptions(securityScanner, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}), RunnerTier(Tier3))
 		logger.Info("security OSV scanner and scheduler registered")
@@ -4147,8 +4153,8 @@ type sbomPublishAdapter struct {
 }
 
 // PublishSignedEventWithResults keeps the per-relay results alongside the
-// error: an ErrPublishIncomplete publish is queued, not lost, and callers
-// inspect both.
+// error: an ErrPublishIncomplete publish is queued, not lost, an
+// ErrPublishAbandoned one is terminal, and callers inspect both.
 func (a sbomPublishAdapter) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomAdapter.PublishOKResult, error) {
 	if a.publisher == nil {
 		return nil, fmt.Errorf("nostr publisher is not configured")

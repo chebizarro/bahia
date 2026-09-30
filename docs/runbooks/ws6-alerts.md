@@ -24,6 +24,7 @@ operations and are not implied by these source fixtures.
 | `BahiaDriftStuck` | At least one drifted service state is older than the threshold or has reconciliation failures | Service owner | Tier 2 | Freeze additional promotion for the affected service and compare desired/observed state |
 | `BahiaWorkerResourcePressure` | Bahia recommends operator intervention for worker pressure | Host owner | Tier 1, Tier 2 if continuity capacity is affected | Cordon new placements; inspect reclaimable disk, VRAM, memory, and thermal state |
 | `BahiaRelayDegraded` | One or more configured relays are degraded or unhealthy | Relay operator | Tier 1 | Preserve multi-relay publishing and verify relay acknowledgements; do not infer delivery from a socket connection |
+| `BahiaNostrOutboxFailed` | One or more outbound Nostr events were abandoned (`bahia_nostr_outbox_failed > 0`) | Relay operator | Tier 1 | Read `last_publish_error` of the failed rows; fix the relay policy or event before re-producing it; do not reset rows to pending |
 | `BahiaAudit4903Anomaly` | A rejected or contradictory kind-4903 event increments the anomaly counter | Security/operator pair | Tier 3 | Preserve the event chain and pause correlated mutations pending signature/correlation review |
 | `BahiaAuthorizationRejectionSpike` | More than ten bounded authorization rejections occur within five minutes | Security operator | Tier 2 | Inspect identity, policy, replay, and signature reason counts; do not loosen policy |
 | `BahiaTierRejectionSpike` | More than five insufficient-tier rejections occur within five minutes | Bahia operator | Tier 1 | Compare requested and active tier and restore the failed dependency instead of bypassing the gate |
@@ -88,6 +89,29 @@ cordoning before moving continuity-critical workloads.
 
 Verify relay connectivity and publish acknowledgements across the configured
 relay set. Do not infer delivery from WebSocket connection state alone.
+
+## BahiaNostrOutboxFailed
+
+The publish outbox gave up on at least one signed event: every write relay
+rejected it permanently (`blocked:`, `invalid:`, `pow:`) or its attempt budget
+ran out without reaching the publish quorum. The gauge counts
+`publish_state = 'failed'` rows in `nostr_events`, which stay until archived,
+so the alert keeps firing after the cause is fixed. Acknowledge it once each row
+is accounted for. It reads `-1`, and does not fire, until `bahia-event-archive
+ensure-indexes` has built `idx_nostr_events_publish_failed`.
+
+```sql
+SELECT id, kind, entity_type, publish_target, last_publish_error, received_at
+FROM nostr_events WHERE publish_state = 'failed' ORDER BY received_at DESC LIMIT 50;
+```
+
+Callers already recorded the terminal outcome: Security publications and their
+runs are `failed_terminal`, SBOM manifests are `failed`, config-fabric versions
+are excluded from desired state, and projector coordinates are re-signed on the
+next repair. Fix the relay policy or the event, then re-produce the content (a
+new signed event). Never set a failed row back to `pending`: relays that
+rejected it permanently will reject the same event again. See
+`docs/runbooks/nostr-event-store-lifecycle.md#publish-outbox-health`.
 
 ## BahiaAudit4903Anomaly
 
