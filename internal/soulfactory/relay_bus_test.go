@@ -60,7 +60,7 @@ func (e *fakeRelayEndpoint) Subscribe(_ context.Context, filters []nostr.Filter)
 	return sub, nil
 }
 
-func (e *fakeRelayEndpoint) Auth(context.Context, relayAuthSigner) error {
+func (e *fakeRelayEndpoint) Authenticate(context.Context, relayAuthSigner, *relayAuthProbe) error {
 	e.authCalls <- struct{}{}
 	return nil
 }
@@ -350,7 +350,10 @@ func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *te
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
 }
 
-func TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill(t *testing.T) {
+// A CLOSED before EOSE is the relay's terminal answer to the stored-event
+// read: backfill ends without waiting on the reissue, but it is reported as
+// incomplete, never as complete. The REQ is still reissued for realtime events.
+func TestRelayBusClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
 	signer := newFakeSigner(t)
 	endpoint := newFakeRelayEndpoint("wss://closed.example")
 	first := newFakeRelaySubscription()
@@ -372,15 +375,17 @@ func TestRelayBusClosedBeforeEOSEReissuesWithoutCompletingBackfill(t *testing.T)
 		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
 	}
 	mustReceiveFilters(t, endpoint.subscribeCalls)
-	first.closed <- "closed: relay restart"
-	mustReceiveFilters(t, endpoint.subscribeCalls)
-	select {
-	case <-sub.EndOfStoredEvents:
-		t.Fatal("EOSE closed after CLOSED-before-EOSE instead of waiting for reissued subscription")
-	default:
-	}
-	close(second.eose)
+	first.closed <- "error: relay restart"
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
+	var incomplete *RelayBusIncompleteError
+	if err := sub.StoredEventsIncomplete(nil); !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayBusIncomplete) {
+		t.Fatalf("StoredEventsIncomplete() = %v, want *RelayBusIncompleteError", err)
+	}
+	if incomplete.Cause != nil || len(incomplete.Relays) != 1 ||
+		incomplete.Relays[0].Status != RelayStoredEventsClosed || incomplete.Relays[0].Reason != "error: relay restart" {
+		t.Fatalf("incomplete = %+v, want the relay reported closed with its reason", incomplete)
+	}
+	mustReceiveFilters(t, endpoint.subscribeCalls)
 }
 
 func TestRelayBusClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testing.T) {

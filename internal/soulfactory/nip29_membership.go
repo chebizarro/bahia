@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 )
@@ -98,23 +97,10 @@ func (m *nip29Membership) Assign(ctx context.Context, pubkey string) ([]string, 
 		if err := m.signer.Sign(ctx, &event); err != nil {
 			return assigned, fmt.Errorf("sign NIP-29 membership %s on %s: %w", group.ID, group.Relay, err)
 		}
+		// Publish answers an "auth-required:" OK by authenticating and
+		// republishing once, so a rejection here is final.
 		if _, err := m.buses[group.Relay].Publish(ctx, event); err != nil {
-			if !strings.Contains(err.Error(), "auth-required:") {
-				return assigned, fmt.Errorf("assign NIP-29 membership %s on %s: %w", group.ID, group.Relay, err)
-			}
-			// Some relays acknowledge NIP-42 AUTH asynchronously. If the
-			// immediately-following write races that acknowledgement, wait
-			// briefly for authenticated connection state and retry once.
-			timer := time.NewTimer(100 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return assigned, ctx.Err()
-			case <-timer.C:
-			}
-			if _, retryErr := m.buses[group.Relay].Publish(ctx, event); retryErr != nil {
-				return assigned, fmt.Errorf("assign NIP-29 membership %s on %s after auth: %w", group.ID, group.Relay, retryErr)
-			}
+			return assigned, fmt.Errorf("assign NIP-29 membership %s on %s: %w", group.ID, group.Relay, err)
 		}
 		assigned = append(assigned, group.Relay+"'"+group.ID)
 	}

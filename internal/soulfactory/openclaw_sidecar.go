@@ -459,14 +459,30 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	}
 	defer sub.Close()
 	eose := sub.EndOfStoredEvents
+	// The subscription itself is long-lived; the backfill deadline only bounds
+	// how long readiness stays silent about relays that have not answered.
+	backfillDeadline := time.NewTimer(relayBusStoredEventsTimeout)
+	defer backfillDeadline.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-backfillDeadline.C:
+			if eose != nil {
+				err := sub.StoredEventsIncomplete(context.DeadlineExceeded)
+				s.logger.Warn("OpenClaw SoulFactory sidecar backfill still incomplete", "error", err)
+				s.setReadinessError(err)
+			}
 		case <-eose:
+			eose = nil
+			if err := sub.StoredEventsIncomplete(nil); err != nil {
+				// A relay CLOSED the REQ: control requests it holds are unseen.
+				s.logger.Warn("OpenClaw SoulFactory sidecar backfill incomplete", "error", err)
+				s.setReadinessError(err)
+				continue
+			}
 			s.logger.Info("OpenClaw SoulFactory sidecar backfill complete")
 			s.markSubscriptionEOSE()
-			eose = nil
 		case event, ok := <-sub.Events:
 			if !ok {
 				err := fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")

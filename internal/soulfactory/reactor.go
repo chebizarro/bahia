@@ -268,8 +268,12 @@ func (r *Reactor) Run(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-eose:
-			r.logger.Info("soul factory request backfill complete; processing realtime events")
 			eose = nil
+			if err := sub.StoredEventsIncomplete(nil); err != nil {
+				r.logger.Warn("soul factory request backfill incomplete; processing realtime events", "error", err)
+				continue
+			}
+			r.logger.Info("soul factory request backfill complete; processing realtime events")
 
 		case ev, ok := <-sub.Events:
 			if !ok {

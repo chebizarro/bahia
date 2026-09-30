@@ -450,30 +450,20 @@ func authenticateConcordRelays(ctx context.Context, bus *SoulFactoryRelayBus, en
 		return fmt.Errorf("soul factory relay auth signer is not configured")
 	}
 	for _, endpoint := range endpoints {
-		if err := endpoint.Auth(ctx, bus.signer); err != nil {
+		if err := endpoint.Authenticate(ctx, bus.signer, nil); err != nil {
 			return fmt.Errorf("authenticate to %s: %w", endpoint.URL(), err)
 		}
 	}
 	return nil
 }
 
+// publishConcordInvite requires every endpoint to accept event. A relay that
+// answers "auth-required:" is authenticated and asked once more.
 func publishConcordInvite(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint, event nostr.Event) error {
 	for _, endpoint := range endpoints {
-		result := endpoint.Publish(ctx, event)
+		result := publishRelayEndpoint(ctx, endpoint, bus.signer, event)
 		if result.Accepted {
 			continue
-		}
-		if isRelayAuthRequired(result.Reason) || (result.Error != nil && strings.Contains(result.Error.Error(), "auth-required:")) {
-			if bus.signer == nil {
-				return fmt.Errorf("%s requested auth but no relay auth signer is configured", endpoint.URL())
-			}
-			if err := endpoint.Auth(ctx, bus.signer); err != nil {
-				return fmt.Errorf("authenticate to %s after relay challenge: %w", endpoint.URL(), err)
-			}
-			result = endpoint.Publish(ctx, event)
-			if result.Accepted {
-				continue
-			}
 		}
 		if result.Error != nil {
 			return fmt.Errorf("%s: %w", endpoint.URL(), result.Error)
