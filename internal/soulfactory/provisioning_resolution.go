@@ -298,7 +298,10 @@ func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigS
 		}
 		authors = append(authors, author)
 	}
-	events, err := bus.Query(ctx, []nostr.Filter{{
+	// Fail closed: the fleet config carries auth, tools, mcp, hooks and plugins
+	// policy, and a stale revision baked into a new agent is not repaired until
+	// the next revision. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_fleet_config", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
 		Authors: authors,
 		Tags:    nostr.TagMap{tagParameterizedD: []string{SoulFactoryFleetConfigIdentifier}},
@@ -307,7 +310,7 @@ func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigS
 	if err != nil {
 		return nil, fmt.Errorf("query fleet config: %w", err)
 	}
-	latest := newestFleetConfigEvent(events)
+	latest := newestFleetConfigEvent(read.Events)
 	if latest == nil {
 		return nil, nil
 	}
@@ -330,12 +333,14 @@ func (r *Reactor) getProvisioningDraft(ctx context.Context, draftRef, draftEvent
 	if len(filters) == 0 {
 		return nil, nil
 	}
-	events, err := bus.Query(ctx, filters)
+	// Latest-wins operator input: the newest draft of a relay majority is
+	// accepted and the degradation logged. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_draft", RelayReadLatestQuorum(), filters)
 	if err != nil {
 		return nil, err
 	}
 	var latest *domain.SoulDraft
-	for _, event := range events {
+	for _, event := range read.Events {
 		if event == nil || event.Kind != domain.KindSoulDraft {
 			continue
 		}
@@ -368,12 +373,14 @@ func (r *Reactor) getProvisioningTemplate(ctx context.Context, templateRef strin
 	if len(filters) == 0 {
 		return nil, nil
 	}
-	events, err := bus.Query(ctx, filters)
+	// Latest-wins operator input: the newest template of a relay majority is
+	// accepted and the degradation logged. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_template", RelayReadLatestQuorum(), filters)
 	if err != nil {
 		return nil, err
 	}
 	var latest *domain.SoulTemplate
-	for _, event := range events {
+	for _, event := range read.Events {
 		if event == nil || event.Kind != domain.KindSoulTemplate {
 			continue
 		}
@@ -417,11 +424,15 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 		}
 		filter.Authors = []nostr.PubKey{parsed}
 	}
-	results, err := bus.Query(ctx, []nostr.Filter{filter})
+	// Idempotency check: any relay's authoritative result is final, but absence
+	// would re-run provisioning, so it needs every relay. See RelayReadPolicy.
+	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_result", RelayReadFound(func(result *nostr.Event) bool {
+		return authoritativeProvisioningResult(result, requestEvent, factoryPubkey)
+	}), []nostr.Filter{filter})
 	if err != nil {
 		return nil, err
 	}
-	for _, result := range results {
+	for _, result := range read.Events {
 		if authoritativeProvisioningResult(result, requestEvent, factoryPubkey) {
 			return result, nil
 		}
