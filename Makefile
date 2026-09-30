@@ -107,9 +107,12 @@ lint-arch:
 
 # Regenerate every architecture baseline from the current tree. Run after
 # violations are removed (baselines only shrink) or on an integration branch.
+# Prints a "BASELINE SUMMARY" per gate: "+" lines are new or grown debt and
+# need a stated reason; "-" lines were paid down. Review with git diff.
 arch-baseline:
-	CGO_ENABLED=0 ARCHTEST_UPDATE_BASELINE=1 go test ./internal/archtest -count=1
+	CGO_ENABLED=0 ARCHTEST_UPDATE_BASELINE=1 go test ./internal/archtest -count=1 -v -run 'TestNoNew'
 	cd web && ARCHTEST_UPDATE_BASELINE=1 $(ARCH_WEB_GATES)
+	git diff --stat -- internal/archtest/testdata web/tests/unit/architecture-gates.baseline.json
 
 # Format. third_party/ holds a vendored upstream module (a separate Go module,
 # so ./... targets already skip it); keep formatters from rewriting it too.

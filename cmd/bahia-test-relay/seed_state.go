@@ -148,14 +148,14 @@ func dnsStateSeeds(workerPubkey string, seededAt time.Time) ([]controlStateSeed,
 		return nil, err
 	}
 	return []controlStateSeed{
-		{kinds.DNSZoneState, nostradapter.DNSZoneDTag(zone.Name),
+		{kinds.CPStateFamilyDNSZone.LegacyKind(), nostradapter.DNSZoneDTag(zone.Name),
 			map[string]any{"name": zone.Name, "visibility": string(zone.Visibility), "backend_ref": zone.BackendRef, "ttl": zone.TTL, "deleted": false, "updated_at": updatedAt},
 			nostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}, {"visibility", string(zone.Visibility)}, {"t", kinds.DNSZoneTopic}, {"t", "bahia"}}},
-		{kinds.DNSEndpointState, endpoint.Coordinate, endpoint, nostradapter.DNSEndpointTags(endpoint)},
-		{kinds.DNSPolicyState, nostradapter.DNSPolicyDTag(seedDNSPolicyID),
+		{kinds.CPStateFamilyDNSEndpoint.LegacyKind(), endpoint.Coordinate, endpoint, nostradapter.DNSEndpointTags(endpoint)},
+		{kinds.CPStateFamilyDNSPolicy.LegacyKind(), nostradapter.DNSPolicyDTag(seedDNSPolicyID),
 			map[string]any{"id": seedDNSPolicyID.String(), "name": "public policy", "zone_id": nil, "environment_id": nil, "rules": []any{}, "enabled": true, "deleted": false, "created_at": updatedAt, "updated_at": updatedAt},
 			nostr.Tags{{"policy", seedDNSPolicyID.String()}, {"enabled", "true"}, {"t", kinds.DNSPolicyTopic}, {"t", "bahia"}}},
-		{kinds.DNSBackendState, nostradapter.DNSBackendDTag(seedDNSBackendRef),
+		{kinds.CPStateFamilyDNSBackend.LegacyKind(), nostradapter.DNSBackendDTag(seedDNSBackendRef),
 			map[string]any{"ref": seedDNSBackendRef, "type": string(domain.DNSBackendTypeCoreDNS), "health": string(domain.HealthStatusHealthy), "zones": []string{zone.Name}, "deleted": false, "updated_at": updatedAt},
 			nostr.Tags{{"backend", seedDNSBackendRef}, {"type", string(domain.DNSBackendTypeCoreDNS)}, {"health", string(domain.HealthStatusHealthy)}, {"t", kinds.DNSBackendTopic}, {"t", "bahia"}, {"zone", zone.Name}}},
 	}, nil

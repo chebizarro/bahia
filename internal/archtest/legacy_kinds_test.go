@@ -5,6 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,11 +26,23 @@ var legacyKindRanges = [][2]int64{
 }
 
 // legacyKindExemptPaths may define or use legacy kinds: the kind registry's
-// declarations and the migration package that exists to read old events.
+// declarations, the cp-state family discriminator contract (the single
+// sanctioned reference to the 31975-31978 legacy_kind values until
+// bahia-irsry.9), and the migration package that exists to read old events.
 var legacyKindExemptPaths = []string{
 	"internal/kinds/kinds.go",
+	"internal/kinds/cp_state_family.go",
 	"internal/nostrmigration/",
 }
+
+// cpStateFamilyType is the sanctioned discriminator type: 30900 cp-state
+// records carry legacy_kind=<family> and code names the family through it,
+// which is a contract use, not publishing or subscribing on a legacy kind.
+const cpStateFamilyType = modulePath + "/internal/kinds.CPStateFamily"
+
+// legacyWord matches "Legacy" as a CamelCase word in an identifier
+// (LegacyWorkerState, KindLegacyWorkerState, SoulFactoryActionLegacyResult).
+var legacyWord = regexp.MustCompile(`(^|[a-z0-9])Legacy([A-Z0-9]|$)`)
 
 func isLegacyKindValue(value int64) bool {
 	for _, r := range legacyKindRanges {
@@ -40,17 +53,27 @@ func isLegacyKindValue(value int64) bool {
 	return false
 }
 
-// isLegacyKindConst matches integer constants whose value is in a legacy
-// range (which also catches re-exported aliases) or whose name marks them as
-// legacy (the Legacy* worker kinds share values with live read models).
+// isLegacyKindConst matches this module's integer constants whose value is in
+// a legacy range (which also catches re-exported aliases) or whose name marks
+// them as a legacy kind (the Legacy* worker kinds share values with live read
+// models). Non-integer constants, such as the "legacy_kind" tag key
+// CASControlStateTagLegacyKind, are never kinds. Constants of the sanctioned
+// CPStateFamily discriminator type are contract uses and are not flagged.
 func isLegacyKindConst(obj *types.Const) bool {
 	if obj.Pkg() == nil || !strings.HasPrefix(obj.Pkg().Path(), modulePath) {
 		return false
 	}
-	if value, ok := constant.Int64Val(constant.ToInt(obj.Val())); ok && isLegacyKindValue(value) {
+	if obj.Val().Kind() != constant.Int {
+		return false
+	}
+	if named, ok := obj.Type().(*types.Named); ok && named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path()+"."+named.Obj().Name() == cpStateFamilyType {
+		return false
+	}
+	if value, ok := constant.Int64Val(obj.Val()); ok && isLegacyKindValue(value) {
 		return true
 	}
-	return strings.Contains(obj.Name(), "Legacy") && isKindConst(obj)
+	return legacyWord.MatchString(obj.Name()) && isKindConst(obj)
 }
 
 func isKindConst(obj *types.Const) bool {

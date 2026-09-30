@@ -46,8 +46,10 @@ func ratchet(t *testing.T, name string, current *violations) {
 	t.Helper()
 	path := filepath.Join(repoRoot(t), "internal", "archtest", "testdata", name+".baseline")
 	if os.Getenv(updateBaselineEnv) == "1" {
+		previous := readBaseline(t, path)
 		writeBaseline(t, path, name, current.counts)
 		t.Logf("wrote %d %s baseline entries to %s", len(current.counts), name, relPath(path))
+		t.Log(baselineChangeSummary(name, previous, current.counts))
 		return
 	}
 	baseline := readBaseline(t, path)
@@ -67,6 +69,40 @@ func ratchet(t *testing.T, name string, current *violations) {
 			t.Logf("%s: %q dropped from %d to %d; tighten the baseline with make arch-baseline", name, key, allowed, got)
 		}
 	}
+}
+
+// baselineChangeSummary lists what a regeneration changed so a reviewer can
+// confirm the ratchet only tightened: "+" entries are new or grown debt and
+// need a reason, "-" entries were paid down.
+func baselineChangeSummary(name string, previous, current map[string]int) string {
+	keys := map[string]bool{}
+	for key := range previous {
+		keys[key] = true
+	}
+	for key := range current {
+		keys[key] = true
+	}
+	sorted := make([]string, 0, len(keys))
+	for key := range keys {
+		sorted = append(sorted, key)
+	}
+	sort.Strings(sorted)
+	var added, removed []string
+	for _, key := range sorted {
+		before, after := previous[key], current[key]
+		switch {
+		case after > before:
+			added = append(added, fmt.Sprintf("  + %s (%d -> %d)", key, before, after))
+		case after < before:
+			removed = append(removed, fmt.Sprintf("  - %s (%d -> %d)", key, before, after))
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "BASELINE SUMMARY %s: %d added/grown, %d removed/shrunk", name, len(added), len(removed))
+	for _, line := range append(added, removed...) {
+		b.WriteString("\n" + line)
+	}
+	return b.String()
 }
 
 func writeBaseline(t *testing.T, path, name string, counts map[string]int) {

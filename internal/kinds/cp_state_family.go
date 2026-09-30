@@ -1,0 +1,30 @@
+package kinds
+
+import "strconv"
+
+// CPStateFamily is the family discriminator a canonical 30900 cp-state record
+// carries in its legacy_kind tag (CASControlStateTagLegacyKind). Its values are
+// the retired per-family catalog kinds; they identify a record family inside
+// the 30900 envelope and are never a wire kind to publish or subscribe on.
+//
+// This file is the single sanctioned reference to those numbers for the
+// discriminator contract: producers and consumers name a CPStateFamily
+// instead of the legacy kind constants, and the architecture ratchet
+// (internal/archtest, legacy-kind gate) exempts values of this type. Phase 1
+// (bahia-irsry.9) replaces the numeric discriminator with family ids.
+type CPStateFamily int
+
+// DNS cp-state families (legacy_kind 31975-31978).
+const (
+	CPStateFamilyDNSZone     CPStateFamily = DNSZoneState
+	CPStateFamilyDNSEndpoint CPStateFamily = DNSEndpointState
+	CPStateFamilyDNSPolicy   CPStateFamily = DNSPolicyState
+	CPStateFamilyDNSBackend  CPStateFamily = DNSBackendState
+)
+
+// LegacyKind returns the numeric discriminator for producer APIs that still
+// key records by the catalog kind (the projector's control-state envelope).
+func (f CPStateFamily) LegacyKind() int { return int(f) }
+
+// TagValue returns the legacy_kind tag value consumers match on.
+func (f CPStateFamily) TagValue() string { return strconv.Itoa(int(f)) }

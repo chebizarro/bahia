@@ -61,6 +61,13 @@ describe('web architecture gates (bahia-irsry.8)', () => {
   it('stores gain no new setInterval polling or $lib/api/client.js imports', () => {
     const current = scanStores();
     if (updateBaseline) {
+      const previous = readBaseline();
+      const keys = [...new Set([...Object.keys(previous), ...Object.keys(current)])].sort();
+      const added = keys.filter((key) => (current[key] ?? 0) > (previous[key] ?? 0))
+        .map((key) => `  + ${key} (${previous[key] ?? 0} -> ${current[key] ?? 0})`);
+      const removed = keys.filter((key) => (current[key] ?? 0) < (previous[key] ?? 0))
+        .map((key) => `  - ${key} (${previous[key] ?? 0} -> ${current[key] ?? 0})`);
+      process.stdout.write(`${[`BASELINE SUMMARY web-stores: ${added.length} added/grown, ${removed.length} removed/shrunk`, ...added, ...removed].join('\n')}\n`);
       const sorted = Object.fromEntries(Object.entries(current).sort(([a], [b]) => a.localeCompare(b)));
       writeFileSync(baselinePath, `${JSON.stringify({
         comment: 'Pre-existing violations only; entries may shrink, never grow. Regenerate with: make arch-baseline',

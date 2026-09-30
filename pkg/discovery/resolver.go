@@ -23,7 +23,7 @@ import (
 // schema=bahia.cp-state.v1, legacy_kind=31976, deleted=true|false and
 // t=dns-endpoint. Legacy kind 31976 is no longer published and its tombstones
 // land on 30900, so the resolver reads 30900 only.
-var endpointLegacyKind = strconv.Itoa(kinds.DNSEndpointState)
+var endpointLegacyKind = kinds.CPStateFamilyDNSEndpoint.TagValue()
 
 const (
 	resolverReconnectInitialBackoff = time.Second

@@ -255,7 +255,7 @@ Normative rule: **relays (addressable events) are canonical; PostgreSQL is an op
 | Membership, roles, org and trust lists | Events relays can serve and clients can verify (encrypted where sensitive) | PostgreSQL only, reached through REST or ContextVM | RC-6, B-27; `bahia-irsry.11`/`.12` |
 | Secrets, notifications, payments | Encrypted events for state; ContextVM only for interactive secret reveal | PostgreSQL, read and written through REST/ContextVM | RC-4; `bahia-irsry.11`/`.12` |
 | Pending service-authored Nostr delivery | Per-relay `OK` tracking in the publisher; local event store per process | PostgreSQL `nostr_events` publish-state outbox (also used for replay cursors and dedup) | B-3, B-13, C-2; Go client tier `bahia-irsry.10` |
-| Kind model | Canonical kinds only (`30900`, `4903`, `30315`, `25910`, `11316`-`11320`, `30002`, `30078`, standard NIPs) | Legacy kinds still defined in `internal/kinds` and referenced by runtime code | C-43, C-44; frozen by the legacy-kind ratchet, removed in `bahia-irsry.9` |
+| Kind model | Canonical kinds only (`30900`, `4903`, `30315`, `25910`, `11316`-`11320`, `30002`, `30078`, standard NIPs) | Legacy kinds still defined in `internal/kinds` and referenced by runtime code; 30900 cp-state records carry `legacy_kind=<31975..31978>` as the family discriminator, named only through `kinds.CPStateFamily` | C-43, C-44; frozen by the legacy-kind ratchet, removed in `bahia-irsry.9` |
 | Container image distribution | Bahia OCI registry and/or configured image registries | Same | — |
 | Logs / blobs | Blossom-backed storage where configured | Same | — |
 
