@@ -390,8 +390,5 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
-1	internal/soulfactory.WithRelayBusBackoff
-1	internal/soulfactory.WithRelayBusEventValidator
-1	internal/soulfactory.WithRelayBusPublishQuorum
 1	internal/soulfactory/saga.PurgeExpired
 1	internal/workflow.WithDeploymentLoomClient

@@ -39,7 +39,7 @@ func (m *concordMembership) resolveConcordInbox(ctx context.Context, recipient n
 	// Latest-wins routing lookup of replaceable relay lists: the newest list of
 	// a relay majority is accepted and the degradation logged. Fewer answers
 	// than a majority stay an error. See RelayReadPolicy.
-	read, err := m.bus.QueryWithPolicy(ctx, "concord.inbox", RelayReadLatestQuorum(), []nostr.Filter{{
+	read, err := m.relayClient.QueryWithPolicy(ctx, "concord.inbox", RelayReadLatestQuorum(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{concordDMRelayListKind, concordRelayListKind},
 		Authors: []nostr.PubKey{recipient},
 	}})
@@ -109,44 +109,32 @@ func validConcordRelayURL(relay string) bool {
 	return parsed.Scheme == "ws" || parsed.Scheme == "wss"
 }
 
-// concordInboxEndpoints binds inbox relays to publishable endpoints, reusing a
-// SoulFactory relay bus endpoint when the recipient names one Bahia already
-// holds and dialing the rest directly. The returned closer shuts down only the
-// endpoints opened here.
-func concordInboxEndpoints(bus *SoulFactoryRelayBus, relays []string) ([]relayBusEndpoint, func()) {
-	configured := make(map[string]relayBusEndpoint, len(bus.endpoints))
-	for _, endpoint := range bus.endpoints {
-		configured[strings.TrimRight(strings.TrimSpace(endpoint.URL()), "/")] = endpoint
-	}
-	endpoints := make([]relayBusEndpoint, 0, len(relays))
-	opened := make([]relayBusEndpoint, 0, len(relays))
-	for _, relay := range relays {
-		if endpoint, ok := configured[strings.TrimRight(relay, "/")]; ok {
-			endpoints = append(endpoints, endpoint)
-			continue
-		}
-		endpoint := newGoNostrRelayEndpoint(relay)
-		endpoints = append(endpoints, endpoint)
-		opened = append(opened, endpoint)
-	}
-	return endpoints, func() {
-		for _, endpoint := range opened {
-			endpoint.Close()
-		}
-	}
-}
-
 // publishConcordInviteToInbox delivers the wrap to the recipient's inbox. Unlike
 // the community relays, a recipient's list is not operator-controlled and may
 // name a dead relay, so one acceptance is enough; zero is a delivery failure.
-func publishConcordInviteToInbox(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint, event nostr.Event) error {
-	failures := make([]string, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		if err := publishConcordInvite(ctx, bus, []relayBusEndpoint{endpoint}, event); err != nil {
+// An inbox relay the SoulFactory relay client already holds is used through
+// it; any other is reached through a short-lived client on the same stack.
+func publishConcordInviteToInbox(ctx context.Context, client *RelayClient, relays []string, event nostr.Event) error {
+	failures := make([]string, 0, len(relays))
+	for _, relay := range relays {
+		if err := publishConcordInviteToInboxRelay(ctx, client, relay, event); err != nil {
 			failures = append(failures, err.Error())
 			continue
 		}
 		return nil
 	}
 	return fmt.Errorf("no inbox relay accepted the invite: %s", strings.Join(failures, "; "))
+}
+
+func publishConcordInviteToInboxRelay(ctx context.Context, client *RelayClient, relay string, event nostr.Event) error {
+	if client.holds(relay) {
+		return publishConcordInvite(ctx, client, []string{relay}, event)
+	}
+	inbox, err := NewRelayClient([]string{relay}, WithRelaySigner(client.signer), WithRelayLogger(client.logger),
+		withRelayEventValidator(client.validateEvent), withRelayResubscribeBackoff(client.resubscribeBackoff))
+	if err != nil {
+		return fmt.Errorf("%s: %w", relay, err)
+	}
+	defer inbox.Close()
+	return publishConcordInvite(ctx, inbox, inbox.Relays(), event)
 }

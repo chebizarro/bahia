@@ -23,15 +23,15 @@ func TestIntegrationCreateSoulWithFullCustomization(t *testing.T) {
 	draft.Content.Runtime.CapabilityRef = "capability-full"
 
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
 	close(subscription.eose)
-	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	relayClient, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
-	reactor.relayBus = relayBus
+	reactor.relayClient = relayClient
 	capture := attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	reactor.getTemplateFn = func(context.Context, string) (*domain.SoulTemplate, error) {
@@ -202,15 +202,15 @@ func runIntegrationProvisionForRuntime(t *testing.T, signer fakeSigner, target d
 	content.SpecHash = "sha256:" + string(target)
 	draft := &domain.SoulDraft{EventID: string(target) + "-draft", AgentID: "parity-" + string(target), Name: "Parity", Tier: domain.SoulTierHeavy, CreatedBy: signer.pubkey, Content: content}
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
 	close(subscription.eose)
-	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	relayClient, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
-	reactor.relayBus = relayBus
+	reactor.relayClient = relayClient
 	attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	runtime := &integrationRuntimeAdapter{runtime: target, bindingPrefix: binding, methods: []string{RuntimeMethodProvision, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate, RuntimeMethodAvatarGenerate}}
@@ -233,15 +233,15 @@ func runIntegrationHotReload(t *testing.T, signer fakeSigner, current, proposed 
 	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed", AgentID: "scout", CreatedBy: signer.pubkey, Content: proposed}
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: current.Identity.Name, Purpose: current.Identity.Purpose, Tier: current.Identity.Tier, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: current.SpecHash, Runtime: current.Runtime, Assets: current.Assets, CreatedAt: time.Now().UTC()}
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
 	close(subscription.eose)
-	relayBus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	relayClient, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
-	reactor.relayBus = relayBus
+	reactor.relayClient = relayClient
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {

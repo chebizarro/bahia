@@ -22,7 +22,7 @@ type fakeRuntimeAdapterTransport struct {
 	resultStatus string
 	resultError  *RuntimeControlError
 	wrongFirst   *nostr.Event
-	resultSub    *RelayBusSubscription
+	resultSub    *RelaySubscription
 	resultEvents chan *nostr.Event
 }
 
@@ -38,7 +38,7 @@ func (f *fakeRuntimeAdapterTransport) Publish(_ context.Context, event nostr.Eve
 	return 1, nil
 }
 
-func (f *fakeRuntimeAdapterTransport) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*RelayBusSubscription, error) {
+func (f *fakeRuntimeAdapterTransport) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*RelaySubscription, error) {
 	f.filters = append(f.filters, filters...)
 	if len(filters) == 0 {
 		return nil, errors.New("missing filters")
@@ -57,7 +57,7 @@ func (f *fakeRuntimeAdapterTransport) SubscribeAllWithEOSE(_ context.Context, fi
 		eose := make(chan struct{})
 		close(eose)
 		f.resultEvents = events
-		f.resultSub = &RelayBusSubscription{Events: events, EndOfStoredEvents: eose, cancel: func() {}}
+		f.resultSub = &RelaySubscription{Events: events, EndOfStoredEvents: eose, closeFn: func() {}}
 		return f.resultSub, nil
 	default:
 		return nil, errors.New("unexpected filter kind")
@@ -129,7 +129,7 @@ func (f *fakeRuntimeAdapterTransport) buildRuntimeResult(request nostr.Event) *n
 	return event
 }
 
-func bufferedSubscription(events ...*nostr.Event) *RelayBusSubscription {
+func bufferedSubscription(events ...*nostr.Event) *RelaySubscription {
 	eventCh := make(chan *nostr.Event)
 	eose := make(chan struct{})
 	go func() {
@@ -139,7 +139,7 @@ func bufferedSubscription(events ...*nostr.Event) *RelayBusSubscription {
 		close(eose)
 		close(eventCh)
 	}()
-	return &RelayBusSubscription{Events: eventCh, EndOfStoredEvents: eose, cancel: func() {}}
+	return &RelaySubscription{Events: eventCh, EndOfStoredEvents: eose, closeFn: func() {}}
 }
 
 var (

@@ -467,4 +467,4 @@ func (r *soulFactoryRunner) Run(ctx context.Context) error {
 
 var _ soulFactorySignerClient = (*signetAdapter.Client)(nil)
 var _ BackgroundRunner = (*soulFactoryRunner)(nil)
-var _ soulfactory.RuntimeAdapterTransport = (*soulfactory.SoulFactoryRelayBus)(nil)
+var _ soulfactory.RuntimeAdapterTransport = (*soulfactory.RelayClient)(nil)

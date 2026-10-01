@@ -12,11 +12,11 @@ func TestConcordInviteDeliversToRecipientDMRelayInbox(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	inboxRelay := newFakeRelayEndpoint("wss://inbox.example")
+	inboxRelay := newFakeRelayEndpoint(t)
 	inboxRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, "wss://inbox.example"))
+	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, inboxRelay.url))
 	queueConcordInboxLookup(inboxRelay)
 
 	membership := newConcordInboxMembership(t, community, staff, communityRelay, inboxRelay)
@@ -42,14 +42,14 @@ func TestConcordInviteFallsBackToNIP65ReadRelays(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	inboxRelay := newFakeRelayEndpoint("wss://inbox.example")
+	inboxRelay := newFakeRelayEndpoint(t)
 	inboxRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	writeOnly := newFakeRelayEndpoint("wss://write-only.example")
+	writeOnly := newFakeRelayEndpoint(t)
 	relayList := signedConcordEvent(t, recipient, concordRelayListKind, nostr.Tags{
-		{"r", "wss://inbox.example", "read"},
-		{"r", "wss://write-only.example", "write"},
+		{"r", inboxRelay.url, "read"},
+		{"r", writeOnly.url, "write"},
 	})
 	queueConcordInboxLookup(communityRelay, relayList)
 	queueConcordInboxLookup(inboxRelay)
@@ -72,14 +72,14 @@ func TestConcordInvitePrefersDMRelayListOverNIP65(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	dmRelay := newFakeRelayEndpoint("wss://inbox.example")
+	dmRelay := newFakeRelayEndpoint(t)
 	dmRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	nip65Relay := newFakeRelayEndpoint("wss://read.example")
+	nip65Relay := newFakeRelayEndpoint(t)
 	queueConcordInboxLookup(communityRelay,
-		concordDMRelayList(t, recipient, "wss://inbox.example"),
-		signedConcordEvent(t, recipient, concordRelayListKind, nostr.Tags{{"r", "wss://read.example", "read"}}),
+		concordDMRelayList(t, recipient, dmRelay.url),
+		signedConcordEvent(t, recipient, concordRelayListKind, nostr.Tags{{"r", nip65Relay.url, "read"}}),
 	)
 	queueConcordInboxLookup(dmRelay)
 	queueConcordInboxLookup(nip65Relay)
@@ -98,13 +98,13 @@ func TestConcordInviteIgnoresForgedRelayLists(t *testing.T) {
 	recipient := newFakeSigner(t)
 	impostor := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	attacker := newFakeRelayEndpoint("wss://attacker.example")
+	attacker := newFakeRelayEndpoint(t)
 
-	forgedAuthor := concordDMRelayList(t, impostor, "wss://attacker.example")
+	forgedAuthor := concordDMRelayList(t, impostor, attacker.url)
 	tampered := concordDMRelayList(t, recipient, "wss://inbox.example")
-	tampered.Tags = nostr.Tags{{"relay", "wss://attacker.example"}}
+	tampered.Tags = nostr.Tags{{"relay", attacker.url}}
 	queueConcordInboxLookup(communityRelay, forgedAuthor, tampered)
 	queueConcordInboxLookup(attacker)
 
@@ -124,11 +124,11 @@ func TestConcordInviteFailsClosedWhenNoInboxRelayAccepts(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	inboxRelay := newFakeRelayEndpoint("wss://inbox.example")
+	inboxRelay := newFakeRelayEndpoint(t)
 	inboxRelay.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted: not a paying member"}}
-	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, "wss://inbox.example"))
+	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, inboxRelay.url))
 	queueConcordInboxLookup(inboxRelay)
 
 	membership := newConcordInboxMembership(t, community, staff, communityRelay, inboxRelay)
@@ -142,13 +142,13 @@ func TestConcordInviteSucceedsWhenOneInboxRelayAccepts(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	dead := newFakeRelayEndpoint("wss://dead.example")
+	dead := newFakeRelayEndpoint(t)
 	dead.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked"}}
-	live := newFakeRelayEndpoint("wss://live.example")
+	live := newFakeRelayEndpoint(t)
 	live.publishResults = []RelayPublishResult{{Accepted: true}}
-	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, "wss://dead.example", "wss://live.example"))
+	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, recipient, dead.url, live.url))
 	queueConcordInboxLookup(dead)
 	queueConcordInboxLookup(live)
 
@@ -234,12 +234,12 @@ func TestConcordRotationRedistributesToSurvivorInbox(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "custody.sealed")
 	writeSealedConcordCustodyFile(t, path, staff, string(community.InviteBundle))
 
-	communityRelay := newFakeRelayEndpoint("wss://community.example")
+	communityRelay := concordCommunityRelay(t)
 	// The channel's Rekey Blob chunk, then the survivor's direct invite.
 	communityRelay.publishResults = []RelayPublishResult{{Accepted: true}, {Accepted: true}}
-	inboxRelay := newFakeRelayEndpoint("wss://inbox.example")
+	inboxRelay := newFakeRelayEndpoint(t)
 	inboxRelay.publishResults = []RelayPublishResult{{Accepted: true}}
-	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, survivor, "wss://inbox.example"))
+	queueConcordInboxLookup(communityRelay, concordDMRelayList(t, survivor, inboxRelay.url))
 	queueConcordInboxLookup(inboxRelay)
 
 	membership := newConcordInboxMembership(t,
@@ -274,13 +274,9 @@ func TestConcordRotationRedistributesToSurvivorInbox(t *testing.T) {
 
 func newConcordInboxMembership(t *testing.T, community ConcordCommunity, staff fakeConcordSigner, endpoints ...*fakeRelayEndpoint) *concordMembership {
 	t.Helper()
-	busEndpoints := make([]relayBusEndpoint, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		busEndpoints = append(busEndpoints, endpoint)
-	}
-	bus, err := newSoulFactoryRelayBusFromEndpoints(busEndpoints, WithRelayBusSigner(staff))
+	bus, err := newRelayClientFromEndpoints(endpoints, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
 	if err != nil {

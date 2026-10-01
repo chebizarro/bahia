@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -207,7 +208,7 @@ func newLateLifecycleFixture(t *testing.T, script ...string) *lateLifecycleFixtu
 		AuthorizedPubkeys: []string{signer.pubkey},
 		SoulFactoryPubkey: signer.pubkey,
 	}, scriptedGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := &fleetReconcilePublishCapture{}
 	reactor.publishFn = capture.publish
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
@@ -513,17 +514,17 @@ func TestFleetNewerRevisionDefersAwaitingSoulThenRedrives(t *testing.T) {
 // The resumable subscription's reissued REQ starts from the newest event the
 // relay delivered, less the overlap, but only once that relay's EOSE proved the
 // backfill below it complete; future-dated events cannot push it past now.
-func TestRelayBusResumableSubscriptionResumesFromCursorAfterEOSE(t *testing.T) {
+func TestRelayClientResumableSubscriptionResumesFromCursorAfterEOSE(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	generations := make([]*fakeRelaySubscription, 4)
 	for i := range generations {
 		generations[i] = newFakeRelaySubscription()
 		endpoint.subscribeQueue <- generations[i]
 	}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -591,30 +592,30 @@ func TestReactorReconnectDeliversResultPublishedWhileDisconnected(t *testing.T) 
 		}
 		return nil
 	}
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first, second := newFakeRelaySubscription(), newFakeRelaySubscription()
-	endpoint.subscribeQueue <- first
-	endpoint.subscribeQueue <- second
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
-	if err != nil {
-		t.Fatalf("new bus: %v", err)
+	// The pool sends one REQ per filter: the runtime-result REQ is scripted,
+	// the others (re)answer with EOSE.
+	resultScripts := make(chan *fakeRelaySubscription, 2)
+	resultScripts <- first
+	resultScripts <- second
+	endpoint.scriptFor = func(filters []nostr.Filter) *fakeRelaySubscription {
+		if len(filters) == 1 && slices.Contains(filters[0].Kinds, nostr.Kind(domain.KindRuntimeControlResult)) {
+			return <-resultScripts
+		}
+		return eoseScript()
 	}
-	f.reactor.relayBus = bus
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
+	if err != nil {
+		t.Fatalf("new relay client: %v", err)
+	}
+	f.reactor.relayClient = bus
 
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- f.reactor.Run(ctx) }()
 
-	resultFilter := func(filters []nostr.Filter) nostr.Filter {
-		for _, filter := range filters {
-			if len(filter.Kinds) == 1 && filter.Kinds[0] == nostr.Kind(domain.KindRuntimeControlResult) {
-				return filter
-			}
-		}
-		t.Fatalf("reactor REQ has no kind:38386 filter: %+v", filters)
-		return nostr.Filter{}
-	}
-	initial := resultFilter(mustReceiveFilters(t, endpoint.subscribeCalls))
+	initial := receiveREQFor(t, endpoint, nostr.Kind(domain.KindRuntimeControlResult))
 	if got := initial.Tags[tagPubkey]; len(got) != 1 || got[0] != f.signer.pubkey || initial.Since != 0 {
 		t.Fatalf("initial result filter = %+v, want #p the controller and a full backfill", initial)
 	}
@@ -636,7 +637,7 @@ func TestReactorReconnectDeliversResultPublishedWhileDisconnected(t *testing.T) 
 	}
 
 	close(first.events) // the relay connection drops
-	resumed := resultFilter(mustReceiveFilters(t, endpoint.subscribeCalls))
+	resumed := receiveREQFor(t, endpoint, nostr.Kind(domain.KindRuntimeControlResult))
 	if want := base - nostr.Timestamp(reactorResumeOverlap/time.Second); resumed.Since != want {
 		t.Fatalf("resumed result filter since = %d, want %d", resumed.Since, want)
 	}
@@ -673,23 +674,23 @@ func TestLifecycleActionReadsSoulThroughReactorRelayBus(t *testing.T) {
 	if err := factory.Sign(t.Context(), soulEvent); err != nil {
 		t.Fatalf("sign soul: %v", err)
 	}
-	endpoint := newFakeRelayEndpoint("wss://bus.example")
+	endpoint := newFakeRelayEndpoint(t)
 	lookup, terminal := newFakeRelaySubscription(), newFakeRelaySubscription()
 	lookup.events <- soulEvent
 	close(lookup.eose)
 	close(terminal.eose)
 	endpoint.subscribeQueue <- lookup
 	endpoint.subscribeQueue <- terminal
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	reactor := NewReactor(Config{
 		Relays:            []string{"wss://not-the-bus.invalid"},
 		AuthorizedPubkeys: []string{operator.pubkey},
 		SoulFactoryPubkey: factory.pubkey,
 	}, scriptedGenerator{}, factory, slog.Default())
-	reactor.relayBus = bus
+	reactor.relayClient = bus
 	capture := attachPublishCapture(reactor)
 
 	event := buildActionEvent(t, operator, "bus-suspend", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionSuspend)}}, "")

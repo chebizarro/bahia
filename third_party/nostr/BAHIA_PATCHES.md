@@ -143,7 +143,7 @@ Tests: `relay_auth_race_test.go`.
 
 Bahia side: the shared `RelayPool` wires `AuthHandler` and
 `AuthResultHandler` once per connection (see `internal/adapters/nostr`
-`relay_pool_auth_test.go`).
+`relay_pool_stack_test.go` (`TestRelayPoolNIP42ThroughAuthHandlerIsRaceFree`)).
 
 ## Removal criteria
 

@@ -59,7 +59,7 @@ func (e *NoTerminalResultError) Unwrap() []error {
 	return []error{ErrNoTerminalResult, e.Cause}
 }
 
-// errReplySubscriptionClosed is the cause when the relay bus ends the reply
+// errReplySubscriptionClosed is the cause when the relay client ends the reply
 // subscription before the wait does.
 var errReplySubscriptionClosed = errors.New("reply subscription closed")
 
@@ -77,7 +77,7 @@ const (
 // (defaultTimeout when timeout is not positive) or ctx's earlier deadline, and
 // ends with *NoTerminalResultError. EOSE is irrelevant: the reply may be stored
 // or arrive live.
-func awaitTerminalReply(ctx context.Context, sub *RelayBusSubscription, requestID string, timeout, defaultTimeout time.Duration, classify func(*nostr.Event) replyClass, onStatus func(*nostr.Event)) (*nostr.Event, error) {
+func awaitTerminalReply(ctx context.Context, sub *RelaySubscription, requestID string, timeout, defaultTimeout time.Duration, classify func(*nostr.Event) replyClass, onStatus func(*nostr.Event)) (*nostr.Event, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}

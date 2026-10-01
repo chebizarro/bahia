@@ -413,11 +413,11 @@ func (m *concordMembership) fetchConcordControlPlane(
 	if err != nil {
 		return nil, err
 	}
-	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
+	if err := authenticateConcordRelays(ctx, m.relayClient, community.boundRelays); err != nil {
 		return nil, fmt.Errorf("authenticate Concord relays: %w", err)
 	}
 	// Fail closed: the fold decides grants and revocations. See RelayReadPolicy.
-	plane, err := m.bus.QueryWithPolicy(ctx, "concord.control_plane", RelayReadComplete(), []nostr.Filter{{
+	plane, err := m.relayClient.QueryWithPolicy(ctx, "concord.control_plane", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.KindGiftWrap},
 		Authors: []nostr.PubKey{address},
 	}})

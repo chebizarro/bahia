@@ -120,7 +120,7 @@ func (m *concordMembership) republishConcordCompaction(
 		if err != nil {
 			return compaction, fmt.Errorf("re-wrap entity %x: %w", entity, err)
 		}
-		if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
+		if err := publishConcordInvite(ctx, m.relayClient, community.boundRelays, wrap); err != nil {
 			return compaction, fmt.Errorf("publish compacted entity %x: %w", entity, err)
 		}
 		compaction.Entities++
@@ -224,7 +224,7 @@ func (m *concordMembership) seedConcordGuestbookSnapshot(
 			snapshot.Error = fmt.Sprintf("wrap chunk %d/%d: %v", index, len(chunks), err)
 			return snapshot
 		}
-		if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
+		if err := publishConcordInvite(ctx, m.relayClient, community.boundRelays, wrap); err != nil {
 			snapshot.Error = fmt.Sprintf("publish chunk %d/%d: %v", index, len(chunks), err)
 			return snapshot
 		}

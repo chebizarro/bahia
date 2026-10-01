@@ -37,7 +37,7 @@ type SoulFactoryRequestReceipt struct {
 
 type SoulFactoryTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
-	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelayBusSubscription, error)
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelaySubscription, error)
 	Close()
 }
 
@@ -92,14 +92,14 @@ func NewNostrClient(relays []string, signer soulClientSigner) (*NostrClient, err
 	if signer == nil {
 		return nil, fmt.Errorf("soul factory signer is required")
 	}
-	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(signer))
+	relayClient, err := NewRelayClient(relays, WithRelaySigner(signer))
 	if err != nil {
 		return nil, err
 	}
 	return &NostrClient{
 		relays:    relays,
 		signer:    signer,
-		transport: bus,
+		transport: relayClient,
 	}, nil
 }
 
@@ -113,14 +113,14 @@ func NewNostrClientFromPrivateKey(relays []string, privateKey string) (*NostrCli
 		return nil, fmt.Errorf("at least one Soul Factory relay is required")
 	}
 	signer := staticSoulSigner{privateKey: normalized}
-	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(signer))
+	relayClient, err := NewRelayClient(relays, WithRelaySigner(signer))
 	if err != nil {
 		return nil, err
 	}
 	return &NostrClient{
 		relays:    relays,
 		signer:    signer,
-		transport: bus,
+		transport: relayClient,
 	}, nil
 }
 
@@ -372,7 +372,7 @@ func soulActionReplyFilters(requestID string) []nostr.Filter {
 
 // awaitSoulActionReply waits on sub for the soul action's terminal result,
 // bounded by the client's reply timeout.
-func (c *NostrClient) awaitSoulActionReply(ctx context.Context, sub *RelayBusSubscription, requestID string) (*nostr.Event, error) {
+func (c *NostrClient) awaitSoulActionReply(ctx context.Context, sub *RelaySubscription, requestID string) (*nostr.Event, error) {
 	return awaitTerminalReply(ctx, sub, requestID, c.replyTimeout, DefaultSoulFactoryReplyTimeout, func(reply *nostr.Event) replyClass {
 		if !validSignedEvent(reply) || !tagHasValue(reply.Tags, "e", requestID) {
 			return replyIgnore

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,16 +76,16 @@ func TestConcordMembershipAssignPublishesCORD05DirectInvite(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	recipient := newFakeSigner(t)
 	community := concordTestCommunity(t, nil)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := concordCommunityRelay(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
-	unrelated := newFakeRelayEndpoint("wss://unrelated.example")
+	unrelated := newFakeRelayEndpoint(t)
 	unrelated.publishResults = []RelayPublishResult{{Accepted: true}}
 	queueConcordInboxLookup(endpoint)
 	queueConcordInboxLookup(unrelated)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{unrelated, endpoint}, WithRelayBusSigner(staff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{unrelated, endpoint}, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
 	if err != nil {
@@ -146,7 +147,7 @@ func TestConcordMembershipRejectsBundleThatDoesNotSelfCertify(t *testing.T) {
 	}
 	bundle["owner_salt"] = strings.Repeat("f", 64)
 	community.InviteBundle, _ = json.Marshal(bundle)
-	bus := newEOSEOnlyRelayBus(t)
+	bus := newEOSEOnlyRelayClient(t)
 
 	if _, err := newConcordMembership([]ConcordCommunity{community}, staff, bus); err == nil || !strings.Contains(err.Error(), "self-certification failed") {
 		t.Fatalf("newConcordMembership() error = %v", err)
@@ -156,10 +157,10 @@ func TestConcordMembershipRejectsBundleThatDoesNotSelfCertify(t *testing.T) {
 func TestConcordMembershipRejectsBundleRelayMissingFromBus(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	community := concordTestCommunity(t, nil)
-	endpoint := newFakeRelayEndpoint("wss://other.example")
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	endpoint := newFakeRelayEndpoint(t) // not the bundle's relay
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	if _, err := newConcordMembership([]ConcordCommunity{community}, staff, bus); err == nil || !strings.Contains(err.Error(), "not configured") {
@@ -169,7 +170,7 @@ func TestConcordMembershipRejectsBundleRelayMissingFromBus(t *testing.T) {
 
 func TestConcordMembershipRejectsSignerWithoutNIP44Capability(t *testing.T) {
 	community := concordTestCommunity(t, nil)
-	if _, err := newConcordMembership([]ConcordCommunity{community}, newFakeSigner(t), newEOSEOnlyRelayBus(t)); err == nil || !strings.Contains(err.Error(), "NIP-44") {
+	if _, err := newConcordMembership([]ConcordCommunity{community}, newFakeSigner(t), newEOSEOnlyRelayClient(t)); err == nil || !strings.Contains(err.Error(), "NIP-44") {
 		t.Fatalf("newConcordMembership() error = %v", err)
 	}
 }
@@ -209,12 +210,12 @@ func TestConcordMembershipAssignFailsClosedOnEncryptionError(t *testing.T) {
 func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	community := concordTestCommunity(t, nil)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := concordCommunityRelay(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted"}}
 	queueConcordInboxLookup(endpoint)
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
 	if err != nil {
@@ -230,15 +231,15 @@ func TestConcordMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 func TestConcordMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 	staff := fakeConcordSigner{fakeSigner: newFakeSigner(t)}
 	community := concordTestCommunity(t, nil)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := concordCommunityRelay(t)
 	endpoint.publishResults = []RelayPublishResult{
 		{Accepted: false, Reason: "auth-required: challenge pending"},
 		{Accepted: true},
 	}
 	queueConcordInboxLookup(endpoint)
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership, err := newConcordMembership([]ConcordCommunity{community}, staff, bus)
 	if err != nil {
@@ -275,17 +276,32 @@ func queueConcordInboxLookup(endpoint *fakeRelayEndpoint, events ...*nostr.Event
 	endpoint.subscribeQueue <- subscription
 }
 
-func newConcordTestBus(t *testing.T, signer relayAuthSigner) *SoulFactoryRelayBus {
+func newConcordTestBus(t *testing.T, signer relayAuthSigner) *RelayClient {
 	t.Helper()
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := concordCommunityRelay(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 	queueConcordInboxLookup(endpoint)
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(signer))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(signer))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	return bus
 }
+
+// concordCommunityRelay is the fake relay a test's Concord community bundle
+// names: the same endpoint for every fixture in one test.
+func concordCommunityRelay(t *testing.T) *fakeRelayEndpoint {
+	t.Helper()
+	if endpoint, ok := concordCommunityRelays.Load(t); ok {
+		return endpoint.(*fakeRelayEndpoint)
+	}
+	endpoint := newFakeRelayEndpoint(t)
+	concordCommunityRelays.Store(t, endpoint)
+	t.Cleanup(func() { concordCommunityRelays.Delete(t) })
+	return endpoint
+}
+
+var concordCommunityRelays sync.Map
 
 func concordTestCommunity(t *testing.T, expiresAt *int64) ConcordCommunity {
 	t.Helper()
@@ -313,7 +329,7 @@ func concordTestCommunityOwnedBy(t *testing.T, ownerHex string, expiresAt *int64
 			Epoch: 5,
 			Name:  "general",
 		}},
-		Relays:    []string{"wss://community.example"},
+		Relays:    []string{concordCommunityRelay(t).url},
 		Name:      "Fleet Private",
 		ExpiresAt: expiresAt,
 	}

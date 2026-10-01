@@ -13,10 +13,10 @@ import (
 )
 
 // RelayReadPolicy decides whether a stored-event read that did not get EOSE
-// from every relay (a *RelayBusIncompleteError) may stand in for a complete
+// from every relay (a *RelayReadIncompleteError) may stand in for a complete
 // one. The zero value is RelayReadComplete: partial reads fail closed.
 //
-// Every SoulFactory bus read names its policy explicitly. Decision table
+// Every SoulFactory relay client read names its policy explicitly. Decision table
 // (bahia-irsry.27):
 //
 //	Caller                                       Read                          Policy          Why
@@ -67,7 +67,7 @@ type RelayReadPolicy struct {
 	name string
 	// acceptPartial reports whether events, read with incomplete, may stand in
 	// for a complete read. nil means never.
-	acceptPartial func(events []*nostr.Event, incomplete *RelayBusIncompleteError) bool
+	acceptPartial func(events []*nostr.Event, incomplete *RelayReadIncompleteError) bool
 }
 
 // String names the policy for logs and metrics.
@@ -88,7 +88,7 @@ func RelayReadComplete() RelayReadPolicy { return RelayReadPolicy{name: "complet
 // id), see newerRelayEvent. With one or two relays a majority is every relay,
 // so the policy only relaxes reads against three or more.
 func RelayReadLatestQuorum() RelayReadPolicy {
-	return RelayReadPolicy{name: "latest_quorum", acceptPartial: func(_ []*nostr.Event, incomplete *RelayBusIncompleteError) bool {
+	return RelayReadPolicy{name: "latest_quorum", acceptPartial: func(_ []*nostr.Event, incomplete *RelayReadIncompleteError) bool {
 		answered := incomplete.Total - len(incomplete.Relays)
 		return incomplete.Total > 0 && 2*answered > incomplete.Total
 	}}
@@ -99,7 +99,7 @@ func RelayReadLatestQuorum() RelayReadPolicy {
 // checks). A partial read without a match fails closed, because absence can
 // only be established by every relay.
 func RelayReadFound(found func(*nostr.Event) bool) RelayReadPolicy {
-	return RelayReadPolicy{name: "found", acceptPartial: func(events []*nostr.Event, _ *RelayBusIncompleteError) bool {
+	return RelayReadPolicy{name: "found", acceptPartial: func(events []*nostr.Event, _ *RelayReadIncompleteError) bool {
 		for _, event := range events {
 			if event != nil && found(event) {
 				return true
@@ -112,7 +112,7 @@ func RelayReadFound(found func(*nostr.Event) bool) RelayReadPolicy {
 // RelayReadAllIDs accepts a partial read that delivered a validly signed event
 // for every id. Event ids are content hashes, so one relay's copy is the event.
 func RelayReadAllIDs(ids ...nostr.ID) RelayReadPolicy {
-	return RelayReadPolicy{name: "all_ids", acceptPartial: func(events []*nostr.Event, _ *RelayBusIncompleteError) bool {
+	return RelayReadPolicy{name: "all_ids", acceptPartial: func(events []*nostr.Event, _ *RelayReadIncompleteError) bool {
 		if len(ids) == 0 {
 			return false
 		}
@@ -136,12 +136,12 @@ type RelayRead struct {
 	Events []*nostr.Event
 	// Degraded is non-nil when the policy accepted a partial read. It names the
 	// relays that did not send EOSE.
-	Degraded *RelayBusIncompleteError
+	Degraded *RelayReadIncompleteError
 }
 
 // QueryWithPolicy runs Query and resolves a partial result under policy.
 // caller is a stable, low-cardinality label for logs and metrics.
-func (b *SoulFactoryRelayBus) QueryWithPolicy(ctx context.Context, caller string, policy RelayReadPolicy, filters []nostr.Filter) (RelayRead, error) {
+func (b *RelayClient) QueryWithPolicy(ctx context.Context, caller string, policy RelayReadPolicy, filters []nostr.Filter) (RelayRead, error) {
 	events, err := b.Query(ctx, filters)
 	var logger *slog.Logger
 	if b != nil {
@@ -151,13 +151,13 @@ func (b *SoulFactoryRelayBus) QueryWithPolicy(ctx context.Context, caller string
 }
 
 // resolveRelayRead applies policy to what Query or CollectStoredEvents
-// returned. Errors other than *RelayBusIncompleteError, and partial reads the
+// returned. Errors other than *RelayReadIncompleteError, and partial reads the
 // caller cancelled, are returned unchanged.
 func resolveRelayRead(ctx context.Context, logger *slog.Logger, caller string, policy RelayReadPolicy, events []*nostr.Event, err error) (RelayRead, error) {
 	if err == nil {
 		return RelayRead{Events: events}, nil
 	}
-	var incomplete *RelayBusIncompleteError
+	var incomplete *RelayReadIncompleteError
 	if !errors.As(err, &incomplete) || errors.Is(incomplete.Cause, context.Canceled) {
 		return RelayRead{}, err
 	}

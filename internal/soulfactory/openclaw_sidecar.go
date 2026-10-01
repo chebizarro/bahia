@@ -221,11 +221,11 @@ func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) 
 		if len(relays) == 0 {
 			return nil, fmt.Errorf("at least one relay is required when no sidecar transport is supplied")
 		}
-		bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(config.Signer), WithRelayBusLogger(logger))
+		relayClient, err := NewRelayClient(relays, WithRelaySigner(config.Signer), WithRelayLogger(logger))
 		if err != nil {
 			return nil, err
 		}
-		transport = bus
+		transport = relayClient
 	}
 	return &OpenClawSidecar{
 		runtimePubkey:    strings.TrimSpace(config.RuntimePubkey),
@@ -461,7 +461,7 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	eose := sub.EndOfStoredEvents
 	// The subscription itself is long-lived; the backfill deadline only bounds
 	// how long readiness stays silent about relays that have not answered.
-	backfillDeadline := time.NewTimer(relayBusStoredEventsTimeout)
+	backfillDeadline := time.NewTimer(relayStoredEventsTimeout)
 	defer backfillDeadline.Stop()
 	for {
 		select {

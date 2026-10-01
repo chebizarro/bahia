@@ -20,7 +20,7 @@ func (t *captureSoulFactoryTransport) Publish(_ context.Context, event nostr.Eve
 	return t.accepted, t.err
 }
 
-func (t *captureSoulFactoryTransport) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelayBusSubscription, error) {
+func (t *captureSoulFactoryTransport) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelaySubscription, error) {
 	return nil, nil
 }
 
@@ -136,7 +136,7 @@ func (t *subscribableSoulFactoryTransport) Publish(_ context.Context, event nost
 	return t.accepted, nil
 }
 
-func (t *subscribableSoulFactoryTransport) SubscribeAllWithEOSE(_ context.Context, _ []nostr.Filter) (*RelayBusSubscription, error) {
+func (t *subscribableSoulFactoryTransport) SubscribeAllWithEOSE(_ context.Context, _ []nostr.Filter) (*RelaySubscription, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan *nostr.Event, len(t.events)+1)
 	eose := make(chan struct{})
@@ -148,7 +148,7 @@ func (t *subscribableSoulFactoryTransport) SubscribeAllWithEOSE(_ context.Contex
 		<-ctx.Done()
 		close(events)
 	}()
-	return &RelayBusSubscription{Events: events, EndOfStoredEvents: eose, cancel: cancel}, nil
+	return &RelaySubscription{Events: events, EndOfStoredEvents: eose, closeFn: cancel}, nil
 }
 
 func (t *subscribableSoulFactoryTransport) Close() {}

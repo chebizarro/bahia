@@ -3,31 +3,28 @@ package soulfactory
 import (
 	"strings"
 	"testing"
-
-	"fiatjaf.com/nostr"
 )
 
 func TestNIP29MembershipAssignPublishesControllerSignedPutUser(t *testing.T) {
 	signer := newFakeSigner(t)
 	target := newFakeSigner(t).pubkey
-	endpoint := newFakeRelayEndpoint("wss://groups.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
-	bus := &SoulFactoryRelayBus{
-		endpoints:     []relayBusEndpoint{endpoint},
-		signer:        signer,
-		validateEvent: func(*nostr.Event) bool { return true },
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(signer))
+	if err != nil {
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := &nip29Membership{
-		signer: signer,
-		groups: []NIP29Group{{Relay: endpoint.url, ID: "fleet-dev"}},
-		buses:  map[string]*SoulFactoryRelayBus{endpoint.url: bus},
+		signer:       signer,
+		groups:       []NIP29Group{{Relay: endpoint.url, ID: "fleet-dev"}},
+		relayClients: map[string]*RelayClient{endpoint.url: bus},
 	}
 
 	assigned, err := membership.Assign(t.Context(), target)
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
-	if len(assigned) != 1 || assigned[0] != "wss://groups.example'fleet-dev" {
+	if len(assigned) != 1 || assigned[0] != endpoint.url+"'fleet-dev" {
 		t.Fatalf("Assign() = %v", assigned)
 	}
 	if len(endpoint.published) != 1 {
@@ -58,17 +55,19 @@ func TestNIP29MembershipAssignPublishesControllerSignedPutUser(t *testing.T) {
 
 func TestNIP29MembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://groups.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted"}}
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(signer))
+	if err != nil {
+		t.Fatalf("new relay client: %v", err)
+	}
 	membership := &nip29Membership{
-		signer: signer,
-		groups: []NIP29Group{{Relay: endpoint.url, ID: "fleet-ops"}},
-		buses: map[string]*SoulFactoryRelayBus{
-			endpoint.url: {endpoints: []relayBusEndpoint{endpoint}, signer: signer},
-		},
+		signer:       signer,
+		groups:       []NIP29Group{{Relay: endpoint.url, ID: "fleet-ops"}},
+		relayClients: map[string]*RelayClient{endpoint.url: bus},
 	}
 
-	_, err := membership.Assign(t.Context(), newFakeSigner(t).pubkey)
+	_, err = membership.Assign(t.Context(), newFakeSigner(t).pubkey)
 	if err == nil || !strings.Contains(err.Error(), "restricted") {
 		t.Fatalf("Assign() error = %v, want relay rejection", err)
 	}

@@ -156,7 +156,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 
-	current, record, err := source.resolve(ctx, m.bus)
+	current, record, err := source.resolve(ctx, m.relayClient)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +198,8 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
 	}
 	// Fail closed on self-minted material: the rotated bundle must validate and
-	// bind to the relay bus exactly like a configured one.
-	next, err := validateConcordCommunity(plan.bundle, communityID, m.bus)
+	// bind to the relay client exactly like a configured one.
+	next, err := validateConcordCommunity(plan.bundle, communityID, m.relayClient)
 	if err != nil {
 		return nil, fmt.Errorf("rotated %w", err)
 	}

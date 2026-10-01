@@ -10,140 +10,14 @@ import (
 	"fiatjaf.com/nostr"
 )
 
-type fakeRelayEndpoint struct {
-	url string
-
-	publishResults []RelayPublishResult
-	publishCalls   int
-	published      []nostr.Event
-	publishFn      func(context.Context, nostr.Event) RelayPublishResult
-
-	subscribeQueue chan *fakeRelaySubscription
-	subscribeCalls chan []nostr.Filter
-	authCalls      chan struct{}
-}
-
-func newFakeRelayEndpoint(url string) *fakeRelayEndpoint {
-	return &fakeRelayEndpoint{
-		url:            url,
-		subscribeQueue: make(chan *fakeRelaySubscription, 8),
-		subscribeCalls: make(chan []nostr.Filter, 8),
-		authCalls:      make(chan struct{}, 8),
-	}
-}
-
-func (e *fakeRelayEndpoint) URL() string { return e.url }
-
-func (e *fakeRelayEndpoint) Publish(ctx context.Context, event nostr.Event) RelayPublishResult {
-	if e.publishFn != nil {
-		return e.publishFn(ctx, event)
-	}
-	e.published = append(e.published, event)
-	result := RelayPublishResult{RelayURL: e.url, Error: errors.New("unexpected publish")}
-	if e.publishCalls < len(e.publishResults) {
-		result = e.publishResults[e.publishCalls]
-	}
-	e.publishCalls++
-	if result.RelayURL == "" {
-		result.RelayURL = e.url
-	}
-	return result
-}
-
-func (e *fakeRelayEndpoint) Subscribe(_ context.Context, filters []nostr.Filter) (relayBusRelaySubscription, error) {
-	copied := append([]nostr.Filter(nil), filters...)
-	e.subscribeCalls <- copied
-	sub := <-e.subscribeQueue
-	if sub.err != nil {
-		return nil, sub.err
-	}
-	return sub, nil
-}
-
-func (e *fakeRelayEndpoint) Authenticate(context.Context, relayAuthSigner, *relayAuthProbe) error {
-	e.authCalls <- struct{}{}
-	return nil
-}
-
-func (e *fakeRelayEndpoint) Close() {}
-
-type fakeRelaySubscription struct {
-	events chan *nostr.Event
-	eose   chan struct{}
-	closed chan string
-	err    error
-}
-
-func newFakeRelaySubscription() *fakeRelaySubscription {
-	return &fakeRelaySubscription{
-		events: make(chan *nostr.Event, 8),
-		eose:   make(chan struct{}, 1),
-		closed: make(chan string, 2),
-	}
-}
-
-func (s *fakeRelaySubscription) Events() <-chan *nostr.Event        { return s.events }
-func (s *fakeRelaySubscription) EndOfStoredEvents() <-chan struct{} { return s.eose }
-func (s *fakeRelaySubscription) ClosedReason() <-chan string        { return s.closed }
-func (s *fakeRelaySubscription) Close()                             {}
-
-func signedRelayBusEvent(t *testing.T, signer fakeSigner, kind int, content string) *nostr.Event {
-	t.Helper()
-	event := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Content: content}
-	if err := signer.Sign(t.Context(), event); err != nil {
-		t.Fatalf("sign event: %v", err)
-	}
-	return event
-}
-
-func mustReceiveRelayEvent(t *testing.T, ch <-chan *nostr.Event) *nostr.Event {
-	t.Helper()
-	ev, ok := <-ch
-	if !ok {
-		t.Fatal("event channel closed before expected event")
-	}
-	return ev
-}
-
-func mustReceiveFilters(t *testing.T, ch <-chan []nostr.Filter) []nostr.Filter {
-	t.Helper()
-	filters, ok := <-ch
-	if !ok {
-		t.Fatal("subscribe call channel closed before expected call")
-	}
-	return filters
-}
-
-func mustReceiveSignal[T any](t *testing.T, ch <-chan T, _ string) {
-	t.Helper()
-	<-ch
-}
-
-func immediateRelayBusBackoff(context.Context, int) error { return nil }
-
-func newEOSEOnlyRelayBus(t *testing.T) *SoulFactoryRelayBus {
-	t.Helper()
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
-	for i := 0; i < cap(endpoint.subscribeQueue); i++ {
-		subscription := newFakeRelaySubscription()
-		endpoint.subscribeQueue <- subscription
-		close(subscription.eose)
-	}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
-	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
-	}
-	return bus
-}
-
-func TestRelayBusPublishDefaultQuorumSucceedsAndCollectsFailures(t *testing.T) {
-	accepted := newFakeRelayEndpoint("wss://accepted.example")
+func TestRelayClientPublishDefaultQuorumSucceedsAndCollectsFailures(t *testing.T) {
+	accepted := newFakeRelayEndpoint(t)
 	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
-	rejected := newFakeRelayEndpoint("wss://rejected.example")
+	rejected := newFakeRelayEndpoint(t)
 	rejected.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: policy"}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, rejected})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{accepted, rejected})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	results, err := bus.PublishWithResults(t.Context(), nostr.Event{ID: soulTestID("event-1")})
@@ -155,14 +29,14 @@ func TestRelayBusPublishDefaultQuorumSucceedsAndCollectsFailures(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishAllRelaysQuorumReportsFailures(t *testing.T) {
-	accepted := newFakeRelayEndpoint("wss://accepted.example")
+func TestRelayClientPublishAllRelaysQuorumReportsFailures(t *testing.T) {
+	accepted := newFakeRelayEndpoint(t)
 	accepted.publishResults = []RelayPublishResult{{Accepted: true}}
-	rejected := newFakeRelayEndpoint("wss://rejected.example")
+	rejected := newFakeRelayEndpoint(t)
 	rejected.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: policy"}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, rejected}, WithRelayBusPublishQuorum(RelayBusPublishQuorumAll))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{accepted, rejected}, withRelayPublishQuorum(RelayPublishQuorumAll))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-all")})
@@ -174,14 +48,14 @@ func TestRelayBusPublishAllRelaysQuorumReportsFailures(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishQuorumAndDuplicateOK(t *testing.T) {
-	duplicate := newFakeRelayEndpoint("wss://duplicate.example")
+func TestRelayClientPublishQuorumAndDuplicateOK(t *testing.T) {
+	duplicate := newFakeRelayEndpoint(t)
 	duplicate.publishResults = []RelayPublishResult{{Accepted: false, Reason: "duplicate: already have it"}}
-	down := newFakeRelayEndpoint("wss://down.example")
+	down := newFakeRelayEndpoint(t)
 	down.publishResults = []RelayPublishResult{{Error: errors.New("connection refused")}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{duplicate, down})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{duplicate, down})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("quorum")})
@@ -193,9 +67,9 @@ func TestRelayBusPublishQuorumAndDuplicateOK(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
+func TestRelayClientPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
 	acceptedReturned := make(chan struct{})
-	accepted := newFakeRelayEndpoint("wss://accepted.example")
+	accepted := newFakeRelayEndpoint(t)
 	accepted.publishFn = func(context.Context, nostr.Event) RelayPublishResult {
 		defer close(acceptedReturned)
 		return RelayPublishResult{RelayURL: accepted.url, Accepted: true}
@@ -203,7 +77,7 @@ func TestRelayBusPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
 
 	// The slow relay answers only after the first relay's OK has been
 	// returned to the bus. The old bus cancelled it at that point.
-	slow := newFakeRelayEndpoint("wss://slow.example")
+	slow := newFakeRelayEndpoint(t)
 	slow.publishFn = func(ctx context.Context, _ nostr.Event) RelayPublishResult {
 		<-acceptedReturned
 		if err := ctx.Err(); err != nil {
@@ -212,9 +86,9 @@ func TestRelayBusPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
 		return RelayPublishResult{RelayURL: slow.url, Accepted: true}
 	}
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{accepted, slow})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{accepted, slow})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	results, err := bus.PublishWithResults(t.Context(), nostr.Event{ID: soulTestID("no-cancel")})
@@ -226,14 +100,14 @@ func TestRelayBusPublishDoesNotCancelOtherRelaysAfterFirstOK(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishReportsOKFalseAndAllRelayReject(t *testing.T) {
-	blocked := newFakeRelayEndpoint("wss://blocked.example")
+func TestRelayClientPublishReportsOKFalseAndAllRelayReject(t *testing.T) {
+	blocked := newFakeRelayEndpoint(t)
 	blocked.publishResults = []RelayPublishResult{{Accepted: false, Reason: "blocked: policy"}}
-	auth := newFakeRelayEndpoint("wss://auth.example")
+	auth := newFakeRelayEndpoint(t)
 	auth.publishResults = []RelayPublishResult{{Accepted: false, Reason: "auth-required: sign in"}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{blocked, auth})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{blocked, auth})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("event-2")})
@@ -248,14 +122,14 @@ func TestRelayBusPublishReportsOKFalseAndAllRelayReject(t *testing.T) {
 	}
 }
 
-func TestRelayBusEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
+func TestRelayClientEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -281,14 +155,14 @@ func TestRelayBusEOSETransitionsToRealtimeWithoutClosingEvents(t *testing.T) {
 	}
 }
 
-func TestRelayBusQueryDrainsHistoricalEventBufferedBeforeEOSE(t *testing.T) {
+func TestRelayClientQueryDrainsHistoricalEventBufferedBeforeEOSE(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	result := make(chan []*nostr.Event, 1)
@@ -313,19 +187,19 @@ func TestRelayBusQueryDrainsHistoricalEventBufferedBeforeEOSE(t *testing.T) {
 	}
 }
 
-func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *testing.T) {
+func TestRelayClientEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *testing.T) {
 	signer := newFakeSigner(t)
-	healthy := newFakeRelayEndpoint("wss://healthy.example")
+	healthy := newFakeRelayEndpoint(t)
 	healthySub := newFakeRelaySubscription()
 	healthy.subscribeQueue <- healthySub
-	failed := newFakeRelayEndpoint("wss://failed.example")
+	failed := newFakeRelayEndpoint(t)
 	failed.subscribeQueue <- &fakeRelaySubscription{err: errors.New("dial failed")}
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{healthy, failed},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{healthy, failed},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -353,19 +227,19 @@ func TestRelayBusEOSEWaitsForRelayThatRecoversAfterInitialSubscribeFailure(t *te
 // A CLOSED before EOSE is the relay's terminal answer to the stored-event
 // read: backfill ends without waiting on the reissue, but it is reported as
 // incomplete, never as complete. The REQ is still reissued for realtime events.
-func TestRelayBusClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
+func TestRelayClientClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://closed.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first := newFakeRelaySubscription()
 	second := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- first
 	endpoint.subscribeQueue <- second
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -377,9 +251,9 @@ func TestRelayBusClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
 	mustReceiveFilters(t, endpoint.subscribeCalls)
 	first.closed <- "error: relay restart"
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
-	var incomplete *RelayBusIncompleteError
-	if err := sub.StoredEventsIncomplete(nil); !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayBusIncomplete) {
-		t.Fatalf("StoredEventsIncomplete() = %v, want *RelayBusIncompleteError", err)
+	var incomplete *RelayReadIncompleteError
+	if err := sub.StoredEventsIncomplete(nil); !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayReadIncomplete) {
+		t.Fatalf("StoredEventsIncomplete() = %v, want *RelayReadIncompleteError", err)
 	}
 	if incomplete.Cause != nil || len(incomplete.Relays) != 1 ||
 		incomplete.Relays[0].Status != RelayStoredEventsClosed || incomplete.Relays[0].Reason != "error: relay restart" {
@@ -388,20 +262,20 @@ func TestRelayBusClosedBeforeEOSESettlesBackfillAsIncomplete(t *testing.T) {
 	mustReceiveFilters(t, endpoint.subscribeCalls)
 }
 
-func TestRelayBusClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testing.T) {
+func TestRelayClientClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://auth.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first := newFakeRelaySubscription()
 	second := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- first
 	endpoint.subscribeQueue <- second
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusSigner(signer),
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		WithRelaySigner(signer),
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -419,20 +293,20 @@ func TestRelayBusClosedAuthRequiredAuthenticatesAndReissuesSubscription(t *testi
 	mustReceiveSignal(t, sub.EndOfStoredEvents, "EOSE")
 }
 
-func TestRelayBusClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.T) {
+func TestRelayClientClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://auth-close.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first := newFakeRelaySubscription()
 	second := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- first
 	endpoint.subscribeQueue <- second
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusSigner(signer),
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		WithRelaySigner(signer),
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -447,14 +321,14 @@ func TestRelayBusClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.T) 
 	mustReceiveFilters(t, endpoint.subscribeCalls)
 }
 
-func TestRelayBusDeduplicatesDuplicateEvents(t *testing.T) {
+func TestRelayClientDeduplicatesDuplicateEvents(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -479,16 +353,16 @@ func TestRelayBusDeduplicatesDuplicateEvents(t *testing.T) {
 	}
 }
 
-func TestRelayBusReconnectReissuesSubscriptionWithSameFilters(t *testing.T) {
+func TestRelayClientReconnectReissuesSubscriptionWithSameFilters(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first := newFakeRelaySubscription()
 	second := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- first
 	endpoint.subscribeQueue <- second
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -509,12 +383,12 @@ func TestRelayBusReconnectReissuesSubscriptionWithSameFilters(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishOKFalseWithEmptyReason(t *testing.T) {
-	endpoint := newFakeRelayEndpoint("wss://silent.example")
+func TestRelayClientPublishOKFalseWithEmptyReason(t *testing.T) {
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false}} // OK false, no reason
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("ok-false-empty")})
@@ -529,14 +403,14 @@ func TestRelayBusPublishOKFalseWithEmptyReason(t *testing.T) {
 	}
 }
 
-func TestRelayBusPublishNetworkErrorCombinedWithOKFalse(t *testing.T) {
-	errEndpoint := newFakeRelayEndpoint("wss://error.example")
+func TestRelayClientPublishNetworkErrorCombinedWithOKFalse(t *testing.T) {
+	errEndpoint := newFakeRelayEndpoint(t)
 	errEndpoint.publishResults = []RelayPublishResult{{Error: errors.New("connection reset")}}
-	rejectedEndpoint := newFakeRelayEndpoint("wss://rejected.example")
+	rejectedEndpoint := newFakeRelayEndpoint(t)
 	rejectedEndpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "rate-limited"}}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{errEndpoint, rejectedEndpoint})
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{errEndpoint, rejectedEndpoint})
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	count, err := bus.Publish(t.Context(), nostr.Event{ID: soulTestID("net-err-ok-false")})
@@ -546,25 +420,26 @@ func TestRelayBusPublishNetworkErrorCombinedWithOKFalse(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("Publish() accepted = %d, want 0", count)
 	}
-	if !containsAll(err.Error(), "connection reset", "rate-limited") {
-		t.Fatalf("Publish() error = %q, want both failure reasons", err.Error())
+	// The dropped connection surfaces as that relay's transport error.
+	if !containsAll(err.Error(), errEndpoint.url, rejectedEndpoint.url, "rate-limited") {
+		t.Fatalf("Publish() error = %q, want both relays' failures", err.Error())
 	}
 }
 
-func TestRelayBusMultiRelayDeduplicatesSameEvent(t *testing.T) {
+func TestRelayClientMultiRelayDeduplicatesSameEvent(t *testing.T) {
 	signer := newFakeSigner(t)
-	relay1 := newFakeRelayEndpoint("wss://relay1.example")
-	relay2 := newFakeRelayEndpoint("wss://relay2.example")
+	relay1 := newFakeRelayEndpoint(t)
+	relay2 := newFakeRelayEndpoint(t)
 	sub1 := newFakeRelaySubscription()
 	sub2 := newFakeRelaySubscription()
 	relay1.subscribeQueue <- sub1
 	relay2.subscribeQueue <- sub2
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{relay1, relay2},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{relay1, relay2},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -594,22 +469,22 @@ func TestRelayBusMultiRelayDeduplicatesSameEvent(t *testing.T) {
 	}
 }
 
-func TestRelayBusInvalidEventFilteredByValidator(t *testing.T) {
+func TestRelayClientInvalidEventFilteredByValidator(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
 
 	// Custom validator that rejects events with specific content.
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
-		WithRelayBusEventValidator(func(ev *nostr.Event) bool {
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
+		withRelayEventValidator(func(ev *nostr.Event) bool {
 			return ev != nil && ev.Content != "invalid"
 		}),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -631,21 +506,21 @@ func TestRelayBusInvalidEventFilteredByValidator(t *testing.T) {
 	}
 }
 
-func TestRelayBusClosedWithMultipleReasonsReissuesCorrectly(t *testing.T) {
+func TestRelayClientClosedWithMultipleReasonsReissuesCorrectly(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://flaky.example")
+	endpoint := newFakeRelayEndpoint(t)
 	first := newFakeRelaySubscription()
 	second := newFakeRelaySubscription()
 	third := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- first
 	endpoint.subscribeQueue <- second
 	endpoint.subscribeQueue <- third
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -676,14 +551,14 @@ func TestRelayBusClosedWithMultipleReasonsReissuesCorrectly(t *testing.T) {
 	}
 }
 
-func TestRelayBusNilEventIgnored(t *testing.T) {
+func TestRelayClientNilEventIgnored(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -702,13 +577,4 @@ func TestRelayBusNilEventIgnored(t *testing.T) {
 	if got.ID != sentinel.ID {
 		t.Fatalf("received event = %s after nil, want sentinel %s", got.ID, sentinel.ID)
 	}
-}
-
-func containsAll(value string, wants ...string) bool {
-	for _, want := range wants {
-		if !strings.Contains(value, want) {
-			return false
-		}
-	}
-	return true
 }

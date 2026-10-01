@@ -3,8 +3,12 @@ package nostr
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -40,6 +44,7 @@ type RelayPool struct {
 	cancel              context.CancelFunc
 	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner          nostr.Signer
+	authSignFunc        func(context.Context, *nostr.Event) error
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
 	// now and newReconnectBackoff pace reconnects to failing relays; both are
 	// replaceable in tests.
@@ -50,6 +55,13 @@ type RelayPool struct {
 	// publish or single-relay subscribe performs.
 	connectTimeout   time.Duration
 	reconnectTimeout time.Duration
+	// newResubscribeBackoff paces the reissue of one relay's REQ after a drop
+	// or a retryable CLOSED; replaceable in tests.
+	newResubscribeBackoff func() *Backoff
+	// fetchRelayLimits reads a relay's NIP-11 document after each connect,
+	// bounded by relayInfoTimeout; replaceable in tests.
+	fetchRelayLimits func(context.Context, string) (relayLimits, *nip11.RelayInformationDocument, error)
+	relayInfoTimeout time.Duration
 
 	// connectedMu guards relay (re)connection listeners. It is never held
 	// while calling out, and notification never blocks the pool.
@@ -80,6 +92,25 @@ type managedRelay struct {
 	// closed is set once the pool has closed this relay for good (retired and
 	// pruned, or pool Close); it is never reconnected afterwards. Guarded by mu.
 	closed bool
+
+	// limits are the NIP-11 limitations of the current connection. After a
+	// connect they are fetched once; limitsReady is closed when that fetch
+	// ends (nil when none is running). Guarded by mu.
+	limits      relayLimits
+	limitsReady chan struct{}
+	// openREQs counts the pool's live subscription REQs on this relay, capped
+	// at limits.MaxSubscriptions; slotFreed is closed (and replaced) whenever
+	// one ends. Guarded by mu.
+	openREQs  int
+	slotFreed chan struct{}
+}
+
+// relayLimits are the NIP-11 limitations the pool enforces. Zero means the
+// relay did not state one.
+type relayLimits struct {
+	MaxLimit         int
+	MaxSubscriptions int
+	MaxFilters       int
 }
 
 // RelayReconnectBackoffError is returned for a relay whose recent connect
@@ -107,7 +138,14 @@ func (e *RelayReconnectBackoffError) Unwrap() error { return e.LastErr }
 const (
 	defaultRelayConnectTimeout   = 10 * time.Second
 	defaultRelayReconnectTimeout = 5 * time.Second
+	defaultRelayInfoTimeout      = 3 * time.Second
 )
+
+// defaultResubscribeBackoff paces the reissue of one relay's REQ: 1s doubling
+// to a 1 minute cap, with jitter.
+func defaultResubscribeBackoff() *Backoff {
+	return &Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0.2}
+}
 
 // defaultReconnectBackoff paces reconnects to a failing relay: 1s doubling to
 // a 1 minute cap, with jitter.
@@ -131,6 +169,23 @@ func WithAuthSigner(signer nostr.Signer) RelayPoolOption {
 	return func(p *RelayPool) { p.authSigner = signer }
 }
 
+// WithResubscribeBackoff sets how the pool paces the reissue of one relay's
+// REQ after a dropped connection or a retryable CLOSED (default: 1s doubling
+// to 1 minute, with jitter).
+func WithResubscribeBackoff(newBackoff func() *Backoff) RelayPoolOption {
+	return func(p *RelayPool) {
+		if newBackoff != nil {
+			p.newResubscribeBackoff = newBackoff
+		}
+	}
+}
+
+// WithAuthSignFunc sets the function that signs NIP-42 AUTH events, for
+// callers whose signer is not a nostr.Signer.
+func WithAuthSignFunc(sign func(context.Context, *nostr.Event) error) RelayPoolOption {
+	return func(p *RelayPool) { p.authSignFunc = sign }
+}
+
 // RelayPoolReconfigureResult describes an in-place relay topology update.
 type RelayPoolReconfigureResult struct {
 	Changed               bool
@@ -149,23 +204,30 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 	normalizedURLs := normalizeRelayURLs(urls)
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &RelayPool{
-		relays:              make(map[string]*managedRelay),
-		retiredRelays:       make(map[string]*managedRelay),
-		activeSubscriptions: make(map[uint64]*activeMergedSubscription),
-		relayInfoCache:      make(map[string]*nip11.RelayInformationDocument),
-		health:              NewRelayHealthTracker(),
-		urls:                normalizedURLs,
-		logger:              logger,
-		ctx:                 ctx,
-		cancel:              cancel,
-		connectRelay:        nostr.RelayConnect,
-		now:                 time.Now,
-		newReconnectBackoff: defaultReconnectBackoff,
-		connectTimeout:      defaultRelayConnectTimeout,
-		reconnectTimeout:    defaultRelayReconnectTimeout,
+		relays:                make(map[string]*managedRelay),
+		retiredRelays:         make(map[string]*managedRelay),
+		activeSubscriptions:   make(map[uint64]*activeMergedSubscription),
+		relayInfoCache:        make(map[string]*nip11.RelayInformationDocument),
+		health:                NewRelayHealthTracker(),
+		urls:                  normalizedURLs,
+		logger:                logger,
+		ctx:                   ctx,
+		cancel:                cancel,
+		connectRelay:          nostr.RelayConnect,
+		now:                   time.Now,
+		newReconnectBackoff:   defaultReconnectBackoff,
+		connectTimeout:        defaultRelayConnectTimeout,
+		reconnectTimeout:      defaultRelayReconnectTimeout,
+		newResubscribeBackoff: defaultResubscribeBackoff,
+		fetchRelayLimits:      fetchRelayLimits,
+		relayInfoTimeout:      defaultRelayInfoTimeout,
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
+		// Relays are held from the start and dialed on first use (or by
+		// Connect), so a publish or subscription before Connect still
+		// reaches them.
+		p.relays[url] = &managedRelay{url: url}
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -405,8 +467,16 @@ func (p *RelayPool) ensureRelayConnected(ctx context.Context, mr *managedRelay, 
 		mr.mu.Lock()
 		if mr.connected && mr.relay != nil {
 			relay := mr.relay
+			if relay.Context().Err() == nil {
+				mr.mu.Unlock()
+				return relay, nil
+			}
+			// The websocket died under us; redial below.
+			mr.connected = false
+			mr.lastErr = context.Cause(relay.Context())
 			mr.mu.Unlock()
-			return relay, nil
+			p.recordRelayConnectionState(mr.url, false)
+			continue
 		}
 		if mr.closed {
 			mr.mu.Unlock()
@@ -473,6 +543,13 @@ func (p *RelayPool) finishDial(ctx context.Context, mr *managedRelay, done chan 
 	mr.retryAt = time.Time{}
 	if mr.reconnectBackoff != nil {
 		mr.reconnectBackoff.Reset()
+	}
+	mr.limits = relayLimits{}
+	mr.limitsReady = nil
+	if relay.IsConnected() {
+		ready := make(chan struct{})
+		mr.limitsReady = ready
+		go p.loadRelayLimits(mr, ready)
 	}
 	mr.mu.Unlock()
 	p.recordRelayConnectionState(mr.url, true)
@@ -549,26 +626,6 @@ func IsAuthRequiredReason(reason string) bool {
 	return normalized == "auth-required" || strings.HasPrefix(normalized, "auth-required:")
 }
 
-func subscribeAuthRequiredReason(err error) (string, bool) {
-	if err == nil {
-		return "", false
-	}
-	message := strings.TrimSpace(err.Error())
-	if message == "" {
-		return "", false
-	}
-	lower := strings.ToLower(message)
-	idx := strings.Index(lower, "auth-required")
-	if idx < 0 {
-		return "", false
-	}
-	reason := strings.TrimSpace(message[idx:])
-	if !IsAuthRequiredReason(reason) {
-		return "", false
-	}
-	return reason, true
-}
-
 func authUnavailableMetadata(relayReason string, authErr error) string {
 	reason := strings.TrimSpace(relayReason)
 	if reason == "" {
@@ -641,13 +698,10 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 	if err != nil {
 		if reason, ok := publishRejectionReason(err); ok {
 			if IsAuthRequiredReason(reason) {
-				mr.mu.Lock()
-				sameRelay := mr.connected && mr.relay == relay
-				authErr := fmt.Errorf("relay connection changed before AUTH retry")
-				if sameRelay {
-					authErr = p.authenticateManagedRelayLocked(ctx, mr)
-				}
-				mr.mu.Unlock()
+				// The relay sent its challenge before this OK, so the pool's
+				// AuthHandler attempt is running or done; Auth joins it (or
+				// answers the challenge) and reports the AUTH OK.
+				authErr := p.authenticateLiveRelay(ctx, mr, relay)
 				if authErr == nil {
 					err = publishOnRelay(relay, ctx, ev)
 					if err == nil {
@@ -845,6 +899,9 @@ type RelayClosed struct {
 	RelayURL       string
 	SubscriptionID string
 	Reason         string
+	// Terminal is true when the pool will not reissue this REQ on this relay
+	// (see ClassifyClosedReason); otherwise it is reissued after a backoff.
+	Terminal bool
 }
 
 // MergedSubscription holds the merged event stream and protocol metadata from multiple relay subscriptions.
@@ -941,10 +998,135 @@ func (m *MergedSubscription) recordEventSource(eventID, relayURL string) {
 	m.eventSources.LoadOrStore(eventID, relayURL)
 }
 
-type relaySubscription struct {
-	relayURL string
-	sub      *nostr.Subscription
-	cancel   context.CancelFunc
+// RelayStoredStatus is one relay's answer to a subscription's initial REQs.
+type RelayStoredStatus string
+
+const (
+	// RelayStoredPending means the relay has not answered every initial REQ.
+	RelayStoredPending RelayStoredStatus = "pending"
+	// RelayStoredEOSE means the relay sent EOSE for every initial REQ.
+	RelayStoredEOSE RelayStoredStatus = "eose"
+	// RelayStoredClosed means the relay CLOSED an initial REQ before its EOSE
+	// (and, for "auth-required:", AUTH did not recover it).
+	RelayStoredClosed RelayStoredStatus = "closed"
+)
+
+// RelayStoredOutcome is one relay's answer to a subscription's initial REQs.
+// Reason is the CLOSED reason, or for a pending relay why it has no REQ yet.
+type RelayStoredOutcome struct {
+	RelayURL string
+	Status   RelayStoredStatus
+	Reason   string
+}
+
+// ErrStoredEventsIncomplete matches every *StoredEventsIncompleteError.
+var ErrStoredEventsIncomplete = errors.New("relay stored events are incomplete")
+
+// StoredEventsIncompleteError reports a stored-event read that ended without
+// EOSE from every relay. It is never a complete result. Cause is the context
+// error when a deadline or cancellation ended the wait, and nil when every
+// relay answered but at least one CLOSED instead of sending EOSE.
+type StoredEventsIncompleteError struct {
+	// Relays lists every relay that did not send EOSE.
+	Relays []RelayStoredOutcome
+	// Total is the number of relays the read covered, so Total-len(Relays)
+	// relays sent EOSE. It is zero when the relay set is unknown.
+	Total int
+	Cause error
+}
+
+func (e *StoredEventsIncompleteError) Error() string {
+	parts := make([]string, 0, len(e.Relays))
+	for _, relay := range e.Relays {
+		part := relay.RelayURL + ": " + string(relay.Status)
+		if relay.Reason != "" {
+			part += " (" + relay.Reason + ")"
+		}
+		parts = append(parts, part)
+	}
+	detail := strings.Join(parts, "; ")
+	if detail == "" {
+		detail = "no relay reported EOSE"
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("relay stored events are incomplete (%v): %s", e.Cause, detail)
+	}
+	return "relay stored events are incomplete: " + detail
+}
+
+func (e *StoredEventsIncompleteError) Unwrap() []error {
+	if e.Cause == nil {
+		return []error{ErrStoredEventsIncomplete}
+	}
+	return []error{ErrStoredEventsIncomplete, e.Cause}
+}
+
+// DefaultStoredEventsTimeout bounds a stored-event read whose caller context
+// has no deadline. An earlier caller deadline always wins.
+const DefaultStoredEventsTimeout = 15 * time.Second
+
+// BoundStoredEventsWait returns ctx bounded by limit unless ctx already
+// carries a deadline, which the caller owns.
+func BoundStoredEventsWait(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, limit)
+}
+
+// StoredOutcomes returns each relay's answer to the initial REQs so far, in
+// configured relay order. Relays left out of the accounting (see
+// SubscribeOptions.AwaitUnavailableRelays) are not listed.
+func (m *MergedSubscription) StoredOutcomes() []RelayStoredOutcome {
+	if m == nil || m.active == nil {
+		return nil
+	}
+	return m.active.outcomesSnapshot()
+}
+
+// StoredEventsIncomplete returns nil when every relay has sent EOSE for every
+// initial REQ, and otherwise a *StoredEventsIncompleteError naming the relays
+// that CLOSED or have not answered. cause is why the caller stopped waiting
+// (a context error), or nil when it saw EndOfStoredEvents.
+func (m *MergedSubscription) StoredEventsIncomplete(cause error) error {
+	outcomes := m.StoredOutcomes()
+	var missing []RelayStoredOutcome
+	for _, outcome := range outcomes {
+		if outcome.Status != RelayStoredEOSE {
+			missing = append(missing, outcome)
+		}
+	}
+	if len(missing) == 0 && (len(outcomes) > 0 || cause == nil) {
+		return nil
+	}
+	return &StoredEventsIncompleteError{Relays: missing, Total: len(outcomes), Cause: cause}
+}
+
+// SubscribeOptions tunes SubscribeWithOptions. The zero value is
+// SubscribeAllWithEOSE.
+type SubscribeOptions struct {
+	// Relays restricts the subscription to these configured relays (every
+	// configured relay when nil). URLs the pool does not hold are ignored.
+	Relays []string
+	// AwaitUnavailableRelays keeps relays that cannot be subscribed when the
+	// subscription opens, or whose connection drops before EOSE, pending in
+	// the stored-event accounting: EndOfStoredEvents and
+	// StoredEventsIncomplete wait for a reissued REQ's answer while the pool
+	// keeps retrying (callers bound the wait). Without it a relay unavailable
+	// at open time is left out of the accounting (and out of RelayURLs until
+	// it recovers), a drop before EOSE settles the relay as incomplete, and
+	// the call fails when no relay can be subscribed. Either way the pool
+	// keeps reissuing the REQ for realtime delivery.
+	AwaitUnavailableRelays bool
+	// ResumeOverlap, when positive, gives every relay REQ a resume cursor (see
+	// relayResumeCursor): once the relay has sent EOSE, a REQ reissued after a
+	// dropped connection or a retryable CLOSED asks only for events since the
+	// newest one that relay delivered, less the overlap. Without it reissued
+	// REQs repeat the original filter and deduplication absorbs the replay.
+	ResumeOverlap time.Duration
+	// ValidateEvent, when set, drops events it rejects before they reach the
+	// resume cursor, deduplication or the caller.
+	ValidateEvent func(*nostr.Event) bool
 }
 
 // SubscribeAll creates subscriptions on all connected relays and merges events into a single channel.
@@ -960,78 +1142,316 @@ func (p *RelayPool) SubscribeAll(ctx context.Context, filters []nostr.Filter) (<
 // SubscribeAllWithEOSE creates subscriptions on all connected relays and merges events.
 // Returns a MergedSubscription with both the event channel and an EOSE signal.
 func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*MergedSubscription, error) {
+	return p.SubscribeWithOptions(ctx, filters, SubscribeOptions{})
+}
+
+// SubscribeWithOptions opens filters on the pool's relays and merges their
+// events. Each filter is its own REQ on each relay (so a relay's NIP-11
+// max_filters is never exceeded), and each (relay, filter) REQ is supervised
+// on its own until ctx ends or the subscription is closed:
+//
+//   - CLOSED "auth-required:" answers the relay's NIP-42 challenge (the
+//     pool's AuthHandler, or a join of its attempt) and reissues that REQ at
+//     once. It is surfaced on Closed only when AUTH is impossible or fails.
+//   - CLOSED "blocked:", "restricted:", "invalid:" and other policy refusals
+//     (see ClassifyClosedReason) stop that REQ for good: surfaced with
+//     Terminal set, never retried.
+//   - CLOSED "error:", "rate-limited:" or an unknown reason, and a dropped
+//     connection, reissue that REQ on that relay only, after a backoff and a
+//     reconnect. Other relays are unaffected.
+//
+// Events closes once every REQ has stopped for good or the subscription ends.
+// NIP-11 limitations fetched on connect are applied per relay: limit is
+// capped at max_limit, and REQs beyond max_subscriptions wait for a free slot.
+func (p *RelayPool) SubscribeWithOptions(ctx context.Context, filters []nostr.Filter, opts SubscribeOptions) (*MergedSubscription, error) {
 	if len(filters) == 0 {
 		return nil, fmt.Errorf("at least one subscription filter is required")
 	}
-
-	p.mu.RLock()
-	relays := p.orderedRelaysLocked()
-	p.mu.RUnlock()
-
-	subCtx, cancel := context.WithCancel(ctx)
-	subs := make([]relaySubscription, 0, len(relays))
-
-	for _, mr := range relays {
-		relaySubs, err := p.subscribeInitialManagedRelay(ctx, subCtx, mr, filters)
-		if err != nil {
-			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
-			continue
-		}
-		subs = append(subs, relaySubs...)
-	}
-
-	if len(subs) == 0 {
-		cancel()
+	relays := p.subscriptionRelays(opts.Relays)
+	if len(relays) == 0 {
 		return nil, fmt.Errorf("no relays available for subscription")
 	}
 
-	return p.newActiveMergedSubscription(subCtx, cancel, filters, subs), nil
+	subCtx, cancel := context.WithCancel(ctx)
+	state := p.newActiveMergedSubscription(subCtx, cancel, filters, opts)
+
+	type openedRelay struct {
+		mr      *managedRelay
+		group   *activeRelayGroup
+		workers []*relayFilterWorker
+		initial bool
+	}
+	opened := make([]openedRelay, 0, len(relays))
+	established := 0
+	for _, mr := range relays {
+		groupCtx, groupCancel := context.WithCancel(subCtx)
+		group := &activeRelayGroup{ctx: groupCtx, cancel: groupCancel}
+		workers, err := p.openRelayWorkers(ctx, groupCtx, mr, state.filters, opts)
+		if err != nil {
+			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
+		} else {
+			established++
+		}
+		opened = append(opened, openedRelay{mr: mr, group: group, workers: workers, initial: err == nil || opts.AwaitUnavailableRelays})
+	}
+	if established == 0 && !opts.AwaitUnavailableRelays {
+		for _, relay := range opened {
+			relay.group.cancel()
+		}
+		cancel()
+		p.unregisterActiveSubscription(state.id)
+		return nil, fmt.Errorf("no relays available for subscription")
+	}
+
+	state.mu.Lock()
+	for _, relay := range opened {
+		if relay.initial {
+			state.addInitialRelayLocked(relay.mr.url, relay.workers)
+		}
+	}
+	for _, relay := range opened {
+		state.groups[relay.mr.url] = relay.group
+		for _, worker := range relay.workers {
+			worker.initial = relay.initial
+			state.startWorkerLocked(worker, relay.group)
+		}
+	}
+	state.checkInitialCompleteLocked()
+	state.mu.Unlock()
+
+	go state.finish()
+	return state.merged(), nil
+}
+
+// subscriptionRelays snapshots the configured relays named in urls (all when
+// nil), in configured order.
+func (p *RelayPool) subscriptionRelays(urls []string) []*managedRelay {
+	p.mu.RLock()
+	relays := p.orderedRelaysLocked()
+	p.mu.RUnlock()
+	if urls == nil {
+		return relays
+	}
+	wanted := relayURLSet(normalizeRelayURLs(urls))
+	selected := relays[:0]
+	for _, mr := range relays {
+		if _, ok := wanted[mr.url]; ok {
+			selected = append(selected, mr)
+		}
+	}
+	return selected
+}
+
+// ClosedAction is what the pool does with a relay's CLOSED for a REQ.
+type ClosedAction int
+
+const (
+	// ClosedRetry reissues the REQ on that relay after a backoff.
+	ClosedRetry ClosedAction = iota
+	// ClosedAuthenticate answers the relay's NIP-42 challenge and reissues.
+	ClosedAuthenticate
+	// ClosedTerminal stops the REQ on that relay for good.
+	ClosedTerminal
+)
+
+// ClassifyClosedReason maps a NIP-01 CLOSED reason to the pool's action by
+// its machine-readable prefix. "auth-required:" authenticates; "blocked:",
+// "restricted:", "invalid:", "unsupported:", "pow:" and "mute:" are policy
+// refusals that a retry cannot change; "error:", "rate-limited:" and reasons
+// without a known prefix are retried with backoff.
+func ClassifyClosedReason(reason string) ClosedAction {
+	prefix := strings.ToLower(strings.TrimSpace(reason))
+	if i := strings.IndexByte(prefix, ':'); i >= 0 {
+		prefix = prefix[:i]
+	}
+	switch prefix {
+	case "auth-required":
+		return ClosedAuthenticate
+	case "blocked", "restricted", "invalid", "unsupported", "pow", "mute":
+		return ClosedTerminal
+	default:
+		return ClosedRetry
+	}
 }
 
 type activeRelayGroup struct {
+	ctx       context.Context
 	cancel    context.CancelFunc
 	remaining int
 }
 
+// relayFilterWorker keeps one filter's REQ alive on one relay.
+type relayFilterWorker struct {
+	mr     *managedRelay
+	filter nostr.Filter
+	cursor *relayResumeCursor
+	// initial is true when the worker counts toward the subscription's
+	// stored-event accounting (EndOfStoredEvents, StoredOutcomes).
+	initial bool
+	// sub is the REQ sent while the subscription opened, with release freeing
+	// its subscription slot; nil when the worker must subscribe itself.
+	sub     *nostr.Subscription
+	release func()
+	// immediate makes that first self-subscribe skip the backoff (a REQ that
+	// only waits for a subscription slot has not failed).
+	immediate bool
+	// pending explains why the worker has no REQ yet.
+	pending string
+	// clampLogged avoids repeating the max_limit log for every reissue.
+	clampLogged bool
+}
+
+// reqFilter is the filter for the worker's next REQ: resumed from its cursor
+// and capped at the relay's NIP-11 max_limit.
+func (w *relayFilterWorker) reqFilter(pool *RelayPool, limits relayLimits) nostr.Filter {
+	filter := w.cursor.resume(w.filter)
+	if limits.MaxLimit > 0 && filter.Limit > limits.MaxLimit {
+		if !w.clampLogged {
+			w.clampLogged = true
+			pool.logger.Debug("capping REQ limit at relay NIP-11 max_limit",
+				zap.String("relay", w.mr.url), zap.Int("limit", filter.Limit), zap.Int("max_limit", limits.MaxLimit))
+		}
+		filter.Limit = limits.MaxLimit
+	}
+	return filter
+}
+
+// openRelayWorkers connects mr if needed and sends one REQ per filter under
+// groupCtx. Filters that cannot be sent now (no free subscription slot, or a
+// failed REQ) get a worker without a REQ that keeps trying. The error is
+// non-nil when no REQ reached the relay.
+func (p *RelayPool) openRelayWorkers(connectCtx, groupCtx context.Context, mr *managedRelay, filters []nostr.Filter, opts SubscribeOptions) ([]*relayFilterWorker, error) {
+	workers := make([]*relayFilterWorker, len(filters))
+	for i, filter := range filters {
+		var cursor *relayResumeCursor
+		if opts.ResumeOverlap > 0 {
+			cursor = newRelayResumeCursor(opts.ResumeOverlap)
+		}
+		workers[i] = &relayFilterWorker{mr: mr, filter: filter, cursor: cursor}
+	}
+
+	if !managedRelayConnected(mr) {
+		p.recordRelayReconnect(mr.url)
+		p.connectOne(connectCtx, mr)
+	}
+	relay, err := p.liveRelay(mr)
+	if err != nil {
+		for _, worker := range workers {
+			worker.pending = err.Error()
+		}
+		return workers, err
+	}
+	limits := p.awaitRelayLimits(connectCtx, mr)
+
+	var lastErr error
+	sent := 0
+	for _, worker := range workers {
+		release, ok := p.tryAcquireSubscriptionSlot(mr)
+		if !ok {
+			worker.pending = fmt.Sprintf("waiting for a subscription slot (NIP-11 max_subscriptions %d)", limits.MaxSubscriptions)
+			worker.immediate = true
+			continue
+		}
+		worker.cursor.begin()
+		sub, err := subscribeOnRelay(relay, groupCtx, worker.reqFilter(p, limits))
+		if err != nil {
+			release()
+			lastErr = err
+			worker.pending = err.Error()
+			p.recordRelayError(mr.url, err.Error())
+			continue
+		}
+		worker.sub, worker.release = sub, release
+		sent++
+	}
+	if sent == 0 && lastErr != nil {
+		p.markRelayDisconnectedIfDead(mr, relay)
+		return workers, lastErr
+	}
+	if sent > 0 {
+		p.recordRelayConnectionState(mr.url, true)
+	}
+	return workers, nil
+}
+
+// liveRelay returns mr's connection when the pool holds one.
+func (p *RelayPool) liveRelay(mr *managedRelay) (*nostr.Relay, error) {
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	if !mr.connected || mr.relay == nil {
+		return nil, fmt.Errorf("relay %s is not connected", mr.url)
+	}
+	return mr.relay, nil
+}
+
+// markRelayDisconnectedIfDead clears mr's connection when relay (the one a
+// REQ was just sent on) has lost its websocket, so the next use redials.
+func (p *RelayPool) markRelayDisconnectedIfDead(mr *managedRelay, relay *nostr.Relay) {
+	if relay == nil || relay.Context().Err() == nil {
+		return
+	}
+	mr.mu.Lock()
+	marked := false
+	if mr.relay == relay && mr.connected {
+		mr.connected = false
+		mr.lastErr = context.Cause(relay.Context())
+		marked = true
+	}
+	mr.mu.Unlock()
+	if marked {
+		p.recordRelayConnectionState(mr.url, false)
+	}
+}
+
 type activeMergedSubscription struct {
-	pool         *RelayPool
-	id           uint64
-	ctx          context.Context
-	cancel       context.CancelFunc
-	filters      []nostr.Filter
-	events       chan *nostr.Event
-	eose         chan struct{}
-	relayEOSE    chan RelayEOSE
-	closed       chan RelayClosed
-	eventSources *sync.Map
-	dedup        *EventDeduplicator
+	pool          *RelayPool
+	id            uint64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	filters       []nostr.Filter
+	opts          SubscribeOptions
+	events        chan *nostr.Event
+	eose          chan struct{}
+	relayEOSE     chan RelayEOSE
+	closed        chan RelayClosed
+	eventSources  *sync.Map
+	dedup         *EventDeduplicator
+	validateEvent func(*nostr.Event) bool
 
 	mu                 sync.Mutex
 	groups             map[string]*activeRelayGroup
+	established        map[string]struct{}
 	initialRemaining   int
 	initialWithoutEOSE bool
 	initialPending     map[string]int
-	realEOSECount      int
-	eoseOnce           sync.Once
-	workers            sync.WaitGroup
-	closeOnce          sync.Once
+	// outcomes holds each initial relay's answer to the initial REQs, in
+	// relayOrder.
+	outcomes      map[string]*RelayStoredOutcome
+	relayOrder    []string
+	realEOSECount int
+	eoseOnce      sync.Once
+	workers       sync.WaitGroup
+	closeOnce     sync.Once
 }
 
-func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel context.CancelFunc, filters []nostr.Filter, subs []relaySubscription) *MergedSubscription {
+func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel context.CancelFunc, filters []nostr.Filter, opts SubscribeOptions) *activeMergedSubscription {
 	state := &activeMergedSubscription{
-		pool:             p,
-		ctx:              ctx,
-		cancel:           cancel,
-		filters:          append([]nostr.Filter(nil), filters...),
-		events:           make(chan *nostr.Event, 64),
-		eose:             make(chan struct{}),
-		relayEOSE:        make(chan RelayEOSE, 64),
-		closed:           make(chan RelayClosed, 64),
-		eventSources:     &sync.Map{},
-		dedup:            NewEventDeduplicator(10000),
-		groups:           make(map[string]*activeRelayGroup),
-		initialRemaining: len(subs),
-		initialPending:   make(map[string]int),
+		pool:           p,
+		ctx:            ctx,
+		cancel:         cancel,
+		filters:        append([]nostr.Filter(nil), filters...),
+		opts:           opts,
+		events:         make(chan *nostr.Event, 64),
+		eose:           make(chan struct{}),
+		relayEOSE:      make(chan RelayEOSE, 64),
+		closed:         make(chan RelayClosed, 64),
+		eventSources:   &sync.Map{},
+		dedup:          NewEventDeduplicator(10000),
+		validateEvent:  opts.ValidateEvent,
+		groups:         make(map[string]*activeRelayGroup),
+		established:    make(map[string]struct{}),
+		initialPending: make(map[string]int),
+		outcomes:       make(map[string]*RelayStoredOutcome),
 	}
 
 	p.subscriptionsMu.Lock()
@@ -1039,88 +1459,256 @@ func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel cont
 	state.id = p.nextSubscriptionID
 	p.activeSubscriptions[state.id] = state
 	p.subscriptionsMu.Unlock()
+	return state
+}
 
-	state.mu.Lock()
-	for _, relaySub := range subs {
-		state.initialPending[relaySub.relayURL]++
-		group := state.groups[relaySub.relayURL]
-		if group == nil {
-			group = &activeRelayGroup{cancel: relaySub.cancel}
-			state.groups[relaySub.relayURL] = group
+func (s *activeMergedSubscription) merged() *MergedSubscription {
+	return &MergedSubscription{
+		Events:            s.events,
+		EndOfStoredEvents: s.eose,
+		RelayEOSE:         s.relayEOSE,
+		Closed:            s.closed,
+		closeFn:           s.close,
+		eventSources:      s.eventSources,
+		active:            s,
+	}
+}
+
+// addInitialRelayLocked adds relayURL's workers to the stored-event
+// accounting. s.mu is held.
+func (s *activeMergedSubscription) addInitialRelayLocked(relayURL string, workers []*relayFilterWorker) {
+	if len(workers) == 0 {
+		return
+	}
+	outcome := &RelayStoredOutcome{RelayURL: relayURL, Status: RelayStoredPending}
+	for _, worker := range workers {
+		if worker.sub == nil && worker.pending != "" {
+			outcome.Reason = worker.pending
 		}
-		group.remaining++
-		state.startWorkerLocked(relaySub, group, true)
+		if worker.sub != nil {
+			s.established[relayURL] = struct{}{}
+		}
 	}
-	state.mu.Unlock()
-
-	merged := &MergedSubscription{
-		Events:            state.events,
-		EndOfStoredEvents: state.eose,
-		RelayEOSE:         state.relayEOSE,
-		Closed:            state.closed,
-		closeFn:           state.close,
-		eventSources:      state.eventSources,
-		active:            state,
-	}
-	go state.finish()
-	return merged
+	s.outcomes[relayURL] = outcome
+	s.relayOrder = append(s.relayOrder, relayURL)
+	s.initialRemaining += len(workers)
+	s.initialPending[relayURL] += len(workers)
 }
 
-func (s *activeMergedSubscription) startWorkerLocked(relaySub relaySubscription, group *activeRelayGroup, initial bool) {
+func (s *activeMergedSubscription) checkInitialCompleteLocked() {
+	if s.initialRemaining == 0 {
+		s.eoseOnce.Do(func() { close(s.eose) })
+	}
+}
+
+func (s *activeMergedSubscription) startWorkerLocked(worker *relayFilterWorker, group *activeRelayGroup) {
+	group.remaining++
+	if worker.sub != nil {
+		s.established[worker.mr.url] = struct{}{}
+	}
 	s.workers.Add(1)
-	go s.runRelaySubscription(relaySub, group, initial)
+	go s.runWorker(worker, group)
 }
 
-func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscription, group *activeRelayGroup, initial bool) {
-	defer s.workers.Done()
-	defer s.workerDone(relaySub.relayURL, group)
+// relaySubscriptionEnd is how one REQ generation ended.
+type relaySubscriptionEnd struct {
+	eosed  bool
+	closed bool
+	reason string
+}
 
-	sub := relaySub.sub
-	var eoseCh <-chan nostr.EndOfStoredEvent
-	var eventsCh <-chan nostr.Event
-	var closedCh <-chan string
-	if sub != nil {
-		eoseCh = sub.EndOfStoredEvents
-		eventsCh = sub.Events
-		closedCh = sub.ClosedReason
-	}
-	terminal := false
-	markTerminal := func(realEOSE bool) {
-		if terminal {
+// runWorker supervises one filter's REQ on one relay; see SubscribeWithOptions.
+func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *activeRelayGroup) {
+	defer s.workers.Done()
+	defer s.workerDone(worker.mr.url, group)
+	ctx := group.ctx
+	relayURL := worker.mr.url
+
+	settled := false
+	settle := func(status RelayStoredStatus, reason string) {
+		if !worker.initial || settled {
 			return
 		}
-		terminal = true
-		if realEOSE {
-			s.markRealEOSE()
-			info := RelayEOSE{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub)}
+		settled = true
+		s.settleInitial(relayURL, status, reason)
+	}
+	defer func() {
+		// A REQ whose relay left the pool never answered and must not hold
+		// EndOfStoredEvents open. One stopped because the subscription ended
+		// stays pending: it never answered, and finish closes
+		// EndOfStoredEvents anyway.
+		if s.ctx.Err() == nil {
+			settle(RelayStoredClosed, "relay removed from the pool before EOSE")
+		}
+	}()
+
+	backoff := s.pool.newResubscribeBackoff()
+	sub, release := worker.sub, worker.release
+	worker.sub, worker.release = nil, nil
+	immediate := worker.immediate
+	if sub == nil && worker.pending != "" {
+		s.setPendingReason(relayURL, worker.pending)
+	}
+	authRetried := false
+	// Only a worker's first EOSE and first CLOSED block on the consumer.
+	eoseEmitted, closedEmitted := false, false
+	for {
+		if sub == nil {
+			sub, release = s.resubscribe(ctx, worker, backoff, immediate)
+			if sub == nil {
+				return
+			}
+			s.markEstablished(relayURL)
+		}
+		immediate = false
+		subID := subscriptionID(sub)
+		end := s.consume(ctx, worker, sub, func() {
+			settle(RelayStoredEOSE, "")
+			s.emitRelayEOSE(ctx, RelayEOSE{RelayURL: relayURL, SubscriptionID: subID}, !eoseEmitted)
+			eoseEmitted = true
+		})
+		relay := sub.Relay
+		release()
+		sub, release = nil, nil
+		if ctx.Err() != nil {
+			return
+		}
+		if end.eosed {
+			authRetried = false
+			backoff.Reset()
+		}
+		if !end.closed {
+			// The REQ ended without CLOSED: the connection dropped. Reissue
+			// on this relay only, after a backoff and a reconnect. The drop
+			// settles the relay's stored-event answer as incomplete unless
+			// the caller waits for unavailable relays to come back.
+			if !s.opts.AwaitUnavailableRelays {
+				settle(RelayStoredClosed, "connection lost before EOSE")
+			}
+			s.pool.markRelayDisconnectedIfDead(worker.mr, relay)
+			s.pool.logger.Debug("relay subscription dropped; reissuing on that relay",
+				zap.String("relay", relayURL))
+			continue
+		}
+
+		reason := end.reason
+		action := ClassifyClosedReason(reason)
+		if action == ClosedAuthenticate {
+			if !authRetried {
+				err := s.pool.authenticateLiveRelay(ctx, worker.mr, relay)
+				if err == nil {
+					authRetried = true
+					immediate = true
+					continue
+				}
+				s.pool.logger.Warn("relay requires NIP-42 AUTH for a REQ and AUTH failed",
+					zap.String("relay", relayURL), zap.String("reason", reason), zap.Error(err))
+				s.pool.recordRelayError(relayURL, authUnavailableMetadata(reason, err))
+			}
+			action = ClosedTerminal
+		}
+		terminal := action == ClosedTerminal
+		settle(RelayStoredClosed, reason)
+		s.emitClosed(ctx, RelayClosed{RelayURL: relayURL, SubscriptionID: subID, Reason: reason, Terminal: terminal}, !closedEmitted)
+		closedEmitted = true
+		if terminal {
+			s.pool.logger.Warn("relay refused subscription; not retrying",
+				zap.String("relay", relayURL), zap.String("reason", reason))
+			return
+		}
+		s.pool.logger.Debug("relay closed subscription; reissuing after backoff",
+			zap.String("relay", relayURL), zap.String("reason", reason))
+	}
+}
+
+// resubscribe sends worker's next REQ on its relay, waiting out the backoff
+// first unless immediate, reconnecting and waiting for a subscription slot as
+// needed. It returns nil once ctx ends.
+func (s *activeMergedSubscription) resubscribe(ctx context.Context, worker *relayFilterWorker, backoff *Backoff, immediate bool) (*nostr.Subscription, func()) {
+	pool := s.pool
+	mr := worker.mr
+	for {
+		if !immediate {
+			timer := time.NewTimer(backoff.Next())
 			select {
-			case s.relayEOSE <- info:
-			case <-s.ctx.Done():
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, nil
+			case <-timer.C:
 			}
 		}
-		if initial {
-			s.markInitialTerminal(relaySub.relayURL, realEOSE)
+		immediate = false
+		relay, err := pool.reconnectRelay(ctx, mr)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil
+			}
+			s.setPendingReason(mr.url, err.Error())
+			continue
 		}
+		limits := pool.awaitRelayLimits(ctx, mr)
+		release, err := pool.acquireSubscriptionSlot(ctx, mr, func(max int) {
+			s.setPendingReason(mr.url, fmt.Sprintf("waiting for a subscription slot (NIP-11 max_subscriptions %d)", max))
+		})
+		if err != nil {
+			return nil, nil
+		}
+		worker.cursor.begin()
+		sub, err := subscribeOnRelay(relay, ctx, worker.reqFilter(pool, limits))
+		if err != nil {
+			release()
+			if ctx.Err() != nil {
+				return nil, nil
+			}
+			pool.markRelayDisconnectedIfDead(mr, relay)
+			pool.recordRelayError(mr.url, err.Error())
+			s.setPendingReason(mr.url, err.Error())
+			continue
+		}
+		pool.recordRelayReREQ(mr.url)
+		pool.recordRelayConnectionState(mr.url, true)
+		return sub, release
 	}
-	defer markTerminal(false)
+}
+
+// consume forwards one REQ generation's events until it ends. onEOSE runs
+// once the generation's stored events have all been forwarded.
+func (s *activeMergedSubscription) consume(ctx context.Context, worker *relayFilterWorker, sub *nostr.Subscription, onEOSE func()) relaySubscriptionEnd {
+	var end relaySubscriptionEnd
+	eoseCh := sub.EndOfStoredEvents
+	eventsCh := sub.Events
+	closedCh := sub.ClosedReason
+	relayURL := worker.mr.url
 	forward := func(event nostr.Event) bool {
+		ev := &event
+		if s.validateEvent != nil && !s.validateEvent(ev) {
+			return true
+		}
+		// The cursor counts every valid event its relay delivered, including
+		// ones another relay delivered first.
+		worker.cursor.observe(ev)
 		eventID := event.ID.Hex()
 		if eventID != "" && s.dedup.IsDuplicate(eventID) {
 			return true
 		}
-		s.eventSources.LoadOrStore(eventID, relaySub.relayURL)
+		s.eventSources.LoadOrStore(eventID, relayURL)
 		select {
-		case s.events <- &event:
+		case s.events <- ev:
 			return true
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return false
 		}
 	}
+	closedWith := func(reason string) relaySubscriptionEnd {
+		end.closed = true
+		end.reason = strings.TrimSpace(reason)
+		return end
+	}
 
-	for eoseCh != nil || eventsCh != nil || closedCh != nil {
+	for eventsCh != nil {
 		select {
-		case <-s.ctx.Done():
-			return
+		case <-ctx.Done():
+			return end
 		case _, ok := <-eoseCh:
 			if ok || eoseCh != nil {
 				// A relay may have buffered EVENTs when EOSE becomes readable.
@@ -1133,58 +1721,116 @@ func (s *activeMergedSubscription) runRelaySubscription(relaySub relaySubscripti
 							break drain
 						}
 						if !forward(event) {
-							return
+							return end
 						}
 					default:
 						break drain
 					}
 				}
-				markTerminal(true)
+				worker.cursor.eose()
+				end.eosed = true
+				onEOSE()
 			}
 			eoseCh = nil
 		case reason, ok := <-closedCh:
-			if ok {
-				emitRelayClosed(s.ctx, s.closed, RelayClosed{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub), Reason: reason})
+			if !ok {
+				closedCh = nil
+				continue
 			}
-			closedCh = nil
+			return closedWith(reason)
 		case ev, ok := <-eventsCh:
 			if !ok {
+				// The library delivers CLOSED before it ends the subscription.
 				if closedCh != nil {
 					select {
 					case reason, ok := <-closedCh:
 						if ok {
-							emitRelayClosed(s.ctx, s.closed, RelayClosed{RelayURL: relaySub.relayURL, SubscriptionID: subscriptionID(sub), Reason: reason})
+							return closedWith(reason)
 						}
 					default:
 					}
 				}
-				return
+				return end
 			}
 			if !forward(ev) {
-				return
+				return end
 			}
 		}
 	}
+	return end
 }
 
-func (s *activeMergedSubscription) markInitialTerminal(relayURL string, realEOSE bool) {
+// emitRelayEOSE and emitClosed block for a REQ's first answer, as callers
+// count them, and never block for the answers of reissued REQs: a
+// long-lived subscription must not stall on a consumer that ignores them.
+func (s *activeMergedSubscription) emitRelayEOSE(ctx context.Context, info RelayEOSE, block bool) {
+	if block {
+		select {
+		case s.relayEOSE <- info:
+		case <-ctx.Done():
+		}
+		return
+	}
+	select {
+	case s.relayEOSE <- info:
+	default:
+	}
+}
+
+func (s *activeMergedSubscription) emitClosed(ctx context.Context, info RelayClosed, block bool) {
+	if block {
+		emitRelayClosed(ctx, s.closed, info)
+		return
+	}
+	select {
+	case s.closed <- info:
+	default:
+	}
+}
+
+func (s *activeMergedSubscription) settleInitial(relayURL string, status RelayStoredStatus, reason string) {
 	s.mu.Lock()
-	if !realEOSE {
+	if status == RelayStoredEOSE {
+		s.realEOSECount++
+	} else {
 		s.initialWithoutEOSE = true
 	}
 	if s.initialRemaining > 0 {
 		s.initialRemaining--
 	}
-	if remaining := s.initialPending[relayURL]; remaining <= 1 {
+	remaining := s.initialPending[relayURL] - 1
+	if remaining <= 0 {
 		delete(s.initialPending, relayURL)
 	} else {
-		s.initialPending[relayURL] = remaining - 1
+		s.initialPending[relayURL] = remaining
+	}
+	if outcome := s.outcomes[relayURL]; outcome != nil && outcome.Status != RelayStoredClosed {
+		switch {
+		case status == RelayStoredClosed:
+			outcome.Status, outcome.Reason = RelayStoredClosed, reason
+		case remaining <= 0:
+			outcome.Status, outcome.Reason = RelayStoredEOSE, ""
+		}
 	}
 	complete := s.initialRemaining == 0
 	s.mu.Unlock()
 	if complete {
 		s.eoseOnce.Do(func() { close(s.eose) })
 	}
+}
+
+func (s *activeMergedSubscription) setPendingReason(relayURL, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if outcome := s.outcomes[relayURL]; outcome != nil && outcome.Status == RelayStoredPending {
+		outcome.Reason = reason
+	}
+}
+
+func (s *activeMergedSubscription) markEstablished(relayURL string) {
+	s.mu.Lock()
+	s.established[relayURL] = struct{}{}
+	s.mu.Unlock()
 }
 
 func (s *activeMergedSubscription) pendingEOSESnapshot() []string {
@@ -1200,10 +1846,14 @@ func (s *activeMergedSubscription) pendingEOSESnapshot() []string {
 	return urls
 }
 
-func (s *activeMergedSubscription) markRealEOSE() {
+func (s *activeMergedSubscription) outcomesSnapshot() []RelayStoredOutcome {
 	s.mu.Lock()
-	s.realEOSECount++
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	out := make([]RelayStoredOutcome, 0, len(s.relayOrder))
+	for _, url := range s.relayOrder {
+		out = append(out, *s.outcomes[url])
+	}
+	return out
 }
 
 func (s *activeMergedSubscription) hasRealEOSE() bool {
@@ -1227,6 +1877,7 @@ func (s *activeMergedSubscription) workerDone(relayURL string, group *activeRela
 	delete(s.groups, relayURL)
 	empty := len(s.groups) == 0
 	s.mu.Unlock()
+	group.cancel()
 	if empty {
 		s.cancel()
 	}
@@ -1250,31 +1901,30 @@ func (s *activeMergedSubscription) addRelay(ctx context.Context, relay *managedR
 	filters := append([]nostr.Filter(nil), s.filters...)
 	s.mu.Unlock()
 
-	relayCtx, relayCancel := context.WithCancel(s.ctx)
-	subs, err := s.pool.subscribeConnectedRelay(ctx, relayCtx, relay, filters)
+	groupCtx, groupCancel := context.WithCancel(s.ctx)
+	group := &activeRelayGroup{ctx: groupCtx, cancel: groupCancel}
+	workers, err := s.pool.openRelayWorkers(ctx, groupCtx, relay, filters, s.opts)
 	if err != nil {
-		relayCancel()
+		groupCancel()
 		return err
 	}
 
 	s.mu.Lock()
 	if _, exists := s.groups[relay.url]; exists {
 		s.mu.Unlock()
-		relayCancel()
+		groupCancel()
 		return nil
 	}
 	select {
 	case <-s.ctx.Done():
 		s.mu.Unlock()
-		relayCancel()
+		groupCancel()
 		return s.ctx.Err()
 	default:
 	}
-	group := &activeRelayGroup{cancel: relayCancel, remaining: len(subs)}
 	s.groups[relay.url] = group
-	for _, sub := range subs {
-		sub.cancel = relayCancel
-		s.startWorkerLocked(sub, group, false)
+	for _, worker := range workers {
+		s.startWorkerLocked(worker, group)
 	}
 	s.mu.Unlock()
 	return nil
@@ -1308,7 +1958,9 @@ func (s *activeMergedSubscription) relayURLsSnapshot() []string {
 	defer s.mu.Unlock()
 	urls := make([]string, 0, len(s.groups))
 	for url := range s.groups {
-		urls = append(urls, url)
+		if _, ok := s.established[url]; ok {
+			urls = append(urls, url)
+		}
 	}
 	sort.Strings(urls)
 	return urls
@@ -1332,61 +1984,6 @@ func (s *activeMergedSubscription) finish() {
 	close(s.events)
 	close(s.relayEOSE)
 	close(s.closed)
-}
-
-func (p *RelayPool) subscribeInitialManagedRelay(authCtx, parentCtx context.Context, mr *managedRelay, filters []nostr.Filter) ([]relaySubscription, error) {
-	relayCtx, relayCancel := context.WithCancel(parentCtx)
-	keepContext := false
-	defer func() {
-		if !keepContext {
-			relayCancel()
-		}
-	}()
-
-	if !managedRelayConnected(mr) {
-		p.recordRelayReconnect(mr.url)
-		p.connectOne(authCtx, mr)
-	}
-	subs, err := p.subscribeConnectedRelay(authCtx, relayCtx, mr, filters)
-	if err != nil {
-		return nil, err
-	}
-	for i := range subs {
-		subs[i].cancel = relayCancel
-	}
-	keepContext = true
-	return subs, nil
-}
-
-func (p *RelayPool) subscribeConnectedRelay(authCtx, subscriptionCtx context.Context, mr *managedRelay, filters []nostr.Filter) ([]relaySubscription, error) {
-	mr.mu.Lock()
-	defer mr.mu.Unlock()
-	if !mr.connected || mr.relay == nil {
-		return nil, fmt.Errorf("relay %s is not connected", mr.url)
-	}
-
-	subs := make([]relaySubscription, 0, len(filters))
-	for _, filter := range filters {
-		sub, err := subscribeOnRelay(mr.relay, subscriptionCtx, filter)
-		recordedAuthUnavailable := false
-		if reason, authRequired := subscribeAuthRequiredReason(err); authRequired {
-			if authErr := p.authenticateManagedRelayLocked(authCtx, mr); authErr == nil {
-				sub, err = subscribeOnRelay(mr.relay, subscriptionCtx, filter)
-			} else {
-				p.recordRelayError(mr.url, authUnavailableMetadata(reason, authErr))
-				recordedAuthUnavailable = true
-			}
-		}
-		if err != nil {
-			if !recordedAuthUnavailable {
-				p.recordRelayError(mr.url, err.Error())
-			}
-			return nil, err
-		}
-		subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
-	}
-	p.recordRelayConnectionState(mr.url, true)
-	return subs, nil
 }
 
 func (p *RelayPool) unregisterActiveSubscription(id uint64) {
@@ -1779,48 +2376,140 @@ func (p *RelayPool) GetMaxSubscriptions(relayURL string) int {
 	return info.Limitation.MaxSubscriptions
 }
 
-// buildRelayOptions creates RelayOption slice with notice handler.
-// Note: NIP-42 AUTH requires manual handling via relay.Auth() when auth-required
-// errors are detected in publish results.
+// buildRelayOptions wires the relay's NOTICE handler and, when the pool has
+// an AUTH signer, NIP-42: every connection answers the relay's AUTH challenge
+// itself (AuthHandler) and reports the relay's OK (AuthResultHandler). The
+// vendored library runs one AUTH attempt at a time per connection, and
+// Relay.Auth joins it, so callers that meet "auth-required:" wait for that
+// attempt instead of racing it (third_party/nostr/BAHIA_PATCHES.md).
 func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
-	return nostr.RelayOptions{NoticeHandler: func(_ *nostr.Relay, notice string) {
+	opts := nostr.RelayOptions{NoticeHandler: func(_ *nostr.Relay, notice string) {
 		p.logger.Info("relay notice",
 			zap.String("relay", relayURL),
 			zap.String("notice", notice),
 		)
 	}}
+	if p.hasAuthSigner() {
+		opts.AuthHandler = func(ctx context.Context, _ *nostr.Relay, event *nostr.Event) error {
+			return p.signAuthEvent(ctx, event)
+		}
+		opts.AuthResultHandler = func(_ *nostr.Relay, err error) {
+			if err != nil {
+				p.logger.Warn("NIP-42 AUTH failed", zap.String("relay", relayURL), zap.Error(err))
+				p.recordRelayError(relayURL, "auth-failed: "+err.Error())
+				return
+			}
+			p.logger.Debug("NIP-42 AUTH completed", zap.String("relay", relayURL))
+		}
+	}
+	return opts
 }
 
-func (p *RelayPool) authenticateManagedRelayLocked(ctx context.Context, mr *managedRelay) error {
-	if p.privateKey == "" && p.authSigner == nil {
+func (p *RelayPool) hasAuthSigner() bool {
+	return p.privateKey != "" || p.authSigner != nil || p.authSignFunc != nil
+}
+
+func (p *RelayPool) signAuthEvent(ctx context.Context, event *nostr.Event) error {
+	switch {
+	case p.authSignFunc != nil:
+		return p.authSignFunc(ctx, event)
+	case p.authSigner != nil:
+		return p.authSigner.SignEvent(ctx, event)
+	default:
+		return signEventWithPrivateKeyHex(event, p.privateKey)
+	}
+}
+
+// authenticateLiveRelay completes NIP-42 on relay, the connection that just
+// answered "auth-required:" (mr's current one when nil).
+func (p *RelayPool) authenticateLiveRelay(ctx context.Context, mr *managedRelay, relay *nostr.Relay) error {
+	if !p.hasAuthSigner() {
 		return fmt.Errorf("no signer configured for NIP-42 AUTH")
 	}
-	if mr == nil || mr.relay == nil {
-		return fmt.Errorf("relay not connected: %s", mr.url)
-	}
-
-	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", mr.url))
-	if err := mr.relay.Auth(ctx, func(_ context.Context, event *nostr.Event) error {
-		if p.authSigner != nil {
-			return p.authSigner.SignEvent(ctx, event)
+	if relay == nil {
+		var err error
+		if relay, err = p.liveRelay(mr); err != nil {
+			return err
 		}
-		return signEventWithPrivateKeyHex(event, p.privateKey)
-	}); err != nil {
-		p.logger.Error("NIP-42 AUTH failed",
-			zap.String("relay", mr.url),
-			zap.Error(err),
-		)
+	}
+	return relay.Auth(ctx, p.signAuthEvent)
+}
+
+// authBarrierFilter asks for nothing. The relay's answer to it (EOSE or
+// CLOSED) proves that any AUTH challenge it sent before, on connect or with a
+// rejection, has been processed by the connection.
+var authBarrierFilter = nostr.Filter{Kinds: []nostr.Kind{nostr.KindClientAuthentication}, LimitZero: true}
+
+// AuthenticateRelays completes NIP-42 ahead of reads and writes that depend
+// on authenticated relay state (relays may silently omit protected events
+// from an unauthenticated REQ). For each named configured relay (all when
+// nil) it connects, waits for the relay's answer to a barrier REQ, and then
+// joins or starts the AUTH attempt for the relay's challenge. A relay that
+// never challenges is left unauthenticated: its later "auth-required:"
+// answers are handled per REQ and per publish.
+func (p *RelayPool) AuthenticateRelays(ctx context.Context, relayURLs []string) error {
+	if !p.hasAuthSigner() {
+		return fmt.Errorf("no signer configured for NIP-42 AUTH")
+	}
+	for _, mr := range p.subscriptionRelays(relayURLs) {
+		if err := p.authenticateRelayAhead(ctx, mr); err != nil {
+			return fmt.Errorf("authenticate to %s: %w", mr.url, err)
+		}
+	}
+	return nil
+}
+
+func (p *RelayPool) authenticateRelayAhead(ctx context.Context, mr *managedRelay) error {
+	relay, err := p.ensureRelayConnected(ctx, mr, p.connectTimeout, false)
+	if err != nil {
 		return err
 	}
-	p.logger.Info("NIP-42 AUTH completed", zap.String("relay", mr.url))
-	return nil
+	barrierCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sub, err := subscribeOnRelay(relay, barrierCtx, authBarrierFilter)
+	if err != nil {
+		p.markRelayDisconnectedIfDead(mr, relay)
+		return err
+	}
+	rejected := ""
+	select {
+	case <-sub.EndOfStoredEvents:
+	case reason := <-sub.ClosedReason:
+		if IsAuthRequiredReason(reason) {
+			rejected = strings.TrimSpace(reason)
+		}
+	case <-sub.Context.Done():
+		// The library ends a subscription itself only when the connection
+		// drops, and delivers its CLOSED, if any, first.
+		select {
+		case reason := <-sub.ClosedReason:
+			if IsAuthRequiredReason(reason) {
+				rejected = strings.TrimSpace(reason)
+			}
+		default:
+			return fmt.Errorf("connection ended before the relay answered: %w", context.Cause(sub.Context))
+		}
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+	err = relay.Auth(ctx, p.signAuthEvent)
+	switch {
+	case err == nil:
+		return nil
+	case strings.Contains(err.Error(), "no challenge") && rejected == "":
+		return nil // the relay does not require NIP-42
+	case strings.Contains(err.Error(), "no challenge"):
+		return fmt.Errorf("relay answered %q without sending a NIP-42 challenge", rejected)
+	default:
+		return err
+	}
 }
 
 // AuthenticateRelay sends a NIP-42 AUTH response to a specific relay.
 // Call this after receiving an auth-required error (PublishResult.IsAuthRequired()).
 // Returns an error if no private key is configured or auth fails.
 func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) error {
-	if p.privateKey == "" && p.authSigner == nil {
+	if !p.hasAuthSigner() {
 		return fmt.Errorf("no signer configured for NIP-42 AUTH")
 	}
 
@@ -1847,7 +2536,8 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 		return fmt.Errorf("relay not connected: %s", relayURL)
 	}
 
-	return p.authenticateManagedRelayLocked(ctx, &managedRelay{url: relayURL, relay: relay, connected: true})
+	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", relayURL))
+	return relay.Auth(ctx, p.signAuthEvent)
 }
 
 // Close disconnects all relays, subscriptions, and reconnection work.
@@ -1879,4 +2569,259 @@ func (p *RelayPool) Close() {
 	for _, relay := range relays {
 		closeManagedRelay(p, relay)
 	}
+}
+
+// relayResumeCursor is one REQ's position on one relay in a resumable
+// subscription: the newest created_at among the valid events that relay
+// delivered for it. Stored events arrive in no guaranteed order, so a
+// generation's events count only once its EOSE proves the backfill below
+// them complete; after EOSE, realtime events advance the cursor as they
+// arrive. Timestamps are clamped to the local clock so a future-dated event
+// cannot push the cursor past events not yet seen. All methods are nil-safe: a
+// nil cursor means "reissue the original filter".
+type relayResumeCursor struct {
+	overlap nostr.Timestamp
+
+	mu sync.Mutex
+	// since is the committed cursor; zero until the relay first sends EOSE.
+	since nostr.Timestamp
+	// generation is the newest created_at the current REQ delivered before its
+	// EOSE; live reports whether the current REQ has sent EOSE.
+	generation nostr.Timestamp
+	live       bool
+}
+
+func newRelayResumeCursor(overlap time.Duration) *relayResumeCursor {
+	seconds := nostr.Timestamp(overlap / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return &relayResumeCursor{overlap: seconds}
+}
+
+// begin starts a new REQ generation.
+func (c *relayResumeCursor) begin() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation = 0
+	c.live = false
+}
+
+// observe records one valid event delivered by this relay.
+func (c *relayResumeCursor) observe(ev *nostr.Event) {
+	if c == nil || ev == nil {
+		return
+	}
+	createdAt := ev.CreatedAt
+	if now := nostr.Now(); createdAt > now {
+		createdAt = now
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.live {
+		if createdAt > c.since {
+			c.since = createdAt
+		}
+		return
+	}
+	if createdAt > c.generation {
+		c.generation = createdAt
+	}
+}
+
+// eose commits the current generation's backfill.
+func (c *relayResumeCursor) eose() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation > c.since {
+		c.since = c.generation
+	}
+	c.live = true
+}
+
+// resume returns the filter for the next REQ: the original until the relay
+// has sent EOSE, then with Since raised to the cursor less the overlap.
+func (c *relayResumeCursor) resume(filter nostr.Filter) nostr.Filter {
+	if c == nil {
+		return filter
+	}
+	c.mu.Lock()
+	since := c.since
+	c.mu.Unlock()
+	if since == 0 {
+		return filter
+	}
+	from := since - c.overlap
+	if from < 1 {
+		from = 1
+	}
+	if filter.Since < from {
+		filter.Since = from
+	}
+	return filter
+}
+
+// fetchRelayLimits reads a relay's NIP-11 document. The library's nip11
+// types do not carry max_filters, so the limitations are decoded here too.
+func fetchRelayLimits(ctx context.Context, relayURL string) (relayLimits, *nip11.RelayInformationDocument, error) {
+	url := nostr.NormalizeURL(relayURL)
+	if len(url) < 8 {
+		return relayLimits{}, nil, fmt.Errorf("invalid relay url %q", relayURL)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http"+url[2:], nil)
+	if err != nil {
+		return relayLimits{}, nil, err
+	}
+	req.Header.Set("Accept", "application/nostr+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return relayLimits{}, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return relayLimits{}, nil, fmt.Errorf("NIP-11 request answered %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return relayLimits{}, nil, err
+	}
+	var raw struct {
+		Limitation struct {
+			MaxLimit         int `json:"max_limit"`
+			MaxSubscriptions int `json:"max_subscriptions"`
+			MaxFilters       int `json:"max_filters"`
+		} `json:"limitation"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return relayLimits{}, nil, fmt.Errorf("invalid NIP-11 document: %w", err)
+	}
+	info := nip11.RelayInformationDocument{URL: url}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return relayLimits{}, nil, fmt.Errorf("invalid NIP-11 document: %w", err)
+	}
+	limits := relayLimits{
+		MaxLimit:         max(raw.Limitation.MaxLimit, 0),
+		MaxSubscriptions: max(raw.Limitation.MaxSubscriptions, 0),
+		MaxFilters:       max(raw.Limitation.MaxFilters, 0),
+	}
+	return limits, &info, nil
+}
+
+// loadRelayLimits fetches mr's NIP-11 limitations once for the connection
+// that started it (ready identifies it) and caches the document.
+func (p *RelayPool) loadRelayLimits(mr *managedRelay, ready chan struct{}) {
+	defer close(ready)
+	ctx, cancel := context.WithTimeout(p.ctx, p.relayInfoTimeout)
+	defer cancel()
+	limits, info, err := p.fetchRelayLimits(ctx, mr.url)
+	if err != nil {
+		p.logger.Debug("relay NIP-11 document unavailable; enforcing no limits", zap.String("relay", mr.url), zap.Error(err))
+		return
+	}
+	mr.mu.Lock()
+	if mr.limitsReady == ready {
+		mr.limits = limits
+	}
+	mr.mu.Unlock()
+	if info != nil {
+		p.mu.Lock()
+		p.relayInfoCache[mr.url] = info
+		p.mu.Unlock()
+	}
+	if limits != (relayLimits{}) {
+		p.logger.Debug("relay NIP-11 limits",
+			zap.String("relay", mr.url),
+			zap.Int("max_limit", limits.MaxLimit),
+			zap.Int("max_subscriptions", limits.MaxSubscriptions),
+			zap.Int("max_filters", limits.MaxFilters))
+	}
+}
+
+// awaitRelayLimits returns mr's limitations for its current connection,
+// waiting for the connect-time NIP-11 fetch (itself bounded by
+// relayInfoTimeout) unless ctx ends first.
+func (p *RelayPool) awaitRelayLimits(ctx context.Context, mr *managedRelay) relayLimits {
+	mr.mu.Lock()
+	ready := mr.limitsReady
+	mr.mu.Unlock()
+	if ready != nil {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+		}
+	}
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	return mr.limits
+}
+
+// tryAcquireSubscriptionSlot takes one of mr's NIP-11 max_subscriptions slots
+// for a REQ, without waiting.
+func (p *RelayPool) tryAcquireSubscriptionSlot(mr *managedRelay) (func(), bool) {
+	mr.mu.Lock()
+	defer mr.mu.Unlock()
+	if limit := mr.limits.MaxSubscriptions; limit > 0 && mr.openREQs >= limit {
+		return nil, false
+	}
+	mr.openREQs++
+	return p.slotRelease(mr), true
+}
+
+// acquireSubscriptionSlot takes a slot, waiting for one to free up (onWait is
+// told the limit once) until ctx ends.
+func (p *RelayPool) acquireSubscriptionSlot(ctx context.Context, mr *managedRelay, onWait func(int)) (func(), error) {
+	waited := false
+	for {
+		mr.mu.Lock()
+		limit := mr.limits.MaxSubscriptions
+		if limit <= 0 || mr.openREQs < limit {
+			mr.openREQs++
+			mr.mu.Unlock()
+			return p.slotRelease(mr), nil
+		}
+		if mr.slotFreed == nil {
+			mr.slotFreed = make(chan struct{})
+		}
+		freed := mr.slotFreed
+		mr.mu.Unlock()
+		if !waited && onWait != nil {
+			waited = true
+			onWait(limit)
+		}
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (p *RelayPool) slotRelease(mr *managedRelay) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			mr.mu.Lock()
+			defer mr.mu.Unlock()
+			if mr.openREQs > 0 {
+				mr.openREQs--
+			}
+			if mr.slotFreed != nil {
+				close(mr.slotFreed)
+				mr.slotFreed = nil
+			}
+		})
+	}
+}
+
+func (p *RelayPool) recordRelayReREQ(relayURL string) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).RecordReREQ()
 }

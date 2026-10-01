@@ -66,7 +66,7 @@ type Reactor struct {
 	lifecycleHandler         *LifecycleHandler
 	fleetConfigReconciler    *FleetConfigReconciler
 	logger                   *slog.Logger
-	relayBus                 *SoulFactoryRelayBus
+	relayClient              *RelayClient
 	publishFn                func(context.Context, *nostr.Event, []string) error
 	getSoulFn                func(context.Context, string) (*domain.AgentSoul, error)
 	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
@@ -161,8 +161,8 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 	}
 	r.runtimeResults = newRuntimeResultWaiters(r.logger)
 	if allRelays := normalizeSoulRelays(append(append([]string{}, config.Relays...), config.AdditionalRelays...)); len(allRelays) > 0 && signer != nil {
-		if bus, err := NewSoulFactoryRelayBus(allRelays, WithRelayBusSigner(signer), WithRelayBusLogger(r.logger)); err == nil {
-			r.relayBus = bus
+		if relayClient, err := NewRelayClient(allRelays, WithRelaySigner(signer), WithRelayLogger(r.logger)); err == nil {
+			r.relayClient = relayClient
 		}
 	}
 
@@ -252,14 +252,14 @@ func (r *Reactor) Run(ctx context.Context) error {
 		}
 	}
 
-	bus := r.relayBus
-	if bus == nil {
+	relayClient := r.relayClient
+	if relayClient == nil {
 		allRelays := normalizeSoulRelays(append(append([]string{}, r.config.Relays...), r.config.AdditionalRelays...))
 		if len(allRelays) == 0 {
 			return fmt.Errorf("at least one Soul Factory relay is required")
 		}
 		var err error
-		bus, err = NewSoulFactoryRelayBus(allRelays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
+		relayClient, err = NewRelayClient(allRelays, WithRelaySigner(r.signer), WithRelayLogger(r.logger))
 		if err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 	// it delivered (less reactorResumeOverlap) instead of replaying the whole
 	// backfill, and a runtime result published while it was unreachable is not
 	// lost.
-	sub, err := bus.subscribeResumable(ctx, filters, reactorResumeOverlap)
+	sub, err := relayClient.subscribeResumable(ctx, filters, reactorResumeOverlap)
 	if err != nil {
 		return err
 	}
@@ -444,7 +444,7 @@ func (r *Reactor) handleLateRuntimeResult(ctx context.Context, event *nostr.Even
 }
 
 func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *RuntimeControlResultEnvelope) (*nostr.Event, *RuntimeControlEnvelope, bool) {
-	if r.relayBus == nil || result == nil || result.Event == nil {
+	if r.relayClient == nil || result == nil || result.Event == nil {
 		return nil, nil, false
 	}
 	controlID, err := nostr.IDFromHex(strings.TrimSpace(result.RequestEvent))
@@ -488,7 +488,7 @@ func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *Ru
 // lookupEventByID fetches one content-addressed event under RelayReadAllIDs:
 // any relay's validly signed copy is the event, and absence fails closed.
 func (r *Reactor) lookupEventByID(ctx context.Context, caller string, id nostr.ID, kind int) (*nostr.Event, bool) {
-	read, err := r.relayBus.QueryWithPolicy(ctx, caller, RelayReadAllIDs(id), []nostr.Filter{{
+	read, err := r.relayClient.QueryWithPolicy(ctx, caller, RelayReadAllIDs(id), []nostr.Filter{{
 		IDs:   []nostr.ID{id},
 		Kinds: []nostr.Kind{nostr.Kind(kind)},
 		Limit: 1,
@@ -785,12 +785,12 @@ func (r *Reactor) publish(ctx context.Context, event *nostr.Event, relays []stri
 	if len(relays) == 0 {
 		return fmt.Errorf("no Soul Factory relays configured for publishing kind %d", event.Kind)
 	}
-	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(r.signer), WithRelayBusLogger(r.logger))
+	relayClient, err := NewRelayClient(relays, WithRelaySigner(r.signer), WithRelayLogger(r.logger))
 	if err != nil {
 		return err
 	}
-	defer bus.Close()
-	published, err := bus.Publish(ctx, *event)
+	defer relayClient.Close()
+	published, err := relayClient.Publish(ctx, *event)
 	if err != nil {
 		return err
 	}
@@ -817,8 +817,8 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 		return nil, nil
 	}
 
-	if r.relayBus == nil {
-		return nil, fmt.Errorf("soul Factory relay bus is not configured for soul lookup")
+	if r.relayClient == nil {
+		return nil, fmt.Errorf("soul Factory relay client is not configured for soul lookup")
 	}
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
@@ -835,7 +835,7 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 	// Fail closed: GetSoul feeds read-modify-write callers (lifecycle actions,
 	// the full provisioner, late-runtime projection) and absence checks, where a
 	// stale or missing soul is unsafe. See RelayReadPolicy.
-	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
+	read, err := r.relayClient.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
 	if err != nil {
 		return nil, err
 	}

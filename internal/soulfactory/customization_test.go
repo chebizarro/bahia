@@ -246,7 +246,7 @@ func (d customizationControlDriver) Execute(context.Context, OpenClawControlInvo
 type noopRuntimeTransport struct{}
 
 func (noopRuntimeTransport) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
-func (noopRuntimeTransport) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelayBusSubscription, error) {
+func (noopRuntimeTransport) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelaySubscription, error) {
 	return nil, nil
 }
 func (noopRuntimeTransport) Close() {}

@@ -20,7 +20,7 @@ func newKhatruTestRelay(t *testing.T, configure func(*khatru.Relay)) string {
 	return "ws" + strings.TrimPrefix(server.URL, "http")
 }
 
-func TestRelayBusPublishCollectsSlowRelayOKOverTheWire(t *testing.T) {
+func TestRelayClientPublishCollectsSlowRelayOKOverTheWire(t *testing.T) {
 	signer := newFakeSigner(t)
 	fastAccepted := make(chan struct{})
 	fast := newKhatruTestRelay(t, func(relay *khatru.Relay) {
@@ -38,9 +38,9 @@ func TestRelayBusPublishCollectsSlowRelayOKOverTheWire(t *testing.T) {
 		}
 	})
 
-	bus, err := NewSoulFactoryRelayBus([]string{fast, slow}, WithRelayBusSigner(signer))
+	bus, err := NewRelayClient([]string{fast, slow}, WithRelaySigner(signer))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	defer bus.Close()
 
