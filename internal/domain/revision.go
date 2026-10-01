@@ -45,3 +45,19 @@ func NextRevisionTime(prev time.Time) time.Time {
 func SameRevision(a, b time.Time) bool {
 	return NormalizeRevisionTime(a).Equal(NormalizeRevisionTime(b))
 }
+
+// StampCreateRevision fixes a create's created_at/updated_at before anything
+// is published or written: unset values become "now" (updated_at defaults to
+// created_at), and set ones are kept at RevisionPrecision. The registry calls
+// it before the relay-first publish and the repositories keep the result, so
+// the signed record and the stored row carry the same timestamps.
+func StampCreateRevision(createdAt, updatedAt *time.Time) {
+	if createdAt.IsZero() {
+		*createdAt = NewRevisionTime()
+	}
+	*createdAt = NormalizeRevisionTime(*createdAt)
+	if updatedAt.IsZero() {
+		*updatedAt = *createdAt
+	}
+	*updatedAt = NormalizeRevisionTime(*updatedAt)
+}

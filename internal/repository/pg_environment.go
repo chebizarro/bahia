@@ -33,7 +33,7 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 	if env.ID == uuid.Nil {
 		env.ID = domain.NewEntityID()
 	}
-	keepCreateTimestamps(&env.CreatedAt, &env.UpdatedAt)
+	domain.StampCreateRevision(&env.CreatedAt, &env.UpdatedAt)
 
 	domain.NormalizeEnvironmentTargeting(env)
 	selectorJSON, err := marshalJSON(env.LoomWorkerSelector, "loom worker selector")

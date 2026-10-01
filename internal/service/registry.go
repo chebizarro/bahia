@@ -382,24 +382,8 @@ func prepareServiceCreate(svc *domain.Service) {
 	if svc.DefaultBranch == "" {
 		svc.DefaultBranch = "main"
 	}
-	stampCreateRevision(&svc.CreatedAt, &svc.UpdatedAt)
+	domain.StampCreateRevision(&svc.CreatedAt, &svc.UpdatedAt)
 	normalizeServiceRepositoryForWrite(svc)
-}
-
-// stampCreateRevision mints a create's timestamps before anything is
-// published or written, so the relay-first record and the stored row carry
-// the same created_at/updated_at and the projection of the row is not signed
-// again (bahia-irsry.53). Timestamps already set (by an earlier preparation
-// of the same create) are kept at the precision the database stores.
-func stampCreateRevision(createdAt, updatedAt *time.Time) {
-	if createdAt.IsZero() {
-		*createdAt = domain.NewRevisionTime()
-	}
-	*createdAt = domain.NormalizeRevisionTime(*createdAt)
-	if updatedAt.IsZero() {
-		*updatedAt = *createdAt
-	}
-	*updatedAt = domain.NormalizeRevisionTime(*updatedAt)
 }
 
 func normalizeServiceRepositoryForWrite(svc *domain.Service) {
@@ -731,7 +715,7 @@ func prepareEnvironmentCreate(env *domain.Environment, units []*domain.Deploymen
 	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
 		return err
 	}
-	stampCreateRevision(&env.CreatedAt, &env.UpdatedAt)
+	domain.StampCreateRevision(&env.CreatedAt, &env.UpdatedAt)
 	// The daemon authors the explicit units' ids (UUIDv7) before the
 	// relay-first record is signed, so the record names the stored units.
 	for _, unit := range units {

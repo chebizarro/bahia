@@ -85,3 +85,24 @@ func TestPgCreatePathsStoreClientIDsAndClassifyConflicts(t *testing.T) {
 		t.Fatalf("same route name, new id: err = %v, want ErrConflict", err)
 	}
 }
+
+// A service row with a NULL repo_url (nullable since 000001; fixtures and
+// older writers leave it NULL) must not break reads, including the List the
+// projector snapshots from.
+func TestPgServiceReadsToleratesNullRepoURL(t *testing.T) {
+	pool := openIdentityTestPool(t)
+	ctx := context.Background()
+	id := domain.NewEntityID()
+	if _, err := pool.Exec(ctx, `INSERT INTO services (id, name, artifact_repo) VALUES ($1, $2, 'registry.example/null-repo')`, id, "null-repo-"+uuid.NewString()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	services := repository.NewPgServiceRepository(pool)
+	t.Cleanup(func() { _ = services.Delete(context.Background(), id) })
+	svc, err := services.GetByID(ctx, id)
+	if err != nil || svc == nil || svc.RepoURL != "" {
+		t.Fatalf("GetByID with NULL repo_url = %+v, %v", svc, err)
+	}
+	if _, err := services.List(ctx); err != nil {
+		t.Fatalf("List with a NULL repo_url row: %v", err)
+	}
+}

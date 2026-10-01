@@ -12,20 +12,6 @@ import (
 // own; otherwise the projection of the stored row differs from the signed
 // record and is signed a second time.
 
-// keepCreateTimestamps keeps the timestamps a create was prepared with,
-// normalized to the precision Postgres stores, and stamps "now" only for
-// callers that supplied none.
-func keepCreateTimestamps(createdAt, updatedAt *time.Time) {
-	if createdAt.IsZero() {
-		*createdAt = domain.NewRevisionTime()
-	}
-	*createdAt = domain.NormalizeRevisionTime(*createdAt)
-	if updatedAt.IsZero() {
-		*updatedAt = *createdAt
-	}
-	*updatedAt = domain.NormalizeRevisionTime(*updatedAt)
-}
-
 // updateRevisionArgs returns the requested and fallback revisions for
 // revisionAssignment: the caller's pre-minted revision (when set), and a
 // fresh one.
