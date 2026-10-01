@@ -36,7 +36,7 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMReque
 	if err := validateContextVMPolicy(policy); err != nil {
 		return nil, err
 	}
-	replayed, err := r.policyService.CreatePolicyIdempotent(ctx, policy)
+	replayed, err := r.policyService.CreatePolicy(ctx, policy)
 	if err != nil {
 		return nil, err
 	}

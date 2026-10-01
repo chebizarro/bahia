@@ -103,7 +103,7 @@ func TestPolicyCreateResolvesAnInsertRaceByContent(t *testing.T) {
 
 	same := winner
 	same.CreatedAt, same.UpdatedAt = time.Time{}, time.Time{}
-	replayed, err := policies.CreatePolicyIdempotent(ctx, &same)
+	replayed, err := policies.CreatePolicy(ctx, &same)
 	if err != nil || !replayed || !same.CreatedAt.Equal(winner.CreatedAt) {
 		t.Fatalf("lost race with identical content: replayed=%v err=%v", replayed, err)
 	}
@@ -111,7 +111,7 @@ func TestPolicyCreateResolvesAnInsertRaceByContent(t *testing.T) {
 	repo.rows = map[uuid.UUID]domain.DeploymentPolicy{}
 	different := winner
 	different.Enabled = false
-	if _, err := policies.CreatePolicyIdempotent(ctx, &different); !errors.Is(err, domain.ErrEntityIDConflict) {
+	if _, err := policies.CreatePolicy(ctx, &different); !errors.Is(err, domain.ErrEntityIDConflict) {
 		t.Fatalf("lost race with different content: err = %v", err)
 	}
 }

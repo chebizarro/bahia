@@ -675,18 +675,12 @@ func errorsIsNotFound(err error) bool {
 
 // --- CRUD ---
 
-// CreatePolicy creates a new deployment policy.
-func (s *PolicyService) CreatePolicy(ctx context.Context, p *domain.DeploymentPolicy) error {
-	_, err := s.CreatePolicyIdempotent(ctx, p)
-	return err
-}
-
-// CreatePolicyIdempotent stores a new policy under p.ID, minting a UUIDv7 when
-// the caller supplied none (bahia-irsry.42). When an identical policy is
-// already stored under that id it loads it into p and reports replayed=true:
-// nothing is written again, and callers publish nothing again. The same id
-// with different content is a *domain.EntityIDConflictError.
-func (s *PolicyService) CreatePolicyIdempotent(ctx context.Context, p *domain.DeploymentPolicy) (replayed bool, err error) {
+// CreatePolicy stores a new policy under p.ID, minting a UUIDv7 when the
+// caller supplied none (bahia-irsry.42). When an identical policy is already
+// stored under that id it loads it into p and reports replayed=true: nothing
+// is written again, and callers publish nothing again. The same id with
+// different content is a *domain.EntityIDConflictError.
+func (s *PolicyService) CreatePolicy(ctx context.Context, p *domain.DeploymentPolicy) (replayed bool, err error) {
 	if p == nil {
 		return false, fmt.Errorf("deployment policy is required")
 	}
