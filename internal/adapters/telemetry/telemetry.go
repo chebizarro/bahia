@@ -129,21 +129,22 @@ type Metrics struct {
 	NostrBackoffDurations []float64        // backoff durations in seconds
 
 	// Relay health metrics
-	NostrRelayHealthy           map[string]bool             // key: relay_url - is healthy
-	NostrRelayDegraded          map[string]bool             // key: relay_url - is degraded
-	NostrRelaySuccessRate       map[string]float64          // key: relay_url - success rate (0-1)
-	NostrRelayClosedReasons     map[string]map[string]int64 // key: relay_url, then bounded CLOSED reason
-	NostrRelayReREQAttempts     map[string]int64            // key: relay_url
-	NostrRelayReconnectAttempts map[string]int64            // key: relay_url
-	NostrOutboxDepth            int64
-	NostrOutboxFailed           int64 // -1 until the failed-row index exists
-	NostrEventStoreTotalBytes   int64
-	NostrEventStoreHeapBytes    int64
-	NostrEventStoreIndexBytes   int64
-	NostrEventStoreLiveRows     int64
-	NostrEventStoreDeadRows     int64
-	NostrEventStoreOldestUnix   int64
-	NostrArchiveBatches         map[string]int64 // key: claimed, exported, protected, pruned
+	NostrRelayHealthy              map[string]bool             // key: relay_url - is healthy
+	NostrRelayDegraded             map[string]bool             // key: relay_url - is degraded
+	NostrRelaySuccessRate          map[string]float64          // key: relay_url - success rate (0-1)
+	NostrRelayClosedReasons        map[string]map[string]int64 // key: relay_url, then bounded CLOSED reason
+	NostrRelayReREQAttempts        map[string]int64            // key: relay_url
+	NostrRelayReconnectAttempts    map[string]int64            // key: relay_url
+	NostrRelayClosedRetryExhausted map[string]int64            // key: relay_url
+	NostrOutboxDepth               int64
+	NostrOutboxFailed              int64 // -1 until the failed-row index exists
+	NostrEventStoreTotalBytes      int64
+	NostrEventStoreHeapBytes       int64
+	NostrEventStoreIndexBytes      int64
+	NostrEventStoreLiveRows        int64
+	NostrEventStoreDeadRows        int64
+	NostrEventStoreOldestUnix      int64
+	NostrArchiveBatches            map[string]int64 // key: claimed, exported, protected, pruned
 
 	// Worker metrics
 	WorkersActive    int64
@@ -160,34 +161,35 @@ type Metrics struct {
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		virtualization:              make(map[virtualizationMetricKey]virtualizationMetricValue),
-		HTTPRequestsTotal:           make(map[string]int64),
-		DeploymentsTotal:            make(map[string]int64),
-		AdoptionScansTotal:          make(map[string]int64),
-		AdoptionImportsTotal:        make(map[string]int64),
-		RuntimeActionsTotal:         make(map[string]int64),
-		NostrEventsPublished:        make(map[string]int64),
-		NostrEventsReceived:         make(map[string]int64),
-		AuthorizationRejections:     make(map[string]int64),
-		TierRejections:              make(map[string]int64),
-		NostrPublishOK:              make(map[string]int64),
-		NostrPublishFailed:          make(map[string]int64),
-		NostrReconnects:             make(map[string]int64),
-		NostrRelayHealthy:           make(map[string]bool),
-		NostrRelayDegraded:          make(map[string]bool),
-		NostrRelaySuccessRate:       make(map[string]float64),
-		NostrRelayClosedReasons:     make(map[string]map[string]int64),
-		NostrRelayReREQAttempts:     make(map[string]int64),
-		NostrRelayReconnectAttempts: make(map[string]int64),
-		NostrArchiveBatches:         make(map[string]int64),
-		LoomJobsTotal:               make(map[string]int64),
-		CashuPaymentsTotal:          make(map[string]int64),
-		CashuWalletBalance:          make(map[string]int64),
-		HygieneCandidatesTotal:      make(map[string]int64),
-		HygieneActionsTotal:         make(map[string]int64),
-		FleetHealthEntities:         make(map[string]int64),
-		ControlPlaneDispatches:      make(map[string]int64),
-		ReleaseOutcomes:             make(map[string]int64),
+		virtualization:                 make(map[virtualizationMetricKey]virtualizationMetricValue),
+		HTTPRequestsTotal:              make(map[string]int64),
+		DeploymentsTotal:               make(map[string]int64),
+		AdoptionScansTotal:             make(map[string]int64),
+		AdoptionImportsTotal:           make(map[string]int64),
+		RuntimeActionsTotal:            make(map[string]int64),
+		NostrEventsPublished:           make(map[string]int64),
+		NostrEventsReceived:            make(map[string]int64),
+		AuthorizationRejections:        make(map[string]int64),
+		TierRejections:                 make(map[string]int64),
+		NostrPublishOK:                 make(map[string]int64),
+		NostrPublishFailed:             make(map[string]int64),
+		NostrReconnects:                make(map[string]int64),
+		NostrRelayHealthy:              make(map[string]bool),
+		NostrRelayDegraded:             make(map[string]bool),
+		NostrRelaySuccessRate:          make(map[string]float64),
+		NostrRelayClosedReasons:        make(map[string]map[string]int64),
+		NostrRelayReREQAttempts:        make(map[string]int64),
+		NostrRelayReconnectAttempts:    make(map[string]int64),
+		NostrRelayClosedRetryExhausted: make(map[string]int64),
+		NostrArchiveBatches:            make(map[string]int64),
+		LoomJobsTotal:                  make(map[string]int64),
+		CashuPaymentsTotal:             make(map[string]int64),
+		CashuWalletBalance:             make(map[string]int64),
+		HygieneCandidatesTotal:         make(map[string]int64),
+		HygieneActionsTotal:            make(map[string]int64),
+		FleetHealthEntities:            make(map[string]int64),
+		ControlPlaneDispatches:         make(map[string]int64),
+		ReleaseOutcomes:                make(map[string]int64),
 	}
 }
 
@@ -882,6 +884,16 @@ func (m *Metrics) SetNostrRelayTransportHealth(relayURL string, closedReasons ma
 	m.NostrRelayReconnectAttempts[relayURL] = reconnectAttempts
 }
 
+// SetNostrRelayClosedRetryExhausted updates the bounded-CLOSED give-up counter.
+func (m *Metrics) SetNostrRelayClosedRetryExhausted(relayURL string, count int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.otel != nil && count > m.NostrRelayClosedRetryExhausted[relayURL] {
+		m.otel.nostrRelayClosedRetryExhausted.Add(context.Background(), count-m.NostrRelayClosedRetryExhausted[relayURL], metric.WithAttributes(attribute.String("relay", relayURL)))
+	}
+	m.NostrRelayClosedRetryExhausted[relayURL] = count
+}
+
 // SetNostrOutboxDepth updates the unpublished Nostr event outbox gauge.
 func (m *Metrics) SetNostrOutboxDepth(depth int64) {
 	m.mu.Lock()
@@ -1347,6 +1359,12 @@ func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 		writer.println("# TYPE bahia_nostr_relay_rereq_attempts_total counter")
 		for relay, count := range m.NostrRelayReREQAttempts {
 			writer.printf("bahia_nostr_relay_rereq_attempts_total{relay=%q} %d\n", relay, count)
+		}
+
+		writer.println("# HELP bahia_nostr_relay_closed_retry_exhausted_total Subscriptions abandoned after retryable CLOSED budget")
+		writer.println("# TYPE bahia_nostr_relay_closed_retry_exhausted_total counter")
+		for relay, count := range m.NostrRelayClosedRetryExhausted {
+			writer.printf("bahia_nostr_relay_closed_retry_exhausted_total{relay=%q} %d\n", relay, count)
 		}
 
 		writer.println("# HELP bahia_nostr_relay_reconnect_attempts_total Relay transport reconnect attempts")

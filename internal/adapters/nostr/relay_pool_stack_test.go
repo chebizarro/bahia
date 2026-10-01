@@ -14,6 +14,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
+	"fiatjaf.com/nostr/eventstore/wrappers"
 	"fiatjaf.com/nostr/khatru"
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
@@ -314,6 +315,125 @@ func TestRelayPoolClosedClassificationStopsRefusalsAndRetriesTransients(t *testi
 			require.Equal(t, event.ID, got.ID)
 		})
 	}
+}
+
+// TestRelayPoolNegentropyAuthenticates: a relay that refuses NEG-OPEN with
+// "auth-required:" is reconciled through the pool's signer. The session
+// answers the challenge, re-opens once, and downloads the protected event
+// (bahia-irsry.47; see third_party/nostr/BAHIA_PATCHES.md).
+func TestRelayPoolNegentropyAuthenticates(t *testing.T) {
+	secret := gonostr.Generate()
+	var negOpens atomic.Int32
+	relay := newPoolKhatruRelay(t, func(rl *khatru.Relay) {
+		rl.Negentropy = true
+		rl.OnRequest = func(ctx context.Context, _ gonostr.Filter) (bool, string) {
+			if !khatru.IsNegentropySession(ctx) {
+				return false, ""
+			}
+			negOpens.Add(1)
+			if authed, ok := khatru.GetAuthed(ctx); !ok || authed != secret.Public() {
+				return true, "auth-required: protected sync"
+			}
+			return false, ""
+		}
+	})
+	ev := signedStackEvent(t, secret, 1, "protected")
+	_, err := relay.relay.AddEvent(t.Context(), ev)
+	require.NoError(t, err)
+	local := wrappers.StorePublisher{Store: &slicestore.SliceStore{}, MaxLimit: 100}
+	require.NoError(t, local.Init())
+	var authOK atomic.Int32
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithAuthSignFunc(func(_ context.Context, event *gonostr.Event) error {
+		authOK.Add(1)
+		return event.Sign(secret)
+	}))
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, pool.negentropySyncRelay(ctx, relay.url, gonostr.Filter{Kinds: []gonostr.Kind{1}}, local, false, 5*time.Second))
+	require.Equal(t, int32(2), negOpens.Load(), "the refused NEG-OPEN and one re-open after AUTH")
+	require.Equal(t, int32(1), authOK.Load(), "one AUTH for the session's connection")
+	found := false
+	for range local.QueryEvents(gonostr.Filter{IDs: []gonostr.ID{ev.ID}}) {
+		found = true
+	}
+	require.True(t, found, "the protected event was not reconciled")
+}
+
+// TestRelayPoolRetryableClosedBudgetGivesUp: a relay that answers every REQ
+// with a retryable CLOSED gets the REQ reissued budget times, then the pool
+// gives up on it: the CLOSED is surfaced as Terminal, the relay is not asked
+// again, and ClosedRetryExhausted counts the give-up.
+func TestRelayPoolRetryableClosedBudgetGivesUp(t *testing.T) {
+	var reqs atomic.Int32
+	relay := newPoolKhatruRelay(t, func(rl *khatru.Relay) {
+		rl.OnRequest = func(context.Context, gonostr.Filter) (bool, string) {
+			reqs.Add(1)
+			return true, "error: overloaded"
+		}
+	})
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithRetryableClosedBudget(2))
+	fastResubscribeBackoff(pool)
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	merged, err := pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{{Kinds: []gonostr.Kind{1}}})
+	require.NoError(t, err)
+	defer merged.Close()
+	var closed []RelayClosed
+	for len(closed) == 0 || !closed[len(closed)-1].Terminal {
+		select {
+		case info := <-merged.Closed:
+			closed = append(closed, info)
+		case <-ctx.Done():
+			t.Fatalf("no terminal CLOSED; got %+v", closed)
+		}
+	}
+	// The relay's only worker stopped, so the merged stream ends.
+	for range merged.Events {
+	}
+	last := closed[len(closed)-1]
+	require.Equal(t, gonostr.NormalizeURL(relay.url), last.RelayURL)
+	require.Equal(t, "error: overloaded", last.Reason)
+	require.Equal(t, int32(3), reqs.Load(), "the first REQ and two reissues")
+	status := pool.HealthSnapshot().Relays[0]
+	require.Equal(t, int64(1), status.ClosedRetryExhausted)
+	require.Equal(t, int64(2), status.ReREQAttempts)
+}
+
+// TestRelayPoolRetryableClosedBudgetResetsOnEOSE: the budget counts
+// consecutive retryable CLOSEDs. A REQ that reached EOSE before its CLOSED
+// proves the relay serves the filter, so the count starts over.
+func TestRelayPoolRetryableClosedBudgetResetsOnEOSE(t *testing.T) {
+	const relayURL = "wss://retry-budget.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	WithRetryableClosedBudget(1)(pool)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	fastResubscribeBackoff(pool)
+	reqs := newScriptedSubscribes(t)
+
+	merged, err := pool.SubscribeAllWithEOSE(t.Context(), []gonostr.Filter{{Kinds: []gonostr.Kind{1}}})
+	require.NoError(t, err)
+	defer merged.Close()
+
+	// 1st CLOSED: within the budget of one reissue.
+	closeScripted(reqs.next(t).sub, "error: temporary overload")
+	require.False(t, (<-merged.Closed).Terminal)
+	// The reissue reaches EOSE, then is CLOSED: the count restarts at one.
+	second := reqs.next(t).sub
+	second.EndOfStoredEvents <- gonostr.EndOfStoredEvent{}
+	closeScripted(second, "rate-limited: slow down")
+	require.False(t, (<-merged.Closed).Terminal)
+	// A second CLOSED in a row exceeds the budget.
+	closeScripted(reqs.next(t).sub, "error: temporary overload")
+	require.True(t, (<-merged.Closed).Terminal)
+	for range merged.Events {
+	}
+	reqs.none(t)
+	require.Equal(t, 3, reqs.count(relayURL))
+	require.Equal(t, int64(1), pool.HealthSnapshot().Relays[0].ClosedRetryExhausted)
 }
 
 // TestRelayPoolReissuesOnlyTheDroppedRelay: one relay's REQ dropping must be

@@ -122,20 +122,19 @@ func (p *RelayPool) relayPageLimit(relayURL string, want int) int {
 }
 
 // negentropySyncRelay reconciles filter between local and one relay with
-// NIP-77 (fiatjaf.com/nostr/nip77.NegentropySync). Events the relay has and
-// local lacks are fetched and published to local; with upload set, events
-// local has and the relay lacks are published to the relay. It fails with the
-// relay's NEG-ERR reason when the relay refuses the session (for example a set
-// larger than it reconciles), with errNegentropyUnsupported when the relay's
-// NIP-11 document omits NIP-77, and when timeout passes first (a relay that
-// ignores NEG-OPEN never answers). Callers fall back to paged REQs.
+// NIP-77 (fiatjaf.com/nostr/nip77.NegentropySyncWithOptions). Events the relay
+// has and local lacks are fetched and published to local; with upload set,
+// events local has and the relay lacks are published to the relay. It fails
+// with the relay's NEG-ERR reason when the relay refuses the session (for
+// example a set larger than it reconciles), with errNegentropyUnsupported when
+// the relay's NIP-11 document omits NIP-77, and when timeout passes first (a
+// relay that ignores NEG-OPEN never answers). Callers fall back to paged REQs.
 //
-// The session runs on its own connection, which nip77 dials and (with the
-// Bahia patch) closes. That connection is not the pool's and gets no
-// AuthHandler: nip77 dials with fixed options, and answering an
-// "auth-required:" NEG-ERR would also mean re-sending NEG-OPEN after AUTH. An
-// auth-required refusal therefore falls back to the pool's authenticated REQ
-// path.
+// The session runs on its own short-lived connection, which nip77 dials and
+// closes, with this pool's connection options: the pool's signer answers the
+// relay's NIP-42 challenge, and an "auth-required:" NEG-ERR authenticates and
+// re-opens the session once (third_party/nostr/BAHIA_PATCHES.md). The id
+// fetches and uploads of a session use that authenticated connection too.
 func (p *RelayPool) negentropySyncRelay(ctx context.Context, relayURL string, filter nostr.Filter, local nostr.QuerierPublisher, upload bool, timeout time.Duration) error {
 	if p.GetRelayInfo(relayURL) != nil && !p.SupportsNIP(relayURL, 77) {
 		return errNegentropyUnsupported
@@ -146,7 +145,7 @@ func (p *RelayPool) negentropySyncRelay(ctx context.Context, relayURL string, fi
 	if upload {
 		source = local
 	}
-	err := nip77.NegentropySync(syncCtx, relayURL, filter, source, local, p.moveNegentropyItems)
+	err := nip77.NegentropySyncWithOptions(syncCtx, relayURL, filter, source, local, p.moveNegentropyItems, p.buildRelayOptions(relayURL))
 	if err != nil && syncCtx.Err() != nil && ctx.Err() == nil {
 		return fmt.Errorf("negentropy session with %s timed out after %s: %w", relayURL, timeout, err)
 	}

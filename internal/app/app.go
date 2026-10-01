@@ -145,18 +145,18 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
-	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 	controlPlanePool.Connect(ctx)
-	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 	contextVMRequestPool.Connect(ctx)
-	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 	contextVMResponsePool.Connect(ctx)
 	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
-	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 	relayPolicyHydrationPool.Connect(ctx)
 
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
-	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
@@ -740,7 +740,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	var fipsRelayPool *nostrAdapter.RelayPool
 	if cfg.FIPS.Enabled {
-		fipsRelayPool = nostrAdapter.NewRelayPool(cfg.FIPS.RelayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+		fipsRelayPool = nostrAdapter.NewRelayPool(cfg.FIPS.RelayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
 		fipsRelayPool.Connect(ctx)
 		fipsSubscriber := nostrAdapter.NewFIPSSubscriber(fipsRelayPool, workerRepo, logger,
 			nostrAdapter.WithFIPSAppNamespace(cfg.FIPS.AppNamespace),

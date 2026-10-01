@@ -14,13 +14,14 @@ type RelayHealth struct {
 	URL string
 
 	// Counters
-	PublishAttempts int64
-	PublishSuccess  int64
-	PublishFailed   int64
-	Reconnects      int64
-	ReREQAttempts   int64
-	ClosedReasons   map[string]int64
-	ErrorCount      int64
+	PublishAttempts      int64
+	PublishSuccess       int64
+	PublishFailed        int64
+	Reconnects           int64
+	ReREQAttempts        int64
+	ClosedRetryExhausted int64
+	ClosedReasons        map[string]int64
+	ErrorCount           int64
 
 	// Recent errors
 	LastError     string
@@ -93,6 +94,14 @@ func (h *RelayHealth) RecordReREQ() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.ReREQAttempts++
+}
+
+// RecordClosedRetryExhausted counts subscriptions that stopped after repeated
+// retryable CLOSED replies.
+func (h *RelayHealth) RecordClosedRetryExhausted() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ClosedRetryExhausted++
 }
 
 // RecordClosed records a relay CLOSED frame by its bounded machine-readable reason.
@@ -197,18 +206,19 @@ func (h *RelayHealth) Stats() RelayHealthStats {
 	defer h.mu.RUnlock()
 
 	stats := RelayHealthStats{
-		URL:             h.URL,
-		Connected:       h.Connected,
-		PublishAttempts: h.PublishAttempts,
-		PublishSuccess:  h.PublishSuccess,
-		PublishFailed:   h.PublishFailed,
-		Reconnects:      h.Reconnects,
-		ReREQAttempts:   h.ReREQAttempts,
-		ClosedReasons:   make(map[string]int64, len(h.ClosedReasons)),
-		ErrorCount:      h.ErrorCount,
-		LastError:       h.LastError,
-		LastErrorTime:   h.LastErrorTime,
-		LastConnected:   h.LastConnected,
+		URL:                  h.URL,
+		Connected:            h.Connected,
+		PublishAttempts:      h.PublishAttempts,
+		PublishSuccess:       h.PublishSuccess,
+		PublishFailed:        h.PublishFailed,
+		Reconnects:           h.Reconnects,
+		ReREQAttempts:        h.ReREQAttempts,
+		ClosedRetryExhausted: h.ClosedRetryExhausted,
+		ClosedReasons:        make(map[string]int64, len(h.ClosedReasons)),
+		ErrorCount:           h.ErrorCount,
+		LastError:            h.LastError,
+		LastErrorTime:        h.LastErrorTime,
+		LastConnected:        h.LastConnected,
 	}
 
 	for reason, count := range h.ClosedReasons {
@@ -234,20 +244,21 @@ func (h *RelayHealth) Stats() RelayHealthStats {
 
 // RelayHealthStats is a snapshot of relay health for export.
 type RelayHealthStats struct {
-	URL               string
-	Connected         bool
-	PublishAttempts   int64
-	PublishSuccess    int64
-	PublishFailed     int64
-	SuccessRate       float64 // 0.0 to 1.0
-	Reconnects        int64
-	ReREQAttempts     int64
-	ClosedReasons     map[string]int64
-	ErrorCount        int64
-	AvgLatencySeconds float64
-	LastError         string
-	LastErrorTime     time.Time
-	LastConnected     time.Time
+	URL                  string
+	Connected            bool
+	PublishAttempts      int64
+	PublishSuccess       int64
+	PublishFailed        int64
+	SuccessRate          float64 // 0.0 to 1.0
+	Reconnects           int64
+	ReREQAttempts        int64
+	ClosedRetryExhausted int64
+	ClosedReasons        map[string]int64
+	ErrorCount           int64
+	AvgLatencySeconds    float64
+	LastError            string
+	LastErrorTime        time.Time
+	LastConnected        time.Time
 }
 
 // IsHealthy returns true if the relay is considered healthy.
