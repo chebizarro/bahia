@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { BAHIA_STATE_SCHEMAS, cpAuditFixture, cpStateFixture } from './cp-state-fixtures.js';
 import { installE2EMocks, e2eTestPubkey } from './helpers.js';
 import { E2E_SERVICE_PUBKEY } from './helpers.js';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
@@ -32,23 +33,26 @@ const relaySystemInfo = {
 };
 
 const nostrEvents = [
-  nostrEvent({
+  cpStateFixture({
     id: 'svc-1-event',
-    kind: 30900,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', 'svc-1'], ['deleted', 'false'], ['name', 'web-app']],
-    content: { schema: 'bahia.registry.service.v1', id: 'svc-1', name: 'web-app', runtime_type: 'docker', deleted: false }
+    schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
+    d: 'svc-1',
+    tags: [['name', 'web-app']],
+    content: { id: 'svc-1', name: 'web-app', runtime_type: 'docker' }
   }),
-  nostrEvent({
+  cpStateFixture({
     id: 'env-1-event',
-    kind: 30900,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.environment.v1'], ['d', 'env-1'], ['deleted', 'false'], ['name', 'production']],
-    content: { schema: 'bahia.registry.environment.v1', id: 'env-1', name: 'production', protected: true, deleted: false }
+    schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY,
+    d: 'env-1',
+    tags: [['name', 'production']],
+    content: { id: 'env-1', name: 'production', protected: true }
   }),
-  nostrEvent({
+  cpStateFixture({
     id: 'state-1-event',
-    kind: 30900,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.state.service.v1'], ['d', 'svc-1:env-1'], ['service', 'svc-1'], ['environment', 'env-1'], ['deleted', 'false']],
-    content: { schema: 'bahia.state.service.v1', service_id: 'svc-1', environment_id: 'env-1', drift_status: 'drifted', deleted: false }
+    schema: BAHIA_STATE_SCHEMAS.SERVICE_STATE,
+    d: 'service:svc-1:environment:env-1',
+    tags: [['service', 'svc-1'], ['environment', 'env-1']],
+    content: { service_id: 'svc-1', environment_id: 'env-1', drift_status: 'drifted' }
   }),
   nostrEvent({
     id: 'worker-1-event',
@@ -56,11 +60,13 @@ const nostrEvents = [
     pubkey: WORKER_PUBKEY,
     content: { name: 'worker-one', description: 'relay worker' }
   }),
-  nostrEvent({
+  cpAuditFixture({
     id: 'audit-1-event',
-    kind: 4903,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', 'service.created'], ['event_type', 'service.created'], ['d', 'svc-1'], ['service', 'svc-1']],
-    content: { schema: 'bahia.audit.v1', type: 'service.created', event_type: 'service.created', entity_id: 'svc-1', data: { name: 'web-app' } }
+    type: 'service.created',
+    entityId: 'svc-1',
+    state: 'svc-1',
+    data: { name: 'web-app' },
+    tags: [['service', 'svc-1']]
   })
 ];
 

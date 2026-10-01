@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
-import { BAHIA_STATE_SCHEMAS, cpStateFixture, workerStateFixture } from './cp-state-fixtures.js';
+import { BAHIA_STATE_SCHEMAS, cpAuditFixture, cpStateFixture, workerStateFixture } from './cp-state-fixtures.js';
 
 // Mock data
 const mockServices = [
@@ -203,10 +203,6 @@ const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 const now = Math.floor(Date.now() / 1000);
 
-function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags = [], content = {} }) {
-  return { id, kind, pubkey, created_at, tags, content: JSON.stringify(content), sig: '0'.repeat(128) };
-}
-
 // Control-plane read models are producer-shaped cp-state records (kind 30900,
 // schema bahia.cp-state.v1, legacy_kind, deleted and the family's t topic), so
 // the dashboard's #t REQs match them exactly as they match the daemon's.
@@ -216,7 +212,6 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       id: `svc-${index}`,
       createdAt: now,
       schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
-      domain: 'service',
       d: svc.id,
       tags: [['name', svc.name]],
       content: svc
@@ -225,7 +220,6 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       id: `env-${index}`,
       createdAt: now,
       schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY,
-      domain: 'environment',
       d: env.id,
       tags: [['name', env.name]],
       content: env
@@ -234,7 +228,6 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       id: `state-${index}`,
       createdAt: now,
       schema: BAHIA_STATE_SCHEMAS.SERVICE_STATE,
-      domain: 'service',
       d: state.id || `${state.service_id}:${state.environment_id}`,
       tags: [['service', state.service_id], ['environment', state.environment_id]],
       content: state
@@ -243,7 +236,6 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       id: `intent-${index}`,
       createdAt: now,
       schema: BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY,
-      domain: 'deployment',
       d: intent.id,
       tags: [['service', intent.service_id], ['environment', intent.environment_id]],
       content: intent
@@ -252,12 +244,13 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       { ...worker, name: worker.name || worker.pubkey },
       { id: `worker-${index}`, createdAt: now }
     )),
-    ...events.map((event, index) => nostrEvent({
+    ...events.map((event, index) => cpAuditFixture({
       id: `activity-${index}`,
-      kind: 4903,
-      created_at: now - index * 60,
-      tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', event.type], ['event_type', event.type], ['d', event.entity_id || event.id]],
-      content: { schema: 'bahia.audit.v1', type: event.type, event_type: event.type, entity_id: event.entity_id, data: event.data }
+      createdAt: now - index * 60,
+      type: event.type,
+      entityId: event.entity_id,
+      state: event.entity_id || event.id,
+      data: event.data
     }))
   ];
 }
