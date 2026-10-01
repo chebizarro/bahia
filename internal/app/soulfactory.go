@@ -89,14 +89,31 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	if err != nil {
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)
 	}
-	closeSigner := func() error { return signer.Close() }
+	// One relay pool for SoulFactory's relay set: the reactor's subscription,
+	// reads and publishes and the runtime adapters share it (bahia-irsry.47).
+	var relayClient *soulfactory.RelayClient
+	if len(allRelays) > 0 {
+		relayClient, err = soulfactory.NewRelayClient(allRelays, soulfactory.WithRelaySigner(signer), soulfactory.WithRelayLogger(slogLogger))
+		if err != nil {
+			_ = signer.Close()
+			return nil, fmt.Errorf("creating SoulFactory relay client: %w", err)
+		}
+	}
+	closeSigner := func() error {
+		relayClient.Close()
+		return signer.Close()
+	}
 	controllerPubkey, err := resolveSoulFactoryControllerPubkey(ctx, sf.SoulFactoryPubkey, signer)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
 	}
 
-	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, sf.RuntimeResultTimeout, slogLogger)
+	var runtimeTransports soulfactory.RuntimeAdapterTransportFactory
+	if relayClient != nil {
+		runtimeTransports = relayClient.RuntimeTransports()
+	}
+	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, runtimeTransports, sf.RuntimeResultTimeout, slogLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -157,7 +174,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		SignetBunkerURI:    sf.SignetBunkerURI,
 		BlossomURL:         firstConfiguredBlossomServer(cfg.Blossom),
 		QdrantURL:          cfg.Qdrant.URL,
-	}, generator, signer, slogLogger)
+	}, generator, signer, slogLogger, soulfactory.WithRelayClient(relayClient))
 	provisioner := soulfactory.NewFullProvisioner(reactor, soulfactory.FullProvisionerConfig{
 		Blossom: blossom.Config{
 			Servers:       configuredBlossomServers(cfg.Blossom),
@@ -235,7 +252,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 // adapter for every administratively enabled agent runtime target. Startup
 // fails on any invalid or failing target; enabled targets are never silently
 // omitted from the registry. resultTimeout is soul_factory.runtime_result_timeout.
-func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, resultTimeout time.Duration, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
+func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, transports soulfactory.RuntimeAdapterTransportFactory, resultTimeout time.Duration, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("soul_factory.agent_runtimes is empty; configuration validation must default or reject it before startup")
 	}
@@ -255,6 +272,7 @@ func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string
 			TrustedRuntimePubkeys: append([]string(nil), runtimePubkeys[target]...),
 			Signer:                signer,
 			Relays:                relays,
+			TransportFactory:      transports,
 			Logger:                logger,
 			ResultTimeout:         resultTimeout,
 		})
