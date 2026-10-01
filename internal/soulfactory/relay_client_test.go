@@ -321,35 +321,47 @@ func TestRelayClientClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.
 	mustReceiveFilters(t, endpoint.subscribeCalls)
 }
 
+// TestRelayClientDeduplicatesDuplicateEvents checks that an event delivered
+// twice by one relay, and again by a second relay, reaches the subscriber
+// once. The relay library dispatches each EVENT frame on its own goroutine,
+// so a subscriber sees a relay's events in no guaranteed order; the test
+// therefore waits for EOSE (every stored event is forwarded before it) and
+// counts copies per ID instead of relying on arrival order (bahia-rvpw2).
 func TestRelayClientDeduplicatesDuplicateEvents(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint(t)
-	subscription := newFakeRelaySubscription()
-	endpoint.subscribeQueue <- subscription
-	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
+	first, second := newFakeRelayEndpoint(t), newFakeRelayEndpoint(t)
+	duplicate := signedRelayBusEvent(t, signer, 1, "duplicate")
+	other := signedRelayBusEvent(t, signer, 1, "other")
+	for _, script := range []struct {
+		endpoint *fakeRelayEndpoint
+		events   []*nostr.Event
+	}{
+		{first, []*nostr.Event{duplicate, duplicate, other}},
+		{second, []*nostr.Event{duplicate}},
+	} {
+		subscription := newFakeRelaySubscription()
+		for _, event := range script.events {
+			subscription.events <- event
+		}
+		subscription.eose <- struct{}{}
+		script.endpoint.subscribeQueue <- subscription
+	}
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{first, second})
 	if err != nil {
 		t.Fatalf("new relay client: %v", err)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 
-	sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
+	events, err := bus.Query(t.Context(), []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(1)}, Tags: nostr.TagMap{"p": []string{signer.pubkey}}}})
 	if err != nil {
-		t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+		t.Fatalf("Query() error = %v", err)
 	}
-	mustReceiveFilters(t, endpoint.subscribeCalls)
-
-	duplicate := signedRelayBusEvent(t, signer, 1, "duplicate")
-	sentinel := signedRelayBusEvent(t, signer, 1, "sentinel")
-	subscription.events <- duplicate
-	subscription.events <- duplicate
-	subscription.events <- sentinel
-
-	if got := mustReceiveRelayEvent(t, sub.Events); got.ID != duplicate.ID {
-		t.Fatalf("first event ID = %s, want duplicate %s", got.ID, duplicate.ID)
+	copies := map[nostr.ID]int{}
+	for _, event := range events {
+		copies[event.ID]++
 	}
-	if got := mustReceiveRelayEvent(t, sub.Events); got.ID != sentinel.ID {
-		t.Fatalf("second event ID = %s, want sentinel %s; duplicate was not filtered", got.ID, sentinel.ID)
+	want := map[nostr.ID]int{duplicate.ID: 1, other.ID: 1}
+	if !reflect.DeepEqual(copies, want) {
+		t.Fatalf("delivered copies per event = %v, want %v", copies, want)
 	}
 }
 
