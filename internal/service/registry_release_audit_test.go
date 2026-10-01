@@ -204,7 +204,7 @@ func TestRelayFirstRegistryForwardsAtomicAcceptedReleaseRegistration(t *testing.
 	intents, state := newMockIntentRepo(), newMockStateRepo()
 	services.services[serviceID] = &domain.Service{ID: serviceID, ArtifactRepo: repositoryName}
 	base := newReleaseDecisionRegistry(services, environments, builds, artifacts, intents, state)
-	relayFirst := NewRelayFirstRegistry(base, nil, nil, zap.NewNop())
+	relayFirst := NewRelayFirstRegistry(base, nil, zap.NewNop())
 
 	digest := "sha256:" + strings.Repeat("a", 64)
 	build := &domain.Build{

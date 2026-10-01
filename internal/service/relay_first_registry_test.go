@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -22,7 +21,7 @@ func TestRelayFirstRegistryCreateServiceFailsWhenRelayPublishFails(t *testing.T)
 	serviceRepo := &relayFirstServiceRepo{calls: &calls}
 	delegate := NewRegistryService(serviceRepo, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	publisher := &relayFirstCapturePublisher{err: errors.New("relay rejected event"), calls: &calls}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 
 	err := registry.CreateService(ctx, &domain.Service{ID: uuid.New(), Name: "api"})
 	if err == nil {
@@ -41,9 +40,9 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 	calls := []string{}
 	serviceRepo := &relayFirstServiceRepo{calls: &calls}
 	delegate := NewRegistryService(serviceRepo, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	publisher := &relayFirstCapturePublisher{published: 1, calls: &calls}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
-	svc := &domain.Service{ID: uuid.New(), Name: "api"}
+	publisher := &relayFirstCapturePublisher{calls: &calls}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
+	svc := &domain.Service{ID: uuid.New(), Name: "api", RepoURL: " https://git.example/acme/api.git "}
 
 	if err := registry.CreateService(ctx, svc); err != nil {
 		t.Fatalf("CreateService returned error: %v", err)
@@ -56,20 +55,19 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 		t.Fatalf("unexpected call order: got %v want %v", calls, wantOrder)
 	}
 	if len(publisher.events) != 1 {
-		t.Fatalf("expected one published event, got %d", len(publisher.events))
+		t.Fatalf("expected one published record, got %d", len(publisher.events))
 	}
-	ev := publisher.events[0]
-	if ev.Kind != gonostr.Kind(relayFirstCanonicalStateKind) {
-		t.Fatalf("published kind = %d, want %d", ev.Kind, relayFirstCanonicalStateKind)
+	published := publisher.events[0]
+	if published.service == nil || published.id() != svc.ID || published.deleted {
+		t.Fatalf("published record = %+v, want live service %s", published, svc.ID)
 	}
-	assertRelayFirstTag(t, ev.Tags, "domain", "service")
-	assertRelayFirstTag(t, ev.Tags, "entity", "registry")
-	assertRelayFirstTag(t, ev.Tags, "schema", relayFirstStateSchema)
-	if ev.ID == (gonostr.ID{}) || ev.Sig == ([64]byte{}) || ev.PubKey == (gonostr.PubKey{}) {
-		t.Fatalf("published event was not signed: id=%q sig=%q pubkey=%q", ev.ID.Hex(), gonostr.HexEncodeToString(ev.Sig[:]), ev.PubKey.Hex())
+	if published.service.RuntimeType != domain.RuntimeTypeDocker || published.service.DefaultBranch != "main" {
+		t.Fatalf("service defaults were not applied before publish: runtime=%q branch=%q", published.service.RuntimeType, published.service.DefaultBranch)
 	}
-	if svc.RuntimeType != domain.RuntimeTypeDocker || svc.DefaultBranch != "main" {
-		t.Fatalf("service defaults were not applied before publish: runtime=%q branch=%q", svc.RuntimeType, svc.DefaultBranch)
+	// The record carries the service as readers (and so the projector) see
+	// the cached row, not the raw write intent (bahia-irsry.41).
+	if repo := published.service.Repository; repo == nil || repo.Source != "manual" || repo.CloneURL != "https://git.example/acme/api.git" {
+		t.Fatalf("published repository = %+v, want the read-normalized manual repository", repo)
 	}
 }
 
@@ -86,8 +84,8 @@ func TestRelayFirstRegistryCompleteSetConflictDoesNotPublishCanonicalState(t *te
 
 	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
 	calls := []string{}
-	publisher := &relayFirstCapturePublisher{published: 1, calls: &calls}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{calls: &calls}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	requested := []*domain.DeploymentUnit{{
 		Key:           domain.DefaultDeploymentUnitKey,
 		RuntimeType:   domain.RuntimeTypeDocker,
@@ -114,8 +112,8 @@ func TestRelayFirstRegistryCompleteSetPublishesPersistedRevision(t *testing.T) {
 	}
 
 	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
-	publisher := &relayFirstCapturePublisher{published: 1}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	requested := []*domain.DeploymentUnit{{
 		Key:           domain.DefaultDeploymentUnitKey,
 		RuntimeType:   domain.RuntimeTypeDocker,
@@ -129,16 +127,7 @@ func TestRelayFirstRegistryCompleteSetPublishesPersistedRevision(t *testing.T) {
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events = %d, want 1", len(publisher.events))
 	}
-	var content struct {
-		UpdatedAt string `json:"updated_at"`
-	}
-	if err := json.Unmarshal([]byte(publisher.events[0].Content), &content); err != nil {
-		t.Fatalf("decode canonical environment event: %v", err)
-	}
-	publishedRevision, err := time.Parse(time.RFC3339Nano, content.UpdatedAt)
-	if err != nil {
-		t.Fatalf("parse published revision %q: %v", content.UpdatedAt, err)
-	}
+	publishedRevision := publisher.events[0].environment.UpdatedAt
 	persisted, err := envs.GetByID(ctx, env.ID)
 	if err != nil || persisted == nil {
 		t.Fatalf("load persisted environment: env=%#v err=%v", persisted, err)
@@ -165,7 +154,7 @@ func TestRelayFirstRegistryCompleteSetPublishFailureRollsBackStagedRevision(t *t
 
 	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
 	publisher := &relayFirstCapturePublisher{err: errors.New("relay rejected event")}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	requested := []*domain.DeploymentUnit{{
 		Key:           domain.DefaultDeploymentUnitKey,
 		RuntimeType:   domain.RuntimeTypeDocker,
@@ -193,8 +182,8 @@ func TestRelayFirstRegistryCreateEnvironmentRequiresRelayAcceptance(t *testing.T
 	calls := []string{}
 	envRepo := &relayFirstEnvironmentRepo{calls: &calls}
 	delegate := NewRegistryService(nil, envRepo, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	publisher := &relayFirstCapturePublisher{published: 0, calls: &calls}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{err: errors.New("no relay accepted the event"), calls: &calls}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 
 	err := registry.CreateEnvironment(ctx, &domain.Environment{ID: uuid.New(), Name: "prod"})
 	if err == nil {
@@ -213,8 +202,8 @@ func TestRelayFirstRegistryUpdateEnvironmentPublishesBeforeDatabaseWrite(t *test
 	calls := []string{}
 	envRepo := &relayFirstEnvironmentRepo{calls: &calls}
 	delegate := NewRegistryService(nil, envRepo, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	publisher := &relayFirstCapturePublisher{published: 1, calls: &calls}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{calls: &calls}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	env := &domain.Environment{ID: uuid.New(), Name: "prod", DeployStrategy: domain.DeployStrategyCanary, Protected: true}
 
 	if err := registry.UpdateEnvironment(ctx, env); err != nil {
@@ -225,44 +214,60 @@ func TestRelayFirstRegistryUpdateEnvironmentPublishesBeforeDatabaseWrite(t *test
 		t.Fatalf("unexpected call order: got %v want %v", calls, wantOrder)
 	}
 	if len(publisher.events) != 1 {
-		t.Fatalf("expected one published event, got %d", len(publisher.events))
+		t.Fatalf("expected one published record, got %d", len(publisher.events))
 	}
-	if publisher.events[0].Kind != gonostr.Kind(relayFirstCanonicalStateKind) {
-		t.Fatalf("published kind = %d, want %d", publisher.events[0].Kind, relayFirstCanonicalStateKind)
+	if published := publisher.events[0]; published.environment == nil || published.id() != env.ID || published.deleted {
+		t.Fatalf("published record = %+v, want live environment %s", published, env.ID)
 	}
-	assertRelayFirstTag(t, publisher.events[0].Tags, "domain", "environment")
-	assertRelayFirstTag(t, publisher.events[0].Tags, "entity", "registry")
-	assertRelayFirstTag(t, publisher.events[0].Tags, "schema", relayFirstStateSchema)
 }
 
-func assertRelayFirstTag(t *testing.T, tags gonostr.Tags, name, value string) {
-	t.Helper()
-	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] == name && tag[1] == value {
-			return
-		}
-	}
-	t.Fatalf("missing tag %s=%s in %#v", name, value, tags)
+// relayFirstPublication is one record the registry handed to its
+// RelayFirstStatePublisher. Its wire shape is the projector builder's, which
+// internal/adapters/nostr tests against the projector itself.
+type relayFirstPublication struct {
+	service     *domain.Service
+	environment *domain.Environment
+	deleted     bool
 }
 
-func relayFirstTestSigner(t *testing.T) RelayFirstSigner {
-	t.Helper()
-	return RelayFirstPrivateKeySigner(gonostr.Generate().Hex())
+func (p relayFirstPublication) id() uuid.UUID {
+	if p.service != nil {
+		return p.service.ID
+	}
+	if p.environment != nil {
+		return p.environment.ID
+	}
+	return uuid.Nil
 }
 
 type relayFirstCapturePublisher struct {
-	published int
-	err       error
-	events    []gonostr.Event
-	calls     *[]string
+	mu     sync.Mutex
+	err    error
+	events []relayFirstPublication
+	calls  *[]string
 }
 
-func (p *relayFirstCapturePublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
+func (p *relayFirstCapturePublisher) record(pub relayFirstPublication) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.calls != nil {
 		*p.calls = append(*p.calls, "publish")
 	}
-	p.events = append(p.events, ev)
-	return p.published, p.err
+	if p.err != nil {
+		return p.err
+	}
+	p.events = append(p.events, pub)
+	return nil
+}
+
+func (p *relayFirstCapturePublisher) PublishServiceRegistry(_ context.Context, svc *domain.Service, deleted bool) error {
+	snapshot := *svc
+	return p.record(relayFirstPublication{service: &snapshot, deleted: deleted})
+}
+
+func (p *relayFirstCapturePublisher) PublishEnvironmentRegistry(_ context.Context, env *domain.Environment, deleted bool) error {
+	snapshot := *env
+	return p.record(relayFirstPublication{environment: &snapshot, deleted: deleted})
 }
 
 type relayFirstServiceRepo struct {
