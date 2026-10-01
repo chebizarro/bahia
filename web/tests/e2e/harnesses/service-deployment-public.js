@@ -207,8 +207,29 @@ export async function installPublicServiceDeploymentHarness(
     // Projected records are built by the shared producer-shaped builder
     // (cp-state-fixtures.js via installE2EMocks): canonical 30900 envelope
     // with legacy_kind and the family's #t topic, as the daemon publishes them.
-    function stateEvent({ id, schema, d, deleted = false, tags = [], content = {}, created_at = nowSeconds }) {
-      return window.__bahiaE2EFixtures.cpState({ id, schema, d, deleted, tags, content, pubkey: servicePubkey, createdAt: created_at });
+    //
+    // Like the daemon's projector, each new version of a coordinate gets a
+    // created_at past the previous one. With one fixed created_at the pending
+    // and approved versions of an intent tie, NIP-01 keeps the lowest id, and
+    // the ids hash content carrying wall-clock timestamps, so the reader kept
+    // whichever version happened to hash lower (bahia-etwho). The floor is
+    // persisted so it survives page.reload() along with the state.
+    const coordinateRevisions = loadPersistedJson('__BAHIA_E2E_PUBLIC_REVISIONS', {});
+
+    function revisionCreatedAt(schema, d, deleted, content) {
+      const key = `${schema}\u0000${d}`;
+      const fingerprint = JSON.stringify({ deleted, content });
+      const previous = coordinateRevisions[key];
+      if (previous && previous.fingerprint === fingerprint) return previous.created_at;
+      const created_at = previous ? Math.max(nowSeconds, previous.created_at + 1) : nowSeconds;
+      coordinateRevisions[key] = { fingerprint, created_at };
+      localStorage.setItem('__BAHIA_E2E_PUBLIC_REVISIONS', JSON.stringify(coordinateRevisions));
+      return created_at;
+    }
+
+    function stateEvent({ id, schema, d, deleted = false, tags = [], content = {}, created_at }) {
+      const createdAt = Number.isInteger(created_at) ? created_at : revisionCreatedAt(schema, d, deleted, content);
+      return window.__bahiaE2EFixtures.cpState({ id, schema, d, deleted, tags, content, pubkey: servicePubkey, createdAt });
     }
 
     function parseContextVMRequest(requestEvent) {

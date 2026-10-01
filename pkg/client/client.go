@@ -731,6 +731,11 @@ type ConfigDrift struct {
 	AppliedVersion      int    `json:"applied_version,omitempty"`
 	Drift               bool   `json:"drift"`
 	LastRejectionReason string `json:"last_rejection_reason,omitempty"`
+	// Withdrawn means the current desired event was deleted or expired; the
+	// consumer keeps enforcing the last applied config until a newer version
+	// is published.
+	Withdrawn       bool   `json:"withdrawn,omitempty"`
+	WithdrawnReason string `json:"withdrawn_reason,omitempty"`
 }
 
 func (c *Client) PublishConfig(ctx context.Context, request ConfigPublishRequest) (*ConfigPublishReceipt, error) {

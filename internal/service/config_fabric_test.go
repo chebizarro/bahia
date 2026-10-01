@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -376,6 +377,8 @@ func TestConfigFabricStatusCoordinatesAndTargetBinding(t *testing.T) {
 		{"applied", configStatusSchema, "applied", base + ":" + target + ":applied", target, 4, true},
 		{"accepted", configStatusSchema, "accepted", base + ":" + target + ":accepted", "", 0, true},
 		{"rejected", configStatusSchema, "rejected", base + ":" + target + ":rejected", "", 0, true},
+		{"withdrawn", configStatusSchema, "withdrawn", base + ":" + target + ":withdrawn", "", 0, true},
+		{"legacy-withdrawn", legacyConfigStatusSchema, "withdrawn", base, "", 0, false},
 		{"shared-coordinate", configStatusSchema, "applied", base, target, 4, false},
 		{"wrong-phase", configStatusSchema, "applied", base + ":" + target + ":accepted", target, 4, false},
 		{"wrong-coordinate-target", configStatusSchema, "applied", base + ":" + other + ":applied", target, 4, false},
@@ -408,5 +411,92 @@ func TestConfigFabricStatusCoordinatesAndTargetBinding(t *testing.T) {
 				t.Fatalf("statusFromRecord() error = %v, want valid=%t", err, tc.valid)
 			}
 		})
+	}
+}
+
+// bahia-irsry.45: a consumer withdraws a deleted or expired desired event and
+// keeps the last applied config live. The drift view reports the withdrawal
+// against the current desired event only, and keeps the applied version.
+func TestConfigFabricDriftReportsWithdrawnDesiredEvent(t *testing.T) {
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	svc := NewConfigFabricService(repo, &configTestPublisher{}, newConfigTestSigner(t))
+	base := time.Unix(1787625660, 0)
+	tick := 0
+	svc.now = func() time.Time {
+		tick++
+		return base.Add(time.Duration(tick) * time.Second)
+	}
+	applied, err := svc.Publish(context.Background(), validPolicyRequest(4))
+	if err != nil {
+		t.Fatalf("Publish(v4) error = %v", err)
+	}
+	recordStatusV2(t, repo, applied.EventID, "applied", 4, "", base.Add(10*time.Second))
+	withdrawn, err := svc.Publish(context.Background(), validPolicyRequest(5))
+	if err != nil {
+		t.Fatalf("Publish(v5) error = %v", err)
+	}
+	recordStatusV2(t, repo, withdrawn.EventID, "withdrawn", 5, "desired event was deleted or has expired", base.Add(20*time.Second))
+
+	view, err := svc.ListDrift(context.Background())
+	if err != nil {
+		t.Fatalf("ListDrift() error = %v", err)
+	}
+	if len(view) != 1 {
+		t.Fatalf("view = %#v", view)
+	}
+	row := view[0]
+	if !row.Withdrawn || row.WithdrawnReason != "desired event was deleted or has expired" {
+		t.Fatalf("withdrawn = %t reason = %q", row.Withdrawn, row.WithdrawnReason)
+	}
+	if row.DesiredEventID != withdrawn.EventID || row.AppliedEventID != applied.EventID || row.AppliedVersion != 4 || !row.Drift {
+		t.Fatalf("a withdrawal must keep the last applied config: %#v", row)
+	}
+	if row.LastRejectionReason != "" {
+		t.Fatalf("a withdrawal is not a rejection: %q", row.LastRejectionReason)
+	}
+	if len(row.StatusHistory) != 2 || row.StatusHistory[0].Status != "withdrawn" {
+		t.Fatalf("status history = %#v", row.StatusHistory)
+	}
+
+	replacement, err := svc.Publish(context.Background(), validPolicyRequest(6))
+	if err != nil {
+		t.Fatalf("Publish(v6) error = %v", err)
+	}
+	view, err = svc.ListDrift(context.Background())
+	if err != nil {
+		t.Fatalf("ListDrift() error = %v", err)
+	}
+	if view[0].DesiredEventID != replacement.EventID || view[0].Withdrawn || view[0].WithdrawnReason != "" {
+		t.Fatalf("a newer desired version supersedes the withdrawal: %#v", view[0])
+	}
+}
+
+func recordStatusV2(t *testing.T, repo repository.NostrEventRepository, configEventID, status string, version int, reason string, createdAt time.Time) {
+	t.Helper()
+	payload := map[string]any{
+		"service_id": "khatru-relay", "scope": "prod", "version": version,
+		"policy_schema": "cascadia.config.rate-limits.v1", "config_event_id": configEventID, "status": status,
+	}
+	if status == "applied" {
+		payload["effective_version"] = version
+		payload["last_applied_event_id"] = configEventID
+	} else {
+		payload["reason"] = reason
+	}
+	content, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := json.Marshal(nostr.Tags{
+		{"d", "config-status:khatru-relay:rate-limits:prod:" + configEventID + ":" + status}, {"domain", "config-status"},
+		{"schema", configStatusSchema}, {"status", status}, {"service", "khatru-relay"},
+		{"scope", "prod"}, {"version", strconv.Itoa(version)}, {"e", configEventID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprintf("%064x", sha256.Sum256([]byte(configEventID+":"+status)))
+	if _, err := repo.Record(context.Background(), &repository.NostrEventRecord{ID: id, Kind: ConfigFabricStatusKind, Content: string(content), Tags: tags, CreatedAt: createdAt}); err != nil {
+		t.Fatalf("record status: %v", err)
 	}
 }
