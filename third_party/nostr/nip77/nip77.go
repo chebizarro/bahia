@@ -43,7 +43,17 @@ func NegentropySync(
 
 	// connect to relay
 	var err error
-	errch := make(chan error)
+	// errch holds the first outcome. report never blocks: it runs on the
+	// relay's read loop, and a second outcome (a late NEG-ERR, a relay CLOSE
+	// after completion) arriving once nobody reads errch must not wedge that
+	// loop (Bahia patch, see BAHIA_PATCHES.md).
+	errch := make(chan error, 1)
+	report := func(err error) {
+		select {
+		case errch <- err:
+		default:
+		}
+	}
 	var relay *nostr.Relay
 	relay, err = nostr.RelayConnect(ctx, relayUrl, nostr.RelayOptions{
 		CustomHandler: func(data string) {
@@ -53,15 +63,15 @@ func NegentropySync(
 			}
 			switch env := envelope.(type) {
 			case *OpenEnvelope, *CloseEnvelope:
-				errch <- fmt.Errorf("unexpected %s received from relay", env.Label())
+				report(fmt.Errorf("unexpected %s received from relay", env.Label()))
 				return
 			case *ErrorEnvelope:
-				errch <- fmt.Errorf("relay returned a %s: %s", env.Label(), env.Reason)
+				report(fmt.Errorf("relay returned a %s: %s", env.Label(), env.Reason))
 				return
 			case *MessageEnvelope:
 				nextmsg, err := neg.Reconcile(env.Message)
 				if err != nil {
-					errch <- fmt.Errorf("failed to reconcile: %w", err)
+					report(fmt.Errorf("failed to reconcile: %w", err))
 					return
 				}
 
@@ -72,6 +82,11 @@ func NegentropySync(
 			}
 		},
 	})
+	// RelayConnect ties the connection to a background context, so it stays
+	// open until Close: close it when the sync ends (Bahia patch).
+	if relay != nil {
+		defer relay.Close()
+	}
 	if err != nil {
 		return err
 	}
@@ -132,10 +147,7 @@ func NegentropySync(
 	go func() {
 		defer close(done)
 		wg.Wait()
-		select {
-		case errch <- nil:
-		case <-ctx.Done():
-		}
+		report(nil)
 	}()
 
 	select {

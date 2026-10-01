@@ -436,6 +436,7 @@ func startupTestConfig(mode Mode) *config.Config {
 	cfg.Loom.Relays = nil
 	cfg.Reconcile.Enabled = true
 	cfg.Server.Port = 0
+	cfg.Nostr.LocalStore.Path = testLocalStorePath()
 	return cfg
 }
 

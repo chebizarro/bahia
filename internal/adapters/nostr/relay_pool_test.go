@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -304,25 +305,37 @@ func TestActiveMergedSubscriptionDoesNotReportTerminationAsRelayEOSE(t *testing.
 	}
 }
 
+// A relay answers an unauthenticated REQ with an asynchronous CLOSED
+// "auth-required:" (the library never reports it from Subscribe). Without an
+// AUTH signer the pool cannot recover: it records the auth-unavailable
+// metadata, surfaces the CLOSED as terminal and does not reissue the REQ.
 func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t *testing.T) {
 	const relayURL = "wss://auth-eose.example"
 	pool := newRelayPoolWithManagedRelays(relayURL)
 	markRelayConnectedForSubscribeTest(pool, relayURL)
 
-	attempts := 0
+	var attempts atomic.Int32
 	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, _ context.Context, _ gonostr.Filter) (*gonostr.Subscription, error) {
-		attempts++
-		return nil, errors.New("relay CLOSED: auth-required: sign in before replay")
+		attempts.Add(1)
+		sub := newTestSubscription()
+		sub.ClosedReason <- "auth-required: sign in before replay"
+		close(sub.Events)
+		return sub, nil
 	})
 
 	merged, err := pool.SubscribeAllWithEOSE(context.Background(), []gonostr.Filter{{Kinds: []gonostr.Kind{canonicalKind(30002)}}})
-	require.Nil(t, merged)
-	require.Error(t, err)
-	require.Equal(t, 1, attempts, "missing AUTH credentials must fail the merged EOSE subscription without fallback")
+	require.NoError(t, err)
+	closed := <-merged.Closed
+	require.Equal(t, "auth-required: sign in before replay", closed.Reason)
+	require.True(t, closed.Terminal, "an auth-required CLOSED without a signer is terminal")
+	<-merged.EndOfStoredEvents
+	require.False(t, merged.AllRelaysReachedEOSE())
+	for range merged.Events {
+	}
+	require.Equal(t, int32(1), attempts.Load(), "missing AUTH credentials must not reissue the REQ")
 
 	snapshot := pool.HealthSnapshot()
 	require.Len(t, snapshot.Relays, 1)
-	require.Equal(t, 1, snapshot.Relays[0].Errors)
 	require.Equal(t, "auth-unavailable: auth-required: sign in before replay: no signer configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
 }
 
@@ -600,7 +613,37 @@ func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}
 	}
+	testPoolsMu.Lock()
+	testPools = append(testPools, pool)
+	testPoolsMu.Unlock()
 	return pool
+}
+
+// testPools are the fake-relay pools created since the last hook cleanup.
+// Their subscription workers reissue REQs through subscribeOnRelay, so they
+// are stopped, and waited for, before a test restores that hook.
+var (
+	testPoolsMu sync.Mutex
+	testPools   []*RelayPool
+)
+
+func stopTestPools() {
+	testPoolsMu.Lock()
+	pools := testPools
+	testPools = nil
+	testPoolsMu.Unlock()
+	for _, pool := range pools {
+		pool.subscriptionsMu.Lock()
+		active := make([]*activeMergedSubscription, 0, len(pool.activeSubscriptions))
+		for _, subscription := range pool.activeSubscriptions {
+			active = append(active, subscription)
+		}
+		pool.subscriptionsMu.Unlock()
+		for _, subscription := range active {
+			subscription.close()
+			subscription.workers.Wait()
+		}
+	}
 }
 
 func markRelayConnectedForSubscribeTest(pool *RelayPool, relayURL string) {
@@ -613,7 +656,10 @@ func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Co
 	t.Helper()
 	original := subscribeOnRelay
 	subscribeOnRelay = fn
-	t.Cleanup(func() { subscribeOnRelay = original })
+	t.Cleanup(func() {
+		stopTestPools()
+		subscribeOnRelay = original
+	})
 }
 
 func setPublishOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, gonostr.Event) error) {

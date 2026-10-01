@@ -72,7 +72,7 @@ type communikeysSectionTarget struct {
 type communikeysMembership struct {
 	signer      relayAuthSigner
 	communities []communikeysCommunityTarget
-	bus         *SoulFactoryRelayBus
+	relayClient *RelayClient
 }
 
 // parseCommunikeysDefinitionAddress splits and validates an exact V2 branch
@@ -108,18 +108,18 @@ func sectionListD(communityID, purpose string, shard int) (string, error) {
 	return d, nil
 }
 
-func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAuthSigner, bus *SoulFactoryRelayBus) (*communikeysMembership, error) {
+func newCommunikeysMembership(communities []CommunikeysCommunity, signer relayAuthSigner, relayClient *RelayClient) (*communikeysMembership, error) {
 	if len(communities) == 0 {
 		return nil, nil
 	}
 	if signer == nil {
 		return nil, fmt.Errorf("communikeys assignment requires a signer")
 	}
-	if bus == nil {
-		return nil, fmt.Errorf("communikeys assignment requires a SoulFactory relay bus")
+	if relayClient == nil {
+		return nil, fmt.Errorf("communikeys assignment requires a SoulFactory relay client")
 	}
 
-	membership := &communikeysMembership{signer: signer, bus: bus}
+	membership := &communikeysMembership{signer: signer, relayClient: relayClient}
 	targetIndexes := make(map[string]int, len(communities))
 	sectionSets := make(map[string]map[string]struct{}, len(communities))
 	for i, community := range communities {
@@ -209,8 +209,8 @@ func (m *communikeysMembership) Assign(ctx context.Context, pubkey string) ([]st
 	if _, err := nostr.PubKeyFromHex(pubkey); err != nil {
 		return nil, fmt.Errorf("invalid provisioned agent pubkey: %w", err)
 	}
-	if err := m.bus.Authenticate(ctx); err != nil {
-		return nil, fmt.Errorf("authenticate Communikeys relay bus: %w", err)
+	if err := m.relayClient.Authenticate(ctx); err != nil {
+		return nil, fmt.Errorf("authenticate Communikeys relay client: %w", err)
 	}
 
 	assigned := make([]string, 0)
@@ -253,7 +253,7 @@ func (m *communikeysMembership) Assign(ctx context.Context, pubkey string) ([]st
 			if !validSignedEvent(&replacement) {
 				return assigned, fmt.Errorf("sign Communikeys profile list %s: signer returned an invalid event", section.coordinate)
 			}
-			if err := publishCommunikeysReplacement(ctx, m.bus, replacement); err != nil {
+			if err := publishCommunikeysReplacement(ctx, m.relayClient, replacement); err != nil {
 				return assigned, fmt.Errorf("assign Communikeys membership %s: %w", section.coordinate, err)
 			}
 			assigned = append(assigned, section.coordinate)
@@ -268,7 +268,7 @@ func (m *communikeysMembership) Assign(ctx context.Context, pubkey string) ([]st
 func (m *communikeysMembership) latestDefinition(ctx context.Context, community communikeysCommunityTarget) (*nostr.Event, error) {
 	// Fail closed: the definition is the authority for a membership grant. See
 	// RelayReadPolicy.
-	read, err := m.bus.QueryWithPolicy(ctx, "communikeys.definition", RelayReadComplete(), []nostr.Filter{{
+	read, err := m.relayClient.QueryWithPolicy(ctx, "communikeys.definition", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{communikeysDefinitionKind},
 		Authors: []nostr.PubKey{community.owner},
 		Tags:    nostr.TagMap{"d": []string{community.communityID}},
@@ -296,7 +296,7 @@ func (m *communikeysMembership) latestDefinition(ctx context.Context, community 
 func (m *communikeysMembership) latestProfileList(ctx context.Context, listAuthor nostr.PubKey, identifier string) (*nostr.Event, error) {
 	// Fail closed: the grant republishes this list with one more member, so a
 	// stale base would silently drop newer members. See RelayReadPolicy.
-	read, err := m.bus.QueryWithPolicy(ctx, "communikeys.profile_list", RelayReadComplete(), []nostr.Filter{{
+	read, err := m.relayClient.QueryWithPolicy(ctx, "communikeys.profile_list", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{communikeysProfileListKind},
 		Authors: []nostr.PubKey{listAuthor},
 		Tags:    nostr.TagMap{"d": []string{identifier}},
@@ -378,7 +378,7 @@ func cloneCommunikeysTags(tags nostr.Tags) nostr.Tags {
 
 // publishCommunikeysReplacement requires a relay OK. Publish answers an
 // "auth-required:" OK by authenticating and republishing once.
-func publishCommunikeysReplacement(ctx context.Context, bus *SoulFactoryRelayBus, event nostr.Event) error {
-	_, err := bus.Publish(ctx, event)
+func publishCommunikeysReplacement(ctx context.Context, relayClient *RelayClient, event nostr.Event) error {
+	_, err := relayClient.Publish(ctx, event)
 	return err
 }

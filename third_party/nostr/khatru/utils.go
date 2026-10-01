@@ -38,11 +38,12 @@ func GetConnection(ctx context.Context) *WebSocket {
 // In a NIP-86 context it returns the single pubkey that have authenticated for that specific method call.
 func GetAuthed(ctx context.Context) (nostr.PubKey, bool) {
 	if conn := GetConnection(ctx); conn != nil {
-		total := len(conn.AuthedPublicKeys)
+		authed := conn.authedPublicKeys()
+		total := len(authed)
 		if total == 0 {
 			return nostr.ZeroPK, false
 		}
-		return conn.AuthedPublicKeys[total-1], true
+		return authed[total-1], true
 	}
 	if nip86Auth := ctx.Value(nip86HeaderAuthKey); nip86Auth != nil {
 		return nip86Auth.(nostr.PubKey), true
@@ -55,7 +56,7 @@ func GetAuthed(ctx context.Context) (nostr.PubKey, bool) {
 // In a NIP-86 context it returns the single pubkey that authenticated for that method call.
 func GetAllAuthed(ctx context.Context) []nostr.PubKey {
 	if conn := GetConnection(ctx); conn != nil {
-		return conn.AuthedPublicKeys
+		return conn.authedPublicKeys()
 	}
 	if nip86Auth := ctx.Value(nip86HeaderAuthKey); nip86Auth != nil {
 		return []nostr.PubKey{nip86Auth.(nostr.PubKey)}
@@ -66,7 +67,7 @@ func GetAllAuthed(ctx context.Context) []nostr.PubKey {
 // IsAuthed checks if the given public key is among the multiple that may have potentially authenticated.
 func IsAuthed(ctx context.Context, pubkey nostr.PubKey) bool {
 	if conn := GetConnection(ctx); conn != nil {
-		for _, pk := range conn.AuthedPublicKeys {
+		for _, pk := range conn.authedPublicKeys() {
 			if pk == pubkey {
 				return true
 			}

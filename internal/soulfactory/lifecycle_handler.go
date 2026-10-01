@@ -324,8 +324,8 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	if h.reactor.findLifecycleResultFn != nil {
 		return h.reactor.findLifecycleResultFn(ctx, eventID)
 	}
-	bus := h.reactor.relayBus
-	if bus == nil {
+	relayClient := h.reactor.relayClient
+	if relayClient == nil {
 		return nil, nil
 	}
 	terminal := func(result *nostr.Event) bool {
@@ -333,7 +333,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	}
 	// Idempotency check: a found terminal result is final, but absence would
 	// re-run the action, so it needs every relay. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "lifecycle.terminal_result", RelayReadFound(terminal), []nostr.Filter{{
+	read, err := relayClient.QueryWithPolicy(ctx, "lifecycle.terminal_result", RelayReadFound(terminal), []nostr.Filter{{
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)},
 		Tags:  nostr.TagMap{tagEvent: []string{eventID}},
 		Limit: 1,

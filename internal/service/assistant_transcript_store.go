@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
@@ -413,24 +414,13 @@ func (s *AssistantTranscriptStore) replayKey(ctx context.Context, keyRef, keyVer
 	return validateAssistantTranscriptKey(key)
 }
 
+// replayFilter scopes a replay REQ to one session by its single-letter "t"
+// topic (kinds.AssistantTranscriptSessionTopic). NIP-01 relays index only
+// single-letter tags, so schema, domain, turn and role are checked locally in
+// decryptEvent rather than sent as #schema/#domain/#session/#turn/#role.
 func (s *AssistantTranscriptStore) replayFilter(query AssistantTranscriptReplayQuery) (nostr.Filter, error) {
-	tags := nostr.TagMap{
-		domain.AssistantTranscriptTagSchema:  []string{domain.AssistantTranscriptSchema},
-		domain.AssistantTranscriptTagDomain:  []string{domain.AssistantDomain},
-		domain.AssistantTranscriptTagSession: []string{query.SessionID},
-	}
-	if query.TurnID = strings.TrimSpace(query.TurnID); query.TurnID != "" {
-		tags[domain.AssistantTranscriptTagTurn] = []string{query.TurnID}
-	}
-	roles := make([]string, 0, len(query.Roles))
-	for _, role := range query.Roles {
-		if role = domain.AssistantAgentMessageRole(strings.TrimSpace(string(role))); role != "" {
-			roles = append(roles, string(role))
-		}
-	}
-	if len(roles) > 0 {
-		tags[domain.AssistantTranscriptTagRole] = roles
-	}
+	query.TurnID = strings.TrimSpace(query.TurnID)
+	tags := nostr.TagMap{"t": []string{kinds.AssistantTranscriptSessionTopic(query.SessionID)}}
 	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.KindAssistantTranscript)}, Tags: tags, Limit: s.relayLimit(query.Limit)}
 	if query.Since != nil && !query.Since.IsZero() {
 		filter.Since = nostr.Timestamp(query.Since.UTC().Unix())
@@ -625,6 +615,8 @@ func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key Assi
 		{domain.AssistantTranscriptTagSequence, strconv.Itoa(payload.Sequence)},
 		{domain.AssistantTranscriptTagKeyRef, key.Ref},
 		{domain.AssistantTranscriptTagEnvelope, domain.AssistantTranscriptEnvelopeServiceHeldAEAD},
+		{"t", kinds.AssistantTranscriptTopic},
+		{"t", kinds.AssistantTranscriptSessionTopic(payload.SessionID)},
 	}
 	if payload.TurnID != "" {
 		tags = append(tags, nostr.Tag{domain.AssistantTranscriptTagTurn, payload.TurnID})

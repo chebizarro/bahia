@@ -192,6 +192,9 @@ const (
 	FamilySystem            ProjectionFamily = "system"
 	FamilyFIPS              ProjectionFamily = "fips"
 	FamilyControlPlane      ProjectionFamily = "control_plane"
+	// FamilyDeletion marks a NIP-09 deletion request. The relay projection
+	// cache resolves it against the events it applied; it has no stream.
+	FamilyDeletion ProjectionFamily = "deletion"
 )
 
 type DecodedProjectionEvent struct {
@@ -227,6 +230,20 @@ type DecodedProjectionEvent struct {
 	FIPS        *DecodedFIPS
 
 	Tombstone bool
+
+	// source is the signed event this projection was decoded from, set by
+	// KindCatalog.Decoder. Consumers resolve replacement, NIP-09 deletion and
+	// NIP-40 expiration from it (see nostrutil.Lifecycle).
+	source *gonostr.Event
+}
+
+// SourceEvent returns the signed event the projection was decoded from, or
+// nil when it was built without one.
+func (e *DecodedProjectionEvent) SourceEvent() *gonostr.Event {
+	if e == nil {
+		return nil
+	}
+	return e.source
 }
 
 type DecodedService struct {
@@ -475,6 +492,10 @@ func NewKindCatalog() *KindCatalog {
 		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
 		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
 		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
+		// NIP-09 deletion requests from the trusted control-plane authors,
+		// replayed in full after every other group so they reach the cache
+		// after the events they delete (bahia-irsry.10.1).
+		{Name: "deletion_live", Kinds: []int{int(gonostr.KindDeletion)}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 	}
 
 	catalog := &KindCatalog{
@@ -488,6 +509,9 @@ func NewKindCatalog() *KindCatalog {
 	catalog.registerRequiredGroupNoopDecoders()
 	catalog.registerOptionalProtocolDecoders()
 	catalog.registerProjectionDecoders()
+	// NIP-09 requests are decodable so any replay that includes kind 5 feeds
+	// them to the projection cache. No replay group requests them yet.
+	catalog.decoders[int(gonostr.KindDeletion)] = decodeDeletionRequest
 	return catalog
 }
 
@@ -526,9 +550,20 @@ func (c *KindCatalog) RequiredGroupsForTier(tier int) []ReplayGroup {
 	return filterReplayGroups(c.Groups, func(group ReplayGroup) bool { return group.Tier <= tier && group.Required })
 }
 
+// Decoder returns the decoder for kind. Every decoded projection carries its
+// source event (DecodedProjectionEvent.SourceEvent).
 func (c *KindCatalog) Decoder(kind int) (DecodeFunc, bool) {
 	decoder, ok := c.decoders[kind]
-	return decoder, ok
+	if !ok {
+		return nil, false
+	}
+	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+		decoded, err := decoder(ev)
+		if decoded != nil {
+			decoded.source = ev
+		}
+		return decoded, err
+	}, true
 }
 
 func filterReplayGroups(groups []ReplayGroup, keep func(ReplayGroup) bool) []ReplayGroup {
@@ -927,16 +962,41 @@ var workerCPStateDecoders = map[string]DecodeFunc{
 
 // decodeCPStateProjection routes canonical 30900 cp-state records whose family
 // has a daemon read model to that family's decoder; every other 30900 record
-// keeps the fallback (state_snapshot no-op) decoder.
+// keeps the fallback (state_snapshot no-op) decoder. A worker record that is
+// not on its family's coordinate is skipped (nil, nil): before bahia-irsry.36
+// the projector published assignment and drain on the same bare-pubkey d, so a
+// relay kept only whichever family was published last, and that survivor is
+// neither family's current state. The projector republishes both families on
+// their own coordinates at startup.
 func decodeCPStateProjection(fallback DecodeFunc) DecodeFunc {
 	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		if ev != nil && tagValueLocal(ev.Tags, kinds.CASControlStateTagSchema) == kinds.CASControlStateSchema {
-			if decode, ok := workerCPStateDecoders[tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind)]; ok {
+			legacyKind := tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind)
+			if decode, ok := workerCPStateDecoders[legacyKind]; ok {
+				if _, onCoordinate := workerRecordID(ev); !onCoordinate {
+					return nil, nil
+				}
 				return decode(ev)
 			}
 		}
 		return fallback(ev)
 	}
+}
+
+// workerRecordID returns the record id a worker cp-state record's d carries
+// after its family's prefix (kinds.CPStateFamily WorkerDTag), and false when
+// the record is not on its family's coordinate.
+func workerRecordID(ev *gonostr.Event) (string, bool) {
+	legacyKind, err := strconv.Atoi(tagValueLocal(ev.Tags, kinds.CASControlStateTagLegacyKind))
+	if err != nil {
+		return "", false
+	}
+	prefix, ok := kinds.CPStateFamily(legacyKind).WorkerDPrefix()
+	if !ok {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(tagValueLocal(ev.Tags, "d"), prefix)
+	return id, ok && id != ""
 }
 
 // cpStateDeleted reports whether a cp-state record is a tombstone: the deleted
@@ -957,7 +1017,8 @@ func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) 
 	if err := decodeContent(ev, &worker); err != nil {
 		return nil, err
 	}
-	worker.PubKey = firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"))
+	recordID, _ := workerRecordID(ev)
+	worker.PubKey = firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), recordID)
 	if worker.PubKey == "" {
 		return nil, fmt.Errorf("worker state record %s names no worker", eventIDHex(ev))
 	}
@@ -971,7 +1032,8 @@ func decodeWorkerAssignmentProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	if err := decodeContent(ev, &state); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerAssignment, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerAssignment, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker"), recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{AssignmentState: &state}
 	}), nil
 }
@@ -981,7 +1043,8 @@ func decodeWorkerDrainProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if err := decodeContent(ev, &status); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerDrain, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerDrain, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker"), recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{DrainStatus: &status}
 	}), nil
 }
@@ -991,7 +1054,8 @@ func decodeWorkerEligibilityProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	if err := decodeContent(ev, &preview); err != nil {
 		return nil, err
 	}
-	return baseDecoded(ev, FamilyWorkerEligibility, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
+	recordID, _ := workerRecordID(ev)
+	return baseDecoded(ev, FamilyWorkerEligibility, firstNonBlank(preview.PreviewID, recordID), cpStateDeleted(ev), func(out *DecodedProjectionEvent) {
 		out.Worker = &DecodedWorker{EligibilityPreview: &preview}
 	}), nil
 }
@@ -1134,6 +1198,19 @@ func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	}), nil
 }
 
+func decodeDeletionRequest(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	if ev == nil || ev.Kind != gonostr.KindDeletion {
+		return nil, fmt.Errorf("deletion request must be kind %d", gonostr.KindDeletion)
+	}
+	return &DecodedProjectionEvent{
+		Kind:      eventKindInt(ev),
+		DTag:      eventIDHex(ev),
+		Timestamp: ev.CreatedAt.Time().UTC(),
+		SourceID:  eventIDHex(ev),
+		Family:    FamilyDeletion,
+	}, nil
+}
+
 func decodeNoopProjection(group string, tier int, family ProjectionFamily) DecodeFunc {
 	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		if ev == nil {
@@ -1162,6 +1239,8 @@ func noopProjectionFamily(group string) ProjectionFamily {
 	case strings.HasPrefix(group, "status"):
 		return FamilyControlPlane
 	case strings.HasPrefix(group, "audit"):
+		return FamilyControlPlane
+	case strings.HasPrefix(group, "deletion"):
 		return FamilyControlPlane
 	default:
 		return ProjectionFamily("")

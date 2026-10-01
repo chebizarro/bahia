@@ -563,8 +563,8 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 	if r.listSoulsFn != nil {
 		return r.listSoulsFn(ctx)
 	}
-	if r.relayBus == nil {
-		return nil, fmt.Errorf("soul Factory relay bus is not configured")
+	if r.relayClient == nil {
+		return nil, fmt.Errorf("soul Factory relay client is not configured")
 	}
 	factory, err := nostr.PubKeyFromHex(strings.TrimSpace(r.config.SoulFactoryPubkey))
 	if err != nil {
@@ -572,7 +572,7 @@ func (r *Reactor) listFleetReconcileSouls(ctx context.Context) ([]*domain.AgentS
 	}
 	// Fail closed: reconcile republishes every soul it lists, so a missing or
 	// stale soul would be skipped or overwritten. See RelayReadPolicy.
-	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.fleet_reconcile_souls", RelayReadComplete(), []nostr.Filter{{
+	read, err := r.relayClient.QueryWithPolicy(ctx, "reactor.fleet_reconcile_souls", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.Kind(domain.KindAgentSoul)},
 		Authors: []nostr.PubKey{factory},
 		Limit:   maxFleetReconcileSouls,
@@ -601,14 +601,14 @@ func (r *Reactor) getFleetConfigRevision(ctx context.Context, eventID string) (*
 	if r.getFleetConfigRevisionFn != nil {
 		return r.getFleetConfigRevisionFn(ctx, eventID)
 	}
-	if r.relayBus == nil {
-		return nil, fmt.Errorf("soul Factory relay bus is not configured")
+	if r.relayClient == nil {
+		return nil, fmt.Errorf("soul Factory relay client is not configured")
 	}
 	id, err := nostr.IDFromHex(strings.TrimSpace(eventID))
 	if err != nil {
 		return nil, fmt.Errorf("invalid fleet config revision id: %w", err)
 	}
-	read, err := r.relayBus.QueryWithPolicy(ctx, "reactor.fleet_config_revision", RelayReadAllIDs(id), []nostr.Filter{{
+	read, err := r.relayClient.QueryWithPolicy(ctx, "reactor.fleet_config_revision", RelayReadAllIDs(id), []nostr.Filter{{
 		IDs:   []nostr.ID{id},
 		Kinds: []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
 		Limit: 1,

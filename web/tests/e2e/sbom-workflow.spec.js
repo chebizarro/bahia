@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { BAHIA_STATE_SCHEMAS, cpAuditFixture, cpStateFixture } from './cp-state-fixtures.js';
 import { installE2EMocks } from './helpers.js';
 
 const SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
@@ -7,8 +8,6 @@ const NO_SBOM_ARTIFACT_ID = 'artifact-no-sbom';
 const SERVICE_ID = 'svc-sbom';
 
 const KINDS = {
-  SERVICE_REGISTRY: 30900,
-  ARTIFACT_REGISTRY: 30900,
   SBOM_STATUS: 30315,
   SBOM_REFERENCE: 30078,
   SBOM_AVAILABILITY_LIST: 30004,
@@ -42,17 +41,13 @@ function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = Math.floor
 }
 
 function serviceEvent() {
-  return nostrEvent({
+  return cpStateFixture({
     id: 'svc-sbom-event',
-    kind: KINDS.SERVICE_REGISTRY,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['d', SERVICE_ID], ['deleted', 'false'], ['name', 'sbom-service']],
-    content: {
-      schema: 'bahia.registry.service.v1',
-      id: SERVICE_ID,
-      name: 'sbom-service',
-      runtime_type: 'docker',
-      deleted: false
-    }
+    pubkey: SERVICE_PUBKEY,
+    schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
+    d: SERVICE_ID,
+    tags: [['name', 'sbom-service']],
+    content: { id: SERVICE_ID, name: 'sbom-service', runtime_type: 'docker' }
   });
 }
 
@@ -77,10 +72,12 @@ function artifactPayload({ id = ARTIFACT_ID, name = null, packages = [], sbom = 
 
 function artifactEvent(options = {}) {
   const artifact = artifactPayload(options);
-  return nostrEvent({
+  return cpStateFixture({
     id: `${artifact.id}-event`,
-    kind: KINDS.ARTIFACT_REGISTRY,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifact.id], ['artifact', artifact.id], ['service', SERVICE_ID], ['deleted', 'false']],
+    pubkey: SERVICE_PUBKEY,
+    schema: BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY,
+    d: artifact.id,
+    tags: [['artifact', artifact.id], ['service', SERVICE_ID]],
     content: artifact
   });
 }
@@ -466,18 +463,15 @@ test.describe('SBOM workflow', () => {
           package_count: 2
         }
       }),
-      nostrEvent({
+      cpAuditFixture({
         id: 'deployment-audit-event',
-        kind: KINDS.AUDIT,
-        created_at: now - 2,
-        tags: [['domain', 'controlplane'], ['schema', 'bahia.audit.v1'], ['type', 'deployment.started'], ['event_type', 'deployment.started'], ['service', SERVICE_ID]],
-        content: {
-          schema: 'bahia.audit.v1',
-          type: 'deployment.started',
-          event_type: 'deployment.started',
-          entity_id: SERVICE_ID,
-          data: { environment_id: 'prod' }
-        }
+        pubkey: SERVICE_PUBKEY,
+        createdAt: now - 2,
+        type: 'deployment.started',
+        entityId: SERVICE_ID,
+        state: SERVICE_ID,
+        data: { environment_id: 'prod' },
+        tags: [['service', SERVICE_ID]]
       })
     ];
 

@@ -37,6 +37,15 @@ type WebSocket struct {
 	negentropySessions *xsync.MapOf[string, *NegentropySession]
 }
 
+// authedPublicKeys returns a copy of AuthedPublicKeys taken under authLock
+// (bahia patch: the AUTH handler rewrites the slice while REQ/EVENT handlers
+// on other goroutines read it).
+func (ws *WebSocket) authedPublicKeys() []nostr.PubKey {
+	ws.authLock.Lock()
+	defer ws.authLock.Unlock()
+	return append([]nostr.PubKey(nil), ws.AuthedPublicKeys...)
+}
+
 func (ws *WebSocket) GetID() string {
 	ptr := uintptr(unsafe.Pointer(ws))
 	var id [8]byte

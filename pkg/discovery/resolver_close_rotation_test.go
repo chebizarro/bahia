@@ -24,9 +24,7 @@ func TestResolverConsumeReturnsWhenEventsCloseBeforeEOSE(t *testing.T) {
 	merged := &nostradapter.MergedSubscription{Events: events, EndOfStoredEvents: make(chan struct{}), RelayEOSE: relayEOSE, Closed: closed}
 	done := make(chan error, 1)
 	go func() {
-		retry, err := resolver.consume(context.Background(), &fakeRelayPool{}, merged, map[string]struct{}{})
-		require.False(t, retry)
-		done <- err
+		done <- resolver.consume(context.Background(), merged)
 	}()
 
 	events <- liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.10"), resolverTestBase()+10)

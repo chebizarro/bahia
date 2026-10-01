@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
@@ -54,6 +55,16 @@ type RelayFirstRegistry struct {
 	publisher RelayFirstPublisher
 	signer    RelayFirstSigner
 	logger    *zap.Logger
+	// createLocks serializes check-publish-store for creates of the same id
+	// in this process, so two concurrent creates with one id and different
+	// content cannot both publish to the coordinate (bahia-irsry.35).
+	createLocks [64]sync.Mutex
+}
+
+func (r *RelayFirstRegistry) lockCreate(id uuid.UUID) func() {
+	lock := &r.createLocks[int(id[15])%len(r.createLocks)]
+	lock.Lock()
+	return lock.Unlock
 }
 
 func NewRelayFirstRegistry(delegate *RegistryService, publisher RelayFirstPublisher, signer RelayFirstSigner, logger *zap.Logger) *RelayFirstRegistry {
@@ -70,13 +81,15 @@ func (r *RelayFirstRegistry) CreateService(ctx context.Context, svc *domain.Serv
 	if svc == nil {
 		return fmt.Errorf("service is nil")
 	}
-	if svc.RuntimeType == "" {
-		svc.RuntimeType = domain.RuntimeTypeDocker
+	// The id (client-minted, or minted here when absent) is fixed before
+	// publication so the relay coordinate and the cached row agree. An
+	// idempotent retry publishes nothing; a conflicting one must not
+	// overwrite the existing coordinate (bahia-irsry.35).
+	prepareServiceCreate(svc)
+	defer r.lockCreate(svc.ID)()
+	if replay, err := r.delegate.replayServiceCreate(ctx, svc); err != nil || replay {
+		return err
 	}
-	if svc.DefaultBranch == "" {
-		svc.DefaultBranch = "main"
-	}
-	normalizeServiceRepositoryForWrite(svc)
 	if err := r.publishServiceRegistry(ctx, svc, false); err != nil {
 		return err
 	}
@@ -146,11 +159,12 @@ func (r *RelayFirstRegistry) CreateEnvironment(ctx context.Context, env *domain.
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
-	if env == nil {
-		return fmt.Errorf("environment is nil")
+	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
+		return err
 	}
-	if env.DeployStrategy == "" {
-		env.DeployStrategy = domain.DeployStrategyReplace
+	defer r.lockCreate(env.ID)()
+	if replay, err := r.delegate.replayEnvironmentCreate(ctx, env, nil); err != nil || replay {
+		return err
 	}
 	if err := r.publishEnvironmentRegistry(ctx, env, false); err != nil {
 		return err
@@ -164,6 +178,13 @@ func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Co
 		return fmt.Errorf("registry delegate is not configured")
 	}
 	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	if units == nil {
+		units = []*domain.DeploymentUnit{}
+	}
+	defer r.lockCreate(env.ID)()
+	if replay, err := r.delegate.replayEnvironmentCreate(ctx, env, units); err != nil || replay {
 		return err
 	}
 	if err := r.publishEnvironmentRegistryWithUnits(ctx, env, units, false); err != nil {
@@ -242,7 +263,7 @@ func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *do
 	if err != nil {
 		return fmt.Errorf("encode service registry event: %w", err)
 	}
-	tags := relayFirstCanonicalStateTags("service", "registry", svc.ID.String(), deleted)
+	tags := relayFirstCanonicalStateTags("service", "registry", domain.FormatEntityCoordinate("", svc.ID), deleted)
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", svc.Name}, gonostr.Tag{"runtime", string(svc.RuntimeType)})
 	}
@@ -277,7 +298,7 @@ func (r *RelayFirstRegistry) publishEnvironmentRegistryWithUnits(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("encode environment registry event: %w", err)
 	}
-	tags := relayFirstCanonicalStateTags("environment", "registry", env.ID.String(), deleted)
+	tags := relayFirstCanonicalStateTags("environment", "registry", domain.FormatEntityCoordinate("", env.ID), deleted)
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", env.Name}, gonostr.Tag{"protected", fmt.Sprintf("%t", env.Protected)})
 	}

@@ -6,14 +6,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/dnsagent/protocol"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 type testService struct {
@@ -304,5 +307,67 @@ func TestRequireEncryptionUsesOuterEnvelopeKind(t *testing.T) {
 	request.OuterEvent = &nostr.Event{Kind: controlplane.KindContextVMGiftWrap}
 	if _, err := service.agent.HealthHandler(context.Background(), request); err != nil {
 		t.Fatalf("encrypted request rejected: %v", err)
+	}
+}
+
+func syncRequest(t *testing.T, serial int64, records []domain.DNSRecord, id byte, tags nostr.Tags) controlplane.ContextVMRequest {
+	t.Helper()
+	request := requestWithParams(t, protocol.SyncParams{Schema: protocol.Schema, Zone: testZone(), Records: records, Serial: serial})
+	request.Event = &nostr.Event{ID: nostr.ID{id}, Kind: nostr.Kind(kinds.ContextVMMessage), Tags: tags}
+	return request
+}
+
+func appliedRecordValue(t *testing.T, agent *Agent) string {
+	t.Helper()
+	result, err := agent.ListHandler(context.Background(), requestWithParams(t, protocol.ListParams{Schema: protocol.Schema, Zone: testZone()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := result.(protocol.ListResult).Records
+	if len(records) != 1 {
+		t.Fatalf("expected one applied record, got %+v", records)
+	}
+	return records[0].Value
+}
+
+// C-13: equal-serial syncs from racing backends converge on the lowest
+// request event id, whichever arrives first.
+func TestEqualSerialResolvesByLowestRequestID(t *testing.T) {
+	low := func(t *testing.T) controlplane.ContextVMRequest {
+		return syncRequest(t, 7, testRecords("10.0.0.1"), 0x01, nil)
+	}
+	high := func(t *testing.T) controlplane.ContextVMRequest {
+		return syncRequest(t, 7, testRecords("10.0.0.2"), 0x02, nil)
+	}
+	for name, order := range map[string][]func(*testing.T) controlplane.ContextVMRequest{"low-first": {low, high}, "high-first": {high, low}} {
+		t.Run(name, func(t *testing.T) {
+			service := newTestService(t, false)
+			for _, request := range order {
+				if _, err := service.agent.SyncHandler(context.Background(), request(t)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := appliedRecordValue(t, service.agent); got != "10.0.0.1" {
+				t.Fatalf("applied %s, want the lowest request id's records 10.0.0.1", got)
+			}
+		})
+	}
+}
+
+// C-12: an expired request (NIP-40) is never applied.
+func TestExpiredRequestIsRejected(t *testing.T) {
+	service := newTestService(t, false)
+	now := time.Unix(1_800_000_000, 0)
+	service.agent.now = func() time.Time { return now }
+	expired := syncRequest(t, 3, testRecords("10.0.0.3"), 0x03, nostr.Tags{{"expiration", strconv.FormatInt(now.Unix(), 10)}})
+	if _, err := service.agent.SyncHandler(context.Background(), expired); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired request was not rejected: %v", err)
+	}
+	if *service.reloadCalls != 0 {
+		t.Fatalf("expired request triggered a reload")
+	}
+	live := syncRequest(t, 3, testRecords("10.0.0.3"), 0x03, nostr.Tags{{"expiration", strconv.FormatInt(now.Add(time.Minute).Unix(), 10)}})
+	if _, err := service.agent.SyncHandler(context.Background(), live); err != nil {
+		t.Fatalf("unexpired request rejected: %v", err)
 	}
 }

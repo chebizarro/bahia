@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { BAHIA_STATE_SCHEMAS, cpStateFixture } from './cp-state-fixtures.js';
 import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
 const SERVICE_ID = 'service-1';
 const BUILD_ID = 'build-1';
 const ARTIFACT_ID = 'artifact-1';
 const ENCRYPTED_RELAY = 'wss://relay.example.com';
-const CONTROLPLANE_STATE_KIND = 30900;
 
 const mockService = {
   schema: 'bahia.registry.service.v1',
@@ -68,38 +68,32 @@ const relaySystemInfo = {
   }
 };
 
-function nostrEvent({ id, kind = CONTROLPLANE_STATE_KIND, pubkey = E2E_SERVICE_PUBKEY, created_at = 1_778_688_000, tags = [], content = {} }) {
-  return {
-    id,
-    kind,
-    pubkey,
-    created_at,
-    tags,
-    content: JSON.stringify(content),
-    sig: '0'.repeat(128)
-  };
-}
-
 function serviceEvent() {
-  return nostrEvent({
+  return cpStateFixture({
     id: 'service-1-registry-event',
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.service.v1'], ['legacy_kind', '31962'], ['d', SERVICE_ID], ['service', SERVICE_ID], ['deleted', 'false']],
+    schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
+    d: SERVICE_ID,
+    tags: [['service', SERVICE_ID]],
     content: mockService
   });
 }
 
 function buildEvent(build = mockBuilds[0]) {
-  return nostrEvent({
+  return cpStateFixture({
     id: `${build.id}-registry-event`,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.build.v1'], ['legacy_kind', '31969'], ['d', build.id], ['build', build.id], ['service', SERVICE_ID], ['deleted', 'false']],
+    schema: BAHIA_STATE_SCHEMAS.BUILD_REGISTRY,
+    d: build.id,
+    tags: [['build', build.id], ['service', SERVICE_ID]],
     content: build
   });
 }
 
 function artifactEvent(artifact = mockArtifacts[0]) {
-  return nostrEvent({
+  return cpStateFixture({
     id: `${artifact.id}-registry-event`,
-    tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifact.id], ['artifact', artifact.id], ['service', SERVICE_ID], ['build', BUILD_ID], ['deleted', 'false']],
+    schema: BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY,
+    d: artifact.id,
+    tags: [['artifact', artifact.id], ['service', SERVICE_ID], ['build', BUILD_ID]],
     content: artifact
   });
 }

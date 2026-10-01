@@ -170,9 +170,9 @@ Production clients must not publish or subscribe to these numbers as runtime con
 
 ---
 
-## Startup Migration App Compatibility
+## Migration Tool Compatibility
 
-Bahia ships a startup migration app in `internal/nostrmigration` so deployed relays and local repositories can be converted without keeping legacy runtime support in the core app.
+Bahia ships an offline migration tool, `bahia-migrate nostr` (code in `internal/nostrmigration`), so deployed relays and local repositories can be converted without keeping legacy runtime support in the core app. It is not on the daemon startup path; see [the CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr) for when operators run it.
 
 Migration behavior:
 

@@ -36,6 +36,9 @@ type bootstrapFakeRelay struct {
 	// ignoreAuthors makes the relay return events regardless of the
 	// filter's authors, like a misbehaving or legacy relay.
 	ignoreAuthors bool
+	// closeWith, when set, makes a store relay answer every REQ with this
+	// CLOSED reason instead of events and EOSE.
+	closeWith string
 	// subs receives manually driven subscriptions when store is nil.
 	subs chan bootstrapFakeRelaySub
 
@@ -107,6 +110,16 @@ func newBootstrapFakeRelayPool(t *testing.T, relays ...*bootstrapFakeRelay) *Rel
 		fake.mu.Lock()
 		fake.filters = append(fake.filters, filter)
 		fake.mu.Unlock()
+		if fake.store != nil && fake.closeWith != "" {
+			sub := &gonostr.Subscription{
+				Events:            make(chan gonostr.Event),
+				EndOfStoredEvents: make(chan gonostr.EndOfStoredEvent),
+				ClosedReason:      make(chan string, 1),
+			}
+			sub.ClosedReason <- fake.closeWith
+			close(sub.Events)
+			return sub, nil
+		}
 		if fake.store != nil {
 			events := fake.query(filter)
 			sub := &gonostr.Subscription{

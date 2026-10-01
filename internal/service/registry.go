@@ -155,15 +155,25 @@ func NewRegistryService(
 
 // --- Service CRUD ---
 
+// CreateService stores a new service under svc.ID, minting a UUIDv7 when the
+// caller supplied none. A retry with the same id and content is an idempotent
+// no-op that loads the stored service into svc; the same id with different
+// content returns *domain.EntityIDConflictError (bahia-irsry.35).
 func (s *RegistryService) CreateService(ctx context.Context, svc *domain.Service) error {
-	if svc.RuntimeType == "" {
-		svc.RuntimeType = domain.RuntimeTypeDocker
+	if svc == nil {
+		return fmt.Errorf("service is nil")
 	}
-	if svc.DefaultBranch == "" {
-		svc.DefaultBranch = "main"
+	prepareServiceCreate(svc)
+	if replay, err := s.replayServiceCreate(ctx, svc); err != nil || replay {
+		return err
 	}
-	normalizeServiceRepositoryForWrite(svc)
 	if err := s.services.Create(ctx, svc); err != nil {
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			// A concurrent create of the same id won the insert.
+			if replay, replayErr := s.replayServiceCreate(ctx, svc); replayErr != nil || replay {
+				return replayErr
+			}
+		}
 		return err
 	}
 	s.publisher.Publish(ctx, events.Event{
@@ -338,6 +348,21 @@ func (s *RegistryService) DeleteService(ctx context.Context, id uuid.UUID, force
 	return nil
 }
 
+// prepareServiceCreate applies create-time defaults, including the id when the
+// caller supplied none, so relay publication and the stored row agree.
+func prepareServiceCreate(svc *domain.Service) {
+	if svc.ID == uuid.Nil {
+		svc.ID = domain.NewEntityID()
+	}
+	if svc.RuntimeType == "" {
+		svc.RuntimeType = domain.RuntimeTypeDocker
+	}
+	if svc.DefaultBranch == "" {
+		svc.DefaultBranch = "main"
+	}
+	normalizeServiceRepositoryForWrite(svc)
+}
+
 func normalizeServiceRepositoryForWrite(svc *domain.Service) {
 	if svc == nil {
 		return
@@ -423,11 +448,21 @@ func normalizeServiceRepositoryForRead(svc *domain.Service) {
 
 // --- Environment CRUD ---
 
+// CreateEnvironment stores a new environment under env.ID with the same
+// client-minted-id semantics as CreateService.
 func (s *RegistryService) CreateEnvironment(ctx context.Context, env *domain.Environment) error {
 	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
 		return err
 	}
+	if replay, err := s.replayEnvironmentCreate(ctx, env, nil); err != nil || replay {
+		return err
+	}
 	if err := s.environments.Create(ctx, env); err != nil {
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			if replay, replayErr := s.replayEnvironmentCreate(ctx, env, nil); replayErr != nil || replay {
+				return replayErr
+			}
+		}
 		return err
 	}
 	s.publishEnvironmentMutation(ctx, events.EventEnvironmentCreated, env)
@@ -441,6 +476,12 @@ func (s *RegistryService) CreateEnvironmentWithDeploymentUnits(ctx context.Conte
 	}
 	if s.txExecutor == nil {
 		return fmt.Errorf("environment deployment-unit transaction handling is not configured")
+	}
+	if units == nil {
+		units = []*domain.DeploymentUnit{}
+	}
+	if replay, err := s.replayEnvironmentCreate(ctx, env, units); err != nil || replay {
+		return err
 	}
 	if err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
 		if repos.Environments == nil || repos.DeploymentUnits == nil {
@@ -456,6 +497,11 @@ func (s *RegistryService) CreateEnvironmentWithDeploymentUnits(ctx context.Conte
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			if replay, replayErr := s.replayEnvironmentCreate(ctx, env, units); replayErr != nil || replay {
+				return replayErr
+			}
+		}
 		return err
 	}
 	s.publishEnvironmentMutation(ctx, events.EventEnvironmentCreated, env)
@@ -620,7 +666,7 @@ func normalizeAndValidateEnvironmentMutation(env *domain.Environment, units []*d
 		return fmt.Errorf("environment is nil")
 	}
 	if env.ID == uuid.Nil {
-		env.ID = uuid.New()
+		env.ID = domain.NewEntityID()
 	}
 	env.Name = strings.TrimSpace(env.Name)
 	if env.Name == "" {

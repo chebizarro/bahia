@@ -79,15 +79,14 @@ func (a *fleetReconcileRuntime) capturedRequests() []RuntimeAdapterRequest {
 
 func TestReactorSubscribesToTrustedFleetConfigRevisions(t *testing.T) {
 	signer := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
-	subscription := newFakeRelaySubscription()
-	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	endpoint := newFakeRelayEndpoint(t)
+	endpoint.autoEOSE = true
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	reactor := NewReactor(Config{
 		Relays:             []string{endpoint.url},
@@ -95,12 +94,13 @@ func TestReactorSubscribesToTrustedFleetConfigRevisions(t *testing.T) {
 		SoulFactoryPubkey:  signer.pubkey,
 		FleetConfigEnabled: true,
 	}, nil, signer, slog.Default())
-	reactor.relayBus = bus
+	reactor.relayClient = bus
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- reactor.Run(ctx) }()
 
-	filters := <-endpoint.subscribeCalls
+	// One REQ per filter: provisioning, lifecycle, runtime results, fleet.
+	filters := receiveREQFilters(t, endpoint, 4)
 	var fleetFilter *nostr.Filter
 	for i := range filters {
 		if len(filters[i].Kinds) == 1 && filters[i].Kinds[0] == nostr.Kind(domain.KindSoulFleetConfig) {
@@ -305,7 +305,7 @@ func newFleetReconcileTestReactorWithRuntime(
 		domain.RuntimeTargetOpenClaw: runtime,
 	})
 	reactor.lifecycleHandler = handler
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	return reactor, capture
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 const (
@@ -64,8 +65,20 @@ type configProjectionState struct {
 	Last    *persistedConfigProjection   `json:"last,omitempty"`
 }
 
+// desiredCoordinate is the desired event currently in force for one
+// coordinate. CreatedAt resolves equal versions by NIP-01 order (C-13).
+// Withdrawn records that the event was deleted (NIP-09) or expired (NIP-40):
+// it keeps the version floor so the same or an older version cannot be
+// accepted again, while a newer version can.
 type desiredCoordinate struct {
 	appliedCoordinate
+	CreatedAt int64 `json:"created_at,omitempty"`
+	ExpiresAt int64 `json:"expires_at,omitempty"`
+	Withdrawn bool  `json:"withdrawn,omitempty"`
+}
+
+func (d desiredCoordinate) version() nostrutil.Version {
+	return nostrutil.Version{CreatedAt: nostr.Timestamp(d.CreatedAt), ID: d.EventID}
 }
 
 type pendingActivation struct {
@@ -111,6 +124,7 @@ type ConfigConsumer struct {
 	apply      func(ConfigProjection) error
 	state      configProjectionState
 	activateCh chan struct{}
+	activating sync.WaitGroup
 }
 
 func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
@@ -208,7 +222,13 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	c.mu.Lock()
 	coordinate := projection.Author + "\x00" + projection.ServiceID + "\x00" + projection.Scope + "\x00" + projection.PolicyName
 	desired := c.state.Desired[coordinate]
-	if projection.Version <= desired.Version {
+	// Versions advance the coordinate. Two different events claiming the same
+	// version resolve like NIP-01 replacement (later created_at, then lowest
+	// id), so the consumer converges on the event relays keep whatever order
+	// they arrive in.
+	advances := projection.Version > desired.Version ||
+		(projection.Version == desired.Version && projection.EventID != desired.EventID && nostrutil.VersionOf(&event).Supersedes(desired.version()))
+	if !advances {
 		c.mu.Unlock()
 		return c.publishStatus(ctx, projection, event.ID.Hex(), "rejected", fmt.Sprintf("version %d does not advance desired version %d", projection.Version, desired.Version))
 	}
@@ -216,6 +236,8 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	next.Desired = cloneDesired(c.state.Desired)
 	next.Desired[coordinate] = desiredCoordinate{
 		appliedCoordinate: appliedCoordinate{Author: projection.Author, EventID: projection.EventID, Version: projection.Version},
+		CreatedAt:         int64(event.CreatedAt),
+		ExpiresAt:         int64(nostrutil.ExpiresAt(&event)),
 	}
 	next.Pending = append(append([]pendingActivation(nil), c.state.Pending...), pendingActivation{
 		Coordinate: coordinate,
@@ -234,6 +256,99 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	return c.publishStatus(ctx, projection, event.ID.Hex(), "accepted", "")
 }
 
+// withdraw handles a desired coordinate whose event the store no longer holds
+// because its author deleted it (NIP-09) or it expired (NIP-40). key is the
+// store's replaceable key ("<kind>:<author>:<d>"). Pending activations of the
+// event are dropped and a "withdrawn" status is published. The relay keeps
+// running the last applied policy: an absent membership or policy document
+// would read as an empty allowlist, which admits every pubkey, so a deletion
+// must not silently open the relay. Operators replace config by publishing a
+// newer version.
+func (c *ConfigConsumer) withdraw(ctx context.Context, key, reason string) error {
+	address, ok := nostrutil.ParseAddress(key)
+	if !ok {
+		return fmt.Errorf("withdraw desired config: malformed coordinate %q", key)
+	}
+	prefix := "service:" + c.serviceID + ":"
+	if !strings.HasPrefix(address.D, prefix) {
+		return nil
+	}
+	policyName := strings.TrimPrefix(address.D, prefix)
+	coordinate := address.PubKey.Hex() + "\x00" + c.serviceID + "\x00" + c.scope + "\x00" + policyName
+	c.mu.Lock()
+	desired, ok := c.state.Desired[coordinate]
+	if !ok || desired.Withdrawn {
+		c.mu.Unlock()
+		return nil
+	}
+	next := c.state
+	next.Desired = cloneDesired(c.state.Desired)
+	desired.Withdrawn = true
+	next.Desired[coordinate] = desired
+	if err := c.persist(ctx, next); err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("persist withdrawn desired config: %w", err)
+	}
+	c.state = next
+	c.mu.Unlock()
+	projection := ConfigProjection{
+		ServiceID: c.serviceID, Scope: c.scope, PolicyName: policyName,
+		Version: desired.Version, Schema: configSchemaForPolicy(policyName),
+		EventID: desired.EventID, Author: desired.Author,
+	}
+	return c.publishStatus(ctx, projection, desired.EventID, "withdrawn", reason)
+}
+
+// desiredEvents maps the store key of every live desired coordinate to the
+// id of its desired event, so the server can re-read those coordinates (after
+// a deletion request, or at startup) without re-handling unchanged events.
+func (c *ConfigConsumer) desiredEvents() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string, len(c.state.Desired))
+	for coordinate, desired := range c.state.Desired {
+		if key, ok := desiredStoreKey(coordinate); ok && !desired.Withdrawn {
+			out[key] = desired.EventID
+		}
+	}
+	return out
+}
+
+// desiredExpiries returns when each live desired event expires (NIP-40),
+// keyed by store key.
+func (c *ConfigConsumer) desiredExpiries() map[string]time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]time.Time{}
+	for coordinate, desired := range c.state.Desired {
+		if key, ok := desiredStoreKey(coordinate); ok && !desired.Withdrawn && desired.ExpiresAt > 0 {
+			out[key] = time.Unix(desired.ExpiresAt, 0)
+		}
+	}
+	return out
+}
+
+// desiredStoreKey maps a consumer coordinate (author, service, scope, policy)
+// to the store's replaceable key for the event that carries it.
+func desiredStoreKey(coordinate string) (string, bool) {
+	parts := strings.Split(coordinate, "\x00")
+	if len(parts) != 4 {
+		return "", false
+	}
+	kind := configPolicyKind
+	if parts[3] == "membership" {
+		kind = configListKind
+	}
+	return strconv.Itoa(int(kind)) + ":" + parts[0] + ":service:" + parts[1] + ":" + parts[3], true
+}
+
+func configSchemaForPolicy(policyName string) string {
+	if policyName == "membership" {
+		return configMembershipSchema
+	}
+	return configRelaySchema
+}
+
 func cloneDesired(in map[string]desiredCoordinate) map[string]desiredCoordinate {
 	out := make(map[string]desiredCoordinate, len(in))
 	for key, value := range in {
@@ -243,7 +358,17 @@ func cloneDesired(in map[string]desiredCoordinate) map[string]desiredCoordinate 
 }
 
 func (c *ConfigConsumer) Start(ctx context.Context) {
-	go c.activateLoop(ctx)
+	c.activating.Add(1)
+	go func() {
+		defer c.activating.Done()
+		c.activateLoop(ctx)
+	}()
+}
+
+// wait blocks until the activation loop started by Start has returned, so
+// shutdown can close the store without an activation still publishing.
+func (c *ConfigConsumer) wait() {
+	c.activating.Wait()
 }
 
 func (c *ConfigConsumer) activateLoop(ctx context.Context) {
@@ -271,6 +396,16 @@ func (c *ConfigConsumer) processPending(ctx context.Context) {
 			return
 		}
 		next := c.state.Pending[0]
+		if desired := c.state.Desired[next.Coordinate]; desired.Withdrawn || (desired.EventID != "" && desired.EventID != next.Projection.EventID) {
+			// Superseded by a later desired event, or deleted/expired since it
+			// was queued: activating it now would apply state that is gone.
+			c.state.Pending = c.state.Pending[1:]
+			if err := c.persist(ctx, c.state); err != nil {
+				c.logActivation("persist skipped activation", ConfigProjection{ServiceID: next.Projection.ServiceID, PolicyName: next.Projection.PolicyName, Version: next.Projection.Version}, err)
+			}
+			c.mu.Unlock()
+			continue
+		}
 		c.mu.Unlock()
 
 		projection := ConfigProjection{
@@ -301,7 +436,7 @@ func (c *ConfigConsumer) processPending(ctx context.Context) {
 		}
 		c.state.Applied = cloneCoordinates(c.state.Applied)
 		applied := c.state.Applied[next.Coordinate]
-		if next.Projection.Version > applied.Version {
+		if next.Projection.Version >= applied.Version {
 			c.state.Applied[next.Coordinate] = appliedCoordinate{
 				Author: next.Projection.Author, EventID: next.Projection.EventID, Version: next.Projection.Version,
 			}
@@ -388,6 +523,9 @@ func (c *ConfigConsumer) validate(event nostr.Event) (ConfigProjection, error) {
 	projection.PolicyName = strings.TrimPrefix(dTag, prefix)
 	if serviceID != c.serviceID || scope != c.scope {
 		return projection, fmt.Errorf("desired event target does not match this sidecar")
+	}
+	if nostrutil.Expired(&event, c.now()) {
+		return projection, fmt.Errorf("desired event has expired (NIP-40)")
 	}
 	switch event.Kind {
 	case configListKind:

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -51,6 +53,10 @@ type FIPSSubscriber struct {
 	logger              *zap.Logger
 	now                 func() time.Time
 	handlers            []FIPSWorkerUpdateHandler
+	// lifecycle resolves adverts across relays and reconnects: latest-wins
+	// per (kind, pubkey, d) with the lowest-id tie-break, NIP-09 deletions
+	// and NIP-40 expiration (C-12, C-13).
+	lifecycle *nostrutil.Lifecycle
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -106,6 +112,7 @@ func NewFIPSSubscriber(pool *RelayPool, workerRepo repository.WorkerRepository, 
 		workerRepo: workerRepo,
 		logger:     logger.Named("fips-subscriber"),
 		now:        func() time.Time { return time.Now().UTC() },
+		lifecycle:  nostrutil.NewLifecycle(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -173,6 +180,14 @@ func (s *FIPSSubscriber) Run(ctx context.Context) error {
 	if s.workerRepo == nil {
 		return fmt.Errorf("fips subscriber worker repository is required")
 	}
+	expiryDone := make(chan struct{})
+	go func() {
+		defer close(expiryDone)
+		_ = s.lifecycle.RunExpiry(ctx, s.now, func(expired []nostrutil.Entry) {
+			s.withdrawAdverts(ctx, expired, "expired")
+		})
+	}()
+	defer func() { <-expiryDone }()
 	backoff := DefaultBackoff()
 	for {
 		err := s.subscribe(ctx)
@@ -190,7 +205,7 @@ func (s *FIPSSubscriber) Run(ctx context.Context) error {
 }
 
 func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
-	merged, err := s.pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{s.filter()})
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{s.filter(), s.deletionFilter()})
 	if err != nil {
 		return err
 	}
@@ -234,9 +249,41 @@ func (s *FIPSSubscriber) filter() gonostr.Filter {
 		tags["protocol"] = []string{s.appNamespace}
 	}
 	return gonostr.Filter{
-		Kinds: []gonostr.Kind{canonicalKind(FIPSOverlayAdvertKind)},
-		Tags:  tags,
+		Kinds:   []gonostr.Kind{canonicalKind(FIPSOverlayAdvertKind)},
+		Authors: s.allowedAuthors(),
+		Tags:    tags,
 	}
+}
+
+// deletionFilter selects NIP-09 requests that can withdraw an advert. With an
+// allowlist the relay filters by author; without one it relies on the `k`
+// tag NIP-09 asks deleters to include.
+func (s *FIPSSubscriber) deletionFilter() gonostr.Filter {
+	filter := gonostr.Filter{Kinds: []gonostr.Kind{gonostr.KindDeletion}}
+	if authors := s.allowedAuthors(); len(authors) > 0 {
+		filter.Authors = authors
+		return filter
+	}
+	filter.Tags = gonostr.TagMap{"k": []string{fmt.Sprint(FIPSOverlayAdvertKind)}}
+	return filter
+}
+
+// allowedAuthors moves the allowlist into the REQ so relays don't send
+// adverts the subscriber would drop (C-13).
+func (s *FIPSSubscriber) allowedAuthors() []gonostr.PubKey {
+	if len(s.allowedPubkeys) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(s.allowedPubkeys))
+	for pubkey := range s.allowedPubkeys {
+		values = append(values, pubkey)
+	}
+	sort.Strings(values)
+	authors, err := nostrutil.PubKeysFromHex(values)
+	if err != nil {
+		return nil
+	}
+	return authors
 }
 
 func (s *FIPSSubscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, authAttempted map[string]struct{}) bool {
@@ -265,6 +312,11 @@ func (s *FIPSSubscriber) handleEvent(ctx context.Context, ev *gonostr.Event) {
 		s.logger.Warn("dropping invalid FIPS advert", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
+	if ev.Kind == gonostr.KindDeletion {
+		decision := s.lifecycle.Observe(ev, s.now())
+		s.withdrawAdverts(ctx, decision.Removed, "deleted")
+		return
+	}
 	worker, advert, err := s.workerFromEvent(ctx, ev)
 	if err != nil {
 		s.logger.Warn("dropping FIPS advert", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)), zap.Error(err))
@@ -274,12 +326,44 @@ func (s *FIPSSubscriber) handleEvent(ctx context.Context, ev *gonostr.Event) {
 		s.logger.Debug("ignoring FIPS advert from unknown worker", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)))
 		return
 	}
+	if decision := s.lifecycle.Observe(ev, s.now()); decision.Outcome != nostrutil.OutcomeAccept {
+		s.logger.Debug("ignoring FIPS advert", zap.String("event_id", eventIDHex(ev)), zap.Stringer("outcome", decision.Outcome))
+		return
+	}
 	if err := s.workerRepo.Upsert(ctx, worker); err != nil {
+		s.lifecycle.Release(ev.ID)
 		s.logger.Warn("updating worker from FIPS advert failed", zap.String("event_id", eventIDHex(ev)), zap.String("pubkey", eventPubKeyHex(ev)), zap.Error(err))
 		return
 	}
 	for _, handler := range s.handlers {
 		handler(ctx, worker, advert)
+	}
+}
+
+// withdrawAdverts clears the overlay endpoints of workers whose current
+// advert was deleted (NIP-09) or expired (NIP-40).
+func (s *FIPSSubscriber) withdrawAdverts(ctx context.Context, entries []nostrutil.Entry, reason string) {
+	for _, entry := range entries {
+		if int(entry.Kind) != FIPSOverlayAdvertKind {
+			continue
+		}
+		pubkey := entry.PubKey.Hex()
+		worker, err := s.workerRepo.GetByPubKey(ctx, pubkey)
+		if err != nil {
+			s.logger.Warn("looking up worker for withdrawn FIPS advert failed", zap.String("pubkey", pubkey), zap.Error(err))
+			continue
+		}
+		if worker == nil {
+			continue
+		}
+		worker.FIPSOverlayAddr = ""
+		worker.FIPSEndpoints = nil
+		worker.UpdatedAt = s.now()
+		if err := s.workerRepo.Upsert(ctx, worker); err != nil {
+			s.logger.Warn("clearing withdrawn FIPS advert failed", zap.String("pubkey", pubkey), zap.String("reason", reason), zap.Error(err))
+			continue
+		}
+		s.logger.Info("FIPS advert withdrawn", zap.String("pubkey", pubkey), zap.String("event_id", entry.ID.Hex()), zap.String("reason", reason))
 	}
 }
 
@@ -414,8 +498,8 @@ func normalizeFIPSAllowedPubkeys(values []string) map[string]struct{} {
 			if err != nil || prefix != "npub" {
 				continue
 			}
-			if pubkey, ok := decoded.(string); ok {
-				value = pubkey
+			if pubkey, ok := decoded.(gonostr.PubKey); ok {
+				value = pubkey.Hex()
 			}
 		}
 		value = strings.ToLower(value)

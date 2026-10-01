@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { cpStateFixture } from './cp-state-fixtures.js';
 import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 
 const BROWSER_RELAY = 'ws://relay.test.local';
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
-const CONTROLPLANE_STATE_KIND = 30900;
 const SERVICE_SCHEMA = 'bahia.registry.service.v1';
 
 const systemInfo = {
@@ -21,22 +21,15 @@ const systemInfo = {
 };
 
 function serviceProjectionEvent(service, createdAt = 1777852800) {
-  return {
+  return cpStateFixture({
     id: `service-projection-${service.id}`,
-    kind: CONTROLPLANE_STATE_KIND,
     pubkey: SERVICE_PUBKEY,
-    created_at: createdAt,
-    tags: [
-      ['domain', 'controlplane'],
-      ['schema', SERVICE_SCHEMA],
-      ['d', service.id],
-      ['service', service.id],
-      ['name', service.name],
-      ['deleted', 'false']
-    ],
-    content: JSON.stringify({ schema: SERVICE_SCHEMA, ...service, deleted: false }),
-    sig: '0'.repeat(128)
-  };
+    createdAt,
+    schema: SERVICE_SCHEMA,
+    d: service.id,
+    tags: [['service', service.id], ['name', service.name]],
+    content: service
+  });
 }
 
 async function installRelayMetadataMock(page) {

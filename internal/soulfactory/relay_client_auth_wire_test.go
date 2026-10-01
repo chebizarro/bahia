@@ -41,11 +41,11 @@ func newNIP42KhatruRelay(t *testing.T, challengeOnConnect bool) string {
 	})
 }
 
-// TestRelayBusNIP42AgainstChallengingRelayIsRaceFree drives Authenticate,
+// TestRelayClientNIP42AgainstChallengingRelayIsRaceFree drives Authenticate,
 // Publish and Query against a relay that challenges on connect. Run with -race:
 // the bus must never read the library's NIP-42 state while the relay reader
 // goroutine may still be writing it.
-func TestRelayBusNIP42AgainstChallengingRelayIsRaceFree(t *testing.T) {
+func TestRelayClientNIP42AgainstChallengingRelayIsRaceFree(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		challengeOnConnect bool
@@ -58,9 +58,9 @@ func TestRelayBusNIP42AgainstChallengingRelayIsRaceFree(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			signer := newFakeSigner(t)
 			url := newNIP42KhatruRelay(t, tc.challengeOnConnect)
-			bus, err := NewSoulFactoryRelayBus([]string{url}, WithRelayBusSigner(signer), WithRelayBusBackoff(immediateRelayBusBackoff))
+			bus, err := NewRelayClient([]string{url}, WithRelaySigner(signer), withRelayResubscribeBackoff(fastRelayBackoff))
 			if err != nil {
-				t.Fatalf("new bus: %v", err)
+				t.Fatalf("new relay client: %v", err)
 			}
 			defer bus.Close()
 

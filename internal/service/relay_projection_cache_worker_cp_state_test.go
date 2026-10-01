@@ -187,9 +187,9 @@ func TestWorkerCPStateReplayOlderThanLocalRowIsSkipped(t *testing.T) {
 	}
 }
 
-// Projector-shaped assignment and drain records share d=<worker pubkey>, so
-// they must land in separate projection streams or each looks stale against
-// the other; cleanup execution has no daemon read model.
+// Projector-shaped assignment and drain records for one worker sit on their
+// own family coordinates (worker:assignment:<pk>, worker:drain:<pk>) and land
+// in separate projection streams; cleanup execution has no daemon read model.
 func TestWorkerCPStateFamiliesDecodeIntoSeparateStreams(t *testing.T) {
 	author := gonostr.Generate()
 	workerPubkey := gonostr.Generate().Public().Hex()
@@ -219,8 +219,8 @@ func TestWorkerCPStateFamiliesDecodeIntoSeparateStreams(t *testing.T) {
 	cache := service.NewRelayProjectionCache(meta, zap.NewNop())
 	requireApply(t, cache, assignment)
 	requireApply(t, cache, drain)
-	assertStoredMeta(t, meta, string(nostr.FamilyWorkerAssignment), workerPubkey, assignment.SourceID, false)
-	assertStoredMeta(t, meta, string(nostr.FamilyWorkerDrain), workerPubkey, drain.SourceID, false)
+	assertStoredMeta(t, meta, string(nostr.FamilyWorkerAssignment), kinds.WorkerAssignmentDPrefix+workerPubkey, assignment.SourceID, false)
+	assertStoredMeta(t, meta, string(nostr.FamilyWorkerDrain), kinds.WorkerDrainDPrefix+workerPubkey, drain.SourceID, false)
 
 	cleanup := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: 1_800_000_000, Tags: gonostr.Tags{
 		{"d", "worker:cleanup:" + workerPubkey + ":job-1"}, {"domain", kinds.WorkerDomain}, {"schema", kinds.CASControlStateSchema},

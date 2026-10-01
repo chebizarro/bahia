@@ -120,6 +120,12 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
           ['schema', schema || (kind === KIND_SESSION ? SESSION_SCHEMA_V2 : kind === KIND_STATUS ? 'bahia.assistant-status.v1' : 'bahia.assistant-transcript.v1')],
           ['session', sessionId],
           ['p', operatorPubkey, '', 'operator'],
+          // Producer shape: assistant status carries t=assistant-status, the
+          // single-letter topic the store REQs on, and transcript messages
+          // carry t=assistant-transcript plus the per-session topic the
+          // daemon replays by (bahia-irsry.37).
+          ...(kind === KIND_STATUS ? [['t', 'assistant-status']] : []),
+          ...(kind === KIND_TRANSCRIPT ? [['t', 'assistant-transcript'], ['t', `assistant-transcript:${sessionId}`]] : []),
           ...(status ? [['status', status]] : []),
           ...tags
         ],

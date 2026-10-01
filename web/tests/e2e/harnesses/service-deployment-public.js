@@ -178,7 +178,6 @@ export async function installPublicServiceDeploymentHarness(
     window.__BAHIA_E2E_PUBLIC_STATE = loadPersistedState();
 
     const KIND_CONTEXTVM = 25910;
-    const KIND_CONTROL_STATE = 30900;
     const STATE_SCHEMAS = {
       service: 'bahia.registry.service.v1',
       environment: 'bahia.registry.environment.v1',
@@ -205,13 +204,11 @@ export async function installPublicServiceDeploymentHarness(
       };
     }
 
-    function stateEvent({ id, schema, tags = [], content = {} }) {
-      return nostrEvent({
-        id,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', schema], ...tags],
-        content: { schema, ...content }
-      });
+    // Projected records are built by the shared producer-shaped builder
+    // (cp-state-fixtures.js via installE2EMocks): canonical 30900 envelope
+    // with legacy_kind and the family's #t topic, as the daemon publishes them.
+    function stateEvent({ id, schema, d, deleted = false, tags = [], content = {}, created_at = nowSeconds }) {
+      return window.__bahiaE2EFixtures.cpState({ id, schema, d, deleted, tags, content, pubkey: servicePubkey, createdAt: created_at });
     }
 
     function parseContextVMRequest(requestEvent) {
@@ -285,47 +282,57 @@ export async function installPublicServiceDeploymentHarness(
     function currentReadModelEvents() {
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       return [
-        ...state.services.map((service, index) => nostrEvent({
+        ...state.services.map((service, index) => stateEvent({
           id: `svc-reg-${service.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', service.id], ['deleted', String(Boolean(service.deleted))], ['name', service.name]],
-          content: { schema: STATE_SCHEMAS.service, ...service }
+          schema: STATE_SCHEMAS.service,
+          d: service.id,
+          deleted: Boolean(service.deleted),
+          tags: [['name', service.name]],
+          content: { ...service }
         })),
-        ...state.environments.map((environment, index) => nostrEvent({
+        ...state.environments.map((environment, index) => stateEvent({
           id: `env-reg-${environment.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.environment], ['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
-          content: { schema: STATE_SCHEMAS.environment, ...environment }
+          schema: STATE_SCHEMAS.environment,
+          d: environment.id,
+          deleted: Boolean(environment.deleted),
+          tags: [['name', environment.name]],
+          content: { ...environment }
         })),
-        ...state.builds.map((build, index) => nostrEvent({
+        ...state.builds.map((build, index) => stateEvent({
           id: `build-reg-${build.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.build], ['d', build.id], ['service', build.service_id]],
-          content: { schema: STATE_SCHEMAS.build, ...build }
+          schema: STATE_SCHEMAS.build,
+          d: build.id,
+          tags: [['service', build.service_id]],
+          content: { ...build }
         })),
-        ...state.artifacts.map((artifact, index) => nostrEvent({
+        ...state.artifacts.map((artifact, index) => stateEvent({
           id: `artifact-reg-${artifact.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.artifact], ['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
-          content: { schema: STATE_SCHEMAS.artifact, ...artifact }
+          schema: STATE_SCHEMAS.artifact,
+          d: artifact.id,
+          tags: [['service', artifact.service_id], ['build', artifact.build_id || '']],
+          content: { ...artifact }
         })),
-        ...state.serviceStates.map((serviceState, index) => nostrEvent({
+        ...state.serviceStates.map((serviceState, index) => stateEvent({
           id: `service-state-${serviceState.service_id}-${serviceState.environment_id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.serviceState], ['d', serviceState.id || `${serviceState.service_id}:${serviceState.environment_id}`], ['service', serviceState.service_id], ['environment', serviceState.environment_id], ['deleted', String(Boolean(serviceState.deleted))]],
-          content: { schema: STATE_SCHEMAS.serviceState, ...serviceState }
+          schema: STATE_SCHEMAS.serviceState,
+          d: serviceState.id || `${serviceState.service_id}:${serviceState.environment_id}`,
+          deleted: Boolean(serviceState.deleted),
+          tags: [['service', serviceState.service_id], ['environment', serviceState.environment_id]],
+          content: { ...serviceState }
         })),
-        ...state.deploymentIntents.map((intent, index) => nostrEvent({
+        ...state.deploymentIntents.map((intent, index) => stateEvent({
           id: `intent-reg-${intent.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
-          content: { schema: STATE_SCHEMAS.intent, ...intent }
+          schema: STATE_SCHEMAS.intent,
+          d: intent.id,
+          tags: [['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
+          content: { ...intent }
         })),
-        ...state.deploymentRuns.map((run, index) => nostrEvent({
+        ...state.deploymentRuns.map((run, index) => stateEvent({
           id: `run-reg-${run.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.run], ['d', run.id], ['intent', run.deployment_intent_id || run.intent_id || '']],
-          content: { schema: STATE_SCHEMAS.run, ...run }
+          schema: STATE_SCHEMAS.run,
+          d: run.id,
+          tags: [['intent', run.deployment_intent_id || run.intent_id || '']],
+          content: { ...run }
         }))
       ];
     }
@@ -402,7 +409,7 @@ export async function installPublicServiceDeploymentHarness(
     function serviceCreateResult(payload) {
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       const service = {
-        id: `svc-created-${state.nextServiceId++}`,
+        id: payload.id || `svc-created-${state.nextServiceId++}`,
         name: payload.name,
         repo_url: payload.repo_url || '',
         artifact_repo: payload.artifact_repo,
@@ -414,11 +421,13 @@ export async function installPublicServiceDeploymentHarness(
       state.services = [...state.services, service];
       persistReadModelEvents();
       return {
-        projections: emitCreateServiceProjection ? [nostrEvent({
+        projections: emitCreateServiceProjection ? [stateEvent({
           id: `svc-reg-live-${service.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', service.id], ['deleted', 'false'], ['name', service.name]],
-          content: { schema: STATE_SCHEMAS.service, ...service }
+          schema: STATE_SCHEMAS.service,
+          d: service.id,
+          deleted: false,
+          tags: [['name', service.name]],
+          content: { ...service }
         })] : [],
         resultEvent: (requestEvent) => nostrEvent({
           id: `result-${requestEvent.id}`,
@@ -448,11 +457,13 @@ export async function installPublicServiceDeploymentHarness(
       state.services = state.services.map((service, i) => (i === index ? next : service));
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: [stateEvent({
           id: `svc-reg-live-update-${next.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', next.id], ['deleted', String(Boolean(next.deleted))], ['name', next.name]],
-          content: { schema: STATE_SCHEMAS.service, ...next }
+          schema: STATE_SCHEMAS.service,
+          d: next.id,
+          deleted: Boolean(next.deleted),
+          tags: [['name', next.name]],
+          content: { ...next }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
@@ -482,11 +493,13 @@ export async function installPublicServiceDeploymentHarness(
       state.services = state.services.map((service, i) => (i === index ? tombstone : service));
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: [stateEvent({
           id: `svc-reg-live-delete-${tombstone.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.service], ['d', tombstone.id], ['deleted', 'true'], ['name', tombstone.name]],
-          content: { schema: STATE_SCHEMAS.service, ...tombstone }
+          schema: STATE_SCHEMAS.service,
+          d: tombstone.id,
+          deleted: true,
+          tags: [['name', tombstone.name]],
+          content: { ...tombstone }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
@@ -498,18 +511,20 @@ export async function installPublicServiceDeploymentHarness(
     }
 
     function environmentProjection(environment, idPrefix) {
-      return nostrEvent({
+      return stateEvent({
         id: `${idPrefix}-${environment.id}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.environment], ['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
-        content: { schema: STATE_SCHEMAS.environment, ...environment }
+        schema: STATE_SCHEMAS.environment,
+        d: environment.id,
+        deleted: Boolean(environment.deleted),
+        tags: [['name', environment.name]],
+        content: { ...environment }
       });
     }
 
     function environmentCreateResult(payload) {
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       const environment = {
-        id: `env-created-${state.environments.length + 1}`,
+        id: payload.id || `env-created-${state.environments.length + 1}`,
         org_id: payload.org_id || '',
         name: payload.name,
         loom_worker_selector: payload.loom_worker_selector || '',
@@ -775,11 +790,12 @@ export async function installPublicServiceDeploymentHarness(
       state.deploymentIntents = [intent, ...state.deploymentIntents];
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: [stateEvent({
           id: `intent-reg-live-${intent.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ...(intent.deployment_unit_id ? [['unit', intent.deployment_unit_id]] : []), ['artifact', intent.artifact_id]],
-          content: { schema: STATE_SCHEMAS.intent, ...intent }
+          schema: STATE_SCHEMAS.intent,
+          d: intent.id,
+          tags: [['service', intent.service_id], ['environment', intent.environment_id], ...(intent.deployment_unit_id ? [['unit', intent.deployment_unit_id]] : []), ['artifact', intent.artifact_id]],
+          content: { ...intent }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
@@ -809,11 +825,12 @@ export async function installPublicServiceDeploymentHarness(
       state.deploymentIntents = [intent, ...state.deploymentIntents];
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: [stateEvent({
           id: `intent-reg-live-rollback-${intent.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
-          content: { schema: STATE_SCHEMAS.intent, ...intent }
+          schema: STATE_SCHEMAS.intent,
+          d: intent.id,
+          tags: [['service', intent.service_id], ['environment', intent.environment_id], ['artifact', intent.artifact_id || '']],
+          content: { ...intent }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,
@@ -861,18 +878,20 @@ export async function installPublicServiceDeploymentHarness(
         : null;
       if (run) state.deploymentRuns = [run, ...state.deploymentRuns];
       persistReadModelEvents();
-      const projections = [nostrEvent({
+      const projections = [stateEvent({
         id: `intent-reg-live-${approvedIntent.id}-${payload.decision}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.intent], ['d', approvedIntent.id], ['service', approvedIntent.service_id], ['environment', approvedIntent.environment_id], ['artifact', approvedIntent.artifact_id || '']],
-        content: { schema: STATE_SCHEMAS.intent, ...approvedIntent }
+        schema: STATE_SCHEMAS.intent,
+        d: approvedIntent.id,
+        tags: [['service', approvedIntent.service_id], ['environment', approvedIntent.environment_id], ['artifact', approvedIntent.artifact_id || '']],
+        content: { ...approvedIntent }
       })];
       if (run) {
-        projections.push(nostrEvent({
+        projections.push(stateEvent({
           id: `run-reg-live-${run.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.run], ['d', run.id], ['intent', run.deployment_intent_id]],
-          content: { schema: STATE_SCHEMAS.run, ...run }
+          schema: STATE_SCHEMAS.run,
+          d: run.id,
+          tags: [['intent', run.deployment_intent_id]],
+          content: { ...run }
         }));
       }
       return {
@@ -901,11 +920,12 @@ export async function installPublicServiceDeploymentHarness(
       state.artifacts = [artifact, ...state.artifacts];
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: [stateEvent({
           id: `artifact-reg-live-${artifact.id}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.artifact], ['d', artifact.id], ['service', artifact.service_id], ['build', artifact.build_id || '']],
-          content: { schema: STATE_SCHEMAS.artifact, ...artifact }
+          schema: STATE_SCHEMAS.artifact,
+          d: artifact.id,
+          tags: [['service', artifact.service_id], ['build', artifact.build_id || '']],
+          content: { ...artifact }
         })],
         resultEvent: () => nostrEvent({
           id: `result-${requestEvent.id}`,

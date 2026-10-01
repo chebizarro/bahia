@@ -10,6 +10,7 @@ import {
   sortByNewestField
 } from './utils.js';
 import { upsertReplaceableEvent } from '../../nostr/client.js';
+import { workerRecordId } from '../../nostr/cp-state.js';
 
 export const workers = $state([]);
 export const workerAssignments = $state([]);
@@ -113,7 +114,7 @@ export function applyWorkerStateEvent(event, replaceableEvents) {
   if (!accepted) return false;
 
   const content = contentWithEventMeta(event);
-  const pubkey = content.worker_pubkey || getTagValue(event, 'worker') || getDTag(event);
+  const pubkey = content.worker_pubkey || content.pubkey || getTagValue(event, 'worker') || workerRecordId(event);
   if (!pubkey) return false;
 
   if (isReplaceableTombstone(event) || content.deleted === true) {
@@ -222,9 +223,14 @@ export function workerJobsForPubkey(jobs, pubkey) {
   return (jobs || []).filter((job) => job.worker_pubkey === pubkey);
 }
 
+// Assignment and drain records count only on their own family coordinate
+// (worker:assignment:<pubkey>, worker:drain:<pubkey>). Before bahia-irsry.36
+// both families shared d=<pubkey>, so a relay kept only whichever was
+// published last; that survivor is ignored, and the projector republishes
+// both families on their own coordinates at startup.
 export const workerApplicators = {
-  assignment: (event, replaceableEvents) => applyProjectedEntity(event, workerAssignmentMap, replaceableEvents, ['worker_pubkey']),
-  drainStatus: (event, replaceableEvents) => applyProjectedEntity(event, workerDrainStatusMap, replaceableEvents, ['worker_pubkey']),
+  assignment: (event, replaceableEvents) => Boolean(workerRecordId(event)) && applyProjectedEntity(event, workerAssignmentMap, replaceableEvents, ['worker_pubkey']),
+  drainStatus: (event, replaceableEvents) => Boolean(workerRecordId(event)) && applyProjectedEntity(event, workerDrainStatusMap, replaceableEvents, ['worker_pubkey']),
   eligibilityPreview: (event, replaceableEvents) => applyProjectedEntity(event, workerEligibilityPreviewMap, replaceableEvents, ['preview_id']),
   cleanupExecution: (event, replaceableEvents) => applyProjectedEntity(event, workerCleanupExecutionMap, replaceableEvents, ['cleanup_id', 'idempotency_key', 'loom_job_id', 'worker_pubkey'])
 };

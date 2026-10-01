@@ -52,7 +52,7 @@ func TestLifecycleHandlerRejectsMalformedUnauthorizedAndProcessesValidActions(t 
 		authorized,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -166,7 +166,7 @@ func TestLifecycleHandlerRegenerateRequiresBriefAndRepublishesUpdatedIdentity(t 
 		authorized,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -328,7 +328,7 @@ func TestLifecycleHandlerUpdateDispatchesRuntimeUpdateAndPersonaControls(t *test
 		AllowedKinds: []int{1, 30023}, PermissionSpec: currentDraft.Content.Permissions, CreatedAt: time.Now().UTC(),
 	}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {
@@ -439,7 +439,7 @@ func TestLifecycleHandlerUpdateRollsBackRuntimeWhenPersonaUpdateFails(t *testing
 		SpecHash: "sha256:old", Runtime: currentDraft.Content.Runtime, CreatedAt: time.Now().UTC(),
 	}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, eventID string) (*domain.SoulDraft, error) {
@@ -549,7 +549,7 @@ func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishes
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
@@ -671,7 +671,7 @@ func TestLifecycleHandlerRollbackRestoresPreviousDraft(t *testing.T) {
 		CreatedAt:            time.Now().UTC(),
 	}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
@@ -720,7 +720,7 @@ func TestLifecycleHandlerHotReloadRollsBackRuntimeOn38386Error(t *testing.T) {
 	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed-event", AgentID: "scout", CreatedBy: signer.pubkey, Content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research deeply", Tier: domain.SoulTierStandard}, Voice: domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "new-voice"}, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, SpecHash: "sha256:new", PreviousSpecHash: "sha256:old"}}
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: "sha256:old", Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, CreatedAt: time.Now().UTC()}
 	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
@@ -804,7 +804,7 @@ func TestLifecycleHandlerReplayDoesNotDuplicateSideEffects(t *testing.T) {
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(_ context.Context, soulRef string) (*domain.AgentSoul, error) {
 		if normalizeSoulLookupRef(soulRef) != soul.AgentID {
@@ -852,7 +852,7 @@ func TestLifecycleHandlerSkipsExecutionWhenTerminalResultAlreadyExists(t *testin
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
 	reactor.findLifecycleResultFn = func(context.Context, string) (*nostr.Event, error) {

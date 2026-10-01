@@ -130,8 +130,8 @@ func TestNostrClientSoulActionTimeoutThenLateResultIsPickedUp(t *testing.T) {
 // it first, still as the distinct outcome with the caller's cause.
 func TestAwaitTerminalReplyKeepsCallerDeadlineAndCancellation(t *testing.T) {
 	never := func(*nostr.Event) replyClass { return replyIgnore }
-	newSub := func() *RelayBusSubscription {
-		return &RelayBusSubscription{Events: make(chan *nostr.Event), EndOfStoredEvents: make(chan struct{}), cancel: func() {}}
+	newSub := func() *RelaySubscription {
+		return &RelaySubscription{Events: make(chan *nostr.Event), EndOfStoredEvents: make(chan struct{}), closeFn: func() {}}
 	}
 
 	deadlineCtx, cancelDeadline := context.WithTimeout(context.Background(), replyTestTimeout)
@@ -146,6 +146,6 @@ func TestAwaitTerminalReplyKeepsCallerDeadlineAndCancellation(t *testing.T) {
 
 	closed := make(chan *nostr.Event)
 	close(closed)
-	_, err = awaitTerminalReply(context.Background(), &RelayBusSubscription{Events: closed, cancel: func() {}}, "req", time.Hour, time.Hour, never, nil)
+	_, err = awaitTerminalReply(context.Background(), &RelaySubscription{Events: closed, closeFn: func() {}}, "req", time.Hour, time.Hour, never, nil)
 	assertNoTerminalResult(t, err, "req", errReplySubscriptionClosed)
 }

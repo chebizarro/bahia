@@ -19,20 +19,20 @@ type RuntimeValidationEventSource interface {
 }
 
 type RelayRuntimeValidationEventSource struct {
-	bus *SoulFactoryRelayBus
+	relayClient *RelayClient
 }
 
 func NewRelayRuntimeValidationEventSource(relays []string) (*RelayRuntimeValidationEventSource, error) {
-	bus, err := NewSoulFactoryRelayBus(relays)
+	relayClient, err := NewRelayClient(relays)
 	if err != nil {
 		return nil, err
 	}
-	return &RelayRuntimeValidationEventSource{bus: bus}, nil
+	return &RelayRuntimeValidationEventSource{relayClient: relayClient}, nil
 }
 
 func (s *RelayRuntimeValidationEventSource) Close() {
-	if s != nil && s.bus != nil {
-		s.bus.Close()
+	if s != nil && s.relayClient != nil {
+		s.relayClient.Close()
 	}
 }
 
@@ -49,7 +49,7 @@ func (s *RelayRuntimeValidationEventSource) LoadEvents(ctx context.Context, even
 		}
 		ids = append(ids, id)
 	}
-	read, err := s.bus.QueryWithPolicy(ctx, "runtime_validation.load_events", RelayReadAllIDs(ids...), []nostr.Filter{{IDs: ids, Limit: len(ids)}})
+	read, err := s.relayClient.QueryWithPolicy(ctx, "runtime_validation.load_events", RelayReadAllIDs(ids...), []nostr.Filter{{IDs: ids, Limit: len(ids)}})
 	if err != nil {
 		return nil, err
 	}

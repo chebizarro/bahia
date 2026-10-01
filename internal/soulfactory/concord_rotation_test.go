@@ -454,7 +454,7 @@ func newConcordRotationFixtureOwnedBy(t *testing.T, publishes int, ownerHex stri
 			{"id": publicChannelID, "key": priorRoot, "epoch": 3, "name": "general", "topic": "ops"},
 			{"id": privateChannelID, "key": priorPrivateKey, "epoch": 5, "name": "staff"},
 		},
-		"relays": []string{"wss://community.example"},
+		"relays": []string{concordCommunityRelay(t).url},
 		"name":   "Fleet Private",
 		"icon":   "https://fleet.example/icon.png",
 	}
@@ -466,7 +466,7 @@ func newConcordRotationFixtureOwnedBy(t *testing.T, publishes int, ownerHex stri
 	path := filepath.Join(t.TempDir(), "custody.sealed")
 	writeSealedConcordCustodyFile(t, path, staff, string(raw))
 
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := concordCommunityRelay(t)
 	for range publishes {
 		endpoint.publishResults = append(endpoint.publishResults, RelayPublishResult{Accepted: true})
 	}
@@ -482,9 +482,9 @@ func newConcordRotationFixtureOwnedBy(t *testing.T, publishes int, ownerHex stri
 			queueConcordInboxLookup(endpoint)
 		}
 	}
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(staff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(staff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership, err := newConcordMembership([]ConcordCommunity{{CommunityID: communityID, SealedBundlePath: path}}, staff, bus)
 	if err != nil {

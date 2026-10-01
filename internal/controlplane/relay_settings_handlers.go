@@ -490,6 +490,13 @@ func (h *RelaySettingsHandlers) currentState(pubkey string) RelayPolicyState {
 	return state
 }
 
+// relaySettingsStateTags are the operator policy record's tags: its fixed
+// addressable coordinate, domain/entity/schema, the single-letter
+// t=kinds.RelaySettingsTopic (bahia-irsry.37), status and the requester.
+func relaySettingsStateTags(status, requesterPubkey string) nostr.Tags {
+	return nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {"entity", "relay-policy"}, {kinds.CASControlStateTagSchema, RelaySettingsSchema}, {"t", kinds.RelaySettingsTopic}, {"status", status}, {"p", requesterPubkey}}
+}
+
 func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMRequest, state RelayPolicyState, status string) error {
 	if req.OuterEvent == nil && req.Event == nil {
 		return fmt.Errorf("relay settings request event is missing")
@@ -502,7 +509,7 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	if err != nil {
 		return err
 	}
-	tags := nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {"entity", "relay-policy"}, {kinds.CASControlStateTagSchema, RelaySettingsSchema}, {"status", status}, {"p", req.Event.PubKey.Hex()}}
+	tags := relaySettingsStateTags(status, req.Event.PubKey.Hex())
 	if req.Event.ID != (nostr.ID{}) {
 		tags = append(tags, nostr.Tag{"e", req.Event.ID.Hex(), "", "request"})
 	}

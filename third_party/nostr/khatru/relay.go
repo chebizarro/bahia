@@ -250,7 +250,7 @@ func (rl *Relay) ListClients() []ClientInfo {
 			IP:                GetIPFromRequest(ws.Request),
 			UserAgent:         ws.Request.UserAgent(),
 			Origin:            ws.Request.Header.Get("Origin"),
-			Authenticated:     ws.AuthedPublicKeys,
+			Authenticated:     ws.authedPublicKeys(),
 			SubscriptionCount: len(specs),
 		})
 	}
@@ -282,7 +282,7 @@ func (rl *Relay) GetClientSnapshot(id string) (ClientSnapshot, bool) {
 			IP:                GetIPFromRequest(ws.Request),
 			UserAgent:         ws.Request.UserAgent(),
 			Origin:            ws.Request.Header.Get("Origin"),
-			Authenticated:     ws.AuthedPublicKeys,
+			Authenticated:     ws.authedPublicKeys(),
 			SubscriptionCount: len(specs),
 		},
 		Subscriptions: make([]SubscriptionInfo, 0, len(specs)),

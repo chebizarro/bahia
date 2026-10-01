@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import { ASSISTANT_STATUS_TOPIC } from '../../../src/lib/nostr/kinds.gen.js';
 
 const authMock = vi.hoisted(() => ({
   authState: { status: 'authenticated', pubkey: 'a'.repeat(64) }
@@ -415,6 +417,22 @@ describe('assistant store', () => {
     expect(item.metadata.scope).toEqual({ allowed_tools: null });
     const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${authMock.authState.pubkey}:${service}`;
     expect(localStorage.getItem(cacheKey)).not.toContain('SECRET-ARG');
+  });
+
+  it('REQs assistant status by its single-letter topic and matches producer-shaped status', async () => {
+    await store.bootstrapAssistant({ force: true });
+    const service = controlplaneMock.controlplaneConnection.servicePubkey;
+    const statusFilter = nostrMock.subscribeWithRecovery.mock.calls.at(-1)[0]
+      .find((filter) => filter.kinds.includes(ASSISTANT_KINDS.STATUS));
+    // bahia-irsry.37: relays index single-letter tags only.
+    expect(statusFilter).toMatchObject({ authors: [service], '#t': [ASSISTANT_STATUS_TOPIC] });
+    expect(Object.keys(statusFilter).filter((key) => key.startsWith('#') && key.length > 2)).toEqual([]);
+    // Tags as internal/service AssistantStatusEventPublisher stamps them.
+    const status = event({ id: 'status-topic-1', kind: ASSISTANT_KINDS.STATUS, pubkey: service, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', 'bahia.assistant-status.v1:topic-1:thinking:1'], ['schema', 'bahia.assistant-status.v1'], ['t', ASSISTANT_STATUS_TOPIC], ['session', 'topic-1'], ['agent', 'bahia-assistant'], ['status', 'thinking']],
+      content: { status: 'thinking', session_id: 'topic-1' } });
+    expect(matchFilter(statusFilter, status)).toBe(true);
+    expect(matchFilter(statusFilter, { ...status, tags: status.tags.filter((tag) => tag[0] !== 't') })).toBe(false);
   });
 
   it('keeps one transcript item per deterministic coordinate when a publish is retried', async () => {

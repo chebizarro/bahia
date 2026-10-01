@@ -63,11 +63,17 @@ type Relay struct {
 	connectionContext       context.Context // will be canceled when the connection closes
 	connectionContextCancel context.CancelCauseFunc
 
-	challenge   string // NIP-42 challenge, we only keep the last
-	performAuth sync.Once
-	authed      bool
+	// NIP-42 state, guarded by authMu (bahia patch: the reader goroutine
+	// writes challenge while AUTH attempts read it). authing is the attempt in
+	// flight, if any: concurrent Auth calls and AuthHandler join it instead of
+	// starting overlapping ones.
+	authMu    sync.Mutex
+	challenge string // NIP-42 challenge, we only keep the last
+	authed    bool
+	authing   *authAttempt
 
 	authHandler                   func(context.Context, *Relay, *Event) error
+	authResultHandler             func(*Relay, error)
 	noticeHandler                 func(*Relay, string) // NIP-01 NOTICEs
 	customHandler                 func(string)         // nonstandard unparseable messages
 	okCallbacks                   map[ID]okcallback
@@ -93,6 +99,7 @@ func NewRelay(ctx context.Context, url string, opts RelayOptions) *Relay {
 		customHandler:                 opts.CustomHandler,
 		noticeHandler:                 opts.NoticeHandler,
 		authHandler:                   opts.AuthHandler,
+		authResultHandler:             opts.AuthResultHandler,
 		closed:                        &atomic.Bool{},
 		AssumeValid:                   opts.AssumeValid,
 	}
@@ -137,7 +144,13 @@ func RelayConnect(ctx context.Context, url string, opts RelayOptions) (*Relay, e
 
 type RelayOptions struct {
 	// AuthHandler is fired when an AUTH message is received. It is given the AUTH event, unsigned, and expects you to sign it.
+	// At most one AUTH attempt runs at a time; an AUTH message that arrives while one is in flight, or after the
+	// connection authenticated, does not start another.
 	AuthHandler func(context.Context, *Relay, *Event) error
+
+	// AuthResultHandler, if given, is called with the outcome of every AUTH attempt on this connection (nil when
+	// the relay answered OK true), whether AuthHandler or a Relay.Auth call started it.
+	AuthResultHandler func(relay *Relay, err error)
 
 	// NoticeHandler just takes notices and is expected to do something with them.
 	// When not given defaults to logging the notices.
@@ -379,15 +392,18 @@ func (r *Relay) handleMessage(message string) {
 			return
 		}
 
-		r.performAuth = sync.Once{} // this ensures we can try to auth again
+		r.authMu.Lock()
 		r.challenge = *env.Challenge
+		var attempt *authAttempt
+		if r.authHandler != nil && !r.authed && r.authing == nil {
+			attempt = r.startAuthLocked()
+		}
+		r.authMu.Unlock()
 
-		if r.authHandler != nil {
-			go func() {
-				r.Auth(r.Context(), func(ctx context.Context, evt *Event) error {
-					return r.authHandler(ctx, r, evt)
-				})
-			}()
+		if attempt != nil {
+			go r.runAuth(r.Context(), attempt, func(ctx context.Context, evt *Event) error {
+				return r.authHandler(ctx, r, evt)
+			})
 		}
 	case *EventEnvelope:
 		// we already have the subscription from the pre-check above, so we can just reuse it
@@ -482,39 +498,83 @@ func (r *Relay) Publish(ctx context.Context, event Event) error {
 //
 // You don't have to build the AUTH event yourself, this function takes a function to which the
 // event that must be signed will be passed, so it's only necessary to sign that.
+//
+// It returns nil at once when the connection is already authenticated. When an AUTH attempt is
+// already in flight (started by AuthHandler or another Auth call) it waits for that attempt and
+// returns its outcome instead of starting another one.
 func (r *Relay) Auth(ctx context.Context, sign func(context.Context, *Event) error) error {
+	r.authMu.Lock()
 	if r.authed {
+		r.authMu.Unlock()
 		return nil
 	}
-
+	if attempt := r.authing; attempt != nil {
+		r.authMu.Unlock()
+		select {
+		case <-attempt.done:
+			return attempt.err
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for AUTH: %w", context.Cause(ctx))
+		}
+	}
 	if r.challenge == "" {
+		r.authMu.Unlock()
 		return fmt.Errorf("no challenge, can't AUTH")
 	}
+	attempt := r.startAuthLocked()
+	r.authMu.Unlock()
 
+	r.runAuth(ctx, attempt, sign)
+	return attempt.err
+}
+
+// authAttempt is one AUTH handshake: the challenge it answers and, once done
+// is closed, its outcome.
+type authAttempt struct {
+	challenge string
+	done      chan struct{}
+	err       error
+}
+
+// startAuthLocked registers a new attempt for the current challenge. The
+// caller holds authMu and must run it with runAuth.
+func (r *Relay) startAuthLocked() *authAttempt {
+	attempt := &authAttempt{challenge: r.challenge, done: make(chan struct{})}
+	r.authing = attempt
+	return attempt
+}
+
+// runAuth signs and sends the AUTH event for attempt, waits for the relay's
+// OK, records the outcome and reports it to AuthResultHandler.
+func (r *Relay) runAuth(ctx context.Context, attempt *authAttempt, sign func(context.Context, *Event) error) {
+	authEvent := Event{
+		CreatedAt: Now(),
+		Kind:      KindClientAuthentication,
+		Tags: Tags{
+			Tag{"relay", r.URL},
+			Tag{"challenge", attempt.challenge},
+		},
+		Content: "",
+	}
 	var err error
+	if err = sign(ctx, &authEvent); err != nil {
+		err = fmt.Errorf("error signing auth event: %w", err)
+	} else {
+		err = r.publish(ctx, authEvent.ID, &AuthEnvelope{Event: authEvent})
+	}
 
-	r.performAuth.Do(func() {
-		authEvent := Event{
-			CreatedAt: Now(),
-			Kind:      KindClientAuthentication,
-			Tags: Tags{
-				Tag{"relay", r.URL},
-				Tag{"challenge", r.challenge},
-			},
-			Content: "",
-		}
-		if err = sign(ctx, &authEvent); err != nil {
-			err = fmt.Errorf("error signing auth event: %w", err)
-		} else {
-			err = r.publish(ctx, authEvent.ID, &AuthEnvelope{Event: authEvent})
-		}
-	})
-
+	r.authMu.Lock()
+	attempt.err = err
 	if err == nil {
 		r.authed = true
 	}
+	r.authing = nil
+	close(attempt.done)
+	r.authMu.Unlock()
 
-	return err
+	if r.authResultHandler != nil {
+		r.authResultHandler(r, err)
+	}
 }
 
 // publish can be used both for EVENT and for AUTH

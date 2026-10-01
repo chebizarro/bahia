@@ -42,6 +42,34 @@ func TestServiceCommandPublisherPublishesCanonicalServiceCreateRequest(t *testin
 	assertReactorTag(t, capture.events[0].Tags, "d", "service-create:payments-api")
 }
 
+func TestServiceCommandPublisherCarriesClientMintedServiceID(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewServiceCommandPublisher(capture, signer)
+	id := domain.NewEntityID()
+
+	receipt, err := publisher.PublishServiceCreateRequest(context.Background(), ServiceCreateCommand{ID: id, Name: "payments-api", ArtifactRepo: "registry.example/payments"})
+	if err != nil {
+		t.Fatalf("publish service create: %v", err)
+	}
+	if receipt.ServiceID != id.String() {
+		t.Fatalf("receipt service_id = %q, want %s", receipt.ServiceID, id)
+	}
+	if params := assertContextVMCommand(t, capture.events[0], ContextVMMethodServiceCreate); params["id"] != id.String() {
+		t.Fatalf("service create params id = %v, want %s", params["id"], id)
+	}
+
+	if _, err := publisher.PublishServiceCreateRequest(context.Background(), ServiceCreateCommand{Name: "billing", ArtifactRepo: "registry.example/billing"}); err != nil {
+		t.Fatalf("publish service create without id: %v", err)
+	}
+	if params := assertContextVMCommand(t, capture.events[1], ContextVMMethodServiceCreate); params["id"] != nil {
+		t.Fatalf("publisher minted an id (%v); retries reusing the idempotency key would change fingerprint", params["id"])
+	}
+}
+
 func TestPolicyCommandPublisherPublishesCanonicalPolicyCreateUpdateDeleteEvaluateRequests(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}

@@ -102,6 +102,70 @@ reason was also written unescaped.
 Tests: `nip77/envelopes_bahia_test.go`, and end to end
 `internal/relaysidecar` `TestSidecarNegentropyRefusesSetsLargerThanTheLimit`.
 
+## NIP-42 AUTH state (bahia-irsry.10.2)
+
+Client side (`relay.go`). `Relay` kept its NIP-42 state (`challenge`, the
+`performAuth` `sync.Once`, and `authed`) in plain fields. The reader goroutine
+rewrote `challenge` and reset `performAuth` on every AUTH frame, while
+`Relay.Auth` read them from the caller's goroutine. With
+`RelayOptions.AuthHandler` set, every AUTH frame also started another `Auth`
+goroutine. khatru re-sends its challenge before each `auth-required:`
+rejection, so those goroutines overlapped the next reset. The result was data
+races and, when `performAuth` was reset while another goroutine was inside
+`Do`, `fatal error: sync: unlock of unlocked mutex`. `AuthHandler` also
+discarded the AUTH OK, so no caller could learn whether it worked.
+
+- `authMu` guards `challenge`, `authed` and the new `authing` field, which
+  holds the attempt in flight. `performAuth` is gone.
+- An AUTH frame records the challenge and starts an `AuthHandler` attempt only
+  when the connection is not yet authenticated and no attempt is in flight.
+- `Relay.Auth` returns nil on an authenticated connection. If an attempt is in
+  flight, it waits for that attempt and returns its outcome; otherwise it
+  starts one. A failed attempt leaves the connection free to try again.
+- New `RelayOptions.AuthResultHandler(relay, err)` receives the outcome of
+  every attempt: nil for OK true, otherwise the OK false reason, a timeout or a
+  signing error.
+
+Server side (`khatru`). `GetAuthed`, `GetAllAuthed`, `IsAuthed`, `ListClients`
+and `GetClientSnapshot` read `WebSocket.AuthedPublicKeys` without the
+`authLock` that the AUTH handler writes it under. They now read a copy through
+`WebSocket.authedPublicKeys()`, which takes the lock. The relay sidecar calls
+these accessors in its REQ and EVENT policy.
+
+Tests: `relay_auth_race_test.go`.
+- `TestRelayAuthHandlerWithOverlappingChallengesIsRaceFree`: concurrent
+  rejected REQs, `AuthHandler` and `Relay.Auth` against an in-process khatru
+  relay that requires NIP-42. It uses only the pristine API. On the pristine
+  copy it reports data races and aborts with the fatal error above. Patched,
+  it passes `-race -count=30`.
+- `TestRelayAuthResultIsObservable`: `AuthResultHandler` delivery, `Auth`
+  joining an in-flight attempt, and recovery after a failed attempt.
+
+Bahia side: the shared `RelayPool` wires `AuthHandler` and
+`AuthResultHandler` once per connection (see `internal/adapters/nostr`
+`relay_pool_stack_test.go` (`TestRelayPoolNIP42ThroughAuthHandlerIsRaceFree`)).
+
+## nip77: NegentropySync connection lifecycle (bahia-irsry.10.1)
+
+`NegentropySync` dials its own connection with `nostr.RelayConnect`, which
+binds it to `context.Background()`, and never closed it: every sync left a
+websocket and its goroutines open for the life of the process. The daemon
+runs a sync per relay and filter on startup and on every reconnect, so this
+leaked without bound. Its relay-frame handler also sent outcomes on an
+unbuffered channel, so a second frame (a NEG-ERR or NEG-CLOSE after the first
+outcome was taken) blocked the connection's read loop forever.
+
+- `nip77/nip77.go`: close the relay when `NegentropySync` returns (also after a
+  failed dial), and report outcomes through a one-slot channel with a
+  non-blocking send, so only the first outcome is kept.
+
+Callers must still pass a `handle` that returns when its context ends:
+`Direction.Items` is never closed when a relay refuses or abandons a session.
+`internal/adapters/nostr/relay_pool_sync.go` does this.
+
+Test: `nip77/nip77_bahia_test.go` (in-process khatru relay, completed and
+NEG-ERR sessions).
+
 ## Removal criteria
 
 Drop the `replace` and this directory once upstream carries equivalent fixes

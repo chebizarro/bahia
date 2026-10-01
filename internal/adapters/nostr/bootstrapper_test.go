@@ -121,7 +121,7 @@ func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 		RequestedTier:   0,
 		SnapshotTimeout: 10 * time.Millisecond,
 	})
-	_, _, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], gonostr.Filter{}, 10*time.Millisecond)
+	_, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], gonostr.Filter{}, 10*time.Millisecond)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wss://one.example")
 	require.Equal(t, "tier0_snapshot", bootstrapper.Progress().CurrentGroup)

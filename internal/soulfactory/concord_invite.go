@@ -52,7 +52,7 @@ type concordInviteSigner interface {
 type concordMembership struct {
 	signer      concordInviteSigner
 	communities []*concordCommunitySource
-	bus         *SoulFactoryRelayBus
+	relayClient *RelayClient
 	now         func() time.Time
 	mintKey     func() (string, error)
 	// rotateMu serializes rotations. Each one is a read-modify-write over
@@ -70,7 +70,7 @@ type concordCommunitySource struct {
 	cached      *validatedConcordCommunity
 }
 
-func (s *concordCommunitySource) resolve(ctx context.Context, bus *SoulFactoryRelayBus) (validatedConcordCommunity, concordCustodyRecord, error) {
+func (s *concordCommunitySource) resolve(ctx context.Context, relayClient *RelayClient) (validatedConcordCommunity, concordCustodyRecord, error) {
 	record, err := s.custody.Load(ctx)
 	if err != nil {
 		return validatedConcordCommunity{}, concordCustodyRecord{}, fmt.Errorf("load Concord invite material from %s: %w", s.custody.Source(), err)
@@ -78,7 +78,7 @@ func (s *concordCommunitySource) resolve(ctx context.Context, bus *SoulFactoryRe
 	if s.cached != nil {
 		return *s.cached, record, nil
 	}
-	validated, err := validateConcordCommunity(record.Bundle, s.communityID, bus)
+	validated, err := validateConcordCommunity(record.Bundle, s.communityID, relayClient)
 	if err != nil {
 		return validatedConcordCommunity{}, concordCustodyRecord{}, err
 	}
@@ -86,13 +86,13 @@ func (s *concordCommunitySource) resolve(ctx context.Context, bus *SoulFactoryRe
 }
 
 // validateConcordCommunity validates a bundle against its configured community
-// and binds its relays to the SoulFactory relay bus, failing closed on either.
-func validateConcordCommunity(bundle json.RawMessage, communityID string, bus *SoulFactoryRelayBus) (validatedConcordCommunity, error) {
+// and binds its relays to the SoulFactory relay client, failing closed on either.
+func validateConcordCommunity(bundle json.RawMessage, communityID string, relayClient *RelayClient) (validatedConcordCommunity, error) {
 	validated, err := validateConcordInviteBundle(bundle, communityID)
 	if err != nil {
 		return validatedConcordCommunity{}, fmt.Errorf("concord community %s invite bundle: %w", communityID, err)
 	}
-	validated.relayEndpoints, err = concordRelayEndpoints(bus, validated.relays)
+	validated.boundRelays, err = concordRelayEndpoints(relayClient, validated.relays)
 	if err != nil {
 		return validatedConcordCommunity{}, fmt.Errorf("concord community %s relay configuration: %w", communityID, err)
 	}
@@ -100,11 +100,12 @@ func validateConcordCommunity(bundle json.RawMessage, communityID string, bus *S
 }
 
 type validatedConcordCommunity struct {
-	communityID    string
-	bundle         json.RawMessage
-	expiresAt      *int64
-	relays         []string
-	relayEndpoints []relayBusEndpoint
+	communityID string
+	bundle      json.RawMessage
+	expiresAt   *int64
+	relays      []string
+	// boundRelays are relays as held by the SoulFactory relay client.
+	boundRelays []string
 }
 
 type concordInviteBundle struct {
@@ -129,7 +130,7 @@ type concordInviteChannel struct {
 	Name  string `json:"name"`
 }
 
-func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *SoulFactoryRelayBus) (*concordMembership, error) {
+func newConcordMembership(communities []ConcordCommunity, signer Signer, relayClient *RelayClient) (*concordMembership, error) {
 	if len(communities) == 0 {
 		return nil, nil
 	}
@@ -137,15 +138,15 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 	if !ok {
 		return nil, fmt.Errorf("concord onboarding requires a Signet signer with NIP-44 encryption and decryption")
 	}
-	if bus == nil {
-		return nil, fmt.Errorf("concord onboarding requires a SoulFactory relay bus")
+	if relayClient == nil {
+		return nil, fmt.Errorf("concord onboarding requires a SoulFactory relay client")
 	}
 
 	membership := &concordMembership{
-		signer:  inviteSigner,
-		bus:     bus,
-		now:     time.Now,
-		mintKey: mintConcordKey,
+		signer:      inviteSigner,
+		relayClient: relayClient,
+		now:         time.Now,
+		mintKey:     mintConcordKey,
 	}
 	seen := make(map[string]struct{}, len(communities))
 	for i, community := range communities {
@@ -156,7 +157,7 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 		if _, duplicate := seen[communityID]; duplicate {
 			continue
 		}
-		source, err := newConcordCommunitySource(communityID, community, inviteSigner, bus)
+		source, err := newConcordCommunitySource(communityID, community, inviteSigner, relayClient)
 		if err != nil {
 			return nil, err
 		}
@@ -166,7 +167,7 @@ func newConcordMembership(communities []ConcordCommunity, signer Signer, bus *So
 	return membership, nil
 }
 
-func newConcordCommunitySource(communityID string, community ConcordCommunity, signer concordInviteSigner, bus *SoulFactoryRelayBus) (*concordCommunitySource, error) {
+func newConcordCommunitySource(communityID string, community ConcordCommunity, signer concordInviteSigner, relayClient *RelayClient) (*concordCommunitySource, error) {
 	sealedPath := strings.TrimSpace(community.SealedBundlePath)
 	hasBundle := len(bytes.TrimSpace(community.InviteBundle)) > 0
 	if hasBundle == (sealedPath != "") {
@@ -182,7 +183,7 @@ func newConcordCommunitySource(communityID string, community ConcordCommunity, s
 	// Operator-supplied material is validated at construction so a malformed
 	// bundle fails the process at boot rather than mid-provision.
 	custody := &staticConcordCustody{bundle: append(json.RawMessage(nil), community.InviteBundle...)}
-	validated, err := validateConcordCommunity(custody.bundle, communityID, bus)
+	validated, err := validateConcordCommunity(custody.bundle, communityID, relayClient)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 	}
 	resolved := make([]validatedConcordCommunity, 0, len(m.communities))
 	for _, source := range m.communities {
-		community, _, resolveErr := source.resolve(ctx, m.bus)
+		community, _, resolveErr := source.resolve(ctx, m.relayClient)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -250,7 +251,7 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 // has no inbox yet and reads the fleet relays, so community relays alone carry
 // that case; a member invited or re-keyed later is reached where they read.
 func (m *concordMembership) deliver(ctx context.Context, community validatedConcordCommunity, staffPK, recipientPK nostr.PubKey, recipient string, inbox concordInbox) error {
-	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
+	if err := authenticateConcordRelays(ctx, m.relayClient, community.boundRelays); err != nil {
 		return fmt.Errorf("authenticate Concord relays for %s: %w", community.communityID, err)
 	}
 	rumor := nostr.Event{
@@ -297,15 +298,13 @@ func (m *concordMembership) deliver(ctx context.Context, community validatedConc
 	if !validConcordGiftWrap(wrap, recipient) {
 		return fmt.Errorf("build Concord direct invite for %s: invalid giftwrap", community.communityID)
 	}
-	if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
+	if err := publishConcordInvite(ctx, m.relayClient, community.boundRelays, wrap); err != nil {
 		return fmt.Errorf("publish Concord direct invite for %s: %w", community.communityID, err)
 	}
 	if inbox.empty() {
 		return nil
 	}
-	endpoints, closeEndpoints := concordInboxEndpoints(m.bus, inbox.relays)
-	defer closeEndpoints()
-	if err := publishConcordInviteToInbox(ctx, m.bus, endpoints, wrap); err != nil {
+	if err := publishConcordInviteToInbox(ctx, m.relayClient, inbox.relays, wrap); err != nil {
 		return fmt.Errorf("publish Concord direct invite for %s to the recipient's %s: %w", community.communityID, inbox.source, err)
 	}
 	return nil
@@ -428,51 +427,25 @@ func validConcordGiftWrap(event nostr.Event, recipient string) bool {
 		len(event.Tags[1]) == 2 && event.Tags[1][0] == "k" && event.Tags[1][1] == "3313"
 }
 
-func concordRelayEndpoints(bus *SoulFactoryRelayBus, relays []string) ([]relayBusEndpoint, error) {
-	configured := make(map[string]relayBusEndpoint, len(bus.endpoints))
-	for _, endpoint := range bus.endpoints {
-		configured[strings.TrimRight(strings.TrimSpace(endpoint.URL()), "/")] = endpoint
-	}
-	endpoints := make([]relayBusEndpoint, 0, len(relays))
+// concordRelayEndpoints binds bundle relays to the SoulFactory relay client;
+// every one must be a relay the client holds.
+func concordRelayEndpoints(client *RelayClient, relays []string) ([]string, error) {
+	bound := make([]string, 0, len(relays))
 	for _, relay := range relays {
-		normalized := strings.TrimRight(relay, "/")
-		endpoint, ok := configured[normalized]
-		if !ok {
-			return nil, fmt.Errorf("bundle relay %s is not configured on the SoulFactory relay bus", relay)
+		if !client.holds(relay) {
+			return nil, fmt.Errorf("bundle relay %s is not configured on the SoulFactory relay client", relay)
 		}
-		endpoints = append(endpoints, endpoint)
+		bound = append(bound, nostr.NormalizeURL(relay))
 	}
-	return endpoints, nil
+	return bound, nil
 }
 
-func authenticateConcordRelays(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint) error {
-	if bus.signer == nil {
-		return fmt.Errorf("soul factory relay auth signer is not configured")
-	}
-	for _, endpoint := range endpoints {
-		if err := endpoint.Authenticate(ctx, bus.signer, nil); err != nil {
-			return fmt.Errorf("authenticate to %s: %w", endpoint.URL(), err)
-		}
-	}
-	return nil
+func authenticateConcordRelays(ctx context.Context, client *RelayClient, relays []string) error {
+	return client.authenticateRelays(ctx, relays)
 }
 
-// publishConcordInvite requires every endpoint to accept event. A relay that
+// publishConcordInvite requires every relay to accept event. A relay that
 // answers "auth-required:" is authenticated and asked once more.
-func publishConcordInvite(ctx context.Context, bus *SoulFactoryRelayBus, endpoints []relayBusEndpoint, event nostr.Event) error {
-	for _, endpoint := range endpoints {
-		result := publishRelayEndpoint(ctx, endpoint, bus.signer, event)
-		if result.Accepted {
-			continue
-		}
-		if result.Error != nil {
-			return fmt.Errorf("%s: %w", endpoint.URL(), result.Error)
-		}
-		reason := strings.TrimSpace(result.Reason)
-		if reason == "" {
-			reason = "OK false"
-		}
-		return fmt.Errorf("%s: %s", endpoint.URL(), reason)
-	}
-	return nil
+func publishConcordInvite(ctx context.Context, client *RelayClient, relays []string, event nostr.Event) error {
+	return client.publishTo(ctx, relays, event)
 }
