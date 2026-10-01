@@ -2834,7 +2834,11 @@ func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Serv
 }
 
 func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
-	tags, content := environmentRegistryRecord(env, deleted)
+	units, err := p.environmentRecordUnits(ctx, env, deleted)
+	if err != nil {
+		return err
+	}
+	tags, content := environmentRegistryRecord(env, units, deleted)
 	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, content, "environment.projection", &env.ID)
 }
 

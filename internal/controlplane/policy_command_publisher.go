@@ -100,7 +100,10 @@ func (p *PolicyCommandPublisher) publish(ctx context.Context, method string, def
 		return nil, fmt.Errorf("policy command publisher is not configured")
 	}
 	content := map[string]any{}
-	if includeID || method == ContextVMMethodPolicyDelete {
+	// A create carries its client-minted id only when the caller set one
+	// (bahia-irsry.42); minting here would change the request fingerprint
+	// on a retry that reuses IdempotencyKey.
+	if includeID || method == ContextVMMethodPolicyDelete || (method == ContextVMMethodPolicyCreate && cmd.ID != uuid.Nil) {
 		content["id"] = cmd.ID.String()
 	}
 	if method == ContextVMMethodPolicyEvaluate {

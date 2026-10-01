@@ -241,7 +241,7 @@ func (s *PackageRegistryService) EnsureRepository(ctx context.Context, repo *dom
 	}
 	now := time.Now().UTC()
 	if repo.ID == uuid.Nil {
-		repo.ID = uuid.New()
+		repo.ID = domain.NewEntityID()
 	}
 	if repo.CreatedAt.IsZero() {
 		repo.CreatedAt = now
@@ -332,7 +332,7 @@ func (s *PackageRegistryService) PublishPackage(ctx context.Context, repo *domai
 		*artifact = *existing
 	}
 	if artifact.ID == uuid.Nil {
-		artifact.ID = uuid.New()
+		artifact.ID = domain.NewEntityID()
 	}
 	if artifact.CreatedAt.IsZero() {
 		artifact.CreatedAt = now
@@ -402,7 +402,7 @@ func (s *PackageRegistryService) PromotePackage(ctx context.Context, sourceRepo 
 		*target = *existingTarget
 	}
 	if target.ID == uuid.Nil {
-		target.ID = uuid.New()
+		target.ID = domain.NewEntityID()
 	}
 	if target.CreatedAt.IsZero() {
 		target.CreatedAt = now
@@ -444,7 +444,7 @@ func (s *PackageRegistryService) YankPackage(ctx context.Context, repo *domain.P
 	}
 	now := time.Now().UTC()
 	if existing == nil {
-		return &domain.PackageArtifact{ID: uuid.New(), RepositoryID: repo.ID, RepositoryName: repo.Name, Format: repo.Format, Namespace: strings.Trim(req.Namespace, "/"), PackageName: req.PackageName, Version: req.Version, Filename: req.Filename, Status: domain.PackageArtifactStatusDeleted, Deleted: true, CreatedAt: now, UpdatedAt: now}, nil
+		return &domain.PackageArtifact{ID: domain.NewEntityID(), RepositoryID: repo.ID, RepositoryName: repo.Name, Format: repo.Format, Namespace: strings.Trim(req.Namespace, "/"), PackageName: req.PackageName, Version: req.Version, Filename: req.Filename, Status: domain.PackageArtifactStatusDeleted, Deleted: true, CreatedAt: now, UpdatedAt: now}, nil
 	}
 	if existing.Deleted || existing.Status == domain.PackageArtifactStatusDeleted {
 		return existing, nil
@@ -750,7 +750,7 @@ func mediaTypeOnly(value string) string {
 
 func newPublication(repositoryID, sourceArtifactID, targetArtifactID uuid.UUID, req PackagePromotionRequest, status domain.PackagePublicationStatus, decision domain.PackagePolicyDecision) *domain.PackagePublication {
 	now := time.Now().UTC()
-	return &domain.PackagePublication{ID: uuid.New(), RepositoryID: repositoryID, ArtifactID: targetArtifactID, Status: status, PolicyDecision: decision, PolicyRef: req.PolicyRef, ApprovedBy: req.ApprovedBy, Environment: req.Environment, Channel: req.Channel, PublishedAt: &now, PromotedAt: &now, Metadata: mergeMetadata(map[string]any{"source_artifact_id": sourceArtifactID.String()}, req.Metadata), CreatedAt: now, UpdatedAt: now}
+	return &domain.PackagePublication{ID: domain.NewEntityID(), RepositoryID: repositoryID, ArtifactID: targetArtifactID, Status: status, PolicyDecision: decision, PolicyRef: req.PolicyRef, ApprovedBy: req.ApprovedBy, Environment: req.Environment, Channel: req.Channel, PublishedAt: &now, PromotedAt: &now, Metadata: mergeMetadata(map[string]any{"source_artifact_id": sourceArtifactID.String()}, req.Metadata), CreatedAt: now, UpdatedAt: now}
 }
 
 func mergeMetadata(a, b map[string]any) map[string]any {

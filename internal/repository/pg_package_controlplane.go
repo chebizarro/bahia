@@ -34,7 +34,7 @@ const packageIntentColumns = `id, request_event_id, operation, repository_id, re
 
 func (r *PgPackageControlPlaneRepository) UpsertRepository(ctx context.Context, repo *domain.PackageRepository) error {
 	if repo.ID == uuid.Nil {
-		repo.ID = uuid.New()
+		repo.ID = domain.NewEntityID()
 	}
 	setProjectionTimes(&repo.CreatedAt, &repo.UpdatedAt, &repo.LastEventCreatedAt)
 	policyJSON, err := marshalJSON(repo.Policy, "package repository policy")
@@ -102,7 +102,7 @@ func (r *PgPackageControlPlaneRepository) ListRepositories(ctx context.Context, 
 
 func (r *PgPackageControlPlaneRepository) UpsertArtifact(ctx context.Context, artifact *domain.PackageArtifact) error {
 	if artifact.ID == uuid.Nil {
-		artifact.ID = uuid.New()
+		artifact.ID = domain.NewEntityID()
 	}
 	setProjectionTimes(&artifact.CreatedAt, &artifact.UpdatedAt, &artifact.LastEventCreatedAt)
 	metadataJSON, err := marshalJSON(artifact.Metadata, "package artifact metadata")
@@ -172,7 +172,7 @@ func (r *PgPackageControlPlaneRepository) ListArtifacts(ctx context.Context, rep
 
 func (r *PgPackageControlPlaneRepository) UpsertPublication(ctx context.Context, publication *domain.PackagePublication) error {
 	if publication.ID == uuid.Nil {
-		publication.ID = uuid.New()
+		publication.ID = domain.NewEntityID()
 	}
 	setProjectionTimes(&publication.CreatedAt, &publication.UpdatedAt, &publication.LastEventCreatedAt)
 	metadataJSON, err := marshalJSON(publication.Metadata, "package publication metadata")
@@ -247,7 +247,7 @@ func (r *PgPackageControlPlaneRepository) ListPublicationsByRepository(ctx conte
 
 func (r *PgPackageControlPlaneRepository) UpsertIntent(ctx context.Context, intent *domain.PackageIntent) error {
 	if intent.ID == uuid.Nil {
-		intent.ID = uuid.New()
+		intent.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if intent.CreatedAt.IsZero() {

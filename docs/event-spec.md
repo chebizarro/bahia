@@ -100,7 +100,8 @@ Normative (bahia-irsry.35, audit C-40/RC-1; decision record [`docs/designs/decis
 Every existing Postgres-minted `<prefix>:<uuid>` coordinate remains valid and round-trips byte for byte. Nothing is re-keyed.
 
 **Carrying the id.**
-- *Today (ContextVM create intents).* `service/create` and `environment/create` params accept an optional `id` holding the entity id. The result echoes it as `service_id`/`environment_id` and in the returned entity. When `id` is absent, Bahia mints a UUIDv7, so existing clients keep working.
+- *Today (ContextVM create intents).* `service/create`, `environment/create` and `policy/create` params accept an optional `id` holding the entity id; so does the `llm/route-create` command content. The result echoes it as `service_id`/`environment_id`/`policy_id` and in the returned entity. When `id` is absent, Bahia mints a UUIDv7, so existing clients keep working.
+- *Clients that mint.* The web create dialogs and stores, the operator client (`pkg/client` `CreateServiceNostr`/`CreateEnvironmentNostr`, used by `bahia services create` and `bahia environments create`) and the MCP create tools (`bahia_create_service`, `bahia_create_environment`, `bahia_create_policy`, `bahia_llm_create_route`) all mint a UUIDv7 before signing and accept a caller-supplied one: `--id` on the CLI, which prints a minted id before publishing so a timed-out create can be retried with it, and the `id` argument for MCP, whose derived idempotency key includes the id. There is no REST create route for these entities any more; creates are signer-first.
 - *Phase 3 (`bahia-irsry.11`).* The client publishes the signed addressable desired-state event itself, with `d` = the coordinate built from the id and `content.id` = the id. The daemon consumes it.
 - In both cases the id is fixed before the first write. The relay coordinate and any cached row therefore agree, and a retry names the same entity.
 
@@ -119,10 +120,11 @@ A relay-first create checks the id before publishing, so a conflicting create ca
 - *Deliberate reuse* of someone else's id cannot hijack the entity:
   - Relays key addressable events by `(kind, pubkey, d)`, so a different signer's event with the same `d` is a different relay coordinate and never replaces the original.
   - The consumer (the daemon today, the Phase 3 intent applier later) applies the first accepted create for an id. A later create for that id is authorized against the org it names *and* compared to the stored entity, whose org is part of its content. A reused id from another org or author is therefore a conflict, never a write into someone else's entity. Existence of an id is the only thing a conflict reveals.
-- *Natural keys* such as `(org, name)` are uniqueness **constraints**, never identity. The authoritative index enforces them; today that is the Postgres `services.name` / `environments.name` unique indexes. When two signers pick the same name with different ids:
+- *Natural keys* such as `(org, name)` are uniqueness **constraints**, never identity. The authoritative index enforces them; today those are the Postgres unique indexes on `services.name`, `environments.name`, `deployment_policies.name` and `llm_routes.name`. When two signers pick the same name with different ids:
   - Today the first committed create wins and the loser gets a name-in-use error.
   - In Phase 3 the applier processes intents in `(created_at, event id)` order: the lowest wins and the loser receives a rejection status referencing its intent event id.
   - Renaming never changes the coordinate.
+- *Names are fleet-wide, not per org* (decision, bahia-irsry.42). Service, environment, policy and LLM route names stay globally unique; no migration scopes them to an org. Names are a shared namespace beyond the database: the DNS projector maps an environment *name* to its zone and turns a service *name* into the DNS label inside it, so two orgs with an `api` service in `production` would claim one FQDN. Name lookups (`GetServiceByName`, `GetEnvironmentByName`, used by MCP, SoulFactory and the ML endpoint resolver) carry no org either. Scoping names per org needs an org-qualified DNS namespace and org-scoped lookups first; it is not a constraint change on its own.
 
 **Keeping natural or derived coordinates.** Some coordinates are already deterministic and keep their grammar, because their identity is inherent in the key:
 - DNS zones and backends: `zone:<name>`, `dnsbackend:<ref>`;
@@ -142,11 +144,16 @@ Existing rows keep their v4 ids. No migration rewrites keys.
 
 | Domain | Create path today | Adoption |
 |---|---|---|
-| Services, environments | client `id` accepted (ContextVM, relay-first registry, web) | done (bahia-irsry.35) |
-| Deployment intents, policies, secrets, notification channels | handler/repository `uuid.New()` | client-minted, same pattern, with their Phase 3 slice |
+| Services, environments | client `id` accepted (ContextVM, relay-first registry, web, operator client/CLI, MCP) | done (bahia-irsry.35, .42) |
+| Deployment policies | client `id` accepted (ContextVM `policy/create`, web, MCP) | done (bahia-irsry.42) |
+| LLM routes | client `id` accepted (`llm/route-create` content, web, MCP; registry replay/conflict, repository) | done for the registry and every producer (bahia-irsry.42). The control plane has no live consumer of `llm/route-create` (no ContextVM handler is registered; the reactor's legacy handler only runs in tests), so the path is complete only once that consumer exists. |
+| Backup repositories, policies, recipes, definitions | apply/register verbs: upserts by id or name | supplied ids validated as client ids (canonical UUIDv7/v4) at the ContextVM entry; new ids daemon-minted UUIDv7. Replay-or-conflict does not apply to an upsert. The ContextVM alias republishes a legacy request kind no production consumer reads, so client minting waits for the backup Phase 3 slice. |
+| Package publications, intents, approvals | daemon-authored | daemon mints UUIDv7 in code (bahia-irsry.42). Package repository apply is a legacy, unconsumed request kind; deferred with the package slice. |
+| ML models, versions, artifacts, recipes, runs, endpoints | no user create path (model import is disabled; recipe runs are daemon-authored) | repositories and services mint UUIDv7 (bahia-irsry.42); client minting when a create intent exists |
+| Deployment intents, secrets, notification channels | handler/repository `uuid.New()` | client-minted, same pattern, with their Phase 3 slice |
 | DNS zones/backends | natural key (`zone:<name>`, `dnsbackend:<ref>`) | keep; ownership conflict by org |
 | DNS policies, endpoints | DB/handler UUID | client-minted with the DNS slice |
-| Backup definitions/policies/repositories/retention/recipes, LLM routes, ML models/datasets/recipes/endpoints, package repositories | handler/repository UUID | client-minted with their Phase 3 slice |
+| Backup retention, ML datasets | handler/repository UUID | client-minted with their Phase 3 slice |
 | Runs, observations, verification/restore results, runtime releases | daemon-authored | daemon mints UUIDv7 in code (drop reliance on `DEFAULT gen_random_uuid()`) |
 | Orgs, memberships, invites | REST + Postgres | client-minted with the membership-events slice (B-27) |
 | Assistant transcript entries | `uuid.NewString()` fallback in `d` | deterministic `(session, seq)` per C-41 (separate issue) |
@@ -262,6 +269,11 @@ Kind `30900` is addressable. The `d` tag identifies the entity coordinate, and `
 ```
 
 For `(kind, pubkey, d)`, latest replacement wins. Clients query historical state, wait for `EOSE`, and keep the subscription open for realtime updates.
+
+**Service and environment registry records** (bahia-irsry.41, .53). The relay-first registry and the projector build these records with one builder (`internal/adapters/nostr/control_state_contract.go`), so one state is one signed event:
+- The registry mints a create's `created_at`/`updated_at`, and an update's `updated_at`, before the relay-first publish, and the repository stores them. The projection of the stored row is the record already signed, so it is deduplicated rather than signed again.
+- `updated_at` is the revision token clients send back as `expected_updated_at`. It is minted, compared and published at microsecond precision, the precision Postgres stores, so the token read from a relay matches the database. A repository update keeps a newer pre-minted revision verbatim and otherwise advances it, so tokens never repeat.
+- An environment record's `deployment_units` lists its explicit units, sorted by `key`, each with its `id` (minted by the daemon before the publish) and declared fields (`display_name`, `runtime_type`, `endpoint_ref`, `compose_dir`, `namespace`, `network_profile`, `git_source`, `reconcile_mode`, `ownership_mode`, `runtime_config`; `implicit: false`) and no timestamps. An environment without explicit units carries only its implicit default unit (`{"key": "<default_unit_key>", "implicit": true}`).
 
 Desired-state runtime projections may add `desired_hash`, renderer/target metadata, environment or deployment-unit revision metadata, apply metadata summaries, and `observation_id`. These additions are optional and backward-compatible. Projection content must remain sanitized: no secret plaintext, generated Compose env-file content, raw Docker transport material, Docker TLS material, bearer credentials, or NIP-98 credentials.
 

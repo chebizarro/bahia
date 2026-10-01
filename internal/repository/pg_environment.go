@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,9 +33,7 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 	if env.ID == uuid.Nil {
 		env.ID = domain.NewEntityID()
 	}
-	now := time.Now().UTC()
-	env.CreatedAt = now
-	env.UpdatedAt = now
+	domain.StampCreateRevision(&env.CreatedAt, &env.UpdatedAt)
 
 	domain.NormalizeEnvironmentTargeting(env)
 	selectorJSON, err := marshalJSON(env.LoomWorkerSelector, "loom worker selector")
@@ -173,8 +172,9 @@ func (r *PgEnvironmentRepository) ListByOrg(ctx context.Context, orgID uuid.UUID
 	return envs, rows.Err()
 }
 
+// Update stores env with the revision semantics of PgServiceRepository.Update.
 func (r *PgEnvironmentRepository) Update(ctx context.Context, env *domain.Environment) error {
-	env.UpdatedAt = time.Now().UTC()
+	requested, fallback := updateRevisionArgs(env.UpdatedAt)
 	domain.NormalizeEnvironmentTargeting(env)
 	selectorJSON, err := marshalJSON(env.LoomWorkerSelector, "loom worker selector")
 	if err != nil {
@@ -189,16 +189,19 @@ func (r *PgEnvironmentRepository) Update(ctx context.Context, env *domain.Enviro
 		return err
 	}
 
-	cmd, err := r.pool.Exec(ctx, `
-		UPDATE environments SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, loom_worker_selector=$4, runtime_config=$5, targeting=$6, deploy_strategy=$7, protected=$8, updated_at=$9
+	var stored time.Time
+	err = r.pool.QueryRow(ctx, `
+		UPDATE environments SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, loom_worker_selector=$4, runtime_config=$5, targeting=$6, deploy_strategy=$7, protected=$8, `+revisionAssignment("$9", "$10")+`
 		WHERE id=$1
-	`, env.ID, env.OrgID, env.Name, selectorJSON, configJSON, targetingJSON, env.DeployStrategy, env.Protected, env.UpdatedAt)
+		RETURNING updated_at
+	`, env.ID, env.OrgID, env.Name, selectorJSON, configJSON, targetingJSON, env.DeployStrategy, env.Protected, requested, fallback).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("updating environment %s: %w", env.ID, ErrNotFound)
+	}
 	if err != nil {
 		return fmt.Errorf("updating environment: %w", err)
 	}
-	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("updating environment %s: %w", env.ID, ErrNotFound)
-	}
+	env.UpdatedAt = stored.UTC()
 	return nil
 }
 

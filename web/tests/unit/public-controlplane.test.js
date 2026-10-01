@@ -76,6 +76,22 @@ describe('public controlplane command helpers', () => {
     expect(environmentCall.payload.id).not.toBe(serviceCall.payload.id);
   });
 
+  it('mints a client entity id for policy and LLM route creates and keeps a supplied one (bahia-irsry.42)', async () => {
+    const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
+    await api.createPolicy({ name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
+    await api.createPolicy({ id, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
+    await api.createLLMRoute({ name: 'chat' });
+    await api.createLLMRoute({ id, name: 'chat' });
+
+    const calls = requestEncryptedResultMock.mock.calls.map(([request]) => request);
+    expect(calls.map((call) => call.operation)).toEqual(['policy/create', 'policy/create', 'llm/route-create', 'llm/route-create']);
+    expect(calls[0].payload.id).toMatch(UUID_V7);
+    expect(calls[1].payload.id).toBe(id);
+    expect(calls[2].payload.id).toMatch(UUID_V7);
+    expect(calls[3].payload.id).toBe(id);
+    await expect(api.createPolicy({ id: 'Not-A-UUID', name: 'x', rules: [] })).rejects.toThrow(/Invalid entity id/);
+  });
+
   it('sends a caller-minted entity id unchanged so retries stay idempotent', async () => {
     const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
     await api.createService({ id, name: 'api', artifact_repo: 'ghcr.io/example/api' });
@@ -243,7 +259,7 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
       operation: 'llm/route-create',
       tags: [],
-      payload: routePayload,
+      payload: { ...routePayload, id: expect.stringMatching(UUID_V7) },
       kind: 25910,
       resultKinds: [25910],
       signal: undefined,

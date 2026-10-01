@@ -176,12 +176,13 @@ func (m *testDeploymentStateRepo) ListAll(_ context.Context) ([]domain.Environme
 }
 
 type captureServiceCommandPublisher struct {
-	create   *controlplane.ServiceCreateCommand
-	update   *controlplane.ServiceUpdateCommand
-	deploy   *controlplane.ServiceDeployCommand
-	rollback *controlplane.ServiceRollbackCommand
-	approval *controlplane.ServiceApprovalCommand
-	err      error
+	create    *controlplane.ServiceCreateCommand
+	envCreate *controlplane.EnvironmentCreateCommand
+	update    *controlplane.ServiceUpdateCommand
+	deploy    *controlplane.ServiceDeployCommand
+	rollback  *controlplane.ServiceRollbackCommand
+	approval  *controlplane.ServiceApprovalCommand
+	err       error
 }
 
 func (p *captureServiceCommandPublisher) PublishServiceCreateRequest(_ context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
@@ -190,6 +191,14 @@ func (p *captureServiceCommandPublisher) PublishServiceCreateRequest(_ context.C
 		return nil, p.err
 	}
 	return &controlplane.ServiceCommandReceipt{RequestEventID: "service-create-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceName: cmd.Name}, nil
+}
+
+func (p *captureServiceCommandPublisher) PublishEnvironmentCreateRequest(_ context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
+	p.envCreate = &cmd
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &controlplane.ServiceCommandReceipt{RequestEventID: "environment-create-event", RequestKind: controlplane.KindContextVMMessage, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, EnvironmentID: cmd.ID.String()}, nil
 }
 
 func (p *captureServiceCommandPublisher) PublishServiceUpdateRequest(_ context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error) {

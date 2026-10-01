@@ -80,7 +80,7 @@ func newEnvironmentsCommand() *cobra.Command {
 func newEnvironmentCreateCommand() *cobra.Command {
 	var targeting environmentTargetingFlags
 	unit := deploymentUnitFlags{prefix: "unit-"}
-	var orgID, name, strategy, reconcileMode string
+	var orgID, name, strategy, reconcileMode, rawID string
 	var protected bool
 	var selectorFile, runtimeConfigFile, unitsFile string
 
@@ -89,6 +89,10 @@ func newEnvironmentCreateCommand() *cobra.Command {
 		Short: "Create an environment through a signed ContextVM mutation",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := cliCreateEntityID(cmd, "environment", rawID)
+			if err != nil {
+				return err
+			}
 			selector, err := readJSONObjectFile(selectorFile)
 			if err != nil {
 				return fmt.Errorf("read loom worker selector: %w", err)
@@ -106,6 +110,7 @@ func newEnvironmentCreateCommand() *cobra.Command {
 				return err
 			}
 			result, err := runEnvironmentCreateNostr(cmd, client.CreateEnvironmentNostrRequest{
+				ID:                 id,
 				OrgID:              strings.TrimSpace(orgID),
 				Name:               strings.TrimSpace(name),
 				LoomWorkerSelector: selector,
@@ -122,6 +127,7 @@ func newEnvironmentCreateCommand() *cobra.Command {
 			return outputSingle(result)
 		},
 	}
+	cmd.Flags().StringVar(&rawID, "id", "", cliCreateEntityIDUsage("environment"))
 	cmd.Flags().StringVar(&orgID, "org", "", "Organization UUID")
 	cmd.Flags().StringVar(&name, "name", "", "Environment name")
 	cmd.Flags().StringVar(&strategy, "strategy", string(domain.DeployStrategyReplace), "Deploy strategy: replace, blue_green, canary")
@@ -774,4 +780,24 @@ func findDeploymentUnit(units []domain.DeploymentUnit, key string) (domain.Deplo
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+// cliCreateEntityID returns the client-minted id a create command signs
+// (bahia-irsry.42): --id when given (a canonical UUIDv7 or v4), otherwise a
+// fresh UUIDv7. A minted id is reported on stderr before anything is
+// published, so a create that timed out can be retried with --id and is then
+// replayed instead of creating a second entity.
+func cliCreateEntityID(cmd *cobra.Command, entity, raw string) (string, error) {
+	id, supplied, err := domain.ResolveCreateEntityID(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --id: %w", err)
+	}
+	if !supplied {
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s id %s (pass --id %s to retry this create)\n", entity, id, id)
+	}
+	return id.String(), nil
+}
+
+func cliCreateEntityIDUsage(entity string) string {
+	return "Client-minted " + entity + " id (canonical UUIDv7 or v4); minted when omitted. Reuse it to retry a create idempotently"
 }

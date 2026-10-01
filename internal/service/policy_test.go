@@ -519,7 +519,7 @@ func TestPolicyService_CreatePolicyValidatesAndDerivesSecuritySchedules(t *testi
 	securityRepo := newMemorySecurityRepo(target, nil)
 	svc.security = securityRepo
 	policy := &domain.DeploymentPolicy{Name: "security", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"interval_seconds": 3600, "target_key_hash": target.TargetKeyHash}}}}
-	if err := svc.CreatePolicy(context.Background(), policy); err != nil {
+	if _, err := svc.CreatePolicy(context.Background(), policy); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
 	if len(securityRepo.schedules) != 1 {
@@ -546,7 +546,7 @@ func TestPolicyService_CreatePolicyValidatesAndDerivesSecuritySchedules(t *testi
 		t.Fatal("disabled security_osv_scan rule left schedule enabled")
 	}
 	bad := &domain.DeploymentPolicy{Name: "bad", Rules: []domain.PolicyRule{{Type: domain.RuleSecurityOSVScan, Params: map[string]any{"stale": "maybe"}}}}
-	if err := svc.CreatePolicy(context.Background(), bad); err == nil {
+	if _, err := svc.CreatePolicy(context.Background(), bad); err == nil {
 		t.Fatal("expected invalid stale behavior to be rejected")
 	}
 }
@@ -982,7 +982,7 @@ func TestPolicyService_CRUD(t *testing.T) {
 	}
 
 	// Create.
-	if err := svc.CreatePolicy(ctx, p); err != nil {
+	if _, err := svc.CreatePolicy(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

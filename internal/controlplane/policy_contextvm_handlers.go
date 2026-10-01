@@ -12,6 +12,10 @@ import (
 
 func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMRequest) (any, error) {
 	var req struct {
+		// ID is the optional client-minted policy id (bahia-irsry.42): a
+		// canonical UUIDv7 (or v4). A retry with the same id and content
+		// replays; different content is JSON-RPC -32010.
+		ID            string              `json:"id,omitempty"`
 		Name          string              `json:"name"`
 		EnvironmentID *uuid.UUID          `json:"environment_id,omitempty"`
 		Rules         []domain.PolicyRule `json:"rules"`
@@ -24,12 +28,21 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMReque
 	if request.ProgressToken == "" {
 		return nil, fmt.Errorf("idempotency_key or _meta.progressToken is required")
 	}
-	policy := &domain.DeploymentPolicy{Name: req.Name, EnvironmentID: req.EnvironmentID, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
+	id, _, err := domain.ResolveCreateEntityID(req.ID)
+	if err != nil {
+		return nil, err
+	}
+	policy := &domain.DeploymentPolicy{ID: id, Name: req.Name, EnvironmentID: req.EnvironmentID, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
 	if err := validateContextVMPolicy(policy); err != nil {
 		return nil, err
 	}
-	if err := r.policyService.CreatePolicy(ctx, policy); err != nil {
+	replayed, err := r.policyService.CreatePolicy(ctx, policy)
+	if err != nil {
 		return nil, err
+	}
+	if replayed {
+		// The stored policy's record is already published.
+		return policyMutationResult("policy_create", policy.ID), nil
 	}
 	if err := r.publishPolicyRegistry(ctx, policy, false); err != nil {
 		return nil, fmt.Errorf("policy created but registry publication failed: %w", err)

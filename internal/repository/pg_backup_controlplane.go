@@ -41,7 +41,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context,
 		return err
 	}
 	if recipe.ID == uuid.Nil {
-		recipe.ID = uuid.New()
+		recipe.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&recipe.CreatedAt, &recipe.UpdatedAt)
 	includeJSON, err := marshalJSON(recipe.Include, "backup recipe include paths")
@@ -101,7 +101,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupPolicy(ctx context.Context,
 		return err
 	}
 	if policy.ID == uuid.Nil {
-		policy.ID = uuid.New()
+		policy.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&policy.CreatedAt, &policy.UpdatedAt)
 	metadataJSON, err := marshalJSON(policy.Metadata, "backup policy metadata")
@@ -147,7 +147,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRepository(ctx context.Cont
 		return err
 	}
 	if repo.ID == uuid.Nil {
-		repo.ID = uuid.New()
+		repo.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&repo.CreatedAt, &repo.UpdatedAt)
 	metadataJSON, err := marshalJSON(repo.Metadata, "backup repository metadata")
@@ -194,7 +194,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupDefinition(ctx context.Cont
 		return err
 	}
 	if definition.ID == uuid.Nil {
-		definition.ID = uuid.New()
+		definition.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&definition.CreatedAt, &definition.UpdatedAt)
 	restoreTargetRulesJSON, executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, metadataJSON, err := marshalBackupDefinitionJSON(definition)
@@ -316,7 +316,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, ru
 		return err
 	}
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&run.CreatedAt, &run.UpdatedAt)
 	publishJSON, metadataJSON, err := marshalBackupRunJSON(run)
@@ -378,7 +378,7 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRunIfAbsent(ctx context.Con
 		return nil, false, err
 	}
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&run.CreatedAt, &run.UpdatedAt)
 	publishJSON, metadataJSON, err := marshalBackupRunJSON(run)
@@ -468,7 +468,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRestore(ctx context.Context
 		return err
 	}
 	if restore.ID == uuid.Nil {
-		restore.ID = uuid.New()
+		restore.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&restore.CreatedAt, &restore.UpdatedAt)
 	evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON, err := marshalBackupRestoreJSON(restore)
@@ -538,7 +538,7 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRestoreIfAbsent(ctx context
 		return nil, false, err
 	}
 	if restore.ID == uuid.Nil {
-		restore.ID = uuid.New()
+		restore.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&restore.CreatedAt, &restore.UpdatedAt)
 	evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON, err := marshalBackupRestoreJSON(restore)
@@ -629,7 +629,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRetentionRun(ctx context.Co
 		return err
 	}
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&run.CreatedAt, &run.UpdatedAt)
 	evidenceJSON, publishJSON, metadataJSON, err := marshalBackupRetentionRunJSON(run)
@@ -682,7 +682,7 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRetentionRunIfAbsent(ctx co
 		return nil, false, err
 	}
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&run.CreatedAt, &run.UpdatedAt)
 	evidenceJSON, publishJSON, metadataJSON, err := marshalBackupRetentionRunJSON(run)
@@ -770,7 +770,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupVerification(ctx context.Co
 		return err
 	}
 	if record.ID == uuid.Nil {
-		record.ID = uuid.New()
+		record.ID = domain.NewEntityID()
 	}
 	setBackupTimes(&record.CreatedAt, &record.UpdatedAt)
 	evidenceJSON, err := marshalJSON(record.Evidence, "backup verification evidence")

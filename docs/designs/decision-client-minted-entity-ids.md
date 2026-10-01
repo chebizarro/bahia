@@ -49,3 +49,8 @@ Addressable coordinates carried Postgres UUIDs: rows were created first, and the
 - No schema migration is needed. The `id uuid` primary keys already accept client values, and their `DEFAULT gen_random_uuid()` becomes unused rather than removed.
 - The projector's coordinate builders are already input-agnostic (`canonicalStateDTag` is the identity on the id, `serviceStateDTag` composes two ids). They need no change.
 - Remaining domains adopt the same pattern with their Phase 3 slices. The event spec lists them.
+
+## Follow-up (bahia-irsry.42, 2026-10-01)
+
+- Rolled out to deployment policies and LLM routes (handler, service replay/conflict through `resolveCreateByID`, repository classification, web, MCP), and to every service/environment producer: the operator client and CLI (`--id`) and MCP (`bahia_create_environment` now publishes `environment/create`). Daemon-authored backup, package and ML records are minted as UUIDv7 in code; backup apply verbs validate supplied ids. The event spec's migration table records what is deferred and why.
+- **Names stay fleet-wide.** `services.name`, `environments.name` (and policy and LLM route names) remain globally unique; no migration scopes them per org. Names are a namespace outside the database too: the DNS projector maps environment names to zones and service names to DNS labels, so per-org names would let two orgs claim one FQDN, and name lookups carry no org. Per-org names need an org-qualified DNS namespace and org-scoped lookups first.

@@ -28,7 +28,7 @@ const mlModelColumns = `id, slug, name, family, summary, description, modalities
 
 func (r *PgMLRegistryRepository) UpsertModel(ctx context.Context, model *domain.MLModel) error {
 	if model.ID == uuid.Nil {
-		model.ID = uuid.New()
+		model.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if model.CreatedAt.IsZero() {
@@ -155,7 +155,7 @@ const mlModelVersionColumns = `id, model_id, version, source, runtime_requiremen
 
 func (r *PgMLRegistryRepository) UpsertModelVersion(ctx context.Context, version *domain.MLModelVersion) error {
 	if version.ID == uuid.Nil {
-		version.ID = uuid.New()
+		version.ID = domain.NewEntityID()
 	}
 	if version.CreatedAt.IsZero() {
 		version.CreatedAt = time.Now().UTC()
@@ -264,7 +264,7 @@ const mlArtifactColumns = `id, model_version_id, kind, format, uri, sha256, size
 
 func (r *PgMLRegistryRepository) UpsertArtifactRef(ctx context.Context, artifact *domain.MLArtifactRef) error {
 	if artifact.ID == uuid.Nil {
-		artifact.ID = uuid.New()
+		artifact.ID = domain.NewEntityID()
 	}
 	if artifact.CreatedAt.IsZero() {
 		artifact.CreatedAt = time.Now().UTC()
@@ -338,7 +338,7 @@ const mlProvenanceColumns = `id, from_artifact_id, to_artifact_id, model_version
 
 func (r *PgMLRegistryRepository) UpsertProvenanceEdge(ctx context.Context, edge *domain.MLProvenanceEdge) error {
 	if edge.ID == uuid.Nil {
-		edge.ID = uuid.New()
+		edge.ID = domain.NewEntityID()
 	}
 	if edge.CreatedAt.IsZero() {
 		edge.CreatedAt = time.Now().UTC()
@@ -394,7 +394,7 @@ const mlRecipeColumns = `id, name, version, description, yaml, normalized_json, 
 
 func (r *PgMLRegistryRepository) UpsertRecipe(ctx context.Context, recipe *domain.MLRecipe) error {
 	if recipe.ID == uuid.Nil {
-		recipe.ID = uuid.New()
+		recipe.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if recipe.CreatedAt.IsZero() {
@@ -478,7 +478,7 @@ const mlRecipeRunColumns = `id, recipe_id, requested_by, status, inputs, paramet
 
 func (r *PgMLRegistryRepository) UpsertRecipeRun(ctx context.Context, run *domain.MLRecipeRun) error {
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if run.CreatedAt.IsZero() {
@@ -588,7 +588,7 @@ const mlEndpointColumns = `id, name, environment_id, task_kinds, protocol, gatew
 
 func (r *PgMLRegistryRepository) UpsertInferenceEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
 	if endpoint.ID == uuid.Nil {
-		endpoint.ID = uuid.New()
+		endpoint.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if endpoint.CreatedAt.IsZero() {
@@ -691,7 +691,7 @@ const mlIntentColumns = `id, endpoint_id, environment_id, model_version_id, requ
 
 func (r *PgMLRegistryRepository) UpsertDeploymentIntent(ctx context.Context, intent *domain.MLDeploymentIntent) error {
 	if intent.ID == uuid.Nil {
-		intent.ID = uuid.New()
+		intent.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if intent.CreatedAt.IsZero() {
@@ -763,7 +763,7 @@ const mlRunColumns = `id, deployment_intent_id, runtime_kind, endpoint_ref, work
 
 func (r *PgMLRegistryRepository) UpsertDeploymentRun(ctx context.Context, run *domain.MLDeploymentRun) error {
 	if run.ID == uuid.Nil {
-		run.ID = uuid.New()
+		run.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	if run.CreatedAt.IsZero() {
@@ -926,7 +926,7 @@ const mlObservationColumns = `id, endpoint_id, environment_id, observed_model_ve
 
 func (r *PgMLRegistryRepository) UpsertInferenceObservation(ctx context.Context, obs *domain.MLInferenceObservation) error {
 	if obs.ID == uuid.Nil {
-		obs.ID = uuid.New()
+		obs.ID = domain.NewEntityID()
 	}
 	if obs.ObservedAt.IsZero() {
 		obs.ObservedAt = time.Now().UTC()
