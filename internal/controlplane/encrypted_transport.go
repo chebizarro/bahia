@@ -15,6 +15,7 @@ import (
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -91,6 +92,9 @@ const (
 	ContextVMMethodApprovalReject             = "approval/reject"
 	ContextVMMethodToolsCall                  = "tools/call"
 
+	// encryptedRequestReplayLookback and contextVMNIP59OuterLookback are the
+	// fixed replay windows of a transport without a local store (the DNS
+	// agent). The daemon uses a persisted cursor instead (contextvm_local_run.go).
 	encryptedRequestReplayLookback = 2 * time.Minute
 	contextVMNIP59OuterLookback    = 12 * time.Hour
 	contextVMResponseDefaultTTL    = 24 * time.Hour
@@ -109,10 +113,11 @@ const (
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
-// encrypted request/result event runtime. RelayPool satisfies this interface.
+// encrypted request/result event runtime. RelayPool satisfies this interface;
+// its AuthHandler answers NIP-42 challenges and reissues auth-required REQs, so
+// the transport never authenticates on its own.
 type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
-	AuthenticateRelay(ctx context.Context, relayURL string) error
 }
 
 // EncryptedRequestEnvelope is the deprecated encrypted request payload shape.
@@ -405,6 +410,7 @@ type EncryptedRequestTransport struct {
 	contextVMDedup         *contextVMDedupCache
 	contextVMResponseStore repository.ContextVMResponseStore
 	contextVMResponseTTL   time.Duration
+	contextVMLocal         contextVMLocalState
 	contextVMResultRetry   contextVMResultRetryConfig
 	contextVMRetrySlots    chan struct{}
 	contextVMRetryMu       sync.RWMutex
@@ -426,6 +432,14 @@ func WithContextVMResponseStore(store repository.ContextVMResponseStore, ttl tim
 			transport.contextVMResponseTTL = ttl
 		}
 	}
+}
+
+// WithContextVMLocalStore keeps the request ledger (claims, keyed responses,
+// processed deliveries) and the per-relay request cursors in the daemon's local
+// store, so restart idempotency and downtime recovery do not depend on
+// Postgres (bahia-irsry.10.6). See contextvm_local_run.go.
+func WithContextVMLocalStore(store *localstore.Store) EncryptedRequestTransportOption {
+	return func(transport *EncryptedRequestTransport) { transport.contextVMLocal.store = store }
 }
 
 func WithContextVMResultRetry(timeout, initialBackoff, maxBackoff time.Duration) EncryptedRequestTransportOption {
@@ -529,6 +543,13 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 		cancelRetries()
 		t.clearContextVMRetryBase(retryBase)
 	}()
+	if t.contextVMLocal.store != nil {
+		return t.runLocalContextVM(ctx)
+	}
+	// Without the local ledger, request dedup is in memory and a request's
+	// inner event must be at most two minutes old. A subscriber may still
+	// deliver from its own store (the DNS agent's StoreBackedSubscriber,
+	// irsry.10.5); the daemon uses the ledger (contextvm_local_run.go).
 	now := time.Now().UTC()
 	innerSince := nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix())
 	filters := contextVMSubscriptionFilters(t.responder.ServicePubkey(), now)
@@ -537,15 +558,11 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 		zap.Time("inner_since", time.Unix(int64(innerSince), 0).UTC()),
 		zap.Duration("nip59_outer_lookback", contextVMNIP59OuterLookback),
 	)
-	subscribe := func() (*nostrpool.MergedSubscription, error) {
-		return t.subscriber.SubscribeAllWithEOSE(ctx, filters)
-	}
-	merged, err := subscribe()
+	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
 	}
-	defer func() { merged.Close() }()
-	authAttempted := make(map[string]struct{})
+	defer merged.Close()
 	t.logger.Info("subscribed to ContextVM encrypted request events")
 	for {
 		select {
@@ -565,35 +582,6 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 					zap.String("subscription_id", closed.SubscriptionID),
 					zap.String("reason", closed.Reason),
 				)
-				if nostrpool.IsAuthRequiredReason(closed.Reason) && closed.RelayURL != "" {
-					if _, attempted := authAttempted[closed.RelayURL]; attempted {
-						continue
-					}
-					authAttempted[closed.RelayURL] = struct{}{}
-					if err := t.subscriber.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-						t.logger.Warn("relay ContextVM encrypted request subscription auth failed",
-							zap.String("relay", closed.RelayURL),
-							zap.String("reason", closed.Reason),
-							zap.Error(err),
-						)
-						continue
-					}
-					merged.Close()
-					next, err := subscribe()
-					if err != nil {
-						t.logger.Warn("relay ContextVM encrypted request subscription resubscribe after auth failed",
-							zap.String("relay", closed.RelayURL),
-							zap.String("reason", closed.Reason),
-							zap.Error(err),
-						)
-						continue
-					}
-					merged = next
-					t.logger.Info("relay ContextVM encrypted request subscription authenticated and resubscribed",
-						zap.String("relay", closed.RelayURL),
-						zap.String("reason", closed.Reason),
-					)
-				}
 			} else {
 				merged.Closed = nil
 			}
@@ -771,23 +759,31 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 			t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "invalid request params"), rpc.Method)
 			return
 		}
-		cached, ok, fingerprintMismatch := t.cachedContextVMResponse(ctx, innerPubkey, rpc.Method, progressToken, requestFingerprint)
-		if fingerprintMismatch {
-			t.logger.Warn("ContextVM idempotency key reused with different request parameters", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey_prefix", pubkeyPrefix(innerPubkey)))
-			t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters"), rpc.Method)
+	}
+	if t.contextVMLocal.store != nil {
+		if !t.claimLocalContextVMRequest(ctx, outer, inner, encrypted, rpc, progressToken, requestFingerprint) {
 			return
 		}
-		if ok {
-			cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
-			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached, rpc.Method)
+	} else {
+		if progressToken != "" {
+			cached, ok, fingerprintMismatch := t.cachedContextVMResponse(ctx, innerPubkey, rpc.Method, progressToken, requestFingerprint)
+			if fingerprintMismatch {
+				t.logger.Warn("ContextVM idempotency key reused with different request parameters", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey_prefix", pubkeyPrefix(innerPubkey)))
+				t.publishContextVMResponse(ctx, outer, inner, encrypted, cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters"), rpc.Method)
+				return
+			}
+			if ok {
+				cached.ID = cascontextvm.NewResponse(rpc.ID, nil).ID
+				t.publishContextVMResponse(ctx, outer, inner, encrypted, cached, rpc.Method)
+				return
+			}
+		}
+		if t.dedup.IsDuplicate(innerID) {
+			t.logger.Debug("duplicate ContextVM request ignored while its first execution is still in flight", zap.String("event_id", innerID))
 			return
 		}
+		t.dedup.MarkSeen(innerID)
 	}
-	if t.dedup.IsDuplicate(innerID) {
-		t.logger.Debug("duplicate ContextVM request ignored while its first execution is still in flight", zap.String("event_id", innerID))
-		return
-	}
-	t.dedup.MarkSeen(innerID)
 	t.logger.Info("dispatching ContextVM request", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey", innerPubkey))
 	// A progress notification is best-effort protocol sugar. Start it before
 	// the handler, but do not synchronously gate the requested mutation on
@@ -826,6 +822,8 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.logger.Warn("ContextVM terminal response conflicted with a different request fingerprint", zap.String("event_id", innerID), zap.String("method", rpc.Method), zap.String("requester_pubkey_prefix", pubkeyPrefix(innerPubkey)))
 		response = cascontextvm.NewErrorResponse(rpc.ID, cascontextvm.InvalidRequestCode, "idempotency key was already used with different request parameters")
 	}
+	// Saved before publication, so a lost response is still replayable.
+	t.completeLocalContextVMRequest(innerID, progressToken != "", response)
 	t.publishContextVMResponse(ctx, outer, inner, encrypted, response, rpc.Method)
 }
 
