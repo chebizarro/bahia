@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
@@ -190,90 +189,6 @@ func TestBridgeLatestDoesNotGrowWithRedeliveriesOfSameCoordinate(t *testing.T) {
 	require.Len(t, bridge.latest, 1, "latest must not grow across redeliveries")
 }
 
-// TestBridgeConsumeBackfillsUntilEOSEThenAppliesLiveStateAndTombstones drives
-// the subscription loop with the merged-subscription channels. Synchronisation
-// is by channel hand-off only: the events channel is unbuffered, so a send
-// returns once consume has taken the event, and every hosts write is observed
-// on the recording writer.
-func TestBridgeConsumeBackfillsUntilEOSEThenAppliesLiveStateAndTombstones(t *testing.T) {
-	pubkey, _ := testIdentity(t)
-	bridge, writer := newTestBridge(t, pubkey, nil)
-
-	events := make(chan *nostr.Event)
-	eose := make(chan struct{})
-	merged := &nostradapter.MergedSubscription{Events: events, EndOfStoredEvents: eose}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		err := bridge.consume(ctx, merged)
-		done <- err
-	}()
-
-	base := nostr.Now() - 100
-	api := endpointRecord{D: "endpoint:service:api:prod", Service: "api", Environment: "prod", FQDN: "api.prod.cascadia", Health: "healthy", Worker: workerA}
-	apiNewer := api
-	apiNewer.Worker = workerB
-	// The web endpoint's label comes from its service tag ("web"), which its
-	// tombstone does not carry; removal must follow the d coordinate.
-	web := endpointRecord{D: "endpoint:service:web:prod", Service: "web", Environment: "prod", FQDN: "frontend.prod.cascadia", Health: "healthy", Worker: workerC}
-	db := endpointRecord{D: "endpoint:service:db:prod", Service: "db", Environment: "prod", FQDN: "db.prod.cascadia", Health: "healthy", Worker: workerC}
-
-	// Backfill, out of order as two relays would deliver it.
-	events <- liveEndpoint(t, pubkey, apiNewer, base+10)
-	events <- liveEndpoint(t, pubkey, api, base)
-	events <- liveEndpoint(t, pubkey, web, base)
-	events <- endpointTombstone(t, pubkey, web.D, web.FQDN, base+5)
-	events <- liveEndpoint(t, pubkey, db, base)
-	close(eose)
-
-	require.Equal(t, map[string]string{"api": npubOf(t, workerB), "db": npubOf(t, workerC)}, writer.next(t),
-		"first write happens at EOSE and reflects newest-per-coordinate backfill with tombstones applied")
-
-	// Live tombstone removes the entry.
-	events <- endpointTombstone(t, pubkey, api.D, api.FQDN, base+20)
-	require.Equal(t, map[string]string{"db": npubOf(t, workerC)}, writer.next(t))
-
-	// A live record older than the tombstone must not resurrect the endpoint;
-	// the next write (triggered by a new endpoint) proves it was ignored.
-	events <- liveEndpoint(t, pubkey, apiNewer, base+15)
-	cache := endpointRecord{D: "endpoint:service:cache:prod", Service: "cache", Environment: "prod", FQDN: "cache.prod.cascadia", Health: "healthy", Worker: workerA}
-	events <- liveEndpoint(t, pubkey, cache, base+21)
-	require.Equal(t, map[string]string{"db": npubOf(t, workerC), "cache": npubOf(t, workerA)}, writer.next(t))
-
-	// A newer live record after a tombstone re-adds the endpoint.
-	events <- liveEndpoint(t, pubkey, api, base+30)
-	require.Equal(t, map[string]string{"db": npubOf(t, workerC), "cache": npubOf(t, workerA), "api": npubOf(t, workerA)}, writer.next(t))
-
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
-	writer.requireNoPending(t)
-}
-
-func TestBridgeCatchUpWithoutStoredEventsLeavesHostsUntouched(t *testing.T) {
-	pubkey, _ := testIdentity(t)
-	bridge, writer := newTestBridge(t, pubkey, nil)
-
-	events := make(chan *nostr.Event)
-	eose := make(chan struct{})
-	merged := &nostradapter.MergedSubscription{Events: events, EndOfStoredEvents: eose}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		err := bridge.consume(ctx, merged)
-		done <- err
-	}()
-
-	close(eose)
-	// The first live event produces the first write; an EOSE-time write of an
-	// empty section would have been observed before it.
-	events <- liveEndpoint(t, pubkey, endpointRecord{D: "endpoint:service:api:prod", Service: "api", FQDN: "api.prod.cascadia", Health: "healthy", Worker: workerA}, nostr.Now())
-	require.Equal(t, map[string]string{"api": npubOf(t, workerA)}, writer.next(t))
-
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
-	writer.requireNoPending(t)
-}
-
 // endpointRecord is the subset of domain.DNSEndpoint the tests vary.
 type endpointRecord struct {
 	D            string
@@ -371,9 +286,9 @@ func (w recordingWriter) requireNoPending(t *testing.T) {
 	}
 }
 
-// newTestBridge returns a bridge with a recording writer. It has not seen
-// EOSE, so direct HandleEvent calls only update state; consume-driven tests
-// close EndOfStoredEvents to reach the live phase.
+// newTestBridge returns a bridge with a recording writer and no relay pool. It
+// has not caught up, so direct HandleEvent calls only update state; the
+// relay-driven tests in bridge_store_test.go cover the live phase.
 func newTestBridge(t *testing.T, pubkey string, configure func(*Config)) (*Bridge, recordingWriter) {
 	t.Helper()
 	cfg := Config{
