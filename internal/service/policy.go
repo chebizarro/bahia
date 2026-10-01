@@ -677,13 +677,58 @@ func errorsIsNotFound(err error) bool {
 
 // CreatePolicy creates a new deployment policy.
 func (s *PolicyService) CreatePolicy(ctx context.Context, p *domain.DeploymentPolicy) error {
+	_, err := s.CreatePolicyIdempotent(ctx, p)
+	return err
+}
+
+// CreatePolicyIdempotent stores a new policy under p.ID, minting a UUIDv7 when
+// the caller supplied none (bahia-irsry.42). When an identical policy is
+// already stored under that id it loads it into p and reports replayed=true:
+// nothing is written again, and callers publish nothing again. The same id
+// with different content is a *domain.EntityIDConflictError.
+func (s *PolicyService) CreatePolicyIdempotent(ctx context.Context, p *domain.DeploymentPolicy) (replayed bool, err error) {
+	if p == nil {
+		return false, fmt.Errorf("deployment policy is required")
+	}
 	if err := validateSecurityPolicyRules(p); err != nil {
-		return err
+		return false, err
+	}
+	if p.ID == uuid.Nil {
+		p.ID = domain.NewEntityID()
+	}
+	if replayed, err := s.replayPolicyCreate(ctx, p); err != nil || replayed {
+		return replayed, err
 	}
 	if err := s.policies.Create(ctx, p); err != nil {
-		return err
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			// A concurrent create of the same id won the insert.
+			if replayed, replayErr := s.replayPolicyCreate(ctx, p); replayErr != nil || replayed {
+				return replayed, replayErr
+			}
+		}
+		return false, err
 	}
-	return s.syncSecuritySchedulesForPolicy(ctx, p)
+	return false, s.syncSecuritySchedulesForPolicy(ctx, p)
+}
+
+func (s *PolicyService) replayPolicyCreate(ctx context.Context, p *domain.DeploymentPolicy) (bool, error) {
+	stored, err := resolveCreateByID(ctx, "policy", p.ID, p, s.policies.GetByID, policyCreateFingerprint)
+	if err != nil || stored == nil {
+		return false, err
+	}
+	*p = *stored
+	return true, nil
+}
+
+// policyCreateFingerprint is a policy's declared content (see
+// canonicalCreateContent) with the create defaults applied.
+func policyCreateFingerprint(p *domain.DeploymentPolicy) []byte {
+	c := *p
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Enforcement == "" {
+		c.Enforcement = domain.PolicyEnforcementWarn
+	}
+	return canonicalCreateContent(c)
 }
 
 // GetPolicy retrieves a policy by ID.

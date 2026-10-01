@@ -1087,6 +1087,7 @@ func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) 
 		return
 	}
 	var req struct {
+		ID                     string                         `json:"id,omitempty"`
 		Name                   string                         `json:"name"`
 		Description            string                         `json:"description,omitempty"`
 		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
@@ -1098,7 +1099,12 @@ func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) 
 		r.logPublishError(r.publishLLMError(ctx, event, "parse_error", err.Error()))
 		return
 	}
-	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
+	routeID, _, err := domain.ResolveCreateEntityID(req.ID)
+	if err != nil {
+		r.logPublishError(r.publishLLMError(ctx, event, "parse_error", err.Error()))
+		return
+	}
+	route := &domain.LLMRoute{ID: routeID, Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
 	if err := r.llmRegistry.CreateRoute(ctx, route); err != nil {
 		logger.Error("failed to create LLM route", "error", err)
 		r.logPublishError(r.publishLLMError(ctx, event, "create_error", err.Error()))

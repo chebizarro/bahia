@@ -86,6 +86,8 @@ The names below are verified against the current `internal/mcp` registries. Some
 
 Signer-first mutations can return transport/correlation metadata rather than a completed domain object. Follow the canonical Nostr observables named in the result.
 
+Create tools (`bahia_create_service`, `bahia_create_environment`, `bahia_create_policy`, `bahia_llm_create_route`) take an optional `id`, a client-minted UUIDv7 (or v4), and mint one when it is omitted; the result echoes it. To retry a create, pass the returned id with the same arguments: the control plane replays it, and the same id with different content is rejected (JSON-RPC `-32010`).
+
 ### Deployments and runs
 
 - Intent workflow: `bahia_deploy`, `bahia_rollback`, `bahia_list_intents`, `bahia_get_intent`, `bahia_approve_intent`, `bahia_reject_intent`

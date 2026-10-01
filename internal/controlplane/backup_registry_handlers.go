@@ -73,7 +73,7 @@ func (r *Reactor) handleBackupRepositoryRegisterRequest(ctx context.Context, eve
 		repo.ID = existing.ID
 	}
 	if repo.ID == uuid.Nil {
-		repo.ID = uuid.New()
+		repo.ID = domain.NewEntityID()
 	}
 	if repo.Metadata == nil {
 		repo.Metadata = map[string]any{}
@@ -111,7 +111,7 @@ func (r *Reactor) handleBackupPolicyApplyRequest(ctx context.Context, event *nos
 		policy.ID = existing.ID
 	}
 	if policy.ID == uuid.Nil {
-		policy.ID = uuid.New()
+		policy.ID = domain.NewEntityID()
 	}
 	if policy.Metadata == nil {
 		policy.Metadata = map[string]any{}
@@ -148,7 +148,7 @@ func (r *Reactor) handleBackupRecipeApplyRequest(ctx context.Context, event *nos
 		}
 	}
 	if recipe.ID == uuid.Nil {
-		recipe.ID = uuid.New()
+		recipe.ID = domain.NewEntityID()
 	}
 	if recipe.Metadata == nil {
 		recipe.Metadata = map[string]any{}
@@ -213,7 +213,7 @@ func (r *Reactor) handleBackupDefinitionApplyRequest(ctx context.Context, event 
 		}
 	}
 	if definition.ID == uuid.Nil {
-		definition.ID = uuid.New()
+		definition.ID = domain.NewEntityID()
 	}
 	if definition.CreatedBy == "" {
 		definition.CreatedBy = backupRequestActor(event)
@@ -342,7 +342,7 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 		r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", status, message, map[string]any{"verification_id": existing.ID.String(), "backup_run_id": run.ID.String(), "mode": string(existing.Mode), "verification_status": string(existing.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", existing.ID.String()}, {"verification_status", string(existing.Status)}})
 		return
 	}
-	record := &domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: run.ID, Mode: mode, Status: domain.BackupVerificationPending, Verified: false, Evidence: backupNostrMetadata(event, req.Metadata, map[string]any{"nostr_request_command": "backup_verification", "nostr_backup_run_id": run.ID.String(), "nostr_snapshot_id": run.SnapshotID})}
+	record := &domain.BackupVerificationRecord{ID: domain.NewEntityID(), BackupRunID: run.ID, Mode: mode, Status: domain.BackupVerificationPending, Verified: false, Evidence: backupNostrMetadata(event, req.Metadata, map[string]any{"nostr_request_command": "backup_verification", "nostr_backup_run_id": run.ID.String(), "nostr_snapshot_id": run.SnapshotID})}
 	if err := registry.RecordBackupVerification(ctx, record); err != nil {
 		r.publishBackupCommandFailure(ctx, event, KindBackupVerificationResult, "failed", "verification_record_error", err.Error())
 		return

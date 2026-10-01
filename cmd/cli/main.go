@@ -186,6 +186,11 @@ func servicesCommands() *cobra.Command {
 			runtimeType, _ := cmd.Flags().GetString("runtime-type")
 			runtimeConfigFile, _ := cmd.Flags().GetString("managed-runtime-config-file")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			rawID, _ := cmd.Flags().GetString("id")
+			id, err := cliCreateEntityID(cmd, "service", rawID)
+			if err != nil {
+				return err
+			}
 			managed, err := readManagedRuntimeConfigFile(runtimeConfigFile)
 			if err != nil {
 				return err
@@ -203,7 +208,7 @@ func servicesCommands() *cobra.Command {
 				}
 			}
 			result, err := runServiceCreateNostr(cmd, client.CreateServiceNostrRequest{
-				OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+				ID: id, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
 				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
 			})
 			if err != nil {
@@ -226,6 +231,7 @@ func servicesCommands() *cobra.Command {
 	createCmd.Flags().String("runtime-type", string(domain.RuntimeTypeCompose), "Runtime type: docker, compose, kubernetes")
 	createCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
 	createCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
+	createCmd.Flags().String("id", "", cliCreateEntityIDUsage("service"))
 	_ = createCmd.MarkFlagRequired("name")
 	_ = createCmd.MarkFlagRequired("artifact-repo")
 

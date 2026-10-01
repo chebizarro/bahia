@@ -28,6 +28,9 @@ func NewLLMCommandPublisher(publisher NostrEventPublisher, signer nostr.Signer) 
 
 // LLMRouteCreateCommand describes a canonical LLM route-create request.
 type LLMRouteCreateCommand struct {
+	// ID is the optional client-minted route id (bahia-irsry.42), sent only
+	// when set; callers that retry mint it once.
+	ID                     uuid.UUID
 	Name                   string
 	Description            string
 	GatewayConfig          *domain.LLMGatewayRouteConfig
@@ -114,6 +117,9 @@ func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, 
 	content := map[string]any{
 		"name": name,
 	}
+	if cmd.ID != uuid.Nil {
+		content["id"] = cmd.ID.String()
+	}
 	if cmd.Description != "" {
 		content["description"] = cmd.Description
 	}
@@ -131,7 +137,11 @@ func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, 
 	}
 	tags := nostr.Tags{{"route", name}}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	return p.publish(ctx, "llm/route-create", KindNIP38Status, KindContextVMMessage, tags, content)
+	receipt, err := p.publish(ctx, "llm/route-create", KindNIP38Status, KindContextVMMessage, tags, content)
+	if receipt != nil && cmd.ID != uuid.Nil {
+		receipt.RouteID = cmd.ID.String()
+	}
+	return receipt, err
 }
 
 // PublishLLMReleaseRegisterRequest publishes a ContextVM release-register request and returns correlation metadata.

@@ -254,7 +254,7 @@ func PackageRKNNArtifact(req RKNNPackagingRequest) (*domain.MLArtifactRef, error
 	for k, v := range req.Metadata {
 		metadata[k] = v
 	}
-	artifact := &domain.MLArtifactRef{ID: uuid.New(), ModelVersionID: req.ModelVersionID, Kind: domain.MLArtifactKindModel, Format: domain.MLArtifactFormatRKNN, URI: req.RKNNURI, SHA256: sha, SizeBytes: size, MediaType: "application/x-rknn", Source: &domain.MLSourceRef{Kind: "rknn_toolkit2", URI: req.RKNNURI, Metadata: metadata}, Metadata: metadata, CreatedAt: time.Now().UTC()}
+	artifact := &domain.MLArtifactRef{ID: domain.NewEntityID(), ModelVersionID: req.ModelVersionID, Kind: domain.MLArtifactKindModel, Format: domain.MLArtifactFormatRKNN, URI: req.RKNNURI, SHA256: sha, SizeBytes: size, MediaType: "application/x-rknn", Source: &domain.MLSourceRef{Kind: "rknn_toolkit2", URI: req.RKNNURI, Metadata: metadata}, Metadata: metadata, CreatedAt: time.Now().UTC()}
 	if err := domain.ValidateMLArtifactRef(artifact); err != nil {
 		return nil, err
 	}

@@ -38,6 +38,23 @@ type ServiceCreateCommand struct {
 	AgentID              string
 }
 
+// EnvironmentCreateCommand is the environment/create request (the environment
+// counterpart of ServiceCreateCommand). ID is the optional client-minted
+// environment id (bahia-irsry.42), sent only when set; callers that retry mint
+// it once and reuse it with the same IdempotencyKey.
+type EnvironmentCreateCommand struct {
+	ID                 uuid.UUID
+	OrgID              uuid.UUID
+	Name               string
+	LoomWorkerSelector map[string]any
+	RuntimeConfig      map[string]any
+	ReconcileMode      string
+	DeployStrategy     string
+	Protected          bool
+	IdempotencyKey     string
+	AgentID            string
+}
+
 type ServiceUpdateCommand struct {
 	ID                       uuid.UUID
 	OrgID                    *uuid.UUID
@@ -140,6 +157,44 @@ func (p *ServiceCommandPublisher) PublishServiceCreateRequest(ctx context.Contex
 		receipt.ServiceName = name
 		if cmd.ID != uuid.Nil {
 			receipt.ServiceID = cmd.ID.String()
+		}
+		receipt.RegistryKind = KindCASControlState
+		receipt.StateKind = KindCASControlState
+	}
+	return receipt, err
+}
+
+// PublishEnvironmentCreateRequest publishes a signer-first environment/create
+// request. The params are exactly the fields environment/create decodes.
+func (p *ServiceCommandPublisher) PublishEnvironmentCreateRequest(ctx context.Context, cmd EnvironmentCreateCommand) (*ServiceCommandReceipt, error) {
+	name := strings.TrimSpace(cmd.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if cmd.OrgID == uuid.Nil {
+		return nil, fmt.Errorf("org_id is required")
+	}
+	content := map[string]any{"name": name, "org_id": cmd.OrgID.String(), "protected": cmd.Protected}
+	if cmd.ID != uuid.Nil {
+		content["id"] = cmd.ID.String()
+	}
+	if len(cmd.LoomWorkerSelector) > 0 {
+		content["loom_worker_selector"] = cmd.LoomWorkerSelector
+	}
+	if len(cmd.RuntimeConfig) > 0 {
+		content["runtime_config"] = cmd.RuntimeConfig
+	}
+	if mode := strings.TrimSpace(cmd.ReconcileMode); mode != "" {
+		content["reconcile_mode"] = mode
+	}
+	if strategy := strings.TrimSpace(cmd.DeployStrategy); strategy != "" {
+		content["deploy_strategy"] = strategy
+	}
+	tags := nostr.Tags{{"environment", name}}
+	receipt, err := p.publish(ctx, ContextVMMethodEnvironmentCreate, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	if receipt != nil {
+		if cmd.ID != uuid.Nil {
+			receipt.EnvironmentID = cmd.ID.String()
 		}
 		receipt.RegistryKind = KindCASControlState
 		receipt.StateKind = KindCASControlState

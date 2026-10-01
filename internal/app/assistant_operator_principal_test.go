@@ -59,6 +59,9 @@ func (p recordingServiceCommands) receipt(ctx context.Context, key string) *cont
 func (p recordingServiceCommands) PublishServiceCreateRequest(ctx context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
 	return p.receipt(ctx, cmd.IdempotencyKey), nil
 }
+func (p recordingServiceCommands) PublishEnvironmentCreateRequest(ctx context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
+	return p.receipt(ctx, cmd.IdempotencyKey), nil
+}
 func (p recordingServiceCommands) PublishServiceUpdateRequest(ctx context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error) {
 	return p.receipt(ctx, cmd.IdempotencyKey), nil
 }

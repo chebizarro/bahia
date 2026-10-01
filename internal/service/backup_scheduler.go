@@ -342,7 +342,7 @@ func (s *BackupSchedulerService) dispatchRun(ctx context.Context, definition *do
 	}
 	policyID := recipe.PolicyID
 	run := &domain.BackupRun{
-		ID:                 uuid.New(),
+		ID:                 domain.NewEntityID(),
 		RecipeID:           recipe.ID,
 		RepositoryID:       recipe.RepositoryID,
 		PolicyID:           policyID,

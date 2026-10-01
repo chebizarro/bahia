@@ -116,7 +116,7 @@ func (r *Reactor) handlePackagePublishIntent(ctx context.Context, plan *packageP
 		return nil, fmt.Errorf("publish artifact registry: %w", err)
 	}
 	now := time.Now().UTC()
-	publication := &domain.PackagePublication{ID: uuid.New(), RepositoryID: plan.repo.ID, ArtifactID: artifact.ID, Status: domain.PackagePublicationStatusSucceeded, PolicyDecision: domain.PackagePolicyDecisionAllowed, PolicyRef: cmd.PolicyRef, ApprovedBy: plan.approvedBy, PublishedAt: &now, Metadata: map[string]any{"operation": "artifact_publish"}, CreatedAt: now, UpdatedAt: now}
+	publication := &domain.PackagePublication{ID: domain.NewEntityID(), RepositoryID: plan.repo.ID, ArtifactID: artifact.ID, Status: domain.PackagePublicationStatusSucceeded, PolicyDecision: domain.PackagePolicyDecisionAllowed, PolicyRef: cmd.PolicyRef, ApprovedBy: plan.approvedBy, PublishedAt: &now, Metadata: map[string]any{"operation": "artifact_publish"}, CreatedAt: now, UpdatedAt: now}
 	if err := r.publishPackagePromotionRegistry(ctx, publication); err != nil {
 		return nil, fmt.Errorf("publish publication registry: %w", err)
 	}
@@ -250,7 +250,7 @@ func (r *Reactor) beginPackageIntent(ctx context.Context, event *nostr.Event, op
 		_ = json.Unmarshal(b, &requestPayload)
 	}
 	now := time.Now().UTC()
-	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: event.ID.Hex(), Operation: operation, RepositoryName: fields.RepositoryName, Namespace: strings.Trim(fields.Namespace, "/"), PackageName: fields.PackageName, Version: fields.Version, Filename: fields.Filename, RequesterPubkey: event.PubKey.Hex(), RequestPayload: requestPayload, Status: domain.PackageIntentStatusAccepted, CreatedAt: now, UpdatedAt: now}
+	intent := &domain.PackageIntent{ID: domain.NewEntityID(), RequestEventID: event.ID.Hex(), Operation: operation, RepositoryName: fields.RepositoryName, Namespace: strings.Trim(fields.Namespace, "/"), PackageName: fields.PackageName, Version: fields.Version, Filename: fields.Filename, RequesterPubkey: event.PubKey.Hex(), RequestPayload: requestPayload, Status: domain.PackageIntentStatusAccepted, CreatedAt: now, UpdatedAt: now}
 	if fields.RepositoryID != uuid.Nil {
 		intent.RepositoryID = &fields.RepositoryID
 	}
@@ -353,7 +353,7 @@ func (r *Reactor) publishPackageResult(ctx context.Context, requestEvent *nostr.
 }
 
 func (r *Reactor) publishPackageError(ctx context.Context, requestEvent *nostr.Event, operation domain.PackageOperation, step, message string) {
-	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: requestEvent.ID.Hex(), Operation: operation, RequesterPubkey: requestEvent.PubKey.Hex(), Status: domain.PackageIntentStatusFailed, ErrorMessage: message}
+	intent := &domain.PackageIntent{ID: domain.NewEntityID(), RequestEventID: requestEvent.ID.Hex(), Operation: operation, RequesterPubkey: requestEvent.PubKey.Hex(), Status: domain.PackageIntentStatusFailed, ErrorMessage: message}
 	r.publishPackageResult(ctx, requestEvent, intent, string(operation), map[string]any{"status": "failed", "step": step, "error": message}, message)
 }
 

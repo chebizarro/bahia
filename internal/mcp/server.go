@@ -121,6 +121,7 @@ type MLCommandPublisher interface {
 // ServiceCommandPublisher emits canonical Nostr request events for assistant-safe service tools.
 type ServiceCommandPublisher interface {
 	PublishServiceCreateRequest(ctx context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error)
+	PublishEnvironmentCreateRequest(ctx context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishServiceUpdateRequest(ctx context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error)
 	PublishRollbackRequest(ctx context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error)
@@ -272,6 +273,7 @@ func (s *Server) GetTools() []Tool {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"id": mcpCreateEntityIDSchema("service"),
 					"org_id": map[string]interface{}{
 						"type":        "string",
 						"description": "Organization UUID (optional; defaults by policy)",
@@ -401,13 +403,39 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_environment",
-			Description: "Deprecated: direct registry writes are removed; publish signer-first ContextVM/Nostr method environment/create instead",
+			Description: "Publish a signer-first ContextVM/Nostr environment/create request and return relay/follow correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"id": mcpCreateEntityIDSchema("environment"),
+					"org_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Organization UUID that owns the environment",
+					},
 					"name": map[string]interface{}{
 						"type":        "string",
 						"description": "Unique name for the environment",
+					},
+					"loom_worker_selector": map[string]interface{}{
+						"type":        "object",
+						"description": "Loom worker selector criteria (optional)",
+					},
+					"runtime_config": map[string]interface{}{
+						"type":        "object",
+						"description": "Environment runtime configuration (optional)",
+					},
+					"reconcile_mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Default reconcile mode (optional)",
+						"enum":        []string{"observe_only", "auto_apply", "approval_required", "disabled"},
+					},
+					"idempotency_key": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional idempotency key",
+					},
+					"agent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calling agent identifier for audit tags",
 					},
 					"protected": map[string]interface{}{
 						"type":        "boolean",
@@ -421,7 +449,7 @@ func (s *Server) GetTools() []Tool {
 						"default":     "replace",
 					},
 				},
-				"required": []string{"name"},
+				"required": []string{"org_id", "name"},
 			},
 		},
 		{
@@ -561,6 +589,7 @@ func (s *Server) GetTools() []Tool {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"id":                       mcpCreateEntityIDSchema("LLM route"),
 					"name":                     map[string]interface{}{"type": "string", "description": "Unique LLM route name"},
 					"description":              map[string]interface{}{"type": "string", "description": "Optional route description"},
 					"gateway_config":           map[string]interface{}{"type": "object", "description": "Gateway route configuration"},
@@ -1288,6 +1317,7 @@ func (s *Server) GetTools() []Tool {
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"id": mcpCreateEntityIDSchema("policy"),
 					"name": map[string]interface{}{
 						"type":        "string",
 						"description": "Policy name",
@@ -2261,10 +2291,14 @@ func (s *Server) handleCreateService(ctx context.Context, args map[string]interf
 	if s.serviceCommands == nil {
 		return signerFirstMCPMutationUnavailable("bahia_create_service", "service/create"), nil
 	}
+	id, errResult := mcpCreateEntityID(args)
+	if errResult != nil {
+		return errResult, nil
+	}
 	receipt, err := s.serviceCommands.PublishServiceCreateRequest(ctx, controlplane.ServiceCreateCommand{
-		Name: name, OrgID: orgID, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
+		ID: id, Name: name, OrgID: orgID, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
 		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
-		IdempotencyKey: mcpIdempotencyKey(args, "service-create", name, artifactRepo), AgentID: agentID,
+		IdempotencyKey: mcpIdempotencyKey(args, "service-create", name, artifactRepo, id.String()), AgentID: agentID,
 	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to publish service create request: %v", err)), nil
@@ -2314,8 +2348,69 @@ func (s *Server) handleGetEnvironment(ctx context.Context, args map[string]inter
 	return jsonResult(environmentToMap(env))
 }
 
+// handleCreateEnvironment publishes a signer-first environment/create request
+// under a client-minted environment id (bahia-irsry.42).
 func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_create_environment", "environment/create"), nil
+	if s.serviceCommands == nil {
+		return signerFirstMCPMutationUnavailable("bahia_create_environment", "environment/create"), nil
+	}
+	name := strings.TrimSpace(stringArg(args, "name"))
+	if name == "" {
+		return errorResult("name is required"), nil
+	}
+	orgID, err := uuid.Parse(strings.TrimSpace(stringArg(args, "org_id")))
+	if err != nil || orgID == uuid.Nil {
+		return errorResult("org_id is required and must be a UUID"), nil
+	}
+	id, errResult := mcpCreateEntityID(args)
+	if errResult != nil {
+		return errResult, nil
+	}
+	cmd := controlplane.EnvironmentCreateCommand{
+		ID: id, OrgID: orgID, Name: name,
+		ReconcileMode: stringArg(args, "reconcile_mode"), DeployStrategy: stringArg(args, "deploy_strategy"),
+		IdempotencyKey: mcpIdempotencyKey(args, "environment-create", orgID.String(), name, id.String()),
+		AgentID:        stringArg(args, "agent_id"),
+	}
+	if protected, ok := args["protected"].(bool); ok {
+		cmd.Protected = protected
+	}
+	if selector, ok := args["loom_worker_selector"].(map[string]interface{}); ok {
+		cmd.LoomWorkerSelector = selector
+	}
+	if runtimeConfig, ok := args["runtime_config"].(map[string]interface{}); ok {
+		cmd.RuntimeConfig = runtimeConfig
+	}
+	receipt, err := s.serviceCommands.PublishEnvironmentCreateRequest(ctx, cmd)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish environment create request: %v", err)), nil
+	}
+	return jsonResult(serviceCommandReceiptToMap(receipt))
+}
+
+// mcpCreateEntityIDSchema is the input schema of a create tool's optional
+// client-minted entity id.
+func mcpCreateEntityIDSchema(entity string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "string",
+		"description": "Optional client-minted " + entity + " id: a canonical lowercase UUIDv7 (or v4). Omit to mint one; the result echoes it. " +
+			"To retry a create, pass the returned id with the same arguments: the same id and content replays the create, the same id with different content is rejected (JSON-RPC -32010).",
+	}
+}
+
+// mcpCreateEntityID returns a create tool's entity id (bahia-irsry.42): the
+// caller's `id` argument, which must be a canonical UUIDv7 (or v4), or a
+// freshly minted UUIDv7. The id is part of the derived idempotency key, so a
+// retry that passes back the returned id (and the same arguments) is replayed
+// by the control plane, and one without it is a new create, never a request
+// fingerprint conflict.
+func mcpCreateEntityID(args map[string]interface{}) (uuid.UUID, *ToolResult) {
+	raw, _ := args["id"].(string)
+	id, _, err := domain.ResolveCreateEntityID(raw)
+	if err != nil {
+		return uuid.Nil, errorResult(fmt.Sprintf("invalid id: %v", err))
+	}
+	return id, nil
 }
 
 func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2529,6 +2624,7 @@ func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]inter
 		return errResult, nil
 	}
 	var req struct {
+		ID                     string                         `json:"id,omitempty"`
 		Name                   string                         `json:"name"`
 		Description            string                         `json:"description,omitempty"`
 		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
@@ -2539,7 +2635,12 @@ func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]inter
 	if err := decodeToolArgs(args, &req); err != nil {
 		return errorResult(fmt.Sprintf("invalid LLM route request: %v", err)), nil
 	}
+	id, errResult := mcpCreateEntityID(args)
+	if errResult != nil {
+		return errResult, nil
+	}
 	receipt, err := publisher.PublishLLMRouteCreateRequest(ctx, controlplane.LLMRouteCreateCommand{
+		ID:                     id,
 		Name:                   req.Name,
 		Description:            req.Description,
 		GatewayConfig:          req.GatewayConfig,
@@ -5020,7 +5121,11 @@ func (s *Server) handleCreatePolicy(ctx context.Context, args map[string]interfa
 	if enabledVal, ok := args["enabled"].(bool); ok {
 		enabled = enabledVal
 	}
-	receipt, err := s.policyCommands.PublishPolicyCreateRequest(ctx, controlplane.PolicyMutationCommand{Name: name, EnvironmentID: envID, Rules: rules, Enforcement: enforcementStr, Enabled: &enabled, IdempotencyKey: stringArg(args, "idempotency_key")})
+	id, errResult := mcpCreateEntityID(args)
+	if errResult != nil {
+		return errResult, nil
+	}
+	receipt, err := s.policyCommands.PublishPolicyCreateRequest(ctx, controlplane.PolicyMutationCommand{ID: id, Name: name, EnvironmentID: envID, Rules: rules, Enforcement: enforcementStr, Enabled: &enabled, IdempotencyKey: stringArg(args, "idempotency_key")})
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to publish PolicyCreate request: %v", err)), nil
 	}

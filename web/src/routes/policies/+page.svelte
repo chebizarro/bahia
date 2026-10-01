@@ -11,6 +11,7 @@
   import PolicyRuleBuilder from '$lib/components/PolicyRuleBuilder.svelte';
   import { policies, environments, loadPolicies, loadEnvironments } from '$lib/stores';
   import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
+  import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
   import { CloseIcon, EnvironmentIcon, PolicyIcon, SuccessIcon } from '$lib/icons/domain-icons.js';
 
@@ -23,6 +24,9 @@
   let createOpen = $state(false);
   let creating = $state(false);
   let createError = $state(null);
+  // Client-minted policy id for this create attempt, reused on retry and
+  // re-minted when the modal is closed (bahia-irsry.42).
+  let createEntityId = mintEntityId();
   let useVisualBuilder = $state(true); // Toggle between visual builder and JSON
   let visualRules = $state([]); // Rules from visual builder
 
@@ -141,6 +145,7 @@
   function closeCreateModal() {
     createOpen = false;
     createError = null;
+    createEntityId = mintEntityId();
     visualRules = [];
     useVisualBuilder = true;
     // Reset form
@@ -181,6 +186,7 @@
 
     try {
       const payload = {
+        id: createEntityId,
         name: createForm.name.trim(),
         rules: parsedRules,
         enforcement: createForm.enforcement,
@@ -197,7 +203,9 @@
       closeCreateModal();
       await loadPolicies();
     } catch (err) {
-      createError = err.message || 'Failed to create policy';
+      createError = isEntityIdConflict(err)
+        ? 'This policy was already created with different settings. Close the dialog and start again to create another policy.'
+        : err.message || 'Failed to create policy';
     } finally {
       creating = false;
     }

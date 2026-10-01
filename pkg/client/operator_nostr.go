@@ -459,6 +459,10 @@ type ServiceCIConfigRequest struct {
 
 // CreateServiceNostrRequest is the signer-first service/create payload.
 type CreateServiceNostrRequest struct {
+	// ID is the client-minted service id (bahia-irsry.42): a canonical
+	// UUIDv7 (or v4). CreateServiceNostr mints one when it is empty; reuse
+	// it to retry the same create idempotently.
+	ID                   string                       `json:"id,omitempty"`
 	OrgID                string                       `json:"org_id,omitempty"`
 	Name                 string                       `json:"name"`
 	RepoURL              string                       `json:"repo_url,omitempty"`
@@ -654,6 +658,8 @@ type DNSCommandResult struct {
 
 // CreateEnvironmentNostrRequest is the signer-first environment/create payload.
 type CreateEnvironmentNostrRequest struct {
+	// ID is the client-minted environment id; see CreateServiceNostrRequest.ID.
+	ID                 string                       `json:"id,omitempty"`
 	OrgID              string                       `json:"org_id,omitempty"`
 	Name               string                       `json:"name"`
 	LoomWorkerSelector map[string]any               `json:"loom_worker_selector,omitempty"`
@@ -781,6 +787,11 @@ func (c *OperatorControlPlaneClient) CreateServiceNostr(ctx context.Context, req
 	if req.ArtifactRepo == "" {
 		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: fmt.Errorf("artifact_repo is required")}
 	}
+	id, err := resolveCreateRequestID(req.ID)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: err}
+	}
+	req.ID = id
 	tags := nostr.Tags{{"service", req.Name}}
 	if req.IdempotencyKey != "" {
 		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
@@ -1136,6 +1147,11 @@ func (c *OperatorControlPlaneClient) CreateEnvironmentNostr(ctx context.Context,
 		return nil, &ControlPlaneRequestError{Phase: "validate environment create request", RequestAccepted: false, Cause: fmt.Errorf("name is required")}
 	}
 	req.OrgID = strings.TrimSpace(req.OrgID)
+	id, err := resolveCreateRequestID(req.ID)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "validate environment create request", RequestAccepted: false, Cause: err}
+	}
+	req.ID = id
 	event, err := c.publishAndAwait(ctx, operatorRequest{
 		Method:  controlplane.ContextVMMethodEnvironmentCreate,
 		Tags:    nostr.Tags{{"environment_name", req.Name}},
@@ -2252,4 +2268,18 @@ func firstValue(values map[string][]string, name string) string {
 		return ""
 	}
 	return values[name][0]
+}
+
+// resolveCreateRequestID returns a create request's client-minted entity id
+// (bahia-irsry.42): the caller's id, validated as a canonical UUIDv7/v4, or a
+// fresh UUIDv7. The id is fixed before the request is signed, so every
+// delivery attempt of this request, and any retry that passes it back, names
+// the same entity: the control plane replays an identical create and rejects
+// a different one with JSON-RPC -32010.
+func resolveCreateRequestID(raw string) (string, error) {
+	id, _, err := domain.ResolveCreateEntityID(raw)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
 }

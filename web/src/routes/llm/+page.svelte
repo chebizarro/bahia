@@ -10,6 +10,7 @@
     resultContent
   } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { KINDS, getTagValue } from '$lib/nostr/client.js';
   import {
     ArtifactIcon,
@@ -52,6 +53,10 @@
   let rollbackSubmitting = $state('');
   let decisionSubmitting = $state('');
 
+  // Client-minted route id for the current create attempt: reused when a
+  // failed create is resubmitted, re-minted once a route was created
+  // (bahia-irsry.42).
+  let routeEntityId = mintEntityId();
   let routeForm = $state({
     name: '',
     description: '',
@@ -143,13 +148,20 @@
     routeSubmitting = true;
     resetNotice();
     try {
-      const result = await createLLMRoute(buildCreateRoutePayload(routeForm));
+      const result = await createLLMRoute({ id: routeEntityId, ...buildCreateRoutePayload(routeForm) });
+      routeEntityId = mintEntityId();
       const content = resultContent(result);
       if (!releaseForm.route_id && content.route_id) releaseForm.route_id = content.route_id;
       if (!deployForm.route_id && content.route_id) deployForm.route_id = content.route_id;
       routeForm = { name: '', description: '', public_model: '', path: '', authorization_secret_ref: '' };
       setSuccess(`Created LLM route ${content.name || content.route_id}`);
     } catch (err) {
+      if (isEntityIdConflict(err)) {
+        // An earlier attempt already created this id with other settings.
+        routeEntityId = mintEntityId();
+        setFailure('A route was already created from an earlier attempt with different settings; submit again to create a new route.');
+        return;
+      }
       setFailure(err.message || 'Failed to create LLM route');
     } finally {
       routeSubmitting = false;

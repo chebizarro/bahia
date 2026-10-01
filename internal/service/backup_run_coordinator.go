@@ -517,7 +517,7 @@ func (c *BackupRunCoordinator) completeFailed(ctx context.Context, run *domain.B
 
 func backupVerificationRecord(runID uuid.UUID, mode domain.BackupVerificationMode, status domain.BackupVerificationStatus, verified bool, evidence map[string]any, errMsg string) *domain.BackupVerificationRecord {
 	return &domain.BackupVerificationRecord{
-		ID:              uuid.New(),
+		ID:              domain.NewEntityID(),
 		BackupRunID:     runID,
 		Mode:            mode,
 		Status:          status,
