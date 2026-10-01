@@ -12,7 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -102,7 +102,7 @@ func TestRelayConfigContextVMReconcileUsesPersistedDesiredCoordinate(t *testing.
 			AdministratorPubkeys: []string{requesterPubkey},
 		}},
 	}}}
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	fabric := service.NewConfigFabricService(repo, relayConfigFabricTestPublisher{}, relayConfigFabricTestSigner{secret: nostr.Generate()})
 	receipt, err := fabric.Publish(t.Context(), service.ConfigPublishRequest{
 		Kind:      service.ConfigFabricPolicyKind,

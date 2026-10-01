@@ -13,8 +13,10 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -95,40 +97,57 @@ const (
 //   - Caller success: a publish call succeeds once nostr.publish_quorum write
 //     relays (default 1; -1 = all) have accepted. Below the quorum it returns
 //     ErrPublishIncomplete while the event stays queued for retry, or
-//     ErrPublishAbandoned once the quorum is unreachable and the row is failed.
+//     ErrPublishAbandoned once the quorum is unreachable and the entry is
+//     failed. OnDelivered and OnDeliveryAbandoned report the same outcomes when
+//     the runner reaches them later.
 //   - Delivery completion: acceptance is tracked per relay, and relays that
 //     have not accepted keep being retried with backoff up to a bounded attempt
-//     budget. The outbox row is marked published only once every write relay
-//     has accepted or reached a terminal state.
+//     budget. The outbox entry settles (published or failed) only once every
+//     write relay has accepted or reached a terminal state.
 //
 // Duplicate OK counts as acceptance; blocked:, invalid: and pow: rejections
 // are terminal for the relay that sent them.
 //
-// Per-relay acceptance is kept in memory only. After a restart, discovery
-// resends a pending row to every write relay, including relays that had
-// already accepted it; they answer OK "duplicate:", which counts as
-// acceptance. The cost is one extra EVENT frame per already-accepting relay per
-// pending row per restart. The event is never re-signed (it is the stored
-// signed event), so relays see the same id and no second copy exists. That
-// bounded resend is preferred over persisting per-relay state, which would put
-// relay topology into Postgres and add a write per relay per round. The same
-// applies to an event published before this publisher's Run is active (for
-// example during startup, where background runners start concurrently): only
-// an active runner keeps a partial delivery in memory, so the runner's first
-// discovery pass resends that row to every write relay, and relays that
-// already accepted it answer OK "duplicate:".
+// The outbox is the daemon's local outbox (WithLocalOutbox, bahia-irsry.10.4):
+// the signed event is durable there before the first relay attempt, and every
+// counted round commits each relay's state, so a restart resumes exactly where
+// delivery stopped without resending to relays that already accepted. No
+// PostgreSQL write gates a publish. When PostgreSQL is configured (eventRepo),
+// each event is also archived to nostr_events with its outcome mirrored, best
+// effort, for the PostgreSQL-backed readers.
 //
-// Every outbox row a Publisher writes carries its publish target (see
-// WithPublishTarget), and its Run only drains rows for that target, so each
-// row is retried to the relays of the pool it was written for. Run one
-// registered Publisher per target.
+// PostgreSQL outbox rows are drained in place by the same runner: rows that
+// producers write inside a PostgreSQL transaction with the domain change they
+// audit (a local outbox cannot join that transaction), and rows left pending
+// by a daemon that predates the local outbox. Their per-relay acceptance is
+// kept in memory only, so after a restart those rows are resent to every
+// write relay and relays that already accepted answer OK "duplicate:". The
+// same applies to a row published before this publisher's Run is active.
+//
+// Every outbox entry a Publisher writes carries its publish target (see
+// WithPublishTarget), and its Run only drains entries and rows for that
+// target, so each event is retried to the relays of the pool it was written
+// for. Run one registered Publisher per target.
 type Publisher struct {
-	pool         *RelayPool
-	privateKey   string
-	enabled      bool
-	logger       *zap.Logger
-	eventRepo    repository.NostrEventRepository
-	outboxRepo   repository.NostrEventOutboxRepository
+	pool       *RelayPool
+	privateKey string
+	enabled    bool
+	logger     *zap.Logger
+	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
+	// outbox it is the outbox itself; with one it is a best-effort archive.
+	eventRepo repository.NostrEventRepository
+	// outboxRepo is eventRepo's publish-state extension: the PostgreSQL rows
+	// this publisher drains (see the type comment).
+	outboxRepo repository.NostrEventOutboxRepository
+	// localOutbox, when set, owns the delivery of every event this publisher
+	// is asked to publish.
+	localOutbox *localstore.Outbox
+	// ownEvents is the daemon's local event store. Each published event is
+	// kept there as the daemon's latest output, and removed again if its
+	// delivery is abandoned (the Projector hydrates its dedupe from it, B-3).
+	ownEvents *localstore.Store
+	// archive mirrors locally delivered events into eventRepo.
+	archive      *postgresArchive
 	publishFn    func(ctx context.Context, ev nostr.Event, relayURLs []string) ([]PublishResult, error)
 	relayURLs    func() []string
 	newBackoff   func() *Backoff
@@ -149,17 +168,42 @@ type Publisher struct {
 	running atomic.Bool
 	// wake nudges Run to recompute its next retry time.
 	wake chan struct{}
-	// outboxCursor is the runner's keyset position in the pending outbox. It
-	// is only touched by the Run goroutine.
+	// outboxCursor and localCursor are the runner's keyset positions in the
+	// PostgreSQL and local pending outboxes; lastPrune is when it last pruned
+	// settled local entries. Only the Run goroutine touches them.
 	outboxCursor *repository.NostrOutboxCursor
-	// abandonedHandlers are told about every event whose delivery this
-	// publisher gave up on (see OnDeliveryAbandoned).
-	abandonedMu       sync.RWMutex
+	localCursor  *localstore.OutboxCursor
+	lastPrune    time.Time
+	// handlersMu guards the delivery outcome handlers (see OnDelivered and
+	// OnDeliveryAbandoned).
+	handlersMu        sync.RWMutex
 	abandonedHandlers []func(nostr.Event)
+	deliveredHandlers []func(nostr.Event)
 }
+
+// Settled local outbox entries are kept this long so a producer that stores
+// an event id after the outbox settled it still reads the outcome (see
+// DeliveryOutcome), and failed ones for the BahiaNostrOutboxFailed alert.
+const (
+	publishedOutboxRetention = 24 * time.Hour
+	failedOutboxRetention    = 7 * 24 * time.Hour
+	outboxPruneInterval      = time.Hour
+)
 
 // PublisherOption configures a Publisher.
 type PublisherOption func(*Publisher)
+
+// WithLocalOutbox delivers every event this publisher is asked to publish
+// from the local outbox, and keeps the daemon's own outputs in its local
+// event store (both may be shared by several publishers). The PostgreSQL
+// repository given to NewPublisher, if any, becomes a best-effort archive,
+// and its pending rows are still drained (see the Publisher comment).
+func WithLocalOutbox(outbox *localstore.Outbox, ownEvents *localstore.Store) PublisherOption {
+	return func(p *Publisher) {
+		p.localOutbox = outbox
+		p.ownEvents = ownEvents
+	}
+}
 
 // WithPublishTarget binds the publisher to a named publish target
 // (repository.NostrPublishTarget*), which must identify the relay pool the
@@ -211,6 +255,9 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 			opt(publisher)
 		}
 	}
+	if publisher.localOutbox != nil {
+		publisher.archive = newPostgresArchive(eventRepo, logger)
+	}
 	return publisher
 }
 
@@ -220,11 +267,11 @@ func (p *Publisher) Pool() *RelayPool {
 }
 
 // OnDeliveryAbandoned registers fn to be called for every event this
-// publisher abandons: the row moved to publish_state=failed because the
-// publish quorum can no longer be reached. Every registered handler is called,
-// in registration order, synchronously and while the delivery is still
-// locked, whether the abandonment happened in the caller's first round (which
-// also returns ErrPublishAbandoned) or later in Run. A handler receives every
+// publisher abandons: the outbox entry moved to failed because the publish
+// quorum can no longer be reached. Every registered handler is called, in
+// registration order, synchronously and while the delivery is still locked,
+// whether the abandonment happened in the caller's first round (which also
+// returns ErrPublishAbandoned) or later in Run. A handler receives every
 // abandoned event of this publisher and must ignore events it does not own;
 // it must be quick and must not publish.
 //
@@ -237,15 +284,46 @@ func (p *Publisher) OnDeliveryAbandoned(fn func(nostr.Event)) {
 	if fn == nil {
 		return
 	}
-	p.abandonedMu.Lock()
-	defer p.abandonedMu.Unlock()
+	p.handlersMu.Lock()
+	defer p.handlersMu.Unlock()
 	p.abandonedHandlers = append(p.abandonedHandlers, fn)
 }
 
+// OnDelivered registers fn to be called when the publish quorum has accepted
+// an event of this publisher and that is durably recorded, whether in the
+// caller's first round (which also returns nil) or later in Run, and even
+// while other relays are still being retried. It is the counterpart of
+// OnDeliveryAbandoned with the same calling rules: handlers run synchronously
+// in registration order, receive every delivered event of this publisher,
+// must ignore events they do not own, must be quick and must not publish.
+//
+// Delivery is reported at least once: an event whose quorum was reached
+// before a restart is reported again when the runner resumes it, so handlers
+// must be idempotent. Producers that recorded an event as queued (Security
+// publications, SBOM manifests) use it to move it to published. A nil fn is
+// ignored.
+func (p *Publisher) OnDelivered(fn func(nostr.Event)) {
+	if fn == nil {
+		return
+	}
+	p.handlersMu.Lock()
+	defer p.handlersMu.Unlock()
+	p.deliveredHandlers = append(p.deliveredHandlers, fn)
+}
+
 func (p *Publisher) notifyAbandoned(ev nostr.Event) {
-	p.abandonedMu.RLock()
+	p.handlersMu.RLock()
 	handlers := p.abandonedHandlers
-	p.abandonedMu.RUnlock()
+	p.handlersMu.RUnlock()
+	for _, fn := range handlers {
+		fn(ev)
+	}
+}
+
+func (p *Publisher) notifyDelivered(ev nostr.Event) {
+	p.handlersMu.RLock()
+	handlers := p.deliveredHandlers
+	p.handlersMu.RUnlock()
 	for _, fn := range handlers {
 		fn(ev)
 	}
@@ -277,8 +355,8 @@ func nostrEventRecordFromEvent(ev nostr.Event, entityType string, entityID *uuid
 	}
 }
 
-// markOutbound makes rec a pending outbox row for this publisher's target when
-// a durable outbox is configured.
+// markOutbound makes rec a pending PostgreSQL outbox row for this publisher's
+// target when PostgreSQL is the outbox.
 func (p *Publisher) markOutbound(rec *repository.NostrEventRecord) {
 	if p.outboxRepo == nil {
 		return
@@ -380,6 +458,7 @@ func (p *Publisher) Run(ctx context.Context) error {
 		discoveryBackoff = DefaultBackoff()
 	}
 	for {
+		p.pruneLocalOutbox()
 		rateLimited := p.redeliverDue(ctx)
 		more, err := p.discoverPending(ctx)
 		if ctx.Err() != nil {
@@ -504,30 +583,173 @@ func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entit
 	return attempt.err
 }
 
-// enqueueAndDeliver records a signed event as a pending outbox row for this
-// publisher's target (durable before the first relay attempt) and runs the
-// first delivery round. Recording is idempotent by event id: re-enqueueing an
-// event that is already stored adds no row.
-// The returned error covers only recording; the delivery outcome is in the
-// attempt.
+// enqueueAndDeliver makes a signed event durable in this publisher's outbox
+// (before the first relay attempt) and runs the first delivery round.
+// Admission is idempotent by event id: re-enqueueing an event that is already
+// held adds nothing. The returned error covers only admission; the delivery
+// outcome is in the attempt.
 //
-// The in-memory delivery is registered before the row becomes durable, so a
-// concurrent runner discovery pass that lists the new row sees it as tracked
+// The in-memory delivery is registered before the entry becomes durable, so a
+// concurrent runner discovery pass that lists the new entry sees it as tracked
 // and skips it, instead of starting a second delivery with empty per-relay
 // state that would resend to relays the first round has already covered.
 func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) (publishAttempt, error) {
 	d, created := p.trackDelivery(ev, 0)
-	if p.eventRepo != nil {
+	if err := p.admit(ctx, ev, entityType, entityID); err != nil {
+		if created {
+			p.forgetDelivery(d)
+		}
+		return publishAttempt{}, err
+	}
+	return p.publishOutboxEvent(ctx, ev), nil
+}
+
+// Enqueue makes an already-signed event durable in this publisher's local
+// outbox without delivering it inline; the runner delivers it. It is for
+// producers that record an event as "pending delivery" and carry on, such as
+// the PostgreSQL-less event repository (see LocalEventRepository). The event
+// must verify.
+func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) error {
+	if p == nil || p.localOutbox == nil {
+		return fmt.Errorf("nostr publisher has no local outbox")
+	}
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return fmt.Errorf("nostr event %s has an invalid id or signature", ev.ID.Hex())
+	}
+	if err := p.admit(ctx, ev, entityType, entityID); err != nil {
+		return err
+	}
+	p.nudge()
+	return nil
+}
+
+// admit makes ev durable in the outbox that delivers it: the local outbox
+// when configured (then also the daemon's own event store and the PostgreSQL
+// archive, both best effort), else the PostgreSQL outbox, else the
+// PostgreSQL audit table.
+func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) error {
+	switch {
+	case p.localOutbox != nil:
+		entry := localstore.OutboxEntry{Event: ev, Target: p.target, EntityType: entityType, EnqueuedAt: p.now()}
+		if entityID != nil {
+			entry.EntityID = entityID.String()
+		}
+		if _, err := p.localOutbox.Enqueue(entry); err != nil {
+			return fmt.Errorf("persist signed nostr event before publish: %w", err)
+		}
+		p.keepOwnEvent(ev)
+		p.archive.write(ctx, "outbound event", ev.ID.Hex(), func(ctx context.Context, repo repository.NostrEventRepository) error {
+			rec := nostrEventRecordFromEvent(ev, entityType, entityID)
+			rec.PublishState = repository.NostrPublishStatePending
+			rec.PublishTarget = repository.LocalOutboxArchiveTarget(p.target)
+			_, err := repo.Record(ctx, rec)
+			return err
+		})
+	case p.eventRepo != nil:
 		rec := nostrEventRecordFromEvent(ev, entityType, entityID)
 		p.markOutbound(rec)
 		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
-			if created {
-				p.forgetDelivery(d)
-			}
-			return publishAttempt{}, fmt.Errorf("persist signed nostr event before publish: %w", err)
+			return fmt.Errorf("persist signed nostr event before publish: %w", err)
 		}
 	}
-	return p.publishOutboxEvent(ctx, ev), nil
+	return nil
+}
+
+// keepOwnEvent stores ev in the daemon's local event store as its latest
+// output. The store is a cache, so a failure is only logged.
+func (p *Publisher) keepOwnEvent(ev nostr.Event) {
+	if p.ownEvents == nil {
+		return
+	}
+	if _, err := p.ownEvents.SaveEvent(ev); err != nil {
+		p.logger.Warn("failed to keep published event in the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+	}
+}
+
+// forgetOwnEvent removes an abandoned event from the local event store: it
+// never reached the quorum, so it must not count as the daemon's output.
+func (p *Publisher) forgetOwnEvent(ev nostr.Event) {
+	if p.ownEvents == nil {
+		return
+	}
+	if err := p.ownEvents.DeleteEvent(ev.ID); err != nil {
+		p.logger.Warn("failed to drop abandoned event from the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+	}
+}
+
+// DeliveryOutcome reports what this publisher's outbox knows about the event
+// with id (hex). A producer that records an event id after publishing calls it
+// once the id is stored, so an outcome the outbox reached in between (before
+// OnDelivered or OnDeliveryAbandoned could find the producer's row) is not
+// lost (bahia-irsry.40). Settled local entries stay readable for a day.
+func (p *Publisher) DeliveryOutcome(ctx context.Context, id string) (nostrutil.DeliveryOutcome, error) {
+	if p == nil {
+		return nostrutil.DeliveryUnknown, nil
+	}
+	parsed, err := nostr.IDFromHex(id)
+	if err != nil {
+		return nostrutil.DeliveryUnknown, fmt.Errorf("delivery outcome: %w", err)
+	}
+	if p.localOutbox != nil {
+		entry, found, err := p.localOutbox.Get(parsed)
+		if err != nil {
+			return nostrutil.DeliveryUnknown, err
+		}
+		if found {
+			switch {
+			case entry.State == localstore.OutboxFailed:
+				return nostrutil.DeliveryAbandoned, nil
+			case entry.State == localstore.OutboxPublished || entry.Delivered:
+				return nostrutil.DeliveryDelivered, nil
+			default:
+				return nostrutil.DeliveryPending, nil
+			}
+		}
+	}
+	if p.outboxRepo != nil {
+		rec, err := p.outboxRepo.GetByID(ctx, id)
+		if err != nil {
+			return nostrutil.DeliveryUnknown, err
+		}
+		if rec != nil && !repository.IsLocalOutboxArchiveTarget(rec.PublishTarget) {
+			switch rec.PublishState {
+			case repository.NostrPublishStateFailed:
+				return nostrutil.DeliveryAbandoned, nil
+			case repository.NostrPublishStatePublished:
+				return nostrutil.DeliveryDelivered, nil
+			case repository.NostrPublishStatePending:
+				if p.trackedDelivered(id) {
+					return nostrutil.DeliveryDelivered, nil
+				}
+				return nostrutil.DeliveryPending, nil
+			}
+		}
+	}
+	if p.trackedDelivered(id) {
+		return nostrutil.DeliveryDelivered, nil
+	}
+	return nostrutil.DeliveryUnknown, nil
+}
+
+// pruneLocalOutbox drops long-settled local outbox entries, at most once per
+// outboxPruneInterval. Only Run calls it.
+func (p *Publisher) pruneLocalOutbox() {
+	if p.localOutbox == nil {
+		return
+	}
+	now := p.now()
+	if !p.lastPrune.IsZero() && now.Sub(p.lastPrune) < outboxPruneInterval {
+		return
+	}
+	p.lastPrune = now
+	removed, err := p.localOutbox.Prune(now.Add(-publishedOutboxRetention), now.Add(-failedOutboxRetention))
+	if err != nil {
+		p.logger.Warn("prune settled local outbox entries failed", zap.Error(err))
+		return
+	}
+	if removed > 0 {
+		p.logger.Debug("pruned settled local outbox entries", zap.Int("removed", removed))
+	}
 }
 
 func signedEventAuditLabel(ev nostr.Event) string {

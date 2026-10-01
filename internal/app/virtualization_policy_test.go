@@ -14,7 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ func TestVirtualizationTrustPolicyVerifiesSignedDigestAndHost(t *testing.T) {
 	key, err := signer.GetPublicKey(ctx)
 	require.NoError(t, err)
 	org, host, trust := uuid.New(), uuid.New(), uuid.New()
-	store := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
+	store := &vmAppStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	body, err := json.Marshal(signing.NostrArtifactAttestation{ImageDigest: digest, Approved: true})
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestVirtualizationTrustPolicyVerifiesSignedDigestAndHost(t *testing.T) {
 	require.Error(t, policy.ValidatePlaneConfiguration(ctx, h, domain.ExecutionPlaneConfiguration{Network: domain.VMNetwork{Mode: domain.VMNetworkBridged}}))
 	require.Error(t, policy.ValidatePlaneConfiguration(ctx, h, domain.ExecutionPlaneConfiguration{Network: domain.VMNetwork{Mode: domain.VMNetworkIsolated, PassthroughDeviceRefs: []uuid.UUID{uuid.New()}}}))
 	// Mutating the stored body while keeping the event ID/signature fails closed.
-	badStore := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
+	badStore := &vmAppStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
 	record, err := store.GetByID(ctx, ev.ID.Hex())
 	require.NoError(t, err)
 	record.Content += " "

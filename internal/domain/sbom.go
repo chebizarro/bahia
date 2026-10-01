@@ -62,6 +62,7 @@ type SBOMPublishState string
 
 const (
 	SBOMPublishDraft     SBOMPublishState = "draft"
+	SBOMPublishPending   SBOMPublishState = "pending"
 	SBOMPublishPublished SBOMPublishState = "published"
 	SBOMPublishFailed    SBOMPublishState = "failed"
 )

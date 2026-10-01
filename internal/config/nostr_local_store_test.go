@@ -13,6 +13,9 @@ func TestNostrLocalStoreDefaultsValidate(t *testing.T) {
 	if store.Path != DefaultNostrLocalStorePath || store.ResumeOverlap != 10*time.Minute || store.RegularLookback != 24*time.Hour || store.NegentropyUpload {
 		t.Fatalf("unexpected defaults: %+v", store)
 	}
+	if got, want := store.ResolvedOutboxPath(), filepath.Join(filepath.Dir(DefaultNostrLocalStorePath), "outbox.bolt"); got != want {
+		t.Fatalf("default outbox path = %q, want %q next to the event store", got, want)
+	}
 	cfg := Defaults()
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("defaults must validate: %v", err)
@@ -37,6 +40,15 @@ func TestNostrLocalStoreValidation(t *testing.T) {
 		"huge overlap":       {func(c *Config) { c.Nostr.LocalStore.ResumeOverlap = 48 * time.Hour }, "nostr.local_store.resume_overlap"},
 		"negative lookback":  {func(c *Config) { c.Nostr.LocalStore.RegularLookback = -time.Hour }, "nostr.local_store.regular_lookback"},
 		"unit-less lookback": {func(c *Config) { c.Nostr.LocalStore.RegularLookback = 86400 }, "nostr.local_store.regular_lookback"},
+		"outbox is the store": {func(c *Config) {
+			c.Nostr.LocalStore.OutboxPath = c.Nostr.LocalStore.Path
+		}, "outbox_path must not be the event store file"},
+		"outbox directory": {func(c *Config) { c.Nostr.LocalStore.OutboxPath = dir }, "outbox_path"},
+		"sidecar outbox reuse": {func(c *Config) {
+			c.Nostr.Sidecar.Enabled = true
+			c.Nostr.Sidecar.DataDir = sidecarDir
+			c.Nostr.LocalStore.OutboxPath = filepath.Join(sidecarDir, "events.bolt")
+		}, "relay sidecar's event store"},
 		"sidecar store reuse": {func(c *Config) {
 			c.Nostr.Sidecar.Enabled = true
 			c.Nostr.Sidecar.DataDir = sidecarDir
@@ -57,7 +69,8 @@ func TestNostrLocalStoreValidation(t *testing.T) {
 func TestNostrLocalStoreLoadsFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bahia.yaml")
 	storePath := filepath.Join(t.TempDir(), "cache.bolt")
-	yaml := "nostr:\n  local_store:\n    path: " + storePath + "\n    resume_overlap: 2m\n    regular_lookback: 0s\n    negentropy_upload: true\n"
+	outboxPath := filepath.Join(t.TempDir(), "outbox.bolt")
+	yaml := "nostr:\n  local_store:\n    path: " + storePath + "\n    outbox_path: " + outboxPath + "\n    resume_overlap: 2m\n    regular_lookback: 0s\n    negentropy_upload: true\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +79,7 @@ func TestNostrLocalStoreLoadsFromYAML(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	store := cfg.Nostr.LocalStore
-	if store.Path != storePath || store.ResumeOverlap != 2*time.Minute || store.RegularLookback != 0 || !store.NegentropyUpload {
+	if store.Path != storePath || store.ResumeOverlap != 2*time.Minute || store.RegularLookback != 0 || !store.NegentropyUpload || store.ResolvedOutboxPath() != outboxPath {
 		t.Fatalf("loaded %+v", store)
 	}
 }

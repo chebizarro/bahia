@@ -11,6 +11,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -75,7 +76,7 @@ func (f *fakeOutboxRelayPool) callCount() int {
 
 func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	fakePool := &fakeOutboxRelayPool{
 		repo:        repo,
 		rateLimited: make(chan struct{}),
@@ -115,7 +116,7 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 
 func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	fakePool := &fakeOutboxRelayPool{
 		repo:        repo,
 		rateLimited: make(chan struct{}),

@@ -77,6 +77,10 @@ func NostrEventArchiveOnlineIndexStatements() []string {
 		// Keeps the bahia_nostr_outbox_failed gauge an index-only count of the
 		// few abandoned outbound rows instead of a full-table scan.
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS ` + nostrPublishFailedIndex + ` ON nostr_events(received_at, id) WHERE publish_state = 'failed'`,
+		// Serves the outbox delivery hooks, which look Security publications
+		// up by event id while they are pending (bahia-irsry.40); without it
+		// each delivered Security event scans the publications table.
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_security_observable_publications_pending_event ON security_observable_publications(event_id) WHERE publish_state = 'pending'`,
 	}
 }
 

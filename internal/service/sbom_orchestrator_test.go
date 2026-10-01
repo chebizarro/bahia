@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 const testSubjectDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -474,6 +475,10 @@ func (p *fakeSBOMPublisher) PublishSignedEventWithResults(_ context.Context, ev 
 	return p.results, nil
 }
 
+func (p *fakeSBOMPublisher) DeliveryOutcome(context.Context, string) (nostrutil.DeliveryOutcome, error) {
+	return nostrutil.DeliveryUnknown, nil
+}
+
 func (p *fakeSBOMPublisher) containsKind(kind int) bool {
 	return p.firstKindIndex(kind) >= 0
 }
@@ -543,9 +548,20 @@ func (r *fakeSBOMManifestRepo) FailManifestByReferenceEvent(_ context.Context, r
 	var changed int64
 	for i := range r.projected {
 		manifest := &r.projected[i]
-		if manifest.ReferenceEventID == referenceEventID && manifest.PublishState == domain.SBOMPublishPublished {
+		if manifest.ReferenceEventID == referenceEventID && (manifest.PublishState == domain.SBOMPublishPublished || manifest.PublishState == domain.SBOMPublishPending) {
 			manifest.PublishState = domain.SBOMPublishFailed
 			manifest.PublishError = reason
+			changed++
+		}
+	}
+	return changed, nil
+}
+func (r *fakeSBOMManifestRepo) MarkManifestDeliveredByReferenceEvent(_ context.Context, referenceEventID string) (int64, error) {
+	var changed int64
+	for i := range r.projected {
+		manifest := &r.projected[i]
+		if manifest.ReferenceEventID == referenceEventID && manifest.PublishState == domain.SBOMPublishPending {
+			manifest.PublishState = domain.SBOMPublishPublished
 			changed++
 		}
 	}

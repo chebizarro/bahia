@@ -207,10 +207,6 @@ func (s *Subscriber) pruneStore() {
 	}
 }
 
-// errRetryAfterAuth ends a relay session whose REQ was CLOSED auth-required
-// once NIP-42 AUTH succeeded, so the worker re-REQs at once.
-var errRetryAfterAuth = errors.New("relay required AUTH; authenticated")
-
 // runRelay keeps one relay in sync until ctx ends or the relay leaves the pool.
 func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem) {
 	backoff := s.newRelayBackoff()
@@ -226,9 +222,6 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 		}
 		if !caughtUp {
 			sendInbound(ctx, out, inboundItem{op: opRelayFailed, relay: relayURL})
-		}
-		if errors.Is(err, errRetryAfterAuth) {
-			continue
 		}
 		delay := backoff.Next()
 		s.logger.Warn("relay sync ended; resyncing with backoff",
@@ -400,7 +393,7 @@ func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key curso
 			}
 			return len(seen), oldest, ctx.Err()
 		case reason := <-sub.ClosedReason:
-			return len(seen), oldest, s.relayClosed(ctx, relayURL, reason)
+			return len(seen), oldest, s.relayClosed(relayURL, reason)
 		}
 	}
 }
@@ -471,28 +464,22 @@ func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key curso
 				return ctx.Err()
 			}
 		case reason := <-sub.ClosedReason:
-			return s.relayClosed(ctx, relayURL, reason)
+			return s.relayClosed(relayURL, reason)
 		}
 	}
 }
 
 // relayClosed records a relay CLOSED and returns the error that ends the
-// session: errRetryAfterAuth when an auth-required refusal was answered.
-func (s *Subscriber) relayClosed(ctx context.Context, relayURL, reason string) error {
+// session; the relay is then resynced with backoff. An "auth-required:"
+// refusal needs nothing more: the pool's connection AuthHandler answers the
+// relay's NIP-42 challenge, so the resync's REQ runs authenticated.
+func (s *Subscriber) relayClosed(relayURL, reason string) error {
 	s.pool.RecordRelayClosed(relayURL, reason)
 	s.logger.Warn("relay closed inbound subscription", zap.String("relay", relayURL), zap.String("reason", reason))
 	for _, observer := range s.ingestionObservers {
 		observer.ObserveRelayClosed(relayURL, reason)
 	}
-	closedErr := fmt.Errorf("relay %s CLOSED the REQ: %s", relayURL, reason)
-	if !IsAuthRequiredReason(reason) {
-		return closedErr
-	}
-	if err := s.pool.AuthenticateRelay(ctx, relayURL); err != nil {
-		s.pool.RecordRelayError(relayURL, "auth-unavailable: "+reason+": "+err.Error())
-		return fmt.Errorf("%w; AUTH failed: %v", closedErr, err)
-	}
-	return errRetryAfterAuth
+	return fmt.Errorf("relay %s CLOSED the REQ: %s", relayURL, reason)
 }
 
 // negentropyTarget is the local side of a NIP-77 session for one relay and

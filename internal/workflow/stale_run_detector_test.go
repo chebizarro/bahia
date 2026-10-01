@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -86,7 +87,7 @@ func TestStaleRunDetectorPublishesReplaceableStaleAndRecoveredOnStatusResume(t *
 		UpdatedAt: startedAt,
 	}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
-	audit := repository.NewInMemoryNostrEventRepository()
+	audit := repositorytest.NewInMemoryNostrEventRepository()
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, audit, published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
@@ -138,7 +139,7 @@ func TestStaleRunDetectorPublishesRecoveredWhenRunBecomesTerminal(t *testing.T) 
 	}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
 	published := &staleRunPublisherFake{}
-	detector := NewStaleRunDetector(runs, repository.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
+	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
 
 	require.NoError(t, detector.check(ctx))
@@ -174,7 +175,7 @@ func TestStaleRunDetectorRecoversPersistedStaleSignalAfterRestart(t *testing.T) 
 		CreatedAt:  now.Add(-20 * time.Minute),
 	}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
-	audit := repository.NewInMemoryNostrEventRepository()
+	audit := repositorytest.NewInMemoryNostrEventRepository()
 	content, err := json.Marshal(map[string]any{
 		"schema":      staleRunHealthSchema,
 		"run_id":      run.ID.String(),
@@ -211,7 +212,7 @@ func TestStaleRunDetectorIgnoresFreshAndNonLoomRuns(t *testing.T) {
 	loomRun := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "fresh-job", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
 	directRun := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "runtime:direct", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{loomRun.ID: loomRun, directRun.ID: directRun}}
-	audit := repository.NewInMemoryNostrEventRepository()
+	audit := repositorytest.NewInMemoryNostrEventRepository()
 	statusAt := now.Add(-time.Minute)
 	tags, err := json.Marshal(nostr.Tags{{"e", loomRun.LoomJobID}})
 	require.NoError(t, err)
@@ -230,7 +231,7 @@ func TestStaleRunDetectorRunStopsWithContext(t *testing.T) {
 	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "job", Status: domain.RunStatusRunning, StartedAt: &now, CreatedAt: now}
 	detector := NewStaleRunDetector(
 		&staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}},
-		repository.NewInMemoryNostrEventRepository(),
+		repositorytest.NewInMemoryNostrEventRepository(),
 		&staleRunPublisherFake{},
 		2*time.Second,
 		zap.NewNop(),
@@ -281,7 +282,7 @@ func TestStaleRunDetectorTreatsQueuedPublishAsKept(t *testing.T) {
 	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job-queued", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt, UpdatedAt: startedAt}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
 	published := &staleRunPublisherFake{err: fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)}
-	detector := NewStaleRunDetector(runs, repository.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
+	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
 
 	require.NoError(t, detector.check(ctx), "a queued publish is not a failed transition")

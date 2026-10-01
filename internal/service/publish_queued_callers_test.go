@@ -23,6 +23,8 @@ var queuedPublish = fmt.Errorf("nostr event accepted by 0 of 1 required relays: 
 type queuedSignedPublisher struct {
 	secret nostr.SecretKey
 	events []nostr.Event
+	// outcome is what DeliveryOutcome reports.
+	outcome nostrutil.DeliveryOutcome
 }
 
 func newQueuedSignedPublisher() *queuedSignedPublisher {
@@ -40,6 +42,15 @@ func (p *queuedSignedPublisher) PublishSignedEvent(_ context.Context, ev *nostr.
 func (p *queuedSignedPublisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error) {
 	err := p.PublishSignedEvent(ctx, ev)
 	return []sbomadapter.PublishOKResult{{RelayURL: "wss://down.example", Error: fmt.Errorf("connection refused")}}, err
+}
+
+// DeliveryOutcome reports what the outbox reached for a queued event by the
+// time the caller stored its id: still pending unless the test set outcome.
+func (p *queuedSignedPublisher) DeliveryOutcome(context.Context, string) (nostrutil.DeliveryOutcome, error) {
+	if p.outcome == nostrutil.DeliveryUnknown {
+		return nostrutil.DeliveryPending, nil
+	}
+	return p.outcome, nil
 }
 
 func (p *queuedSignedPublisher) pubkey() string { return p.secret.Public().Hex() }

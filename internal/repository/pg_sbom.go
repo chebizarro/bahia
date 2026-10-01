@@ -279,10 +279,27 @@ func (r *PgSBOMRepository) FailManifestByReferenceEvent(ctx context.Context, ref
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE sbom_manifests
 			SET publish_state = $2, publish_error = $3, updated_at = $4
-			WHERE reference_event_id = $1 AND publish_state = $5`,
-		referenceEventID, string(domain.SBOMPublishFailed), nilIfEmpty(reason), time.Now().UTC(), string(domain.SBOMPublishPublished))
+			WHERE reference_event_id = $1 AND publish_state IN ($5, $6)`,
+		referenceEventID, string(domain.SBOMPublishFailed), nilIfEmpty(reason), time.Now().UTC(), string(domain.SBOMPublishPublished), string(domain.SBOMPublishPending))
 	if err != nil {
 		return 0, fmt.Errorf("failing SBOM manifest for abandoned reference %s: %w", referenceEventID, err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// MarkManifestDeliveredByReferenceEvent implements SBOMManifestRepository.
+func (r *PgSBOMRepository) MarkManifestDeliveredByReferenceEvent(ctx context.Context, referenceEventID string) (int64, error) {
+	if strings.TrimSpace(referenceEventID) == "" {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE sbom_manifests
+			SET publish_state = $2, publish_error = NULL, published_at = $3, updated_at = $3
+			WHERE reference_event_id = $1 AND publish_state = $4`,
+		referenceEventID, string(domain.SBOMPublishPublished), now, string(domain.SBOMPublishPending))
+	if err != nil {
+		return 0, fmt.Errorf("marking SBOM manifest for delivered reference %s: %w", referenceEventID, err)
 	}
 	return tag.RowsAffected(), nil
 }

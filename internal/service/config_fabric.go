@@ -462,9 +462,11 @@ func (s *ConfigFabricService) persistDesired(ctx context.Context, event nostr.Ev
 		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(), Content: event.Content,
 		Tags: tags, Sig: hex.EncodeToString(event.Sig[:]), CreatedAt: event.CreatedAt.Time(), ReceivedAt: s.now(),
 		EntityType: configEntityType, PublishState: repository.NostrPublishStatePending,
-		// Config-fabric desired state is delivered to the control-plane
-		// relays; only that pool's runner may retry it.
-		PublishTarget: repository.NostrPublishTargetControlPlane,
+		// The control-plane publisher's local outbox delivers the event; this
+		// row is its archive copy, whose publish state the publisher keeps in
+		// step (failed versions are not desired state, see ListDrift). No
+		// PostgreSQL runner drains it.
+		PublishTarget: repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane),
 	}
 	if _, err := s.repo.Record(ctx, record); err != nil {
 		return fmt.Errorf("persist config-fabric desired event before publish: %w", err)

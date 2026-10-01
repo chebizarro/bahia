@@ -11,6 +11,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -94,7 +95,7 @@ func fleetOperatorRegistrations(t *testing.T) []fleetOperatorRegistration {
 			AdministratorPubkeys: []string{requester},
 		}},
 	}}}
-	configFabricRepo := repository.NewInMemoryNostrEventRepository()
+	configFabricRepo := repositorytest.NewInMemoryNostrEventRepository()
 	configFabric := service.NewConfigFabricService(configFabricRepo, relayConfigFabricTestPublisher{}, relayConfigFabricTestSigner{secret: nostr.Generate()})
 	if _, err := configFabric.Publish(t.Context(), service.ConfigPublishRequest{
 		Kind:      service.ConfigFabricPolicyKind,

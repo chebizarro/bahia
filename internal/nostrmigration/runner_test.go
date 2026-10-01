@@ -12,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -61,7 +62,7 @@ func (p *captureMigrationPublisher) PublishMigrationEvent(_ context.Context, ev 
 
 func TestRunnerMigratesLocalLegacyRecordAndRecordsCanonicalEvent(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := legacyRecord(t, "legacy-1", kinds.DeployRequest, time.Unix(100, 0).UTC())
 	inserted, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)
@@ -85,7 +86,7 @@ func TestRunnerMigratesLocalLegacyRecordAndRecordsCanonicalEvent(t *testing.T) {
 
 func TestRunnerSkipsAlreadyMigratedLegacyRecord(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := legacyRecord(t, "legacy-1", kinds.ServiceState, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)
@@ -101,7 +102,7 @@ func TestRunnerSkipsAlreadyMigratedLegacyRecord(t *testing.T) {
 
 func TestRunnerDoesNotRemigrateCurrentMigrationOutput(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	tags, err := json.Marshal(gonostr.Tags{
 		{"d", "sbom:migrated:legacy-1"},
 		{"migrated-from", "legacy-1"},
@@ -124,7 +125,7 @@ func TestRunnerDoesNotRemigrateCurrentMigrationOutput(t *testing.T) {
 
 func TestRunnerPaginatesAllLocalRecordsAndPersistsCursor(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	for i := 0; i < 5; i++ {
 		_, err := repo.Record(ctx, legacyRecord(t, fmt.Sprintf("legacy-%d", i), kinds.DeployRequest, time.Unix(int64(100+i), 0).UTC()))
 		require.NoError(t, err)
@@ -181,7 +182,7 @@ func TestBuildCanonicalEventTranslatesLegacyResultIntoContextVMResponse(t *testi
 
 func TestRunnerRegeneratesLegacyV1MigrationOutput(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := legacyRecord(t, "legacy-v1", kinds.DeployRequest, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)
@@ -198,7 +199,7 @@ func TestRunnerRegeneratesLegacyV1MigrationOutput(t *testing.T) {
 
 func TestRunnerPaginatesRelayBackfillWindows(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	newest := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(300, 0).UTC())
 	middle := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(200, 0).UTC())
 	oldest := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
@@ -214,7 +215,7 @@ func TestRunnerPaginatesRelayBackfillWindows(t *testing.T) {
 
 func TestRunnerFailsWhenPublishOutcomeIsNotAcceptedOrDuplicate(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	_, err := repo.Record(ctx, legacyRecord(t, "legacy-1", kinds.WorkerStatus, time.Unix(100, 0).UTC()))
 	require.NoError(t, err)
 	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: false, Reason: "blocked: policy"}}}
@@ -226,7 +227,7 @@ func TestRunnerFailsWhenPublishOutcomeIsNotAcceptedOrDuplicate(t *testing.T) {
 
 func TestRunnerAcceptsExplicitDuplicatePublishOutcome(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := legacyRecord(t, "legacy-1", kinds.WorkerStatus, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)
@@ -240,7 +241,7 @@ func TestRunnerAcceptsExplicitDuplicatePublishOutcome(t *testing.T) {
 
 func TestRunnerMigratesRelayBackfillUntilEOSE(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
 	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
 	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
@@ -257,7 +258,7 @@ func TestRunnerMigratesRelayBackfillUntilEOSE(t *testing.T) {
 
 func TestRunnerPersistsRelayBackfillCompletionAndSkipsReplayOnRestart(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
 	firstSubscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
 	firstPublisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: true}}}
@@ -278,7 +279,7 @@ func TestRunnerPersistsRelayBackfillCompletionAndSkipsReplayOnRestart(t *testing
 
 func TestRunnerHonorsLegacyTerminalCursorWithoutReplayingRelayHistory(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	require.NoError(t, repo.SaveMigrationCursor(ctx, repository.NostrMigrationCursor{
 		Name:      localCursorName,
 		CreatedAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
@@ -299,7 +300,7 @@ func TestRunnerHonorsLegacyTerminalCursorWithoutReplayingRelayHistory(t *testing
 
 func TestRunnerDoesNotMarkFailedRelayBackfillComplete(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
 	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
 	publisher := &captureMigrationPublisher{outcomes: []PublishOutcome{{RelayURL: "wss://relay.example", Accepted: false, Reason: "rate-limited: slow down"}}}
@@ -313,7 +314,7 @@ func TestRunnerDoesNotMarkFailedRelayBackfillComplete(t *testing.T) {
 
 func TestRunnerSkipsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := signedLegacyEvent(t, kinds.PackagePromotionRequest, time.Unix(100, 0).UTC())
 	legacy.Content = `{"tampered":true}`
 	subscriber := &fakeMigrationSubscriber{events: []*gonostr.Event{legacy}}
@@ -329,7 +330,7 @@ func TestRunnerSkipsInvalidRelayBackfillEventBeforeRecording(t *testing.T) {
 
 func TestRunnerDryRunDoesNotPublishOrRecordCanonicalEvent(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	legacy := legacyRecord(t, "legacy-1", kinds.BackupRunResult, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, legacy)
 	require.NoError(t, err)

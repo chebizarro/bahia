@@ -80,11 +80,16 @@ type IngestionObserver interface {
 // local event store so replay after a restart does not depend on Postgres
 // (C-14), and which keeps the per-(relay, filter) cursors (see
 // replay_cursor.go).
+//
+// NIP-42 is answered by the pool's connection AuthHandler. A relay that CLOSEs
+// a REQ "auth-required:" ends the session like any other CLOSED and is resynced
+// with backoff, by which time the connection has authenticated.
 type Subscriber struct {
 	pool *RelayPool
-	// eventRepo is the optional nostr_events audit table. When set, an event
-	// must also be newly recorded there before handlers run.
-	eventRepo              repository.NostrEventRepository
+	// archive is the optional PostgreSQL nostr_events table, written best
+	// effort: it never decides whether an event is new or whether handlers
+	// run (B-14).
+	archive                *postgresArchive
 	store                  *localstore.Store
 	kinds                  []int
 	handlers               []EventHandler
@@ -130,8 +135,7 @@ func WithHandler(h EventHandler) SubscriberOption {
 // or it was already held.
 //
 // Handlers registered with WithHandler run only for events that are new to the
-// local store (and, when an audit repository is configured, newly recorded
-// there), and never for the daemon's own events (WithSelfAuthors), so side
+// local store, and never for the daemon's own events (WithSelfAuthors), so side
 // effects never repeat. Observers exist for read-side projections such as
 // fleet-health telemetry that must see those self-published canonical
 // observables. An observer must be idempotent under redelivery, for example by
@@ -210,7 +214,8 @@ func withClock(now func() time.Time) SubscriberOption {
 	}
 }
 
-// NewSubscriber creates a new inbound event subscriber.
+// NewSubscriber creates a new inbound event subscriber. eventRepo is the
+// optional PostgreSQL nostr_events archive.
 func NewSubscriber(
 	pool *RelayPool,
 	eventRepo repository.NostrEventRepository,
@@ -219,7 +224,6 @@ func NewSubscriber(
 ) *Subscriber {
 	s := &Subscriber{
 		pool:            pool,
-		eventRepo:       eventRepo,
 		kinds:           DefaultInboundKinds,
 		logger:          logger.Named("nostr-subscriber"),
 		self:            make(map[nostr.PubKey]struct{}),
@@ -230,6 +234,7 @@ func NewSubscriber(
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.archive = newPostgresArchive(eventRepo, s.logger)
 	s.sync = s.sync.normalized()
 	return s
 }
@@ -257,9 +262,10 @@ const (
 )
 
 // handleEvent stores a delivered event and dispatches it. The local store is
-// the idempotency gate: handlers run only for an event new to it (and, with an
-// audit repository, newly recorded there too), so neither overlap replay, nor
-// another relay's copy, nor a restart re-runs side effects.
+// the idempotency gate: handlers run only for an event new to it, so neither
+// overlap replay, nor another relay's copy, nor a restart re-runs side
+// effects. The PostgreSQL archive is written best effort and decides nothing,
+// so a database outage does not make the daemon deaf to its relays (B-14).
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) ingestOutcome {
 	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
@@ -294,24 +300,11 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) ingestOut
 		}
 		fresh = stored
 	}
-	if s.eventRepo != nil {
-		inserted, err := s.eventRepo.Record(ctx, s.auditRecord(ev))
-		if err != nil {
-			s.logger.Warn("failed to persist inbound event",
-				zap.String("event_id", eventIDHex(ev)),
-				zap.Int("kind", eventKindInt(ev)),
-				zap.Error(err),
-			)
-			if fresh && s.store != nil {
-				// Undo the local write so the redelivery is still new and
-				// its handlers run once the audit write succeeds.
-				if err := s.store.DeleteEvent(ev.ID); err != nil {
-					s.logger.Warn("roll back local event failed", zap.String("event_id", eventIDHex(ev)), zap.Error(err))
-				}
-			}
-			return ingestFailed
-		}
-		fresh = fresh && inserted
+	if fresh {
+		s.archive.write(ctx, "inbound event", eventIDHex(ev), func(ctx context.Context, repo repository.NostrEventRepository) error {
+			_, err := repo.Record(ctx, s.auditRecord(ev))
+			return err
+		})
 	}
 	// Observers see validated, persisted events whether or not they are new;
 	// see WithObserver for why self-published echoes must reach them.

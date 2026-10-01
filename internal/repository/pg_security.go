@@ -766,6 +766,40 @@ func (r *PgSecurityRepository) AbandonSecurityPublication(ctx context.Context, e
 	return changed, nil
 }
 
+// DeliverSecurityPublication implements SecurityRepository. The sub-select
+// sees the publications as they were before this statement, so the rows it
+// delivers are excluded by id when checking for other unfinished ones.
+func (r *PgSecurityRepository) DeliverSecurityPublication(ctx context.Context, eventID string) (int64, error) {
+	if strings.TrimSpace(eventID) == "" {
+		return 0, nil
+	}
+	var changed int64
+	err := r.pool.QueryRow(ctx, `
+		WITH delivered AS (
+			UPDATE security_observable_publications
+			SET publish_state = $2, last_error = NULL, next_retry_at = NULL, published_at = $3, updated_at = $3
+			WHERE event_id = $1 AND publish_state = $4
+			RETURNING id, run_id
+		), runs AS (
+			UPDATE security_scan_runs AS run
+			SET publish_state = $2, updated_at = $3
+			WHERE run.id IN (SELECT run_id FROM delivered WHERE run_id IS NOT NULL)
+			  AND run.publish_state = $4
+			  AND NOT EXISTS (
+				SELECT 1 FROM security_observable_publications other
+				WHERE other.run_id = run.id AND other.publish_state <> $2
+				  AND other.id NOT IN (SELECT id FROM delivered)
+			  )
+			RETURNING run.id
+		)
+		SELECT count(*) FROM delivered
+	`, eventID, domain.SecurityPublicationPublished, time.Now().UTC(), domain.SecurityPublicationPending).Scan(&changed)
+	if err != nil {
+		return 0, fmt.Errorf("delivering security publication %s: %w", eventID, err)
+	}
+	return changed, nil
+}
+
 func (r *PgSecurityRepository) updateBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) error {
 	metadataJSON, violatedJSON, osvIDsJSON, err := marshalBreachJSON(breach)
 	if err != nil {

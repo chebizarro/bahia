@@ -52,9 +52,15 @@ const (
 // nostrutil.ErrPublishAbandoned means the outbox gave up on the signed event
 // (its row is failed); any other error means the event was never queued (for
 // example it could not be signed or recorded). An event reported as queued
-// that the outbox abandons later reaches HandlePublishAbandoned.
+// that the outbox abandons later reaches HandlePublishAbandoned, and one it
+// delivers later reaches HandlePublishDelivered.
+//
+// DeliveryOutcome reports what the outbox knows about an event id; the
+// scanner reads it after recording a queued event's id, for an outcome the
+// outbox reached before the id was stored (bahia-irsry.40).
 type SecurityVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
+	DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error)
 }
 
 type SecurityRelaySubscriber interface {
@@ -1063,8 +1069,12 @@ func (s *SecurityScanner) publishObservable(ctx context.Context, run *domain.Sec
 	case nostrutil.IsPublishQueued(err):
 		// Below the publish quorum but durably queued: record it as pending
 		// under its event ID rather than as a failure that invites a re-sign.
+		// The outbox moves it on through the delivery hooks; an outcome it
+		// reached before the ID was stored is applied here.
 		if s.repo != nil {
-			_ = s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPending, nostrutil.EventIDHex(ev), err.Error(), nil, nil)
+			if updateErr := s.repo.UpdateSecurityPublicationState(ctx, publication.ID, domain.SecurityPublicationPending, nostrutil.EventIDHex(ev), err.Error(), nil, nil); updateErr == nil {
+				s.applyDeliveryOutcome(ctx, *ev)
+			}
 		}
 		return nil
 	case nostrutil.IsPublishAbandoned(err):
@@ -1116,13 +1126,52 @@ func (s *SecurityScanner) HandlePublishAbandoned(ev nostr.Event) {
 	eventID := ev.ID.Hex()
 	ctx, cancel := context.WithTimeout(context.Background(), securityAbandonWriteTimeout)
 	defer cancel()
-	changed, err := s.repo.AbandonSecurityPublication(ctx, eventID, "publishing: "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in nostr_events.last_publish_error")
+	changed, err := s.repo.AbandonSecurityPublication(ctx, eventID, "publishing: "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in its abandonment warning")
 	if err != nil {
 		s.logger.Warn("failed to record abandoned security publication", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	if changed > 0 {
 		s.logger.Warn("security publication abandoned by the publish outbox", zap.String("event_id", eventID), zap.Int64("publications", changed))
+	}
+}
+
+// HandlePublishDelivered is registered with the outbox publisher's
+// OnDelivered hook. A publication publishObservable recorded as queued becomes
+// published once the publish quorum accepted its event, and so does its scan
+// run's publish state when no other publication of the run is still pending
+// or failed. Delivery may be reported more than once; the update only touches
+// pending rows. Events of other producers (no domain=security tag) are
+// ignored, so other publishes cost no database write.
+func (s *SecurityScanner) HandlePublishDelivered(ev nostr.Event) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	if tag := ev.Tags.Find("domain"); len(tag) < 2 || tag[1] != "security" {
+		return
+	}
+	eventID := ev.ID.Hex()
+	ctx, cancel := context.WithTimeout(context.Background(), securityAbandonWriteTimeout)
+	defer cancel()
+	if _, err := s.repo.DeliverSecurityPublication(ctx, eventID); err != nil {
+		s.logger.Warn("failed to record delivered security publication", zap.String("event_id", eventID), zap.Error(err))
+	}
+}
+
+// applyDeliveryOutcome applies an outcome the outbox reached for ev before
+// its publication row carried the event ID, when the delivery hooks found
+// nothing to update.
+func (s *SecurityScanner) applyDeliveryOutcome(ctx context.Context, ev nostr.Event) {
+	outcome, err := s.publisher.DeliveryOutcome(ctx, ev.ID.Hex())
+	if err != nil {
+		s.logger.Warn("failed to read security publication delivery outcome", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+		return
+	}
+	switch outcome {
+	case nostrutil.DeliveryDelivered:
+		s.HandlePublishDelivered(ev)
+	case nostrutil.DeliveryAbandoned:
+		s.HandlePublishAbandoned(ev)
 	}
 }
 

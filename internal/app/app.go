@@ -95,6 +95,7 @@ type App struct {
 	soulFactoryCloser         func() error
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
+	localOutbox               *localstore.Outbox
 	reloadMu                  sync.Mutex
 }
 
@@ -244,12 +245,39 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	tenantRBAC := newTenantRBAC(orgMemberRepo)
 
-	// Nostr event audit repository.
-	var nostrEventRepo repository.NostrEventRepository
+	// Local event store and publish outbox (bahia-irsry.10.1, .10.4). They are
+	// present at every tier: the store is the inbound subscriptions' cache,
+	// dedup set and per-(relay, filter) cursors, and the daemon's own outputs;
+	// the outbox holds every event the daemon publishes until its relays
+	// accept it. Neither needs PostgreSQL.
+	localEventStore, err := localstore.Open(cfg.Nostr.LocalStore.Path)
+	if err != nil {
+		return nil, fmt.Errorf("opening local Nostr event store: %w", err)
+	}
+	localOutbox, err := localstore.OpenOutbox(cfg.Nostr.LocalStore.ResolvedOutboxPath())
+	if err != nil {
+		_ = localEventStore.Close()
+		return nil, fmt.Errorf("opening local Nostr publish outbox: %w", err)
+	}
+	if aside := localOutbox.MovedAside(); aside != "" {
+		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
+			zap.String("moved_to", aside))
+	}
+	localNostrReleased := false
+	defer func() {
+		if !localNostrReleased {
+			_ = localOutbox.Close()
+			_ = localEventStore.Close()
+		}
+	}()
+
+	// PostgreSQL nostr_events, when available: an archive and index for the
+	// PostgreSQL-backed readers, and the outbox of producers that write their
+	// audit event in the same transaction as the change it audits. Relay
+	// delivery and inbound idempotency never depend on it.
+	var pgNostrEventRepo repository.NostrEventRepository
 	if dbAvailable {
-		nostrEventRepo = repository.NewPgNostrEventRepository(pool)
-	} else {
-		nostrEventRepo = repository.NewInMemoryNostrEventRepository()
+		pgNostrEventRepo = repository.NewPgNostrEventRepository(pool)
 	}
 
 	loomClientOptions := []loom.ClientOption{loom.WithWorkerRepo(workerRepo)}
@@ -326,13 +354,32 @@ func New(cfg *config.Config) (*App, error) {
 	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
-	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
+	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, pgNostrEventRepo, logger,
+		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
 	// Control-plane outbox publisher shared by the read-model projector, docs,
-	// SBOM and config-fabric. Its rows carry the control-plane publish target
-	// and its own runner retries them, so they are never redelivered to the
-	// interop relays.
-	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger,
-		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	// SBOM and config-fabric. Its entries carry the control-plane publish
+	// target and its own runner retries them, so they are never redelivered to
+	// the interop relays.
+	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, pgNostrEventRepo, logger,
+		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
+		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
+	// nostr_events for its readers and audit writers: PostgreSQL when
+	// available, else the local event store, which replaced the unbounded
+	// in-memory fallback (B-12). An event a producer records there as pending
+	// delivery goes to the outbox of its publish target.
+	nostrEventRepo := pgNostrEventRepo
+	if nostrEventRepo == nil {
+		nostrEventRepo = nostrAdapter.NewLocalEventRepository(localEventStore, func(ctx context.Context, ev nostr.Event, target, entityType string, entityID *uuid.UUID) error {
+			switch target {
+			case repository.NostrPublishTargetDefault:
+				return nostrPub.Enqueue(ctx, ev, entityType, entityID)
+			case repository.NostrPublishTargetControlPlane:
+				return controlPlanePub.Enqueue(ctx, ev, entityType, entityID)
+			default:
+				return fmt.Errorf("unknown publish target %q", target)
+			}
+		})
+	}
 
 	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
 	// wrap registry mutations so relay publish must succeed before local DB writes.
@@ -631,18 +678,6 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	catalog := nostrAdapter.NewKindCatalog()
-	// Local event store: the inbound subscriptions' rebuildable cache, dedup
-	// set and per-(relay, filter) cursors (bahia-irsry.10.1).
-	localEventStore, err := localstore.Open(cfg.Nostr.LocalStore.Path)
-	if err != nil {
-		return nil, fmt.Errorf("opening local Nostr event store: %w", err)
-	}
-	localEventStoreReleased := false
-	defer func() {
-		if !localEventStoreReleased {
-			_ = localEventStore.Close()
-		}
-	}()
 
 	// Relay projection cache: applies decoded relay events to local repositories.
 	// When DB is unavailable, appliers are skipped (tier1-only mode has no
@@ -933,7 +968,10 @@ func New(cfg *config.Config) (*App, error) {
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
 	}
-	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, nostrEventRepo, logger, projectorOpts...)
+	// The projector's memory of what it published is its own latest events
+	// in the local event store, never PostgreSQL (B-3).
+	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
@@ -1027,9 +1065,11 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey: servicePubkey,
 			Logger: logger,
 		})
-		// Manifests recorded as published on a queued reference are failed
-		// if the control-plane outbox later abandons that reference.
+		// Manifests recorded as pending on a queued reference become
+		// published when the control-plane outbox delivers that reference,
+		// and failed if it abandons it.
 		controlPlanePub.OnDeliveryAbandoned(sbomOrchestrator.HandlePublishAbandoned)
+		controlPlanePub.OnDelivered(sbomOrchestrator.HandlePublishDelivered)
 	}
 
 	// OCI Registry wiring.
@@ -1222,9 +1262,10 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey:     servicePubkey,
 			Logger:     logger,
 		})
-		// Publications recorded as queued become failed_terminal if the
-		// outbox later abandons their event.
+		// Publications recorded as queued become published when the outbox
+		// delivers their event, and failed_terminal if it abandons it.
 		nostrPub.OnDeliveryAbandoned(securityScanner.HandlePublishAbandoned)
+		nostrPub.OnDelivered(securityScanner.HandlePublishDelivered)
 		bgManager.RegisterWithOptions(securityScanner, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}), RunnerTier(Tier3))
 		logger.Info("security OSV scanner and scheduler registered")
@@ -1443,7 +1484,7 @@ func New(cfg *config.Config) (*App, error) {
 	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, configFabricPublishAdapter{publisher: controlPlanePub}, configFabricSigner)
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
-	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
+	nostrSub := nostrAdapter.NewSubscriber(relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalStore(localEventStore),
 		nostrAdapter.WithSelfAuthors(servicePubkey),
 		nostrAdapter.WithInboundSync(inboundSyncConfig(cfg.Nostr.LocalStore)),
@@ -1834,9 +1875,9 @@ func New(cfg *config.Config) (*App, error) {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
-	outboxRepo, _ := nostrEventRepo.(repository.NostrEventOutboxRepository)
+	pgOutboxRepo, _ := pgNostrEventRepo.(repository.NostrEventOutboxRepository)
 	nostrTransportMetrics := newNostrTransportMetricsRunner(
-		telemetryProvider.GetMetrics(), outboxRepo, 15*time.Second, logger,
+		telemetryProvider.GetMetrics(), localOutbox, pgOutboxRepo, 15*time.Second, logger,
 		controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPool, fipsRelayPool,
 	)
 	if pool != nil {
@@ -1869,9 +1910,10 @@ func New(cfg *config.Config) (*App, error) {
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
+		localOutbox:               localOutbox,
 	}
 	soulFactoryRuntimeReleased = true
-	localEventStoreReleased = true
+	localNostrReleased = true
 	return application, nil
 }
 
@@ -2603,6 +2645,11 @@ func (a *App) RunContext(ctx context.Context) error {
 	if a.localEventStore != nil {
 		if err := a.localEventStore.Close(); err != nil {
 			a.Logger.Warn("local Nostr event store close failed", zap.Error(err))
+		}
+	}
+	if a.localOutbox != nil {
+		if err := a.localOutbox.Close(); err != nil {
+			a.Logger.Warn("local Nostr publish outbox close failed", zap.Error(err))
 		}
 	}
 
@@ -4153,6 +4200,14 @@ type sbomPublishAdapter struct {
 // PublishSignedEventWithResults keeps the per-relay results alongside the
 // error: an ErrPublishIncomplete publish is queued, not lost, an
 // ErrPublishAbandoned one is terminal, and callers inspect both.
+// DeliveryOutcome reports what the publisher's outbox knows about eventID.
+func (a sbomPublishAdapter) DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error) {
+	if a.publisher == nil {
+		return nostrutil.DeliveryUnknown, nil
+	}
+	return a.publisher.DeliveryOutcome(ctx, eventID)
+}
+
 func (a sbomPublishAdapter) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomAdapter.PublishOKResult, error) {
 	if a.publisher == nil {
 		return nil, fmt.Errorf("nostr publisher is not configured")

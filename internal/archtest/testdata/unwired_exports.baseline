@@ -282,14 +282,13 @@
 1	internal/reconcile.WithStartingTimeout
 1	internal/relaysidecar.Server.Relay
 1	internal/repository.BackupCheckpointExecuting
-1	internal/repository.InMemoryNostrEventRepository.FindByID
-1	internal/repository.InMemoryNostrEventRepository.FindSince
 1	internal/repository.PgOCIRepository.CreateUpload
 1	internal/repository.PgOCIRepository.DeleteUpload
 1	internal/repository.PgOCIRepository.GetUpload
 1	internal/repository.PgOCIRepository.MarkUploadFailed
 1	internal/repository.PgOCIRepository.UpdateUploadOffset
 1	internal/repository.RelayPolicyProjectionShouldReplace
+1	internal/repository/repositorytest.NewInMemoryNostrEventRepository
 1	internal/rollout.NewExecutor
 1	internal/service.AgentRuntimePromotionService.HandleRepositoryStateTrigger
 1	internal/service.Assess

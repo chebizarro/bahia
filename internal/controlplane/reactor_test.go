@@ -2,12 +2,14 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
 )
 
@@ -65,7 +67,7 @@ func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlapOrIncludeLegacy(t *
 
 func TestReactorAuditsAcceptedInboundEventToRepository(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	r := NewReactor(Config{}, nil, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithNostrEventRepository(repo))
 	event := signedControlPlaneTestEvent(t, nostradapter.KindCASControlState)
 
@@ -80,6 +82,34 @@ func TestReactorAuditsAcceptedInboundEventToRepository(t *testing.T) {
 	}
 	if rec.Kind != int(event.Kind) || rec.PubKey != event.PubKey.Hex() || rec.Content != event.Content || rec.Sig != gonostr.HexEncodeToString(event.Sig[:]) {
 		t.Fatalf("audit record mismatch: got %#v for event %#v", rec, event)
+	}
+}
+
+// failingAuditRepo is a nostr_events table whose writes fail (a database
+// outage).
+type failingAuditRepo struct {
+	*repositorytest.InMemoryNostrEventRepository
+}
+
+func (failingAuditRepo) Record(context.Context, *repository.NostrEventRecord) (bool, error) {
+	return false, errors.New("connection refused")
+}
+
+// B-14: a failed audit write does not drop the inbound event; the in-memory
+// dedupe still stops a relay replay within the process.
+func TestReactorHandlesInboundEventWhenTheAuditWriteFails(t *testing.T) {
+	catalog := nostradapter.NewKindCatalog()
+	r := NewReactor(Config{}, nil, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+		WithKindCatalog(catalog), WithNostrEventRepository(failingAuditRepo{repositorytest.NewInMemoryNostrEventRepository()}))
+	eventTime := gonostr.Timestamp(time.Now().Unix() - 60)
+	event := signedControlPlaneTestEventAt(t, nostradapter.KindCASControlState, eventTime)
+
+	r.handleEvent(context.Background(), event)
+	if got := r.lastSeenByGroup["state_snapshot"]; got != eventTime {
+		t.Fatalf("event was dropped on the audit failure: lastSeen %v, want %v", got, eventTime)
+	}
+	if !r.dedup.IsDuplicate(event.ID.Hex()) {
+		t.Fatal("a handled event must be remembered by the in-process dedupe")
 	}
 }
 

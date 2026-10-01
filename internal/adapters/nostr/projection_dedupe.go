@@ -47,8 +47,10 @@ const (
 	projectionHydrationBackoffMin = 2 * time.Second
 	projectionHydrationBackoffMax = time.Minute
 	// projectionHydrateLimit bounds how many retained records are read per wire
-	// kind when warming the dedupe cache after a restart.
-	projectionHydrateLimit = 10000
+	// kind when warming the dedupe cache after a restart. The history holds one
+	// event per coordinate, all the daemon's own, so this is a bound on live
+	// coordinates per wire kind, across every projection family.
+	projectionHydrateLimit = 100000
 	projectionFamilyAudit  = "audit"
 )
 
@@ -289,11 +291,11 @@ func (p *Projector) nextProjectionCreatedAt(key projectionKey) gonostr.Timestamp
 }
 
 // hydrateProjectionCache warms the dedupe cache for one wire kind from the
-// retained event store so an unchanged coordinate is not re-signed merely
+// projection history so an unchanged coordinate is not re-signed merely
 // because the process restarted. Newest record per coordinate wins; only this
 // projector's own events are considered.
 func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) error {
-	if p.eventRepo == nil {
+	if p.history == nil {
 		return nil
 	}
 	s := p.projection()
@@ -313,7 +315,11 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		return fmt.Errorf("%w: kind %d", ErrProjectorHydrationBackoff, wireKind)
 	}
 
-	records, err := p.eventRepo.ListByKind(ctx, wireKind, projectionHydrateLimit)
+	limit := projectionHydrateLimit
+	if wireKind == KindCASAudit {
+		limit = auditFactCapacity
+	}
+	records, err := p.history.ListByKind(ctx, wireKind, limit)
 	if err != nil {
 		if hydration.retryDelay == 0 {
 			hydration.retryDelay = projectionHydrationBackoffMin

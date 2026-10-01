@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,29 @@ const (
 	// SBOM, config-fabric).
 	NostrPublishTargetControlPlane = "control-plane"
 )
+
+// NostrPublishTargetLocalPrefix marks archive rows of events whose delivery
+// the daemon's local outbox owns (bahia-irsry.10.4). Their publish_state
+// mirrors the local outcome for PostgreSQL readers (config-fabric drift,
+// virtualization, the failed-row runbook), but no runner drains them and the
+// outbox metrics do not count them: the local outbox does.
+const NostrPublishTargetLocalPrefix = "local:"
+
+// LocalOutboxArchiveTarget is the publish_target of the archive row of an
+// event the local outbox delivers to target.
+func LocalOutboxArchiveTarget(target string) string {
+	return NostrPublishTargetLocalPrefix + target
+}
+
+// IsLocalOutboxArchiveTarget reports whether a row is an archive row of the
+// local outbox rather than a row the PostgreSQL outbox drains.
+func IsLocalOutboxArchiveTarget(target string) bool {
+	return strings.HasPrefix(target, NostrPublishTargetLocalPrefix)
+}
+
+// drainedOutboxRows restricts a query to rows the PostgreSQL outbox delivers
+// (written by transactional producers or before the local outbox existed).
+const drainedOutboxRows = `publish_target NOT LIKE 'local:%'`
 
 // NostrEventRecord represents a row in the nostr_events audit table.
 type NostrEventRecord struct {
@@ -92,6 +116,13 @@ type NostrEventRepository interface {
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
 //
+// Since bahia-irsry.10.4 the daemon's own publishes are delivered from the
+// local outbox (localstore.Outbox). PostgreSQL rows are drained in place: rows
+// written inside a PostgreSQL transaction together with the domain change
+// they audit (registry release registration and promotion), and rows left
+// pending by a daemon that predates the local outbox. Archive rows of the
+// local outbox (LocalOutboxArchiveTarget) only mirror its outcome.
+//
 // Publish-state lifecycle for an outbound event:
 //   - pending: at least one configured relay still has to accept it (or the
 //     publisher has not finished retrying the relays that have not accepted it).
@@ -106,7 +137,8 @@ type NostrEventRepository interface {
 // only discovers rows for its own target.
 type NostrEventOutboxRepository interface {
 	NostrEventRepository
-	// ListUnpublished returns pending rows for every target, oldest first.
+	// ListUnpublished returns pending rows for every drained target, oldest
+	// first.
 	ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error)
 	// ListUnpublishedAfter returns pending rows for target strictly after the
 	// cursor in (received_at, id) order; a nil cursor starts at the oldest
@@ -202,7 +234,7 @@ func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int)
 	}
 	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+`
 		FROM nostr_events
-		WHERE publish_state = $1
+		WHERE publish_state = $1 AND `+drainedOutboxRows+`
 		ORDER BY received_at ASC, id ASC LIMIT $2`, NostrPublishStatePending, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing unpublished nostr events: %w", err)
@@ -237,10 +269,11 @@ func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, targe
 	return scanNostrEventRows(rows)
 }
 
-// CountUnpublished returns the current durable publish outbox depth.
+// CountUnpublished returns the depth of the PostgreSQL outbox: pending rows it
+// drains, not archive rows of the local outbox.
 func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, error) {
 	var count int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1`, NostrPublishStatePending).Scan(&count); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1 AND `+drainedOutboxRows, NostrPublishStatePending).Scan(&count); err != nil {
 		return 0, fmt.Errorf("counting unpublished nostr events: %w", err)
 	}
 	return count, nil
@@ -255,8 +288,10 @@ var ErrNostrPublishFailedIndexNotReady = errors.New("nostr publish failed-row in
 // nostrPublishFailedIndex is the online partial index over failed rows.
 const nostrPublishFailedIndex = "idx_nostr_events_publish_failed"
 
-// CountPublishFailed counts publish_state=failed rows through the partial
-// failed-row index, after checking the catalog that the index is usable.
+// CountPublishFailed counts publish_state=failed rows of the PostgreSQL outbox
+// (not archive rows of the local outbox, which counts its own) through the
+// partial failed-row index, after checking the catalog that the index is
+// usable.
 func (r *PgNostrEventRepository) CountPublishFailed(ctx context.Context) (int64, error) {
 	var ready bool
 	if err := r.pool.QueryRow(ctx, `
@@ -271,7 +306,7 @@ func (r *PgNostrEventRepository) CountPublishFailed(ctx context.Context) (int64,
 		return 0, ErrNostrPublishFailedIndexNotReady
 	}
 	var count int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1`, NostrPublishStateFailed).Scan(&count); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1 AND `+drainedOutboxRows, NostrPublishStateFailed).Scan(&count); err != nil {
 		return 0, fmt.Errorf("counting failed nostr events: %w", err)
 	}
 	return count, nil
