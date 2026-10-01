@@ -171,7 +171,6 @@ type relayPool interface {
 	Connect(context.Context)
 	Close()
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error)
-	AuthenticateRelay(context.Context, string) error
 }
 
 // NewBridge constructs a bridge using Bahia's Nostr relay pool implementation.
@@ -251,22 +250,16 @@ func (b *Bridge) fetchRelayMetadata(ctx context.Context) {
 	}
 }
 
+// subscribeOnce runs one subscription until its event stream ends. The pool
+// answers NIP-42 challenges and reissues a relay's REQ after an
+// "auth-required:" or transient CLOSED or a dropped connection, so a CLOSED
+// here is only logged.
 func (b *Bridge) subscribeOnce(ctx context.Context) error {
-	filters := []nostr.Filter{b.subscriptionFilter()}
-	authAttempted := make(map[string]struct{})
-	for {
-		merged, err := b.pool.SubscribeAllWithEOSE(ctx, filters)
-		if err != nil {
-			return err
-		}
-		retry, err := b.consume(ctx, merged, authAttempted)
-		if err != nil {
-			return err
-		}
-		if !retry {
-			return nil
-		}
+	merged, err := b.pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{b.subscriptionFilter()})
+	if err != nil {
+		return err
 	}
+	return b.consume(ctx, merged)
 }
 
 func (b *Bridge) subscriptionFilter() nostr.Filter {
@@ -283,15 +276,15 @@ func (b *Bridge) subscriptionFilter() nostr.Filter {
 	}
 }
 
-func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
+func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription) error {
 	if merged == nil {
-		return false, nil
+		return nil
 	}
 	defer merged.Close()
 	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return ctx.Err()
 		case eose, ok := <-merged.RelayEOSE:
 			if ok {
 				b.logger.Info("relay sent EOSE", "relay", eose.RelayURL, "subscription_id", eose.SubscriptionID)
@@ -306,41 +299,21 @@ func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscri
 			}
 		case closed, ok := <-merged.Closed:
 			if ok {
-				if b.handleClosed(ctx, closed, authAttempted) {
-					return true, nil
-				}
+				b.logger.Warn("relay closed subscription", "relay", closed.RelayURL, "subscription_id", closed.SubscriptionID,
+					"reason", closed.Reason, "terminal", closed.Terminal)
 			} else {
 				merged.Closed = nil
 			}
 		case ev, ok := <-merged.Events:
 			if !ok {
-				return false, nil
+				return nil
 			}
 			if err := b.HandleEvent(ctx, ev); err != nil {
 				b.logger.Warn("endpoint event ignored", "event_id", eventID(ev), "error", err)
 			}
 		}
 	}
-	return false, nil
-}
-
-func (b *Bridge) handleClosed(ctx context.Context, closed nostradapter.RelayClosed, authAttempted map[string]struct{}) bool {
-	b.logger.Warn("relay closed subscription", "relay", closed.RelayURL, "subscription_id", closed.SubscriptionID, "reason", closed.Reason)
-	if !nostradapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || b.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := b.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		if recorder, ok := b.pool.(interface{ RecordRelayError(string, string) }); ok {
-			recorder.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
-		}
-		b.logger.Warn("relay authentication failed", "relay", closed.RelayURL, "error", err)
-		return false
-	}
-	return true
+	return nil
 }
 
 // markCaughtUp ends the backfill phase and writes the hosts section once if
