@@ -66,25 +66,6 @@ func TestResolveCreateEntityIDMintsWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestFormatEntityCoordinateIsInputAgnostic(t *testing.T) {
-	legacy := uuid.MustParse("3f2504e0-4f89-41d3-9a0c-0305e82c3301") // Postgres gen_random_uuid (v4)
-	client := NewEntityID()
-	for _, tc := range []struct {
-		prefix string
-		id     uuid.UUID
-		want   string
-	}{
-		{"", legacy, "3f2504e0-4f89-41d3-9a0c-0305e82c3301"},
-		{"vm", legacy, "vm:3f2504e0-4f89-41d3-9a0c-0305e82c3301"},
-		{"", client, client.String()},
-		{"runtime-release", client, "runtime-release:" + client.String()},
-	} {
-		if d := FormatEntityCoordinate(tc.prefix, tc.id); d != tc.want {
-			t.Fatalf("FormatEntityCoordinate(%q, %s) = %q, want %q", tc.prefix, tc.id, d, tc.want)
-		}
-	}
-}
-
 func TestEntityIDConflictErrorIsSentinel(t *testing.T) {
 	id := NewEntityID()
 	err := error(&EntityIDConflictError{Entity: "service", ID: id})

@@ -2,13 +2,11 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
 
-	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -22,28 +20,8 @@ func newIdentityTestRegistry(t *testing.T) (*RelayFirstRegistry, *relayFirstServ
 	t.Helper()
 	serviceRepo := &relayFirstServiceRepo{}
 	delegate := NewRegistryService(serviceRepo, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	publisher := &relayFirstCapturePublisher{published: 1}
-	return NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop()), serviceRepo, publisher
-}
-
-func relayFirstEventTag(ev gonostr.Event, name string) string {
-	for _, tag := range ev.Tags {
-		if len(tag) >= 2 && tag[0] == name {
-			return tag[1]
-		}
-	}
-	return ""
-}
-
-func relayFirstEventContentID(t *testing.T, ev gonostr.Event) string {
-	t.Helper()
-	var content struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
-		t.Fatalf("decode event content: %v", err)
-	}
-	return content.ID
+	publisher := &relayFirstCapturePublisher{}
+	return NewRelayFirstRegistry(delegate, publisher, zap.NewNop()), serviceRepo, publisher
 }
 
 func TestRelayFirstCreateServiceClientIDRoundTripsToRelayCoordinate(t *testing.T) {
@@ -68,9 +46,8 @@ func TestRelayFirstCreateServiceClientIDRoundTripsToRelayCoordinate(t *testing.T
 		t.Fatalf("published %d events, want 1", len(publisher.events))
 	}
 	ev := publisher.events[0]
-	d := relayFirstEventTag(ev, "d")
-	if d != clientID.String() || relayFirstEventContentID(t, ev) != clientID.String() {
-		t.Fatalf("relay coordinate d=%q content id=%q, want %s", d, relayFirstEventContentID(t, ev), clientID)
+	if ev.id() != clientID {
+		t.Fatalf("relay record id=%s, want %s", ev.id(), clientID)
 	}
 }
 
@@ -140,7 +117,7 @@ func TestRelayFirstCreateServiceMintsUUIDv7WhenIDAbsent(t *testing.T) {
 	if svc.ID == uuid.Nil || svc.ID.Version() != 7 {
 		t.Fatalf("minted id = %s (v%d), want a UUIDv7", svc.ID, svc.ID.Version())
 	}
-	if d := relayFirstEventTag(publisher.events[0], "d"); d != svc.ID.String() {
+	if d := publisher.events[0].id().String(); d != svc.ID.String() {
 		t.Fatalf("published d = %q before the id was minted, want %s", d, svc.ID)
 	}
 	if repo.services[svc.ID] == nil {
@@ -156,7 +133,7 @@ func TestRelayFirstCreateServiceKeepsLegacyUUIDv4Coordinate(t *testing.T) {
 	if err := registry.CreateService(ctx, &domain.Service{ID: legacy, Name: "api", ArtifactRepo: "ghcr.io/acme/api"}); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
-	d := relayFirstEventTag(publisher.events[0], "d")
+	d := publisher.events[0].id().String()
 	if d != legacy.String() {
 		t.Fatalf("legacy coordinate d = %q, want %s", d, legacy)
 	}
@@ -197,8 +174,8 @@ func TestRelayFirstCreateEnvironmentClientIDIsIdempotentAndConflictsOnDifferentC
 	ctx := context.Background()
 	envRepo := &relayFirstEnvironmentRepo{}
 	delegate := NewRegistryService(nil, envRepo, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	publisher := &relayFirstCapturePublisher{published: 1}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	id := domain.NewEntityID()
 	org := uuid.New()
 	intent := func() *domain.Environment {
@@ -208,7 +185,7 @@ func TestRelayFirstCreateEnvironmentClientIDIsIdempotentAndConflictsOnDifferentC
 	if err := registry.CreateEnvironment(ctx, intent()); err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	if d := relayFirstEventTag(publisher.events[0], "d"); d != id.String() {
+	if d := publisher.events[0].id().String(); d != id.String() {
 		t.Fatalf("environment coordinate d = %q, want client id %s", d, id)
 	}
 	if err := registry.CreateEnvironment(ctx, intent()); err != nil {
@@ -230,8 +207,8 @@ func TestRelayFirstCreateEnvironmentClientIDIsIdempotentAndConflictsOnDifferentC
 	if err := registry.CreateEnvironment(ctx, minted); err != nil {
 		t.Fatalf("CreateEnvironment without id: %v", err)
 	}
-	if minted.ID.Version() != 7 || relayFirstEventTag(publisher.events[1], "d") != minted.ID.String() {
-		t.Fatalf("absent environment id was not minted before publish: id=%s d=%q", minted.ID, relayFirstEventTag(publisher.events[1], "d"))
+	if minted.ID.Version() != 7 || publisher.events[1].id().String() != minted.ID.String() {
+		t.Fatalf("absent environment id was not minted before publish: id=%s d=%q", minted.ID, publisher.events[1].id().String())
 	}
 }
 
@@ -240,8 +217,8 @@ func TestRelayFirstCreateEnvironmentWithUnitsReplayReturnsStoredUnits(t *testing
 	envs := newEnvironmentMutationEnvRepo()
 	units := newEnvironmentMutationUnitRepo()
 	delegate := newEnvironmentMutationRegistry(envs, units, &capturePublisher{})
-	publisher := &relayFirstCapturePublisher{published: 1}
-	registry := NewRelayFirstRegistry(delegate, publisher, relayFirstTestSigner(t), zap.NewNop())
+	publisher := &relayFirstCapturePublisher{}
+	registry := NewRelayFirstRegistry(delegate, publisher, zap.NewNop())
 	id := domain.NewEntityID()
 	intent := func(composeDir string) (*domain.Environment, []*domain.DeploymentUnit) {
 		return &domain.Environment{

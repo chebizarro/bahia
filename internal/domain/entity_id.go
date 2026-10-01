@@ -91,15 +91,3 @@ func ResolveCreateEntityID(raw string) (id uuid.UUID, supplied bool, err error) 
 	}
 	return id, true, nil
 }
-
-// FormatEntityCoordinate builds an addressable d value from an optional
-// resource prefix and the entity id: `<prefix>:<id>`, or the bare id when
-// prefix is empty (service/environment registry state). It is input-agnostic:
-// a client-minted UUIDv7 and a legacy Postgres-minted UUIDv4 produce
-// coordinates of the same shape, so existing coordinates stay valid.
-func FormatEntityCoordinate(prefix string, id uuid.UUID) string {
-	if prefix == "" {
-		return id.String()
-	}
-	return prefix + ":" + id.String()
-}

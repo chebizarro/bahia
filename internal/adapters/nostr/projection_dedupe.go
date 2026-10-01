@@ -213,14 +213,27 @@ func projectionFingerprint(wireKind int, tags gonostr.Tags, content string) stri
 	sort.Strings(tagLines)
 	h := sha256.New()
 	h.Write([]byte(strconv.Itoa(wireKind) + "\x00" + strings.Join(tagLines, "\x1e") + "\x00"))
-	h.Write([]byte(stableContent(content)))
+	_, keepRevision := revisionTokenFamilies[tagValue(tags, "legacy_kind")]
+	h.Write([]byte(stableContent(content, keepRevision)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// stableContent canonicalizes a JSON object by stripping volatile keys and
-// re-marshalling (encoding/json emits map keys in sorted order). Non-object
-// content is used verbatim.
-func stableContent(content string) string {
+// revisionTokenFamilies are the cp-state families (by legacy_kind) whose
+// updated_at is not bookkeeping but the entity revision: clients send it back
+// as expected_updated_at for an optimistic-concurrency update. It changes
+// only when the entity does, and a record whose revision lags the cache makes
+// the next edit conflict, so for these families it is part of the stable
+// fingerprint. The relay-first registry publishes before the cache stamps the
+// new revision, and the projection that follows must replace that record.
+var revisionTokenFamilies = map[string]struct{}{
+	strconv.Itoa(KindServiceRegistry):     {},
+	strconv.Itoa(KindEnvironmentRegistry): {},
+}
+
+// stableContent canonicalizes a JSON object by stripping volatile keys (all
+// but updated_at when keepRevision) and re-marshalling (encoding/json emits
+// map keys in sorted order). Non-object content is used verbatim.
+func stableContent(content string, keepRevision bool) string {
 	trimmed := strings.TrimSpace(content)
 	if !strings.HasPrefix(trimmed, "{") {
 		return content
@@ -230,6 +243,9 @@ func stableContent(content string) string {
 		return content
 	}
 	for key := range volatileContentKeys {
+		if keepRevision && key == "updated_at" {
+			continue
+		}
 		delete(object, key)
 	}
 	canonical, err := json.Marshal(object)
@@ -499,6 +515,45 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	if dedupable {
 		p.rememberProjection(key, fingerprint, createdAt)
 	}
+	return nil
+}
+
+// publishSignedRelayFirst signs one cp-state record for a writer that commits
+// only after the publish quorum accepted it (RelayFirstStatePublisher). It
+// shares publishSigned's per-coordinate lock, created_at floor and
+// fingerprint memory, so the relay-first record and the projection of the
+// same state are one signed event, and every later event on the coordinate is
+// newer. It delivers with PublishBeforeCommit (one round first, outbox only
+// at the quorum) and does not open or honour the projector's backoff window.
+//
+// A record whose stable content the coordinate already carries is not signed
+// again. That event reached the quorum or is held by the outbox, which keeps
+// delivering it.
+func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, publisher PreCommitPublisher) error {
+	key := projectionKeyOf(wireKind, tags)
+	fingerprint := projectionFingerprint(wireKind, tags, content)
+	tombstone := isTombstoneTags(tags)
+	// Retained state only sharpens the dedupe and the created_at floor. A
+	// local-store outage must not block a mutation, so a failed load is
+	// logged by hydrateProjectionCache and otherwise ignored here.
+	_ = p.hydrateProjectionCache(ctx, wireKind)
+	_, unlock := p.lockProjectionKey(key)
+	defer unlock()
+
+	if !tombstone && p.projectionUnchanged(key, fingerprint) {
+		p.logger.Debug("relay-first record unchanged on its coordinate; not re-signed", zap.Int("kind", wireKind), zap.String("d", key.d))
+		return nil
+	}
+	createdAt := p.nextProjectionCreatedAt(key)
+	ev := gonostr.Event{Kind: gonostr.Kind(wireKind), CreatedAt: createdAt, Tags: tags, Content: content}
+	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
+		return fmt.Errorf("sign relay-first record: %w", err)
+	}
+	if err := publisher.PublishBeforeCommit(ctx, ev, entityType, entityID); err != nil {
+		return fmt.Errorf("publish relay-first record: %w", err)
+	}
+	p.rememberProjection(key, fingerprint, createdAt)
+	p.logger.Debug("relay-first record published", zap.Int("kind", wireKind), zap.String("event_id", eventIDHex(&ev)))
 	return nil
 }
 

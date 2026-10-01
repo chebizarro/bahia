@@ -595,7 +595,7 @@ func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entit
 // state that would resend to relays the first round has already covered.
 func (p *Publisher) enqueueAndDeliver(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) (publishAttempt, error) {
 	d, created := p.trackDelivery(ev, 0)
-	if err := p.admit(ctx, ev, entityType, entityID); err != nil {
+	if err := p.admit(ctx, ev, entityType, entityID, nil); err != nil {
 		if created {
 			p.forgetDelivery(d)
 		}
@@ -616,7 +616,7 @@ func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType stri
 	if !ev.CheckID() || !ev.VerifySignature() {
 		return fmt.Errorf("nostr event %s has an invalid id or signature", ev.ID.Hex())
 	}
-	if err := p.admit(ctx, ev, entityType, entityID); err != nil {
+	if err := p.admit(ctx, ev, entityType, entityID, nil); err != nil {
 		return err
 	}
 	p.nudge()
@@ -626,13 +626,22 @@ func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType stri
 // admit makes ev durable in the outbox that delivers it: the local outbox
 // when configured (then also the daemon's own event store and the PostgreSQL
 // archive, both best effort), else the PostgreSQL outbox, else the
-// PostgreSQL audit table.
-func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID) error {
+// PostgreSQL audit table. prior, when non-nil, is a delivery round that ran
+// before admission (see PublishBeforeCommit): the local outbox entry starts
+// from its per-relay state, round count and delivered flag, so no relay that
+// accepted is contacted again. A PostgreSQL row keeps per-relay state in
+// memory only (see the Publisher comment).
+func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID, prior *outboxDelivery) error {
 	switch {
 	case p.localOutbox != nil:
 		entry := localstore.OutboxEntry{Event: ev, Target: p.target, EntityType: entityType, EnqueuedAt: p.now()}
 		if entityID != nil {
 			entry.EntityID = entityID.String()
+		}
+		if prior != nil {
+			entry.Rounds = prior.rounds
+			entry.Delivered = prior.delivered
+			entry.Relays = prior.relayDeliveries()
 		}
 		if _, err := p.localOutbox.Enqueue(entry); err != nil {
 			return fmt.Errorf("persist signed nostr event before publish: %w", err)
