@@ -46,6 +46,7 @@ first, then environment, then flags.
 | `--reload-command` | `BAHIA_DNS_AGENT_RELOAD_COMMAND` | Explicit reload (run via `sh -c`); otherwise auto-detected (systemctl/service/init.d/killall/pkill HUP) |
 | `--pre-reload-check` | `BAHIA_DNS_AGENT_PRE_RELOAD_CHECK` | Optional validation command run before reload |
 | `--state-file` | `BAHIA_DNS_AGENT_STATE_FILE` | Durable serial state; defaults into the include dir |
+| `--store-path` | `BAHIA_DNS_AGENT_STORE_PATH` | Rebuildable bbolt Nostr event cache and per-relay cursors; defaults beside `--state-file` |
 | `--require-encryption` | `BAHIA_DNS_AGENT_REQUIRE_ENCRYPTION` | Reject bare kind-25910 requests |
 | `--health-addr` | `BAHIA_DNS_AGENT_HEALTH_ADDR` | Optional local HTTP `/healthz` |
 

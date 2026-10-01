@@ -220,6 +220,40 @@ func TestStateFilePersistenceAcrossAgentRestarts(t *testing.T) {
 	}
 }
 
+func TestEmptyZoneAndSerialGuardSurviveRestart(t *testing.T) {
+	service := newTestService(t, false)
+	if _, err := syncAgent(t, service.agent, 10, testRecords("10.0.0.10")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncAgent(t, service.agent, 11, nil); err != nil {
+		t.Fatal(err)
+	}
+	eng := engine.New(engine.Config{
+		IncludeDir: service.includeDir,
+		FilePrefix: "bahia-",
+		Reload:     engine.ReloadConfig{ExplicitCommand: "reload dnsmasq"},
+		Runner:     func(context.Context, []string) error { *service.reloadCalls++; return nil },
+	})
+	restarted, err := New(Config{Engine: eng, IncludeDir: service.includeDir, FilePrefix: "bahia-", AllowedZones: []string{"example.internal"}, StateFilePath: service.statePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := restarted.ListHandler(context.Background(), requestWithParams(t, protocol.ListParams{Schema: protocol.Schema, Zone: testZone()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := list.(protocol.ListResult); len(got.Records) != 0 || got.Serial != 11 {
+		t.Fatalf("cleared zone did not survive restart: %+v", got)
+	}
+	stale, err := syncAgent(t, restarted, 10, testRecords("10.0.0.10"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Status != protocol.SyncStatusStale || stale.Changed {
+		t.Fatalf("stale request resurrected cleared zone: %+v", stale)
+	}
+}
+
 func TestSyncRewritesHandEditedIncludeFile(t *testing.T) {
 	service := newTestService(t, false)
 	records := testRecords("10.0.0.5")

@@ -20,6 +20,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	bahiaconfig "github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	dnsagent "github.com/openagentsinc/bahia/internal/dnsagent/agent"
@@ -40,6 +41,7 @@ type config struct {
 	ReloadCommand     string   `json:"reload_command"`
 	PreReloadCheck    string   `json:"pre_reload_check"`
 	StateFilePath     string   `json:"state_file_path"`
+	StorePath         string   `json:"store_path"`
 	RequireEncryption bool     `json:"require_encryption"`
 	HealthAddr        string   `json:"health_addr"`
 }
@@ -64,11 +66,6 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid private key: %w", err)
 	}
-	signer, err := controlplane.NewPrivateKeySigner(normalizedKey)
-	if err != nil {
-		return fmt.Errorf("create DNS agent signer: %w", err)
-	}
-
 	logger, err := zap.NewProduction()
 	if err != nil {
 		return fmt.Errorf("create logger: %w", err)
@@ -97,12 +94,19 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	store, err := localstore.Open(cfg.StorePath)
+	if err != nil {
+		return fmt.Errorf("open DNS agent event store: %w", err)
+	}
+	defer store.Close()
 	pool := nostradapter.NewRelayPool(cfg.RelayURLs, logger, nostradapter.WithPrivateKey(normalizedKey))
 	defer pool.Close()
-	pool.Connect(ctx)
-	responder := controlplane.NewEncryptedResponder(pool, signer, normalizedKey, logger)
-	transport := controlplane.NewEncryptedRequestTransport(pool, responder, []string{cfg.AuthorizedPubkey}, logger)
+	transport, err := newRequestTransport(pool, store, normalizedKey, cfg.AuthorizedPubkey, logger)
+	if err != nil {
+		return err
+	}
 	service.RegisterHandlers(transport)
+	pool.Connect(ctx)
 
 	healthServer, healthErr := startHealthServer(ctx, cfg.HealthAddr, service, stop)
 	if healthServer != nil {
@@ -127,6 +131,28 @@ func run(args []string) error {
 		return fmt.Errorf("DNS agent transport stopped: %w", err)
 	}
 	return nil
+}
+
+// newRequestTransport wires the agent's ContextVM request transport to the
+// relays through the local event store (bahia-irsry.10.5). Request wraps are
+// synced into the store per relay, NIP-59 gift wraps reconciled by id because
+// their created_at is backdated, so a restart or reconnect hands the transport
+// only wraps it has not seen, and a relay that was down catches up on its own.
+// The transport still validates, routes and expires requests (its replay
+// window rejects stale ones) and the agent still orders applies by serial.
+func newRequestTransport(pool *nostradapter.RelayPool, store *localstore.Store, privateKey, authorizedPubkey string, logger *zap.Logger) (*controlplane.EncryptedRequestTransport, error) {
+	signer, err := controlplane.NewPrivateKeySigner(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("create DNS agent signer: %w", err)
+	}
+	responder := controlplane.NewEncryptedResponder(pool, signer, privateKey, logger)
+	subscriber := &nostradapter.StoreBackedSubscriber{
+		Pool:           pool,
+		Store:          store,
+		Logger:         logger,
+		ReconcileKinds: []nostr.Kind{controlplane.KindContextVMGiftWrap},
+	}
+	return controlplane.NewEncryptedRequestTransport(subscriber, responder, []string{authorizedPubkey}, logger), nil
 }
 
 func startHealthServer(ctx context.Context, addr string, service *dnsagent.Agent, stop context.CancelFunc) (*http.Server, <-chan error) {
@@ -187,6 +213,7 @@ func loadConfig(args []string) (config, error) {
 	flags.StringVar(&cfg.ReloadCommand, "reload-command", cfg.ReloadCommand, "explicit shell command used to reload dnsmasq")
 	flags.StringVar(&cfg.PreReloadCheck, "pre-reload-check", cfg.PreReloadCheck, "optional shell command used to validate dnsmasq before reload")
 	flags.StringVar(&cfg.StateFilePath, "state-file", cfg.StateFilePath, "durable DNS agent serial state file")
+	flags.StringVar(&cfg.StorePath, "store-path", cfg.StorePath, "local Nostr event store: a rebuildable cache of request events and per-relay sync cursors (default: beside the state file)")
 	flags.BoolVar(&cfg.RequireEncryption, "require-encryption", cfg.RequireEncryption, "reject bare kind-25910 requests and require a 1059/21059 envelope")
 	flags.StringVar(&cfg.HealthAddr, "health-addr", cfg.HealthAddr, "optional local HTTP address serving /healthz")
 	if err := flags.Parse(args); err != nil {
@@ -238,6 +265,7 @@ func applyEnvironment(cfg *config) error {
 	setStringEnv("BAHIA_DNS_AGENT_RELOAD_COMMAND", &cfg.ReloadCommand)
 	setStringEnv("BAHIA_DNS_AGENT_PRE_RELOAD_CHECK", &cfg.PreReloadCheck)
 	setStringEnv("BAHIA_DNS_AGENT_STATE_FILE", &cfg.StateFilePath)
+	setStringEnv("BAHIA_DNS_AGENT_STORE_PATH", &cfg.StorePath)
 	setStringEnv("BAHIA_DNS_AGENT_HEALTH_ADDR", &cfg.HealthAddr)
 	if value := strings.TrimSpace(os.Getenv("BAHIA_DNS_AGENT_REQUIRE_ENCRYPTION")); value != "" {
 		parsed, err := strconv.ParseBool(value)
@@ -283,6 +311,9 @@ func validateConfig(cfg config) (config, error) {
 	}
 	if cfg.StateFilePath == "" {
 		cfg.StateFilePath = filepath.Join(cfg.IncludeDir, "."+cfg.FilePrefix+"dns-agent-state.json")
+	}
+	if cfg.StorePath == "" {
+		cfg.StorePath = filepath.Join(filepath.Dir(cfg.StateFilePath), "."+cfg.FilePrefix+"dns-agent-events.bolt")
 	}
 	return cfg, nil
 }
