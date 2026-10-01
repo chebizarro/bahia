@@ -25,7 +25,8 @@ func TestRelayProjectionCacheDecodesLegacyAndClientMintedServiceCoordinates(t *t
 	client := domain.NewEntityID()
 	now := time.Now().UTC()
 	for i, id := range []uuid.UUID{legacy, client} {
-		d := domain.FormatEntityCoordinate("", id)
+		_, envelope := nostr.ControlStateEnvelope(nostr.KindServiceRegistry, id.String(), false)
+		d := envelope.GetD()
 		event := &nostr.DecodedProjectionEvent{
 			Kind:      nostr.KindServiceRegistry,
 			DTag:      d,

@@ -243,6 +243,30 @@ Not patched: `go vet` on `khatru` still reports a lost cancel in
 `handlers.go` (`cancelReqCtx`) and an `unsafe.Pointer` conversion in
 `relay.go`. Both are upstream code that this wave does not touch.
 
+## nip11: omit a zero created_at_lower_limit (bahia-irsry.44)
+
+The generated `RelayInformationDocument` encoder wrote `created_at_lower_limit`
+unconditionally, so a relay that sets no lower bound still advertised
+`"created_at_lower_limit": 0`. Every other numeric limitation field is omitted
+when zero. The relay sidecar only caps the age of regular and ephemeral kinds
+(replaceable and addressable events and deletion requests are accepted at any
+age), and NIP-11 has no per-kind form, so it must not advertise a lower limit
+at all.
+
+- `nip11/easyjson.go`: `created_at_lower_limit` is written only when non-zero.
+  `created_at_upper_limit` is still always written, now with the leading-comma
+  handling it needs when no earlier field was written. Decoding is unchanged.
+
+Test: `nip11/limitation_bahia_test.go`
+(`TestLimitationOmitsZeroCreatedAtLowerLimit`; on the unpatched encoder the
+document contains `"created_at_lower_limit":0`). End to end:
+`internal/relaysidecar` `TestSidecarNIP11AdvertisesAccurateCapabilities`.
+
+The eventstore itself is not patched for bahia-irsry.44. Its tag index still
+skips values longer than 100 bytes (`eventstore/boltdb/helpers.go`); raising
+the limit would change the on-disk index. The relay sidecar works around it
+with its own deletion index (`internal/relaysidecar/deletion_index.go`).
+
 ## Removal criteria
 
 Drop the `replace` and this directory once upstream carries equivalent fixes

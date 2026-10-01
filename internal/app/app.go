@@ -381,18 +381,6 @@ func New(cfg *config.Config) (*App, error) {
 		})
 	}
 
-	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
-	// wrap registry mutations so relay publish must succeed before local DB writes.
-	// In full mode, this defaults off for backward compatibility with existing
-	// DB-first semantics. Set mode to degraded/emergency or configure
-	// relay_canonical_writes: true to activate.
-	var relayFirstRegistry *service.RelayFirstRegistry
-	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
-		signer := service.RelayFirstPrivateKeySigner(cfg.Nostr.PrivateKey)
-		relayFirstRegistry = service.NewRelayFirstRegistry(registry, relayFirstNostrPublisher{pool: relayPool}, signer, logger)
-		logger.Info("relay-first write path enabled for core registry mutations",
-			zap.String("mode", string(policy.RequestedMode)))
-	}
 	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
@@ -973,6 +961,24 @@ func New(cfg *config.Config) (*App, error) {
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
+
+	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
+	// wrap registry mutations so relay publish must succeed before local DB writes.
+	// In full mode, this defaults off for backward compatibility with existing
+	// DB-first semantics. Set mode to degraded/emergency or configure
+	// relay_canonical_writes: true to activate.
+	// The records go to the control-plane relays the projector publishes the
+	// same coordinates to, built and signed through the projector's own
+	// builders and coordinate state, so both writers emit one record shape
+	// and a projection of an unchanged state is not re-signed. Once the
+	// quorum accepted, the control-plane outbox retries the remaining relays
+	// (bahia-irsry.41).
+	var relayFirstRegistry *service.RelayFirstRegistry
+	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
+		relayFirstRegistry = service.NewRelayFirstRegistry(registry, nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub), logger)
+		logger.Info("relay-first write path enabled for core registry mutations",
+			zap.String("mode", string(policy.RequestedMode)))
+	}
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -3454,17 +3460,6 @@ type auditedNostrPublisher struct {
 	delegate controlplane.NostrEventPublisher
 	repo     repository.NostrEventRepository
 	logger   *zap.Logger
-}
-
-type relayFirstNostrPublisher struct {
-	pool *nostrAdapter.RelayPool
-}
-
-func (p relayFirstNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {
-	if p.pool == nil {
-		return 0, fmt.Errorf("relay pool is not configured")
-	}
-	return p.pool.Publish(ctx, ev)
 }
 
 func (p *auditedNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {

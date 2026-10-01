@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	"fiatjaf.com/nostr/eventstore/boltdb"
 	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
 	"fiatjaf.com/nostr/nip40"
+	"github.com/openagentsinc/bahia/internal/boltcoord"
 	"go.etcd.io/bbolt"
 	"go.uber.org/zap"
 )
@@ -111,7 +110,7 @@ func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*e
 		return nil, fmt.Errorf("open relay sidecar event store %s (is another relay process using this data_dir?): %w", path, err)
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket} {
+		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket, sidecarDeletionBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -124,6 +123,10 @@ func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*e
 	shared := &sharedEventStore{path: path, backend: backend, refs: 1}
 	store := &eventStore{shared: shared}
 	if _, err := migrateLegacySQLite(ctx, store, dataDir, logger); err != nil {
+		_ = backend.DB.Close()
+		return nil, err
+	}
+	if err := store.buildDeletionIndex(ctx); err != nil {
 		_ = backend.DB.Close()
 		return nil, err
 	}
@@ -163,11 +166,22 @@ func (s *eventStore) Save(ctx context.Context, event nostr.Event) error {
 	if err := s.checkNotDeleted(event); err != nil {
 		return err
 	}
+	if event.Kind == nostr.KindDeletion {
+		// Index before the write: a concurrent write of a target either sees
+		// the entry or lands before applyDeletion reads the coordinate.
+		if err := s.indexDeletion(event); err != nil {
+			return err
+		}
+	}
 	if err := s.backend().SaveEvent(event); err != nil {
 		if errors.Is(err, eventstore.ErrDupEvent) {
 			return eventstore.ErrDupEvent // khatru compares the sentinel with ==
 		}
-		return fmt.Errorf("store relay event: %w", err)
+		err = fmt.Errorf("store relay event: %w", err)
+		if event.Kind == nostr.KindDeletion && !s.stored(event.ID) {
+			err = errors.Join(err, s.unindexDeletion(event))
+		}
+		return err
 	}
 	return s.afterWrite(ctx, event)
 }
@@ -186,18 +200,23 @@ func (s *eventStore) Replace(ctx context.Context, event nostr.Event) error {
 	if err := s.checkNotDeleted(event); err != nil {
 		return err
 	}
-	s.shared.replaceMu.Lock()
-	current, found := s.latest(coordinateFilter(event.Kind, event.PubKey, event.Tags.GetD()))
-	if found && !nostr.IsOlder(current, event) {
-		s.shared.replaceMu.Unlock()
-		return eventstore.ErrDupEvent
+	if err := s.replace(event); err != nil {
+		return err
 	}
-	_, err := s.backend().ReplaceEvent(event)
-	s.shared.replaceMu.Unlock()
+	return s.afterWrite(ctx, event)
+}
+
+func (s *eventStore) replace(event nostr.Event) error {
+	s.shared.replaceMu.Lock()
+	defer s.shared.replaceMu.Unlock()
+	stored, err := boltcoord.Replace(s.backend(), s.scan, event)
 	if err != nil {
 		return fmt.Errorf("replace relay event: %w", err)
 	}
-	return s.afterWrite(ctx, event)
+	if !stored {
+		return eventstore.ErrDupEvent
+	}
+	return nil
 }
 
 // afterWrite indexes the event's NIP-40 expiration and closes the race with a
@@ -226,6 +245,9 @@ func (s *eventStore) afterWrite(ctx context.Context, event nostr.Event) error {
 // (an `e` reference), or, for replaceable and addressable events, by
 // coordinate (an `a` reference) at or after the event's created_at. Stored
 // kind-5 requests are the tombstones, so a deleted event is never re-accepted.
+// Event ids are always 64 hex characters, which the eventstore's tag index
+// holds; coordinates can be longer than it indexes, so they are looked up in
+// the sidecar's own deletion index.
 func (s *eventStore) checkNotDeleted(event nostr.Event) error {
 	if event.Kind == nostr.KindDeletion {
 		return nil // deleting a deletion request has no effect (NIP-09)
@@ -239,17 +261,21 @@ func (s *eventStore) checkNotDeleted(event nostr.Event) error {
 		return errEventDeleted
 	}
 	if event.Kind.IsReplaceable() || event.Kind.IsAddressable() {
-		byAddress := nostr.Filter{
-			Kinds:   []nostr.Kind{nostr.KindDeletion},
-			Authors: []nostr.PubKey{event.PubKey},
-			Tags:    nostr.TagMap{"a": []string{addressOf(event.Kind, event.PubKey, event.Tags.GetD())}},
-			Since:   event.CreatedAt,
+		deleted, err := s.coordinateDeleted(boltcoord.CoordinateOf(event), event.CreatedAt)
+		if err != nil {
+			return err
 		}
-		if _, found := s.latest(byAddress); found {
+		if deleted {
 			return errEventDeleted
 		}
 	}
 	return nil
+}
+
+// stored reports whether the event with id is in the store.
+func (s *eventStore) stored(id nostr.ID) bool {
+	event, found := s.latest(nostr.Filter{IDs: []nostr.ID{id}})
+	return found && event.ID == id
 }
 
 // applyDeletion executes a stored kind-5 request (NIP-09). `e` references are
@@ -275,32 +301,27 @@ func (s *eventStore) applyDeletion(ctx context.Context, request nostr.Event) (in
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		if len(tag) < 2 {
+		if len(tag) < 2 || tag[0] != "e" {
 			continue
 		}
-		switch tag[0] {
-		case "e":
-			id, err := nostr.IDFromHex(tag[1])
-			if err != nil {
-				continue
+		id, err := nostr.IDFromHex(tag[1])
+		if err != nil {
+			continue
+		}
+		// Collect before deleting: no bbolt write may run inside a read.
+		for _, target := range slices.Collect(s.Query(ctx, nostr.Filter{IDs: []nostr.ID{id}}, 1)) {
+			if err := remove(target); err != nil {
+				return deleted, err
 			}
-			// Collect before deleting: no bbolt write may run inside a read.
-			for _, target := range slices.Collect(s.Query(ctx, nostr.Filter{IDs: []nostr.ID{id}}, 1)) {
-				if err := remove(target); err != nil {
-					return deleted, err
-				}
-			}
-		case "a":
-			kind, author, d, ok := parseAddress(tag[1])
-			if !ok || author != request.PubKey || (!kind.IsReplaceable() && !kind.IsAddressable()) {
-				continue
-			}
-			filter := coordinateFilter(kind, author, d)
-			filter.Until = request.CreatedAt
-			for _, target := range slices.Collect(s.scan(filter, unboundedQueryLimit)) {
-				if err := remove(target); err != nil {
-					return deleted, err
-				}
+		}
+	}
+	for _, c := range boltcoord.DeletedCoordinates(request) {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		for _, target := range slices.Collect(s.versions(c, request.CreatedAt, unboundedQueryLimit)) {
+			if err := remove(target); err != nil {
+				return deleted, err
 			}
 		}
 	}
@@ -468,14 +489,14 @@ func (s *eventStore) latest(filter nostr.Filter) (nostr.Event, bool) {
 // or addressable key (see replaceableKey). Unlike Query, it reports store
 // failures, so callers that must not lose a change can retry.
 func (s *eventStore) latestByReplaceableKey(_ context.Context, key string) (nostr.Event, bool, error) {
-	kind, author, d, ok := parseAddress(key)
+	kind, author, d, ok := boltcoord.ParseAddress(key)
 	if !ok {
 		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: malformed key", key)
 	}
 	if err := s.ping(); err != nil {
 		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: %w", key, err)
 	}
-	event, found := s.latest(coordinateFilter(kind, author, d))
+	event, found := s.latestVersion(newCoordinate(kind, author, d))
 	return event, found, nil
 }
 
@@ -535,42 +556,12 @@ func storableEvent(event nostr.Event) error {
 
 // replaceableKey is the latest-wins coordinate of a replaceable or addressable
 // event: "<kind>:<pubkey>:<d>", with an empty d for replaceable kinds. It is
-// the NIP-01/NIP-09 address format, so parseAddress reads it back.
+// the NIP-01/NIP-09 address format, so boltcoord.ParseAddress reads it back.
 func replaceableKey(event nostr.Event) string {
 	if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
 		return ""
 	}
-	return addressOf(event.Kind, event.PubKey, event.Tags.GetD())
-}
-
-func addressOf(kind nostr.Kind, author nostr.PubKey, d string) string {
-	return strconv.Itoa(int(kind)) + ":" + author.Hex() + ":" + d
-}
-
-func parseAddress(address string) (nostr.Kind, nostr.PubKey, string, bool) {
-	parts := strings.SplitN(address, ":", 3)
-	if len(parts) != 3 {
-		return 0, nostr.ZeroPK, "", false
-	}
-	kind, err := strconv.ParseUint(parts[0], 10, 16)
-	if err != nil {
-		return 0, nostr.ZeroPK, "", false
-	}
-	author, err := nostr.PubKeyFromHex(parts[1])
-	if err != nil {
-		return 0, nostr.ZeroPK, "", false
-	}
-	return nostr.Kind(kind), author, parts[2], true
-}
-
-// coordinateFilter selects the versions stored under one coordinate. Plain
-// replaceable kinds ignore d.
-func coordinateFilter(kind nostr.Kind, author nostr.PubKey, d string) nostr.Filter {
-	filter := nostr.Filter{Kinds: []nostr.Kind{kind}, Authors: []nostr.PubKey{author}}
-	if kind.IsAddressable() {
-		filter.Tags = nostr.TagMap{"d": []string{d}}
-	}
-	return filter
+	return boltcoord.Address(event.Kind, event.PubKey, event.Tags.GetD())
 }
 
 // sweepMatching deletes, page by page, the events matching filter that
@@ -637,6 +628,13 @@ func (s *eventStore) sweepExpired(ctx context.Context, now nostr.Timestamp) (int
 		for _, key := range keys {
 			id := nostr.ID(key[8:])
 			if event, stored := s.latest(nostr.Filter{IDs: []nostr.ID{id}}); stored && event.ID == id {
+				// Unindex first: an expired request left stored by a crash
+				// here is hidden and swept on the next run anyway.
+				if event.Kind == nostr.KindDeletion {
+					if err := s.unindexDeletion(event); err != nil {
+						return deleted, err
+					}
+				}
 				if err := s.backend().DeleteEvent(id); err != nil {
 					return deleted, fmt.Errorf("delete expired relay event: %w", err)
 				}

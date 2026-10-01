@@ -2,58 +2,32 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
-	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
-const (
-	relayFirstCanonicalStateKind = kinds.CASControlState
-	relayFirstStateSchema        = "bahia.cp-state.v1"
-)
-
-// RelayFirstPublisher publishes signed Nostr events and returns the number of relay OK acceptances.
-type RelayFirstPublisher interface {
-	Publish(ctx context.Context, ev gonostr.Event) (int, error)
-}
-
-// RelayFirstSigner signs outbound canonical registry events.
-type RelayFirstSigner interface {
-	Sign(ctx context.Context, ev *gonostr.Event) error
-}
-
-// RelayFirstPrivateKeySigner signs registry events with a Nostr hex private key.
-type RelayFirstPrivateKeySigner string
-
-func (s RelayFirstPrivateKeySigner) Sign(_ context.Context, ev *gonostr.Event) error {
-	privateKey := strings.TrimSpace(string(s))
-	if privateKey == "" {
-		return fmt.Errorf("nostr registry signer private key is not configured")
-	}
-	if ev == nil {
-		return fmt.Errorf("nostr registry event is nil")
-	}
-	secret, err := gonostr.SecretKeyFromHex(privateKey)
-	if err != nil {
-		return fmt.Errorf("decode nostr registry signer private key: %w", err)
-	}
-	return ev.Sign(secret)
+// RelayFirstStatePublisher publishes the canonical cp-state record of a
+// registry entity (or its tombstone) and returns nil only once a relay holds
+// it. internal/adapters/nostr.RelayFirstStatePublisher is the implementation:
+// it builds the record with the projector's own builders and shares the
+// projector's per-coordinate created_at floor and dedupe memory, so the
+// relay-first record and the projection of the same state are identical and
+// signed once (bahia-irsry.41).
+type RelayFirstStatePublisher interface {
+	PublishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error
+	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error
 }
 
 // RelayFirstRegistry wraps RegistryService so canonical relay publication succeeds before local cache writes.
 type RelayFirstRegistry struct {
 	delegate  *RegistryService
-	publisher RelayFirstPublisher
-	signer    RelayFirstSigner
+	publisher RelayFirstStatePublisher
 	logger    *zap.Logger
 	// createLocks serializes check-publish-store for creates of the same id
 	// in this process, so two concurrent creates with one id and different
@@ -67,11 +41,11 @@ func (r *RelayFirstRegistry) lockCreate(id uuid.UUID) func() {
 	return lock.Unlock
 }
 
-func NewRelayFirstRegistry(delegate *RegistryService, publisher RelayFirstPublisher, signer RelayFirstSigner, logger *zap.Logger) *RelayFirstRegistry {
+func NewRelayFirstRegistry(delegate *RegistryService, publisher RelayFirstStatePublisher, logger *zap.Logger) *RelayFirstRegistry {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &RelayFirstRegistry{delegate: delegate, publisher: publisher, signer: signer, logger: logger}
+	return &RelayFirstRegistry{delegate: delegate, publisher: publisher, logger: logger}
 }
 
 func (r *RelayFirstRegistry) CreateService(ctx context.Context, svc *domain.Service) error {
@@ -172,7 +146,10 @@ func (r *RelayFirstRegistry) CreateEnvironment(ctx context.Context, env *domain.
 	return r.delegate.CreateEnvironment(ctx, env)
 }
 
-// CreateEnvironmentWithDeploymentUnits publishes the complete desired environment contract before atomically caching it.
+// CreateEnvironmentWithDeploymentUnits publishes the environment's registry
+// record before atomically caching the environment and its units. The record
+// is the projector's (control_state_contract.go), which does not carry
+// explicit units yet.
 func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
@@ -187,7 +164,7 @@ func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Co
 	if replay, err := r.delegate.replayEnvironmentCreate(ctx, env, units); err != nil || replay {
 		return err
 	}
-	if err := r.publishEnvironmentRegistryWithUnits(ctx, env, units, false); err != nil {
+	if err := r.publishEnvironmentRegistry(ctx, env, false); err != nil {
 		return err
 	}
 	return r.delegate.CreateEnvironmentWithDeploymentUnits(ctx, env, units)
@@ -206,8 +183,8 @@ func (r *RelayFirstRegistry) UpdateEnvironment(ctx context.Context, env *domain.
 	return r.delegate.UpdateEnvironment(ctx, env)
 }
 
-// UpdateEnvironmentWithDeploymentUnits publishes the complete desired environment
-// contract after the revision has been checked under lock and before atomically
+// UpdateEnvironmentWithDeploymentUnits publishes the environment's registry
+// record after the revision has been checked under lock and before atomically
 // caching it.
 func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error {
 	if r.delegate == nil {
@@ -217,7 +194,7 @@ func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Co
 		return err
 	}
 	return r.delegate.updateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt, func() error {
-		return r.publishEnvironmentRegistryWithUnits(ctx, env, units, false)
+		return r.publishEnvironmentRegistry(ctx, env, false)
 	})
 }
 
@@ -242,106 +219,34 @@ func (r *RelayFirstRegistry) DeleteEnvironment(ctx context.Context, id uuid.UUID
 	return r.delegate.DeleteEnvironment(ctx, id, force)
 }
 
+// publishServiceRegistry publishes svc as readers will see it once cached:
+// the read normalization GetService and ListServices apply (and the projector
+// therefore publishes) is applied to a copy, so the relay-first record does
+// not differ from the projection of the same row.
 func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
-	content := map[string]any{"deleted": deleted, "id": svc.ID.String()}
-	if !deleted {
-		content["org_id"] = svc.OrgID.String()
-		content["name"] = svc.Name
-		content["repo_url"] = svc.RepoURL
-		if svc.Repository != nil {
-			content["repository"] = svc.Repository
-		}
-		content["artifact_repo"] = svc.ArtifactRepo
-		content["default_branch"] = svc.DefaultBranch
-		content["runtime_type"] = string(svc.RuntimeType)
-		content["created_at"] = relayFirstFormatTime(svc.CreatedAt)
-		content["updated_at"] = relayFirstFormatTime(svc.UpdatedAt)
-	} else {
-		content["updated_at"] = relayFirstFormatTime(svc.UpdatedAt)
-	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("encode service registry event: %w", err)
-	}
-	tags := relayFirstCanonicalStateTags("service", "registry", domain.FormatEntityCoordinate("", svc.ID), deleted)
-	if !deleted {
-		tags = append(tags, gonostr.Tag{"name", svc.Name}, gonostr.Tag{"runtime", string(svc.RuntimeType)})
-	}
-	return r.publishCanonical(ctx, relayFirstCanonicalStateKind, tags, string(contentJSON), "service registry")
-}
-
-func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
-	return r.publishEnvironmentRegistryWithUnits(ctx, env, nil, deleted)
-}
-
-func (r *RelayFirstRegistry) publishEnvironmentRegistryWithUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, deleted bool) error {
-	content := map[string]any{"deleted": deleted, "id": env.ID.String()}
-	if !deleted {
-		if env.OrgID != uuid.Nil {
-			content["org_id"] = env.OrgID.String()
-		}
-		content["name"] = env.Name
-		content["loom_worker_selector"] = env.LoomWorkerSelector
-		content["runtime_config"] = env.RuntimeConfig
-		content["targeting"] = env.Targeting
-		content["protected"] = env.Protected
-		content["deploy_strategy"] = string(env.DeployStrategy)
-		if units != nil {
-			content["deployment_units"] = units
-		}
-		content["created_at"] = relayFirstFormatTime(env.CreatedAt)
-		content["updated_at"] = relayFirstFormatTime(env.UpdatedAt)
-	} else {
-		content["updated_at"] = relayFirstFormatTime(env.UpdatedAt)
-	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("encode environment registry event: %w", err)
-	}
-	tags := relayFirstCanonicalStateTags("environment", "registry", domain.FormatEntityCoordinate("", env.ID), deleted)
-	if !deleted {
-		tags = append(tags, gonostr.Tag{"name", env.Name}, gonostr.Tag{"protected", fmt.Sprintf("%t", env.Protected)})
-	}
-	return r.publishCanonical(ctx, relayFirstCanonicalStateKind, tags, string(contentJSON), "environment registry")
-}
-
-func (r *RelayFirstRegistry) publishCanonical(ctx context.Context, kind int, tags gonostr.Tags, content, label string) error {
 	if r.publisher == nil {
 		return fmt.Errorf("nostr registry publisher is not configured")
 	}
-	if r.signer == nil {
-		return fmt.Errorf("nostr registry signer is not configured")
+	snapshot := *svc
+	if svc.Repository != nil {
+		repo := *svc.Repository
+		snapshot.Repository = &repo
 	}
-	ev := gonostr.Event{Kind: gonostr.Kind(kind), CreatedAt: gonostr.Now(), Tags: tags, Content: content}
-	if err := r.signer.Sign(ctx, &ev); err != nil {
-		return fmt.Errorf("sign %s event: %w", label, err)
+	normalizeServiceRepositoryForRead(&snapshot)
+	if err := r.publisher.PublishServiceRegistry(ctx, &snapshot, deleted); err != nil {
+		return fmt.Errorf("publish service registry event: %w", err)
 	}
-	published, err := r.publisher.Publish(ctx, ev)
-	if err != nil {
-		return fmt.Errorf("publish %s event: %w", label, err)
-	}
-	if published == 0 {
-		return fmt.Errorf("publish %s event: no relay accepted the event", label)
-	}
-	r.logger.Debug("relay-first registry event published", zap.Int("kind", kind), zap.String("event_id", ev.ID.Hex()), zap.Int("relays", published))
 	return nil
 }
 
-func relayFirstCanonicalStateTags(domain, entity, dTag string, deleted bool) gonostr.Tags {
-	return gonostr.Tags{
-		{"d", dTag},
-		{"domain", domain},
-		{"entity", entity},
-		{"schema", relayFirstStateSchema},
-		{"deleted", fmt.Sprintf("%t", deleted)},
+func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
+	if r.publisher == nil {
+		return fmt.Errorf("nostr registry publisher is not configured")
 	}
-}
-
-func relayFirstFormatTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
+	if err := r.publisher.PublishEnvironmentRegistry(ctx, env, deleted); err != nil {
+		return fmt.Errorf("publish environment registry event: %w", err)
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return nil
 }
 
 func (r *RelayFirstRegistry) GetService(ctx context.Context, id uuid.UUID) (*domain.Service, error) {

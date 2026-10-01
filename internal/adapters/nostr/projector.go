@@ -2825,64 +2825,17 @@ func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.De
 	return p.publishControlState(ctx, KindPolicyRegistry, policy.ID.String(), deleted, tags, string(contentJSON), "policy.projection", &policy.ID)
 }
 
+// publishServiceRegistry and publishEnvironmentRegistry publish the records
+// serviceRegistryRecord and environmentRegistryRecord build, the builders the
+// relay-first registry publishes with too (control_state_contract.go).
 func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
-	content := map[string]any{
-		"deleted": deleted,
-		"id":      svc.ID.String(),
-	}
-	if !deleted {
-		content["name"] = svc.Name
-		content["repo_url"] = svc.RepoURL
-		content["artifact_repo"] = svc.ArtifactRepo
-		content["default_branch"] = svc.DefaultBranch
-		content["runtime_type"] = string(svc.RuntimeType)
-		content["created_at"] = formatTime(svc.CreatedAt)
-		content["updated_at"] = formatTime(svc.UpdatedAt)
-	} else {
-		content["updated_at"] = formatTime(svc.UpdatedAt)
-	}
-	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{}
-	if !deleted {
-		tags = append(tags,
-			gonostr.Tag{"name", svc.Name},
-			gonostr.Tag{"runtime", string(svc.RuntimeType)},
-		)
-	}
-	return p.publishControlState(ctx, KindServiceRegistry, svc.ID.String(), deleted, tags, string(contentJSON), "service.projection", &svc.ID)
+	tags, content := serviceRegistryRecord(svc, deleted)
+	return p.publishControlState(ctx, KindServiceRegistry, svc.ID.String(), deleted, tags, content, "service.projection", &svc.ID)
 }
 
 func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
-	if env != nil {
-		domain.NormalizeEnvironmentTargeting(env)
-	}
-	content := map[string]any{
-		"deleted": deleted,
-		"id":      env.ID.String(),
-	}
-	if !deleted {
-		content["name"] = env.Name
-		content["protected"] = env.Protected
-		content["deploy_strategy"] = string(env.DeployStrategy)
-		content["targeting"] = env.Targeting
-		content["deployment_units"] = []map[string]any{{"key": env.Targeting.DefaultUnitKey, "implicit": true}}
-		content["reconcile_mode"] = string(env.Targeting.DefaultReconcileMode)
-		content["created_at"] = formatTime(env.CreatedAt)
-		content["updated_at"] = formatTime(env.UpdatedAt)
-	} else {
-		content["updated_at"] = formatTime(env.UpdatedAt)
-	}
-	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{}
-	if !deleted {
-		tags = append(tags,
-			gonostr.Tag{"name", env.Name},
-			gonostr.Tag{"protected", fmt.Sprintf("%t", env.Protected)},
-			gonostr.Tag{"unit", env.Targeting.DefaultUnitKey},
-			gonostr.Tag{"reconcile_mode", string(env.Targeting.DefaultReconcileMode)},
-		)
-	}
-	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, string(contentJSON), "environment.projection", &env.ID)
+	tags, content := environmentRegistryRecord(env, deleted)
+	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, content, "environment.projection", &env.ID)
 }
 
 func (p *Projector) publishBackupRecipeRegistry(ctx context.Context, recipe *domain.BackupRecipe) error {
