@@ -33,3 +33,32 @@ func IsPublishQueued(err error) bool {
 func IsPublishAbandoned(err error) bool {
 	return errors.Is(err, ErrPublishAbandoned)
 }
+
+// DeliveryOutcome is what the publish outbox knows about one signed event.
+type DeliveryOutcome int
+
+const (
+	// DeliveryUnknown: the outbox holds no record of the event (never
+	// queued, or settled long enough ago to have been pruned).
+	DeliveryUnknown DeliveryOutcome = iota
+	// DeliveryPending: queued, and the publish quorum has not accepted it yet.
+	DeliveryPending
+	// DeliveryDelivered: the publish quorum accepted it (other relays may
+	// still be retried).
+	DeliveryDelivered
+	// DeliveryAbandoned: the outbox gave up on it (ErrPublishAbandoned).
+	DeliveryAbandoned
+)
+
+func (o DeliveryOutcome) String() string {
+	switch o {
+	case DeliveryPending:
+		return "pending"
+	case DeliveryDelivered:
+		return "delivered"
+	case DeliveryAbandoned:
+		return "abandoned"
+	default:
+		return "unknown"
+	}
+}

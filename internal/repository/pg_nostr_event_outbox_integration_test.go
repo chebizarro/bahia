@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -30,7 +31,7 @@ func TestPgNostrEventOutboxTargetsAndFailedState(t *testing.T) {
 
 	repos := map[string]repository.NostrEventOutboxRepository{
 		"postgres":  repository.NewPgNostrEventRepository(pool),
-		"in-memory": repository.NewInMemoryNostrEventRepository(),
+		"in-memory": repositorytest.NewInMemoryNostrEventRepository(),
 	}
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {
@@ -111,16 +112,25 @@ func TestPgNostrEventCountPublishFailedAfterEnsureIndexes(t *testing.T) {
 
 	repo := repository.NewPgNostrEventRepository(pool)
 	now := time.Now().UTC()
-	for _, row := range []struct{ id, state string }{
-		{"failed-1", repository.NostrPublishStatePending},
-		{"failed-2", repository.NostrPublishStatePending},
-		{"pending-1", repository.NostrPublishStatePending},
+	archive := repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane)
+	for _, row := range []struct{ id, target string }{
+		{"failed-1", repository.NostrPublishTargetControlPlane},
+		{"failed-2", repository.NostrPublishTargetControlPlane},
+		{"pending-1", repository.NostrPublishTargetControlPlane},
+		// Archive rows of the local outbox, which counts them itself.
+		{"archived-pending", archive},
+		{"archived-failed", archive},
 	} {
-		_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: row.id, Kind: 30900, PubKey: "pub", Content: "{}", Sig: "sig", CreatedAt: now, PublishState: row.state, PublishTarget: repository.NostrPublishTargetControlPlane})
+		_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: row.id, Kind: 30900, PubKey: "pub", Content: "{}", Sig: "sig", CreatedAt: now, PublishState: repository.NostrPublishStatePending, PublishTarget: row.target})
 		require.NoError(t, err)
 	}
 	require.NoError(t, repo.AbandonPublish(ctx, "failed-1", "abandoned: test"))
 	require.NoError(t, repo.AbandonPublish(ctx, "failed-2", "abandoned: test"))
+	require.NoError(t, repo.AbandonPublish(ctx, "archived-failed", "abandoned: test"))
+	unpublished, err := repo.ListUnpublished(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, unpublished, 1, "archive rows are not drained")
+	require.Equal(t, "pending-1", unpublished[0].ID)
 
 	_, err = repo.CountPublishFailed(ctx)
 	require.ErrorIs(t, err, repository.ErrNostrPublishFailedIndexNotReady)

@@ -10,6 +10,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -75,7 +76,7 @@ func (s *scriptedRelays) requireNoPendingCalls(t *testing.T) {
 
 // signalingOutbox reports outbox transitions on channels.
 type signalingOutbox struct {
-	*repository.InMemoryNostrEventRepository
+	*repositorytest.InMemoryNostrEventRepository
 	listed    chan struct{}
 	published chan string
 	abandoned chan string
@@ -83,7 +84,7 @@ type signalingOutbox struct {
 
 func newSignalingOutbox() *signalingOutbox {
 	return &signalingOutbox{
-		InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(),
+		InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(),
 		listed:                       make(chan struct{}, 64),
 		published:                    make(chan string, 8),
 		abandoned:                    make(chan string, 8),

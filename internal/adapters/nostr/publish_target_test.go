@@ -8,13 +8,14 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 )
 
 // sharedOutbox wraps one repository in a signalingOutbox per runner so each
 // runner's discovery passes are observed separately while both read the same
 // rows.
-func sharedOutbox(repo *repository.InMemoryNostrEventRepository) *signalingOutbox {
+func sharedOutbox(repo *repositorytest.InMemoryNostrEventRepository) *signalingOutbox {
 	outbox := newSignalingOutbox()
 	outbox.InMemoryNostrEventRepository = repo
 	return outbox
@@ -81,7 +82,7 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			repo := repository.NewInMemoryNostrEventRepository()
+			repo := repositorytest.NewInMemoryNostrEventRepository()
 			cpOutbox := sharedOutbox(repo)
 			interopOutbox := sharedOutbox(repo)
 
@@ -149,7 +150,7 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 // vice versa.
 func TestPublisherRunnerOnlyDiscoversItsOwnTarget(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	privateKey := gonostr.Generate()
 
 	record := func(content, target string) string {

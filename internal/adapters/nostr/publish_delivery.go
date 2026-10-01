@@ -7,9 +7,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -19,7 +21,8 @@ import (
 // defaultMaxPublishAttempts bounds how many delivery rounds an outbound event
 // gets before the relays that still have not accepted it are given up on. With
 // DefaultBackoff (1s doubling to 2m) this is roughly 50 minutes of retrying.
-// The count is the durable publish_attempts column, so it survives restarts.
+// The count is durable (the local outbox entry's rounds, or a PostgreSQL row's
+// publish_attempts), so it survives restarts.
 const defaultMaxPublishAttempts = 30
 
 // maxDiscoveredDeliveries caps how many outbox rows discovery pulls into
@@ -135,6 +138,20 @@ type relayDeliveryState struct {
 	seenDialFailure time.Time
 }
 
+// deliveryLedger is where a delivery's rounds are persisted.
+type deliveryLedger int
+
+const (
+	// ledgerNone: nothing durable; the delivery lives in memory only.
+	ledgerNone deliveryLedger = iota
+	// ledgerLocal: the local outbox, with every relay's state.
+	ledgerLocal
+	// ledgerPostgres: a PostgreSQL nostr_events outbox row.
+	ledgerPostgres
+	// ledgerAudit: a PostgreSQL audit row with no publish state.
+	ledgerAudit
+)
+
 // outboxDelivery tracks per-relay acceptance of one signed event. mu serializes
 // delivery rounds for the event (the runner uses TryLock to skip events that an
 // inline publish is already delivering); nextAt is guarded by
@@ -142,11 +159,17 @@ type relayDeliveryState struct {
 type outboxDelivery struct {
 	mu        sync.Mutex
 	event     nostr.Event
+	ledger    deliveryLedger
 	relays    map[string]*relayDeliveryState
 	rounds    int
 	backoff   *Backoff
 	settled   bool
 	delivered bool
+	// reportedDelivered is set once OnDelivered handlers saw the event.
+	reportedDelivered bool
+	// quorumReached mirrors delivered for readers that do not hold mu (see
+	// Publisher.DeliveryOutcome).
+	quorumReached atomic.Bool
 
 	nextAt time.Time
 }
@@ -170,11 +193,36 @@ func (p *Publisher) newDelivery(ev nostr.Event, rounds int) *outboxDelivery {
 	}
 	return &outboxDelivery{
 		event:   ev,
+		ledger:  p.defaultLedger(),
 		relays:  make(map[string]*relayDeliveryState),
 		rounds:  rounds,
 		backoff: backoff,
 		nextAt:  deliveryUnscheduled,
 	}
+}
+
+// defaultLedger is where events this publisher admits are persisted (see
+// Publisher.admit).
+func (p *Publisher) defaultLedger() deliveryLedger {
+	switch {
+	case p.localOutbox != nil:
+		return ledgerLocal
+	case p.outboxRepo != nil:
+		return ledgerPostgres
+	case p.eventRepo != nil:
+		return ledgerAudit
+	default:
+		return ledgerNone
+	}
+}
+
+// trackedDelivered reports whether a delivery this publisher is tracking for
+// id has reached the publish quorum.
+func (p *Publisher) trackedDelivered(id string) bool {
+	p.deliveriesMu.Lock()
+	d := p.deliveries[id]
+	p.deliveriesMu.Unlock()
+	return d != nil && d.quorumReached.Load()
 }
 
 // trackDelivery returns the in-flight delivery for ev, registering a new one
@@ -377,8 +425,9 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 
 	var persistErr error
 	if !skipped || settled {
-		// A skipped round records nothing: publish_attempts is the budget.
-		persistErr = p.persistRound(ctx, eventID, delivered, settled, exhausted, detail)
+		// A skipped round records nothing: the durable round count is the
+		// budget.
+		persistErr = p.persistRound(ctx, d, delivered, settled, exhausted, detail)
 	}
 	if persistErr != nil {
 		// Keep the delivery open so the next round retries the bookkeeping;
@@ -396,10 +445,19 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	}
 	d.settled = settled
 	d.delivered = delivered
+	if delivered {
+		d.quorumReached.Store(true)
+	}
+	if persistErr == nil && delivered && !d.reportedDelivered {
+		// The quorum's acceptance is durable; tell the owner of the content.
+		d.reportedDelivered = true
+		p.notifyDelivered(d.event)
+	}
 	switch {
 	case settled:
 		if !delivered {
-			// The row is now durably failed; tell the owner of the content.
+			// The entry is now durably failed; tell the owner of the content.
+			p.forgetOwnEvent(d.event)
 			p.notifyAbandoned(d.event)
 		}
 	case skipped:
@@ -413,29 +471,88 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	return report
 }
 
-func (p *Publisher) persistRound(ctx context.Context, eventID string, delivered, settled, exhausted bool, detail string) error {
-	if p.outboxRepo == nil {
-		return nil
-	}
-	switch {
-	case settled && delivered:
-		if err := p.outboxRepo.MarkPublished(ctx, eventID, p.now().UTC()); err != nil {
-			return fmt.Errorf("persist publish acceptance: %w", err)
-		}
-	case settled:
+// persistRound records a counted (or settling) round in d's ledger. For the
+// local outbox, every relay's state is committed with it, so a restart resumes
+// without resending to relays that already accepted; once the entry settles,
+// its outcome is mirrored to the PostgreSQL archive, best effort.
+func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, delivered, settled, exhausted bool, detail string) error {
+	eventID := d.event.ID.Hex()
+	now := p.now().UTC()
+	if settled && !delivered {
 		reason := "abandoned: required relay acceptance is unreachable"
 		if exhausted {
 			reason = fmt.Sprintf("abandoned after %d publish attempts", p.maxAttempts)
 		}
-		if err := p.outboxRepo.AbandonPublish(ctx, eventID, joinDetail(reason, detail)); err != nil {
-			return fmt.Errorf("persist publish abandonment: %w", err)
+		detail = joinDetail(reason, detail)
+	}
+	switch d.ledger {
+	case ledgerLocal:
+		state := localstore.OutboxPending
+		switch {
+		case settled && delivered:
+			state = localstore.OutboxPublished
+		case settled:
+			state = localstore.OutboxFailed
 		}
-	default:
-		if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, detail); err != nil {
-			return fmt.Errorf("persist publish failure: %w", err)
+		if _, err := p.localOutbox.CommitRound(d.event.ID, localstore.OutboxRound{
+			Rounds: d.rounds, Relays: d.relayDeliveries(), Delivered: delivered, State: state, Detail: detail, At: now,
+		}); err != nil {
+			return err
+		}
+		if settled {
+			p.mirrorSettled(ctx, eventID, delivered, detail, now)
+		}
+	case ledgerPostgres:
+		switch {
+		case settled && delivered:
+			if err := p.outboxRepo.MarkPublished(ctx, eventID, now); err != nil {
+				return fmt.Errorf("persist publish acceptance: %w", err)
+			}
+		case settled:
+			if err := p.outboxRepo.AbandonPublish(ctx, eventID, detail); err != nil {
+				return fmt.Errorf("persist publish abandonment: %w", err)
+			}
+		default:
+			if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, detail); err != nil {
+				return fmt.Errorf("persist publish failure: %w", err)
+			}
 		}
 	}
 	return nil
+}
+
+// mirrorSettled copies a local outbox outcome onto the event's PostgreSQL
+// archive row, best effort.
+func (p *Publisher) mirrorSettled(ctx context.Context, eventID string, delivered bool, detail string, at time.Time) {
+	archive := p.archive.outbox()
+	if archive == nil {
+		return
+	}
+	p.archive.write(ctx, "outbound outcome", eventID, func(ctx context.Context, _ repository.NostrEventRepository) error {
+		if delivered {
+			return archive.MarkPublished(ctx, eventID, at)
+		}
+		return archive.AbandonPublish(ctx, eventID, detail)
+	})
+}
+
+// relayDeliveries snapshots d's per-relay state for the local outbox.
+func (d *outboxDelivery) relayDeliveries() map[string]localstore.RelayDelivery {
+	out := make(map[string]localstore.RelayDelivery, len(d.relays))
+	for url, state := range d.relays {
+		out[url] = localstore.RelayDelivery{Accepted: state.accepted, Rejected: state.rejected, LastError: state.lastErr, SeenDialFailure: state.seenDialFailure}
+	}
+	return out
+}
+
+// restore resumes d from a local outbox entry left pending by an earlier
+// delivery or process.
+func (d *outboxDelivery) restore(entry localstore.OutboxEntry) {
+	d.ledger = ledgerLocal
+	d.rounds = entry.Rounds
+	for url, state := range entry.Relays {
+		d.relays[url] = &relayDeliveryState{accepted: state.Accepted, rejected: state.Rejected, lastErr: state.LastError, seenDialFailure: state.SeenDialFailure}
+	}
 }
 
 func (p *Publisher) logRound(d *outboxDelivery, report deliveryReport, detail string) {
@@ -553,10 +670,59 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 }
 
 // discoverPending reads one keyset page of this publisher's target's pending
-// outbox rows and starts delivery for rows it is not already tracking (rows
-// recorded by other producers, or left pending by a previous process). It
-// reports whether the page was full, meaning more rows follow the cursor.
-func (p *Publisher) discoverPending(ctx context.Context) (more bool, err error) {
+// entries from the local outbox and one from the PostgreSQL outbox, and starts
+// delivery for those it is not already tracking (left pending by a previous
+// process or an inactive runner, or recorded by a transactional producer). It
+// reports whether either page was full, meaning more follow its cursor.
+func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
+	localMore, err := p.discoverLocal(ctx)
+	if err != nil {
+		return false, err
+	}
+	pgMore, err := p.discoverPostgres(ctx)
+	return localMore || pgMore, err
+}
+
+func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
+	if p.localOutbox == nil {
+		return false, nil
+	}
+	entries, err := p.localOutbox.ListPending(p.target, p.localCursor, p.pageSize)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) < p.pageSize {
+		p.localCursor = nil // wrap to the oldest pending entry on the next pass
+	} else {
+		last := entries[len(entries)-1]
+		p.localCursor = &localstore.OutboxCursor{EnqueuedAt: last.EnqueuedAt, ID: last.Event.ID}
+	}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return false, nil
+		}
+		if p.isTracked(entry.Event.ID.Hex()) {
+			continue
+		}
+		if p.trackedCount() >= maxDiscoveredDeliveries {
+			return false, nil
+		}
+		d, created := p.trackDelivery(entry.Event, entry.Rounds)
+		if !created || !d.mu.TryLock() {
+			continue
+		}
+		d.restore(entry)
+		p.deliverRound(ctx, d)
+		settled := d.settled
+		d.mu.Unlock()
+		if settled {
+			p.forgetDelivery(d)
+		}
+	}
+	return len(entries) == p.pageSize, nil
+}
+
+func (p *Publisher) discoverPostgres(ctx context.Context) (more bool, err error) {
 	if p.outboxRepo == nil {
 		return false, nil
 	}
@@ -591,6 +757,7 @@ func (p *Publisher) discoverPending(ctx context.Context) (more bool, err error) 
 		if !created || !d.mu.TryLock() {
 			continue
 		}
+		d.ledger = ledgerPostgres
 		p.deliverRound(ctx, d)
 		settled := d.settled
 		d.mu.Unlock()

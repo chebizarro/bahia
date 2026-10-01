@@ -2,7 +2,6 @@ package nostr
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -257,26 +256,29 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T)
 	require.Empty(t, open.Authors)
 }
 
-func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *testing.T) {
+// B-14: a failed PostgreSQL archive write does not hold back handling. The
+// local store alone decides that the event is new, so its handlers run once,
+// and a redelivery is a duplicate even though the archive never got it.
+func TestSubscriberHandleEventRunsHandlersWhenTheArchiveWriteFails(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()
-	now := time.Unix(200, 0).UTC()
-	ev := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
+	store := openTestLocalStore(t, "")
+	ev := signedTestEvent(t, 5101, time.Now().UTC().Add(-time.Minute))
 	repo.failRecordID = eventIDHex(ev)
 
 	var handled []string
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithLocalStore(store),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
 			handled = append(handled, eventIDHex(ev))
 		}),
-		withClock(func() time.Time { return now }),
 	)
 
-	sub.handleEvent(ctx, ev)
-	require.Empty(t, handled)
-	require.Nil(t, repo.latest)
-
-	sub.handleEvent(ctx, ev)
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, ev))
+	require.Equal(t, []string{eventIDHex(ev)}, handled)
+	require.True(t, localStoreHas(store, ev.ID))
+	require.Nil(t, repo.latest, "the archive write failed")
+	require.Equal(t, ingestDuplicate, sub.handleEvent(ctx, ev))
 	require.Equal(t, []string{eventIDHex(ev)}, handled)
 }
 
@@ -311,70 +313,56 @@ func TestSubscriberHandleEventInjectsCanonicalMLReadModelAndMarksEOSECaughtUp(t 
 	require.True(t, sub.IsCaughtUp(), "caught up once every relay synced or failed its first attempt")
 }
 
-func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *testing.T) {
+func TestSubscriberHandleEventInvokesHandlersOnlyForEventsNewToTheLocalStore(t *testing.T) {
 	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
+	store := openTestLocalStore(t, "")
 	now := time.Unix(200, 0).UTC()
-	persistedEvent := signedTestEvent(t, 5101, time.Unix(100, 0).UTC())
-	_, err := repo.Record(ctx, &repository.NostrEventRecord{
-		ID:        eventIDHex(persistedEvent),
-		Kind:      eventKindInt(persistedEvent),
-		PubKey:    eventPubKeyHex(persistedEvent),
-		Content:   persistedEvent.Content,
-		Tags:      json.RawMessage("[]"),
-		Sig:       eventSignatureHex(persistedEvent),
-		CreatedAt: persistedEvent.CreatedAt.Time(),
-	})
+	heldEvent := signedTestEvent(t, 5101, time.Unix(100, 0).UTC())
+	_, err := store.SaveEvent(*heldEvent)
 	require.NoError(t, err)
 
 	var handled []string
-	sub := NewSubscriber(nil, repo, zap.NewNop(),
+	sub := NewSubscriber(nil, nil, zap.NewNop(),
+		WithLocalStore(store),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) {
 			handled = append(handled, eventIDHex(ev))
 		}),
 		withClock(func() time.Time { return now }),
 	)
 
-	sub.handleEvent(ctx, persistedEvent)
-	require.Empty(t, handled, "persisted overlap duplicate must not re-run handlers")
+	sub.handleEvent(ctx, heldEvent)
+	require.Empty(t, handled, "an overlap duplicate already held must not re-run handlers")
 
 	newEvent := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
 	sub.handleEvent(ctx, newEvent)
 	require.Equal(t, []string{eventIDHex(newEvent)}, handled)
 }
 
-// A self-published observable is persisted by the publisher before its relay
-// attempt, so its relay echo is always an already-persisted duplicate. Side-effect
-// handlers must stay gated, but idempotent projections still have to see it or
-// Bahia's own fleet-health observables are invisible to its own telemetry.
+// A self-published observable is kept in the local store by the publisher
+// before its relay attempt, so its relay echo is always a duplicate there.
+// Side-effect handlers must stay gated, but idempotent projections still have
+// to see it or Bahia's own fleet-health observables are invisible to its own
+// telemetry.
 func TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated(t *testing.T) {
 	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
+	store := openTestLocalStore(t, "")
 	now := time.Unix(200, 0).UTC()
 	echo := signedTestEvent(t, KindCASControlState, time.Unix(100, 0).UTC())
-	inserted, err := repo.Record(ctx, &repository.NostrEventRecord{
-		ID:           eventIDHex(echo),
-		Kind:         eventKindInt(echo),
-		PubKey:       eventPubKeyHex(echo),
-		Content:      echo.Content,
-		Tags:         json.RawMessage("[]"),
-		Sig:          eventSignatureHex(echo),
-		CreatedAt:    echo.CreatedAt.Time(),
-		PublishState: repository.NostrPublishStatePending,
-	})
+	stored, err := store.SaveEvent(*echo)
 	require.NoError(t, err)
-	require.True(t, inserted)
+	require.True(t, stored)
 
 	var handled, observed []string
-	sub := NewSubscriber(nil, repo, zap.NewNop(),
+	sub := NewSubscriber(nil, nil, zap.NewNop(),
+		WithLocalStore(store),
 		WithHandler(func(_ context.Context, ev *gonostr.Event) { handled = append(handled, eventIDHex(ev)) }),
 		WithObserver(func(_ context.Context, ev *gonostr.Event) { observed = append(observed, eventIDHex(ev)) }),
 		withClock(func() time.Time { return now }),
 	)
 
 	sub.handleEvent(ctx, echo)
-	require.Empty(t, handled, "a persisted echo must not re-run side-effect handlers")
-	require.Equal(t, []string{eventIDHex(echo)}, observed, "a persisted echo must reach idempotent observers")
+	require.Empty(t, handled, "a held echo must not re-run side-effect handlers")
+	require.Equal(t, []string{eventIDHex(echo)}, observed, "a held echo must reach idempotent observers")
 
 	fresh := signedTestEvent(t, KindCASControlState, time.Unix(105, 0).UTC())
 	sub.handleEvent(ctx, fresh)
@@ -384,12 +372,8 @@ func TestSubscriberObserversSeeSelfPublishedEchoWhileHandlersStayGated(t *testin
 	invalid := *signedTestEvent(t, KindCASControlState, time.Unix(106, 0).UTC())
 	invalid.ID = gonostr.ID{}
 	sub.handleEvent(ctx, &invalid)
-
-	unpersisted := signedTestEvent(t, KindCASControlState, time.Unix(107, 0).UTC())
-	repo.failRecordID = eventIDHex(unpersisted)
-	sub.handleEvent(ctx, unpersisted)
 	require.Equal(t, []string{eventIDHex(echo), eventIDHex(fresh)}, observed,
-		"observers only see events that validated and are durably persisted")
+		"observers only see events that validated and are stored")
 }
 
 func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *testing.T) {
@@ -458,26 +442,32 @@ func TestSubscriberHandleEventDedupsAgainstTheLocalStoreAcrossRestarts(t *testin
 	require.Equal(t, 2, observed)
 }
 
-// With an audit repository configured, a failed audit write undoes the local
-// store write, so the redelivery is still new and its handlers run exactly
-// once when the write succeeds.
-func TestSubscriberHandleEventRollsBackTheLocalStoreWhenTheAuditWriteFails(t *testing.T) {
+// After a failed archive write the archive cools down: a database outage costs
+// one timeout per cooldown, not one per event, and writes resume after it.
+func TestSubscriberArchiveCoolsDownAfterAFailedWrite(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()
 	store := openTestLocalStore(t, "")
-	ev := signedTestEvent(t, 5101, time.Now().UTC().Add(-time.Minute))
-	repo.failRecordID = eventIDHex(ev)
+	base := time.Now().UTC()
+	clock := base
+	first := signedTestEvent(t, 5101, base.Add(-3*time.Minute))
+	second := signedTestEvent(t, 5101, base.Add(-2*time.Minute))
+	third := signedTestEvent(t, 5101, base.Add(-time.Minute))
+	repo.failRecordID = eventIDHex(first)
 	var handled int
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithLocalStore(store),
 		WithHandler(func(context.Context, *gonostr.Event) { handled++ }),
 	)
+	sub.archive.now = func() time.Time { return clock }
 
-	require.Equal(t, ingestFailed, sub.handleEvent(ctx, ev))
-	require.False(t, localStoreHas(store, ev.ID))
-	require.Equal(t, ingestNew, sub.handleEvent(ctx, ev))
-	require.Equal(t, ingestDuplicate, sub.handleEvent(ctx, ev))
-	require.Equal(t, 1, handled)
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, first))
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, second))
+	require.Equal(t, 0, repo.inserted, "no archive write is attempted during the cooldown")
+	clock = base.Add(postgresArchiveCooldown + time.Second)
+	require.Equal(t, ingestNew, sub.handleEvent(ctx, third))
+	require.Equal(t, 1, repo.inserted, "archive writes resume after the cooldown")
+	require.Equal(t, 3, handled)
 }
 
 // The daemon's own events reach observers but never side-effect handlers,

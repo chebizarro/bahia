@@ -6,18 +6,23 @@ import (
 	"time"
 
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
 type nostrTransportMetricsRunner struct {
-	metrics  *telemetry.Metrics
-	outbox   repository.NostrEventOutboxRepository
-	storage  nostrEventStorageStatsSource
-	pools    []*nostrAdapter.RelayPool
-	interval time.Duration
-	logger   *zap.Logger
+	metrics *telemetry.Metrics
+	// localOutbox is the daemon's publish outbox; pgOutbox the PostgreSQL
+	// rows it still drains (transactional producers, pre-upgrade rows). The
+	// outbox gauges are their sum.
+	localOutbox localOutboxCounter
+	pgOutbox    repository.NostrEventOutboxRepository
+	storage     nostrEventStorageStatsSource
+	pools       []*nostrAdapter.RelayPool
+	interval    time.Duration
+	logger      *zap.Logger
 	// failedIndexWarned limits the missing failed-row index warning to once;
 	// only the Run goroutine touches it.
 	failedIndexWarned bool
@@ -27,32 +32,64 @@ type nostrEventStorageStatsSource interface {
 	StorageStats(context.Context) (repository.NostrEventStorageStats, error)
 }
 
-func newNostrTransportMetricsRunner(metrics *telemetry.Metrics, outbox repository.NostrEventOutboxRepository, interval time.Duration, logger *zap.Logger, pools ...*nostrAdapter.RelayPool) *nostrTransportMetricsRunner {
+type localOutboxCounter interface {
+	Counts() (localstore.OutboxCounts, error)
+}
+
+func newNostrTransportMetricsRunner(metrics *telemetry.Metrics, localOutbox localOutboxCounter, pgOutbox repository.NostrEventOutboxRepository, interval time.Duration, logger *zap.Logger, pools ...*nostrAdapter.RelayPool) *nostrTransportMetricsRunner {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &nostrTransportMetricsRunner{metrics: metrics, outbox: outbox, pools: pools, interval: interval, logger: logger}
+	return &nostrTransportMetricsRunner{metrics: metrics, localOutbox: localOutbox, pgOutbox: pgOutbox, pools: pools, interval: interval, logger: logger}
 }
 
-// refreshOutboxFailed samples the abandoned outbox row count. Until the online
-// failed-row index exists the gauge reads -1 (unknown) and one warning names
-// the maintenance command, rather than scanning nostr_events every interval.
-func (r *nostrTransportMetricsRunner) refreshOutboxFailed(ctx context.Context) {
-	failed, err := r.outbox.CountPublishFailed(ctx)
-	switch {
-	case errors.Is(err, repository.ErrNostrPublishFailedIndexNotReady):
-		r.metrics.SetNostrOutboxFailed(-1)
-		if !r.failedIndexWarned {
-			r.failedIndexWarned = true
-			r.logger.Warn("Nostr outbox failed-row metric unavailable until `bahia-event-archive --action ensure-indexes` builds its index")
+// refreshOutbox samples bahia_nostr_outbox_depth (pending entries and rows)
+// and bahia_nostr_outbox_failed (abandoned ones still retained). Without a
+// local outbox, until the online PostgreSQL failed-row index exists the failed
+// gauge reads -1 (unknown) and one warning names the maintenance command,
+// rather than scanning nostr_events every interval; with one, the gauge counts
+// the local outbox alone until then.
+func (r *nostrTransportMetricsRunner) refreshOutbox(ctx context.Context) {
+	var depth, failed int64
+	failedKnown := true
+	if r.localOutbox != nil {
+		counts, err := r.localOutbox.Counts()
+		if err != nil {
+			r.logger.Warn("failed to refresh local Nostr outbox metrics", zap.Error(err))
+			return
 		}
-	case err != nil:
-		r.logger.Warn("failed to refresh Nostr outbox failed-row metric", zap.Error(err))
-	default:
+		depth, failed = counts.Pending, counts.Failed
+	}
+	if r.pgOutbox != nil {
+		pending, err := r.pgOutbox.CountUnpublished(ctx)
+		if err != nil {
+			r.logger.Warn("failed to refresh Nostr outbox depth metric", zap.Error(err))
+			return
+		}
+		depth += pending
+		pgFailed, err := r.pgOutbox.CountPublishFailed(ctx)
+		switch {
+		case errors.Is(err, repository.ErrNostrPublishFailedIndexNotReady):
+			failedKnown = r.localOutbox != nil
+			if !r.failedIndexWarned {
+				r.failedIndexWarned = true
+				r.logger.Warn("PostgreSQL outbox rows are missing from the Nostr outbox failed-row metric until `bahia-event-archive --action ensure-indexes` builds its index")
+			}
+		case err != nil:
+			r.logger.Warn("failed to refresh Nostr outbox failed-row metric", zap.Error(err))
+			return
+		default:
+			failed += pgFailed
+		}
+	}
+	r.metrics.SetNostrOutboxDepth(depth)
+	if failedKnown {
 		r.metrics.SetNostrOutboxFailed(failed)
+	} else {
+		r.metrics.SetNostrOutboxFailed(-1)
 	}
 }
 
@@ -118,18 +155,8 @@ func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 		r.metrics.SetNostrRelayHealth(relayURL, values.healthy, values.degraded && !values.healthy, values.successRate)
 		r.metrics.SetNostrRelayTransportHealth(relayURL, values.closedReasons, values.reREQAttempts, values.reconnects)
 	}
-	if r.outbox == nil {
-		if r.storage == nil {
-			return
-		}
-	} else {
-		depth, err := r.outbox.CountUnpublished(ctx)
-		if err != nil {
-			r.logger.Warn("failed to refresh Nostr outbox depth metric", zap.Error(err))
-		} else {
-			r.metrics.SetNostrOutboxDepth(depth)
-		}
-		r.refreshOutboxFailed(ctx)
+	if r.localOutbox != nil || r.pgOutbox != nil {
+		r.refreshOutbox(ctx)
 	}
 	if r.storage == nil {
 		return

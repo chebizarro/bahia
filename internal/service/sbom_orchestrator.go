@@ -27,8 +27,14 @@ const (
 	KindSBOMAudit  = cascadia.CAS_AUDIT
 )
 
+// SBOMVerifiedPublisher publishes the orchestrator's events through the
+// control-plane outbox, with the error contract of SecurityVerifiedPublisher.
+// DeliveryOutcome reports what the outbox knows about an event id; the
+// orchestrator reads it once a manifest recording a queued reference is
+// stored, for an outcome the outbox reached before that (bahia-irsry.40).
 type SBOMVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
+	DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error)
 }
 
 type SBOMAvailabilitySubscriber interface {
@@ -319,7 +325,10 @@ type SBOMOrchestrator struct {
 
 	mu      sync.Mutex
 	results map[string]SBOMRunResult
-	locks   map[string]*sync.Mutex
+	// queuedRefs holds, per cached result, the reference events still
+	// queued in the outbox; the result is published once none is left.
+	queuedRefs map[string]map[string]struct{}
+	locks      map[string]*sync.Mutex
 }
 
 type SBOMOrchestratorConfig struct {
@@ -439,7 +448,10 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 	var availabilityEntries []domain.SBOMIndexEntry
 	if existing, err := s.Repo.ListManifestsBySubject(ctx, subject, 500); err == nil {
 		for _, manifest := range existing {
-			if manifest.PublishState == domain.SBOMPublishPublished && manifest.ReferenceDTag != "" && manifest.StorageURI != "" && manifest.PayloadSHA256 != "" {
+			// A pending manifest's reference is queued, not lost: it stays
+			// in the availability list like a published one.
+			listed := manifest.PublishState == domain.SBOMPublishPublished || manifest.PublishState == domain.SBOMPublishPending
+			if listed && manifest.ReferenceDTag != "" && manifest.StorageURI != "" && manifest.PayloadSHA256 != "" {
 				availabilityEntries = append(availabilityEntries, manifestEntry(manifest, s.Pubkey))
 			}
 		}
@@ -452,11 +464,16 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 		packages []domain.SBOMManifestPackage
 	}
 	projected := make([]pendingProjection, 0, len(produced))
+	var queuedRefs []string
 	for _, item := range produced {
 		manifest, pkgs, entry, refID, err := s.processOne(ctx, statusD, item, sourceKind)
 		if err != nil {
 			_ = s.publishStatus(ctx, statusD, subject, "failed", "publishing_reference", err.Error())
 			return nil, err
+		}
+		if manifest.PublishState == domain.SBOMPublishPending {
+			result.PublishState = domain.SBOMPublishPending
+			queuedRefs = append(queuedRefs, refID)
 		}
 		availabilityEntries = append(availabilityEntries, entry)
 		projected = append(projected, pendingProjection{manifest: manifest, packages: pkgs})
@@ -501,7 +518,16 @@ func (s *SBOMOrchestrator) run(ctx context.Context, key string, subject domain.S
 	if err := s.publishStatus(ctx, statusD, subject, "completed", "completed", ""); err != nil {
 		s.Logger.Warn("publish SBOM completed status failed after canonical events were accepted", zap.Error(err))
 	}
-	s.remember(key, result)
+	s.rememberQueued(key, result, queuedRefs)
+	// The manifests now carry their reference ids, so an outcome the outbox
+	// reached for a queued reference before they were stored (when the
+	// delivery hooks found nothing to update) is applied now.
+	for _, refID := range queuedRefs {
+		s.applyDeliveryOutcome(ctx, refID)
+	}
+	if cached, ok := s.cached(key); ok {
+		return &cached, nil
+	}
 	return &result, nil
 }
 
@@ -644,7 +670,7 @@ func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item 
 	if err != nil {
 		return nil, nil, domain.SBOMIndexEntry{}, "", err
 	}
-	refID, err := s.publishVerified(ctx, refEvent, "SBOM reference")
+	refID, queued, err := s.publishVerifiedOutcome(ctx, refEvent, "SBOM reference")
 	if err != nil {
 		return nil, nil, domain.SBOMIndexEntry{}, "", err
 	}
@@ -656,12 +682,18 @@ func (s *SBOMOrchestrator) processOne(ctx context.Context, statusD string, item 
 	parsed.Manifest.NTIAStatus = ntiaStatus(att.Predicate.NTIA)
 	parsed.Manifest.ReferenceEventID = refID
 	parsed.Manifest.ReferenceDTag = refD
-	parsed.Manifest.PublishState = domain.SBOMPublishPublished
 	parsed.Manifest.SourceKind = sourceKind
 	now := time.Now().UTC()
 	parsed.Manifest.CreatedAt = now
 	parsed.Manifest.UpdatedAt = now
-	parsed.Manifest.PublishedAt = &now
+	if queued {
+		// Below the publish quorum: pending until the outbox delivers the
+		// reference (HandlePublishDelivered) or abandons it.
+		parsed.Manifest.PublishState = domain.SBOMPublishPending
+	} else {
+		parsed.Manifest.PublishState = domain.SBOMPublishPublished
+		parsed.Manifest.PublishedAt = &now
+	}
 	entry := domain.SBOMIndexEntry{SubjectDigest: item.Subject.Digest, AttestationID: fmt.Sprintf("%d:%s:%s", sbomadapter.KindSBOMReference, s.Pubkey, refD), ReferenceDTag: refD, Format: parsed.Manifest.Format, LocationURI: stored.Location.URI, StorageType: domain.SBOMStorageBlossom, PayloadSHA256: payloadSHA, GeneratorID: item.Generator.ID, Timestamp: now}
 	return &parsed.Manifest, parsed.Packages, entry, refID, nil
 }
@@ -681,32 +713,40 @@ func (s *SBOMOrchestrator) publishAudit(ctx context.Context, subject domain.SBOM
 }
 
 func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event, label string) (string, error) {
+	id, _, err := s.publishVerifiedOutcome(ctx, ev, label)
+	return id, err
+}
+
+// publishVerifiedOutcome publishes ev and returns its id, and whether it is
+// queued (below the publish quorum, still being retried) rather than
+// accepted.
+func (s *SBOMOrchestrator) publishVerifiedOutcome(ctx context.Context, ev *nostr.Event, label string) (string, bool, error) {
 	results, err := s.Publisher.PublishSignedEventWithResults(ctx, ev)
 	if nostrutil.IsPublishQueued(err) {
 		// Below the publish quorum but durably queued: the control-plane
 		// runner keeps retrying this exact signed event. Treat it as kept so
 		// the run neither fails nor re-signs it.
 		if s.Pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.Pubkey) {
-			return "", fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
+			return "", false, fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
 		}
-		return nostrutil.EventIDHex(ev), nil
+		return nostrutil.EventIDHex(ev), true, nil
 	}
 	if err != nil {
 		// Includes nostrutil.ErrPublishAbandoned: the outbox gave up on the
 		// event (every relay rejected it permanently), so the run fails
 		// rather than recording it as published.
-		return "", fmt.Errorf("publishing %s event: %w", label, err)
+		return "", false, fmt.Errorf("publishing %s event: %w", label, err)
 	}
 	if len(results) == 0 {
-		return "", fmt.Errorf("publishing %s event: no relay OK results", label)
+		return "", false, fmt.Errorf("publishing %s event: no relay OK results", label)
 	}
 	var rejections []string
 	for _, result := range results {
 		if result.Accepted {
 			if s.Pubkey != "" && !strings.EqualFold(ev.PubKey.Hex(), s.Pubkey) {
-				return "", fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
+				return "", false, fmt.Errorf("publishing %s event: signed pubkey %s does not match configured publisher pubkey %s", label, ev.PubKey.Hex(), s.Pubkey)
 			}
-			return nostrutil.EventIDHex(ev), nil
+			return nostrutil.EventIDHex(ev), false, nil
 		}
 		relay := result.RelayURL
 		if relay == "" {
@@ -720,7 +760,7 @@ func (s *SBOMOrchestrator) publishVerified(ctx context.Context, ev *nostr.Event,
 			rejections = append(rejections, relay+" returned OK accepted=false without reason")
 		}
 	}
-	return "", fmt.Errorf("publishing %s event: no relay accepted event: %s", label, strings.Join(rejections, "; "))
+	return "", false, fmt.Errorf("publishing %s event: no relay accepted event: %s", label, strings.Join(rejections, "; "))
 }
 
 // sbomAbandonWriteTimeout bounds the manifest update made from the outbox's
@@ -749,7 +789,7 @@ func (s *SBOMOrchestrator) HandlePublishAbandoned(ev nostr.Event) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sbomAbandonWriteTimeout)
 	defer cancel()
-	changed, err := s.Repo.FailManifestByReferenceEvent(ctx, eventID, "SBOM reference "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in nostr_events.last_publish_error")
+	changed, err := s.Repo.FailManifestByReferenceEvent(ctx, eventID, "SBOM reference "+nostrutil.ErrPublishAbandoned.Error()+" by the outbox runner; reason in its abandonment warning")
 	if err != nil {
 		logger.Warn("failed to record abandoned SBOM reference", zap.String("event_id", eventID), zap.Error(err))
 		return
@@ -759,12 +799,84 @@ func (s *SBOMOrchestrator) HandlePublishAbandoned(ev nostr.Event) {
 	}
 }
 
+// HandlePublishDelivered is registered with the control-plane outbox
+// publisher's OnDelivered hook. Manifests recorded as pending on a queued
+// reference become published once the publish quorum accepted it, and a
+// cached run result is published once none of its references is queued.
+// Delivery may be reported more than once; only pending manifests change.
+// Events other than SBOM references are ignored.
+func (s *SBOMOrchestrator) HandlePublishDelivered(ev nostr.Event) {
+	if s == nil || int(ev.Kind) != sbomadapter.KindSBOMReference {
+		return
+	}
+	eventID := ev.ID.Hex()
+	s.markReferenceDelivered(eventID)
+	if s.Repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sbomAbandonWriteTimeout)
+	defer cancel()
+	if _, err := s.Repo.MarkManifestDeliveredByReferenceEvent(ctx, eventID); err != nil {
+		s.logger().Warn("failed to record delivered SBOM reference", zap.String("event_id", eventID), zap.Error(err))
+	}
+}
+
+// applyDeliveryOutcome applies an outcome the outbox already reached for a
+// queued reference (see run).
+func (s *SBOMOrchestrator) applyDeliveryOutcome(ctx context.Context, refID string) {
+	outcome, err := s.Publisher.DeliveryOutcome(ctx, refID)
+	if err != nil {
+		s.logger().Warn("failed to read SBOM reference delivery outcome", zap.String("event_id", refID), zap.Error(err))
+		return
+	}
+	id, err := nostr.IDFromHex(refID)
+	if err != nil {
+		return
+	}
+	ref := nostr.Event{ID: id, Kind: nostr.Kind(sbomadapter.KindSBOMReference)}
+	switch outcome {
+	case nostrutil.DeliveryDelivered:
+		s.HandlePublishDelivered(ref)
+	case nostrutil.DeliveryAbandoned:
+		s.HandlePublishAbandoned(ref)
+	}
+}
+
+func (s *SBOMOrchestrator) logger() *zap.Logger {
+	if s.Logger == nil {
+		return zap.NewNop()
+	}
+	return s.Logger
+}
+
 func (s *SBOMOrchestrator) forgetResultsWithReference(eventID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, result := range s.results {
 		if slices.Contains(result.ReferenceEventIDs, eventID) {
 			delete(s.results, key)
+			delete(s.queuedRefs, key)
+		}
+	}
+}
+
+// markReferenceDelivered publishes cached results whose last queued
+// reference is eventID.
+func (s *SBOMOrchestrator) markReferenceDelivered(eventID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, queued := range s.queuedRefs {
+		if _, ok := queued[eventID]; !ok {
+			continue
+		}
+		delete(queued, eventID)
+		if len(queued) > 0 {
+			continue
+		}
+		delete(s.queuedRefs, key)
+		if result, ok := s.results[key]; ok {
+			result.PublishState = domain.SBOMPublishPublished
+			s.results[key] = result
 		}
 	}
 }
@@ -783,9 +895,26 @@ func (s *SBOMOrchestrator) cached(key string) (SBOMRunResult, bool) {
 	return r, ok
 }
 func (s *SBOMOrchestrator) remember(key string, r SBOMRunResult) {
+	s.rememberQueued(key, r, nil)
+}
+
+// rememberQueued caches r with the reference events it is still waiting on.
+func (s *SBOMOrchestrator) rememberQueued(key string, r SBOMRunResult, queuedRefs []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.results[key] = r
+	delete(s.queuedRefs, key)
+	if len(queuedRefs) == 0 {
+		return
+	}
+	if s.queuedRefs == nil {
+		s.queuedRefs = make(map[string]map[string]struct{})
+	}
+	set := make(map[string]struct{}, len(queuedRefs))
+	for _, ref := range queuedRefs {
+		set[ref] = struct{}{}
+	}
+	s.queuedRefs[key] = set
 }
 func (s *SBOMOrchestrator) lockFor(subject domain.SBOMSubject) *sync.Mutex {
 	return s.lockForKey("subject", string(subject.Type)+"\x00"+subject.ID+"\x00"+subject.Digest)

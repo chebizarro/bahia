@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +48,7 @@ func vmChange(org, id uuid.UUID, seq int64) repository.VirtualizationResourceCha
 }
 
 type vmProjectionStore struct {
-	*repository.InMemoryNostrEventRepository
+	*repositorytest.InMemoryNostrEventRepository
 	failCursor   bool
 	checkpointed chan struct{}
 }
@@ -103,7 +104,7 @@ func vmProjectorFixture(t *testing.T) (*VirtualizationProjector, *vmJournalFixtu
 		t.Fatal(err)
 	}
 	journal := &vmJournalFixture{}
-	store := &vmProjectionStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository()}
+	store := &vmProjectionStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository()}
 	pub := &vmDurablePublisher{store: store, signer: signer}
 	p, err := NewVirtualizationProjector(journal, store, pub, pubkey.Hex())
 	if err != nil {

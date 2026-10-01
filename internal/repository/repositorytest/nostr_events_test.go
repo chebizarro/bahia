@@ -1,4 +1,4 @@
-package repository
+package repositorytest
 
 import (
 	"context"
@@ -7,13 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/repository"
+
 	"github.com/stretchr/testify/require"
 )
 
-func TestInMemoryNostrEventRepositoryRecordFindByIDRoundTrip(t *testing.T) {
+func TestInMemoryNostrEventRepositoryRecordGetByIDRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
-	rec := &NostrEventRecord{
+	rec := &repository.NostrEventRecord{
 		ID:        "event-1",
 		Kind:      5101,
 		PubKey:    "pubkey",
@@ -26,7 +28,7 @@ func TestInMemoryNostrEventRepositoryRecordFindByIDRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inserted)
 
-	got, err := repo.FindByID(ctx, rec.ID)
+	got, err := repo.GetByID(ctx, rec.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, rec.ID, got.ID)
@@ -40,7 +42,7 @@ func TestInMemoryNostrEventRepositoryRecordFindByIDRoundTrip(t *testing.T) {
 func TestInMemoryNostrEventRepositoryRecordIdempotency(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
-	rec := &NostrEventRecord{ID: "event-1", Kind: 5101, CreatedAt: time.Unix(100, 0).UTC()}
+	rec := &repository.NostrEventRecord{ID: "event-1", Kind: 5101, CreatedAt: time.Unix(100, 0).UTC()}
 
 	inserted, err := repo.Record(ctx, rec)
 	require.NoError(t, err)
@@ -50,49 +52,42 @@ func TestInMemoryNostrEventRepositoryRecordIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, inserted)
 
-	records, err := repo.FindSince(ctx, time.Unix(0, 0).UTC(), nil)
+	records, err := repo.ListByKind(ctx, 5101, 10)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 }
 
-func TestInMemoryNostrEventRepositoryFindSinceTimestampFiltering(t *testing.T) {
+// Like PostgreSQL, archive rows of the local outbox are neither drained nor
+// counted as outbox depth or failures.
+func TestInMemoryNostrEventRepositoryIgnoresLocalOutboxArchiveRows(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
+	archive := repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane)
 	recordEvents(t, ctx, repo,
-		&NostrEventRecord{ID: "before", Kind: 5101, CreatedAt: time.Unix(99, 0).UTC()},
-		&NostrEventRecord{ID: "at", Kind: 5101, CreatedAt: time.Unix(100, 0).UTC()},
-		&NostrEventRecord{ID: "after", Kind: 5101, CreatedAt: time.Unix(101, 0).UTC()},
+		&repository.NostrEventRecord{ID: "drained", Kind: 4903, PublishState: repository.NostrPublishStatePending, PublishTarget: repository.NostrPublishTargetControlPlane, CreatedAt: time.Unix(101, 0).UTC()},
+		&repository.NostrEventRecord{ID: "archived", Kind: 4903, PublishState: repository.NostrPublishStatePending, PublishTarget: archive, CreatedAt: time.Unix(102, 0).UTC()},
+		&repository.NostrEventRecord{ID: "archived-failed", Kind: 4903, PublishState: repository.NostrPublishStateFailed, PublishTarget: archive, CreatedAt: time.Unix(103, 0).UTC()},
 	)
 
-	records, err := repo.FindSince(ctx, time.Unix(100, 0).UTC(), nil)
+	pending, err := repo.ListUnpublished(ctx, 10)
 	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Equal(t, "after", records[0].ID)
-}
-
-func TestInMemoryNostrEventRepositoryFindSinceKindFiltering(t *testing.T) {
-	ctx := context.Background()
-	repo := NewInMemoryNostrEventRepository()
-	recordEvents(t, ctx, repo,
-		&NostrEventRecord{ID: "kind-1", Kind: 5101, CreatedAt: time.Unix(101, 0).UTC()},
-		&NostrEventRecord{ID: "kind-2", Kind: 5961, CreatedAt: time.Unix(102, 0).UTC()},
-		&NostrEventRecord{ID: "kind-3", Kind: 5962, CreatedAt: time.Unix(103, 0).UTC()},
-	)
-
-	records, err := repo.FindSince(ctx, time.Unix(100, 0).UTC(), []int{5961, 5962})
+	require.Len(t, pending, 1)
+	require.Equal(t, "drained", pending[0].ID)
+	depth, err := repo.CountUnpublished(ctx)
 	require.NoError(t, err)
-	require.Len(t, records, 2)
-	require.Equal(t, "kind-2", records[0].ID)
-	require.Equal(t, "kind-3", records[1].ID)
+	require.Equal(t, int64(1), depth)
+	failed, err := repo.CountPublishFailed(ctx)
+	require.NoError(t, err)
+	require.Zero(t, failed)
 }
 
 func TestInMemoryNostrEventRepositoryListByKindsAndFindByTag(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
 	recordEvents(t, ctx, repo,
-		&NostrEventRecord{ID: "b", Kind: 5961, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(102, 0).UTC()},
-		&NostrEventRecord{ID: "a", Kind: 5962, Tags: []byte(`[["migrated-from","legacy-2"]]`), CreatedAt: time.Unix(101, 0).UTC()},
-		&NostrEventRecord{ID: "c", Kind: 7000, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(103, 0).UTC()},
+		&repository.NostrEventRecord{ID: "b", Kind: 5961, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(102, 0).UTC()},
+		&repository.NostrEventRecord{ID: "a", Kind: 5962, Tags: []byte(`[["migrated-from","legacy-2"]]`), CreatedAt: time.Unix(101, 0).UTC()},
+		&repository.NostrEventRecord{ID: "c", Kind: 7000, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(103, 0).UTC()},
 	)
 
 	listed, err := repo.ListByKinds(ctx, []int{5961, 5962}, 10)
@@ -116,7 +111,7 @@ func TestInMemoryNostrEventRepositoryConcurrentRecord(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			inserted, err := repo.Record(ctx, &NostrEventRecord{
+			inserted, err := repo.Record(ctx, &repository.NostrEventRecord{
 				ID:        fmt.Sprintf("event-%d", i),
 				Kind:      5101,
 				CreatedAt: time.Unix(int64(i), 0).UTC(),
@@ -127,12 +122,12 @@ func TestInMemoryNostrEventRepositoryConcurrentRecord(t *testing.T) {
 	}
 	wg.Wait()
 
-	records, err := repo.FindSince(ctx, time.Unix(-1, 0).UTC(), []int{5101})
+	records, err := repo.ListByKind(ctx, 5101, count)
 	require.NoError(t, err)
 	require.Len(t, records, count)
 }
 
-func recordEvents(t *testing.T, ctx context.Context, repo *InMemoryNostrEventRepository, records ...*NostrEventRecord) {
+func recordEvents(t *testing.T, ctx context.Context, repo *InMemoryNostrEventRepository, records ...*repository.NostrEventRecord) {
 	t.Helper()
 	for _, rec := range records {
 		inserted, err := repo.Record(ctx, rec)
@@ -144,7 +139,7 @@ func recordEvents(t *testing.T, ctx context.Context, repo *InMemoryNostrEventRep
 func TestNostrArchiveLatestQueriesUseLowestIDOnTie(t *testing.T) {
 	repo := NewInMemoryNostrEventRepository()
 	for _, id := range []string{"ffff", "1111"} {
-		_, err := repo.Record(t.Context(), &NostrEventRecord{ID: id, Kind: 30900, PubKey: "author", Tags: []byte(`[["d","state"]]`), CreatedAt: time.Unix(100, 0)})
+		_, err := repo.Record(t.Context(), &repository.NostrEventRecord{ID: id, Kind: 30900, PubKey: "author", Tags: []byte(`[["d","state"]]`), CreatedAt: time.Unix(100, 0)})
 		require.NoError(t, err)
 	}
 	latest, err := repo.FindLatestByKindPubkeyDTag(t.Context(), 30900, "author", "state", "")
@@ -163,18 +158,18 @@ func TestInMemoryNostrEventRepositoryListUnpublishedAfterPagesByKeyset(t *testin
 	repo := NewInMemoryNostrEventRepository()
 	base := time.Unix(1000, 0).UTC()
 	for i, id := range []string{"b", "a", "c"} {
-		_, err := repo.Record(ctx, &NostrEventRecord{ID: id, ReceivedAt: base.Add(time.Duration(i/2) * time.Second), PublishState: NostrPublishStatePending})
+		_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: id, ReceivedAt: base.Add(time.Duration(i/2) * time.Second), PublishState: repository.NostrPublishStatePending})
 		require.NoError(t, err)
 	}
-	_, err := repo.Record(ctx, &NostrEventRecord{ID: "done", ReceivedAt: base, PublishState: NostrPublishStatePublished})
+	_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: "done", ReceivedAt: base, PublishState: repository.NostrPublishStatePublished})
 	require.NoError(t, err)
 
-	first, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, nil, 2)
+	first, err := repo.ListUnpublishedAfter(ctx, repository.NostrPublishTargetDefault, nil, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, nostrRecordIDs(first))
 
 	last := first[len(first)-1]
-	rest, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, &NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}, 2)
+	rest, err := repo.ListUnpublishedAfter(ctx, repository.NostrPublishTargetDefault, &repository.NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}, 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"c"}, nostrRecordIDs(rest))
 }
@@ -183,25 +178,25 @@ func TestInMemoryNostrEventRepositoryListUnpublishedAfterIsPartitionedByTarget(t
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
 	base := time.Unix(1000, 0).UTC()
-	rows := []NostrEventRecord{
-		{ID: "interop-1", ReceivedAt: base, PublishState: NostrPublishStatePending},
-		{ID: "cp-1", ReceivedAt: base.Add(time.Second), PublishState: NostrPublishStatePending, PublishTarget: NostrPublishTargetControlPlane},
-		{ID: "interop-2", ReceivedAt: base.Add(2 * time.Second), PublishState: NostrPublishStatePending},
-		{ID: "cp-done", ReceivedAt: base, PublishState: NostrPublishStatePublished, PublishTarget: NostrPublishTargetControlPlane},
+	rows := []repository.NostrEventRecord{
+		{ID: "interop-1", ReceivedAt: base, PublishState: repository.NostrPublishStatePending},
+		{ID: "cp-1", ReceivedAt: base.Add(time.Second), PublishState: repository.NostrPublishStatePending, PublishTarget: repository.NostrPublishTargetControlPlane},
+		{ID: "interop-2", ReceivedAt: base.Add(2 * time.Second), PublishState: repository.NostrPublishStatePending},
+		{ID: "cp-done", ReceivedAt: base, PublishState: repository.NostrPublishStatePublished, PublishTarget: repository.NostrPublishTargetControlPlane},
 	}
 	for i := range rows {
 		_, err := repo.Record(ctx, &rows[i])
 		require.NoError(t, err)
 	}
 
-	interop, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetDefault, nil, 10)
+	interop, err := repo.ListUnpublishedAfter(ctx, repository.NostrPublishTargetDefault, nil, 10)
 	require.NoError(t, err)
 	require.Equal(t, []string{"interop-1", "interop-2"}, nostrRecordIDs(interop))
 
-	controlPlane, err := repo.ListUnpublishedAfter(ctx, NostrPublishTargetControlPlane, nil, 10)
+	controlPlane, err := repo.ListUnpublishedAfter(ctx, repository.NostrPublishTargetControlPlane, nil, 10)
 	require.NoError(t, err)
 	require.Equal(t, []string{"cp-1"}, nostrRecordIDs(controlPlane))
-	require.Equal(t, NostrPublishTargetControlPlane, controlPlane[0].PublishTarget)
+	require.Equal(t, repository.NostrPublishTargetControlPlane, controlPlane[0].PublishTarget)
 
 	all, err := repo.ListUnpublished(ctx, 10)
 	require.NoError(t, err)
@@ -214,9 +209,9 @@ func TestInMemoryNostrEventRepositoryListUnpublishedAfterIsPartitionedByTarget(t
 func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()
-	_, err := repo.Record(ctx, &NostrEventRecord{ID: "pending", PublishState: NostrPublishStatePending})
+	_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: "pending", PublishState: repository.NostrPublishStatePending})
 	require.NoError(t, err)
-	_, err = repo.Record(ctx, &NostrEventRecord{ID: "published", PublishState: NostrPublishStatePending})
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "published", PublishState: repository.NostrPublishStatePending})
 	require.NoError(t, err)
 	require.NoError(t, repo.MarkPublished(ctx, "published", time.Now()))
 
@@ -225,13 +220,13 @@ func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *tes
 
 	pending, err := repo.GetByID(ctx, "pending")
 	require.NoError(t, err)
-	require.Equal(t, NostrPublishStateFailed, pending.PublishState)
+	require.Equal(t, repository.NostrPublishStateFailed, pending.PublishState)
 	require.Equal(t, "abandoned: blocked: no", pending.LastPublishError)
 	require.Equal(t, 1, pending.PublishAttempts)
 
 	published, err := repo.GetByID(ctx, "published")
 	require.NoError(t, err)
-	require.Equal(t, NostrPublishStatePublished, published.PublishState)
+	require.Equal(t, repository.NostrPublishStatePublished, published.PublishState)
 	require.Empty(t, published.LastPublishError)
 
 	depth, err := repo.CountUnpublished(ctx)
@@ -239,7 +234,7 @@ func TestInMemoryNostrEventRepositoryAbandonPublishOnlyAffectsPendingRows(t *tes
 	require.Zero(t, depth)
 }
 
-func nostrRecordIDs(records []NostrEventRecord) []string {
+func nostrRecordIDs(records []repository.NostrEventRecord) []string {
 	ids := make([]string, 0, len(records))
 	for _, rec := range records {
 		ids = append(ids, rec.ID)

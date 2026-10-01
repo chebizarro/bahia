@@ -163,11 +163,15 @@ type SBOMManifestRepository interface {
 	GetManifestByID(ctx context.Context, id uuid.UUID) (*domain.SBOMManifest, error)
 	ListManifestsBySubject(ctx context.Context, subject domain.SBOMSubject, limit int) ([]domain.SBOMManifest, error)
 	UpdateManifestPublishState(ctx context.Context, id uuid.UUID, state domain.SBOMPublishState, referenceEventID, availabilityEventID, publishError string) error
-	// FailManifestByReferenceEvent marks published manifests whose reference
-	// event referenceEventID was abandoned by the publish outbox as failed with
-	// reason, so the next run regenerates them instead of treating them as
-	// published. It returns how many manifests changed.
+	// FailManifestByReferenceEvent marks pending or published manifests whose
+	// reference event referenceEventID was abandoned by the publish outbox as
+	// failed with reason, so the next run regenerates them instead of treating
+	// them as published. It returns how many manifests changed.
 	FailManifestByReferenceEvent(ctx context.Context, referenceEventID, reason string) (int64, error)
+	// MarkManifestDeliveredByReferenceEvent moves manifests recorded as pending
+	// on a queued reference event to published once the outbox's publish
+	// quorum accepted it. It returns how many manifests changed.
+	MarkManifestDeliveredByReferenceEvent(ctx context.Context, referenceEventID string) (int64, error)
 	CreateManifestPackages(ctx context.Context, packages []domain.SBOMManifestPackage) error
 	ListPackagesByManifest(ctx context.Context, manifestID uuid.UUID) ([]domain.SBOMManifestPackage, error)
 	SearchManifestPackagesByName(ctx context.Context, name string, limit int) ([]domain.SBOMManifestPackage, error)
@@ -238,6 +242,12 @@ type SecurityRepository interface {
 	// the publish state of their scan runs. It returns how many publications
 	// changed (0 when none is pending under that event id).
 	AbandonSecurityPublication(ctx context.Context, eventID, reason string) (int64, error)
+	// DeliverSecurityPublication records that the outbox's publish quorum
+	// accepted eventID after the scanner recorded it as queued: its pending
+	// publications become published, and so does a pending scan run once none
+	// of its publications is still pending or failed. Runs that are
+	// failed_terminal stay so. It returns how many publications changed.
+	DeliverSecurityPublication(ctx context.Context, eventID string) (int64, error)
 }
 
 // PaymentRecordRepository manages Cashu payment records.

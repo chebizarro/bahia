@@ -46,9 +46,11 @@ func TestSecurityRetireFailedRetryableMigrationRoundTrip(t *testing.T) {
 	defer cancel()
 	logger := zap.NewNop()
 	require.NoError(t, Migrate(ctx, pool, logger))
-	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	// 000073 is newer; rolling back to 000071 unwinds it and 000072.
+	toBefore072 := DownOptions{Confirm: true, To: "000071_nostr_publish_target"}
+	rolled, err := Down(ctx, pool, logger, toBefore072)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000072_security_retire_failed_retryable"}, rolled)
+	require.Equal(t, []string{"000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, securityRetryIndex).Scan(&exists))
 	require.False(t, exists, "the rollback does not rebuild the retired index")
@@ -114,9 +116,9 @@ func TestSecurityRetireFailedRetryableMigrationRoundTrip(t *testing.T) {
 		require.True(t, securityConstraintValidated(t, ctx, pool, name), "ensure-indexes validates %s", name)
 	}
 
-	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
+	rolled, err = Down(ctx, pool, logger, toBefore072)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000072_security_retire_failed_retryable"}, rolled)
+	require.Equal(t, []string{"000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
 	for _, name := range []string{"security_observable_publications_publish_state_check", "security_scan_runs_publish_state_check"} {
 		require.False(t, securityConstraintValidated(t, ctx, pool, name), "rollback restores %s NOT VALID", name)
 	}

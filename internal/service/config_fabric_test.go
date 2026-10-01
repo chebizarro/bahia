@@ -15,6 +15,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 )
 
 type configTestSigner struct {
@@ -88,7 +89,7 @@ func (p *configStatusRepoPublisher) Publish(ctx context.Context, event nostr.Eve
 }
 
 func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	desiredPublisher := &configTestPublisher{}
 	operator := newConfigTestSigner(t)
 	console := NewConfigFabricService(repo, desiredPublisher, operator)
@@ -208,7 +209,7 @@ func TestComposeConfigEventRequiredTagShape(t *testing.T) {
 }
 
 func TestConfigFabricPublisherRejectsNonMonotonicVersion(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	publisher := &configTestPublisher{}
 	svc := NewConfigFabricService(repo, publisher, newConfigTestSigner(t))
 	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
@@ -259,7 +260,7 @@ func TestConfigFabricListValidatesStandardItemTags(t *testing.T) {
 }
 
 func TestConfigFabricDriftAppliedAndRejectedProjection(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	svc := NewConfigFabricService(repo, &configTestPublisher{}, newConfigTestSigner(t))
 	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
 	receipt, err := svc.Publish(context.Background(), validPolicyRequest(4))
@@ -297,7 +298,7 @@ func TestConfigFabricDriftAppliedAndRejectedProjection(t *testing.T) {
 }
 
 func TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	publisher := &configTestPublisher{}
 	svc := NewConfigFabricService(repo, publisher, newConfigTestSigner(t))
 	base := time.Unix(1787625660, 0)
