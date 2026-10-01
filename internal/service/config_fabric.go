@@ -122,19 +122,26 @@ type ConfigFabricStatus struct {
 }
 
 type ConfigDrift struct {
-	ServiceID           string                `json:"service_id"`
-	PolicyName          string                `json:"policy_name"`
-	Scope               string                `json:"scope"`
-	DesiredEventID      string                `json:"desired_event_id"`
-	DesiredVersion      int                   `json:"desired_version"`
-	AppliedEventID      string                `json:"applied_event_id,omitempty"`
-	AppliedVersion      int                   `json:"applied_version,omitempty"`
-	Drift               bool                  `json:"drift"`
-	LastRejectionReason string                `json:"last_rejection_reason,omitempty"`
-	Desired             *ConfigFabricVersion  `json:"desired,omitempty"`
-	Effective           *ConfigFabricVersion  `json:"effective,omitempty"`
-	Versions            []ConfigFabricVersion `json:"versions"`
-	StatusHistory       []ConfigFabricStatus  `json:"status_history"`
+	ServiceID           string `json:"service_id"`
+	PolicyName          string `json:"policy_name"`
+	Scope               string `json:"scope"`
+	DesiredEventID      string `json:"desired_event_id"`
+	DesiredVersion      int    `json:"desired_version"`
+	AppliedEventID      string `json:"applied_event_id,omitempty"`
+	AppliedVersion      int    `json:"applied_version,omitempty"`
+	Drift               bool   `json:"drift"`
+	LastRejectionReason string `json:"last_rejection_reason,omitempty"`
+	// Withdrawn reports that a consumer withdrew the current desired event
+	// because its author deleted it (NIP-09) or it expired (NIP-40). The
+	// consumer keeps enforcing the last applied config: an absent membership
+	// or policy document would read as an empty allowlist, which admits every
+	// pubkey. Publishing a newer version replaces it.
+	Withdrawn       bool                  `json:"withdrawn,omitempty"`
+	WithdrawnReason string                `json:"withdrawn_reason,omitempty"`
+	Desired         *ConfigFabricVersion  `json:"desired,omitempty"`
+	Effective       *ConfigFabricVersion  `json:"effective,omitempty"`
+	Versions        []ConfigFabricVersion `json:"versions"`
+	StatusHistory   []ConfigFabricStatus  `json:"status_history"`
 }
 
 type ConfigFabricService struct {
@@ -586,6 +593,12 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 			if view.LastRejectionReason == "" && status.Status == "rejected" {
 				view.LastRejectionReason = status.Reason
 			}
+			// Only a withdrawal of the current desired event matters: a newer
+			// published version supersedes an older withdrawn one.
+			if !view.Withdrawn && status.Status == "withdrawn" && status.ConfigEventID == wanted.EventID {
+				view.Withdrawn = true
+				view.WithdrawnReason = status.Reason
+			}
 		}
 		for i := range view.Versions {
 			if view.Versions[i].EventID == view.AppliedEventID {
@@ -721,9 +734,12 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 		if schema == configStatusSchema && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
 			return status, fmt.Errorf("applied status target mismatch")
 		}
-	} else if status.Status == "rejected" {
+	} else if status.Status == "rejected" || status.Status == "withdrawn" {
+		if status.Status == "withdrawn" && schema != configStatusSchema {
+			return status, fmt.Errorf("withdrawn status requires %s", configStatusSchema)
+		}
 		if strings.TrimSpace(status.Reason) == "" || looksLikeSecretValue(status.Reason) {
-			return status, fmt.Errorf("invalid rejected status reason")
+			return status, fmt.Errorf("invalid %s status reason", status.Status)
 		}
 	} else if status.Status != "accepted" {
 		return status, fmt.Errorf("invalid status")

@@ -13,7 +13,8 @@
   let error = $state('');
   let publishOpen = $state(false);
 
-  let driftCount = $derived(rows.filter((row) => row.drift).length);
+  let withdrawnCount = $derived(rows.filter((row) => row.withdrawn).length);
+  let driftCount = $derived(rows.filter((row) => row.drift && !row.withdrawn).length);
 
   $effect(() => {
     void loadDrift();
@@ -65,9 +66,19 @@
     <div class="summary" aria-label="Config Fabric summary">
       <div><strong>{rows.length}</strong><span>service policies</span></div>
       <div class:warning={driftCount > 0}><strong>{driftCount}</strong><span>drifted</span></div>
+      {#if withdrawnCount > 0}
+        <div class="warning"><strong>{withdrawnCount}</strong><span>withdrawn</span></div>
+      {/if}
     </div>
     {#if driftCount > 0}
       <p class="drift-warning"><WarningIcon size={18} /> {driftCount} coordinate{driftCount === 1 ? '' : 's'} differ from effective state.</p>
+    {/if}
+    {#if withdrawnCount > 0}
+      <p class="drift-warning" role="status">
+        <WarningIcon size={18} />
+        {withdrawnCount} desired config{withdrawnCount === 1 ? ' was' : 's were'} deleted or expired. The relay keeps
+        the last applied config live (the allowlist is intentionally not reverted); open the policy to publish a replacement.
+      </p>
     {/if}
     <ConfigFabricDriftTable {rows} />
   {/if}

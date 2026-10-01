@@ -142,9 +142,16 @@ func TestRelayFirstServiceRecordMatchesProjectionAndIsSignedOnce(t *testing.T) {
 	if err := json.Unmarshal([]byte(relayFirst.Content), &content); err != nil {
 		t.Fatalf("decode relay-first content: %v", err)
 	}
-	if content["org_id"] != stored.OrgID.String() || content["updated_at"] != updated.Format(time.RFC3339Nano) {
-		t.Fatalf("relay-first content org_id=%v updated_at=%v, want %s and the full-precision revision %s",
-			content["org_id"], content["updated_at"], stored.OrgID, updated.Format(time.RFC3339Nano))
+	// The update's revision is minted before publishing (bahia-irsry.53):
+	// the record carries the revision the cache then stored, newer than the
+	// one the edit started from.
+	revision := h.services.rows[stored.ID].UpdatedAt
+	if !revision.After(updated) {
+		t.Fatalf("cached revision %s did not advance past %s", revision, updated)
+	}
+	if content["org_id"] != stored.OrgID.String() || content["updated_at"] != revision.Format(time.RFC3339Nano) {
+		t.Fatalf("relay-first content org_id=%v updated_at=%v, want %s and the cached revision %s",
+			content["org_id"], content["updated_at"], stored.OrgID, revision.Format(time.RFC3339Nano))
 	}
 	assertWebReadModelFilterMatches(t, relayFirst)
 
@@ -214,7 +221,7 @@ func TestRelayFirstTombstonesMatchProjectorTombstones(t *testing.T) {
 	if err := writer.PublishServiceRegistry(ctx, &domain.Service{ID: serviceID, UpdatedAt: deletedAt}, true); err != nil {
 		t.Fatalf("relay-first service tombstone: %v", err)
 	}
-	if err := writer.PublishEnvironmentRegistry(ctx, &domain.Environment{ID: environmentID, UpdatedAt: deletedAt}, true); err != nil {
+	if err := writer.PublishEnvironmentRegistry(ctx, &domain.Environment{ID: environmentID, UpdatedAt: deletedAt}, nil, true); err != nil {
 		t.Fatalf("relay-first environment tombstone: %v", err)
 	}
 	relayFirst := relayFirstSink.events
@@ -413,6 +420,8 @@ type relayFirstTestServiceRepo struct {
 	mu            sync.Mutex
 	rows          map[uuid.UUID]domain.Service
 	stampRevision bool
+	// pgRevisions applies PgServiceRepository.Update's revision rule.
+	pgRevisions bool
 }
 
 func (r *relayFirstTestServiceRepo) Create(_ context.Context, svc *domain.Service) error {
@@ -456,8 +465,21 @@ func (r *relayFirstTestServiceRepo) Update(_ context.Context, svc *domain.Servic
 	if r.stampRevision {
 		svc.UpdatedAt = r.rows[svc.ID].UpdatedAt.Add(time.Second + 7*time.Microsecond)
 	}
+	if r.pgRevisions {
+		svc.UpdatedAt = pgStoredRevision(r.rows[svc.ID].UpdatedAt, svc.UpdatedAt)
+	}
 	r.rows[svc.ID] = *svc
 	return nil
+}
+
+// pgStoredRevision is the revision repository.revisionAssignment stores: a
+// newer requested revision verbatim, otherwise one moved past the stored one.
+func pgStoredRevision(stored, requested time.Time) time.Time {
+	requested = domain.NormalizeRevisionTime(requested)
+	if requested.After(stored) {
+		return requested
+	}
+	return domain.NextRevisionTime(stored)
 }
 
 func (r *relayFirstTestServiceRepo) Delete(_ context.Context, id uuid.UUID) error {
@@ -470,6 +492,8 @@ func (r *relayFirstTestServiceRepo) Delete(_ context.Context, id uuid.UUID) erro
 type relayFirstTestEnvironmentRepo struct {
 	mu   sync.Mutex
 	rows map[uuid.UUID]domain.Environment
+	// pgRevisions applies PgEnvironmentRepository.Update's revision rule.
+	pgRevisions bool
 }
 
 func (r *relayFirstTestEnvironmentRepo) Create(_ context.Context, env *domain.Environment) error {
@@ -510,6 +534,9 @@ func (r *relayFirstTestEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([
 func (r *relayFirstTestEnvironmentRepo) Update(_ context.Context, env *domain.Environment) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.pgRevisions {
+		env.UpdatedAt = pgStoredRevision(r.rows[env.ID].UpdatedAt, env.UpdatedAt)
+	}
 	r.rows[env.ID] = *env
 	return nil
 }

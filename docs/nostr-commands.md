@@ -271,6 +271,7 @@ Each domain's mutations flow through MCP tools backed by signer-first controlpla
 | MCP tool | ContextVM method | Publisher |
 |----------|-----------------|-----------|
 | `bahia_create_service` | `service/create` | `ServiceCommandPublisher.PublishServiceCreate` |
+| `bahia_create_environment` | `environment/create` | `ServiceCommandPublisher.PublishEnvironmentCreateRequest` |
 | `bahia_deploy` | `service/deploy` | `ServiceCommandPublisher.PublishDeployIntent` |
 | `bahia_rollback` | `service/rollback` | `ServiceCommandPublisher.PublishRollback` |
 

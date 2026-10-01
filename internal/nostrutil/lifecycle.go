@@ -44,6 +44,25 @@ func IsStateKind(kind canonicalnostr.Kind) bool {
 	return kind.IsReplaceable() || kind.IsAddressable()
 }
 
+// MaxEventAge bounds how old an event of an AgeCapped kind may be when a
+// Bahia consumer or relay admits it (C-11): a year-old one-shot fact, request
+// or command is a replay, not news, and the cap keeps replay protection and
+// dedup memory bounded.
+const MaxEventAge = 365 * 24 * time.Hour
+
+// AgeCapped reports whether MaxEventAge applies to events of kind. It is the
+// one rule both the daemon's inbound validation and the relay sidecar's write
+// policy apply. Regular and ephemeral kinds are capped. Replaceable and
+// addressable events are exempt: they are current state until a newer version
+// replaces them, however old (a NIP-65 list, ACL, relay set or trust list
+// untouched for a year is still in force), and archives must be able to
+// republish them. Deletion requests are exempt because they stay in force for
+// as long as their targets can be republished; dropping an old one would let
+// deleted state return.
+func AgeCapped(kind canonicalnostr.Kind) bool {
+	return !IsStateKind(kind) && kind != canonicalnostr.KindDeletion
+}
+
 // AddressOf returns the coordinate of a replaceable or addressable event.
 func AddressOf(ev *canonicalnostr.Event) (Address, bool) {
 	if ev == nil || !IsStateKind(ev.Kind) {

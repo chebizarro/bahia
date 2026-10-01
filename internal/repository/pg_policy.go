@@ -25,9 +25,12 @@ func NewPgDeploymentPolicyRepository(pool *pgxpool.Pool) *PgDeploymentPolicyRepo
 }
 
 // Create inserts a new deployment policy.
+// The id is stored verbatim (client-minted, bahia-irsry.42); a UUIDv7 is
+// minted only for callers that supply none. A primary-key hit is
+// ErrAlreadyExists, which the service resolves by content.
 func (r *PgDeploymentPolicyRepository) Create(ctx context.Context, p *domain.DeploymentPolicy) error {
 	if p.ID == uuid.Nil {
-		p.ID = uuid.New()
+		p.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	p.CreatedAt = now
@@ -46,7 +49,16 @@ func (r *PgDeploymentPolicyRepository) Create(ctx context.Context, p *domain.Dep
 		string(p.Enforcement), p.Enabled, p.CreatedAt, p.UpdatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("inserting policy: %w", err)
+		switch constraint := uniqueViolationConstraint(err); constraint {
+		case "":
+			return fmt.Errorf("inserting policy: %w", err)
+		case "deployment_policies_pkey":
+			return fmt.Errorf("inserting policy %s: %w", p.ID, ErrAlreadyExists)
+		case "deployment_policies_name_key":
+			return fmt.Errorf("inserting policy: policy name %q is already in use: %w", p.Name, ErrConflict)
+		default:
+			return fmt.Errorf("inserting policy: unique constraint %s violated: %w", constraint, ErrConflict)
+		}
 	}
 	return nil
 }

@@ -3,7 +3,7 @@ package relaysidecar
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -173,50 +173,81 @@ collect:
 		"applied must end at the highest handled version, got %v", seen)
 }
 
+// A failed activation leaves the coordinate pending and Applied behind; the
+// next activation trigger retries it. The test waits on the consumer's own
+// signals instead of sleeping: Apply reports every attempt, and the "applied"
+// status is published only after processPending has advanced Applied.
 func TestConfigConsumerFailedActivationLeavesAppliedBehind(t *testing.T) {
 	sk := nostr.Generate()
 	author := sk.Public().Hex()
-	dir := t.TempDir()
+	// Sign before Start: event.Sign trips a known checkptr bug in the nostr
+	// library under -race (bahia-4fz4z), so it must stay off the raced path.
+	event := membershipEvent(t, sk, nostr.Tags{{"p", author}})
 
-	failCount := 0
+	attempts := make(chan error, 2)
+	statuses := make(chan nostr.Event, 8)
+	failNext := true // only the activation goroutine reads or writes it
 	consumer, err := NewConfigConsumer(ConfigConsumerConfig{
 		ServiceID:      "relay-sidecar-test",
 		Scope:          "edge",
-		ProjectionPath: filepath.Join(dir, "projection.json"),
+		ProjectionPath: filepath.Join(t.TempDir(), "projection.json"),
 		TrustedAuthors: []string{author},
 		Signer:         stubConfigSigner{},
-		Publisher:      stubConfigPublisher{},
-		Apply: func(p ConfigProjection) error {
-			if failCount == 0 {
-				failCount++
-				return fmt.Errorf("activation failed")
+		Publisher: configStatusPublisherFunc(func(_ context.Context, status nostr.Event) (int, error) {
+			statuses <- status
+			return 1, nil
+		}),
+		Apply: func(ConfigProjection) error {
+			var err error
+			if failNext {
+				failNext = false
+				err = errors.New("activation failed")
 			}
-			return nil
+			attempts <- err
+			return err
 		},
 	})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	consumer.Start(ctx)
 
-	event := membershipEvent(t, sk, nostr.Tags{{"p", author}})
+	pendingAndApplied := func() (int, int) {
+		consumer.mu.Lock()
+		defer consumer.mu.Unlock()
+		return len(consumer.state.Pending), consumer.state.Applied[author+"\x00relay-sidecar-test\x00edge\x00membership"].Version
+	}
+	awaitAttempt := func() error {
+		t.Helper()
+		select {
+		case err := <-attempts:
+			return err
+		case <-ctx.Done():
+			t.Fatal("activation was not attempted")
+			return nil
+		}
+	}
+
+	// Handle publishes "accepted" before it returns, then signals activation.
 	require.NoError(t, consumer.Handle(ctx, event))
+	awaitStatus(t, ctx, statuses, "accepted", event.ID.Hex())
 
-	time.Sleep(100 * time.Millisecond)
-
-	consumer.mu.Lock()
-	appliedVersion := consumer.state.Applied[author+"\x00"+"relay-sidecar-test"+"\x00"+"edge"+"\x00"+"membership"].Version
-	consumer.mu.Unlock()
-	require.Equal(t, 0, appliedVersion, "applied should still be 0 after failed activation")
+	// A failed Apply returns from processPending without touching state, so
+	// once the attempt is observed nothing else can change it until the next
+	// trigger.
+	require.Error(t, awaitAttempt())
+	pending, applied := pendingAndApplied()
+	require.Equal(t, 1, pending, "a failed activation must stay pending for retry")
+	require.Equal(t, 0, applied, "applied should still be 0 after failed activation")
+	require.Empty(t, statuses, "a failed activation must not publish applied status")
 
 	consumer.activateCh <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
-
-	consumer.mu.Lock()
-	appliedVersion = consumer.state.Applied[author+"\x00"+"relay-sidecar-test"+"\x00"+"edge"+"\x00"+"membership"].Version
-	consumer.mu.Unlock()
-	require.Equal(t, 1, appliedVersion, "applied should advance to 1 after successful retry")
+	require.NoError(t, awaitAttempt())
+	awaitStatus(t, ctx, statuses, "applied", event.ID.Hex())
+	pending, applied = pendingAndApplied()
+	require.Equal(t, 0, pending, "the retried activation must leave the queue")
+	require.Equal(t, 1, applied, "applied should advance to 1 after successful retry")
 }
 
 func TestValidateAcceptsMembershipTagsWithRelayHints(t *testing.T) {

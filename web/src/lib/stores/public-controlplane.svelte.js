@@ -209,8 +209,10 @@ export function rejectDeploymentIntent(id) {
   return publishCommand({ operation: 'approval/reject', tags: [['intent', id], ['decision', 'reject']], content: { intent_id: id, decision: 'reject' } });
 }
 
-export function createLLMRoute(payload) {
-  return publishCommand({ operation: 'llm/route-create', content: payload });
+// The route id is client-minted (bahia-irsry.42): pass the same payload.id to
+// retry; one is minted when absent.
+export async function createLLMRoute(payload) {
+  return publishCommand({ operation: 'llm/route-create', content: withEntityId(payload) });
 }
 
 export function registerLLMRelease(payload) {
@@ -483,8 +485,10 @@ export function yankPackage(payload) {
   });
 }
 
-export function createPolicy(payload) {
-  return publishCommand({ operation: 'policy/create', tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: payload });
+// The policy id is client-minted (bahia-irsry.42): pass the same payload.id to
+// retry; one is minted when absent.
+export async function createPolicy(payload) {
+  return publishCommand({ operation: 'policy/create', tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: withEntityId(payload) });
 }
 
 export function updatePolicy(id, payload) {

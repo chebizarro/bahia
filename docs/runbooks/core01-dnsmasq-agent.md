@@ -299,6 +299,38 @@ on the agent side and surfaces the error to Bahia
 (`TestDnsmasqAgentBackendReloadFailureRollsBackAndRecovers`); this section is
 only for deliberately abandoning Bahia management.
 
+### Agent binary downgrade
+
+The agent's state file (`--state-file`, schema `bahia.dnsagent.state.v1`)
+gained a `zone_request_ids` map: the id of the request event applied at each
+zone's serial, used to break equal-serial ties by lowest event id. Agents built
+before that change decode the state file strictly (unknown fields are
+rejected), so an older binary started on a state file written by a newer one
+exits at startup with
+`decode DNS agent state file ...: json: unknown field "zone_request_ids"`.
+
+Downgrading the agent binary therefore needs a state-file reset:
+
+1. Stop the agent: `ssh core-01 systemctl stop bahia-dns-agent`.
+2. Keep a copy: `cp state.json state.json.pre-downgrade` in the state directory
+   (`/var/lib/bahia-dns-agent` here, `/etc/bahia` on OpenWrt).
+3. Preferred: remove only the new field, keeping the per-zone serial floors:
+
+   ```sh
+   cd /var/lib/bahia-dns-agent
+   jq 'del(.zone_request_ids)' state.json > state.json.tmp \
+     && chmod 0600 state.json.tmp && mv state.json.tmp state.json
+   ```
+
+   If `jq` is not available, delete `state.json` instead. The agent then starts
+   with no serial floors and accepts the next `dns-agent/sync` at any serial,
+   so do this only while Bahia is running and publishing the current zone. That
+   sync rewrites the Bahia include and the state file.
+4. Install the older binary, start the agent and verify as in section 3.
+
+Upgrading again needs no action: a newer agent reads a state file without
+`zone_request_ids` and records request ids from the next applied request on.
+
 ### Internal HTTPS rollback
 
 1. Restore the saved manual Astillero vhost, validate it with `nginx -t`, and

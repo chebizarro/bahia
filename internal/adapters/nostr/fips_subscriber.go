@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -169,7 +170,11 @@ func (s *FIPSSubscriber) Stop() {
 	s.wg.Wait()
 }
 
-// Run subscribes until ctx is cancelled, reconnecting with exponential backoff after relay closures/errors.
+// Run subscribes until ctx is cancelled, reconnecting with exponential backoff
+// after the subscription ends. It returns a *SubscriptionGaveUpError when the
+// pool gave up on the relays (a policy refusal, failed NIP-42 AUTH or an
+// exhausted CLOSED retry budget): resubscribing would only sidestep that
+// give-up with a fresh budget (bahia-irsry.49).
 func (s *FIPSSubscriber) Run(ctx context.Context) error {
 	if s == nil {
 		return fmt.Errorf("fips subscriber is nil")
@@ -180,19 +185,27 @@ func (s *FIPSSubscriber) Run(ctx context.Context) error {
 	if s.workerRepo == nil {
 		return fmt.Errorf("fips subscriber worker repository is required")
 	}
+	expiryCtx, stopExpiry := context.WithCancel(ctx)
 	expiryDone := make(chan struct{})
 	go func() {
 		defer close(expiryDone)
-		_ = s.lifecycle.RunExpiry(ctx, s.now, func(expired []nostrutil.Entry) {
-			s.withdrawAdverts(ctx, expired, "expired")
+		_ = s.lifecycle.RunExpiry(expiryCtx, s.now, func(expired []nostrutil.Entry) {
+			s.withdrawAdverts(expiryCtx, expired, "expired")
 		})
 	}()
-	defer func() { <-expiryDone }()
+	defer func() {
+		stopExpiry()
+		<-expiryDone
+	}()
 	backoff := DefaultBackoff()
 	for {
 		err := s.subscribe(ctx)
 		if ctx.Err() != nil {
 			return nil
+		}
+		if errors.Is(err, ErrSubscriptionGaveUp) {
+			s.logger.Error("relays refused the FIPS advert subscription for good; not resubscribing", zap.Error(err))
+			return err
 		}
 		delay := backoff.Next()
 		s.logger.Warn("fips subscription ended, reconnecting with backoff", zap.Error(err), zap.Duration("delay", delay), zap.Int("attempt", backoff.Attempt()))
@@ -233,7 +246,9 @@ func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
 			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
-				return nil
+				// Every REQ stopped: the relays left the pool, or the pool
+				// gave up on them.
+				return merged.GaveUp()
 			}
 			s.handleEvent(ctx, ev)
 		}

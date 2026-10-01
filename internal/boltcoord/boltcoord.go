@@ -1,19 +1,23 @@
-// Package boltcoord resolves NIP-01 coordinates and NIP-09 `a` deletions over
-// the bolt eventstore (fiatjaf.com/nostr/eventstore/boltdb) for coordinates of
-// any length. Both Bahia stores built on it use this package: the relay
-// sidecar's events.bolt and the daemon's local store (bahia-irsry.44,
-// bahia-irsry.51).
+// Package boltcoord makes the bolt eventstore (fiatjaf.com/nostr/eventstore/
+// boltdb) answer NIP-01 coordinates, NIP-09 deletions and tag filters for tag
+// values of any length. Both Bahia stores built on it use this package: the
+// relay sidecar's events.bolt and the daemon's local store (bahia-irsry.44,
+// bahia-irsry.51, bahia-irsry.52).
 //
 // The eventstore indexes no tag value that is empty or longer than
-// TagIndexMaxValue bytes, so its #d and #a lookups cannot find such values:
+// TagIndexMaxValue bytes, so its tag lookups cannot find such values:
 //   - ReplaceEvent finds the versions an event supersedes through #d, so for a
 //     d it does not index it supersedes nothing and every version is kept.
-//     Versions and Replace match such a d here instead, over the author's
-//     events of that kind.
+//     Versions and Store.Replace match such a d here instead, over the
+//     author's events of that kind.
 //   - A coordinate is "<kind>:<pubkey>:<d>", already 67 bytes before d, so any
 //     d of 30 bytes or more takes it past the limit and an #a lookup for a
 //     deletion request naming it finds nothing. DeletionIndex keeps a hashed
 //     index of the coordinates stored requests delete instead.
+//   - A REQ or COUNT filter on such a value (#a with a relay config
+//     coordinate, #d with an empty d) matches nothing. Store keeps a hashed
+//     index of those values next to the eventstore's (see tagindex.go) and
+//     Store.Query reads filters that name one through it.
 package boltcoord
 
 import (
@@ -21,7 +25,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"iter"
 	"math"
 	"slices"
@@ -29,7 +32,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/eventstore/boltdb"
 	"go.etcd.io/bbolt"
 )
 
@@ -160,37 +162,6 @@ func LatestVersion(scan Scan, c Coordinate) (nostr.Event, bool) {
 	return nostr.Event{}, false
 }
 
-// Replace stores a replaceable or addressable event if it is newer than every
-// version held for its coordinate (NIP-01: higher created_at, then lower id)
-// and removes the versions it supersedes. It reports false, storing nothing,
-// when a version at least as new is held (the event itself included). Callers
-// serialise Replace with other writes to the coordinate.
-func Replace(backend *boltdb.BoltBackend, scan Scan, event nostr.Event) (bool, error) {
-	c := CoordinateOf(event)
-	// ReplaceEvent finds the versions it supersedes through the #d index, so
-	// for a d that index skips it supersedes nothing: read every version here
-	// and delete them after the write.
-	limit := 1
-	if !c.dIndexed() {
-		limit = unbounded
-	}
-	current := slices.Collect(Versions(scan, c, 0, limit))
-	if len(current) > 0 && !nostr.IsOlder(current[0], event) {
-		return false, nil
-	}
-	if _, err := backend.ReplaceEvent(event); err != nil {
-		return false, err
-	}
-	if !c.dIndexed() {
-		for _, older := range current {
-			if err := backend.DeleteEvent(older.ID); err != nil {
-				return false, fmt.Errorf("delete replaced version %s: %w", older.ID.Hex(), err)
-			}
-		}
-	}
-	return true, nil
-}
-
 // DeletionIndex indexes, in one bucket of the eventstore's bbolt file, the
 // coordinates that stored kind-5 requests delete. A key is sha256(coordinate)
 // ‖ request created_at (8 bytes, big endian) ‖ request id, with an empty
@@ -268,12 +239,29 @@ func (ix DeletionIndex) Deleted(c Coordinate, since nostr.Timestamp) (bool, erro
 // backfill can simply run again. requests must not hold a bbolt read
 // transaction while it yields (see Scan). A cancelled ctx is returned as is.
 func (ix DeletionIndex) Backfill(ctx context.Context, requests iter.Seq[nostr.Event], batch int, finish func(*bbolt.Tx) error) error {
-	var keys [][]byte
+	keys := func(yield func([]byte) bool) {
+		for request := range requests {
+			for _, c := range DeletedCoordinates(request) {
+				if !yield(deletionKey(c, request)) {
+					return
+				}
+			}
+		}
+	}
+	return putBatched(ctx, ix.db, ix.bucket, keys, batch, finish)
+}
+
+// putBatched writes keys, with empty values, into bucket in transactions of at
+// most batch keys. finish, if set, runs in the last transaction. keys must not
+// hold a bbolt read transaction while it yields (see Scan). A cancelled ctx is
+// returned as is.
+func putBatched(ctx context.Context, db *bbolt.DB, bucket []byte, keys iter.Seq[[]byte], batch int, finish func(*bbolt.Tx) error) error {
+	var pending [][]byte
 	flush := func(done bool) error {
-		err := ix.db.Update(func(tx *bbolt.Tx) error {
-			bucket := tx.Bucket(ix.bucket)
-			for _, key := range keys {
-				if err := bucket.Put(key, nil); err != nil {
+		err := db.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket(bucket)
+			for _, key := range pending {
+				if err := b.Put(key, nil); err != nil {
 					return err
 				}
 			}
@@ -282,21 +270,22 @@ func (ix DeletionIndex) Backfill(ctx context.Context, requests iter.Seq[nostr.Ev
 			}
 			return nil
 		})
-		keys = keys[:0]
+		pending = pending[:0]
 		return err
 	}
-	for request := range requests {
+	for key := range keys {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		for _, c := range DeletedCoordinates(request) {
-			keys = append(keys, deletionKey(c, request))
-		}
-		if len(keys) >= batch {
+		pending = append(pending, key)
+		if len(pending) >= batch {
 			if err := flush(false); err != nil {
 				return err
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return flush(true)
 }

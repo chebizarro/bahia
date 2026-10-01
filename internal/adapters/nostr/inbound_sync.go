@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +59,19 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	tracker := newCursorTracker(s.store, s.self, s.now, s.logger)
 	progress := make(map[string]relayProgress)
 	startRelays := func() {
-		for _, relayURL := range s.pool.URLs() {
+		urls := s.pool.URLs()
+		// A relay given up on stays given up while it is configured; one
+		// that has left the pool since is synced afresh if it comes back.
+		configured := make(map[string]struct{}, len(urls))
+		for _, relayURL := range urls {
+			configured[relayURL] = struct{}{}
+		}
+		for relayURL, state := range progress {
+			if _, ok := configured[relayURL]; !ok && state.gaveUp {
+				delete(progress, relayURL)
+			}
+		}
+		for _, relayURL := range urls {
 			if _, running := progress[relayURL]; running {
 				continue
 			}
@@ -85,6 +98,10 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			startRelays()
 		case item := <-inbound:
 			s.consume(runCtx, item, tracker, progress)
+			if item.op == opRelayGaveUp && everyRelayGaveUp(progress) {
+				s.logger.Error("every relay refused the inbound subscription for good; inbound sync is idle until the relay set changes",
+					zap.Strings("relays", s.pool.URLs()))
+			}
 			if item.op == opCaughtUp && s.now().Sub(lastPrune) >= regularRetentionPruneInterval {
 				s.pruneStore()
 				lastPrune = s.now()
@@ -100,6 +117,9 @@ func (s *Subscriber) Run(ctx context.Context) error {
 type relayProgress struct {
 	caughtUp bool
 	failed   bool
+	// gaveUp is set once the relay refused every filter for good; its
+	// worker has stopped.
+	gaveUp bool
 }
 
 type inboundOp int
@@ -117,17 +137,21 @@ const (
 	opRelayFailed
 	// opRelayGone: the relay left the pool; its worker stopped.
 	opRelayGone
+	// opRelayGaveUp: the relay refused every filter for good (see runRelay);
+	// its worker stopped. reason is the last refusal.
+	opRelayGaveUp
 )
 
 // inboundItem is one message from a relay worker to the consumer. A worker
 // sends a key's events before that key's commit, and the channel is FIFO, so
 // a cursor is only committed after the events below it are stored.
 type inboundItem struct {
-	op    inboundOp
-	relay string
-	key   cursorKey
-	ev    *nostr.Event
-	floor nostr.Timestamp
+	op     inboundOp
+	relay  string
+	key    cursorKey
+	ev     *nostr.Event
+	floor  nostr.Timestamp
+	reason string
 }
 
 func sendInbound(ctx context.Context, out chan<- inboundItem, item inboundItem) bool {
@@ -166,6 +190,12 @@ func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cur
 		s.updateCaughtUp(progress)
 	case opRelayGone:
 		delete(progress, item.relay)
+		s.updateCaughtUp(progress)
+	case opRelayGaveUp:
+		state := progress[item.relay]
+		state.failed = true
+		state.gaveUp = true
+		progress[item.relay] = state
 		s.updateCaughtUp(progress)
 	}
 }
@@ -207,11 +237,28 @@ func (s *Subscriber) pruneStore() {
 	}
 }
 
-// runRelay keeps one relay in sync until ctx ends or the relay leaves the pool.
+// runRelay keeps one relay in sync until ctx ends, the relay leaves the pool,
+// or the relay refuses every filter for good.
+//
+// A session that ends without a CLOSED (a dropped connection, a failed
+// catch-up) is resynced with backoff, without limit. A CLOSED goes through
+// the pool's CLOSED policy (closedRetryBudget) per filter, as for the pool's
+// own subscriptions (bahia-irsry.49): "auth-required:" authenticates the
+// relay and resyncs at once; a policy refusal, a failed AUTH, or a retryable
+// reason more than nostr.closed_retry_budget times in a row gives that filter
+// up on this relay, while its other filters keep syncing. A filter's count
+// starts over once its catch-up commits. Every resync resumes each filter from
+// its EOSE-anchored cursor, or reconciles it with NIP-77, as before.
 func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem) {
 	backoff := s.newRelayBackoff()
+	budgets := make(map[string]*closedRetryBudget, len(filters))
+	for _, filter := range filters {
+		budgets[filter.hash] = s.pool.newClosedRetryBudget()
+	}
+	served := func(hash string) { budgets[hash].served() }
+	active := filters
 	for {
-		caughtUp, err := s.syncRelay(ctx, relayURL, filters, out, backoff)
+		caughtUp, err := s.syncRelay(ctx, relayURL, active, out, backoff, served)
 		if ctx.Err() != nil {
 			return
 		}
@@ -220,35 +267,81 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 			sendInbound(ctx, out, inboundItem{op: opRelayGone, relay: relayURL})
 			return
 		}
+		immediate := false
+		var closed *relayClosedError
+		if errors.As(err, &closed) && budgets[closed.hash] != nil {
+			verdict := budgets[closed.hash].closed(closed.reason)
+			action := verdict.Action
+			if action == ClosedAuthenticate {
+				if authErr := s.pool.AuthenticateRelay(ctx, relayURL); authErr != nil {
+					s.logger.Warn("relay requires NIP-42 AUTH for an inbound REQ and AUTH failed",
+						zap.String("relay", relayURL), zap.String("reason", closed.reason), zap.Error(authErr))
+					s.pool.recordRelayError(relayURL, authUnavailableMetadata(closed.reason, authErr))
+					action = ClosedTerminal
+				} else {
+					immediate = true
+				}
+			}
+			if action == ClosedTerminal {
+				if verdict.Exhausted {
+					s.pool.recordClosedRetryExhausted(relayURL)
+				}
+				active = withoutInboundFilter(active, closed.hash)
+				s.logger.Warn("relay refused an inbound filter for good; not retrying it",
+					zap.String("relay", relayURL),
+					zap.String("reason", closed.reason),
+					zap.Bool("retry_budget_exhausted", verdict.Exhausted),
+					zap.Int("filters_left", len(active)))
+				if len(active) == 0 {
+					sendInbound(ctx, out, inboundItem{op: opRelayGaveUp, relay: relayURL, reason: closed.reason})
+					return
+				}
+			}
+		}
 		if !caughtUp {
 			sendInbound(ctx, out, inboundItem{op: opRelayFailed, relay: relayURL})
 		}
-		delay := backoff.Next()
-		s.logger.Warn("relay sync ended; resyncing with backoff",
-			zap.String("relay", relayURL),
-			zap.Error(err),
-			zap.Duration("delay", delay),
-			zap.Int("attempt", backoff.Attempt()))
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
+		if !immediate {
+			delay := backoff.Next()
+			s.logger.Warn("relay sync ended; resyncing with backoff",
+				zap.String("relay", relayURL),
+				zap.Error(err),
+				zap.Duration("delay", delay),
+				zap.Int("attempt", backoff.Attempt()))
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 		s.pool.RecordRelayReREQ()
 	}
 }
 
+// withoutInboundFilter returns filters less those with hash.
+func withoutInboundFilter(filters []inboundFilter, hash string) []inboundFilter {
+	kept := make([]inboundFilter, 0, len(filters))
+	for _, filter := range filters {
+		if filter.hash != hash {
+			kept = append(kept, filter)
+		}
+	}
+	return kept
+}
+
 // syncRelay runs one session with a relay: catch up every filter, then follow
-// live until the relay drops. It reports whether catch-up finished.
-func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem, backoff *Backoff) (bool, error) {
+// live until the relay drops. It reports whether catch-up finished; served
+// is told each filter whose catch-up committed.
+func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem, backoff *Backoff, served func(hash string)) (bool, error) {
 	sessionStart := s.now()
 	s.refreshRelayInfo(ctx, relayURL)
 	for _, filter := range filters {
 		if err := s.catchUp(ctx, relayURL, filter, sessionStart, out); err != nil {
 			return false, err
 		}
+		served(filter.hash)
 	}
 	if !sendInbound(ctx, out, inboundItem{op: opCaughtUp, relay: relayURL}) {
 		return true, ctx.Err()
@@ -393,7 +486,7 @@ func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key curso
 			}
 			return len(seen), oldest, ctx.Err()
 		case reason := <-sub.ClosedReason:
-			return len(seen), oldest, s.relayClosed(relayURL, reason)
+			return len(seen), oldest, s.relayClosed(key, reason)
 		}
 	}
 }
@@ -464,22 +557,33 @@ func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key curso
 				return ctx.Err()
 			}
 		case reason := <-sub.ClosedReason:
-			return s.relayClosed(relayURL, reason)
+			return s.relayClosed(key, reason)
 		}
 	}
 }
 
-// relayClosed records a relay CLOSED and returns the error that ends the
-// session; the relay is then resynced with backoff. An "auth-required:"
-// refusal needs nothing more: the pool's connection AuthHandler answers the
-// relay's NIP-42 challenge, so the resync's REQ runs authenticated.
-func (s *Subscriber) relayClosed(relayURL, reason string) error {
-	s.pool.RecordRelayClosed(relayURL, reason)
-	s.logger.Warn("relay closed inbound subscription", zap.String("relay", relayURL), zap.String("reason", reason))
+// relayClosedError ends a sync session on a relay's CLOSED for one filter;
+// runRelay applies the pool's CLOSED policy to it.
+type relayClosedError struct {
+	relay  string
+	hash   string
+	reason string
+}
+
+func (e *relayClosedError) Error() string {
+	return fmt.Sprintf("relay %s CLOSED the REQ: %s", e.relay, e.reason)
+}
+
+// relayClosed records a relay CLOSED for key's filter and returns the error
+// that ends the session (see runRelay for what follows).
+func (s *Subscriber) relayClosed(key cursorKey, reason string) error {
+	reason = strings.TrimSpace(reason)
+	s.pool.RecordRelayClosed(key.relay, reason)
+	s.logger.Warn("relay closed inbound subscription", zap.String("relay", key.relay), zap.String("reason", reason))
 	for _, observer := range s.ingestionObservers {
-		observer.ObserveRelayClosed(relayURL, reason)
+		observer.ObserveRelayClosed(key.relay, reason)
 	}
-	return fmt.Errorf("relay %s CLOSED the REQ: %s", relayURL, reason)
+	return &relayClosedError{relay: key.relay, hash: key.hash, reason: reason}
 }
 
 // negentropyTarget is the local side of a NIP-77 session for one relay and

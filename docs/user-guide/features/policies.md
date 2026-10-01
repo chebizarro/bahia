@@ -54,8 +54,10 @@ Open **Config Fabric** in the **Admin** navigation section. The console lists ev
 
 - latest desired event ID and version;
 - latest applied event ID and effective version;
-- in-sync or drifted status;
+- in-sync, drifted, or withdrawn status;
 - the latest safe rejection reason.
+
+**Withdrawn** means the latest desired event was deleted (NIP-09) or has expired (NIP-40), and the relay reported it as withdrawn. The relay keeps enforcing the last applied version shown in the row. It intentionally does not revert the live allowlist, because an absent membership list or policy would read as an empty allowlist, and an empty allowlist admits every pubkey. The withdrawn version can't be re-sent. To change the live config, open the policy and select **Publish v*N*** in the withdrawal notice (the next version after the withdrawn one), or select **Rollback** beside any retained version (including the withdrawn one) to republish it at a newer version. Once a newer version is published, the row returns to drifted or in sync.
 
 Select a service policy to open its detail view. The detail view shows the retained desired policy or list and the policy represented by the latest applied event, status/audit history, and all retained desired versions. Event IDs and versions identify the exact signed records used for each view.
 
@@ -104,7 +106,7 @@ Each request requires `target_ref`, `service_id`, `scope`, and `policy_coordinat
 
 ### View drift
 
-`GET /api/v1/config-fabric/drift` returns the latest desired and applied event IDs and versions for each service, policy, and scope, plus `drift` and the latest safe rejection reason.
+`GET /api/v1/config-fabric/drift` returns the latest desired and applied event IDs and versions for each service, policy, and scope, plus `drift` and the latest safe rejection reason. `withdrawn` and `withdrawn_reason` are set when the consumer withdrew the current desired event (deleted or expired); `applied_*` still identifies the config the relay keeps enforcing.
 
 ### Roll back
 

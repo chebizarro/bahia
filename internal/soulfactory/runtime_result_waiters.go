@@ -25,10 +25,19 @@ import (
 // observed terminal failure or an explicit operator action (a lifecycle
 // rollback action or a newer fleet revision).
 //
-// Parked operations live in memory. After a restart the reactor's backfill
-// re-drives them: the kind:1950 action has no terminal result yet, and a soul
-// whose applied fleet revision is not the latest is reconciled again, with the
-// same runtime idempotency keys.
+// A parked operation that changes a soul (a lifecycle step or a fleet apply)
+// keeps that soul's soulOperationGate hold while it waits, so later lifecycle
+// actions and fleet reloads for the soul wait behind it. Such entries are never
+// evicted: the gate allows one per soul. The only evictable entries are late
+// rollback follow-ups, which hold no soul (see parkedOperation).
+//
+// Parked continuations live in memory, but the state they stand for is on the
+// relays: every park publishes a kind:6950 awaiting_terminal progress event
+// tagged t=awaitingTerminalTopic, and its operation ends with a kind:7950
+// terminal result. After a restart the reactor rebuilds the outstanding ones
+// (awaiting_terminal without a matching terminal result) before it handles the
+// backlog, holds their souls again and re-drives them with the same runtime
+// idempotency keys (rebuildParkedOperations).
 
 const (
 	// actionStatusAwaitingTerminal is the kind:6950 progress status of an
@@ -40,8 +49,15 @@ const (
 	// result was not observed within the wait.
 	rollbackStatusOutcomeUnknown = "outcome_unknown"
 
-	// maxParkedRuntimeResults bounds parked operations. Past it the oldest is
-	// dropped with a warning and stays awaiting_terminal until re-driven.
+	// actionStatusRollbackResolved is the kind:6950 follow-up progress status
+	// published when the terminal kind:38386 of a rollback whose wait timed out
+	// (reported as rollback_status outcome_unknown) is observed. Its
+	// rollback-status tag says how the rollback ended.
+	actionStatusRollbackResolved = "rollback_resolved"
+
+	// maxParkedRuntimeResults bounds parked entries that hold no soul (late
+	// rollback follow-ups). Past it the oldest of those is dropped with a
+	// warning. Entries that hold a soul are never evicted.
 	maxParkedRuntimeResults = 4096
 	// maxUnclaimedRuntimeResults bounds results remembered for an operation
 	// that has not parked yet: the result can arrive between the wait's timeout
@@ -97,13 +113,23 @@ func runtimeResultFailure(result *RuntimeControlResultEnvelope) error {
 	return fmt.Errorf("runtime %s response", result.Status)
 }
 
-type parkedRuntimeResult struct {
-	pending *runtimeResultPending
+// parkedOperation is the continuation of an operation waiting for a late
+// runtime terminal result.
+type parkedOperation struct {
 	// shardKey is the reactor handler shard of the parked operation, so the
 	// continuation runs serialized with the work it continues.
 	shardKey string
-	resume   func(context.Context, *RuntimeControlResultEnvelope)
-	seq      uint64
+	// holdsSoul marks an operation that keeps its soul's soulOperationGate hold
+	// while parked. It is never evicted: dropping it would leave the soul held
+	// with nothing left to release it.
+	holdsSoul bool
+	resume    func(context.Context, *RuntimeControlResultEnvelope)
+}
+
+type parkedRuntimeResult struct {
+	pending *runtimeResultPending
+	op      parkedOperation
+	seq     uint64
 }
 
 type unclaimedRuntimeResult struct {
@@ -115,6 +141,8 @@ type unclaimedRuntimeResult struct {
 // It is event-driven: nothing expires on a timer.
 type runtimeResultWaiters struct {
 	logger *slog.Logger
+	// limit bounds parked entries that hold no soul (maxParkedRuntimeResults).
+	limit int
 
 	mu             sync.Mutex
 	seq            uint64
@@ -129,15 +157,16 @@ func newRuntimeResultWaiters(logger *slog.Logger) *runtimeResultWaiters {
 	}
 	return &runtimeResultWaiters{
 		logger:    logger,
+		limit:     maxParkedRuntimeResults,
 		parked:    make(map[string]*parkedRuntimeResult),
 		unclaimed: make(map[string][]unclaimedRuntimeResult),
 	}
 }
 
-// park registers resume for pending's terminal result. When a correlated result
+// park registers op for pending's terminal result. When a correlated result
 // has already been delivered, park returns it instead and registers nothing;
 // the caller continues inline.
-func (w *runtimeResultWaiters) park(pending *runtimeResultPending, shardKey string, resume func(context.Context, *RuntimeControlResultEnvelope)) (*RuntimeControlResultEnvelope, bool) {
+func (w *runtimeResultWaiters) park(pending *runtimeResultPending, op parkedOperation) (*RuntimeControlResultEnvelope, bool) {
 	id := pending.requestID()
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -148,19 +177,32 @@ func (w *runtimeResultWaiters) park(pending *runtimeResultPending, shardKey stri
 		}
 	}
 	w.seq++
-	w.parked[id] = &parkedRuntimeResult{pending: pending, shardKey: shardKey, resume: resume, seq: w.seq}
-	if len(w.parked) > maxParkedRuntimeResults {
-		oldestID, oldest := "", uint64(0)
-		for candidateID, candidate := range w.parked {
+	w.parked[id] = &parkedRuntimeResult{pending: pending, op: op, seq: w.seq}
+	w.evictFollowUpsLocked()
+	return nil, false
+}
+
+// evictFollowUpsLocked drops the oldest parked entries that hold no soul while
+// more than limit of them are parked.
+func (w *runtimeResultWaiters) evictFollowUpsLocked() {
+	for {
+		followUps, oldestID, oldest := 0, "", uint64(0)
+		for id, candidate := range w.parked {
+			if candidate.op.holdsSoul {
+				continue
+			}
+			followUps++
 			if oldestID == "" || candidate.seq < oldest {
-				oldestID, oldest = candidateID, candidate.seq
+				oldestID, oldest = id, candidate.seq
 			}
 		}
+		if followUps <= w.limit {
+			return
+		}
 		delete(w.parked, oldestID)
-		w.logger.Warn("dropping oldest operation awaiting a runtime terminal result; it stays awaiting_terminal until re-driven",
-			"request_event", oldestID, "limit", maxParkedRuntimeResults)
+		w.logger.Warn("dropping oldest late rollback follow-up awaiting a runtime terminal result; its action already reported rollback_status outcome_unknown",
+			"request_event", oldestID, "limit", w.limit)
 	}
-	return nil, false
 }
 
 // shardKey returns the handler shard of the operation parked on requestID.
@@ -171,7 +213,7 @@ func (w *runtimeResultWaiters) shardKey(requestID string) (string, bool) {
 	if parked == nil {
 		return "", false
 	}
-	return parked.shardKey, true
+	return parked.op.shardKey, true
 }
 
 // deliver hands a kind:38386 event to the operation parked on its request and
@@ -194,7 +236,7 @@ func (w *runtimeResultWaiters) deliver(ctx context.Context, event *nostr.Event) 
 	w.logger.Info("late runtime terminal result observed; resuming operation",
 		"request_event", result.RequestEvent, "result_event", event.ID.Hex(),
 		"method", result.Method, "status", result.Status)
-	parked.resume(ctx, result)
+	parked.op.resume(ctx, result)
 	return true
 }
 
@@ -230,4 +272,34 @@ func (w *runtimeResultWaiters) dropUnclaimedLocked(id string, index int) {
 		w.unclaimed[id] = results
 	}
 	w.unclaimedCount--
+}
+
+// observeLateRollback resolves a rollback request's Execute outcome. When the
+// rollback's terminal result was not observed in time, its outcome stays
+// unknown (the caller reports rollback_status outcome_unknown) and a follow-up
+// is parked: report receives the late result once the reactor observes it, so
+// the rollback's actual outcome is published rather than only logged
+// (bahia-irsry.38). A result that arrived between the wait's timeout and the
+// park is the rollback's outcome and is returned as if observed in time. The
+// follow-up holds no soul.
+func (w *runtimeResultWaiters) observeLateRollback(shardKey string, result *RuntimeControlResultEnvelope, err error, report func(context.Context, *RuntimeControlResultEnvelope)) (*RuntimeControlResultEnvelope, error) {
+	pending, unknown := runtimeOutcomeUnknown(err)
+	if !unknown || pending == nil {
+		return result, err
+	}
+	late, observed := w.park(pending, parkedOperation{shardKey: shardKey, resume: report})
+	if !observed {
+		w.logger.Info("rollback outcome unknown; its late runtime result will be reported as progress", "request_event", pending.requestID())
+		return result, err
+	}
+	return late, runtimeResultFailure(late)
+}
+
+// lateRollbackProgress is the rollback-status tag value and message of the
+// follow-up progress for a late rollback result.
+func lateRollbackProgress(step string, late *RuntimeControlResultEnvelope) (status, message string) {
+	if failure := runtimeResultFailure(late); failure != nil {
+		return "failed", fmt.Sprintf("%s: %s failed after its outcome was reported unknown: %v", actionStatusRollbackResolved, step, failure)
+	}
+	return "completed", fmt.Sprintf("%s: %s completed after its outcome was reported unknown", actionStatusRollbackResolved, step)
 }

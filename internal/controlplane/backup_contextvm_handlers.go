@@ -127,7 +127,7 @@ type backupRepositoryProbeContextVMPayload struct {
 }
 
 func (h backupContextVMHandlers) repositoryRegister(ctx context.Context, request ContextVMRequest) (any, error) {
-	params, err := backupContextVMParams(request)
+	params, err := backupApplyParams(request, "id", "repository_id")
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (h backupContextVMHandlers) repositoryRegister(ctx context.Context, request
 }
 
 func (h backupContextVMHandlers) policyApply(ctx context.Context, request ContextVMRequest) (any, error) {
-	params, err := backupContextVMParams(request)
+	params, err := backupApplyParams(request, "id", "policy_id")
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (h backupContextVMHandlers) policyApply(ctx context.Context, request Contex
 }
 
 func (h backupContextVMHandlers) recipeApply(ctx context.Context, request ContextVMRequest) (any, error) {
-	params, err := backupContextVMParams(request)
+	params, err := backupApplyParams(request, "id", "recipe_id")
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (h backupContextVMHandlers) recipeApply(ctx context.Context, request Contex
 }
 
 func (h backupContextVMHandlers) definitionApply(ctx context.Context, request ContextVMRequest) (any, error) {
-	params, err := backupContextVMParams(request)
+	params, err := backupApplyParams(request, "id", "definition_id")
 	if err != nil {
 		return nil, err
 	}
@@ -610,6 +610,27 @@ func backupContextVMParams(request ContextVMRequest) (map[string]any, error) {
 	}
 	if params == nil {
 		params = map[string]any{}
+	}
+	return params, nil
+}
+
+// backupApplyParams decodes a backup apply/register request and validates the
+// entity id it may carry (bahia-irsry.42). Apply verbs are upserts: an id
+// names the entity to create or update, and without one the daemon resolves
+// the name or mints a UUIDv7. A supplied id must therefore be a canonical
+// UUIDv7 or v4 (every stored backup id is one), never a name-derived or
+// non-canonical spelling.
+func backupApplyParams(request ContextVMRequest, idKeys ...string) (map[string]any, error) {
+	params, err := backupContextVMParams(request)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range idKeys {
+		if raw := backupStringParam(params, key); raw != "" {
+			if _, err := domain.ParseClientEntityID(raw); err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+		}
 	}
 	return params, nil
 }

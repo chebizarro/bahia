@@ -607,6 +607,13 @@ resubscribe:
 		case ev, ok := <-sub.Events:
 			if !ok {
 				sub.Close()
+				// Every REQ stopped. If the pool gave up on the relays (a
+				// policy refusal, failed AUTH or an exhausted CLOSED retry
+				// budget), resubscribing would only sidestep that give-up
+				// with a fresh budget (bahia-irsry.49).
+				if gaveUp := sub.GaveUp(); gaveUp != nil {
+					return nil, fmt.Errorf("loom job status subscription for %s: %w", jobEventID, gaveUp)
+				}
 				c.logger.Warn("Loom job subscription ended before terminal result; resubscribing",
 					zap.String("job_id", jobEventID),
 					zap.Duration("backoff", backoff),

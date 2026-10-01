@@ -70,6 +70,9 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       approvalStates: expect.arrayContaining(['approved'])
     });
     await page.reload();
+    // The read model is complete once the relay subscriptions reach EOSE and
+    // the connection reports live; only then is an empty list meaningful.
+    await expect(page.getByRole('button', { name: /Live.*Connected and up to date/ })).toBeVisible();
     await expect(page.getByText('No pending approvals')).toBeVisible();
 
     await page.goto('/deployments');

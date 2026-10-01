@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -101,11 +102,35 @@ func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMR
 	if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
 		return err
 	}
+	// The route id is client-minted (bahia-irsry.42): a retry with the same
+	// id and content replays, the same id with other content conflicts.
+	if route.ID == uuid.Nil {
+		route.ID = domain.NewEntityID()
+	}
+	if replayed, err := s.replayRouteCreate(ctx, route); err != nil || replayed {
+		return err
+	}
 	if err := s.routes.Create(ctx, route); err != nil {
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			if replayed, replayErr := s.replayRouteCreate(ctx, route); replayErr != nil || replayed {
+				return replayErr
+			}
+		}
 		return err
 	}
 	s.publish(ctx, events.EventLLMRouteCreated, route.ID.String(), events.ResourceData{RouteID: route.ID.String()})
 	return nil
+}
+
+// replayRouteCreate resolves route.ID against the stored routes and, on an
+// idempotent retry, loads the stored route into route.
+func (s *LLMRegistryService) replayRouteCreate(ctx context.Context, route *domain.LLMRoute) (bool, error) {
+	stored, err := resolveCreateByID(ctx, "LLM route", route.ID, route, s.routes.GetByID, func(r *domain.LLMRoute) []byte { return canonicalCreateContent(r) })
+	if err != nil || stored == nil {
+		return false, err
+	}
+	*route = *stored
+	return true, nil
 }
 
 func (s *LLMRegistryService) GetRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error) {

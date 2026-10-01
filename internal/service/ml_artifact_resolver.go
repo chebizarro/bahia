@@ -232,7 +232,7 @@ func newArtifactRef(input MLArtifactResolveInput, sourceKind string) (*domain.ML
 		metadata[k] = v
 	}
 	artifact := &domain.MLArtifactRef{
-		ID:             uuid.New(),
+		ID:             domain.NewEntityID(),
 		ModelVersionID: input.ModelVersionID,
 		Kind:           kind,
 		Format:         input.Format,

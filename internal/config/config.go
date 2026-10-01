@@ -707,7 +707,9 @@ type NostrConfig struct {
 	// REQ that a relay CLOSED with a retryable reason ("error:",
 	// "rate-limited:" or an unknown prefix) before it gives up on that relay
 	// and filter, surfacing a terminal CLOSED. A relay's EOSE resets the
-	// count. 0 (unset) uses the pool default of 5; at most 100.
+	// count. The inbound sync (nostr subscriber, process sync) applies the
+	// same budget per relay and filter, where a committed catch-up resets
+	// it. 0 (unset) uses the pool default of 5; at most 100.
 	ClosedRetryBudget int `koanf:"closed_retry_budget" yaml:"closed_retry_budget" secret:"false"`
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.

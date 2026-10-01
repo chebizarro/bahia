@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import ConfigFabricDriftTable from '../../src/lib/config-fabric/ConfigFabricDriftTable.svelte';
 import ConfigPublishForm from '../../src/lib/config-fabric/ConfigPublishForm.svelte';
+import ConfigWithdrawnNotice from '../../src/lib/config-fabric/ConfigWithdrawnNotice.svelte';
 import {
   CONFIG_POLICY,
+  configRowState,
+  configStatusVariant,
   initialConfigPublishForm,
   validateConfigPublishForm
 } from '../../src/lib/config-fabric/model.js';
@@ -18,6 +21,13 @@ const driftRow = {
   applied_version: 6,
   drift: true,
   last_rejection_reason: 'query limit exceeds service maximum'
+};
+
+const withdrawnRow = {
+  ...driftRow,
+  last_rejection_reason: undefined,
+  withdrawn: true,
+  withdrawn_reason: 'desired event was deleted or has expired'
 };
 
 describe('Config Fabric operator console', () => {
@@ -73,5 +83,63 @@ describe('Config Fabric operator console', () => {
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'looks like a secret-bearing field'
     );
+  });
+
+  it('shows a withdrawn desired config as withdrawn rather than drifted, with the kept live version', () => {
+    const target = renderComponent(ConfigFabricDriftTable, { rows: [withdrawnRow] });
+    const text = textOf(target);
+
+    expect(text).toContain('Withdrawn');
+    expect(text).not.toContain('Drifted');
+    expect(text).toContain('Live config v6 kept');
+    expect(text).toContain('publish v8+ to replace');
+  });
+
+  it('explains the kept allowlist and offers publishing the next version for a withdrawn config', async () => {
+    let published = 0;
+    const target = renderComponent(ConfigWithdrawnNotice, {
+      row: withdrawnRow,
+      onPublish: () => { published += 1; }
+    });
+    const text = textOf(target);
+
+    expect(target.querySelector('[aria-label="Withdrawn desired config"]')).not.toBeNull();
+    expect(text).toContain('Desired v7 was withdrawn: desired event was deleted or has expired.');
+    expect(text).toContain('The relay keeps enforcing the last applied config, v6.');
+    expect(text).toContain('an empty allowlist would admit every pubkey');
+    expect(text).toContain('publish v8 or later');
+
+    const publish = Array.from(target.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Publish v8'));
+    if (!publish) throw new Error('Publish v8 button not found');
+    await click(publish);
+    expect(published).toBe(1);
+  });
+
+  it('explains a withdrawal when no version was ever applied', () => {
+    const target = renderComponent(ConfigWithdrawnNotice, {
+      row: { ...withdrawnRow, applied_event_id: '', applied_version: 0 }
+    });
+    const text = textOf(target);
+
+    expect(text).toContain('No version was applied, so the relay keeps its current mounted policy.');
+    expect(target.querySelector('button')).toBeNull();
+  });
+
+  it('renders no withdrawal notice for a live desired config', () => {
+    const target = renderComponent(ConfigWithdrawnNotice, { row: driftRow });
+
+    expect(target.querySelector('[aria-label="Withdrawn desired config"]')).toBeNull();
+  });
+
+  it('maps row states and status phases to badges', () => {
+    expect(configRowState(withdrawnRow)).toEqual({ label: 'Withdrawn', variant: 'warning' });
+    expect(configRowState(driftRow)).toEqual({ label: 'Drifted', variant: 'warning' });
+    expect(configRowState({ ...driftRow, drift: false })).toEqual({ label: 'In sync', variant: 'success' });
+    expect(configStatusVariant('withdrawn')).toBe('warning');
+    expect(configStatusVariant('applied')).toBe('success');
+    expect(configStatusVariant('rejected')).toBe('error');
+    expect(configStatusVariant('accepted')).toBe('info');
+    expect(configStatusVariant('unknown')).toBe('default');
   });
 });

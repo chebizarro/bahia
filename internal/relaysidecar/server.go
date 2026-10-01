@@ -112,7 +112,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		DefaultLimit:     nostrCfg.Sidecar.MaxQueryLimit, // a REQ without limit gets the cap
 		MaxContentLength: betterbinary.MaxContentSize,
 		// No CreatedAtLowerLimit: the one-year cap is per kind (see
-		// ageCapped), and the field would claim it for every kind.
+		// nostrutil.AgeCapped), and the field would claim it for every kind.
 		CreatedAtUpperLimit: int64(maxEventFutureSkew / time.Second),
 	}
 	relay.Info.Retention = retention.nip11()

@@ -227,6 +227,7 @@ func TestRelayFirstRegistryUpdateEnvironmentPublishesBeforeDatabaseWrite(t *test
 type relayFirstPublication struct {
 	service     *domain.Service
 	environment *domain.Environment
+	units       []domain.DeploymentUnit
 	deleted     bool
 }
 
@@ -265,9 +266,9 @@ func (p *relayFirstCapturePublisher) PublishServiceRegistry(_ context.Context, s
 	return p.record(relayFirstPublication{service: &snapshot, deleted: deleted})
 }
 
-func (p *relayFirstCapturePublisher) PublishEnvironmentRegistry(_ context.Context, env *domain.Environment, deleted bool) error {
+func (p *relayFirstCapturePublisher) PublishEnvironmentRegistry(_ context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error {
 	snapshot := *env
-	return p.record(relayFirstPublication{environment: &snapshot, deleted: deleted})
+	return p.record(relayFirstPublication{environment: &snapshot, units: append([]domain.DeploymentUnit(nil), units...), deleted: deleted})
 }
 
 type relayFirstServiceRepo struct {

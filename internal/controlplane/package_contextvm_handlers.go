@@ -201,7 +201,7 @@ func (h packageContextVMHandlers) approvePlan(ctx context.Context, request Conte
 		return nil, err
 	}
 	now := time.Now().UTC()
-	approval := repository.PackageApproval{ID: uuid.New(), Requester: cmd.Requester, Approver: approver, Method: cmd.Method, PlanHash: hash, EventID: request.Event.ID.Hex(), CreatedAt: now, ExpiresAt: now.Add(packageApprovalMaxAge)}
+	approval := repository.PackageApproval{ID: domain.NewEntityID(), Requester: cmd.Requester, Approver: approver, Method: cmd.Method, PlanHash: hash, EventID: request.Event.ID.Hex(), CreatedAt: now, ExpiresAt: now.Add(packageApprovalMaxAge)}
 	if err := h.store.CreatePackageApproval(ctx, approval); err != nil {
 		return nil, fmt.Errorf("record package approval: %w", err)
 	}
@@ -245,7 +245,7 @@ func (h packageContextVMHandlers) run(handler func(context.Context, *packagePlan
 			return nil, err
 		}
 		now := time.Now().UTC()
-		intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: claim.EventID, RequesterPubkey: claim.Requester, RepositoryID: &plan.repo.ID, RepositoryName: plan.repo.Name, Operation: plan.op, Status: domain.PackageIntentStatusExecuting, CreatedAt: now, UpdatedAt: now}
+		intent := &domain.PackageIntent{ID: domain.NewEntityID(), RequestEventID: claim.EventID, RequesterPubkey: claim.Requester, RepositoryID: &plan.repo.ID, RepositoryName: plan.repo.Name, Operation: plan.op, Status: domain.PackageIntentStatusExecuting, CreatedAt: now, UpdatedAt: now}
 		if err := json.Unmarshal(request.RPC.Params, &intent.RequestPayload); err != nil {
 			return nil, err
 		}

@@ -257,12 +257,24 @@ signed desired config event and one phase, with this address:
 
 `d=config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`
 
-The phases are `accepted`, `applied`, and `rejected`. The existing `service`,
+The phases are `accepted`, `applied`, `rejected`, and `withdrawn`. The existing `service`,
 `scope`, `version`, `status`, and `e=<config_event_id>` tags match the content.
 An `applied` receipt must bind `last_applied_event_id` to `config_event_id` and
 `effective_version` to `version`. `accepted` only acknowledges durable admission;
 it is not proof of activation. A rejection of a duplicate desired event does
 not retract a previously published applied fact.
+
+`withdrawn` (v2 only, with a non-empty `reason`) means the consumer dropped the
+desired event because its author deleted it (NIP-09) or it expired (NIP-40).
+Pending activation of that event is cancelled, but the consumer keeps enforcing
+the last applied config: it does **not** revert the live relay policy, because
+an absent membership list or policy document would read as an empty allowlist,
+and an empty allowlist admits every pubkey. The withdrawn event keeps its
+version floor, so the consumer will not re-accept it. To change the live config,
+publish a newer version (or roll back, which republishes older content at a
+newer version). Readers report a coordinate as withdrawn only while the
+withdrawn event is still the latest desired event; a newer desired version
+supersedes the withdrawal.
 
 This address separates both phases and target events. A relay retaining one
 event per `(kind, pubkey, d)` therefore cannot replace applied truth with
@@ -632,14 +644,15 @@ Normative companion to [event-spec "Entity identity and coordinates"](event-spec
 - Mint one UUIDv7 per create *attempt*: web `mintEntityId()` in `web/src/lib/entity-id.js`, Go `domain.NewEntityID()`.
 - Keep that id for every retry of the same attempt, e.g. a timeout followed by "Create" again. Mint a new id only when the user starts a new entity (the form resets).
 - Never derive an id from a name (UUIDv5 or a hash of `org:slug`). A predictable id lets anyone pre-claim the coordinate.
-- The web stores `createService`/`createEnvironment` add an id when the caller passes none (`withEntityId`). Dialogs pass their own id so retries stay idempotent.
+- The web stores `createService`/`createEnvironment`/`createPolicy`/`createLLMRoute` add an id when the caller passes none (`withEntityId`). Dialogs and pages pass their own id so retries stay idempotent.
+- The operator client (`pkg/client`) mints in `CreateServiceNostr`/`CreateEnvironmentNostr`; the CLI mints first and prints the id (retry with `--id`). MCP create tools take an optional `id` and include it in their derived idempotency key.
 
 **Validating (servers).**
 - Parse the intent's optional `id` with `domain.ResolveCreateEntityID`. It accepts canonical lowercase UUIDv7/v4, mints a UUIDv7 when the id is absent, and wraps `domain.ErrInvalidEntityID` otherwise; the handler reports it as `invalid id: …`.
 - Validate before authorization side effects and before any publish.
 
 **Building and decoding coordinates.**
-- Build `d` with `domain.FormatEntityCoordinate(prefix, id)`. It is input-agnostic: it never asks who minted the id, so v7 and legacy v4 ids produce coordinates of the same shape.
+- Build `d` with the projector's coordinate builders (`canonicalStateDTag` and the family builders in `internal/adapters/nostr`). They are input-agnostic: they never ask who minted the id, so v7 and legacy v4 ids produce coordinates of the same shape.
 - A coordinate builder takes the entity id. It must not take a row or a database sequence.
 - Consumers read the entity id from `content.id` and accept any UUID version (`parseProjectionUUID` in the relay projection cache). Existing v4 coordinates therefore keep decoding.
 
@@ -660,7 +673,7 @@ Normative companion to [event-spec "Entity identity and coordinates"](event-spec
 **Adopting the rule in another domain.**
 - Add `id` to the create intent.
 - Resolve it with `ResolveCreateEntityID` in the handler.
-- Add a `replay<Entity>Create` check in the service (see `internal/service/registry_create_identity.go`).
+- Add a `replay<Entity>Create` check in the service with `resolveCreateByID` and a content fingerprint (`canonicalCreateContent`), see `internal/service/create_identity.go` and its uses for policies and LLM routes.
 - Classify the primary-key violation in the repository.
 - Mint once per attempt in the web store/dialog.
 - Cover the four cases in tests: id round-trips to the coordinate, same-content retry, different-content conflict, and absent id minted.

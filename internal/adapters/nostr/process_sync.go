@@ -70,7 +70,10 @@ type ProcessSync struct {
 }
 
 // Run syncs filters with every relay in the pool until ctx ends. It returns
-// nil when ctx is cancelled.
+// nil when ctx is cancelled, and an error when every relay has left the pool
+// or refused every filter for good: a *SubscriptionGaveUpError (matching
+// ErrSubscriptionGaveUp) in the latter case, which callers must not answer by
+// running again, since that would sidestep the pool's CLOSED policy.
 func (p *ProcessSync) Run(ctx context.Context, filters []nostr.Filter) error {
 	if p == nil || p.Pool == nil || p.Store == nil || p.Apply == nil {
 		return errors.New("process sync requires a relay pool, a local store and an event applier")
@@ -149,6 +152,7 @@ func (p *ProcessSync) Run(ctx context.Context, filters []nostr.Filter) error {
 	}
 	tracker := newCursorTracker(p.Store, nil, worker.now, worker.logger)
 	progress := make(map[string]relayProgress, len(urls))
+	var refusals []RelayClosed
 	for _, relayURL := range urls {
 		progress[relayURL] = relayProgress{}
 		workers.Add(1)
@@ -176,9 +180,23 @@ func (p *ProcessSync) Run(ctx context.Context, filters []nostr.Filter) error {
 				if len(progress) == 0 {
 					return errors.New("process sync: every relay left the pool")
 				}
+			case opRelayGaveUp:
+				refusals = append(refusals, RelayClosed{RelayURL: item.relay, Reason: item.reason, Terminal: true})
+				if everyRelayGaveUp(progress) {
+					return fmt.Errorf("process sync: %w", &SubscriptionGaveUpError{Closed: refusals})
+				}
 			}
 		}
 	}
+}
+
+func everyRelayGaveUp(progress map[string]relayProgress) bool {
+	for _, state := range progress {
+		if !state.gaveUp {
+			return false
+		}
+	}
+	return len(progress) > 0
 }
 
 // liveOnlyKey is the cursor key of live-only deliveries. It is never

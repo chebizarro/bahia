@@ -122,7 +122,6 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 		return fmt.Errorf("read legacy relay sidecar events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	backend := store.backend()
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -148,7 +147,7 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 			} else if err != nil {
 				return fmt.Errorf("import legacy relay event %s: %w", event.ID.Hex(), err)
 			}
-		} else if err := backend.SaveEvent(event); errors.Is(err, eventstore.ErrDupEvent) {
+		} else if err := store.coords().Save(event); errors.Is(err, eventstore.ErrDupEvent) {
 			stored = false
 		} else if err != nil {
 			return fmt.Errorf("import legacy relay event %s: %w", event.ID.Hex(), err)

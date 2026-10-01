@@ -156,6 +156,9 @@ func TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesR
 	if repo == nil || repo.RepositoryURI != "kopia://archive" || repo.Metadata["nostr_request_pubkey"] != requestPubkey {
 		t.Fatalf("repository was not applied with Nostr metadata: %#v", repo)
 	}
+	if repo.ID.Version() != 7 {
+		t.Fatalf("new repository id %s is not daemon-minted UUIDv7 (bahia-irsry.42)", repo.ID)
+	}
 	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupRepositoryRegisterResult {
 		t.Fatalf("result events = %#v", capture.events)
 	}

@@ -1,6 +1,6 @@
 <script>
   import Badge from '$lib/components/Badge.svelte';
-  import { configFabricHref, shortEventId } from './model.js';
+  import { configFabricHref, configRowState, shortEventId } from './model.js';
 
   let { rows = [] } = $props();
 </script>
@@ -40,9 +40,13 @@
             {/if}
           </td>
           <td>
-            <Badge variant={row.drift ? 'warning' : 'success'}>
-              {row.drift ? 'Drifted' : 'In sync'}
-            </Badge>
+            <Badge variant={configRowState(row).variant}>{configRowState(row).label}</Badge>
+            {#if row.withdrawn}
+              <span class="withdrawn-note">
+                {row.applied_event_id ? `Live config v${row.applied_version} kept` : 'Live config kept'};
+                publish v{Number(row.desired_version || 0) + 1}+ to replace
+              </span>
+            {/if}
           </td>
           <td>
             {#if row.last_rejection_reason}
@@ -79,4 +83,5 @@
   .version { display: block; font-weight: 600; margin-bottom: 0.2rem; }
   code { font-size: 0.75rem; }
   .rejection { color: var(--error); font-size: 0.8rem; }
+  .withdrawn-note { color: var(--text-muted); display: block; font-size: 0.75rem; margin-top: 0.3rem; max-width: 14rem; }
 </style>

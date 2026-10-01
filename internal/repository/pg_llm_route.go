@@ -26,9 +26,12 @@ func newPgLLMRouteRepositoryWithDB(db pgQueryer) *PgLLMRouteRepository {
 
 const llmRouteColumns = `id, name, description, gateway_config, default_placement_policy, default_promotion_gate, metadata, created_at, updated_at`
 
+// Create stores route under its client-minted id (bahia-irsry.42), minting a
+// UUIDv7 only when none is supplied. A primary-key hit is ErrAlreadyExists,
+// which the registry resolves by content; a taken name is ErrConflict.
 func (r *PgLLMRouteRepository) Create(ctx context.Context, route *domain.LLMRoute) error {
 	if route.ID == uuid.Nil {
-		route.ID = uuid.New()
+		route.ID = domain.NewEntityID()
 	}
 	now := time.Now().UTC()
 	route.CreatedAt = now
@@ -56,7 +59,16 @@ func (r *PgLLMRouteRepository) Create(ctx context.Context, route *domain.LLMRout
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, route.ID, route.Name, route.Description, gatewayJSON, placementJSON, gateJSON, metaJSON, route.CreatedAt, route.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("inserting LLM route: %w", err)
+		switch constraint := uniqueViolationConstraint(err); constraint {
+		case "":
+			return fmt.Errorf("inserting LLM route: %w", err)
+		case "llm_routes_pkey":
+			return fmt.Errorf("inserting LLM route %s: %w", route.ID, ErrAlreadyExists)
+		case "llm_routes_name_key":
+			return fmt.Errorf("inserting LLM route: route name %q is already in use: %w", route.Name, ErrConflict)
+		default:
+			return fmt.Errorf("inserting LLM route: unique constraint %s violated: %w", constraint, ErrConflict)
+		}
 	}
 	return nil
 }

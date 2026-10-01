@@ -85,6 +85,8 @@ At startup it requests the newest `5950`, newest `1950`, and up to 500 stored `3
 
 The subscription is resumable: each relay keeps a cursor, the newest `created_at` it delivered, committed only after that relay's EOSE. When a relay reconnects (dropped connection or `CLOSED`), the reissued REQ asks for events since the cursor minus a 10-minute overlap, so a result published while the relay was unreachable still arrives and the full backfill is not replayed. Future-dated events cannot advance the cursor past the local clock.
 
+The overlap is also the limit of what a reconnect recovers. An event that reaches the relay while the reactor is disconnected, with a `created_at` more than 10 minutes older than that relay's cursor, is below the resumed REQ's `since` and is not refetched. Only the next restart's full backfill sees it, and only within that backfill's limits. Publishers stamp `created_at` when they sign, so this needs a badly backdated request or a signer clock skewed by more than 10 minutes. Events inside the overlap that were already received are replayed; deduplication and idempotent handlers absorb them.
+
 If a runtime operation first produces a deploy-stage timeout/error but a valid success `38386` arrives later, the reactor validates the full correlation chain, restores the public-safe soul checkpoint embedded in `38384`, republishes active `31951`, and replaces the terminal provisioning result. It does not repeat Signet, avatar, memory, workspace, or runtime side effects.
 
 ### Outcome unknown: awaiting a terminal result
@@ -94,11 +96,12 @@ Each runtime-control wait is bounded by `soul_factory.runtime_result_timeout` (d
 - SoulFactory publishes a `6950` progress event with status `awaiting_terminal` and publishes no terminal `7950` yet.
 - Nothing is rolled back on a timeout. Rollback happens only on an observed terminal failure, or on an explicit operator action (a `rollback` soul action or a newer fleet revision).
 - When the late `38386` arrives, it is correlated with the parked request (runtime author, request event, operator request, method and idempotency key) and applied exactly as a timely result would have been. A success runs the remaining steps and publishes the updated `31951` and a completed `7950`. A failure rolls back and publishes an error `7950`.
-- A multi-section hot-reload rollback runs every section even when one rollback request fails or times out. A rollback whose own result is not observed is reported as `rollback_status: outcome_unknown`.
-- While a soul's lifecycle action awaits its result, later soul actions for that soul are deferred and run in arrival order once it finishes, as they would have queued behind a timely result.
-- While a soul's fleet apply awaits its result, newer fleet revisions defer that soul. Once the late result is reconciled, the soul is re-driven to the latest revision, so revisions reach a runtime in order and never overlap.
+- A multi-section hot-reload rollback runs every section even when one rollback request fails or times out. A rollback whose own result is not observed is reported as `rollback_status: outcome_unknown`. When that rollback's `38386` arrives later, SoulFactory publishes a follow-up `6950` for the action with status `rollback_resolved` and a `rollback-status` tag of `completed` or `failed`. The terminal `7950` already published is not replaced.
+- Lifecycle actions and fleet reloads are serialized per soul. While any of them runs on a soul, including one awaiting its result, the other work for that soul waits and then runs in arrival order. For lifecycle actions that is the order they would have queued in behind a timely result. A fleet revision that finds the soul busy re-drives it to the latest revision once the soul is free. The re-drive re-reads the soul first, so a lifecycle change made meanwhile is kept and is not overwritten by a stale snapshot. A runtime never has two of these requests in flight, and revisions reach it in order.
 
-Parked operations are held in memory. After a restart the backfill re-drives them with the same runtime idempotency keys: the `1950` has no terminal result, and the soul's applied fleet revision is not the latest.
+Parked continuations are held in memory, but the operations they continue are recorded on the relays. Every park publishes its `awaiting_terminal` `6950` with the topic tag `t=soulfactory-awaiting-terminal`. At startup the reactor reads up to 500 of them and drops those with a matching terminal result. A lifecycle action is matched by its `e`, and a fleet apply by its revision `e` and `agent-id`. The outstanding operations hold their souls again, oldest first, before the backlog is handled. They are re-driven with the same runtime idempotency keys, so a runtime that already finished replays its cached result. A lifecycle action is re-driven from its `1950`, fetched by id even when it falls outside the backlog's limit. A fleet apply re-drives the soul to the latest revision. The backlog's later work for those souls waits behind them, as it did before the restart.
+
+Parked operations that hold a soul are never evicted: per-soul serialization allows at most one per soul. Only late-rollback follow-ups, which hold no soul, are capped (4096). The oldest is dropped with a warning, and its action has already reported `rollback_status: outcome_unknown`.
 
 ## NIP-29 group assignment and NIP-42
 
@@ -345,7 +348,11 @@ A later valid success `38386` can reconcile a deploy-stage runtime timeout. The 
 
 ### Action or fleet reload stuck in `awaiting_terminal`
 
-The runtime accepted the `38384` but its `38386` has not been observed. Check the runtime's health and whether it published a correlated result to a controller relay. The result is reconciled whenever it arrives, and nothing is rolled back meanwhile. To abandon the change, publish a `rollback` soul action or a newer fleet revision. On the client, `bahia souls await <request-id>` keeps waiting for a soul action's terminal result, bounded by `--reply-timeout` or `BAHIA_SOUL_FACTORY_REPLY_TIMEOUT`.
+The runtime accepted the `38384` but its `38386` has not been observed. Check the runtime's health and whether it published a correlated result to a controller relay. The result is reconciled whenever it arrives, and nothing is rolled back meanwhile. Later actions and fleet revisions for that soul wait behind it, including a `rollback` action or a newer fleet revision. Once the runtime answers, they run in order. A restart re-drives the operation with the same idempotency key. On the client, `bahia souls await <request-id>` keeps waiting for a soul action's terminal result, bounded by `--reply-timeout` or `BAHIA_SOUL_FACTORY_REPLY_TIMEOUT`.
+
+### Lifecycle action or fleet reload fails with an incomplete relay read
+
+`GetSoul` reads the soul under the fail-closed `complete` policy. Every relay in `soul_factory.relays` and `additional_relays` must answer with EOSE, and that includes browser-facing relays listed only in `additional_relays`. If one relay stays silent or sends `CLOSED`, the read fails, and the lifecycle action or fleet reload that needed the soul fails with it. There is no fallback to a partial read, because these are read-modify-write paths and a stale soul would be republished. Each rejected read is counted for caller `reactor.get_soul`, and `BahiaSoulFactoryRelayReadRejected` fires when rejections persist. Restore the relay, or remove it from the SoulFactory relay set. Do not relax the read policy.
 
 ### NIP-29 failure
 

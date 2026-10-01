@@ -939,6 +939,9 @@ type MergedSubscription struct {
 	relayURLs    []string
 	eventSources *sync.Map
 	active       *activeMergedSubscription
+	// gaveUp answers GaveUp for a subscription the pool does not supervise
+	// (StoreBackedSubscriber).
+	gaveUp func() error
 }
 
 // PendingEOSE exposes the initial relay URLs that have not yet reached a
@@ -1037,6 +1040,16 @@ type RelayStoredOutcome struct {
 	RelayURL string
 	Status   RelayStoredStatus
 	Reason   string
+	// Terminal is set once the pool stopped reissuing one of the relay's REQs
+	// for good (see RelayClosed.Terminal), whether before or after its EOSE.
+	// It is recorded before EndOfStoredEvents can close on that answer, so a
+	// caller woken by EndOfStoredEvents never mistakes a refusal for a
+	// retryable CLOSED.
+	Terminal bool
+	// Truncated is set when the relay sent EOSE but its answer misses stored
+	// events: more events share one created_at than its NIP-11 max_limit
+	// lets one page hold, so paging had to step past that second.
+	Truncated bool
 }
 
 // ErrStoredEventsIncomplete matches every *StoredEventsIncompleteError.
@@ -1059,6 +1072,12 @@ func (e *StoredEventsIncompleteError) Error() string {
 	parts := make([]string, 0, len(e.Relays))
 	for _, relay := range e.Relays {
 		part := relay.RelayURL + ": " + string(relay.Status)
+		if relay.Truncated {
+			part += ", truncated"
+		}
+		if relay.Terminal {
+			part += ", terminal"
+		}
 		if relay.Reason != "" {
 			part += " (" + relay.Reason + ")"
 		}
@@ -1105,14 +1124,16 @@ func (m *MergedSubscription) StoredOutcomes() []RelayStoredOutcome {
 }
 
 // StoredEventsIncomplete returns nil when every relay has sent EOSE for every
-// initial REQ, and otherwise a *StoredEventsIncompleteError naming the relays
-// that CLOSED or have not answered. cause is why the caller stopped waiting
-// (a context error), or nil when it saw EndOfStoredEvents.
+// initial REQ with nothing truncated, and otherwise a
+// *StoredEventsIncompleteError naming the relays that CLOSED, have not
+// answered or truncated their answer (RelayStoredOutcome.Truncated). cause is
+// why the caller stopped waiting (a context error), or nil when it saw
+// EndOfStoredEvents.
 func (m *MergedSubscription) StoredEventsIncomplete(cause error) error {
 	outcomes := m.StoredOutcomes()
 	var missing []RelayStoredOutcome
 	for _, outcome := range outcomes {
-		if outcome.Status != RelayStoredEOSE {
+		if outcome.Status != RelayStoredEOSE || outcome.Truncated {
 			missing = append(missing, outcome)
 		}
 	}
@@ -1180,9 +1201,15 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 //     connection, reissue that REQ on that relay only, after a backoff and a
 //     reconnect. Other relays are unaffected.
 //
-// Events closes once every REQ has stopped for good or the subscription ends.
-// NIP-11 limitations fetched on connect are applied per relay: limit is
-// capped at max_limit, and REQs beyond max_subscriptions wait for a free slot.
+// Events closes once every REQ has stopped for good or the subscription ends;
+// GaveUp then tells a refusal from a relay leaving the pool.
+//
+// NIP-11 limitations fetched on connect are applied per relay: REQs beyond
+// max_subscriptions wait for a free slot, and limit is capped at max_limit.
+// When that cap applies, the relay's stored answer is paged with `until` up to
+// the caller's limit before its EOSE is reported (see storedPager), so a
+// caller that does not page still gets every event it asked for; the rare
+// answer that cannot be paged completely is reported Truncated.
 func (p *RelayPool) SubscribeWithOptions(ctx context.Context, filters []nostr.Filter, opts SubscribeOptions) (*MergedSubscription, error) {
 	if len(filters) == 0 {
 		return nil, fmt.Errorf("at least one subscription filter is required")
@@ -1322,21 +1349,67 @@ type relayFilterWorker struct {
 	pending string
 	// clampLogged avoids repeating the max_limit log for every reissue.
 	clampLogged bool
+	// pager pages the stored answer of the current REQ when max_limit capped
+	// its limit; nil otherwise. A REQ reissued mid-answer resumes the page.
+	pager *storedPager
+	// followSince, when set, makes the next REQ follow the relay live from
+	// there: a paged answer is complete and its last page had an until.
+	followSince nostr.Timestamp
+	// answered is set once the worker's stored answer reached its EOSE.
+	answered bool
 }
 
-// reqFilter is the filter for the worker's next REQ: resumed from its cursor
-// and capped at the relay's NIP-11 max_limit.
-func (w *relayFilterWorker) reqFilter(pool *RelayPool, limits relayLimits) nostr.Filter {
-	filter := w.cursor.resume(w.filter)
+// nextFilter is the filter for the worker's next REQ, which it prepares the
+// resume cursor and pager for: the current page of a paged answer, else the
+// worker's filter resumed from its cursor (or from followSince), with limit
+// capped at the relay's NIP-11 max_limit. A capped REQ gets a pager when it
+// asks for stored events not yet delivered: the first answer, or a reissue
+// resumed from the cursor. A reissue of the original filter replays events
+// already delivered, and a live follow-up must not page again. continuation
+// reports a page or a follow-up rather than a reissue.
+func (w *relayFilterWorker) nextFilter(pool *RelayPool, limits relayLimits) (filter nostr.Filter, continuation bool) {
+	if pager := w.pager; pager != nil && pager.continued {
+		pager.beginPage()
+		return pager.pageFilter(), true
+	}
+	w.pager = nil
+	w.cursor.begin()
+	filter = w.cursor.resume(w.filter)
+	follow := w.followSince != 0
+	if follow && w.cursor == nil && filter.Since < w.followSince {
+		// A resume cursor already starts the follow-up at the newest
+		// event less its own overlap.
+		filter.Since = w.followSince
+	}
+	w.followSince = 0
 	if limits.MaxLimit > 0 && filter.Limit > limits.MaxLimit {
 		if !w.clampLogged {
 			w.clampLogged = true
-			pool.logger.Debug("capping REQ limit at relay NIP-11 max_limit",
+			pool.logger.Debug("capping REQ limit at relay NIP-11 max_limit; paging the stored answer",
 				zap.String("relay", w.mr.url), zap.Int("limit", filter.Limit), zap.Int("max_limit", limits.MaxLimit))
 		}
+		want := filter.Limit
 		filter.Limit = limits.MaxLimit
+		if !follow && (!w.answered || w.cursor != nil) {
+			w.pager = newStoredPager(filter, want)
+		}
 	}
-	return filter
+	return filter, follow
+}
+
+// sendWorkerREQ sends one REQ under its own context, so a page can be closed
+// on its own; the returned release also frees the subscription slot.
+func sendWorkerREQ(relay *nostr.Relay, ctx context.Context, filter nostr.Filter, releaseSlot func()) (*nostr.Subscription, func(), error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	sub, err := subscribeOnRelay(relay, reqCtx, filter)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return sub, func() {
+		cancel()
+		releaseSlot()
+	}, nil
 }
 
 // errRelayDialDeferred marks a relay left for its workers to dial.
@@ -1387,8 +1460,8 @@ func (p *RelayPool) openRelayWorkers(connectCtx, groupCtx context.Context, mr *m
 			worker.immediate = true
 			continue
 		}
-		worker.cursor.begin()
-		sub, err := subscribeOnRelay(relay, groupCtx, worker.reqFilter(p, limits))
+		filter, _ := worker.nextFilter(p, limits)
+		sub, releaseREQ, err := sendWorkerREQ(relay, groupCtx, filter, release)
 		if err != nil {
 			release()
 			lastErr = err
@@ -1396,7 +1469,7 @@ func (p *RelayPool) openRelayWorkers(connectCtx, groupCtx context.Context, mr *m
 			p.recordRelayError(mr.url, err.Error())
 			continue
 		}
-		worker.sub, worker.release = sub, release
+		worker.sub, worker.release = sub, releaseREQ
 		sent++
 	}
 	if sent == 0 && lastErr != nil {
@@ -1464,9 +1537,12 @@ type activeMergedSubscription struct {
 	outcomes      map[string]*RelayStoredOutcome
 	relayOrder    []string
 	realEOSECount int
-	eoseOnce      sync.Once
-	workers       sync.WaitGroup
-	closeOnce     sync.Once
+	// terminal holds the first terminal CLOSED of each relay the pool gave up
+	// on (see GaveUp), in the order received.
+	terminal  []RelayClosed
+	eoseOnce  sync.Once
+	workers   sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func (p *RelayPool) newActiveMergedSubscription(ctx context.Context, cancel context.CancelFunc, filters []nostr.Filter, opts SubscribeOptions) *activeMergedSubscription {
@@ -1550,6 +1626,9 @@ type relaySubscriptionEnd struct {
 	eosed  bool
 	closed bool
 	reason string
+	// paged means the REQ was a page of a paged answer and ended at its EOSE:
+	// the next page, or the live follow-up, is due at once.
+	paged bool
 }
 
 // runWorker supervises one filter's REQ on one relay; see SubscribeWithOptions.
@@ -1584,8 +1663,7 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 	if sub == nil && worker.pending != "" {
 		s.setPendingReason(relayURL, worker.pending)
 	}
-	authRetried := false
-	retryableClosed := 0
+	budget := s.pool.newClosedRetryBudget()
 	// Only a worker's first EOSE and first CLOSED block on the consumer.
 	eoseEmitted, closedEmitted := false, false
 	for {
@@ -1610,9 +1688,12 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 			return
 		}
 		if end.eosed {
-			authRetried = false
-			retryableClosed = 0
+			budget.served()
 			backoff.Reset()
+		}
+		if end.paged {
+			immediate = true
+			continue
 		}
 		if !end.closed {
 			// The REQ ended without CLOSED: the connection dropped. Reissue
@@ -1629,37 +1710,35 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 		}
 
 		reason := end.reason
-		action := ClassifyClosedReason(reason)
-		if action == ClosedAuthenticate {
-			if !authRetried {
-				err := s.pool.authenticateLiveRelay(ctx, worker.mr, relay)
-				if err == nil {
-					authRetried = true
-					immediate = true
-					continue
-				}
-				s.pool.logger.Warn("relay requires NIP-42 AUTH for a REQ and AUTH failed",
-					zap.String("relay", relayURL), zap.String("reason", reason), zap.Error(err))
-				s.pool.recordRelayError(relayURL, authUnavailableMetadata(reason, err))
-			}
-			action = ClosedTerminal
-		}
 		// A retryable CLOSED is reissued at most maxRetryableClosedRetries
 		// times in a row (an EOSE resets the count); the next one is given up
 		// on like a policy refusal.
-		exhausted := false
-		if action == ClosedRetry {
-			retryableClosed++
-			exhausted = retryableClosed > s.pool.maxRetryableClosedRetries
+		verdict := budget.closed(reason)
+		action, exhausted := verdict.Action, verdict.Exhausted
+		if action == ClosedAuthenticate {
+			err := s.pool.authenticateLiveRelay(ctx, worker.mr, relay)
+			if err == nil {
+				immediate = true
+				continue
+			}
+			s.pool.logger.Warn("relay requires NIP-42 AUTH for a REQ and AUTH failed",
+				zap.String("relay", relayURL), zap.String("reason", reason), zap.Error(err))
+			s.pool.recordRelayError(relayURL, authUnavailableMetadata(reason, err))
+			action = ClosedTerminal
 		}
-		terminal := action == ClosedTerminal || exhausted
+		terminal := action == ClosedTerminal
+		info := RelayClosed{RelayURL: relayURL, SubscriptionID: subID, Reason: reason, Terminal: terminal}
+		if terminal {
+			// Recorded before the settle below can close EndOfStoredEvents.
+			s.recordTerminal(info)
+		}
 		settle(RelayStoredClosed, reason)
 		if exhausted {
-			s.pool.health.GetOrCreate(relayURL).RecordClosedRetryExhausted()
+			s.pool.recordClosedRetryExhausted(relayURL)
 		}
 		// A terminal CLOSED always reaches the consumer: it ends this relay's
 		// part of the subscription.
-		s.emitClosed(ctx, RelayClosed{RelayURL: relayURL, SubscriptionID: subID, Reason: reason, Terminal: terminal}, !closedEmitted || terminal)
+		s.emitClosed(ctx, info, !closedEmitted || terminal)
 		closedEmitted = true
 		if exhausted {
 			s.pool.logger.Warn("relay kept closing subscription; retry budget exhausted, not retrying",
@@ -1709,8 +1788,8 @@ func (s *activeMergedSubscription) resubscribe(ctx context.Context, worker *rela
 		if err != nil {
 			return nil, nil
 		}
-		worker.cursor.begin()
-		sub, err := subscribeOnRelay(relay, ctx, worker.reqFilter(pool, limits))
+		filter, continuation := worker.nextFilter(pool, limits)
+		sub, releaseREQ, err := sendWorkerREQ(relay, ctx, filter, release)
 		if err != nil {
 			release()
 			if ctx.Err() != nil {
@@ -1721,9 +1800,11 @@ func (s *activeMergedSubscription) resubscribe(ctx context.Context, worker *rela
 			s.setPendingReason(mr.url, err.Error())
 			continue
 		}
-		pool.recordRelayReREQ(mr.url)
+		if !continuation {
+			pool.recordRelayReREQ(mr.url)
+		}
 		pool.recordRelayConnectionState(mr.url, true)
-		return sub, release
+		return sub, releaseREQ
 	}
 }
 
@@ -1735,8 +1816,12 @@ func (s *activeMergedSubscription) consume(ctx context.Context, worker *relayFil
 	eventsCh := sub.Events
 	closedCh := sub.ClosedReason
 	relayURL := worker.mr.url
+	pager := worker.pager
 	forward := func(event nostr.Event) bool {
 		ev := &event
+		if pager != nil && !pager.observe(ev) {
+			return true
+		}
 		if s.validateEvent != nil && !s.validateEvent(ev) {
 			return true
 		}
@@ -1783,8 +1868,31 @@ func (s *activeMergedSubscription) consume(ctx context.Context, worker *relayFil
 						break drain
 					}
 				}
-				worker.cursor.eose()
 				end.eosed = true
+				if pager != nil && pager.advance() {
+					// More stored events than one page holds: the next
+					// page carries on before the answer is complete.
+					end.paged = true
+					return end
+				}
+				firstAnswer := !worker.answered
+				worker.cursor.eose()
+				worker.answered = true
+				if pager != nil {
+					worker.pager = nil
+					if pager.truncated {
+						s.recordTruncated(relayURL, pager.base, worker.initial && firstAnswer)
+					}
+					if pager.continued {
+						// The last page has an until: follow the relay
+						// live with a fresh REQ from the newest event.
+						worker.followSince = pager.followSince()
+						onEOSE()
+						end.paged = true
+						return end
+					}
+					pager = nil
+				}
 				onEOSE()
 			}
 			eoseCh = nil
