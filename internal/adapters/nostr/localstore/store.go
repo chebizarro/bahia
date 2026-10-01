@@ -9,13 +9,18 @@
 // the same reason.
 //
 // Events live in a fiatjaf.com/nostr/eventstore bbolt backend (the same pure-Go
-// store the relay sidecar uses), so replaceable and addressable events collapse
-// to their latest version per coordinate. Cursors live in a separate bucket of
-// the same file, so the events and the cursors that describe them are deleted
-// together.
+// store the relay sidecar uses). The store keeps what a NIP-01/NIP-09 relay
+// would serve: replaceable and addressable events collapse to their latest
+// version per coordinate, and a kind-5 deletion request removes the
+// requester's events it names and keeps them from coming back. Coordinates
+// the eventstore's tag index cannot hold (an empty d, a d or `a` coordinate
+// over 100 bytes) are resolved through package boltcoord, as in the relay
+// sidecar (bahia-irsry.51). Cursors live in a separate bucket of the same
+// file, so the events and the cursors that describe them are deleted together.
 package localstore
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,12 +35,28 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
 	"fiatjaf.com/nostr/eventstore/boltdb"
+	"github.com/openagentsinc/bahia/internal/boltcoord"
 	"go.etcd.io/bbolt"
 )
 
-// cursorBucket holds one record per (relay, filter hash). It sits next to the
-// eventstore's own buckets in the same bbolt file.
-var cursorBucket = []byte("bahiaInboundCursors")
+// Buckets Bahia keeps next to the eventstore's own in the same bbolt file.
+var (
+	// cursorBucket holds one record per (relay, filter hash).
+	cursorBucket = []byte("bahiaInboundCursors")
+	// deletionBucket indexes the coordinates that stored kind-5 requests
+	// delete (boltcoord.DeletionIndex). An entry is written before its
+	// request is stored and removed with it.
+	deletionBucket = []byte("bahiaLocalDeletions")
+	metaBucket     = []byte("bahiaLocalMeta")
+)
+
+// coordinateRepairMarker records that the store has been brought up to what
+// SaveEvent maintains (see repairCoordinates): stores written before
+// deletionBucket existed applied no deletion requests.
+var coordinateRepairMarker = boltcoord.Marker{Bucket: metaBucket, Key: []byte("coordinateRepairVersion"), Version: "1"}
+
+// unboundedScan stands in for "no cap" on internal scans.
+const unboundedScan = math.MaxInt32
 
 // queryPageSize bounds one bbolt query. The backend preallocates a buffer
 // proportional to the limit it is given, so unbounded reads are paged by
@@ -107,8 +128,13 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open local event store %s (is another process using it?): %w", abs, err)
 	}
 	shared := &sharedStore{path: abs, backend: backend, refs: 1}
+	store := &Store{shared: shared}
+	if err := store.repairCoordinates(); err != nil {
+		_ = backend.DB.Close()
+		return nil, fmt.Errorf("open local event store %s: %w", abs, err)
+	}
 	openStores.byPath[abs] = shared
-	return &Store{shared: shared}, nil
+	return store, nil
 }
 
 func openBackend(path string) (*boltdb.BoltBackend, error) {
@@ -120,8 +146,12 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 		return nil, err
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists(cursorBucket)
-		return err
+		for _, name := range [][]byte{cursorBucket, deletionBucket, metaBucket} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		_ = backend.DB.Close()
 		return nil, err
@@ -156,9 +186,12 @@ func (s *Store) Close() error {
 func (s *Store) backend() *boltdb.BoltBackend { return s.shared.backend }
 
 // SaveEvent stores ev and reports whether it is new to this store: false for
-// an id the store already holds, and for a replaceable or addressable event
-// that is not newer than the version held for its coordinate (NIP-01: higher
-// created_at, then lower id). Ephemeral events are never stored and always
+// an id the store already holds, for a replaceable or addressable event that
+// is not newer than the version held for its coordinate (NIP-01: higher
+// created_at, then lower id), and for an event a stored kind-5 request of its
+// author deletes (NIP-09). Saving a kind-5 request removes the requester's
+// events it names: `e` references, and every version of an `a` coordinate up
+// to the request's created_at. Ephemeral events are never stored and always
 // count as new. The caller is expected to have verified the event.
 func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 	if ev.Kind.IsEphemeral() {
@@ -169,13 +202,25 @@ func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 	if s.hasLocked(ev.ID) {
 		return false, nil
 	}
-	if ev.Kind.IsReplaceable() || ev.Kind.IsAddressable() {
-		if _, err := s.backend().ReplaceEvent(ev); err != nil {
+	deleted, err := s.deletedLocked(ev)
+	if err != nil {
+		return false, fmt.Errorf("check local event %s against deletion requests: %w", ev.ID.Hex(), err)
+	}
+	if deleted {
+		return false, nil
+	}
+	switch {
+	case ev.Kind == nostr.KindDeletion:
+		if err := s.saveDeletionLocked(ev); err != nil {
+			return false, fmt.Errorf("save local deletion request %s: %w", ev.ID.Hex(), err)
+		}
+		return true, nil
+	case ev.Kind.IsReplaceable() || ev.Kind.IsAddressable():
+		stored, err := boltcoord.Replace(s.backend(), s.scan, ev)
+		if err != nil {
 			return false, fmt.Errorf("replace local event %s: %w", ev.ID.Hex(), err)
 		}
-		// ReplaceEvent keeps the newer of the held and incoming versions; the
-		// incoming one is new only if it is the one now held.
-		return s.hasLocked(ev.ID), nil
+		return stored, nil
 	}
 	if err := s.backend().SaveEvent(ev); err != nil {
 		if errors.Is(err, eventstore.ErrDupEvent) {
@@ -186,12 +231,97 @@ func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 	return true, nil
 }
 
+// deletedLocked reports whether a stored kind-5 request of ev's author deletes
+// it: by id (an `e` reference; ids are 64 hex characters, which the
+// eventstore's tag index holds) or, for replaceable and addressable events, by
+// coordinate at or after its created_at (through the deletion index, since a
+// coordinate can be longer than the tag index holds). Deleting a deletion
+// request has no effect (NIP-09).
+func (s *Store) deletedLocked(ev nostr.Event) (bool, error) {
+	if ev.Kind == nostr.KindDeletion {
+		return false, nil
+	}
+	byID := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.KindDeletion},
+		Authors: []nostr.PubKey{ev.PubKey},
+		Tags:    nostr.TagMap{"e": []string{ev.ID.Hex()}},
+		Limit:   1,
+	}
+	for range s.QueryEvents(byID) {
+		return true, nil
+	}
+	if !ev.Kind.IsReplaceable() && !ev.Kind.IsAddressable() {
+		return false, nil
+	}
+	return s.deletions().Deleted(boltcoord.CoordinateOf(ev), ev.CreatedAt)
+}
+
+// saveDeletionLocked indexes, applies and stores a kind-5 request, in that
+// order: a failure leaves the request unstored and unindexed, so a redelivery
+// runs it again, and applying it twice is harmless.
+func (s *Store) saveDeletionLocked(request nostr.Event) error {
+	if err := s.deletions().Index(request); err != nil {
+		return err
+	}
+	err := s.applyDeletionLocked(request)
+	if err == nil {
+		err = s.backend().SaveEvent(request)
+	}
+	if err != nil {
+		return errors.Join(err, s.deletions().Unindex(request))
+	}
+	return nil
+}
+
+// applyDeletionLocked removes the events a kind-5 request deletes: those its
+// `e` references name, when the requester is their author, and every version
+// of its `a` coordinates (the requester's own) up to its created_at.
+// Deletion requests are never deleted.
+func (s *Store) applyDeletionLocked(request nostr.Event) error {
+	var targets []nostr.ID
+	for _, tag := range request.Tags {
+		if len(tag) < 2 || tag[0] != "e" {
+			continue
+		}
+		id, err := nostr.IDFromHex(tag[1])
+		if err != nil {
+			continue
+		}
+		for target := range s.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}) {
+			if target.ID == id && target.PubKey == request.PubKey && target.Kind != nostr.KindDeletion {
+				targets = append(targets, target.ID)
+			}
+		}
+	}
+	for _, c := range boltcoord.DeletedCoordinates(request) {
+		for target := range boltcoord.Versions(s.scan, c, request.CreatedAt, unboundedScan) {
+			targets = append(targets, target.ID)
+		}
+	}
+	// Collected first: QueryEvents copies each page out of its read
+	// transaction, but the deletes still run after the reads finish.
+	for _, id := range targets {
+		if err := s.backend().DeleteEvent(id); err != nil {
+			return fmt.Errorf("delete %s: %w", id.Hex(), err)
+		}
+	}
+	return nil
+}
+
 // DeleteEvent removes one event. Deleting an absent id is not an error.
+// Removing a kind-5 request also lifts its deletions for events stored later;
+// the events it already removed stay removed.
 func (s *Store) DeleteEvent(id nostr.ID) error {
 	s.shared.saveMu.Lock()
 	defer s.shared.saveMu.Unlock()
-	if !s.hasLocked(id) {
+	held := slices.Collect(s.backend().QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}, 1))
+	if len(held) == 0 || held[0].ID != id {
 		return nil
+	}
+	if held[0].Kind == nostr.KindDeletion {
+		if err := s.deletions().Unindex(held[0]); err != nil {
+			return fmt.Errorf("unindex local deletion request %s: %w", id.Hex(), err)
+		}
 	}
 	return s.backend().DeleteEvent(id)
 }
@@ -203,6 +333,80 @@ func (s *Store) hasLocked(id nostr.ID) bool {
 		return true
 	}
 	return false
+}
+
+func (s *Store) deletions() boltcoord.DeletionIndex {
+	return boltcoord.NewDeletionIndex(s.backend().DB, deletionBucket)
+}
+
+// scan adapts QueryEvents to boltcoord.Scan.
+func (s *Store) scan(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
+	filter.Limit = limit
+	return s.QueryEvents(filter)
+}
+
+// repairCoordinates brings a store written before the deletion index existed
+// up to what SaveEvent now maintains, once (coordinateRepairMarker): it
+// indexes the stored kind-5 requests, applies them (such a store applied
+// none), and collapses every coordinate to its latest version (ReplaceEvent
+// kept every version of a d the eventstore does not index). Each step is safe
+// to repeat, so a repair interrupted before its marker is written runs again
+// in full on the next open.
+func (s *Store) repairCoordinates() error {
+	db := s.backend().DB
+	done, err := coordinateRepairMarker.Done(db)
+	if err != nil {
+		return fmt.Errorf("read coordinate repair marker: %w", err)
+	}
+	if done {
+		return nil
+	}
+	requests := nostr.Filter{Kinds: []nostr.Kind{nostr.KindDeletion}}
+	if err := s.deletions().Backfill(context.Background(), s.QueryEvents(requests), queryPageSize, nil); err != nil {
+		return fmt.Errorf("index stored deletion requests: %w", err)
+	}
+	for request := range s.QueryEvents(requests) {
+		if err := s.applyDeletionLocked(request); err != nil {
+			return fmt.Errorf("apply stored deletion request %s: %w", request.ID.Hex(), err)
+		}
+	}
+	if err := s.collapseVersions(); err != nil {
+		return err
+	}
+	if err := db.Update(coordinateRepairMarker.Set); err != nil {
+		return fmt.Errorf("write coordinate repair marker: %w", err)
+	}
+	return nil
+}
+
+// collapseVersions deletes every stored replaceable or addressable event that
+// is not the latest version of its coordinate.
+func (s *Store) collapseVersions() error {
+	latest := map[boltcoord.Coordinate]nostr.Event{} // only ID and CreatedAt, for nostr.IsOlder
+	var superseded []nostr.ID
+	for event := range s.QueryEvents(nostr.Filter{}) {
+		if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
+			continue
+		}
+		c := boltcoord.CoordinateOf(event)
+		ev := nostr.Event{ID: event.ID, CreatedAt: event.CreatedAt}
+		current, held := latest[c]
+		switch {
+		case !held:
+			latest[c] = ev
+		case nostr.IsOlder(current, ev):
+			superseded = append(superseded, current.ID)
+			latest[c] = ev
+		default:
+			superseded = append(superseded, ev.ID)
+		}
+	}
+	for _, id := range superseded {
+		if err := s.backend().DeleteEvent(id); err != nil {
+			return fmt.Errorf("delete superseded local event %s: %w", id.Hex(), err)
+		}
+	}
+	return nil
 }
 
 // QueryEvents yields the stored events matching filter, newest first, up to

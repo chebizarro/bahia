@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	"fiatjaf.com/nostr/eventstore/boltdb"
 	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
 	"fiatjaf.com/nostr/nip40"
+	"github.com/openagentsinc/bahia/internal/boltcoord"
 	"go.etcd.io/bbolt"
 	"go.uber.org/zap"
 )
@@ -208,29 +207,14 @@ func (s *eventStore) Replace(ctx context.Context, event nostr.Event) error {
 }
 
 func (s *eventStore) replace(event nostr.Event) error {
-	c := coordinateOf(event)
-	// ReplaceEvent finds the versions it supersedes through the #d index, so
-	// for a d that index skips it supersedes nothing: read every version here
-	// and delete them after the write.
-	limit := 1
-	if !c.dIndexed() {
-		limit = unboundedQueryLimit
-	}
 	s.shared.replaceMu.Lock()
 	defer s.shared.replaceMu.Unlock()
-	current := slices.Collect(s.versions(c, 0, limit))
-	if len(current) > 0 && !nostr.IsOlder(current[0], event) {
-		return eventstore.ErrDupEvent
-	}
-	if _, err := s.backend().ReplaceEvent(event); err != nil {
+	stored, err := boltcoord.Replace(s.backend(), s.scan, event)
+	if err != nil {
 		return fmt.Errorf("replace relay event: %w", err)
 	}
-	if !c.dIndexed() {
-		for _, older := range current {
-			if err := s.backend().DeleteEvent(older.ID); err != nil {
-				return fmt.Errorf("delete replaced relay event: %w", err)
-			}
-		}
+	if !stored {
+		return eventstore.ErrDupEvent
 	}
 	return nil
 }
@@ -277,7 +261,7 @@ func (s *eventStore) checkNotDeleted(event nostr.Event) error {
 		return errEventDeleted
 	}
 	if event.Kind.IsReplaceable() || event.Kind.IsAddressable() {
-		deleted, err := s.coordinateDeleted(coordinateOf(event), event.CreatedAt)
+		deleted, err := s.coordinateDeleted(boltcoord.CoordinateOf(event), event.CreatedAt)
 		if err != nil {
 			return err
 		}
@@ -331,7 +315,7 @@ func (s *eventStore) applyDeletion(ctx context.Context, request nostr.Event) (in
 			}
 		}
 	}
-	for _, c := range deletedCoordinates(request) {
+	for _, c := range boltcoord.DeletedCoordinates(request) {
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
@@ -505,7 +489,7 @@ func (s *eventStore) latest(filter nostr.Filter) (nostr.Event, bool) {
 // or addressable key (see replaceableKey). Unlike Query, it reports store
 // failures, so callers that must not lose a change can retry.
 func (s *eventStore) latestByReplaceableKey(_ context.Context, key string) (nostr.Event, bool, error) {
-	kind, author, d, ok := parseAddress(key)
+	kind, author, d, ok := boltcoord.ParseAddress(key)
 	if !ok {
 		return nostr.Event{}, false, fmt.Errorf("read replaceable relay event %s: malformed key", key)
 	}
@@ -572,32 +556,12 @@ func storableEvent(event nostr.Event) error {
 
 // replaceableKey is the latest-wins coordinate of a replaceable or addressable
 // event: "<kind>:<pubkey>:<d>", with an empty d for replaceable kinds. It is
-// the NIP-01/NIP-09 address format, so parseAddress reads it back.
+// the NIP-01/NIP-09 address format, so boltcoord.ParseAddress reads it back.
 func replaceableKey(event nostr.Event) string {
 	if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
 		return ""
 	}
-	return addressOf(event.Kind, event.PubKey, event.Tags.GetD())
-}
-
-func addressOf(kind nostr.Kind, author nostr.PubKey, d string) string {
-	return strconv.Itoa(int(kind)) + ":" + author.Hex() + ":" + d
-}
-
-func parseAddress(address string) (nostr.Kind, nostr.PubKey, string, bool) {
-	parts := strings.SplitN(address, ":", 3)
-	if len(parts) != 3 {
-		return 0, nostr.ZeroPK, "", false
-	}
-	kind, err := strconv.ParseUint(parts[0], 10, 16)
-	if err != nil {
-		return 0, nostr.ZeroPK, "", false
-	}
-	author, err := nostr.PubKeyFromHex(parts[1])
-	if err != nil {
-		return 0, nostr.ZeroPK, "", false
-	}
-	return nostr.Kind(kind), author, parts[2], true
+	return boltcoord.Address(event.Kind, event.PubKey, event.Tags.GetD())
 }
 
 // sweepMatching deletes, page by page, the events matching filter that

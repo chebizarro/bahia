@@ -33,7 +33,8 @@ import (
 // Because the store holds everything already applied, a consumer rebuilds its
 // in-memory state on start by replaying Store.QueryEvents for its filters
 // before Run (the store keeps the latest version per replaceable coordinate,
-// tombstones included).
+// tombstones included, and drops what stored NIP-09 requests delete, for
+// coordinates of any length).
 type ProcessSync struct {
 	Pool   *RelayPool
 	Store  *localstore.Store
