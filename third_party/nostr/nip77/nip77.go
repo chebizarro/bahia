@@ -3,7 +3,9 @@ package nip77
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip77/negentropy"
@@ -36,62 +38,33 @@ func NegentropySync(
 	// fetched from the source and published to the target
 	handle func(ctx context.Context, directions Direction),
 ) error {
+	return NegentropySyncWithOptions(ctx, relayUrl, filter, source, target, handle, nostr.RelayOptions{})
+}
+
+// NegentropySyncWithOptions is NegentropySync with the session connection's
+// options (Bahia patch, see BAHIA_PATCHES.md). With options.AuthHandler set the
+// connection answers the relay's NIP-42 challenge, and a NEG-ERR whose reason
+// starts with "auth-required:" makes the session authenticate (joining an
+// AUTH attempt already in flight) and send its NEG-OPEN again, once: a second
+// refusal ends the session with that NEG-ERR. options.CustomHandler, if set,
+// still sees every frame the session does not handle itself.
+func NegentropySyncWithOptions(
+	ctx context.Context,
+	relayUrl string,
+	filter nostr.Filter,
+	source nostr.Querier,
+	target nostr.Publisher,
+	handle func(ctx context.Context, directions Direction),
+	options nostr.RelayOptions,
+) error {
 	id := "nl-tmp" // for now we can't have more than one subscription in the same connection
 
 	vec := vector.New()
 	neg := negentropy.New(vec, 60_000, source != nil, target != nil)
 
-	// connect to relay
-	var err error
-	// errch holds the first outcome. report never blocks: it runs on the
-	// relay's read loop, and a second outcome (a late NEG-ERR, a relay CLOSE
-	// after completion) arriving once nobody reads errch must not wedge that
-	// loop (Bahia patch, see BAHIA_PATCHES.md).
-	errch := make(chan error, 1)
-	report := func(err error) {
-		select {
-		case errch <- err:
-		default:
-		}
-	}
-	var relay *nostr.Relay
-	relay, err = nostr.RelayConnect(ctx, relayUrl, nostr.RelayOptions{
-		CustomHandler: func(data string) {
-			envelope := ParseNegMessage(data)
-			if envelope == nil {
-				return
-			}
-			switch env := envelope.(type) {
-			case *OpenEnvelope, *CloseEnvelope:
-				report(fmt.Errorf("unexpected %s received from relay", env.Label()))
-				return
-			case *ErrorEnvelope:
-				report(fmt.Errorf("relay returned a %s: %s", env.Label(), env.Reason))
-				return
-			case *MessageEnvelope:
-				nextmsg, err := neg.Reconcile(env.Message)
-				if err != nil {
-					report(fmt.Errorf("failed to reconcile: %w", err))
-					return
-				}
-
-				if nextmsg != "" {
-					msgb, _ := MessageEnvelope{id, nextmsg}.MarshalJSON()
-					relay.Write(msgb)
-				}
-			}
-		},
-	})
-	// RelayConnect ties the connection to a background context, so it stays
-	// open until Close: close it when the sync ends (Bahia patch).
-	if relay != nil {
-		defer relay.Close()
-	}
-	if err != nil {
-		return err
-	}
-
-	// fill our local vector
+	// fill our local vector and build the NEG-OPEN before dialing, so the
+	// frame handler below never sees a session that is still being set up
+	// (Bahia patch).
 	var usedSource nostr.Querier
 	if source != nil {
 		for evt := range source.QueryEvents(filter) {
@@ -107,12 +80,81 @@ func NegentropySync(
 		}
 	}
 	vec.Seal()
+	open, _ := OpenEnvelope{id, filter, neg.Start()}.MarshalJSON()
+
+	// errch holds the first outcome. report never blocks: it runs on the
+	// relay's read loop, and a second outcome (a late NEG-ERR, a relay CLOSE
+	// after completion) arriving once nobody reads errch must not wedge that
+	// loop (Bahia patch, see BAHIA_PATCHES.md).
+	errch := make(chan error, 1)
+	report := func(err error) {
+		select {
+		case errch <- err:
+		default:
+		}
+	}
+
+	var relay *nostr.Relay
+	var reopened atomic.Bool
+	authHandler := options.AuthHandler
+	customHandler := options.CustomHandler
+	options.CustomHandler = func(data string) {
+		envelope := ParseNegMessage(data)
+		if envelope == nil {
+			if customHandler != nil {
+				customHandler(data)
+			}
+			return
+		}
+		switch env := envelope.(type) {
+		case *OpenEnvelope, *CloseEnvelope:
+			report(fmt.Errorf("unexpected %s received from relay", env.Label()))
+			return
+		case *ErrorEnvelope:
+			if authHandler != nil && isAuthRequired(env.Reason) && reopened.CompareAndSwap(false, true) {
+				// Relay.Auth waits for the relay's OK, which this read loop
+				// delivers: authenticate and re-open from another goroutine.
+				go func() {
+					err := relay.Auth(ctx, func(ctx context.Context, evt *nostr.Event) error {
+						return authHandler(ctx, relay, evt)
+					})
+					if err != nil {
+						report(fmt.Errorf("relay returned a %s: %s (NIP-42 AUTH failed: %w)", env.Label(), env.Reason, err))
+						return
+					}
+					if err := relay.WriteWithError(open); err != nil {
+						report(fmt.Errorf("failed to re-open negentropy after AUTH: %w", err))
+					}
+				}()
+				return
+			}
+			report(fmt.Errorf("relay returned a %s: %s", env.Label(), env.Reason))
+			return
+		case *MessageEnvelope:
+			nextmsg, err := neg.Reconcile(env.Message)
+			if err != nil {
+				report(fmt.Errorf("failed to reconcile: %w", err))
+				return
+			}
+
+			if nextmsg != "" {
+				msgb, _ := MessageEnvelope{id, nextmsg}.MarshalJSON()
+				relay.Write(msgb)
+			}
+		}
+	}
+
+	// connect to relay. NewRelay binds the connection to a background
+	// context, so it stays open until Close: close it when the sync ends,
+	// also after a failed dial (Bahia patch).
+	relay = nostr.NewRelay(context.Background(), relayUrl, options)
+	defer relay.Close()
+	if err := relay.Connect(ctx); err != nil {
+		return err
+	}
 
 	// kickstart the process
-	msg := neg.Start()
-	open, _ := OpenEnvelope{id, filter, msg}.MarshalJSON()
-	err = relay.WriteWithError(open)
-	if err != nil {
+	if err := relay.WriteWithError(open); err != nil {
 		return fmt.Errorf("failed to write to relay: %w", err)
 	}
 
@@ -151,16 +193,19 @@ func NegentropySync(
 	}()
 
 	select {
-	case err = <-errch:
-		if err != nil {
-			return err
-		}
-		return nil
+	case err := <-errch:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-done:
 		return nil
 	}
+}
+
+// isAuthRequired reports whether a NEG-ERR reason carries NIP-42's
+// machine-readable "auth-required:" prefix (Bahia patch).
+func isAuthRequired(reason string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(reason)), "auth-required:")
 }
 
 func SyncEventsFromIDs(ctx context.Context, dir Direction) {

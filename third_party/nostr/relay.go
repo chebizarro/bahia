@@ -234,10 +234,12 @@ func (r *Relay) newConnection(ctx context.Context, httpClient *http.Client) erro
 	debugLogf("{%s} connecting!\n", r.URL)
 
 	dialCtx := ctx
+	cancelDial := func() {}
 	if _, ok := dialCtx.Deadline(); !ok {
 		// if no timeout is set, force it to 7 seconds
-		dialCtx, _ = context.WithTimeoutCause(ctx, 7*time.Second, errors.New("connection took too long"))
+		dialCtx, cancelDial = context.WithTimeoutCause(ctx, 7*time.Second, errors.New("connection took too long"))
 	}
+	defer cancelDial()
 
 	dialOpts := &ws.DialOptions{
 		HTTPHeader: http.Header{
@@ -643,7 +645,9 @@ func (r *Relay) publish(ctx context.Context, id ID, env Envelope) error {
 			r.okCallbacksMutex.Unlock()
 			return fmt.Errorf("publish: %w", context.Cause(ctx))
 		case <-r.connectionContext.Done():
+			r.okCallbacksMutex.Lock()
 			r.okCallbacks = make(map[ID]okcallback)
+			r.okCallbacksMutex.Unlock()
 			return fmt.Errorf("relay: %w", context.Cause(r.connectionContext))
 		}
 	}
