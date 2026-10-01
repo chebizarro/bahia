@@ -48,11 +48,6 @@ type LifecycleHandler struct {
 
 	mu               sync.Mutex
 	processedActions map[string]struct{}
-	// awaiting holds, per agent with an action parked on a runtime terminal
-	// result, the later actions deferred until that action finishes. A timely
-	// result would have kept them waiting on the handler shard; deferring keeps
-	// the same order across the park.
-	awaiting map[string][]*nostr.Event
 }
 
 // NewLifecycleHandler creates a new lifecycle handler.
@@ -71,7 +66,6 @@ func NewLifecycleHandler(
 		statusSync:       statusSync,
 		logger:           logger,
 		processedActions: make(map[string]struct{}),
-		awaiting:         make(map[string][]*nostr.Event),
 	}
 	h.engine = &localLifecycleEngine{
 		reactor:          reactor,
@@ -82,12 +76,15 @@ func NewLifecycleHandler(
 	return h
 }
 
-// HandleAction processes a soul lifecycle action event.
+// HandleAction processes a soul lifecycle action event. An authorized action
+// runs holding its soul (soulOperationGate): while another lifecycle action or
+// a fleet reload holds the soul, including one parked on a runtime terminal
+// result, the action is deferred and runs in arrival order once that
+// operation finishes, as it would have queued behind a timely result.
 func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event) error {
 	if event == nil {
 		return fmt.Errorf("nil lifecycle action event")
 	}
-	logger := h.logger.With("event_id", event.ID)
 
 	// Parse action from event.
 	action, err := h.parseAction(event)
@@ -97,7 +94,48 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		return fmt.Errorf("parse action: %w", err)
 	}
 
-	logger = logger.With(
+	agentID := normalizeSoulLookupRef(action.SoulRef)
+	if agentID == "" || !h.isAuthorized(event.PubKey.Hex(), nil) || !isSupportedLifecycleAction(action.Action) {
+		// Rejected before any side effect, so there is nothing to serialize.
+		_, err := h.runAction(ctx, event, action, nil)
+		return err
+	}
+	var runErr error
+	now := soulOperation{key: lifecycleOperationKey(action.EventID), run: func(ctx context.Context, hold *soulHold) bool {
+		parked, err := h.runAction(ctx, event, action, hold)
+		runErr = err
+		return parked
+	}}
+	switch h.reactor.soulOperations().do(ctx, agentID, now, h.deferredAction(event, action)) {
+	case soulOperationDeferred:
+		h.logger.Info("deferring lifecycle action until the soul's current operation finishes",
+			"event_id", event.ID, "action", action.Action, "agent_id", agentID)
+	case soulOperationDuplicate:
+		h.logger.Info("ignoring lifecycle action already in progress or deferred",
+			"event_id", event.ID, "action", action.Action, "agent_id", agentID)
+	}
+	return runErr
+}
+
+// deferredAction is the soul operation that runs event later: deferred behind
+// another operation, or re-driven after a restart (rebuildParkedOperations).
+// It re-reads the soul when it runs.
+func (h *LifecycleHandler) deferredAction(event *nostr.Event, action *domain.SoulAction) soulOperation {
+	return soulOperation{key: lifecycleOperationKey(action.EventID), run: func(ctx context.Context, hold *soulHold) bool {
+		parked, err := h.runAction(ctx, event, action, hold)
+		if err != nil {
+			h.logger.Error("deferred lifecycle action failed", "event_id", event.ID, "action", action.Action, "error", err)
+		}
+		return parked
+	}}
+}
+
+// runAction executes a parsed lifecycle action. hold is the action's hold on
+// its soul (nil for an action rejected before any side effect). parked reports
+// that the action is awaiting a runtime terminal result and keeps the hold.
+func (h *LifecycleHandler) runAction(ctx context.Context, event *nostr.Event, action *domain.SoulAction, hold *soulHold) (parked bool, err error) {
+	logger := h.logger.With(
+		"event_id", event.ID,
 		"action", action.Action,
 		"soul_ref", action.SoulRef,
 		"initiator", action.Initiator,
@@ -107,10 +145,10 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	// Look up the soul.
 	soul, err := h.reactor.GetSoul(ctx, action.SoulRef)
 	if err != nil {
-		return fmt.Errorf("lookup soul: %w", err)
+		return false, fmt.Errorf("lookup soul: %w", err)
 	}
 	if soul == nil {
-		return fmt.Errorf("soul not found: %s", action.SoulRef)
+		return false, fmt.Errorf("soul not found: %s", action.SoulRef)
 	}
 
 	// Verify authorization.
@@ -118,12 +156,12 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		err := fmt.Errorf("unauthorized: %s cannot perform %s on soul %s",
 			event.PubKey.Hex(), action.Action, soul.AgentID)
 		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
-		return err
+		return false, err
 	}
 	if !isSupportedLifecycleAction(action.Action) {
 		err := fmt.Errorf("unknown action: %s", action.Action)
 		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
-		return err
+		return false, err
 	}
 
 	if existing, err := h.findExistingTerminalResult(ctx, action.EventID); err != nil {
@@ -131,22 +169,17 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	} else if existing != nil {
 		logger.Info("ignoring lifecycle action with existing terminal result", "result_event", existing.ID)
 		h.beginAction(action.EventID)
-		return nil
-	}
-
-	if h.deferBehindAwaiting(soul.AgentID, event) {
-		logger.Info("deferring lifecycle action until the soul's action awaiting a runtime terminal result finishes")
-		return nil
+		return false, nil
 	}
 
 	if !h.beginAction(action.EventID) {
 		logger.Info("ignoring replayed lifecycle action")
-		return nil
+		return false, nil
 	}
 
 	if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("processing %s action", action.Action), soul.AgentID); err != nil {
 		h.clearAction(action.EventID)
-		return fmt.Errorf("publish action progress: %w", err)
+		return false, fmt.Errorf("publish action progress: %w", err)
 	}
 
 	var result *LifecycleExecutionResult
@@ -160,50 +193,19 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	default:
 		result, err = h.engine.ExecuteLifecycleAction(ctx, soul, action)
 	}
-	return h.finishAction(ctx, h.reactor.handlerShardKey(event), action, soul, result, err, false)
+	return h.finishAction(ctx, lifecycleRun{action: action, soul: soul, hold: hold, shardKey: h.reactor.handlerShardKey(event)}, result, err)
 }
 
-// deferBehindAwaiting queues event when its soul has an action awaiting a
-// runtime terminal result, and reports whether it did.
-func (h *LifecycleHandler) deferBehindAwaiting(agentID string, event *nostr.Event) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	deferred, awaiting := h.awaiting[agentID]
-	if !awaiting {
-		return false
-	}
-	for _, queued := range deferred {
-		if queued.ID == event.ID {
-			return true
-		}
-	}
-	h.awaiting[agentID] = append(deferred, event)
-	return true
-}
-
-func (h *LifecycleHandler) markAwaiting(agentID string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.awaiting == nil {
-		h.awaiting = make(map[string][]*nostr.Event)
-	}
-	if _, exists := h.awaiting[agentID]; !exists {
-		h.awaiting[agentID] = nil
-	}
-}
-
-// releaseAwaiting ends agentID's awaiting state and runs the actions deferred
-// behind it, in arrival order. One of them may park again, deferring the rest.
-func (h *LifecycleHandler) releaseAwaiting(ctx context.Context, agentID string) {
-	h.mu.Lock()
-	deferred := h.awaiting[agentID]
-	delete(h.awaiting, agentID)
-	h.mu.Unlock()
-	for _, event := range deferred {
-		if err := h.HandleAction(ctx, event); err != nil {
-			h.logger.Error("deferred lifecycle action failed", "event_id", event.ID, "error", err)
-		}
-	}
+// lifecycleRun is one action in progress: what finishAction and its parked
+// continuations need.
+type lifecycleRun struct {
+	action *domain.SoulAction
+	soul   *domain.AgentSoul
+	// hold is the action's hold on its soul; a parked action keeps it until
+	// its continuation finishes.
+	hold *soulHold
+	// shardKey is the reactor handler shard the continuation runs under.
+	shardKey string
 }
 
 // awaitingRuntimeResult is a lifecycle step's error when a runtime request was
@@ -245,51 +247,50 @@ func awaitRuntimeStep(executeErr error, next func(context.Context, *RuntimeContr
 // finishAction publishes an action's outcome. An action waiting on a runtime
 // terminal result publishes awaiting_terminal progress and is parked: it gets
 // no terminal result and no rollback until the late result is observed, and
-// the reactor's result subscription then resumes it under shardKey. Later
-// actions for the soul are deferred until a parked action finishes. resumed
-// reports that this call continues a parked action.
-func (h *LifecycleHandler) finishAction(ctx context.Context, shardKey string, action *domain.SoulAction, soul *domain.AgentSoul, result *LifecycleExecutionResult, err error, resumed bool) error {
+// the reactor's result subscription then resumes it under run.shardKey. A
+// parked action keeps its soul, so later work for the soul waits behind it;
+// the continuation releases the soul when the action finishes. parked reports
+// that the action is awaiting.
+func (h *LifecycleHandler) finishAction(ctx context.Context, run lifecycleRun, result *LifecycleExecutionResult, err error) (parked bool, _ error) {
+	action, soul := run.action, run.soul
 	logger := h.logger.With("event_id", action.EventID, "action", action.Action, "agent_id", soul.AgentID)
-	parked := resumed
-	defer func() {
-		if parked {
-			h.releaseAwaiting(ctx, soul.AgentID)
-		}
-	}()
 	for {
 		var awaiting *awaitingRuntimeResult
 		if !errors.As(err, &awaiting) {
 			break
 		}
 		message := fmt.Sprintf("%s: %v; no rollback without an observed runtime failure", actionStatusAwaitingTerminal, awaiting.cause)
-		if publishErr := h.publishActionProgress(ctx, action, actionStatusAwaitingTerminal, message, soul.AgentID); publishErr != nil {
+		if publishErr := h.publishActionProgressTags(ctx, action, actionStatusAwaitingTerminal, message, soul.AgentID, awaitingTerminalTags()); publishErr != nil {
 			logger.Warn("failed to publish awaiting_terminal progress", "error", publishErr)
 		}
 		if awaiting.pending == nil {
-			logger.Warn("runtime outcome unknown and not correlatable; the action stays awaiting_terminal until re-driven", "error", awaiting.cause)
-			return nil
+			logger.Warn("runtime outcome unknown and not correlatable; the action stays awaiting_terminal until a restart re-drives it", "error", awaiting.cause)
+			return false, nil
 		}
-		// Mark before parking: the continuation may run as soon as park returns.
-		h.markAwaiting(soul.AgentID)
-		late, observed := h.reactor.resultWaiters().park(awaiting.pending, shardKey, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
-			result, err := awaiting.resume(ctx, late)
-			if err := h.finishAction(ctx, shardKey, action, soul, result, err, true); err != nil {
-				logger.Error("lifecycle action failed after late runtime result", "error", err)
-			}
+		late, observed := h.reactor.resultWaiters().park(awaiting.pending, parkedOperation{
+			shardKey:  run.shardKey,
+			holdsSoul: run.hold != nil,
+			resume: func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+				result, err := awaiting.resume(ctx, late)
+				parked, err := h.finishAction(ctx, run, result, err)
+				if err != nil {
+					logger.Error("lifecycle action failed after late runtime result", "error", err)
+				}
+				if !parked {
+					h.reactor.soulOperations().release(ctx, run.hold)
+				}
+			},
 		})
 		if !observed {
 			logger.Info("lifecycle action awaiting runtime terminal result", "request_event", awaiting.pending.requestID())
-			// The continuation owns the awaiting state from here.
-			parked = false
-			return nil
+			return true, nil
 		}
-		parked = true
 		result, err = awaiting.resume(ctx, late)
 	}
 	if err != nil {
 		logger.Error("lifecycle action failed", "error", err)
 		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
-		return err
+		return false, err
 	}
 	if result == nil {
 		result = &LifecycleExecutionResult{PublishSoul: true}
@@ -297,11 +298,11 @@ func (h *LifecycleHandler) finishAction(ctx context.Context, shardKey string, ac
 
 	if result.PublishSoul {
 		if err := h.publishSoulUpdate(ctx, soul); err != nil {
-			return fmt.Errorf("publish soul update: %w", err)
+			return false, fmt.Errorf("publish soul update: %w", err)
 		}
 	}
 
-	return h.publishActionResult(ctx, action, "completed", result.Data, soul.AgentID)
+	return false, h.publishActionResult(ctx, action, "completed", result.Data, soul.AgentID)
 }
 
 func (h *LifecycleHandler) beginAction(eventID string) bool {
@@ -320,6 +321,11 @@ func (h *LifecycleHandler) clearAction(eventID string) {
 	delete(h.processedActions, eventID)
 }
 
+// lifecycleTerminalResultKinds are the kinds of lifecycle and fleet
+// reconciliation terminal results: the canonical 7950 and the migration-only
+// 1951 alias.
+var lifecycleTerminalResultKinds = []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)}
+
 func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, eventID string) (*nostr.Event, error) {
 	if h.reactor.findLifecycleResultFn != nil {
 		return h.reactor.findLifecycleResultFn(ctx, eventID)
@@ -334,7 +340,7 @@ func (h *LifecycleHandler) findExistingTerminalResult(ctx context.Context, event
 	// Idempotency check: a found terminal result is final, but absence would
 	// re-run the action, so it needs every relay. See RelayReadPolicy.
 	read, err := relayClient.QueryWithPolicy(ctx, "lifecycle.terminal_result", RelayReadFound(terminal), []nostr.Filter{{
-		Kinds: []nostr.Kind{nostr.Kind(domain.KindProvisioningResult), nostr.Kind(domain.KindSoulActionLegacyResult)},
+		Kinds: lifecycleTerminalResultKinds,
 		Tags:  nostr.TagMap{tagEvent: []string{eventID}},
 		Limit: 1,
 	}})
@@ -372,7 +378,13 @@ func (h *LifecycleHandler) publishSoulUpdate(ctx context.Context, soul *domain.A
 }
 
 func (h *LifecycleHandler) publishActionProgress(ctx context.Context, action *domain.SoulAction, status, message, agentID string) error {
+	return h.publishActionProgressTags(ctx, action, status, message, agentID, nil)
+}
+
+// publishActionProgressTags publishes kind:6950 progress carrying extra tags.
+func (h *LifecycleHandler) publishActionProgressTags(ctx context.Context, action *domain.SoulAction, status, message, agentID string, extra nostr.Tags) error {
 	event := BuildActionStatusEvent(action, status, message, agentID)
+	event.Tags = append(event.Tags, extra...)
 	if err := h.reactor.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign action status: %w", err)
 	}
@@ -690,6 +702,7 @@ func (h *LifecycleHandler) rollbackRuntimeUpdate(
 		Target: RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
 		Params: rollbackParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
 	})
+	result, err = h.observeRollback(action, soul.AgentID, "rollback update", result, err)
 	if err != nil {
 		rollbackErrors = append(rollbackErrors, rollbackStepError("rollback update", err))
 	} else if result == nil {
@@ -705,6 +718,7 @@ func (h *LifecycleHandler) rollbackRuntimeUpdate(
 			Target: RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
 			Params: personaParams, DraftPolicy: policy, RequestKind: domain.KindSoulAction, Action: domain.SoulActionRollback,
 		})
+		result, err = h.observeRollback(action, soul.AgentID, "rollback persona", result, err)
 		if err != nil {
 			rollbackErrors = append(rollbackErrors, rollbackStepError("rollback persona", err))
 		} else if result == nil {
@@ -712,6 +726,17 @@ func (h *LifecycleHandler) rollbackRuntimeUpdate(
 		}
 	}
 	return errors.Join(rollbackErrors...)
+}
+
+// observeRollback applies observeLateRollback to a lifecycle rollback request:
+// a late result is reported as rollback_resolved progress on the action.
+func (h *LifecycleHandler) observeRollback(action *domain.SoulAction, agentID, step string, result *RuntimeControlResultEnvelope, err error) (*RuntimeControlResultEnvelope, error) {
+	return h.reactor.resultWaiters().observeLateRollback(agentID, result, err, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+		status, message := lateRollbackProgress(step, late)
+		if err := h.publishActionProgressTags(ctx, action, actionStatusRollbackResolved, message, agentID, nostr.Tags{{tagRollbackStatus, status}}); err != nil {
+			h.logger.Warn("failed to publish late rollback progress", "event_id", action.EventID, "step", step, "error", err)
+		}
+	})
 }
 
 // rollbackStepError names a failed rollback request, distinguishing one whose

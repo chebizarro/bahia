@@ -50,6 +50,16 @@ const (
 	// reactorResumeOverlap is how far before a relay's resume cursor a reissued
 	// REQ starts, so events published while the relay was unreachable (and
 	// modestly backdated ones) are still delivered. See subscribeResumable.
+	//
+	// The overlap is the limit of what a reconnect recovers: an event that
+	// reaches the relay while the reactor is disconnected with a created_at
+	// more than reactorResumeOverlap older than the relay's cursor (the newest
+	// created_at it had delivered) is below the resumed REQ's since and is not
+	// refetched. It is seen only by the full backfill of the next restart, and
+	// only within that backfill's limits. Publishers stamp created_at when they
+	// sign, so this takes a badly backdated request or a signer clock skewed
+	// by more than the overlap. Events the reactor already received are
+	// replayed inside the overlap; dedup and idempotent handlers absorb them.
 	reactorResumeOverlap = 10 * time.Minute
 
 	// fleetHandlerShardKey serializes fleet config revisions and the fleet
@@ -83,6 +93,9 @@ type Reactor struct {
 	// runtimeResults parks lifecycle and fleet operations whose runtime result
 	// wait ended before the terminal kind:38386; see runtimeResultWaiters.
 	runtimeResults *runtimeResultWaiters
+	// soulGate serializes lifecycle actions and fleet reloads per soul; see
+	// soulOperationGate.
+	soulGate *soulOperationGate
 
 	mu            sync.Mutex
 	runs          map[string]*domain.ProvisioningRun // requestID -> run
@@ -176,6 +189,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 		runs:        make(map[string]*domain.ProvisioningRun),
 	}
 	r.runtimeResults = newRuntimeResultWaiters(r.logger)
+	r.soulGate = newSoulOperationGate()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(r)
@@ -216,6 +230,16 @@ func (r *Reactor) resultWaiters() *runtimeResultWaiters {
 		r.runtimeResults = newRuntimeResultWaiters(r.logger)
 	}
 	return r.runtimeResults
+}
+
+// soulOperations returns the reactor's per-soul operation gate.
+func (r *Reactor) soulOperations() *soulOperationGate {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.soulGate == nil {
+		r.soulGate = newSoulOperationGate()
+	}
+	return r.soulGate
 }
 
 func (r *Reactor) fleetReconciler() *FleetConfigReconciler {
@@ -281,16 +305,6 @@ func (r *Reactor) Run(ctx context.Context) error {
 		return fmt.Errorf("at least one Soul Factory relay is required")
 	}
 
-	// Resumable: after a relay reconnects, its REQ resumes from the newest event
-	// it delivered (less reactorResumeOverlap) instead of replaying the whole
-	// backfill, and a runtime result published while it was unreachable is not
-	// lost.
-	sub, err := relayClient.subscribeResumable(ctx, filters, reactorResumeOverlap)
-	if err != nil {
-		return err
-	}
-	defer sub.Close()
-
 	handlerCtx, cancelHandlers := context.WithCancel(ctx)
 	jobs := make(chan *nostr.Event, reactorHandlerQueue)
 	var handlerWG sync.WaitGroup
@@ -311,6 +325,21 @@ func (r *Reactor) Run(ctx context.Context) error {
 		close(jobs)
 		handlerWG.Wait()
 	}()
+
+	// Before any backlog event is handled, hold the souls of operations a
+	// previous run left awaiting a runtime terminal result and re-drive them,
+	// so the backlog's later work for those souls waits behind them.
+	r.startRebuiltOperations(handlerCtx, &handlerWG, r.rebuildParkedOperations(ctx))
+
+	// Resumable: after a relay reconnects, its REQ resumes from the newest event
+	// it delivered (less reactorResumeOverlap) instead of replaying the whole
+	// backfill, and a runtime result published while it was unreachable is not
+	// lost.
+	sub, err := relayClient.subscribeResumable(ctx, filters, reactorResumeOverlap)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
 
 	eose := sub.EndOfStoredEvents
 
@@ -861,8 +890,18 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 		filter.Authors = []nostr.PubKey{parsed}
 	}
 	// Fail closed: GetSoul feeds read-modify-write callers (lifecycle actions,
-	// the full provisioner, late-runtime projection) and absence checks, where a
-	// stale or missing soul is unsafe. See RelayReadPolicy.
+	// fleet reloads, the full provisioner, late-runtime projection) and
+	// absence checks, where a stale or missing soul is unsafe. See
+	// RelayReadPolicy.
+	//
+	// Under RelayReadComplete every relay of the reactor's client must answer
+	// with EOSE: Relays and AdditionalRelays together, including browser-facing
+	// relays listed only in AdditionalRelays. One relay that stays silent or
+	// CLOSEs the REQ fails the read, and with it the lifecycle action or fleet
+	// reload that needed the soul; nothing falls back to a partial read. Each
+	// rejected read is counted for caller "reactor.get_soul" and raises
+	// BahiaSoulFactoryRelayReadRejected when it persists. Restore the relay or
+	// remove it from the SoulFactory relay set; do not relax the policy.
 	read, err := r.relayClient.QueryWithPolicy(ctx, "reactor.get_soul", RelayReadComplete(), []nostr.Filter{filter})
 	if err != nil {
 		return nil, err

@@ -345,9 +345,9 @@ func TestRuntimeResultWaitersHandBackResultObservedBeforePark(t *testing.T) {
 	if waiters.deliver(t.Context(), late) {
 		t.Fatal("deliver resumed an operation that has not parked")
 	}
-	got, observed := waiters.park(pending, "scout", func(context.Context, *RuntimeControlResultEnvelope) {
+	got, observed := waiters.park(pending, parkedOperation{shardKey: "scout", resume: func(context.Context, *RuntimeControlResultEnvelope) {
 		t.Fatal("park registered a continuation for a result it already had")
-	})
+	}})
 	if !observed || got == nil || got.Event.ID != late.ID {
 		t.Fatalf("park() = %v, %v; want the runtime's result, not the forged one", got, observed)
 	}

@@ -504,6 +504,16 @@ func (s *RelaySubscription) CollectStoredEvents(ctx context.Context) ([]*nostr.E
 	}
 	waitCtx, cancel := boundRelayWait(ctx, relayStoredEventsTimeout)
 	defer cancel()
+	// The pool ends a subscription when its context ends, which also closes
+	// EndOfStoredEvents and Events. When the wait's deadline is what ended it,
+	// select may wake on either channel first; the deadline is still why the
+	// read stopped, so it is reported as the cause either way.
+	waitCause := func() error {
+		if waitCtx.Err() != nil {
+			return context.Cause(waitCtx)
+		}
+		return nil
+	}
 	var out []*nostr.Event
 	for {
 		select {
@@ -518,18 +528,18 @@ func (s *RelaySubscription) CollectStoredEvents(ctx context.Context) ([]*nostr.E
 				select {
 				case ev, ok := <-s.Events:
 					if !ok {
-						return out, s.StoredEventsIncomplete(nil)
+						return out, s.StoredEventsIncomplete(waitCause())
 					}
 					out = append(out, ev)
 				default:
-					return out, s.StoredEventsIncomplete(nil)
+					return out, s.StoredEventsIncomplete(waitCause())
 				}
 			}
 		case ev, ok := <-s.Events:
 			if !ok {
 				// Events closes only once every REQ has stopped: the caller
 				// closed the subscription, or every relay refused it for good.
-				return out, s.StoredEventsIncomplete(ctx.Err())
+				return out, s.StoredEventsIncomplete(waitCause())
 			}
 			out = append(out, ev)
 		}

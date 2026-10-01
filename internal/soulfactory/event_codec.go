@@ -49,6 +49,7 @@ const (
 	tagRelayRead          = "relay-read"
 	tagRelayWrite         = "relay-write"
 	tagRequestKind        = "request-kind"
+	tagRollbackStatus     = "rollback-status"
 	tagRuntime            = "runtime"
 	tagRuntimeBinding     = "runtime-binding"
 	tagRuntimePubkey      = "runtime-pubkey"
@@ -63,6 +64,7 @@ const (
 	tagTemplate           = "template"
 	tagTier               = "tier"
 	tagTool               = "tool"
+	tagTopic              = "t"
 	tagVoiceRef           = "voice-ref"
 	tagWorkspace          = "workspace"
 )
@@ -853,6 +855,11 @@ func BuildAgentSoulEvent(soul *domain.AgentSoul) *nostr.Event {
 	return &nostr.Event{Kind: domain.KindAgentSoul, CreatedAt: nostr.Now(), Tags: tags, Content: soul.SoulMD}
 }
 
+// lifecycleProgressKind is the kind of lifecycle and fleet reconciliation
+// progress events (BuildActionStatusEvent), named once for the readers that
+// look them up, such as the parked-operation rebuild.
+var lifecycleProgressKind = nostr.Kind(domain.KindProvisioningStatus)
+
 // BuildActionStatusEvent builds a lifecycle progress event. Lifecycle actions
 // reuse kind:6950 and are distinguished from provisioning by request-kind,
 // soul, and action tags correlated to the original kind:1950 event via #e.
@@ -870,7 +877,7 @@ func BuildActionStatusEvent(action *domain.SoulAction, status, message string, a
 		appendTag(&tags, tagAgentID, agentID[0])
 	}
 	return &nostr.Event{
-		Kind:      domain.KindProvisioningStatus,
+		Kind:      lifecycleProgressKind,
 		CreatedAt: nostr.Now(),
 		Tags:      tags,
 		Content:   message,

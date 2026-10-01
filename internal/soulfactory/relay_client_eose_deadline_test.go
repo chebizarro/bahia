@@ -185,3 +185,23 @@ func TestRelayClientCallersReportPartialWhenRelayNeverSendsEOSE(t *testing.T) {
 		})
 	}
 }
+
+// When the caller's deadline ends a read, the pool ends the subscription too,
+// closing EndOfStoredEvents. With both ready, CollectStoredEvents must still
+// report the deadline, whichever channel select picks. This was the
+// package-wide flake in TestRelayClientCallersReportPartialWhenRelayNeverSendsEOSE.
+func TestCollectStoredEventsReportsDeadlineWhenSubscriptionEndsWithIt(t *testing.T) {
+	for range 32 {
+		bus, relay := newSilentRelayClient(t)
+		ctx, cancel := context.WithTimeout(t.Context(), relayBusCallerDeadline)
+		sub, err := bus.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
+		if err != nil {
+			cancel()
+			t.Fatalf("SubscribeAllWithEOSE() error = %v", err)
+		}
+		<-sub.EndOfStoredEvents // closed once the deadline ends the subscription
+		_, err = sub.CollectStoredEvents(ctx)
+		cancel()
+		assertRelayBusDeadlinePartial(t, err, relay)
+	}
+}

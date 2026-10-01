@@ -27,6 +27,38 @@ func (c *fleetReconcilePublishCapture) publish(_ context.Context, event *nostr.E
 	return nil
 }
 
+// latestSoul is the newest kind:31951 published for agentID, as a relay would
+// return it, or nil.
+func (c *fleetReconcilePublishCapture) latestSoul(agentID string) *domain.AgentSoul {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.events) - 1; i >= 0; i-- {
+		event := c.events[i]
+		if event.Kind == nostr.Kind(domain.KindAgentSoul) && tagValue(event.Tags, tagParameterizedD) == agentID {
+			return ParseAgentSoulEvent(event)
+		}
+	}
+	return nil
+}
+
+// relayBackedSoulLookup answers GetSoul like the relays would: the newest soul
+// the reactor published, otherwise a copy of the seeded soul.
+func relayBackedSoulLookup(capture *fleetReconcilePublishCapture, seeded func() []*domain.AgentSoul) func(context.Context, string) (*domain.AgentSoul, error) {
+	return func(_ context.Context, ref string) (*domain.AgentSoul, error) {
+		agentID := normalizeSoulLookupRef(ref)
+		if published := capture.latestSoul(agentID); published != nil {
+			return published, nil
+		}
+		for _, soul := range seeded() {
+			if soul.AgentID == agentID {
+				copied := *soul
+				return &copied, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
 func (c *fleetReconcilePublishCapture) byKind(kind int) []*nostr.Event {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -99,17 +131,10 @@ func TestReactorSubscribesToTrustedFleetConfigRevisions(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- reactor.Run(ctx) }()
 
-	// One REQ per filter: provisioning, lifecycle, runtime results, fleet.
-	filters := receiveREQFilters(t, endpoint, 4)
-	var fleetFilter *nostr.Filter
-	for i := range filters {
-		if len(filters[i].Kinds) == 1 && filters[i].Kinds[0] == nostr.Kind(domain.KindSoulFleetConfig) {
-			fleetFilter = &filters[i]
-			break
-		}
-	}
-	if fleetFilter == nil {
-		t.Fatal("reactor subscription omitted kind 31953")
+	// One REQ per filter, after the parked-operation rebuild read.
+	fleetFilter := receiveREQFor(t, endpoint, nostr.Kind(domain.KindSoulFleetConfig))
+	if len(fleetFilter.Kinds) != 1 {
+		t.Fatalf("fleet filter kinds = %v, want only 31953", fleetFilter.Kinds)
 	}
 	if len(fleetFilter.Authors) != 1 || fleetFilter.Authors[0].Hex() != signer.pubkey {
 		t.Fatalf("fleet authors = %#v", fleetFilter.Authors)
@@ -294,6 +319,7 @@ func newFleetReconcileTestReactorWithRuntime(
 	reactor.listSoulsFn = func(context.Context) ([]*domain.AgentSoul, error) {
 		return souls, nil
 	}
+	reactor.getSoulFn = relayBackedSoulLookup(capture, func() []*domain.AgentSoul { return souls })
 	reactor.getFleetConfigRevisionFn = func(_ context.Context, eventID string) (*FleetConfigSnapshot, error) {
 		if previous != nil && previous.EventID == eventID {
 			return previous, nil
