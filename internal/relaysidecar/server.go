@@ -101,17 +101,18 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.Info.Name = state.Metadata.Name
 	relay.Info.Description = state.Metadata.Description
 	relay.Info.Icon = state.Metadata.Icon
-	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
+	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. Regular and ephemeral events created more than one year ago are refused; replaceable and addressable events and deletion requests are accepted at any age. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
 	// 9: kind-5 deletions are applied and kept as tombstones (store.go).
 	// 40: expired events are refused, hidden and swept. 45: COUNT from the
 	// indexes. 77: negentropy.
 	relay.Info.SupportedNIPs = []any{1, 9, 11, 17, 40, 42, 44, 45, 51, 59, 65, 70, 77}
 	relay.Info.Limitation = &nip11.RelayLimitationDocument{
-		MaxMessageLength:    int(relay.MaxMessageSize),
-		MaxLimit:            nostrCfg.Sidecar.MaxQueryLimit,
-		DefaultLimit:        nostrCfg.Sidecar.MaxQueryLimit, // a REQ without limit gets the cap
-		MaxContentLength:    betterbinary.MaxContentSize,
-		CreatedAtLowerLimit: int64(maxEventAge / time.Second),
+		MaxMessageLength: int(relay.MaxMessageSize),
+		MaxLimit:         nostrCfg.Sidecar.MaxQueryLimit,
+		DefaultLimit:     nostrCfg.Sidecar.MaxQueryLimit, // a REQ without limit gets the cap
+		MaxContentLength: betterbinary.MaxContentSize,
+		// No CreatedAtLowerLimit: the one-year cap is per kind (see
+		// ageCapped), and the field would claim it for every kind.
 		CreatedAtUpperLimit: int64(maxEventFutureSkew / time.Second),
 	}
 	relay.Info.Retention = retention.nip11()

@@ -134,6 +134,14 @@ func startHTTPTestServer(t *testing.T, server *Server) string {
 
 func fetchNIP11(t *testing.T, relayURL string) nip11.RelayInformationDocument {
 	t.Helper()
+	var info nip11.RelayInformationDocument
+	body := fetchNIP11Body(t, relayURL)
+	require.NoError(t, json.Unmarshal(body, &info), string(body))
+	return info
+}
+
+func fetchNIP11Body(t *testing.T, relayURL string) []byte {
+	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, relayURL, nil)
 	require.NoError(t, err)
 	req.Header.Set("Accept", "application/nostr+json")
@@ -143,14 +151,14 @@ func fetchNIP11(t *testing.T, relayURL string) nip11.RelayInformationDocument {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	var info nip11.RelayInformationDocument
-	require.NoError(t, json.Unmarshal(body, &info), string(body))
-	return info
+	return body
 }
 
 // TestSidecarNIP11AdvertisesAccurateCapabilities covers C-21: NIPs 9, 40, 45
 // and 77 are advertised, limits match what the relay enforces, retention
 // describes the kind classes, and restricted_writes follows the allow list.
+// created_at_lower_limit is absent: the one-year cap only covers regular and
+// ephemeral kinds (C-11), which the field cannot express.
 func TestSidecarNIP11AdvertisesAccurateCapabilities(t *testing.T) {
 	server, relayURL := startSidecarForFanoutTest(t)
 	info := fetchNIP11(t, relayURL)
@@ -171,8 +179,15 @@ func TestSidecarNIP11AdvertisesAccurateCapabilities(t *testing.T) {
 	require.Equal(t, server.cfg.MaxQueryLimit, info.Limitation.DefaultLimit)
 	require.Equal(t, 65535, info.Limitation.MaxContentLength)
 	require.Equal(t, int(server.relay.MaxMessageSize), info.Limitation.MaxMessageLength)
-	require.EqualValues(t, 365*24*60*60, info.Limitation.CreatedAtLowerLimit)
+	require.Zero(t, info.Limitation.CreatedAtLowerLimit)
+	var raw struct {
+		Limitation map[string]json.RawMessage `json:"limitation"`
+	}
+	require.NoError(t, json.Unmarshal(fetchNIP11Body(t, relayURL), &raw))
+	require.NotContains(t, raw.Limitation, "created_at_lower_limit")
+	require.JSONEq(t, "600", string(raw.Limitation["created_at_upper_limit"]))
 	require.EqualValues(t, 600, info.Limitation.CreatedAtUpperLimit)
+	require.Contains(t, info.PostingPolicy, "replaceable and addressable events and deletion requests are accepted at any age")
 	require.False(t, info.Limitation.RestrictedWrites)
 	require.Len(t, info.Retention, 2)
 	require.Equal(t, [][]int{{1059, 1059}}, info.Retention[0].Kinds)

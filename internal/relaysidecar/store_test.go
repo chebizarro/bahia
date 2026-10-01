@@ -39,6 +39,16 @@ func storeIDs(t *testing.T, store *eventStore, filter nostr.Filter) []nostr.ID {
 	return ids
 }
 
+// coordinateFilter selects the versions stored under one coordinate whose d
+// the eventstore indexes. Plain replaceable kinds ignore d.
+func coordinateFilter(kind nostr.Kind, author nostr.PubKey, d string) nostr.Filter {
+	filter := nostr.Filter{Kinds: []nostr.Kind{kind}, Authors: []nostr.PubKey{author}}
+	if kind.IsAddressable() {
+		filter.Tags = nostr.TagMap{"d": []string{d}}
+	}
+	return filter
+}
+
 func saveOrReplace(t *testing.T, store *eventStore, event nostr.Event) {
 	t.Helper()
 	if event.Kind.IsReplaceable() || event.Kind.IsAddressable() {

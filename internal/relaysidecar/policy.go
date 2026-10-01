@@ -9,13 +9,27 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
-// Admission bounds on created_at, also advertised in NIP-11.
+// Admission bounds on created_at. NIP-11 advertises maxEventFutureSkew as
+// created_at_upper_limit. maxEventAge applies only to the kinds ageCapped
+// reports, so it is not advertised: created_at_lower_limit has no per-kind form.
 const (
 	maxEventFutureSkew = 10 * time.Minute
 	maxEventAge        = 365 * 24 * time.Hour
 )
+
+// ageCapped reports whether maxEventAge applies to kind (C-11), with the same
+// rule the daemon applies to inbound events (ValidateInboundEvent in
+// internal/adapters/nostr). Regular and ephemeral kinds are one-shot facts,
+// requests and commands, so a year-old one is a replay. Replaceable and
+// addressable events are state until a newer version replaces them, however
+// old, and archives must be able to republish them; a deletion request stays
+// in force for as long as its targets can be republished.
+func ageCapped(kind nostr.Kind) bool {
+	return !nostrutil.IsStateKind(kind) && kind != nostr.KindDeletion
+}
 
 type policy struct {
 	now           func() nostr.Timestamp
@@ -45,8 +59,8 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	if event.CreatedAt > p.now()+nostr.Timestamp(maxEventFutureSkew.Seconds()) {
 		return true, "invalid: created_at too far in the future"
 	}
-	if p.now()-event.CreatedAt > nostr.Timestamp(maxEventAge.Seconds()) {
-		return true, "invalid: created_at too far in the past"
+	if ageCapped(event.Kind) && p.now()-event.CreatedAt > nostr.Timestamp(maxEventAge.Seconds()) {
+		return true, "invalid: created_at too far in the past (regular and ephemeral events older than one year are refused)"
 	}
 	if expired(event, p.now()) {
 		return true, "invalid: event has expired (NIP-40)"

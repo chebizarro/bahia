@@ -935,7 +935,10 @@ func easyjsonEncodeRelayLimitationDocument(out *jwriter.Writer, in RelayLimitati
 		}
 		out.Int(in.MinPowDifficulty)
 	}
-	{
+	// Bahia patch (bahia-irsry.44): like the other numeric limits, a zero
+	// created_at_lower_limit is omitted rather than advertised as 0, so a
+	// relay can state that it has no lower bound (see BAHIA_PATCHES.md).
+	if in.CreatedAtLowerLimit != 0 {
 		const prefix string = ",\"created_at_lower_limit\":"
 		if first {
 			first = false
@@ -947,7 +950,12 @@ func easyjsonEncodeRelayLimitationDocument(out *jwriter.Writer, in RelayLimitati
 	}
 	{
 		const prefix string = ",\"created_at_upper_limit\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Int64(in.CreatedAtUpperLimit)
 	}
 	{
