@@ -21,8 +21,10 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"go.uber.org/zap"
 )
 
 var (
@@ -60,19 +62,33 @@ const (
 )
 
 // Client communicates with Signet via NIP-46.
+//
+// Two relay stacks, by protocol:
+//   - NIP-46 RPC (connect, sign, NIP-44, per-agent bunkers) runs on pool, a
+//     library nostr.Pool, because nip46.ConnectBunker and BunkerClient take
+//     one and own its kind-24133 request/response subscription. That is the
+//     library's NIP-46 client, not a Bahia relay consumer.
+//   - Signet's ContextVM management plane (NIP-59 gift-wrapped JSON-RPC,
+//     callManagement) is a Bahia REQ/EVENT exchange and runs on the shared
+//     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
+//     Its pool lives as long as one bunker connection and authenticates as
+//     the provisioner through that bunker, the identity the gift-wrapped
+//     replies are addressed to.
 type Client struct {
-	bunkerURI       string
-	relays          []string
-	pool            *nostr.Pool
-	logger          *slog.Logger
-	clientSecretKey string // Ephemeral key for NIP-46 session
-	requireReal     bool   // Fail closed unless a real Signet bunker is configured and reachable
-	allowMock       bool   // Explicit test/dev-only mock signing mode
-	connectTimeout  time.Duration
+	bunkerURI        string
+	relays           []string
+	pool             *nostr.Pool // NIP-46 only; see above
+	managementRelays []string
+	logger           *slog.Logger
+	clientSecretKey  string // Ephemeral key for NIP-46 session
+	requireReal      bool   // Fail closed unless a real Signet bunker is configured and reachable
+	allowMock        bool   // Explicit test/dev-only mock signing mode
+	connectTimeout   time.Duration
 
 	connectMu            sync.Mutex
 	mu                   sync.Mutex
-	bunker               *nip46.BunkerClient // Active NIP-46 connection
+	bunker               *nip46.BunkerClient  // Active NIP-46 connection
+	management           *nostrpool.RelayPool // Management plane of the active connection
 	agents               map[string]*AgentIdentity
 	connected            bool
 	lifetime             context.Context
@@ -118,16 +134,17 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 	}
 
 	c := &Client{
-		bunkerURI:       config.BunkerURI,
-		relays:          config.Relays,
-		pool:            nostr.NewPool(),
-		logger:          logger.With("component", "signet"),
-		clientSecretKey: clientSK,
-		requireReal:     config.RequireReal,
-		allowMock:       config.AllowMock,
-		connectTimeout:  config.ConnectTimeout,
-		agents:          make(map[string]*AgentIdentity),
-		stateChanged:    make(chan struct{}),
+		bunkerURI:        config.BunkerURI,
+		relays:           config.Relays,
+		pool:             nostr.NewPool(),
+		managementRelays: signetManagementRelays(config),
+		logger:           logger.With("component", "signet"),
+		clientSecretKey:  clientSK,
+		requireReal:      config.RequireReal,
+		allowMock:        config.AllowMock,
+		connectTimeout:   config.ConnectTimeout,
+		agents:           make(map[string]*AgentIdentity),
+		stateChanged:     make(chan struct{}),
 	}
 
 	return c, nil
@@ -198,6 +215,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.setConnection(bunker, connectCtx, cancelConnect, true)
+	c.replaceManagementPool(c.newManagementPool(bunker))
 	installed = true
 
 	c.logger.Info("connected to Signet bunker")
@@ -272,6 +290,40 @@ func (c *Client) setConnection(bunker *nip46.BunkerClient, lifetime context.Cont
 	c.mu.Unlock()
 	if previousCancel != nil {
 		previousCancel()
+	}
+}
+
+// signetManagementRelays are the relays callManagement may use: the bunker
+// URI's relays, else the configured ones.
+func signetManagementRelays(config Config) []string {
+	if config.BunkerURI != "" {
+		if _, bunkerRelays, _, err := ParseBunkerURI(config.BunkerURI); err == nil && len(bunkerRelays) > 0 {
+			return bunkerRelays
+		}
+	}
+	return append([]string(nil), config.Relays...)
+}
+
+// newManagementPool returns the management-plane pool for one bunker
+// connection. NIP-42 AUTH events are signed by the bunker, as the
+// provisioner the replies are gift-wrapped to: inbox relays serve kind-1059
+// events only to their authenticated recipient.
+func (c *Client) newManagementPool(bunker *nip46.BunkerClient) *nostrpool.RelayPool {
+	if len(c.managementRelays) == 0 {
+		return nil
+	}
+	return nostrpool.NewRelayPool(c.managementRelays, zap.NewNop(), nostrpool.WithAuthSignFunc(bunker.SignEvent))
+}
+
+// replaceManagementPool installs the active connection's management pool and
+// closes the previous one.
+func (c *Client) replaceManagementPool(pool *nostrpool.RelayPool) {
+	c.mu.Lock()
+	previous := c.management
+	c.management = pool
+	c.mu.Unlock()
+	if previous != nil {
+		previous.Close()
 	}
 }
 
@@ -890,14 +942,11 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 }
 
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
-	bunkerPubkey, relayURLs, _, err := ParseBunkerURI(c.bunkerURI)
+	bunkerPubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
 		return err
 	}
-	if len(relayURLs) == 0 {
-		relayURLs = append([]string{}, c.relays...)
-	}
-	if len(relayURLs) == 0 {
+	if len(c.managementRelays) == 0 {
 		return fmt.Errorf("signet management relays are required")
 	}
 	bunkerPK, err := nostr.PubKeyFromHex(bunkerPubkey)
@@ -906,8 +955,9 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	}
 	c.mu.Lock()
 	bunker := c.bunker
+	management := c.management
 	c.mu.Unlock()
-	if bunker == nil {
+	if bunker == nil || management == nil {
 		return ErrNotConnected
 	}
 	provisionerPK, err := bunker.GetPublicKey(ctx)
@@ -972,7 +1022,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 
 	// Subscribe before publishing. Signet can answer immediately, and creating
 	// the response subscription afterwards loses that reply on fast relays.
-	responses := c.pool.SubscribeMany(ctx, relayURLs, nostr.Filter{
+	responses, err := management.SubscribeAllWithEOSE(ctx, []nostr.Filter{{
 		Kinds: []nostr.Kind{signetKindGiftWrap},
 		Tags:  nostr.TagMap{"p": []string{provisionerPK.Hex()}},
 		// NIP-59 deliberately backdates gift-wrap timestamps (go-nostr uses a
@@ -980,26 +1030,32 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		// below makes a wider history window safe and prevents a freshly
 		// published Signet response from being filtered out as "old".
 		Since: nostr.Now() - 12*60*60,
-	}, nostr.SubscriptionOptions{Label: "signet-mgmt"})
+	}})
+	if err != nil {
+		return fmt.Errorf("subscribe to Signet management replies: %w", err)
+	}
+	defer responses.Close()
 
 	// Publishing is transport, not request/response flow control. A relay OK is
 	// useful telemetry, but waiting for one before consuming the already-live
 	// response subscription can deadlock indefinitely on otherwise functional
-	// pub/sub relays. Start the publish and drain acknowledgements independently;
-	// the correlated Signet response below is the operation's completion signal.
-	publishResults := c.pool.PublishMany(ctx, relayURLs, gift)
+	// pub/sub relays. The pool collects every relay's OK in the background; the
+	// correlated Signet response below is the operation's completion signal.
 	go func() {
-		for result := range publishResults {
-			if result.Error != nil {
-				c.logger.Warn("signet management relay rejected publish",
-					"relay", result.RelayURL,
-					"error", result.Error,
-				)
+		results, _ := management.PublishWithResults(ctx, gift)
+		for _, result := range results {
+			if result.Accepted || result.IsDuplicate() {
+				continue
 			}
+			c.logger.Warn("signet management relay rejected publish",
+				"relay", result.RelayURL,
+				"reason", result.Reason,
+				"error", result.Error,
+			)
 		}
 	}()
 
-	for relayEvent := range responses {
+	for relayEvent := range responses.Events {
 		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.PubKey, relayEvent.Content)
 		if err != nil {
 			continue
@@ -1090,6 +1146,7 @@ func (c *Client) Close() error {
 		cancelLifetime()
 	}
 
+	c.replaceManagementPool(nil)
 	c.logger.Info("signet client closed")
 	return nil
 }
