@@ -69,6 +69,7 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
     const KIND_CONTEXTVM = 25910;
     const KIND_CONTROL_STATE = 30900;
     const POLICY_SCHEMA = 'bahia.registry.policy.v1';
+    const POLICY_TOPIC = window.__bahiaE2EFixtures.contract.families[POLICY_SCHEMA].topic;
 
     function loadJson(key, fallback) {
       try {
@@ -108,37 +109,33 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
     }
 
     let policyCreatedAt = loadJson('__bahia_e2e_nostr_events', [])
-      .filter((event) => event.tags?.some((tag) => tag[0] === 'schema' && tag[1] === POLICY_SCHEMA))
+      .filter((event) => isPolicyRecord(event))
       .reduce((latest, event) => Math.max(latest, event.created_at || 0), Math.floor(Date.now() / 1000));
 
+    // Producer-shaped policy registry record (cp-state-fixtures.js builder).
     function policyEvent(policy, idPrefix = 'policy-reg') {
-      const deleted = Boolean(policy.deleted);
-      return {
+      return window.__bahiaE2EFixtures.cpState({
         id: `${idPrefix}-${policy.id}`,
-        kind: KIND_CONTROL_STATE,
         pubkey: servicePubkey,
         // Canonical revisions must not depend on event-ID ordering within a second.
-        created_at: ++policyCreatedAt,
-        tags: [
-          ['domain', 'controlplane'],
-          ['schema', POLICY_SCHEMA],
-          ['d', policy.id],
-          ['policy', policy.id],
-          ['deleted', String(deleted)],
-          ['name', policy.name || '']
-        ],
-        content: JSON.stringify({ schema: POLICY_SCHEMA, ...policy, deleted }),
-        sig: '0'.repeat(128)
-      };
+        createdAt: ++policyCreatedAt,
+        schema: POLICY_SCHEMA,
+        d: policy.id,
+        deleted: Boolean(policy.deleted),
+        tags: [['policy', policy.id], ['name', policy.name || '']],
+        content: { ...policy }
+      });
+    }
+
+    function isPolicyRecord(event) {
+      return event?.kind === KIND_CONTROL_STATE
+        && Array.isArray(event.tags)
+        && event.tags.some((tag) => Array.isArray(tag) && tag[0] === 't' && tag[1] === POLICY_TOPIC);
     }
 
     function refreshPersistedPolicyEvents() {
       const currentEvents = loadJson('__bahia_e2e_nostr_events', []);
-      const nonPolicyEvents = currentEvents.filter((event) => {
-        if (event?.kind !== KIND_CONTROL_STATE) return true;
-        const tags = Array.isArray(event.tags) ? event.tags : [];
-        return !tags.some((tag) => Array.isArray(tag) && tag[0] === 'schema' && tag[1] === POLICY_SCHEMA);
-      });
+      const nonPolicyEvents = currentEvents.filter((event) => !isPolicyRecord(event));
       const policyEvents = (window.__BAHIA_E2E_POLICY_STATE.policies || []).map((policy) => policyEvent(policy));
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...nonPolicyEvents, ...policyEvents]));
       for (const event of policyEvents) {

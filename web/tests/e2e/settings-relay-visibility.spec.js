@@ -19,7 +19,7 @@ function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], ser
     kind: 30900,
     pubkey: SERVICE_PUBKEY,
     created_at: createdAt,
-    tags: [['d', 'relay-settings:operator'], ['domain', 'relay-settings'], ['schema', 'bahia.relay-settings.v1']],
+    tags: [['d', 'relay-settings:operator'], ['domain', 'relay-settings'], ['schema', 'bahia.relay-settings.v1'], ['t', 'relay-settings']],
     content: JSON.stringify({
       schema: 'bahia.relay-settings.v1',
       browser_relays: browserRelays,

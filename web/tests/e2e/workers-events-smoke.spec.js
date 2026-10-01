@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks, seedNostrEvents } from './helpers.js';
-import { workerStateFixture } from './cp-state-fixtures.js';
+import { cpAuditFixture, workerStateFixture } from './cp-state-fixtures.js';
 
 // Mock data
 const mockWorkers = [
@@ -96,29 +96,17 @@ const mockEvents = [
   }
 ];
 
+// Audit facts as the projector publishes them (regular 4903, t=cp-audit).
 function mockNostrActivityEvents(events) {
-  const pubkey = E2E_SERVICE_PUBKEY;
   const base = Math.floor(Date.now() / 1000);
-  return events.map((event, index) => ({
+  return events.map((event, index) => cpAuditFixture({
     id: `nostr-${event.id}`,
-    pubkey,
-    created_at: base - index * 60,
-    kind: 4903,
-    tags: [
-      ['domain', 'controlplane'],
-      ['schema', 'bahia.audit.v1'],
-      ['type', event.type],
-      ['event_type', event.type],
-      ['d', event.id],
-      ['service', event.data?.service_id || event.entity_id || '']
-    ],
-    content: JSON.stringify({
-      schema: 'bahia.audit.v1',
-      type: event.type,
-      event_type: event.type,
-      entity_id: event.entity_id,
-      data: event.data
-    })
+    createdAt: base - index * 60,
+    type: event.type,
+    entityId: event.entity_id,
+    state: event.entity_id || event.id,
+    data: event.data,
+    tags: [['service', event.data?.service_id || event.entity_id || '']]
   }));
 }
 

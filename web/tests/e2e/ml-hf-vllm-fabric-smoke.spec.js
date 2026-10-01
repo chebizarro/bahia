@@ -1,35 +1,30 @@
 import { createHash } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
+import { cpStateFixture } from './cp-state-fixtures.js';
+import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../src/lib/nostr/cp-state.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 const WORKER_PUBKEY = e2eTestPubkey('worker');
 const now = Math.floor(Date.now() / 1000);
 
-const canonicalSchemaByLegacyKind = {
-  31980: 'bahia.registry.ml-model.v1',
-  31981: 'bahia.registry.ml-model-version.v1',
-  31985: 'bahia.registry.ml-inference-endpoint.v1',
-  31986: 'bahia.state.ml-inference-endpoint.v1',
-  31988: 'bahia.state.ml-provenance.v1',
-  31989: 'bahia.state.ml-runtime-capability.v1'
-};
-
+// ML records arrive as producer-shaped cp-state (30900 envelope with
+// legacy_kind and t topic); other kinds are passed through as-is.
 function nostrEvent({ kind, pubkey = SERVICE_PUBKEY, tags = [], content = {} }) {
   const body = typeof content === 'string' ? content : JSON.stringify(content);
-  const schema = canonicalSchemaByLegacyKind[kind];
-  const event = {
-    kind: schema ? 30900 : kind,
-    pubkey,
-    created_at: now,
-    tags: schema ? [['schema', schema], ['legacy_kind', String(kind)], ...tags] : tags,
-    content: body,
-    sig: '0'.repeat(128)
-  };
+  const schema = CP_STATE_SCHEMA_BY_LEGACY_KIND[String(kind)];
+  const template = schema
+    ? cpStateFixture({ pubkey, createdAt: now, schema, d: tagValue(tags, 'd'), tags: tags.filter((tag) => tag[0] !== 'd'), content: body })
+    : { kind, pubkey, created_at: now, tags, content: body };
+  const event = { kind: template.kind, pubkey, created_at: now, tags: template.tags, content: template.content };
   event.id = createHash('sha256')
     .update(JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]))
     .digest('hex');
   return event;
+}
+
+function tagValue(tags, name) {
+  return tags.find((tag) => tag[0] === name)?.[1] ?? '';
 }
 
 const modelId = '11111111-1111-4111-8111-111111111111';

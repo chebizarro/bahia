@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { cpStateFixture } from './cp-state-fixtures.js';
 import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
 
 const BROWSER_RELAY = 'ws://relay.test.local';
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
-const CONTROLPLANE_STATE_KIND = 30900;
-const CONTROLPLANE_DOMAIN = 'controlplane';
 const STATE_SCHEMAS = {
   service: 'bahia.registry.service.v1',
   environment: 'bahia.registry.environment.v1',
@@ -100,20 +99,7 @@ const fixtures = {
 };
 
 function controlplaneStateEvent({ id, schema, content, tags = [], createdAt = 1777852800 }) {
-  return {
-    id: `route-console-${id}`,
-    kind: CONTROLPLANE_STATE_KIND,
-    pubkey: SERVICE_PUBKEY,
-    created_at: createdAt,
-    tags: [
-      ['domain', CONTROLPLANE_DOMAIN],
-      ['schema', schema],
-      ['d', id],
-      ...tags
-    ],
-    content: JSON.stringify({ schema, ...content }),
-    sig: '0'.repeat(128)
-  };
+  return cpStateFixture({ id: `route-console-${id}`, pubkey: SERVICE_PUBKEY, createdAt, schema, d: id, tags, content });
 }
 
 function controlplaneFixtureEvents() {

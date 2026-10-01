@@ -1,58 +1,7 @@
-import { createHash } from 'node:crypto';
-import { finalizeEvent, getPublicKey } from 'nostr-tools';
+import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, signE2EEvent } from './e2e-keyring.js';
+import { cpStateFixtureBrowserScript } from './cp-state-fixtures.js';
 
-// Every event the mock relay delivers is really signed (nostr-tools
-// finalizeEvent) with a throwaway test key, so the app's inbound signature
-// verification runs unmodified in E2E. The keyring maps each fixture pubkey to
-// its secret; fixtures must derive author pubkeys with e2eTestPubkey().
-const HEX_PUBKEY = /^[0-9a-f]{64}$/;
-const e2eKeyring = new Map();
-
-function rememberSecretKey(secretKey) {
-  const pubkey = getPublicKey(secretKey);
-  e2eKeyring.set(pubkey, secretKey);
-  return pubkey;
-}
-
-function secretKeyFromHex(hex) {
-  return Uint8Array.from(hex.match(/.{2}/g).map((byte) => Number.parseInt(byte, 16)));
-}
-
-/** Deterministic test secret key for a fixture identity label. */
-export function e2eTestSecretKey(label) {
-  const secretKey = new Uint8Array(createHash('sha256').update(`bahia-e2e:${label}`).digest());
-  rememberSecretKey(secretKey);
-  return secretKey;
-}
-
-/** Pubkey of the e2eTestSecretKey(label) identity; events it authors are signable. */
-export function e2eTestPubkey(label) {
-  return getPublicKey(e2eTestSecretKey(label));
-}
-
-// The service identity is secret key 1 (pubkey = secp256k1 G.x), and the
-// relay-backed harness operator is 0x33..33 (relay-harness.js).
-export const E2E_SERVICE_PUBKEY = rememberSecretKey(secretKeyFromHex(`${'0'.repeat(63)}1`));
-rememberSecretKey(secretKeyFromHex('3'.repeat(64)));
-export const TEST_PUBKEY = e2eTestPubkey('operator');
-
-/**
- * Sign an event template as its (test-keyring) author. Events without a hex
- * pubkey are authored by fallbackPubkey (the mock relay's service identity).
- */
-export function signE2EEvent(event, fallbackPubkey = E2E_SERVICE_PUBKEY) {
-  const pubkey = typeof event?.pubkey === 'string' && HEX_PUBKEY.test(event.pubkey) ? event.pubkey : fallbackPubkey;
-  const secretKey = e2eKeyring.get(pubkey);
-  if (!secretKey) {
-    throw new Error(`E2E mock relay has no test key for pubkey ${pubkey}; derive fixture pubkeys with e2eTestPubkey(label)`);
-  }
-  return finalizeEvent({
-    kind: event.kind,
-    created_at: event.created_at,
-    tags: event.tags,
-    content: event.content
-  }, secretKey);
-}
+export { E2E_SERVICE_PUBKEY, TEST_PUBKEY, e2eTestPubkey, e2eTestSecretKey, signE2EEvent } from './e2e-keyring.js';
 
 const signerPages = new WeakSet();
 
@@ -108,6 +57,9 @@ export async function installE2EMocks(
     features: { direct_nostr_http_auth: true, ...discoveryInfo.features }
   };
   await exposeE2ESigner(page);
+  // Producer-shaped cp-state/audit builders for in-page harnesses
+  // (window.__bahiaE2EFixtures, cp-state-fixtures.js).
+  await page.addInitScript(cpStateFixtureBrowserScript());
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
@@ -460,25 +412,29 @@ export async function installE2EMocks(
       };
       publishMockNostrEvent(availabilityEvent);
 
-      const auditEvent = {
+      const auditEvent = window.__bahiaE2EFixtures.cpAudit({
         id: `mock-sbom-audit-${event.id}`,
-        kind: 4903,
         pubkey: servicePubkey,
-        created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.audit.v1'], ['type', auditType], ['event_type', auditType], ['artifact', artifactId]],
-        content: JSON.stringify({ schema: 'bahia.audit.v1', type: auditType, event_type: auditType, entity_id: artifactId, data: { formats, generator } }),
-      };
+        createdAt: now,
+        type: auditType,
+        entityId: artifactId,
+        state: artifactId,
+        sourceEventId: event.id,
+        data: { formats, generator },
+        tags: [['artifact', artifactId]]
+      });
       publishMockNostrEvent(auditEvent);
 
       if (operation === 'sbom/import') {
-        publishMockNostrEvent({
+        publishMockNostrEvent(window.__bahiaE2EFixtures.cpState({
           id: `mock-sbom-compat-artifact-${event.id}`,
-          kind: 30900,
           pubkey: servicePubkey,
-          created_at: now,
-          tags: [['domain', 'controlplane'], ['schema', 'bahia.registry.artifact.v1'], ['legacy_kind', '31966'], ['d', artifactId], ['artifact', artifactId], ['deleted', 'false']],
-          content: JSON.stringify({ schema: 'bahia.registry.artifact.v1', id: artifactId, name: artifactId, artifact_type: 'container_image', digest, sbom: { artifact_id: artifactId, format: formats[0], generator: { id: generator }, source_url: `blossom://${sourcePath}/${artifactId}.${formats[0]}.json`, raw_hash: payloadSha, package_count: 1 }, sbom_packages: [{ name: `${formats[0]}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }], deleted: false }),
-          });
+          createdAt: now,
+          schema: 'bahia.registry.artifact.v1',
+          d: artifactId,
+          tags: [['artifact', artifactId]],
+          content: { id: artifactId, name: artifactId, artifact_type: 'container_image', digest, sbom: { artifact_id: artifactId, format: formats[0], generator: { id: generator }, source_url: `blossom://${sourcePath}/${artifactId}.${formats[0]}.json`, raw_hash: payloadSha, package_count: 1 }, sbom_packages: [{ name: `${formats[0]}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }] }
+        }));
       }
 
       window.dispatchEvent(new CustomEvent(operation === 'sbom/import' ? '__bahia_e2e_sbom_imported' : '__bahia_e2e_sbom_generated', {

@@ -139,6 +139,14 @@ export async function installPublicLLMControlplaneHarness(
       return event;
     }
 
+    // Projected records come from the shared producer-shaped builder
+    // (cp-state-fixtures.js via installE2EMocks), then take the revision
+    // clock above.
+    function stateEvent({ id, schema, d, deleted = false, tags = [], content = {} }) {
+      const template = window.__bahiaE2EFixtures.cpState({ id, schema, d, deleted, tags, content, pubkey: servicePubkey });
+      return nostrEvent({ id, kind: template.kind, tags: template.tags, content: template.content });
+    }
+
     function parseContextVMRequest(requestEvent) {
       const content = String(requestEvent.content || '');
       const plaintext = content.startsWith('mock-nip44:')
@@ -191,23 +199,29 @@ export async function installPublicLLMControlplaneHarness(
     function currentReadModelEvents() {
       const state = window.__BAHIA_E2E_LLM_STATE;
       return [
-        ...state.environments.map((environment, index) => nostrEvent({
+        ...state.environments.map((environment, index) => stateEvent({
           id: `env-${environment.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.environment], ['d', environment.id], ['deleted', String(Boolean(environment.deleted))], ['name', environment.name]],
-          content: { schema: STATE_SCHEMAS.environment, ...environment }
+          schema: STATE_SCHEMAS.environment,
+          d: environment.id,
+          deleted: Boolean(environment.deleted),
+          tags: [['name', environment.name]],
+          content: { ...environment }
         })),
-        ...state.routes.map((route, index) => nostrEvent({
+        ...state.routes.map((route, index) => stateEvent({
           id: `llm-route-${route.id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.route], ['d', route.id], ['route', route.id], ['deleted', String(Boolean(route.deleted))], ['name', route.name]],
-          content: { schema: STATE_SCHEMAS.route, ...route }
+          schema: STATE_SCHEMAS.route,
+          d: route.id,
+          deleted: Boolean(route.deleted),
+          tags: [['route', route.id], ['name', route.name]],
+          content: { ...route }
         })),
-        ...state.routeStates.map((routeState, index) => nostrEvent({
+        ...state.routeStates.map((routeState, index) => stateEvent({
           id: `llm-state-${routeState.route_id}-${routeState.environment_id}-${index}`,
-          kind: KIND_CONTROL_STATE,
-          tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.routeState], ['d', `${routeState.route_id}:${routeState.environment_id}`], ['route', routeState.route_id], ['environment', routeState.environment_id], ['deleted', String(Boolean(routeState.deleted))]],
-          content: { schema: STATE_SCHEMAS.routeState, ...routeState }
+          schema: STATE_SCHEMAS.routeState,
+          d: `${routeState.route_id}:${routeState.environment_id}`,
+          deleted: Boolean(routeState.deleted),
+          tags: [['route', routeState.route_id], ['environment', routeState.environment_id]],
+          content: { ...routeState }
         })),
         ...state.activity.map((activity) => nostrEvent(activity))
       ];
@@ -290,11 +304,12 @@ export async function installPublicLLMControlplaneHarness(
       };
       route.route_id = route.id;
       state.routes = [route, ...state.routes];
-      const projection = nostrEvent({
+      const projection = stateEvent({
         id: `live-${route.id}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.route], ['d', route.id], ['route', route.id], ['name', route.name]],
-        content: { schema: STATE_SCHEMAS.route, ...route }
+        schema: STATE_SCHEMAS.route,
+        d: route.id,
+        tags: [['route', route.id], ['name', route.name]],
+        content: { ...route }
       });
       const result = nostrEvent({
         id: `result-${requestEvent.id}`,
@@ -346,11 +361,12 @@ export async function installPublicLLMControlplaneHarness(
         updated_at: new Date().toISOString()
       };
       upsertRouteState(routeState);
-      const projection = nostrEvent({
+      const projection = stateEvent({
         id: `state-${payload.route_id}-${payload.environment_id}-${Date.now()}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.routeState], ['d', `${payload.route_id}:${payload.environment_id}`], ['route', payload.route_id], ['environment', payload.environment_id]],
-        content: { schema: STATE_SCHEMAS.routeState, ...routeState }
+        schema: STATE_SCHEMAS.routeState,
+        d: `${payload.route_id}:${payload.environment_id}`,
+        tags: [['route', payload.route_id], ['environment', payload.environment_id]],
+        content: { ...routeState }
       });
       window.__BAHIA_E2E_LLM_DEPLOY_REQUEST_EVENT_IDS[intentId] = requestEvent.id;
       const status = nostrEvent({
@@ -409,11 +425,12 @@ export async function installPublicLLMControlplaneHarness(
             updated_at: new Date().toISOString()
           };
       upsertRouteState(routeState);
-      const projection = nostrEvent({
+      const projection = stateEvent({
         id: `state-${routeState.route_id}-${routeState.environment_id}-${Date.now()}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.routeState], ['d', `${routeState.route_id}:${routeState.environment_id}`], ['route', routeState.route_id], ['environment', routeState.environment_id]],
-        content: { schema: STATE_SCHEMAS.routeState, ...routeState }
+        schema: STATE_SCHEMAS.routeState,
+        d: `${routeState.route_id}:${routeState.environment_id}`,
+        tags: [['route', routeState.route_id], ['environment', routeState.environment_id]],
+        content: { ...routeState }
       });
       const decisionResult = nostrEvent({
         id: `result-${requestEvent.id}`,
@@ -533,11 +550,12 @@ export async function installPublicLLMControlplaneHarness(
         updated_at: new Date().toISOString()
       };
       upsertRouteState(acceptedState);
-      const acceptedProjection = nostrEvent({
+      const acceptedProjection = stateEvent({
         id: `rollback-state-${payload.route_id}-${payload.environment_id}-${Date.now()}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.routeState], ['d', `${payload.route_id}:${payload.environment_id}`], ['route', payload.route_id], ['environment', payload.environment_id]],
-        content: { schema: STATE_SCHEMAS.routeState, ...acceptedState }
+        schema: STATE_SCHEMAS.routeState,
+        d: `${payload.route_id}:${payload.environment_id}`,
+        tags: [['route', payload.route_id], ['environment', payload.environment_id]],
+        content: { ...acceptedState }
       });
       const acceptedStatus = nostrEvent({
         id: `status-${requestEvent.id}`,
@@ -580,11 +598,12 @@ export async function installPublicLLMControlplaneHarness(
         },
         ...state.deploymentHistory.filter((entry) => entry.intent_id !== intentId)
       ];
-      const completedProjection = nostrEvent({
+      const completedProjection = stateEvent({
         id: `rollback-complete-${payload.route_id}-${payload.environment_id}-${Date.now()}`,
-        kind: KIND_CONTROL_STATE,
-        tags: [['domain', 'controlplane'], ['schema', STATE_SCHEMAS.routeState], ['d', `${payload.route_id}:${payload.environment_id}`], ['route', payload.route_id], ['environment', payload.environment_id]],
-        content: { schema: STATE_SCHEMAS.routeState, ...completedState }
+        schema: STATE_SCHEMAS.routeState,
+        d: `${payload.route_id}:${payload.environment_id}`,
+        tags: [['route', payload.route_id], ['environment', payload.environment_id]],
+        content: { ...completedState }
       });
       const completionResult = nostrEvent({
         id: `result-${requestEvent.id}`,
