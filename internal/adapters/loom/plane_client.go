@@ -299,7 +299,10 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 					return false, false, planeError(domain.VMErrorUnavailable, ctx.Err())
 				case ev, ok := <-events:
 					if !ok {
-						return false, disconnected != nil, planeError(domain.VMErrorUnavailable, nil)
+						// Every REQ stopped: retry only if the relays left
+						// the pool rather than the pool giving up on them.
+						gaveUp := sub.GaveUp()
+						return false, disconnected != nil && gaveUp == nil, planeError(domain.VMErrorUnavailable, gaveUp)
 					}
 					done, err := handle(ev)
 					if done || err != nil {
@@ -328,8 +331,13 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 				case <-history:
 					history = nil
 					if !sub.HasRealEOSE() {
-						// The cause names each relay's CLOSED reason.
-						return false, disconnected != nil, planeError(domain.VMErrorUnavailable, sub.StoredEventsIncomplete(nil))
+						// The CLOSED that ended the stored answer may still
+						// be queued on closed: the pool records a terminal
+						// one before EndOfStoredEvents closes, so GaveUp
+						// keeps this branch from retrying what the closed
+						// branch would give up on (bahia-irsry.49). The
+						// cause names each relay's CLOSED reason.
+						return false, disconnected != nil && sub.GaveUp() == nil, planeError(domain.VMErrorUnavailable, sub.StoredEventsIncomplete(nil))
 					}
 					// Buffered EVENTs precede EOSE at the relay, even if select chose EOSE first.
 					for len(events) > 0 {
