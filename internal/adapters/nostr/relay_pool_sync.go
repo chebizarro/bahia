@@ -16,8 +16,7 @@ import (
 // SubscribeAllWithEOSE sends the same filters to every relay, which forces one
 // `since` on all of them (C-23). Inbound sync keeps a cursor per (relay,
 // filter) instead, so it needs a REQ on one relay at a time, and a NIP-77
-// session against one relay at a time. These live in their own file so the
-// merged-subscription code in relay_pool.go is untouched.
+// session against one relay at a time.
 
 // errRelayNotInPool reports a relay the pool no longer manages; a per-relay
 // sync worker stops for good when it sees it.
@@ -32,32 +31,59 @@ var errNegentropyUnsupported = errors.New("relay does not advertise NIP-77")
 const negentropyFetchBatch = 50
 
 // subscribeRelay opens one REQ for filter on one relay over the pool's managed
-// connection, dialling (subject to the relay's reconnect backoff) if it is not
-// connected, and answering an auth-required refusal with NIP-42 AUTH once.
-// The subscription ends when ctx ends, the relay CLOSEs it, or the connection
-// drops.
+// connection. The caller owns the REQ's lifecycle (paging, cursors, resync),
+// so unlike SubscribeWithOptions the pool does not supervise or reissue it.
+// It uses the same primitives as the merged subscriptions:
+//
+//   - reconnectRelay dials the relay if needed, honouring its reconnect
+//     backoff, and redials a websocket that died since the last use (the
+//     pool now notices a dead socket itself);
+//   - the REQ takes one of the relay's NIP-11 max_subscriptions slots, held
+//     until ctx ends or the subscription does;
+//   - NIP-42 is answered by the connection's AuthHandler; an "auth-required:"
+//     CLOSED still ends the REQ, and the caller re-REQs after
+//     AuthenticateRelay, which joins that AUTH attempt.
+//
+// filter.Limit is sent as given: the caller pages against relayPageLimit, and
+// capping it here as well could make a full page look short. The subscription
+// ends when ctx ends, the relay CLOSEs it, or the connection drops.
 func (p *RelayPool) subscribeRelay(ctx context.Context, relayURL string, filter nostr.Filter) (*nostr.Subscription, error) {
 	mr, err := p.managedRelayFor(relayURL)
 	if err != nil {
 		return nil, err
 	}
-	relay, err := p.ensureRelayConnected(ctx, mr, p.reconnectTimeout, true)
+	relay, err := p.reconnectRelay(ctx, mr)
 	if err != nil {
 		return nil, err
 	}
-	if !relay.IsConnected() {
-		// The socket dropped since the last dial; only publish errors mark a
-		// relay disconnected, so notice the drop here and dial again.
-		p.markRelayDropped(mr, relay)
-		if _, err := p.ensureRelayConnected(ctx, mr, p.reconnectTimeout, true); err != nil {
-			return nil, err
+	p.awaitRelayLimits(ctx, mr)
+	release, err := p.acquireSubscriptionSlot(ctx, mr, func(limit int) {
+		p.logger.Warn("relay subscription waits for a free NIP-11 max_subscriptions slot",
+			zap.String("relay", mr.url), zap.Int("max_subscriptions", limit))
+	})
+	if err != nil {
+		return nil, err
+	}
+	sub, err := subscribeOnRelay(relay, ctx, filter)
+	if err != nil {
+		release()
+		p.markRelayDisconnectedIfDead(mr, relay)
+		p.recordRelayError(mr.url, err.Error())
+		return nil, err
+	}
+	p.recordRelayConnectionState(mr.url, true)
+	var subDone <-chan struct{}
+	if sub.Context != nil {
+		subDone = sub.Context.Done()
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-subDone:
 		}
-	}
-	subs, err := p.subscribeConnectedRelay(ctx, ctx, mr, []nostr.Filter{filter})
-	if err != nil {
-		return nil, err
-	}
-	return subs[0].sub, nil
+		release()
+	}()
+	return sub, nil
 }
 
 // managedRelayFor returns the pool's managed relay for a configured URL,
@@ -85,19 +111,6 @@ func (p *RelayPool) managedRelayFor(relayURL string) (*managedRelay, error) {
 	return nil, fmt.Errorf("%w: %s", errRelayNotInPool, relayURL)
 }
 
-func (p *RelayPool) markRelayDropped(mr *managedRelay, relay *nostr.Relay) {
-	mr.mu.Lock()
-	dropped := mr.relay == relay && mr.connected
-	if dropped {
-		mr.connected = false
-		mr.lastErr = errors.New("relay connection closed")
-	}
-	mr.mu.Unlock()
-	if dropped {
-		p.recordRelayConnectionState(mr.url, false)
-	}
-}
-
 // relayPageLimit returns the largest `limit` worth asking relayURL for: want,
 // lowered to the relay's advertised NIP-11 max_limit. Asking for more than a
 // relay serves would make a truncated page look complete.
@@ -118,8 +131,11 @@ func (p *RelayPool) relayPageLimit(relayURL string, want int) int {
 // ignores NEG-OPEN never answers). Callers fall back to paged REQs.
 //
 // The session runs on its own connection, which nip77 dials and (with the
-// Bahia patch) closes; it does not answer NIP-42 AUTH, so an auth-required
-// refusal also falls back to the pool's authenticated REQ path.
+// Bahia patch) closes. That connection is not the pool's and gets no
+// AuthHandler: nip77 dials with fixed options, and answering an
+// "auth-required:" NEG-ERR would also mean re-sending NEG-OPEN after AUTH. An
+// auth-required refusal therefore falls back to the pool's authenticated REQ
+// path.
 func (p *RelayPool) negentropySyncRelay(ctx context.Context, relayURL string, filter nostr.Filter, local nostr.QuerierPublisher, upload bool, timeout time.Duration) error {
 	if p.GetRelayInfo(relayURL) != nil && !p.SupportsNIP(relayURL, 77) {
 		return errNegentropyUnsupported

@@ -117,7 +117,6 @@ type relayPool interface {
 	Connect(context.Context)
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error)
 	FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument
-	AuthenticateRelay(context.Context, string) error
 	Close()
 }
 
@@ -503,26 +502,21 @@ func limitationWarnings(limitations RelayAdvisoryLimitations) []string {
 	return warnings
 }
 
+// subscribeUntilClosed runs one subscription until its event stream ends. The
+// pool answers NIP-42 challenges and reissues a relay's REQ after an
+// "auth-required:" or transient CLOSED or a dropped connection, so a CLOSED
+// here needs no handling beyond the log.
 func (r *Resolver) subscribeUntilClosed(ctx context.Context, pool relayPool) error {
-	authAttempted := make(map[string]struct{})
-	for {
-		merged, err := pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{r.subscriptionFilter()})
-		if err != nil {
-			return err
-		}
-		retry, err := r.consume(ctx, pool, merged, authAttempted)
-		if err != nil {
-			return err
-		}
-		if !retry {
-			return nil
-		}
+	merged, err := pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{r.subscriptionFilter()})
+	if err != nil {
+		return err
 	}
+	return r.consume(ctx, merged)
 }
 
-func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
+func (r *Resolver) consume(ctx context.Context, merged *nostradapter.MergedSubscription) error {
 	if merged == nil {
-		return false, nil
+		return nil
 	}
 	defer merged.Close()
 	// Backfill-then-live: until EOSE, stored events may arrive in any order,
@@ -532,7 +526,7 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return ctx.Err()
 		case eose, ok := <-merged.RelayEOSE:
 			if ok {
 				r.logger.Info("relay sent EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
@@ -546,9 +540,8 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 			r.markSynced(newest)
 		case closed, ok := <-merged.Closed:
 			if ok {
-				if r.handleClosed(ctx, pool, closed, authAttempted) {
-					return true, nil
-				}
+				r.logger.Warn("relay closed subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID),
+					zap.String("reason", closed.Reason), zap.Bool("terminal", closed.Terminal))
 			} else {
 				merged.Closed = nil
 			}
@@ -561,9 +554,9 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 				// reconnect (a backfill cut short is redone in full, since
 				// the cursor only moves after EOSE).
 				if ctx.Err() != nil {
-					return false, ctx.Err()
+					return ctx.Err()
 				}
-				return false, errors.New("subscription event stream closed")
+				return errors.New("subscription event stream closed")
 			}
 			if err := r.applyEvent(ev); err != nil {
 				if errors.Is(err, errNotDNSEndpoint) {
@@ -580,23 +573,7 @@ func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostrada
 			}
 		}
 	}
-	return false, errors.New("subscription event stream closed")
-}
-
-func (r *Resolver) handleClosed(ctx context.Context, pool relayPool, closed nostradapter.RelayClosed, authAttempted map[string]struct{}) bool {
-	r.logger.Warn("relay closed subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID), zap.String("reason", closed.Reason))
-	if !nostradapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		r.logger.Warn("relay authentication failed", zap.String("relay", closed.RelayURL), zap.Error(err))
-		return false
-	}
-	return true
+	return errors.New("subscription event stream closed")
 }
 
 // markSynced records that the resolver has seen everything up to createdAt

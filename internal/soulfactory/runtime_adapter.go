@@ -62,12 +62,12 @@ type RuntimeAdapter interface {
 	Execute(ctx context.Context, req RuntimeAdapterRequest) (*RuntimeControlResultEnvelope, error)
 }
 
-// RuntimeAdapterTransport is intentionally the existing SoulFactory relay-bus
+// RuntimeAdapterTransport is intentionally the existing SoulFactory relay-client
 // surface. It publishes with NIP-01 OK enforcement and subscribes until EOSE
 // without introducing polling or request/response transport semantics.
 type RuntimeAdapterTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
-	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelayBusSubscription, error)
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelaySubscription, error)
 	Close()
 }
 
@@ -228,7 +228,7 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 	factory := config.TransportFactory
 	if factory == nil {
 		factory = func(relays []string) (RuntimeAdapterTransport, error) {
-			return NewSoulFactoryRelayBus(relays, WithRelayBusSigner(config.Signer), WithRelayBusLogger(logger))
+			return NewRelayClient(relays, WithRelaySigner(config.Signer), WithRelayLogger(logger))
 		}
 	}
 	limit := config.CapabilityLimit
@@ -725,7 +725,7 @@ func uniqueValidRelayEvents(events []*nostr.Event) []*nostr.Event {
 // positive) or ctx's earlier deadline. Reactor handler contexts carry no
 // deadline, so this bound is what ends a wait on a runtime that never answers.
 // A wait that ends first returns *NoTerminalResultError.
-func awaitRuntimeControlResult(ctx context.Context, sub *RelayBusSubscription, requestEvent *nostr.Event, req RuntimeAdapterRequest, controllerPubkey string, timeout time.Duration) (*RuntimeControlResultEnvelope, error) {
+func awaitRuntimeControlResult(ctx context.Context, sub *RelaySubscription, requestEvent *nostr.Event, req RuntimeAdapterRequest, controllerPubkey string, timeout time.Duration) (*RuntimeControlResultEnvelope, error) {
 	var result *RuntimeControlResultEnvelope
 	_, err := awaitTerminalReply(ctx, sub, requestEvent.ID.Hex(), timeout, DefaultRuntimeControlResultTimeout, func(event *nostr.Event) replyClass {
 		parsed, ok := parseRuntimeControlResultEvent(event)

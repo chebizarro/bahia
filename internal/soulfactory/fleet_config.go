@@ -115,7 +115,7 @@ func BuildFleetConfigEvent(document FleetConfigDocument) (*nostr.Event, error) {
 }
 
 // ParseFleetConfigEvent validates a kind 31953 event from a trusted operator.
-// Signature verification is performed by SoulFactoryRelayBus before delivery.
+// Signature verification is performed by RelayClient before delivery.
 func ParseFleetConfigEvent(event *nostr.Event, trustedOperators []string) (*FleetConfigSnapshot, error) {
 	if event == nil {
 		return nil, fmt.Errorf("nil fleet config event")
@@ -219,4 +219,3 @@ func isEnvironmentPlaceholder(value string) bool {
 	}
 	return name != ""
 }
-

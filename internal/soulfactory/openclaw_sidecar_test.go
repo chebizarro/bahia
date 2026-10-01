@@ -21,7 +21,7 @@ import (
 
 type fakeOpenClawSidecarTransport struct {
 	published []nostr.Event
-	sub       *RelayBusSubscription
+	sub       *RelaySubscription
 }
 
 func (f *fakeOpenClawSidecarTransport) Publish(_ context.Context, event nostr.Event) (int, error) {
@@ -29,7 +29,7 @@ func (f *fakeOpenClawSidecarTransport) Publish(_ context.Context, event nostr.Ev
 	return 1, nil
 }
 
-func (f *fakeOpenClawSidecarTransport) SubscribeAllWithEOSE(_ context.Context, _ []nostr.Filter) (*RelayBusSubscription, error) {
+func (f *fakeOpenClawSidecarTransport) SubscribeAllWithEOSE(_ context.Context, _ []nostr.Filter) (*RelaySubscription, error) {
 	if f.sub == nil {
 		return nil, errors.New("no subscription configured")
 	}
@@ -211,7 +211,7 @@ func TestOpenClawSidecarRecordsUnexpectedSubscriptionClosure(t *testing.T) {
 	events := make(chan *nostr.Event)
 	close(events)
 	eose := make(chan struct{})
-	transport := &fakeOpenClawSidecarTransport{sub: &RelayBusSubscription{
+	transport := &fakeOpenClawSidecarTransport{sub: &RelaySubscription{
 		Events:            events,
 		EndOfStoredEvents: eose,
 	}}

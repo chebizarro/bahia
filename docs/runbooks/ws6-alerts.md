@@ -136,7 +136,7 @@ EOSE, or CLOSED the REQ). Fail-closed callers such as `reactor.get_soul`,
 `reactor.fleet_reconcile_souls` and `communikeys.profile_list` return an error
 instead of acting on possibly stale state, so lifecycle actions, fleet
 reconciliation or provisioning grants stall while this fires. Use the `caller`
-label and the SoulFactory logs ("relay bus stored events are incomplete") to
+label and the SoulFactory logs ("relay stored events are incomplete") to
 find the relays that did not answer, then restore or remove them from
 `soul_factory.relays` / `additional_relays`. Do not switch a caller to a
 partial-read policy to clear the alert: the policy table in

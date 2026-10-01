@@ -16,7 +16,7 @@ func TestCommunikeysMembershipAssignRepublishesDelegatedAuthorProfileList(t *tes
 	controller := newFakeSigner(t)
 	target := newFakeSigner(t).pubkey
 	existingMember := newFakeSigner(t).pubkey
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 
 	identifier := opaqueCommunityID + "-apps"
@@ -34,12 +34,12 @@ func TestCommunikeysMembershipAssignRepublishesDelegatedAuthorProfileList(t *tes
 	}, "preserved content")
 	queueCommunikeysQuery(endpoint, original)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusSigner(controller),
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		WithRelaySigner(controller),
 	)
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -130,7 +130,7 @@ func TestCommunikeysMembershipAssignIsIdempotentForExistingMember(t *testing.T) 
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
 	target := newFakeSigner(t).pubkey
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	identifier := opaqueCommunityID + "-chat"
 	queueCommunikeysQuery(endpoint, signedCommunikeysDefinition(t, owner, opaqueCommunityID, nostr.Tags{
 		{"content", "Chat"},
@@ -142,9 +142,9 @@ func TestCommunikeysMembershipAssignIsIdempotentForExistingMember(t *testing.T) 
 		{"p", target},
 	}, ""))
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -168,7 +168,7 @@ func TestCommunikeysMembershipAssignSelectsLatestProfileListFromQueryResults(t *
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
 	target := newFakeSigner(t).pubkey
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 
 	identifier := opaqueCommunityID + "-apps"
@@ -185,9 +185,9 @@ func TestCommunikeysMembershipAssignSelectsLatestProfileListFromQueryResults(t *
 	newer := signedCommunikeysProfileList(t, controller, identifier, nostr.Tags{{"d", identifier}, {"title", "Current"}}, "")
 	queueCommunikeysQuery(endpoint, newer, older)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -206,7 +206,7 @@ func TestCommunikeysMembershipAssignSelectsLatestProfileListFromQueryResults(t *
 func TestCommunikeysMembershipAssignPrefersLowestEventIDAtEqualTimestamp(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: true}}
 
 	identifier := opaqueCommunityID + "-apps"
@@ -227,9 +227,9 @@ func TestCommunikeysMembershipAssignPrefersLowestEventIDAtEqualTimestamp(t *test
 	}
 	queueCommunikeysQuery(endpoint, first, second)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -248,7 +248,7 @@ func TestCommunikeysMembershipAssignPrefersLowestEventIDAtEqualTimestamp(t *test
 func TestCommunikeysMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{
 		{Accepted: false, Reason: "auth-required: challenge pending"},
 		{Accepted: true},
@@ -261,9 +261,9 @@ func TestCommunikeysMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 	}))
 	queueCommunikeysQuery(endpoint, signedCommunikeysProfileList(t, controller, identifier, nostr.Tags{{"d", identifier}}, ""))
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -282,12 +282,12 @@ func TestCommunikeysMembershipAssignRetriesPublishAfterAuthRace(t *testing.T) {
 func TestCommunikeysMembershipAssignFailsClosedWithoutDefinition(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	queueCommunikeysQuery(endpoint, nil)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -307,7 +307,7 @@ func TestCommunikeysMembershipAssignFailsClosedWithoutDefinition(t *testing.T) {
 func TestCommunikeysMembershipAssignFailsClosedWhenCoordinateUnreferenced(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	identifier := opaqueCommunityID + "-general"
 	// The coordinate appears only BEFORE the first content tag: top-level `a`
 	// tags are not section references, and placement is authoritative.
@@ -317,9 +317,9 @@ func TestCommunikeysMembershipAssignFailsClosedWhenCoordinateUnreferenced(t *tes
 		{"k", "1"},
 	}))
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -339,7 +339,7 @@ func TestCommunikeysMembershipAssignFailsClosedWhenCoordinateUnreferenced(t *tes
 func TestCommunikeysMembershipAssignFailsClosedWithoutDelegatedProfileList(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	identifier := opaqueCommunityID + "-general"
 	queueCommunikeysQuery(endpoint, signedCommunikeysDefinition(t, owner, opaqueCommunityID, nostr.Tags{
 		{"content", "General"},
@@ -348,9 +348,9 @@ func TestCommunikeysMembershipAssignFailsClosedWithoutDelegatedProfileList(t *te
 	}))
 	queueCommunikeysQuery(endpoint, nil)
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -370,7 +370,7 @@ func TestCommunikeysMembershipAssignFailsClosedWithoutDelegatedProfileList(t *te
 func TestCommunikeysMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Accepted: false, Reason: "restricted"}}
 	identifier := opaqueCommunityID + "-apps"
 	queueCommunikeysQuery(endpoint, signedCommunikeysDefinition(t, owner, opaqueCommunityID, nostr.Tags{
@@ -380,9 +380,9 @@ func TestCommunikeysMembershipAssignFailsClosedOnRelayRejection(t *testing.T) {
 	}))
 	queueCommunikeysQuery(endpoint, signedCommunikeysProfileList(t, controller, identifier, nostr.Tags{{"d", identifier}}, ""))
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -400,7 +400,7 @@ func TestCommunikeysMembershipAssignRejectsSignerOtherThanListAuthor(t *testing.
 	owner := newFakeSigner(t)
 	listAuthor := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
+	endpoint := newFakeRelayEndpoint(t)
 	identifier := opaqueCommunityID + "-apps"
 	queueCommunikeysQuery(endpoint, signedCommunikeysDefinition(t, owner, opaqueCommunityID, nostr.Tags{
 		{"content", "Apps"},
@@ -409,9 +409,9 @@ func TestCommunikeysMembershipAssignRejectsSignerOtherThanListAuthor(t *testing.
 	}))
 	queueCommunikeysQuery(endpoint, signedCommunikeysProfileList(t, listAuthor, identifier, nostr.Tags{{"d", identifier}}, ""))
 
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	membership := newTestCommunikeysMembership(t, controller, bus, CommunikeysCommunity{
 		DefinitionAddress: "32222:" + owner.pubkey + ":" + opaqueCommunityID,
@@ -431,10 +431,10 @@ func TestCommunikeysMembershipAssignRejectsSignerOtherThanListAuthor(t *testing.
 func TestNewCommunikeysMembershipValidation(t *testing.T) {
 	owner := newFakeSigner(t)
 	controller := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://community.example")
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusSigner(controller))
+	endpoint := newFakeRelayEndpoint(t)
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, WithRelaySigner(controller))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	address := "32222:" + owner.pubkey + ":" + opaqueCommunityID
 
@@ -609,7 +609,7 @@ func TestSectionListD(t *testing.T) {
 	}
 }
 
-func newTestCommunikeysMembership(t *testing.T, signer fakeSigner, bus *SoulFactoryRelayBus, communities ...CommunikeysCommunity) *communikeysMembership {
+func newTestCommunikeysMembership(t *testing.T, signer fakeSigner, bus *RelayClient, communities ...CommunikeysCommunity) *communikeysMembership {
 	t.Helper()
 	membership, err := newCommunikeysMembership(communities, signer, bus)
 	if err != nil {

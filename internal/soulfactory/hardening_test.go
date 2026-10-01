@@ -73,7 +73,7 @@ func TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine(t *testing.T)
 		AuthorizedPubkeys: []string{signer.pubkey},
 		SoulFactoryPubkey: signer.pubkey,
 	}, fakeGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "no-engine", nostr.Tags{{"agent-id", "agent"}}, `{"brief":"brief"}`)
 

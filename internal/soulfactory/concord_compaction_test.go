@@ -18,7 +18,7 @@ func TestConcordCompactionRewrapsStructuralHeads(t *testing.T) {
 	grantHead := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 2, grantFirst.hash)
 	metadata := concordTestControlEdition(t, fixture, owner, concordTestBytes32(t, 0x5e), 7, strings.Repeat("cd", 32), `{"name":"Fleet Private"}`)
 	queueConcordInboxLookup(fixture.endpoint, grantFirst.wrap, grantHead.wrap, metadata.wrap)
-	current, _, err := fixture.membership.communities[0].resolve(t.Context(), fixture.membership.bus)
+	current, _, err := fixture.membership.communities[0].resolve(t.Context(), fixture.membership.relayClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func concordTestMemberHex(index int) string {
 // writing custody or bypassing the production Rotate refusal boundary.
 func concordTestRefoundingPlan(t *testing.T, f *concordRotationFixture) (concordRotationPlan, validatedConcordCommunity, concordInviteBundle) {
 	t.Helper()
-	current, record, err := f.membership.communities[0].resolve(t.Context(), f.membership.bus)
+	current, record, err := f.membership.communities[0].resolve(t.Context(), f.membership.relayClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func concordTestRefoundingPlan(t *testing.T, f *concordRotationFixture) (concord
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := validateConcordCommunity(plan.bundle, f.communityID, f.membership.bus)
+	next, err := validateConcordCommunity(plan.bundle, f.communityID, f.membership.relayClient)
 	if err != nil {
 		t.Fatal(err)
 	}

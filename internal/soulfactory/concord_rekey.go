@@ -178,7 +178,7 @@ func (m *concordMembership) publishConcordRekeys(
 	if len(scopes) == 0 || len(recipients) == 0 {
 		return nil, nil
 	}
-	if err := authenticateConcordRelays(ctx, m.bus, community.relayEndpoints); err != nil {
+	if err := authenticateConcordRelays(ctx, m.relayClient, community.boundRelays); err != nil {
 		return nil, fmt.Errorf("authenticate Concord relays for %s: %w", community.communityID, err)
 	}
 
@@ -207,7 +207,7 @@ func (m *concordMembership) publishConcordRekeys(
 			if err != nil {
 				return published, fmt.Errorf("wrap %s rekey chunk %d/%d: %w", scope.label(), index+1, len(chunked), err)
 			}
-			if err := publishConcordInvite(ctx, m.bus, community.relayEndpoints, wrap); err != nil {
+			if err := publishConcordInvite(ctx, m.relayClient, community.boundRelays, wrap); err != nil {
 				return published, fmt.Errorf("publish %s rekey chunk %d/%d for %s: %w", scope.label(), index+1, len(chunked), community.communityID, err)
 			}
 		}

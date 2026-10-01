@@ -79,11 +79,11 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	if nip29Err != nil {
 		logger.Error("NIP-29 membership configuration is invalid", "error", nip29Err)
 	}
-	communikeysMembership, communikeysErr := newCommunikeysMembership(config.CommunikeysCommunities, reactor.signer, reactor.relayBus)
+	communikeysMembership, communikeysErr := newCommunikeysMembership(config.CommunikeysCommunities, reactor.signer, reactor.relayClient)
 	if communikeysErr != nil {
 		logger.Error("Communikeys membership configuration is invalid", "error", communikeysErr)
 	}
-	concordMembership, concordErr := newConcordMembership(config.ConcordCommunities, reactor.signer, reactor.relayBus)
+	concordMembership, concordErr := newConcordMembership(config.ConcordCommunities, reactor.signer, reactor.relayClient)
 	if concordErr != nil {
 		logger.Error("Concord membership configuration is invalid", "error", concordErr)
 	}

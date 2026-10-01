@@ -12,12 +12,11 @@ import (
 const libraryNostrPath = "fiatjaf.com/nostr"
 
 // relaySubscribeOwners are the only files allowed to open REQs on library
-// relay objects directly: the daemon's relay pool and the SoulFactory bus.
-// Everything else goes through RelayPool.SubscribeAll*/the bus, so fixes to
-// EOSE, CLOSED, AUTH and reconnect handling land once (C-8, C-35).
+// relay objects directly: the relay pool. Everything else, SoulFactory
+// included since its bus was retired, goes through RelayPool.Subscribe*, so
+// fixes to EOSE, CLOSED, AUTH and reconnect handling land once (C-8, C-35).
 var relaySubscribeOwners = []string{
 	"internal/adapters/nostr/relay_pool",
-	"internal/soulfactory/relay_bus",
 }
 
 func isLibraryRelaySubscribe(method *types.Func) bool {

@@ -345,18 +345,20 @@ func TestResolverNIP11MetadataIsAdvisoryForMissingMalformedAndLimitingRelays(t *
 	require.ElementsMatch(t, []string{"auth-required", "payment-required", "restricted-writes", "max-limit:25"}, limited.Warnings)
 }
 
-func TestResolverRetriesAfterAuthRequiredClosed(t *testing.T) {
+// The pool answers "auth-required:" itself (AUTH, then reissue on that
+// relay), so a CLOSED reaching the resolver is only logged: it neither
+// authenticates nor tears the subscription down (C-5).
+func TestResolverLeavesAuthRequiredClosedToThePool(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, "author")
-	pool := &fakeRelayPool{}
 	closed := make(chan nostradapter.RelayClosed, 1)
-	closed <- nostradapter.RelayClosed{RelayURL: "wss://relay.example.test", SubscriptionID: "sub-1", Reason: "auth-required: restricted"}
+	closed <- nostradapter.RelayClosed{RelayURL: "wss://relay.example.test", SubscriptionID: "sub-1", Reason: "auth-required: restricted", Terminal: true}
 	close(closed)
+	events := make(chan *nostr.Event)
+	close(events)
 
-	retry, err := resolver.consume(context.Background(), pool, &nostradapter.MergedSubscription{Closed: closed}, map[string]struct{}{})
+	err := resolver.consume(context.Background(), &nostradapter.MergedSubscription{Events: events, Closed: closed})
 
-	require.NoError(t, err)
-	require.True(t, retry)
-	require.Equal(t, []string{"auth:wss://relay.example.test"}, pool.calls)
+	require.ErrorContains(t, err, "subscription event stream closed")
 }
 
 func resolverTestBase() nostr.Timestamp {
@@ -511,11 +513,6 @@ func (p *fakeRelayPool) SubscribeAllWithEOSE(_ context.Context, filters []nostr.
 func (p *fakeRelayPool) FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument {
 	p.calls = append(p.calls, "fetch_info")
 	return p.infos
-}
-
-func (p *fakeRelayPool) AuthenticateRelay(_ context.Context, relayURL string) error {
-	p.calls = append(p.calls, "auth:"+relayURL)
-	return nil
 }
 
 func (p *fakeRelayPool) Close() {

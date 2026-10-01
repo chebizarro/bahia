@@ -205,7 +205,7 @@ func TestBridgeConsumeBackfillsUntilEOSEThenAppliesLiveStateAndTombstones(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := bridge.consume(ctx, merged, map[string]struct{}{})
+		err := bridge.consume(ctx, merged)
 		done <- err
 	}()
 
@@ -259,7 +259,7 @@ func TestBridgeCatchUpWithoutStoredEventsLeavesHostsUntouched(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := bridge.consume(ctx, merged, map[string]struct{}{})
+		err := bridge.consume(ctx, merged)
 		done <- err
 	}()
 

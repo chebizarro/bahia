@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -26,21 +28,20 @@ type fakeRelayScript struct {
 	events []*nostr.Event
 }
 
-// waitForCancelBackoff never lets a relay reissue its REQ: a relay that CLOSED
-// stays settled and every worker exits when the read ends.
-func waitForCancelBackoff(ctx context.Context, _ int) error {
-	<-ctx.Done()
-	return ctx.Err()
+// neverReissueBackoff keeps a relay that CLOSED from reissuing its REQ
+// within a test: it stays settled until the read ends.
+func neverReissueBackoff() *nostradapter.Backoff {
+	return &nostradapter.Backoff{Initial: time.Hour, Max: time.Hour}
 }
 
-// newScriptedRelayBus builds a bus over fake relays that answer the first REQ
+// newScriptedRelayClient builds a bus over fake relays that answer the first REQ
 // per script. It returns the bus and the relay URLs in script order.
-func newScriptedRelayBus(t *testing.T, logger *slog.Logger, scripts ...fakeRelayScript) (*SoulFactoryRelayBus, []string) {
+func newScriptedRelayClient(t *testing.T, logger *slog.Logger, scripts ...fakeRelayScript) (*RelayClient, []string) {
 	t.Helper()
-	endpoints := make([]relayBusEndpoint, 0, len(scripts))
+	endpoints := make([]*fakeRelayEndpoint, 0, len(scripts))
 	urls := make([]string, 0, len(scripts))
-	for i, script := range scripts {
-		endpoint := newFakeRelayEndpoint("wss://relay-" + string(rune('a'+i)) + ".example")
+	for _, script := range scripts {
+		endpoint := newFakeRelayEndpoint(t)
 		sub := newFakeRelaySubscription()
 		sub.events = make(chan *nostr.Event, len(script.events)+1)
 		for _, event := range script.events {
@@ -56,9 +57,9 @@ func newScriptedRelayBus(t *testing.T, logger *slog.Logger, scripts ...fakeRelay
 		endpoints = append(endpoints, endpoint)
 		urls = append(urls, endpoint.url)
 	}
-	bus, err := newSoulFactoryRelayBusFromEndpoints(endpoints, WithRelayBusBackoff(waitForCancelBackoff), WithRelayBusLogger(logger))
+	bus, err := newRelayClientFromEndpoints(endpoints, withRelayResubscribeBackoff(neverReissueBackoff), WithRelayLogger(logger))
 	if err != nil {
-		t.Fatalf("new bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	t.Cleanup(bus.Close)
 	return bus, urls
@@ -110,9 +111,9 @@ func signedSoulFactoryEventAt(t *testing.T, signer fakeSigner, kind int, created
 
 func assertIncompleteRelay(t *testing.T, err error, relay string, status RelayStoredEventsStatus) {
 	t.Helper()
-	var incomplete *RelayBusIncompleteError
-	if !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayBusIncomplete) {
-		t.Fatalf("error = %v, want *RelayBusIncompleteError", err)
+	var incomplete *RelayReadIncompleteError
+	if !errors.As(err, &incomplete) || !errors.Is(err, ErrRelayReadIncomplete) {
+		t.Fatalf("error = %v, want *RelayReadIncompleteError", err)
 	}
 	if incomplete.Total != 3 {
 		t.Fatalf("incomplete.Total = %d, want 3", incomplete.Total)
@@ -136,7 +137,7 @@ func TestRelayReadQuorumLookupReturnsNewestAndReportsDegradation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logs := &recordingLogHandler{}
 			logger := slog.New(logs)
-			bus, urls := newScriptedRelayBus(t, logger,
+			bus, urls := newScriptedRelayClient(t, logger,
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{older}},
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{newer}},
 				fakeRelayScript{answer: third},
@@ -173,13 +174,13 @@ func TestRelayReadQuorumLookupReturnsNewestAndReportsDegradation(t *testing.T) {
 	t.Run("reactor template lookup", func(t *testing.T) {
 		logs := &recordingLogHandler{}
 		logger := slog.New(logs)
-		bus, _ := newScriptedRelayBus(t, logger,
+		bus, _ := newScriptedRelayClient(t, logger,
 			fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{older}},
 			fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{newer}},
 			fakeRelayScript{answer: relayStaysSilent},
 		)
 		reactor := NewReactor(Config{Relays: []string{"wss://relay-a.example"}, SoulFactoryPubkey: signer.pubkey}, nil, signer, logger)
-		reactor.relayBus = bus
+		reactor.relayClient = bus
 		ctx, cancel := context.WithTimeout(t.Context(), relayBusCallerDeadline)
 		defer cancel()
 		template, err := reactor.getProvisioningTemplate(ctx, "research")
@@ -209,22 +210,22 @@ func TestRelayReadFailClosedCallersErrorWithOneSilentRelay(t *testing.T) {
 
 	callers := map[string]struct {
 		event *nostr.Event
-		call  func(context.Context, *SoulFactoryRelayBus) error
+		call  func(context.Context, *RelayClient) error
 	}{
-		"fleet reconcile souls": {soul, func(ctx context.Context, bus *SoulFactoryRelayBus) error {
+		"fleet reconcile souls": {soul, func(ctx context.Context, bus *RelayClient) error {
 			reactor := NewReactor(Config{Relays: []string{"wss://relay-a.example"}, SoulFactoryPubkey: signer.pubkey}, nil, signer, slog.Default())
-			reactor.relayBus = bus
+			reactor.relayClient = bus
 			_, err := reactor.listFleetReconcileSouls(ctx)
 			return err
 		}},
-		"communikeys membership profile list": {profileList, func(ctx context.Context, bus *SoulFactoryRelayBus) error {
-			_, err := (&communikeysMembership{bus: bus}).latestProfileList(ctx, listAuthor, "section")
+		"communikeys membership profile list": {profileList, func(ctx context.Context, bus *RelayClient) error {
+			_, err := (&communikeysMembership{relayClient: bus}).latestProfileList(ctx, listAuthor, "section")
 			return err
 		}},
 	}
 	for name, caller := range callers {
 		t.Run(name, func(t *testing.T) {
-			bus, urls := newScriptedRelayBus(t, slog.Default(),
+			bus, urls := newScriptedRelayClient(t, slog.Default(),
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{caller.event}},
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{caller.event}},
 				fakeRelayScript{answer: relayStaysSilent},
@@ -247,7 +248,7 @@ func TestResolveRelayReadPolicies(t *testing.T) {
 		for i := range relays {
 			relays[i] = RelayStoredEventsOutcome{RelayURL: "wss://silent.example", Status: RelayStoredEventsPending}
 		}
-		return &RelayBusIncompleteError{Relays: relays, Total: total, Cause: cause}
+		return &RelayReadIncompleteError{Relays: relays, Total: total, Cause: cause}
 	}
 	isFound := func(event *nostr.Event) bool { return event.ID == found.ID }
 	cases := []struct {
@@ -263,7 +264,7 @@ func TestResolveRelayReadPolicies(t *testing.T) {
 		{"quorum 2 of 3", RelayReadLatestQuorum(), nil, partial(3, 1, context.DeadlineExceeded), true},
 		{"quorum needs a strict majority: 1 of 2", RelayReadLatestQuorum(), []*nostr.Event{found}, partial(2, 1, nil), false},
 		{"quorum 1 of 3 fails", RelayReadLatestQuorum(), []*nostr.Event{found}, partial(3, 2, context.DeadlineExceeded), false},
-		{"quorum without relay count fails", RelayReadLatestQuorum(), nil, &RelayBusIncompleteError{Cause: context.DeadlineExceeded}, false},
+		{"quorum without relay count fails", RelayReadLatestQuorum(), nil, &RelayReadIncompleteError{Cause: context.DeadlineExceeded}, false},
 		{"caller cancellation is never accepted", RelayReadLatestQuorum(), nil, partial(3, 1, context.Canceled), false},
 		{"found match accepted", RelayReadFound(isFound), []*nostr.Event{found}, partial(3, 2, context.DeadlineExceeded), true},
 		{"absence needs every relay", RelayReadFound(isFound), nil, partial(3, 1, context.DeadlineExceeded), false},

@@ -286,8 +286,8 @@ func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigS
 	if !r.config.FleetConfigEnabled || len(r.config.AuthorizedPubkeys) == 0 {
 		return nil, nil
 	}
-	bus := r.relayBus
-	if bus == nil {
+	relayClient := r.relayClient
+	if relayClient == nil {
 		return nil, nil
 	}
 	authors := make([]nostr.PubKey, 0, len(r.config.AuthorizedPubkeys))
@@ -301,7 +301,7 @@ func (r *Reactor) getProvisioningFleetConfig(ctx context.Context) (*FleetConfigS
 	// Fail closed: the fleet config carries auth, tools, mcp, hooks and plugins
 	// policy, and a stale revision baked into a new agent is not repaired until
 	// the next revision. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_fleet_config", RelayReadComplete(), []nostr.Filter{{
+	read, err := relayClient.QueryWithPolicy(ctx, "reactor.provisioning_fleet_config", RelayReadComplete(), []nostr.Filter{{
 		Kinds:   []nostr.Kind{nostr.Kind(domain.KindSoulFleetConfig)},
 		Authors: authors,
 		Tags:    nostr.TagMap{tagParameterizedD: []string{SoulFactoryFleetConfigIdentifier}},
@@ -330,9 +330,9 @@ func (r *Reactor) getProvisioningDraft(ctx context.Context, draftRef, draftEvent
 	if r.getDraftFn != nil {
 		return r.getDraftFn(ctx, draftRef, draftEventID)
 	}
-	bus := r.relayBus
-	if bus == nil {
-		return nil, fmt.Errorf("soul draft lookup requires a relay bus")
+	relayClient := r.relayClient
+	if relayClient == nil {
+		return nil, fmt.Errorf("soul draft lookup requires a relay client")
 	}
 	filters := draftLookupFilters(draftRef, draftEventID)
 	if len(filters) == 0 {
@@ -340,7 +340,7 @@ func (r *Reactor) getProvisioningDraft(ctx context.Context, draftRef, draftEvent
 	}
 	// Latest-wins operator input: the newest draft of a relay majority is
 	// accepted and the degradation logged. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_draft", RelayReadLatestQuorum(), filters)
+	read, err := relayClient.QueryWithPolicy(ctx, "reactor.provisioning_draft", RelayReadLatestQuorum(), filters)
 	if err != nil {
 		return nil, err
 	}
@@ -370,9 +370,9 @@ func (r *Reactor) getProvisioningTemplate(ctx context.Context, templateRef strin
 	if r.getTemplateFn != nil {
 		return r.getTemplateFn(ctx, templateRef)
 	}
-	bus := r.relayBus
-	if bus == nil {
-		return nil, fmt.Errorf("soul template lookup requires a relay bus")
+	relayClient := r.relayClient
+	if relayClient == nil {
+		return nil, fmt.Errorf("soul template lookup requires a relay client")
 	}
 	filters := templateLookupFilters(templateRef)
 	if len(filters) == 0 {
@@ -380,7 +380,7 @@ func (r *Reactor) getProvisioningTemplate(ctx context.Context, templateRef strin
 	}
 	// Latest-wins operator input: the newest template of a relay majority is
 	// accepted and the degradation logged. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_template", RelayReadLatestQuorum(), filters)
+	read, err := relayClient.QueryWithPolicy(ctx, "reactor.provisioning_template", RelayReadLatestQuorum(), filters)
 	if err != nil {
 		return nil, err
 	}
@@ -413,8 +413,8 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 		}
 		return result, nil
 	}
-	bus := r.relayBus
-	if bus == nil {
+	relayClient := r.relayClient
+	if relayClient == nil {
 		return nil, nil
 	}
 	filter := nostr.Filter{
@@ -431,7 +431,7 @@ func (r *Reactor) findExistingProvisioningResult(ctx context.Context, requestEve
 	}
 	// Idempotency check: any relay's authoritative result is final, but absence
 	// would re-run provisioning, so it needs every relay. See RelayReadPolicy.
-	read, err := bus.QueryWithPolicy(ctx, "reactor.provisioning_result", RelayReadFound(func(result *nostr.Event) bool {
+	read, err := relayClient.QueryWithPolicy(ctx, "reactor.provisioning_result", RelayReadFound(func(result *nostr.Event) bool {
 		return authoritativeProvisioningResult(result, requestEvent, factoryPubkey)
 	}), []nostr.Filter{filter})
 	if err != nil {

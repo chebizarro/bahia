@@ -37,24 +37,24 @@ func attachPublishCapture(reactor *Reactor) *capturedPublish {
 }
 
 func TestReactorBackfillsRequestAndActionBacklogBeforeLiveUpdates(t *testing.T) {
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
-	subscription := newFakeRelaySubscription()
-	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	endpoint := newFakeRelayEndpoint(t)
+	endpoint.autoEOSE = true
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	reactor := NewReactor(Config{Relays: []string{endpoint.url}}, nil, nil, slog.Default())
-	reactor.relayBus = bus
+	reactor.relayClient = bus
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- reactor.Run(ctx) }()
 
-	filters := <-endpoint.subscribeCalls
+	// One REQ per filter.
+	filters := receiveREQFilters(t, endpoint, 3)
 	if len(filters) != 3 {
 		t.Fatalf("subscription filters = %d, want provisioning, lifecycle, and runtime-result filters", len(filters))
 	}
@@ -90,15 +90,21 @@ func (e blockingProvisioningEngine) Provision(ctx context.Context, req *domain.P
 
 func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 	factory := newFakeSigner(t)
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
-	endpoint.subscribeQueue <- subscription
-	bus, err := newSoulFactoryRelayBusFromEndpoints(
-		[]relayBusEndpoint{endpoint},
-		WithRelayBusBackoff(immediateRelayBusBackoff),
+	// One REQ per filter: the provisioning-request REQ carries the backlog.
+	endpoint.scriptFor = func(filters []nostr.Filter) *fakeRelaySubscription {
+		if slices.Contains(filters[0].Kinds, nostr.Kind(domain.KindProvisioningRequest)) {
+			return subscription
+		}
+		return eoseScript()
+	}
+	bus, err := newRelayClientFromEndpoints(
+		[]*fakeRelayEndpoint{endpoint},
+		withRelayResubscribeBackoff(fastRelayBackoff),
 	)
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 
 	release := make(chan struct{})
@@ -114,7 +120,7 @@ func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 		slog.Default(),
 		WithProvisioningEngine(blockingProvisioningEngine{started: started, release: release}),
 	)
-	reactor.relayBus = bus
+	reactor.relayClient = bus
 	reactor.findProvisioningResultFn = func(context.Context, string) (*nostr.Event, error) {
 		return nil, nil
 	}
@@ -123,7 +129,7 @@ func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- reactor.Run(ctx) }()
-	<-endpoint.subscribeCalls
+	receiveREQFor(t, endpoint, nostr.Kind(domain.KindProvisioningRequest))
 
 	for i := 0; i < reactorHandlerWorkers+1; i++ {
 		event := &nostr.Event{
@@ -258,7 +264,7 @@ func TestLateRuntimeSuccessWithoutReadinessNeverProjectsRunningTerminal(t *testi
 		t.Fatalf("sign failed result: %v", err)
 	}
 
-	endpoint := newFakeRelayEndpoint("wss://relay.example")
+	endpoint := newFakeRelayEndpoint(t)
 	queueQuery := func(event *nostr.Event) {
 		sub := newFakeRelaySubscription()
 		if event != nil {
@@ -273,16 +279,16 @@ func TestLateRuntimeSuccessWithoutReadinessNeverProjectsRunningTerminal(t *testi
 		queueQuery(failed)
 	}
 	queueRecoveryQueries()
-	bus, err := newSoulFactoryRelayBusFromEndpoints([]relayBusEndpoint{endpoint}, WithRelayBusBackoff(immediateRelayBusBackoff))
+	bus, err := newRelayClientFromEndpoints([]*fakeRelayEndpoint{endpoint}, withRelayResubscribeBackoff(fastRelayBackoff))
 	if err != nil {
-		t.Fatalf("new relay bus: %v", err)
+		t.Fatalf("new relay client: %v", err)
 	}
 	reactor := NewReactor(Config{
 		Relays:            []string{endpoint.url},
 		AuthorizedPubkeys: []string{operator.pubkey},
 		SoulFactoryPubkey: factory.pubkey,
 	}, scriptedGenerator{}, factory, slog.Default())
-	reactor.relayBus = bus
+	reactor.relayClient = bus
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return nil, nil }
 	capture := attachPublishCapture(reactor)
 
@@ -394,7 +400,7 @@ func TestProvisioningPublicationUsesNormalizedCombinedRelaysAndSurfacesErrors(t 
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
@@ -429,7 +435,7 @@ func TestReactorPublishesCorrelatedErrorsForUnauthorizedAndMalformedRequests(t *
 		newFakeSigner(t),
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 
 	t.Run("unauthorized requester", func(t *testing.T) {
@@ -535,7 +541,7 @@ func TestReactorRequiresExplicitAuthorizedPubkeys(t *testing.T) {
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "missing-authorized-pubkeys", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
 
@@ -566,7 +572,7 @@ func TestProvisioningRequiresExplicitFactoryPubkeyBeforeSideEffects(t *testing.T
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "missing-factory-pubkey", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
 
@@ -617,7 +623,7 @@ func TestFullProvisionerSuccessRecordsEightStagesAndCorrelatedProgress(t *testin
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
@@ -707,7 +713,7 @@ func TestFullProvisionerFailsClosedWhenBahiaRegistrationFails(t *testing.T) {
 		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
 		scriptedGenerator{}, signer, slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	services := &sfMockServiceRepo{services: map[uuid.UUID]*domain.Service{}, createErr: errors.New("service store unavailable")}
 	registry := service.NewRegistryService(services, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
@@ -843,7 +849,7 @@ func TestProvisioningReplaySkipsExternalSideEffectsWhenTerminalResultExists(t *t
 		slog.Default(),
 		WithProvisioningEngine(engine),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	reactor.findProvisioningResultFn = func(_ context.Context, eventID string) (*nostr.Event, error) {
 		factoryPubkey, err := nostr.PubKeyFromHex(signer.pubkey)
@@ -887,7 +893,7 @@ func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *t
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:     "exact-draft-event",
@@ -1021,7 +1027,7 @@ func TestProvisionWithUnregisteredRuntimeTargetFailsClosed(t *testing.T) {
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "unregistered-target-draft",
@@ -1092,7 +1098,7 @@ func TestRuntimeProvisionFailurePublishesErrorWithoutFinalSoulOrSuccess(t *testi
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "runtime-failure-draft",
@@ -1136,7 +1142,7 @@ func TestReadinessFailurePublishesOnlyCorrelatedErrorAndNeverRunningSoul(t *test
 		Config{Relays: []string{"wss://relay.example"}, AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
 		&capturingGenerator{}, signer, slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID: "readiness-failure-draft", AgentID: "scout", CreatedBy: signer.pubkey,
@@ -1170,7 +1176,7 @@ func TestReadinessFailurePublishesOnlyCorrelatedErrorAndNeverRunningSoul(t *test
 func TestDraftSpecHashMismatchFailsBeforeRuntimeProvisioning(t *testing.T) {
 	signer := newFakeSigner(t)
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, &capturingGenerator{}, signer, slog.Default())
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	draft := &domain.SoulDraft{
 		EventID:   "mismatched-draft-event",
@@ -1229,7 +1235,7 @@ func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *te
 		signer,
 		slog.Default(),
 	)
-	reactor.relayBus = newEOSEOnlyRelayBus(t)
+	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	registry, builds, artifacts, intents, _, _ := newSoulFactoryRegistryHarness()
 	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
