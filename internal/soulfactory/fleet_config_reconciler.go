@@ -24,30 +24,35 @@ const (
 // OpenClaw souls. Revisions are serialized while soul work is bounded and
 // independent, so a slow older rollout cannot overtake a newer revision.
 //
+// Each soul is reconciled holding it (soulOperationGate), the same hold
+// lifecycle actions take, so a fleet reload and a lifecycle action never drive
+// one soul's runtime or rewrite its kind:31951 at the same time. A soul held
+// by other work is deferred: once that work finishes, the soul is re-driven to
+// the latest revision, re-reading the soul first so the other work's changes
+// are kept.
+//
 // An apply whose runtime result was not observed within the wait is neither
 // applied nor failed: the soul is awaiting_terminal, nothing is rolled back,
 // and the late result is reconciled when the reactor observes it (see
-// runtimeResultWaiters). Until then newer revisions defer that soul, and the
-// reconciliation re-drives the soul to the latest revision afterwards, so a
-// runtime never has two fleet reloads in flight and revisions apply in order.
+// runtimeResultWaiters). The apply keeps the soul meanwhile, so newer
+// revisions and lifecycle actions wait behind it and a runtime never has two
+// requests in flight; revisions reach it in order.
 type FleetConfigReconciler struct {
 	reactor     *Reactor
 	concurrency int
 
-	// mu serializes revisions and late-result continuations; it guards latest.
-	mu     sync.Mutex
-	latest *FleetConfigSnapshot
+	// mu serializes revisions.
+	mu sync.Mutex
 
-	awaitingMu sync.Mutex
-	// awaiting holds the revision each awaiting_terminal soul is applying.
-	awaiting map[string]string
+	latestMu sync.Mutex
+	latest   *FleetConfigSnapshot
 }
 
 func NewFleetConfigReconciler(reactor *Reactor, concurrency int) *FleetConfigReconciler {
 	if concurrency <= 0 {
 		concurrency = defaultFleetReconcileConcurrency
 	}
-	return &FleetConfigReconciler{reactor: reactor, concurrency: concurrency, awaiting: make(map[string]string)}
+	return &FleetConfigReconciler{reactor: reactor, concurrency: concurrency}
 }
 
 // Reconcile fans one exact fleet revision out to every affected deployed soul.
@@ -64,10 +69,12 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.latest != nil && fleetSnapshotBefore(snapshot, r.latest) {
+	if latest := r.latestRevision(); latest != nil && fleetSnapshotBefore(snapshot, latest) {
 		return nil
 	}
+	r.latestMu.Lock()
 	r.latest = snapshot
+	r.latestMu.Unlock()
 
 	souls, err := r.reactor.listFleetReconcileSouls(ctx)
 	if err != nil {
@@ -75,15 +82,9 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 	}
 	eligible := make([]*domain.AgentSoul, 0, len(souls))
 	for _, soul := range souls {
-		if !fleetReconcileEligible(soul, snapshot) {
-			continue
+		if fleetReconcileEligible(soul, snapshot) {
+			eligible = append(eligible, soul)
 		}
-		if revision, awaiting := r.awaitingRevision(soul.AgentID); awaiting {
-			r.reactor.logger.Info("fleet config revision deferred for soul awaiting a runtime terminal result",
-				"agent_id", soul.AgentID, "fleet_revision", snapshot.EventID, "awaiting_revision", revision)
-			continue
-		}
-		eligible = append(eligible, soul)
 	}
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].AgentID < eligible[j].AgentID })
 	if len(eligible) == 0 {
@@ -99,7 +100,7 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 		go func() {
 			defer wg.Done()
 			for soul := range jobs {
-				if err := r.reconcileSoul(ctx, soul, snapshot); err != nil {
+				if err := r.reconcileGated(ctx, soul.AgentID, snapshot); err != nil {
 					errs <- err
 				}
 			}
@@ -128,26 +129,65 @@ func fleetReconcileEligible(soul *domain.AgentSoul, snapshot *FleetConfigSnapsho
 		soul.AppliedFleetConfigRevision != snapshot.EventID
 }
 
-func (r *FleetConfigReconciler) awaitingRevision(agentID string) (string, bool) {
-	r.awaitingMu.Lock()
-	defer r.awaitingMu.Unlock()
-	revision, ok := r.awaiting[agentID]
-	return revision, ok
+// latestRevision is the newest revision Reconcile has taken up, if any.
+func (r *FleetConfigReconciler) latestRevision() *FleetConfigSnapshot {
+	r.latestMu.Lock()
+	defer r.latestMu.Unlock()
+	return r.latest
 }
 
-func (r *FleetConfigReconciler) setAwaiting(agentID, revision string) {
-	r.awaitingMu.Lock()
-	defer r.awaitingMu.Unlock()
-	if r.awaiting == nil {
-		r.awaiting = make(map[string]string)
+// reconcileGated applies snapshot to agentID holding the soul. While other
+// work holds the soul it defers a re-drive to the latest revision instead.
+func (r *FleetConfigReconciler) reconcileGated(ctx context.Context, agentID string, snapshot *FleetConfigSnapshot) error {
+	var reconcileErr error
+	now := soulOperation{key: fleetOperationKey(snapshot.EventID), run: func(ctx context.Context, hold *soulHold) bool {
+		parked, err := r.reconcileHeld(ctx, hold, agentID, snapshot)
+		reconcileErr = err
+		return parked
+	}}
+	if r.reactor.soulOperations().do(ctx, agentID, now, r.redriveOperation(agentID)) == soulOperationDeferred {
+		r.reactor.logger.Info("fleet config revision deferred for soul held by another operation; it is re-driven to the latest revision once that finishes",
+			"agent_id", agentID, "fleet_revision", snapshot.EventID)
 	}
-	r.awaiting[agentID] = revision
+	return reconcileErr
 }
 
-func (r *FleetConfigReconciler) clearAwaiting(agentID string) {
-	r.awaitingMu.Lock()
-	defer r.awaitingMu.Unlock()
-	delete(r.awaiting, agentID)
+// redriveOperation re-drives agentID to the latest fleet revision: deferred
+// behind other work on the soul, or after a restart.
+func (r *FleetConfigReconciler) redriveOperation(agentID string) soulOperation {
+	return soulOperation{key: fleetRedriveOperationKey, run: func(ctx context.Context, hold *soulHold) bool {
+		logger := r.reactor.logger.With("agent_id", agentID)
+		latest := r.latestRevision()
+		if latest == nil {
+			var err error
+			if latest, err = r.reactor.getProvisioningFleetConfig(ctx); err != nil {
+				logger.Warn("cannot re-drive soul to the latest fleet revision; the next revision or a restart re-drives it", "error", err)
+				return false
+			}
+		}
+		if latest == nil {
+			return false
+		}
+		parked, err := r.reconcileHeld(ctx, hold, agentID, latest)
+		if err != nil {
+			logger.Error("deferred fleet config reconciliation failed", "latest_revision", latest.EventID, "error", err)
+		}
+		return parked
+	}}
+}
+
+// reconcileHeld applies snapshot to agentID, which hold holds. It re-reads the
+// soul: work that held it before (a lifecycle action, an earlier revision) may
+// have republished it since the soul was listed.
+func (r *FleetConfigReconciler) reconcileHeld(ctx context.Context, hold *soulHold, agentID string, snapshot *FleetConfigSnapshot) (bool, error) {
+	soul, err := r.reactor.GetSoul(ctx, agentID)
+	if err != nil {
+		return false, fmt.Errorf("reconcile fleet config for %s: read soul: %w", agentID, err)
+	}
+	if !fleetReconcileEligible(soul, snapshot) {
+		return false, nil
+	}
+	return r.reconcileSoul(ctx, hold, soul, snapshot)
 }
 
 func fleetSnapshotBefore(candidate, current *FleetConfigSnapshot) bool {
@@ -165,10 +205,12 @@ func drainFleetErrors(errs <-chan error) []error {
 	return out
 }
 
-func (r *FleetConfigReconciler) reconcileSoul(ctx context.Context, soul *domain.AgentSoul, next *FleetConfigSnapshot) error {
+// reconcileSoul applies next to soul, which hold holds. parked reports that
+// the apply is awaiting its runtime terminal result and keeps the hold.
+func (r *FleetConfigReconciler) reconcileSoul(ctx context.Context, hold *soulHold, soul *domain.AgentSoul, next *FleetConfigSnapshot) (parked bool, _ error) {
 	action := r.fleetAction(soul, next)
 	if err := r.publishProgress(ctx, action, next, "processing", "fleet config reconciliation started"); err != nil {
-		return fmt.Errorf("reconcile fleet config for %s: %w", soul.AgentID, err)
+		return false, fmt.Errorf("reconcile fleet config for %s: %w", soul.AgentID, err)
 	}
 
 	var previous *FleetConfigSnapshot
@@ -176,10 +218,10 @@ func (r *FleetConfigReconciler) reconcileSoul(ctx context.Context, soul *domain.
 	if soul.AppliedFleetConfigRevision != "" {
 		previous, err = r.reactor.getFleetConfigRevision(ctx, soul.AppliedFleetConfigRevision)
 		if err != nil {
-			return r.failSoul(ctx, action, next, soul, fmt.Errorf("load applied fleet revision %s: %w", soul.AppliedFleetConfigRevision, err), nil)
+			return false, r.failSoul(ctx, action, next, soul, fmt.Errorf("load applied fleet revision %s: %w", soul.AppliedFleetConfigRevision, err), nil)
 		}
 		if previous == nil {
-			return r.failSoul(ctx, action, next, soul, fmt.Errorf("applied fleet revision %s is unavailable", soul.AppliedFleetConfigRevision), nil)
+			return false, r.failSoul(ctx, action, next, soul, fmt.Errorf("applied fleet revision %s is unavailable", soul.AppliedFleetConfigRevision), nil)
 		}
 	}
 
@@ -188,25 +230,25 @@ func (r *FleetConfigReconciler) reconcileSoul(ctx context.Context, soul *domain.
 		updated := *soul
 		updated.AppliedFleetConfigRevision = next.EventID
 		if err := r.reactor.PublishSoul(ctx, &updated); err != nil {
-			return r.failSoul(ctx, action, next, soul, fmt.Errorf("record unchanged fleet revision: %w", err), nil)
+			return false, r.failSoul(ctx, action, next, soul, fmt.Errorf("record unchanged fleet revision: %w", err), nil)
 		}
-		return r.completeSoul(ctx, action, next, soul, changed, "unchanged")
+		return false, r.completeSoul(ctx, action, next, soul, changed, "unchanged")
 	}
 
 	adapter, err := r.openClawAdapter()
 	if err != nil {
-		return r.failSoul(ctx, action, next, soul, err, nil)
+		return false, r.failSoul(ctx, action, next, soul, err, nil)
 	}
 	if err := r.publishProgress(ctx, action, next, "processing", "applying fleet config via soulfactory.config.reload"); err != nil {
-		return fmt.Errorf("reconcile fleet config for %s: %w", soul.AgentID, err)
+		return false, fmt.Errorf("reconcile fleet config for %s: %w", soul.AgentID, err)
 	}
 	applyReq := r.runtimeRequest(soul, next, next, "apply")
 	result, applyErr := adapter.Execute(ctx, applyReq)
 	if pending, unknown := runtimeOutcomeUnknown(applyErr); unknown {
-		return r.awaitApply(ctx, adapter, action, soul, next, previous, changed, pending, applyErr)
+		return r.awaitApply(ctx, hold, adapter, action, soul, next, previous, changed, pending, applyErr)
 	}
 	_, err = r.finishApply(ctx, adapter, action, soul, next, previous, changed, result, applyErr)
-	return err
+	return false, err
 }
 
 // finishApply applies the apply request's terminal result, observed in time or
@@ -241,9 +283,11 @@ func (r *FleetConfigReconciler) finishApply(
 
 // awaitApply parks an apply whose runtime result was not observed: the soul is
 // awaiting_terminal, with no rollback and no terminal result, until the
-// reactor delivers the late result to resumeApply.
+// reactor delivers the late result to resumeApply. The apply keeps its hold on
+// the soul meanwhile. parked reports that it is awaiting.
 func (r *FleetConfigReconciler) awaitApply(
 	ctx context.Context,
+	hold *soulHold,
 	adapter RuntimeAdapter,
 	action *domain.SoulAction,
 	soul *domain.AgentSoul,
@@ -251,33 +295,37 @@ func (r *FleetConfigReconciler) awaitApply(
 	changed []string,
 	pending *runtimeResultPending,
 	cause error,
-) error {
+) (parked bool, _ error) {
 	logger := r.reactor.logger.With("agent_id", soul.AgentID, "fleet_revision", next.EventID)
 	message := fmt.Sprintf("%s: fleet config apply outcome unknown: %v; no rollback without an observed runtime failure", actionStatusAwaitingTerminal, cause)
-	if err := r.publishProgress(ctx, action, next, actionStatusAwaitingTerminal, message); err != nil {
+	if err := r.publishProgress(ctx, action, next, actionStatusAwaitingTerminal, message, awaitingTerminalTags()...); err != nil {
 		logger.Warn("failed to publish fleet awaiting_terminal progress", "error", err)
 	}
 	if pending == nil {
 		logger.Warn("fleet config apply outcome unknown and not correlatable; the soul is re-driven by the next revision or restart", "error", cause)
-		return nil
+		return false, nil
 	}
-	r.setAwaiting(soul.AgentID, next.EventID)
-	late, observed := r.reactor.resultWaiters().park(pending, fleetHandlerShardKey, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
-		r.resumeApply(ctx, adapter, action, soul, next, previous, changed, late)
+	late, observed := r.reactor.resultWaiters().park(pending, parkedOperation{
+		shardKey:  soul.AgentID,
+		holdsSoul: hold != nil,
+		resume: func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+			r.resumeApply(ctx, hold, adapter, action, soul, next, previous, changed, late)
+		},
 	})
 	if !observed {
 		logger.Info("fleet config apply awaiting runtime terminal result", "request_event", pending.requestID())
-		return nil
+		return true, nil
 	}
-	defer r.clearAwaiting(soul.AgentID)
 	_, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil)
-	return err
+	return false, err
 }
 
 // resumeApply reconciles a late apply result exactly as a timely one, then
-// re-drives the soul if a newer revision was deferred while it was awaiting.
+// releases the soul. Work deferred behind the apply runs next; a newer
+// revision deferred meanwhile re-drives the soul to the latest revision.
 func (r *FleetConfigReconciler) resumeApply(
 	ctx context.Context,
+	hold *soulHold,
 	adapter RuntimeAdapter,
 	action *domain.SoulAction,
 	soul *domain.AgentSoul,
@@ -285,30 +333,10 @@ func (r *FleetConfigReconciler) resumeApply(
 	changed []string,
 	late *RuntimeControlResultEnvelope,
 ) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	logger := r.reactor.logger.With("agent_id", soul.AgentID, "fleet_revision", next.EventID)
-	recorded, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil)
-	r.clearAwaiting(soul.AgentID)
-	if err != nil {
-		logger.Error("fleet config reconciliation failed after late runtime result", "error", err)
-	}
-	latest := r.latest
-	if latest == nil || latest.EventID == next.EventID || fleetSnapshotBefore(latest, next) {
-		return
-	}
-	current, err := r.reactor.GetSoul(ctx, soul.AgentID)
-	if err != nil || current == nil {
-		logger.Warn("cannot re-drive soul to the deferred fleet revision; the next revision or a restart re-drives it", "latest_revision", latest.EventID, "error", err)
-		return
-	}
-	// The relay read may lag the revision just recorded; ours is authoritative.
-	current.AppliedFleetConfigRevision = recorded.AppliedFleetConfigRevision
-	if !fleetReconcileEligible(current, latest) {
-		return
-	}
-	if err := r.reconcileSoul(ctx, current, latest); err != nil {
-		logger.Error("deferred fleet config reconciliation failed", "latest_revision", latest.EventID, "error", err)
+	defer r.reactor.soulOperations().release(ctx, hold)
+	if _, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil); err != nil {
+		r.reactor.logger.Error("fleet config reconciliation failed after late runtime result",
+			"agent_id", soul.AgentID, "fleet_revision", next.EventID, "error", err)
 	}
 }
 
@@ -336,6 +364,12 @@ func (r *FleetConfigReconciler) rollbackSoul(
 		return fmt.Errorf("publish rollback progress: %w", err)
 	}
 	result, err := adapter.Execute(ctx, r.runtimeRequest(soul, failed, previous, "rollback"))
+	result, err = r.reactor.resultWaiters().observeLateRollback(soul.AgentID, result, err, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+		status, message := lateRollbackProgress("rollback fleet config", late)
+		if err := r.publishProgress(ctx, action, failed, actionStatusRollbackResolved, message, nostr.Tag{tagRollbackStatus, status}); err != nil {
+			r.reactor.logger.Warn("failed to publish late fleet rollback progress", "agent_id", soul.AgentID, "fleet_revision", failed.EventID, "error", err)
+		}
+	})
 	if err != nil {
 		return rollbackStepError("rollback fleet config", err)
 	}
@@ -422,9 +456,11 @@ func (r *FleetConfigReconciler) publishProgress(
 	action *domain.SoulAction,
 	snapshot *FleetConfigSnapshot,
 	status, message string,
+	extra ...nostr.Tag,
 ) error {
 	event := BuildActionStatusEvent(action, status, message, normalizeSoulLookupRef(action.SoulRef))
 	setFleetReconcileTags(event, snapshot)
+	event.Tags = append(event.Tags, extra...)
 	if err := r.reactor.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign fleet reconciliation progress: %w", err)
 	}
