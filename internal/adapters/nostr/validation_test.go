@@ -6,6 +6,7 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,18 +92,23 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 }
 
 // C-11: replaceable and addressable state and deletion requests keep their
-// force however old they are; regular events stay capped.
+// force however old they are; regular and ephemeral events stay capped. The
+// rule is nostrutil.AgeCapped, shared with the relay sidecar's write policy
+// (bahia-irsry.52).
 func TestValidateInboundEventAgeCapAppliesOnlyToRegularKinds(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	old := now.Add(-InboundEventMaxPastAge - 30*24*time.Hour)
 
 	for _, kind := range []int{0, 3, 10002, 19999, 30000, 31410, 39999, 5} {
+		require.False(t, nostrutil.AgeCapped(canonicalKind(kind)), "kind %d", kind)
 		require.NoError(t, ValidateInboundEvent(signedTestEvent(t, kind, old), now, InboundEventMaxFutureSkew), "kind %d", kind)
 	}
-	for _, kind := range []int{1, 4903, 9999, 20000, 40000} {
+	for _, kind := range []int{1, 4903, 9999, 20000, 29999, 40000} {
+		require.True(t, nostrutil.AgeCapped(canonicalKind(kind)), "kind %d", kind)
 		err := ValidateInboundEvent(signedTestEvent(t, kind, old), now, InboundEventMaxFutureSkew)
 		require.ErrorContains(t, err, "too far in past", "kind %d", kind)
 	}
+	require.Equal(t, nostrutil.MaxEventAge, InboundEventMaxPastAge)
 }
 
 // C-12: expired events (NIP-40) are dropped at the trust boundary.

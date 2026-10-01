@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/bbolt"
 )
@@ -251,14 +252,20 @@ func TestSidecarAgeCapSparesStateKinds(t *testing.T) {
 	client.publish(signedStoreEvent(t, alice, 1, nostr.Now()-nostr.Timestamp((maxEventAge-time.Hour).Seconds()), nil, "recent enough"))
 }
 
-// TestAgeCappedMatchesTheDaemonRule: the sidecar caps exactly the kinds the
-// daemon's ValidateInboundEvent caps (regular and ephemeral).
-func TestAgeCappedMatchesTheDaemonRule(t *testing.T) {
-	for kind, capped := range map[nostr.Kind]bool{
-		0: false, 3: false, 10002: false, 19999: false, 30000: false, 39999: false,
-		nostr.KindDeletion: false,
-		1:                  true, 4: true, 1059: true, 9999: true, 20000: true, 29999: true, 40000: true, 65535: true,
-	} {
-		require.Equal(t, capped, ageCapped(kind), "kind %d", kind)
+// TestSidecarPolicyAppliesTheSharedAgeCap (bahia-irsry.52): the sidecar's
+// write policy refuses a two-year-old event exactly when nostrutil.AgeCapped
+// caps its kind, the rule the daemon's ValidateInboundEvent applies too.
+func TestSidecarPolicyAppliesTheSharedAgeCap(t *testing.T) {
+	now := nostr.Timestamp(1_800_000_000)
+	pol := &policy{now: func() nostr.Timestamp { return now }}
+	alice := nostr.Generate()
+	old := now - nostr.Timestamp((2 * nostrutil.MaxEventAge).Seconds())
+	for _, kind := range []nostr.Kind{0, 3, 10002, 19999, 30000, 30078, 39999, nostr.KindDeletion, 1, 4, 1059, 9999, 20000, 29999, 40000, 65535} {
+		event := signedStoreEvent(t, alice, kind, old, nil, "old")
+		rejected, reason := pol.acceptEvent(t.Context(), event)
+		require.Equal(t, nostrutil.AgeCapped(kind), rejected, "kind %d: %s", kind, reason)
+		if rejected {
+			require.Contains(t, reason, "invalid: created_at too far in the past")
+		}
 	}
 }

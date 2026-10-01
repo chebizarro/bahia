@@ -110,7 +110,7 @@ func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*e
 		return nil, fmt.Errorf("open relay sidecar event store %s (is another relay process using this data_dir?): %w", path, err)
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket, sidecarDeletionBucket} {
+		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket, sidecarDeletionBucket, sidecarTagBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -126,15 +126,24 @@ func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*e
 		_ = backend.DB.Close()
 		return nil, err
 	}
-	if err := store.buildDeletionIndex(ctx); err != nil {
-		_ = backend.DB.Close()
-		return nil, err
+	for _, step := range []func(context.Context) error{store.buildDeletionIndex, store.buildTagIndex, store.repairCoordinates} {
+		if err := step(ctx); err != nil {
+			_ = backend.DB.Close()
+			return nil, err
+		}
 	}
 	openEventStores.byPath[path] = shared
 	return store, nil
 }
 
 func (s *eventStore) backend() *boltdb.BoltBackend { return s.shared.backend }
+
+// coords is the write path for every event the store saves or deletes: it
+// keeps the tag index of values the eventstore does not index (see
+// sidecarTagBucket) in step with the eventstore.
+func (s *eventStore) coords() boltcoord.Store {
+	return boltcoord.NewStore(s.backend(), sidecarTagBucket)
+}
 
 // Close releases this handle. The database closes with its last handle.
 // Closing a handle twice is a no-op.
@@ -173,7 +182,7 @@ func (s *eventStore) Save(ctx context.Context, event nostr.Event) error {
 			return err
 		}
 	}
-	if err := s.backend().SaveEvent(event); err != nil {
+	if err := s.coords().Save(event); err != nil {
 		if errors.Is(err, eventstore.ErrDupEvent) {
 			return eventstore.ErrDupEvent // khatru compares the sentinel with ==
 		}
@@ -209,7 +218,7 @@ func (s *eventStore) Replace(ctx context.Context, event nostr.Event) error {
 func (s *eventStore) replace(event nostr.Event) error {
 	s.shared.replaceMu.Lock()
 	defer s.shared.replaceMu.Unlock()
-	stored, err := boltcoord.Replace(s.backend(), s.scan, event)
+	stored, err := s.coords().Replace(s.scan, event)
 	if err != nil {
 		return fmt.Errorf("replace relay event: %w", err)
 	}
@@ -233,7 +242,7 @@ func (s *eventStore) afterWrite(ctx context.Context, event nostr.Event) error {
 		return nil
 	}
 	if err := s.checkNotDeleted(event); err != nil {
-		if deleteErr := s.backend().DeleteEvent(event.ID); deleteErr != nil {
+		if deleteErr := s.coords().Delete(event); deleteErr != nil {
 			return errors.Join(err, deleteErr)
 		}
 		return err
@@ -278,54 +287,16 @@ func (s *eventStore) stored(id nostr.ID) bool {
 	return found && event.ID == id
 }
 
-// applyDeletion executes a stored kind-5 request (NIP-09). `e` references are
-// deleted when they have the requester as author; `a` references delete every
-// version of the requester's coordinate up to the request's created_at.
-// References to other authors' events and to deletion requests are ignored.
-// Khatru's own handler is not used: it cannot address plain replaceable events
-// (whose coordinate has an empty d), and it fails the whole request on the
-// first foreign reference.
+// applyDeletion executes a stored kind-5 request (NIP-09; see
+// boltcoord.Store.ApplyDeletion). `e` references are deleted when they have
+// the requester as author; `a` references delete every version of the
+// requester's coordinate up to the request's created_at. References to other
+// authors' events and to deletion requests are ignored. Khatru's own handler
+// is not used: it cannot address plain replaceable events (whose coordinate
+// has an empty d), and it fails the whole request on the first foreign
+// reference.
 func (s *eventStore) applyDeletion(ctx context.Context, request nostr.Event) (int, error) {
-	deleted := 0
-	remove := func(target nostr.Event) error {
-		if target.PubKey != request.PubKey || target.Kind == nostr.KindDeletion {
-			return nil
-		}
-		if err := s.backend().DeleteEvent(target.ID); err != nil {
-			return err
-		}
-		deleted++
-		return nil
-	}
-	for _, tag := range request.Tags {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-		if len(tag) < 2 || tag[0] != "e" {
-			continue
-		}
-		id, err := nostr.IDFromHex(tag[1])
-		if err != nil {
-			continue
-		}
-		// Collect before deleting: no bbolt write may run inside a read.
-		for _, target := range slices.Collect(s.Query(ctx, nostr.Filter{IDs: []nostr.ID{id}}, 1)) {
-			if err := remove(target); err != nil {
-				return deleted, err
-			}
-		}
-	}
-	for _, c := range boltcoord.DeletedCoordinates(request) {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-		for _, target := range slices.Collect(s.versions(c, request.CreatedAt, unboundedQueryLimit)) {
-			if err := remove(target); err != nil {
-				return deleted, err
-			}
-		}
-	}
-	return deleted, nil
+	return s.coords().ApplyDeletion(ctx, s.scan, request)
 }
 
 // Query yields events matching filter, newest first, at most maxLimit (or the
@@ -368,8 +339,22 @@ func (s *eventStore) Query(ctx context.Context, filter nostr.Filter, maxLimit in
 	}
 }
 
-// scan reads up to limit events matching filter, newest first. It reads in
-// pages of at most queryPageSize and copies each page out of its bbolt read
+// scan reads up to limit events matching filter, newest first. A filter on a
+// tag value the eventstore does not index (empty, or longer than
+// tagIndexMaxValue, such as an #a relay config coordinate) is read through
+// the sidecar's tag index (boltcoord.Store.Query); the rest go to scanIndexed.
+func (s *eventStore) scan(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
+	if matchesNothing(filter) {
+		return func(func(nostr.Event) bool) {}
+	}
+	if filter.IDs == nil && boltcoord.NeedsTagIndex(filter) {
+		return s.coords().Query(s.scanIndexed, filter, limit)
+	}
+	return s.scanIndexed(filter, limit)
+}
+
+// scanIndexed reads up to limit events matching filter, newest first, from the
+// eventstore's own indexes. It reads in pages of at most queryPageSize and copies each page out of its bbolt read
 // transaction before yielding, for two reasons: bbolt preallocates a buffer
 // proportional to the limit it is given, and a read transaction held while the
 // consumer blocks (a slow websocket, or a caller deleting what it reads) can
@@ -377,11 +362,8 @@ func (s *eventStore) Query(ctx context.Context, filter nostr.Filter, maxLimit in
 // the oldest created_at of the previous one (until is inclusive) and skips the
 // ids already yielded at that timestamp; a page holding nothing new is retried
 // larger, so ties wider than a page still make progress.
-func (s *eventStore) scan(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
+func (s *eventStore) scanIndexed(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
 	return func(yield func(nostr.Event) bool) {
-		if matchesNothing(filter) {
-			return
-		}
 		if filter.IDs != nil {
 			for _, event := range slices.Collect(s.backend().QueryEvents(filter, limit)) {
 				if !yield(event) {
@@ -454,12 +436,14 @@ func matchesNothing(filter nostr.Filter) bool {
 	return false
 }
 
-// Count answers NIP-45 COUNT from the indexes.
+// Count answers NIP-45 COUNT from the indexes. A filter on a tag value the
+// eventstore does not index is counted over the events the sidecar's tag
+// index yields for it.
 func (s *eventStore) Count(ctx context.Context, filter nostr.Filter) (uint32, error) {
 	if filter.LimitZero || matchesNothing(filter) {
 		return 0, nil
 	}
-	if filter.IDs != nil {
+	if filter.IDs != nil || boltcoord.NeedsTagIndex(filter) {
 		if err := s.ping(); err != nil {
 			return 0, fmt.Errorf("count relay events: %w", err)
 		}
@@ -572,18 +556,18 @@ func (s *eventStore) sweepMatching(ctx context.Context, filter nostr.Filter, eli
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		var ids []nostr.ID
+		var swept []nostr.Event
 		scanned := 0
 		var oldest nostr.Timestamp
 		for _, event := range slices.Collect(s.backend().QueryEvents(filter, sweepBatchSize)) {
 			scanned++
 			oldest = event.CreatedAt
 			if eligible(event) {
-				ids = append(ids, event.ID)
+				swept = append(swept, event)
 			}
 		}
-		for _, id := range ids {
-			if err := s.backend().DeleteEvent(id); err != nil {
+		for _, event := range swept {
+			if err := s.coords().Delete(event); err != nil {
 				return deleted, fmt.Errorf("delete swept relay event: %w", err)
 			}
 			deleted++
@@ -594,7 +578,7 @@ func (s *eventStore) sweepMatching(ctx context.Context, filter nostr.Filter, eli
 		// A full page: older matches may remain. Re-read from the oldest
 		// timestamp seen (events sharing it may be left), or step past it when
 		// the page held nothing eligible, so every round makes progress.
-		if len(ids) == 0 {
+		if len(swept) == 0 {
 			oldest--
 		}
 		filter.Until = oldest
@@ -635,7 +619,7 @@ func (s *eventStore) sweepExpired(ctx context.Context, now nostr.Timestamp) (int
 						return deleted, err
 					}
 				}
-				if err := s.backend().DeleteEvent(id); err != nil {
+				if err := s.coords().Delete(event); err != nil {
 					return deleted, fmt.Errorf("delete expired relay event: %w", err)
 				}
 				deleted++

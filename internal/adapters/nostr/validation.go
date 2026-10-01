@@ -11,12 +11,10 @@ import (
 
 const (
 	InboundEventMaxFutureSkew = 10 * time.Minute
-	// InboundEventMaxPastAge bounds how old a regular or ephemeral event may
-	// be. Those kinds are one-shot facts, requests and commands: a year-old
-	// one is a replay, not news, and the cap keeps replay protection and
-	// dedup memory bounded. It does not apply to replaceable or addressable
-	// state or to deletion requests (see ageCapExempt).
-	InboundEventMaxPastAge = 365 * 24 * time.Hour
+	// InboundEventMaxPastAge bounds how old an event of a kind
+	// nostrutil.AgeCapped reports (regular and ephemeral) may be. It does not
+	// apply to replaceable or addressable state or to deletion requests.
+	InboundEventMaxPastAge = nostrutil.MaxEventAge
 )
 
 // ValidateInboundEvent verifies the NIP-01 trust boundary for relay-provided events.
@@ -53,7 +51,7 @@ func ValidateInboundEvent(ev *gonostr.Event, now time.Time, maxFutureSkew time.D
 	if createdAt.After(now.Add(maxFutureSkew)) {
 		return fmt.Errorf("created_at too far in future")
 	}
-	if !ageCapExempt(ev.Kind) && createdAt.Before(now.Add(-InboundEventMaxPastAge)) {
+	if nostrutil.AgeCapped(ev.Kind) && createdAt.Before(now.Add(-InboundEventMaxPastAge)) {
 		return fmt.Errorf("created_at too far in past")
 	}
 	if nostrutil.Expired(ev, now) {
@@ -69,16 +67,6 @@ func ValidateInboundEvent(ev *gonostr.Event, now time.Time, maxFutureSkew time.D
 		return fmt.Errorf("invalid signature")
 	}
 	return nil
-}
-
-// ageCapExempt reports whether kind is exempt from InboundEventMaxPastAge (C-11).
-// A replaceable or addressable event is current state until a newer version
-// replaces it, however old it is: a NIP-65 list, ACL, relay set or trust list
-// untouched for a year is still in force, and archives must be able to
-// republish it. A deletion request stays in force for as long as its targets
-// can be republished, so dropping an old one would let deleted state return.
-func ageCapExempt(kind gonostr.Kind) bool {
-	return nostrutil.IsStateKind(kind) || kind == gonostr.KindDeletion
 }
 
 func validateHexField(name, value string, expectedLen int) error {
