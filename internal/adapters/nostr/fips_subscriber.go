@@ -205,14 +205,13 @@ func (s *FIPSSubscriber) Run(ctx context.Context) error {
 }
 
 func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
-	merged, err := s.pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{s.filter(), s.deletionFilter()})
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, s.filters())
 	if err != nil {
 		return err
 	}
 	defer merged.Close()
 
 	s.logger.Info("subscribed to FIPS overlay adverts", zap.Strings("relays", s.pool.URLs()), zap.String("namespace", s.appNamespace))
-	authAttempted := make(map[string]struct{})
 	for {
 		select {
 		case <-ctx.Done():
@@ -225,9 +224,7 @@ func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
 			}
 		case closed, ok := <-merged.Closed:
 			if ok {
-				if s.handleRelayClosed(ctx, closed, authAttempted) {
-					return nil
-				}
+				s.logger.Warn("relay closed FIPS subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID), zap.String("reason", closed.Reason), zap.Bool("terminal", closed.Terminal))
 			} else {
 				merged.Closed = nil
 			}
@@ -241,6 +238,11 @@ func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
 			s.handleEvent(ctx, ev)
 		}
 	}
+}
+
+// filters are the subscription's REQ filters: adverts and their deletions.
+func (s *FIPSSubscriber) filters() []gonostr.Filter {
+	return []gonostr.Filter{s.filter(), s.deletionFilter()}
 }
 
 func (s *FIPSSubscriber) filter() gonostr.Filter {
@@ -284,23 +286,6 @@ func (s *FIPSSubscriber) allowedAuthors() []gonostr.PubKey {
 		return nil
 	}
 	return authors
-}
-
-func (s *FIPSSubscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, authAttempted map[string]struct{}) bool {
-	s.logger.Warn("relay closed FIPS subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID), zap.String("reason", closed.Reason))
-	if !IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		s.pool.RecordRelayError(closed.RelayURL, "auth-unavailable: "+closed.Reason+": "+err.Error())
-		s.logger.Warn("relay FIPS subscription auth failed", zap.String("relay", closed.RelayURL), zap.String("reason", closed.Reason), zap.Error(err))
-		return false
-	}
-	return true
 }
 
 func (s *FIPSSubscriber) handleEvent(ctx context.Context, ev *gonostr.Event) {

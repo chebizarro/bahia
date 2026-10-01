@@ -268,8 +268,7 @@ func (r *contextVME2ERelayTransport) SubscribeOperator(_ context.Context, _ []no
 	}, nil
 }
 
-func (r *contextVME2ERelayTransport) AuthenticateRelay(context.Context, string) error { return nil }
-func (r *contextVME2ERelayTransport) Close()                                          {}
+func (r *contextVME2ERelayTransport) Close() {}
 
 func (r *contextVME2ERelayTransport) requestPublishCount() int {
 	r.mu.Lock()

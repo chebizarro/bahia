@@ -123,7 +123,6 @@ type StatusCallback func(status *JobStatus)
 type loomRelayPool interface {
 	Publish(context.Context, nostr.Event) (int, error)
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error)
-	AuthenticateRelay(context.Context, string) error
 }
 
 type loomRelayHealthRecorder interface {
@@ -155,7 +154,12 @@ type Client struct {
 // workerRepo is optional; when non-nil, enables auto-selection of workers.
 func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter.RelayPool, logger *zap.Logger, opts ...ClientOption) *Client {
 	if pool == nil {
-		pool = nostrAdapter.NewRelayPool(cfg.Relays, logger)
+		var poolOpts []nostrAdapter.RelayPoolOption
+		if nostrPrivateKey != "" {
+			// The pool answers relays' NIP-42 challenges with the client key.
+			poolOpts = append(poolOpts, nostrAdapter.WithPrivateKey(nostrPrivateKey))
+		}
+		pool = nostrAdapter.NewRelayPool(cfg.Relays, logger, poolOpts...)
 		pool.Connect(context.Background())
 	}
 
@@ -548,7 +552,6 @@ func (c *Client) AwaitJobStatusFromWorker(ctx context.Context, jobEventID string
 	// Track the latest status while waiting for a result.
 	latest := &JobStatus{JobID: jobEventID, Status: StatusQueued}
 	seen := nostrAdapter.NewEventDeduplicator(256)
-	authAttempted := make(map[string]struct{})
 	backoff := c.initialJobSubscriptionBackoff()
 	subscribeAttempts := 0
 
@@ -592,14 +595,9 @@ resubscribe:
 				sub.Closed = nil
 				continue
 			}
-			retry, err := c.handleJobSubscriptionClosed(ctx, closed, authAttempted, jobEventID)
-			if err != nil {
+			if err := c.handleJobSubscriptionClosed(closed, jobEventID); err != nil {
 				sub.Close()
 				return nil, err
-			}
-			if retry {
-				sub.Close()
-				goto resubscribe
 			}
 		case <-sub.EndOfStoredEvents:
 			c.logger.Debug("loom job status subscription caught up",
@@ -727,7 +725,12 @@ func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string
 	return []nostr.Filter{statusFilter, resultFilter}
 }
 
-func (c *Client) handleJobSubscriptionClosed(ctx context.Context, closed nostrAdapter.RelayClosed, authAttempted map[string]struct{}, jobEventID string) (bool, error) {
+// handleJobSubscriptionClosed records a relay's CLOSED. The pool answers
+// "auth-required:" itself (NIP-42 through its AuthHandler, then a re-REQ on
+// that relay) and reissues retryable CLOSEDs, so only its terminal verdicts
+// reach here as anything but telemetry. A terminal "auth-required:" means the
+// pool could not authenticate; it fails the wait.
+func (c *Client) handleJobSubscriptionClosed(closed nostrAdapter.RelayClosed, jobEventID string) error {
 	if recorder, ok := c.pool.(loomRelayHealthRecorder); ok {
 		recorder.RecordRelayClosed(closed.RelayURL, closed.Reason)
 	}
@@ -735,25 +738,13 @@ func (c *Client) handleJobSubscriptionClosed(ctx context.Context, closed nostrAd
 		zap.String("relay", closed.RelayURL),
 		zap.String("subscription_id", closed.SubscriptionID),
 		zap.String("reason", closed.Reason),
+		zap.Bool("terminal", closed.Terminal),
 		zap.String("job_id", jobEventID),
 	)
-	if nostrAdapter.IsAuthRequiredReason(closed.Reason) && closed.RelayURL != "" && c.pool != nil {
-		if _, ok := authAttempted[closed.RelayURL]; ok {
-			return false, nil
-		}
-		authAttempted[closed.RelayURL] = struct{}{}
-		if err := c.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-			c.logger.Warn("loom job status subscription auth failed",
-				zap.String("relay", closed.RelayURL),
-				zap.String("reason", closed.Reason),
-				zap.String("job_id", jobEventID),
-				zap.Error(err),
-			)
-			return false, fmt.Errorf("loom job status subscription auth failed: %w", err)
-		}
-		return true, nil
+	if closed.Terminal && nostrAdapter.IsAuthRequiredReason(closed.Reason) {
+		return fmt.Errorf("loom job status subscription auth failed on %s: %s", closed.RelayURL, closed.Reason)
 	}
-	return false, nil
+	return nil
 }
 
 func (c *Client) rememberSubmittedWorker(jobEventID string, workerPubkey string) {

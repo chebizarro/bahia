@@ -88,17 +88,75 @@ func TestFIPSSubscriberFilterUsesFixedDTagAndOptionalProtocolNamespace(t *testin
 	require.Equal(t, []string{"bahia-mesh-v1"}, scoped.filter().Tags["protocol"])
 }
 
-func TestFIPSSubscriberRecordsAuthUnavailableClosedMetadata(t *testing.T) {
-	pool := newRelayPoolWithManagedRelays("wss://auth.example")
-	subscriber := NewFIPSSubscriber(pool, newFIPSTestWorkerRepo(), zap.NewNop())
+// TestFIPSSubscriberReceivesAdvertsFromAuthRequiredRelay: the subscriber has
+// no AUTH logic of its own (bahia-irsry.47). Against a relay that refuses
+// unauthenticated REQs, the pool's AuthHandler authenticates and reissues the
+// REQ on that relay, and the advert reaches the worker repository on the
+// subscriber's first subscription.
+func TestFIPSSubscriberReceivesAdvertsFromAuthRequiredRelay(t *testing.T) {
+	relay := newPoolKhatruRelay(t, nil)
+	ev := signedFIPSAdvertEvent(t, time.Now(), fipsAdvertContent("203.0.113.45:2121"))
+	_, err := relay.relay.AddEvent(t.Context(), *ev)
+	require.NoError(t, err)
+	// Stored before the policy (khatru's AddEvent applies OnEvent), and
+	// before any client connects.
+	requireNIP42(false)(relay.relay)
+	repo := &notifyingFIPSRepo{
+		fipsTestWorkerRepo: newFIPSTestWorkerRepo(&domain.Worker{PubKey: eventPubKeyHex(ev), Name: "worker-a"}),
+		upserted:           make(chan domain.Worker, 4),
+	}
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithPrivateKey(testNostrPrivateKey))
+	fastResubscribeBackoff(pool)
+	defer pool.Close()
+	subscriber := NewFIPSSubscriber(pool, repo, zap.NewNop())
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- subscriber.Run(ctx) }()
 
-	retry := subscriber.handleRelayClosed(context.Background(), RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}, map[string]struct{}{})
-	require.False(t, retry)
+	select {
+	case worker := <-repo.upserted:
+		require.Equal(t, []domain.FIPSTransportEndpoint{{Transport: "udp", Address: "203.0.113.45:2121"}}, worker.FIPSEndpoints)
+	case <-ctx.Done():
+		t.Fatal("advert from the auth-required relay never arrived")
+	}
+	cancel()
+	require.NoError(t, <-done)
+	status := pool.HealthSnapshot().Relays[0]
+	require.Empty(t, status.ClosedReasons, "auth-required is answered by the pool, not surfaced as CLOSED")
+}
 
-	snapshot := pool.HealthSnapshot()
-	require.Len(t, snapshot.Relays, 1)
-	require.Contains(t, snapshot.Relays[0].LastError, "auth-unavailable")
-	require.Contains(t, snapshot.Relays[0].LastError, "auth-required: sign in")
+// TestFIPSSubscriberAuthFailureIsTerminalAtThePool: without a signer the
+// pool cannot answer "auth-required:"; it records the reason and surfaces a
+// terminal CLOSED instead of retrying.
+func TestFIPSSubscriberAuthFailureIsTerminalAtThePool(t *testing.T) {
+	const relayURL = "wss://auth.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	reqs := newScriptedSubscribes(t)
+	merged, err := pool.SubscribeAllWithEOSE(t.Context(), NewFIPSSubscriber(pool, newFIPSTestWorkerRepo(), zap.NewNop()).filters())
+	require.NoError(t, err)
+	defer merged.Close()
+	closeScripted(reqs.next(t).sub, "auth-required: sign in")
+	closeScripted(reqs.next(t).sub, "auth-required: sign in")
+	for range 2 {
+		closed := <-merged.Closed
+		require.True(t, closed.Terminal)
+		require.Equal(t, "auth-required: sign in", closed.Reason)
+	}
+	require.Contains(t, pool.HealthSnapshot().Relays[0].LastError, "auth-unavailable")
+	reqs.none(t)
+}
+
+type notifyingFIPSRepo struct {
+	*fipsTestWorkerRepo
+	upserted chan domain.Worker
+}
+
+func (r *notifyingFIPSRepo) Upsert(ctx context.Context, worker *domain.Worker) error {
+	err := r.fipsTestWorkerRepo.Upsert(ctx, worker)
+	r.upserted <- *worker
+	return err
 }
 
 func TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert(t *testing.T) {

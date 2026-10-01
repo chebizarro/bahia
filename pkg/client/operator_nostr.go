@@ -228,11 +228,13 @@ func (s *ContextVMSubscription) Close() {
 
 // ContextVMRelayTransport is the relay surface used by ContextVMRequestClient.
 // Injected transports remain owned by the caller and are not closed by the client.
+// NIP-42 is the transport's concern: the default transport's RelayPool answers
+// a relay's AUTH challenge and reissues the REQ that got "auth-required:" on
+// that relay, so a CLOSED it delivers means the relay is out for this request.
 type ContextVMRelayTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
 	PublishWithResults(context.Context, nostr.Event) ([]ContextVMPublishResult, error)
 	SubscribeOperator(context.Context, []nostr.Filter) (*ContextVMSubscription, error)
-	AuthenticateRelay(context.Context, string) error
 	Close()
 }
 
@@ -287,11 +289,6 @@ func (t *relayPoolOperatorTransport) SubscribeOperator(ctx context.Context, filt
 		relayURLs:         merged.RelayURLs(),
 		closeFn:           merged.Close,
 	}, nil
-}
-
-func (t *relayPoolOperatorTransport) AuthenticateRelay(ctx context.Context, relayURL string) error {
-	t.ensureConnected(ctx)
-	return t.pool.AuthenticateRelay(ctx, relayURL)
 }
 
 func (t *relayPoolOperatorTransport) Close() {
@@ -1665,14 +1662,13 @@ func (c *ContextVMRequestClient) prepareOperatorAttempt(ctx context.Context, inn
 	return outer, []nostr.Filter{filter}, outerIDs, nil
 }
 
-func (c *ContextVMRequestClient) waitForOperatorSubscriptionActivation(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, timeout time.Duration) (*operatorSubscription, error) {
+func (c *ContextVMRequestClient) waitForOperatorSubscriptionActivation(ctx context.Context, sub *operatorSubscription, timeout time.Duration) (*operatorSubscription, error) {
 	activationCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	current := sub
 	active := operatorRelaySet(current.RelayURLs())
 	eosed := map[string]struct{}{}
 	closedRelays := map[string]string{}
-	authAttempted := map[string]struct{}{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1717,25 +1713,6 @@ func (c *ContextVMRequestClient) waitForOperatorSubscriptionActivation(ctx conte
 				continue
 			}
 			closedRelays[relayURL] = reason
-			if nostrpool.IsAuthRequiredReason(reason) {
-				if _, attempted := authAttempted[relayURL]; !attempted {
-					authAttempted[relayURL] = struct{}{}
-					if authErr := c.transport.AuthenticateRelay(activationCtx, relayURL); authErr == nil {
-						resub, subErr := c.transport.SubscribeOperator(activationCtx, filters)
-						if subErr == nil && len(resub.RelayURLs()) > 0 {
-							current.Close()
-							current = resub
-							active = operatorRelaySet(current.RelayURLs())
-							eosed = map[string]struct{}{}
-							closedRelays = map[string]string{}
-							continue
-						}
-						if resub != nil {
-							resub.Close()
-						}
-					}
-				}
-			}
 			delete(active, relayURL)
 			delete(eosed, relayURL)
 			current.relayURLs = removeRelayURL(current.relayURLs, relayURL)
@@ -1759,11 +1736,10 @@ func operatorRelaySet(relays []string) map[string]struct{} {
 	return set
 }
 
-func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *operatorSubscription, filters []nostr.Filter, inner *nostr.Event, outerRequestIDs []string, requestID string, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
+func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *operatorSubscription, inner *nostr.Event, outerRequestIDs []string, requestID string, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
 	seen := map[string]struct{}{}
 	pendingRelays := sub.RelayURLs()
 	closedRelays := map[string]string{}
-	authAttempted := map[string]struct{}{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1779,36 +1755,6 @@ func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *o
 			}
 			if relayClosed.RelayURL == "" {
 				return nil, fmt.Errorf("reply subscription closed before terminal result: %s", reason)
-			}
-			if nostrpool.IsAuthRequiredReason(reason) {
-				if _, attempted := authAttempted[relayClosed.RelayURL]; !attempted {
-					authAttempted[relayClosed.RelayURL] = struct{}{}
-					if authErr := c.transport.AuthenticateRelay(ctx, relayClosed.RelayURL); authErr == nil {
-						sub.Close()
-						resub, subErr := c.transport.SubscribeOperator(ctx, filters)
-						if subErr != nil {
-							return nil, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: %w", subErr)
-						}
-						if len(resub.RelayURLs()) == 0 {
-							resub.Close()
-							return nil, fmt.Errorf("re-open reply subscription after NIP-42 AUTH: no relay established a subscription")
-						}
-						activationTimeout := c.activationTimeout
-						if activationTimeout <= 0 {
-							activationTimeout = operatorActivationTimeout
-						}
-						activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, resub, filters, activationTimeout)
-						if activationErr != nil {
-							activatedSub.Close()
-							return nil, fmt.Errorf("activate reply subscription after NIP-42 AUTH: %w", activationErr)
-						}
-						defer activatedSub.Close()
-						sub = activatedSub
-						pendingRelays = sub.RelayURLs()
-						closedRelays = map[string]string{}
-						continue
-					}
-				}
 			}
 			closedRelays[relayClosed.RelayURL] = reason
 			pendingRelays = removeRelayURL(pendingRelays, relayClosed.RelayURL)

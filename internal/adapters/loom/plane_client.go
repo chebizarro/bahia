@@ -16,13 +16,14 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// PlaneRelayPool preserves relay acceptance, EOSE, CLOSED and AUTH semantics.
+// PlaneRelayPool preserves relay acceptance, EOSE and CLOSED semantics.
 // The shared RelayPool owns NIP-11 discovery, NIP-65-selected relay policy,
-// connection backoff and signer-backed NIP-42 authentication.
+// connection backoff and signer-backed NIP-42 authentication: it answers a
+// relay's "auth-required:" itself, so a CLOSED that reaches the plane client
+// is retryable or terminal (RelayClosed.Terminal).
 type PlaneRelayPool interface {
 	PublishWithResults(context.Context, nostr.Event) ([]nostrAdapter.PublishResult, error)
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error)
-	AuthenticateRelay(context.Context, string) error
 }
 
 type PlaneClient struct {
@@ -246,7 +247,6 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 	seen := make(map[nostr.ID]bool)
 	var ring [1024]nostr.ID
 	cursor := 0
-	authenticated := map[string]bool{}
 	backoff := c.backoff
 	for {
 		if err := ctx.Err(); err != nil {
@@ -310,25 +310,26 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 						closed = nil
 						continue
 					}
-					// CLOSED invalidates eligibility before AUTH can block on the relay.
+					// CLOSED invalidates eligibility. A stream that can retract
+					// reconnects for a fresh EOSE unless the pool gave up on
+					// the relay (a policy refusal, failed NIP-42 AUTH or an
+					// exhausted retry budget).
 					if disconnected != nil {
 						retracted = true
 						if err := disconnected(); err != nil {
 							return false, false, err
 						}
 					}
-					if nostrAdapter.IsAuthRequiredReason(reason.Reason) && !authenticated[reason.RelayURL] {
-						authenticated[reason.RelayURL] = true
-						if err := c.pool.AuthenticateRelay(ctx, reason.RelayURL); err != nil {
-							return false, false, planeError(domain.VMErrorUnavailable, err)
-						}
-						return false, true, nil
+					var cause error
+					if reason.Terminal {
+						cause = errors.New(reason.Reason)
 					}
-					return false, disconnected != nil && !nostrAdapter.IsAuthRequiredReason(reason.Reason), planeError(domain.VMErrorUnavailable, nil)
+					return false, disconnected != nil && !reason.Terminal, planeError(domain.VMErrorUnavailable, cause)
 				case <-history:
 					history = nil
 					if !sub.HasRealEOSE() {
-						return false, disconnected != nil, planeError(domain.VMErrorUnavailable, nil)
+						// The cause names each relay's CLOSED reason.
+						return false, disconnected != nil, planeError(domain.VMErrorUnavailable, sub.StoredEventsIncomplete(nil))
 					}
 					// Buffered EVENTs precede EOSE at the relay, even if select chose EOSE first.
 					for len(events) > 0 {

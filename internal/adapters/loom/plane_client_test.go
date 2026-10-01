@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type planeRelayFixture struct {
@@ -26,9 +28,6 @@ type planeRelayFixture struct {
 	contexts    []context.Context
 	published   []nostr.Event
 	results     []nostrAdapter.PublishResult
-	authCalls   int
-	authError   error
-	onAuth      func()
 	onSubscribe func(int)
 	onPublish   func(nostr.Event)
 }
@@ -50,13 +49,6 @@ func (f *planeRelayFixture) PublishWithResults(_ context.Context, event nostr.Ev
 		f.onPublish(event)
 	}
 	return f.results, nil
-}
-func (f *planeRelayFixture) AuthenticateRelay(context.Context, string) error {
-	f.authCalls++
-	if f.onAuth != nil {
-		f.onAuth()
-	}
-	return f.authError
 }
 func planeClientFixture(t *testing.T, pool *planeRelayFixture, e domain.ExecutionPlaneEndpoint, now time.Time) *PlaneClient {
 	t.Helper()
@@ -200,32 +192,47 @@ func TestPlaneTransportRejectsOKAndAcknowledgmentFailures(t *testing.T) {
 	})
 }
 
-func TestPlaneAUTHReREQAndFailure(t *testing.T) {
+// TestPlaneDiscoverRelayAuthIsThePools: the plane client has no AUTH logic of
+// its own (bahia-irsry.47). Over the shared pool, a relay that refuses
+// unauthenticated REQs is answered by the pool's signer and the REQ reissued
+// on that relay; without a signer the pool's terminal CLOSED fails discovery.
+func TestPlaneDiscoverRelayAuthIsThePools(t *testing.T) {
 	e, _, _, key, now := planeFixture(t)
-	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
-			pool := newPlaneRelayFixture()
-			if fail {
-				pool.authError = errors.New("signer unavailable")
-			}
-			pool.closed <- nostrAdapter.RelayClosed{RelayURL: "wss://fixture.invalid", Reason: "auth-required: challenge"}
-			pool.onSubscribe = func(n int) {
-				if n == 2 {
-					pool.events <- planeSupportEvent(t, e, key, now)
-					close(pool.eose)
-				}
-			}
-			c := planeClientFixture(t, pool, e, now)
-			_, err := c.Discover(t.Context(), e)
-			if fail {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				require.Len(t, pool.filters, 2)
-			}
-			require.Equal(t, 1, pool.authCalls)
-		})
+	var reqs atomic.Int32
+	relayURL := authRequiredRelay(t, &reqs, planeSupportEvent(t, e, key, now))
+	clientKey, _ := generatedKeyPair(t)
+	discover := func(t *testing.T, opts ...nostrAdapter.RelayPoolOption) (domain.ExecutionPlaneSupport, error) {
+		pool := nostrAdapter.NewRelayPool([]string{relayURL}, zap.NewNop(), opts...)
+		t.Cleanup(pool.Close)
+		c, err := NewPlaneClient(pool, HexKeyCanonicalSigner{PrivateKey: clientKey}, []domain.ExecutionPlaneEndpoint{e})
+		require.NoError(t, err)
+		c.now = func() time.Time { return now }
+		return c.Discover(t.Context(), e)
 	}
+
+	t.Run("pool signer", func(t *testing.T) {
+		reqs.Store(0)
+		support, err := discover(t, nostrAdapter.WithPrivateKey(clientKey))
+		require.NoError(t, err)
+		require.True(t, SupportsPlaneClasses(support, []domain.VMLifecycleClass{domain.VMLifecycleLoomQEMU}))
+		require.Equal(t, int32(2), reqs.Load(), "the refused REQ and the pool's reissue after AUTH")
+	})
+	t.Run("no signer", func(t *testing.T) {
+		reqs.Store(0)
+		_, err := discover(t)
+		require.ErrorContains(t, planeCause(t, err), "auth-required: authenticated clients only")
+		require.Equal(t, int32(1), reqs.Load())
+	})
+}
+
+// planeCause is the cause a plane client error carries; its message is the
+// sanitized provider code.
+func planeCause(t *testing.T, err error) error {
+	t.Helper()
+	var providerErr *domain.VMProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.Equal(t, domain.VMErrorUnavailable, providerErr.Code)
+	return providerErr.Cause
 }
 
 type planeRecordingObserver struct {
@@ -257,39 +264,48 @@ func (o planeRecordingObserver) OnUnavailable(_ context.Context, diagnostic doma
 	return nil
 }
 
-func TestPlaneObserveRetractsBeforeAuthentication(t *testing.T) {
-	for _, failure := range []bool{false, true} {
-		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+// TestPlaneObserveRetractsOnClosed: a CLOSED retracts eligibility first. A
+// retryable one reconnects for a fresh EOSE; a terminal one (here a failed
+// NIP-42 AUTH at the pool) ends the stream without resubscribing.
+func TestPlaneObserveRetractsOnClosed(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal=%v", terminal), func(t *testing.T) {
 			e, p, o, key, now := planeFixture(t)
 			pool := newPlaneRelayFixture()
 			pool.events <- planeObservationEvent(t, e, o, key, now)
 			client := planeClientFixture(t, pool, e, now)
 			eligible, retracted := false, false
-			stop := errors.New("stop after authentication")
-			pool.onAuth = func() {
-				require.True(t, retracted)
-				require.False(t, eligible, "eligibility must be gone even if AUTH blocks")
-			}
-			if failure {
-				pool.authError = stop
-			}
+			stop := errors.New("stop after the fresh EOSE")
 			pool.onSubscribe = func(n int) {
 				if n == 2 {
+					require.False(t, terminal, "terminal CLOSED must not resubscribe")
 					require.True(t, retracted)
 					close(pool.eose)
 				}
 			}
+			closed := nostrAdapter.RelayClosed{RelayURL: "wss://fixture.invalid", Reason: "error: overloaded"}
+			if terminal {
+				closed = nostrAdapter.RelayClosed{RelayURL: "wss://fixture.invalid", Reason: "auth-required: challenge", Terminal: true}
+			}
 			observer := planeRecordingObserver{
 				observation: func(domain.ExecutionPlaneObservation) error {
 					eligible = true
-					pool.closed <- nostrAdapter.RelayClosed{RelayURL: "wss://fixture.invalid", Reason: "auth-required: challenge"}
+					pool.closed <- closed
 					return nil
 				},
 				unavailable: func() error { eligible = false; retracted = true; return nil },
 				eose:        func() error { require.False(t, eligible); return stop },
 			}
-			require.ErrorIs(t, client.Observe(t.Context(), e, p.ID, observer), stop)
-			require.Equal(t, 1, pool.authCalls)
+			err := client.Observe(t.Context(), e, p.ID, observer)
+			require.True(t, retracted)
+			require.False(t, eligible)
+			if terminal {
+				require.ErrorContains(t, planeCause(t, err), "auth-required: challenge")
+				require.Len(t, pool.filters, 1)
+				return
+			}
+			require.ErrorIs(t, err, stop)
+			require.Len(t, pool.filters, 2)
 		})
 	}
 }
