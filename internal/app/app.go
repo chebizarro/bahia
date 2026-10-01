@@ -970,10 +970,12 @@ func New(cfg *config.Config) (*App, error) {
 	// The records go to the control-plane relays the projector publishes the
 	// same coordinates to, built and signed through the projector's own
 	// builders and coordinate state, so both writers emit one record shape
-	// and a projection of an unchanged state is not re-signed (bahia-irsry.41).
+	// and a projection of an unchanged state is not re-signed. Once the
+	// quorum accepted, the control-plane outbox retries the remaining relays
+	// (bahia-irsry.41).
 	var relayFirstRegistry *service.RelayFirstRegistry
 	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
-		relayFirstRegistry = service.NewRelayFirstRegistry(registry, nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePool), logger)
+		relayFirstRegistry = service.NewRelayFirstRegistry(registry, nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub), logger)
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", string(policy.RequestedMode)))
 	}

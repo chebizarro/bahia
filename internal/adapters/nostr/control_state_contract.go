@@ -140,10 +140,11 @@ func recordObject(m map[string]any) map[string]any {
 	return m
 }
 
-// RelayAcceptPublisher publishes one signed event and reports how many relays
-// accepted it. RelayPool implements it.
-type RelayAcceptPublisher interface {
-	Publish(ctx context.Context, ev gonostr.Event) (int, error)
+// PreCommitPublisher delivers a signed event before the caller commits the
+// state it records, and fails, leaving nothing queued, unless the publish
+// quorum accepted it. Publisher.PublishBeforeCommit implements it.
+type PreCommitPublisher interface {
+	PublishBeforeCommit(ctx context.Context, ev gonostr.Event, entityType string, entityID *uuid.UUID) error
 }
 
 // RelayFirstStatePublisher is the relay-first registry's writer of service
@@ -153,20 +154,21 @@ type RelayAcceptPublisher interface {
 // a later projection of the same state is not signed again, and any later
 // event on the coordinate (from either writer) is strictly newer.
 //
-// Unlike the projector it publishes synchronously to relays instead of through
-// the outbox, and fails unless a relay accepted the event: the caller writes
-// its cache only after that, and a rejected write must leave nothing queued
-// for later delivery.
+// It delivers through the control-plane publisher's PublishBeforeCommit
+// rather than PublishProjection: the caller writes its cache only once the
+// quorum accepted, so a rejected write must leave nothing queued, while an
+// accepted one is handed to the outbox, which retries the relays that have
+// not accepted yet.
 type RelayFirstStatePublisher struct {
 	projector *Projector
-	relays    RelayAcceptPublisher
+	publisher PreCommitPublisher
 }
 
 // NewRelayFirstStatePublisher returns the relay-first writer that shares
-// projector's coordinate state and publishes to relays (the control-plane
-// relays the projector targets).
-func NewRelayFirstStatePublisher(projector *Projector, relays RelayAcceptPublisher) *RelayFirstStatePublisher {
-	return &RelayFirstStatePublisher{projector: projector, relays: relays}
+// projector's coordinate state and delivers through publisher (the
+// control-plane publisher the projector publishes with).
+func NewRelayFirstStatePublisher(projector *Projector, publisher PreCommitPublisher) *RelayFirstStatePublisher {
+	return &RelayFirstStatePublisher{projector: projector, publisher: publisher}
 }
 
 // PublishServiceRegistry publishes svc's service-registry record (or its
@@ -176,7 +178,7 @@ func (r *RelayFirstStatePublisher) PublishServiceRegistry(ctx context.Context, s
 		return fmt.Errorf("service is nil")
 	}
 	tags, content := serviceRegistryRecord(svc, deleted)
-	return r.publish(ctx, KindServiceRegistry, svc.ID.String(), deleted, tags, content)
+	return r.publish(ctx, KindServiceRegistry, svc.ID, deleted, tags, content, "service.projection")
 }
 
 // PublishEnvironmentRegistry publishes env's environment-registry record (or
@@ -186,16 +188,16 @@ func (r *RelayFirstStatePublisher) PublishEnvironmentRegistry(ctx context.Contex
 		return fmt.Errorf("environment is nil")
 	}
 	tags, content := environmentRegistryRecord(env, deleted)
-	return r.publish(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, content)
+	return r.publish(ctx, KindEnvironmentRegistry, env.ID, deleted, tags, content, "environment.projection")
 }
 
-func (r *RelayFirstStatePublisher) publish(ctx context.Context, legacyKind int, id string, deleted bool, tags gonostr.Tags, content string) error {
+func (r *RelayFirstStatePublisher) publish(ctx context.Context, legacyKind int, id uuid.UUID, deleted bool, tags gonostr.Tags, content, entityType string) error {
 	if r == nil || r.projector == nil {
 		return fmt.Errorf("relay-first state publisher is not configured")
 	}
-	if r.relays == nil {
-		return fmt.Errorf("relay-first state publisher has no relays")
+	if r.publisher == nil {
+		return fmt.Errorf("relay-first state publisher has no publisher")
 	}
-	wireKind, baseTags := controlStateEnvelope(legacyKind, id, deleted)
-	return r.projector.publishSignedRelayFirst(ctx, wireKind, append(baseTags, tags...), content, r.relays)
+	wireKind, baseTags := controlStateEnvelope(legacyKind, id.String(), deleted)
+	return r.projector.publishSignedRelayFirst(ctx, wireKind, append(baseTags, tags...), content, entityType, &id, r.publisher)
 }

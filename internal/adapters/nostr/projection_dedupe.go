@@ -519,17 +519,17 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 }
 
 // publishSignedRelayFirst signs one cp-state record for a writer that commits
-// only after a relay accepted it (RelayFirstStatePublisher). It shares
-// publishSigned's per-coordinate lock, created_at floor and fingerprint
-// memory, so the relay-first record and the projection of the same state are
-// one signed event, and every later event on the coordinate is newer. It
-// publishes to relays directly rather than through the outbox, and does not
-// open or honour the projector's backoff window, which paces the outbox path.
+// only after the publish quorum accepted it (RelayFirstStatePublisher). It
+// shares publishSigned's per-coordinate lock, created_at floor and
+// fingerprint memory, so the relay-first record and the projection of the
+// same state are one signed event, and every later event on the coordinate is
+// newer. It delivers with PublishBeforeCommit (one round first, outbox only
+// at the quorum) and does not open or honour the projector's backoff window.
 //
 // A record whose stable content the coordinate already carries is not signed
-// again. That event was accepted by a relay or is held by the outbox, which
-// keeps delivering it.
-func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, tags gonostr.Tags, content string, relays RelayAcceptPublisher) error {
+// again. That event reached the quorum or is held by the outbox, which keeps
+// delivering it.
+func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, publisher PreCommitPublisher) error {
 	key := projectionKeyOf(wireKind, tags)
 	fingerprint := projectionFingerprint(wireKind, tags, content)
 	tombstone := isTombstoneTags(tags)
@@ -549,15 +549,11 @@ func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, t
 	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
 		return fmt.Errorf("sign relay-first record: %w", err)
 	}
-	accepted, err := relays.Publish(ctx, ev)
-	if err != nil {
+	if err := publisher.PublishBeforeCommit(ctx, ev, entityType, entityID); err != nil {
 		return fmt.Errorf("publish relay-first record: %w", err)
 	}
-	if accepted == 0 {
-		return fmt.Errorf("publish relay-first record: no relay accepted the event")
-	}
 	p.rememberProjection(key, fingerprint, createdAt)
-	p.logger.Debug("relay-first record published", zap.Int("kind", wireKind), zap.String("event_id", eventIDHex(&ev)), zap.Int("relays", accepted))
+	p.logger.Debug("relay-first record published", zap.Int("kind", wireKind), zap.String("event_id", eventIDHex(&ev)))
 	return nil
 }
 

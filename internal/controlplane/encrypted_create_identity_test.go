@@ -26,11 +26,12 @@ type identityRelayPublisher struct {
 	events []nostr.Event
 }
 
-func (p *identityRelayPublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
+// PublishBeforeCommit accepts every record, as a quorum of relays would.
+func (p *identityRelayPublisher) PublishBeforeCommit(_ context.Context, ev nostr.Event, _ string, _ *uuid.UUID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.events = append(p.events, ev)
-	return 1, nil
+	return nil
 }
 
 func (p *identityRelayPublisher) coordinates() []string {
@@ -129,7 +130,7 @@ func newIdentityHarness(t *testing.T, orgID uuid.UUID) *identityHarness {
 	delegate := service.NewRegistryService(services, envs, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	relay := &identityRelayPublisher{}
 	// The production relay-first writer: the projector's record builders and
-	// coordinate state over the fake relay.
+	// coordinate state over a fake publisher whose quorum always accepts.
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: nostr.Generate().Hex()}, nil, nil, nil, zap.NewNop())
 	registry := service.NewRelayFirstRegistry(delegate, nostrpool.NewRelayFirstStatePublisher(projector, relay), zap.NewNop())
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Registry: registry, RBAC: encryptedAdminRBAC(t, orgID), Logger: zap.NewNop()})

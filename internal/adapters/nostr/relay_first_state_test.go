@@ -11,12 +11,14 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +49,7 @@ func newRelayFirstHarness(t *testing.T, stampRevision bool) *relayFirstHarness {
 	}
 	h.source = service.NewRegistryService(h.services, h.environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
 	h.projector = newRelayFirstTestProjector(h.source, h.projectorRelay)
-	h.registry = service.NewRelayFirstRegistry(h.source, NewRelayFirstStatePublisher(h.projector, h.relayFirst), zap.NewNop())
+	h.registry = service.NewRelayFirstRegistry(h.source, NewRelayFirstStatePublisher(h.projector, newRelayFirstTestPublisher(h.relayFirst)), zap.NewNop())
 	return h
 }
 
@@ -74,6 +76,18 @@ func (h *relayFirstHarness) republishRegistrySnapshot(t *testing.T) {
 			t.Fatalf("snapshot environment %s: %v", envs[i].ID, err)
 		}
 	}
+}
+
+// newRelayFirstTestPublisher is a control-plane publisher with one write
+// relay, sink, and no outbox: PublishBeforeCommit's round goes to sink.
+func newRelayFirstTestPublisher(sink *captureProjectionPublisher) *Publisher {
+	const relayURL = "wss://relay-first.test"
+	publisher := NewPublisher(config.NostrConfig{PrivateKey: projectorTestPrivateKey}, NewRelayPool([]string{relayURL}, zap.NewNop()), nil, zap.NewNop())
+	publisher.publishFn = func(ctx context.Context, ev gonostr.Event, urls []string) ([]PublishResult, error) {
+		accepted, err := sink.Publish(ctx, ev)
+		return []PublishResult{{RelayURL: relayURL, Accepted: accepted > 0, Error: err}}, nil
+	}
+	return publisher
 }
 
 func newRelayFirstTestProjector(source ProjectionSource, sink relaySink) *Projector {
@@ -195,14 +209,15 @@ func TestRelayFirstTombstonesMatchProjectorTombstones(t *testing.T) {
 	deletedAt := time.Date(2026, 10, 1, 8, 0, 0, 5000, time.UTC)
 	serviceID, environmentID := domain.NewEntityID(), domain.NewEntityID()
 
-	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, nil), &captureProjectionPublisher{})
+	relayFirstSink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, nil), newRelayFirstTestPublisher(relayFirstSink))
 	if err := writer.PublishServiceRegistry(ctx, &domain.Service{ID: serviceID, UpdatedAt: deletedAt}, true); err != nil {
 		t.Fatalf("relay-first service tombstone: %v", err)
 	}
 	if err := writer.PublishEnvironmentRegistry(ctx, &domain.Environment{ID: environmentID, UpdatedAt: deletedAt}, true); err != nil {
 		t.Fatalf("relay-first environment tombstone: %v", err)
 	}
-	relayFirst := writer.relays.(*captureProjectionPublisher).events
+	relayFirst := relayFirstSink.events
 
 	sink := &captureProjectionPublisher{}
 	projector := newRelayFirstTestProjector(nil, sink)
@@ -236,7 +251,7 @@ func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
 	// Projector live record, then a relay-first tombstone, then the
 	// projector's own tombstone for the delete's bus event.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
-	writer := NewRelayFirstStatePublisher(h.projector, h.relayFirst)
+	writer := NewRelayFirstStatePublisher(h.projector, newRelayFirstTestPublisher(h.relayFirst))
 	if err := writer.PublishServiceRegistry(ctx, &domain.Service{ID: stored.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
 		t.Fatalf("relay-first tombstone: %v", err)
 	}
@@ -504,4 +519,100 @@ func (r *relayFirstTestEnvironmentRepo) Delete(_ context.Context, id uuid.UUID) 
 	defer r.mu.Unlock()
 	delete(r.rows, id)
 	return nil
+}
+
+// relayFirstOutboxRegistry is the relay-first registry over a control-plane
+// publisher with a local outbox (the production wiring), with one cached
+// service it can update.
+func relayFirstOutboxRegistry(t *testing.T, publisher *Publisher) (*service.RelayFirstRegistry, *relayFirstTestServiceRepo, domain.Service) {
+	t.Helper()
+	services := &relayFirstTestServiceRepo{rows: map[uuid.UUID]domain.Service{}}
+	created, updated := relayFirstTestTimes()
+	stored := domain.Service{ID: domain.NewEntityID(), Name: "api", RuntimeType: domain.RuntimeTypeDocker, DefaultBranch: "main", CreatedAt: created, UpdatedAt: updated}
+	services.rows[stored.ID] = stored
+	source := service.NewRegistryService(services, &relayFirstTestEnvironmentRepo{rows: map[uuid.UUID]domain.Environment{}}, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	projector := newRelayFirstTestProjector(source, nil)
+	return service.NewRelayFirstRegistry(source, NewRelayFirstStatePublisher(projector, publisher), zap.NewNop()), services, stored
+}
+
+// Quorum 1 with one control-plane relay down: the write commits on the up
+// relay's OK, and the outbox then retries only the down relay until it
+// accepts. The relay that accepted in the pre-commit round is never contacted
+// again.
+func TestRelayFirstQuorumMetRetriesTheDownRelayThroughTheOutbox(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	pool := newSyncTestPool(up, down)
+	defer pool.Close()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, projectorTestPrivateKey, 0)
+	h.startRunner()
+	registry, services, stored := relayFirstOutboxRegistry(t, h.pub)
+
+	edit := stored
+	edit.Name = "api-v2"
+	require.NoError(t, registry.UpdateService(ctx, &edit), "the default quorum of one relay accepted")
+	require.Equal(t, "api-v2", services.rows[stored.ID].Name, "the cache is written once the quorum accepted")
+
+	first := receive(t, h.rounds, "the pre-commit round")
+	require.ElementsMatch(t, []string{up.url, down.url}, first.targets, "the pre-commit round goes to every control-plane relay")
+	ev := receive(t, h.delivered, "the delivered hook")
+	require.Equal(t, KindCASControlState, int(ev.Kind))
+	entry := h.entry(t, ev.ID)
+	require.Equal(t, localstore.OutboxPending, entry.State, "pending until the down relay accepts")
+	require.True(t, entry.Delivered)
+	require.Equal(t, 1, entry.Rounds, "the pre-commit round counts against the attempt budget")
+	require.True(t, entry.Relays[up.url].Accepted, "the up relay's OK is recorded")
+	require.False(t, entry.Relays[down.url].Accepted)
+	counts, err := h.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counts.Pending, "outbox depth sees the relay-first record")
+	require.True(t, h.storeHolds(ev.ID), "the record is kept as the daemon's own output")
+
+	down.down.Store(false)
+	for accepted := false; !accepted; {
+		round := receive(t, h.rounds, "a retry round")
+		require.Equal(t, []string{down.url}, round.targets, "a retry contacted a relay that already accepted")
+		for _, result := range round.results {
+			accepted = accepted || (result.RelayURL == down.url && (result.Accepted || result.IsDuplicate()))
+		}
+	}
+	h.stopRun()
+	h.stopRun = nil
+	entry = h.entry(t, ev.ID)
+	require.Equal(t, localstore.OutboxPublished, entry.State)
+	require.True(t, entry.Relays[up.url].Accepted)
+	require.True(t, entry.Relays[down.url].Accepted)
+}
+
+// Below the quorum the write is abandoned: the cache is not written and the
+// record is not queued, so no relay is sent it later for a state that was
+// never committed.
+func TestRelayFirstQuorumNotMetQueuesNothingAndSkipsTheCacheWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	pool := newSyncTestPool(up, down)
+	defer pool.Close()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, projectorTestPrivateKey, config.PublishQuorumAllRelays)
+	registry, services, stored := relayFirstOutboxRegistry(t, h.pub)
+
+	edit := stored
+	edit.Name = "api-v2"
+	err := registry.UpdateService(ctx, &edit)
+	require.Error(t, err, "one of two required relays accepted")
+	require.Contains(t, err.Error(), "not queued")
+	require.Equal(t, "api", services.rows[stored.ID].Name, "the cache was written below the quorum")
+
+	round := receive(t, h.rounds, "the pre-commit round")
+	require.ElementsMatch(t, []string{up.url, down.url}, round.targets)
+	require.Empty(t, h.rounds, "a relay was contacted again")
+	counts, err := h.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, localstore.OutboxCounts{}, counts, "the rejected record was queued")
+	require.Empty(t, h.delivered)
 }

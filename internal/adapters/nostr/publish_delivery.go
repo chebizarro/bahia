@@ -331,9 +331,8 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	targets := d.retryableRelays(configured)
 
 	var (
-		results     []PublishResult
-		callErr     error
-		rateLimited bool
+		results []PublishResult
+		callErr error
 	)
 	if len(targets) > 0 {
 		if p.publishFn == nil {
@@ -342,54 +341,7 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 			results, callErr = p.publishFn(ctx, d.event, targets)
 		}
 	}
-	// A round only counts against the attempt budget if it learned something:
-	// a relay was actually contacted, or a relay in reconnect backoff reported
-	// a dial failure this event has not counted yet. Rounds that only hit the
-	// pool's fail-fast backoff are skipped and rescheduled for when the relay
-	// may be dialed again.
-	countable := len(targets) == 0 || len(results) == 0
-	var backoffUntil time.Time
-	answered := make(map[string]struct{}, len(results))
-	for _, result := range results {
-		state, ok := d.relays[result.RelayURL]
-		if !ok {
-			continue
-		}
-		answered[result.RelayURL] = struct{}{}
-		var backoffErr *RelayReconnectBackoffError
-		if result.Error != nil && errors.As(result.Error, &backoffErr) {
-			if backoffErr.FailedAt.After(state.seenDialFailure) {
-				state.seenDialFailure = backoffErr.FailedAt
-				countable = true
-			}
-			if backoffUntil.IsZero() || backoffErr.RetryAt.Before(backoffUntil) {
-				backoffUntil = backoffErr.RetryAt
-			}
-		} else {
-			countable = true
-		}
-		switch classifyPublishResult(result) {
-		case relayPublishAccepted:
-			state.accepted = true
-			state.lastErr = ""
-		case relayPublishRejected:
-			state.rejected = result.Reason
-		default:
-			rateLimited = rateLimited || result.IsRateLimited()
-			state.lastErr = describePublishFailure(result)
-		}
-	}
-	for _, url := range targets {
-		if _, ok := answered[url]; ok {
-			continue
-		}
-		missing := "no publish result"
-		if callErr != nil {
-			missing = callErr.Error()
-		}
-		d.relays[url].lastErr = missing
-		countable = true
-	}
+	countable, backoffUntil, rateLimited := d.applyRound(targets, results, callErr)
 	skipped := !countable
 	if !skipped {
 		d.rounds++
@@ -469,6 +421,59 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	}
 	p.logRound(d, report, detail)
 	return report
+}
+
+// applyRound records one round's per-relay results for the targets contacted
+// in d's relay state. It reports whether the round counts against the attempt
+// budget: it does if it learned something, that is a relay was actually
+// contacted, or a relay in reconnect backoff reported a dial failure this
+// event has not counted yet. Rounds that only hit the pool's fail-fast backoff
+// are skipped and rescheduled for backoffUntil, when the relay may be dialed
+// again.
+func (d *outboxDelivery) applyRound(targets []string, results []PublishResult, callErr error) (countable bool, backoffUntil time.Time, rateLimited bool) {
+	countable = len(targets) == 0 || len(results) == 0
+	answered := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		state, ok := d.relays[result.RelayURL]
+		if !ok {
+			continue
+		}
+		answered[result.RelayURL] = struct{}{}
+		var backoffErr *RelayReconnectBackoffError
+		if result.Error != nil && errors.As(result.Error, &backoffErr) {
+			if backoffErr.FailedAt.After(state.seenDialFailure) {
+				state.seenDialFailure = backoffErr.FailedAt
+				countable = true
+			}
+			if backoffUntil.IsZero() || backoffErr.RetryAt.Before(backoffUntil) {
+				backoffUntil = backoffErr.RetryAt
+			}
+		} else {
+			countable = true
+		}
+		switch classifyPublishResult(result) {
+		case relayPublishAccepted:
+			state.accepted = true
+			state.lastErr = ""
+		case relayPublishRejected:
+			state.rejected = result.Reason
+		default:
+			rateLimited = rateLimited || result.IsRateLimited()
+			state.lastErr = describePublishFailure(result)
+		}
+	}
+	for _, url := range targets {
+		if _, ok := answered[url]; ok {
+			continue
+		}
+		missing := "no publish result"
+		if callErr != nil {
+			missing = callErr.Error()
+		}
+		d.relays[url].lastErr = missing
+		countable = true
+	}
+	return countable, backoffUntil, rateLimited
 }
 
 // persistRound records a counted (or settling) round in d's ledger. For the
