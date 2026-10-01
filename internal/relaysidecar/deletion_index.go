@@ -3,7 +3,6 @@ package relaysidecar
 import (
 	"context"
 	"fmt"
-	"iter"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/boltcoord"
@@ -28,6 +27,21 @@ var deletionIndexVersionKey = []byte("deletionIndexVersion")
 const deletionIndexVersion = "1"
 
 var deletionIndexMarker = boltcoord.Marker{Bucket: sidecarMetaBucket, Key: deletionIndexVersionKey, Version: deletionIndexVersion}
+
+// sidecarTagBucket indexes the tag values the eventstore does not (empty, or
+// longer than tagIndexMaxValue; see boltcoord.Store), so a REQ or COUNT on
+// #a with a relay config coordinate or on an empty #d matches what it should
+// (bahia-irsry.52). Every write and delete goes through eventStore.coords,
+// which keeps it in step.
+var sidecarTagBucket = []byte("bahiaSidecarTags")
+
+// tagIndexMarker marks, in sidecarMetaBucket, that every event stored before
+// the tag index existed has been indexed (see buildTagIndex).
+var tagIndexMarker = boltcoord.Marker{Bucket: sidecarMetaBucket, Key: []byte("tagIndexVersion"), Version: "1"}
+
+// coordinateRepairMarker marks, in sidecarMetaBucket, that the store has been
+// repaired once (see repairCoordinates).
+var coordinateRepairMarker = boltcoord.Marker{Bucket: sidecarMetaBucket, Key: []byte("coordinateRepairVersion"), Version: "1"}
 
 // coordinate is a replaceable or addressable event's address.
 type coordinate = boltcoord.Coordinate
@@ -89,10 +103,36 @@ func (s *eventStore) buildDeletionIndex(ctx context.Context) error {
 	return nil
 }
 
-// versions yields the stored versions of c created at or before until (0: no
-// bound), newest first, at most limit (see boltcoord.Versions).
-func (s *eventStore) versions(c coordinate, until nostr.Timestamp, limit int) iter.Seq[nostr.Event] {
-	return boltcoord.Versions(s.scan, c, until, limit)
+// buildTagIndex indexes the tag values of every stored event once per store,
+// for stores written before the tag index existed (boltcoord.Store
+// BuildTagIndex). Events written later are indexed as they are written.
+func (s *eventStore) buildTagIndex(ctx context.Context) error {
+	if err := s.coords().BuildTagIndex(ctx, s.scanIndexed, tagIndexMarker, sweepBatchSize); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		return fmt.Errorf("relay tag index: %w", err)
+	}
+	return nil
+}
+
+// repairCoordinates brings a store written before bahia-irsry.44 up to what
+// writes now maintain, once (bahia-irsry.54): such a store kept every version
+// of an addressable coordinate whose d is empty or longer than
+// tagIndexMaxValue, and may serve events its stored kind-5 requests delete
+// (applyDeletion missed coordinates longer than the eventstore indexes, and
+// kind-5s imported from SQLite were never applied). It applies every stored
+// request and collapses those coordinates to their latest version
+// (boltcoord.Store.Repair). buildDeletionIndex runs first, so the requests are
+// already indexed.
+func (s *eventStore) repairCoordinates(ctx context.Context) error {
+	if err := s.coords().Repair(ctx, s.scan, coordinateRepairMarker); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		return fmt.Errorf("repair relay event store: %w", err)
+	}
+	return nil
 }
 
 // latestVersion returns the newest stored version of c.

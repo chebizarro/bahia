@@ -15,8 +15,10 @@
 // requester's events it names and keeps them from coming back. Coordinates
 // the eventstore's tag index cannot hold (an empty d, a d or `a` coordinate
 // over 100 bytes) are resolved through package boltcoord, as in the relay
-// sidecar (bahia-irsry.51). Cursors live in a separate bucket of the same
-// file, so the events and the cursors that describe them are deleted together.
+// sidecar (bahia-irsry.51), and so are filters on such tag values, through
+// boltcoord's tag index (bahia-irsry.52). Cursors live in a separate bucket of
+// the same file, so the events and the cursors that describe them are deleted
+// together.
 package localstore
 
 import (
@@ -47,7 +49,11 @@ var (
 	// delete (boltcoord.DeletionIndex). An entry is written before its
 	// request is stored and removed with it.
 	deletionBucket = []byte("bahiaLocalDeletions")
-	metaBucket     = []byte("bahiaLocalMeta")
+	// tagBucket indexes the tag values the eventstore does not (empty, or
+	// over 100 bytes; see boltcoord.Store), so QueryEvents answers filters on
+	// them. Every write and delete goes through Store.coords.
+	tagBucket  = []byte("bahiaLocalTags")
+	metaBucket = []byte("bahiaLocalMeta")
 )
 
 // coordinateRepairMarker records that the store has been brought up to what
@@ -55,8 +61,9 @@ var (
 // deletionBucket existed applied no deletion requests.
 var coordinateRepairMarker = boltcoord.Marker{Bucket: metaBucket, Key: []byte("coordinateRepairVersion"), Version: "1"}
 
-// unboundedScan stands in for "no cap" on internal scans.
-const unboundedScan = math.MaxInt32
+// tagIndexMarker records that every event stored before tagBucket existed has
+// been indexed (see Open).
+var tagIndexMarker = boltcoord.Marker{Bucket: metaBucket, Key: []byte("tagIndexVersion"), Version: "1"}
 
 // queryPageSize bounds one bbolt query. The backend preallocates a buffer
 // proportional to the limit it is given, so unbounded reads are paged by
@@ -129,6 +136,10 @@ func Open(path string) (*Store, error) {
 	}
 	shared := &sharedStore{path: abs, backend: backend, refs: 1}
 	store := &Store{shared: shared}
+	if err := store.coords().BuildTagIndex(context.Background(), store.pagedQuery, tagIndexMarker, queryPageSize); err != nil {
+		_ = backend.DB.Close()
+		return nil, fmt.Errorf("open local event store %s: %w", abs, err)
+	}
 	if err := store.repairCoordinates(); err != nil {
 		_ = backend.DB.Close()
 		return nil, fmt.Errorf("open local event store %s: %w", abs, err)
@@ -146,7 +157,7 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 		return nil, err
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{cursorBucket, deletionBucket, metaBucket} {
+		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -216,13 +227,13 @@ func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 		}
 		return true, nil
 	case ev.Kind.IsReplaceable() || ev.Kind.IsAddressable():
-		stored, err := boltcoord.Replace(s.backend(), s.scan, ev)
+		stored, err := s.coords().Replace(s.scan, ev)
 		if err != nil {
 			return false, fmt.Errorf("replace local event %s: %w", ev.ID.Hex(), err)
 		}
 		return stored, nil
 	}
-	if err := s.backend().SaveEvent(ev); err != nil {
+	if err := s.coords().Save(ev); err != nil {
 		if errors.Is(err, eventstore.ErrDupEvent) {
 			return false, nil
 		}
@@ -263,47 +274,12 @@ func (s *Store) saveDeletionLocked(request nostr.Event) error {
 	if err := s.deletions().Index(request); err != nil {
 		return err
 	}
-	err := s.applyDeletionLocked(request)
+	_, err := s.coords().ApplyDeletion(context.Background(), s.scan, request)
 	if err == nil {
-		err = s.backend().SaveEvent(request)
+		err = s.coords().Save(request)
 	}
 	if err != nil {
 		return errors.Join(err, s.deletions().Unindex(request))
-	}
-	return nil
-}
-
-// applyDeletionLocked removes the events a kind-5 request deletes: those its
-// `e` references name, when the requester is their author, and every version
-// of its `a` coordinates (the requester's own) up to its created_at.
-// Deletion requests are never deleted.
-func (s *Store) applyDeletionLocked(request nostr.Event) error {
-	var targets []nostr.ID
-	for _, tag := range request.Tags {
-		if len(tag) < 2 || tag[0] != "e" {
-			continue
-		}
-		id, err := nostr.IDFromHex(tag[1])
-		if err != nil {
-			continue
-		}
-		for target := range s.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}) {
-			if target.ID == id && target.PubKey == request.PubKey && target.Kind != nostr.KindDeletion {
-				targets = append(targets, target.ID)
-			}
-		}
-	}
-	for _, c := range boltcoord.DeletedCoordinates(request) {
-		for target := range boltcoord.Versions(s.scan, c, request.CreatedAt, unboundedScan) {
-			targets = append(targets, target.ID)
-		}
-	}
-	// Collected first: QueryEvents copies each page out of its read
-	// transaction, but the deletes still run after the reads finish.
-	for _, id := range targets {
-		if err := s.backend().DeleteEvent(id); err != nil {
-			return fmt.Errorf("delete %s: %w", id.Hex(), err)
-		}
 	}
 	return nil
 }
@@ -323,7 +299,7 @@ func (s *Store) DeleteEvent(id nostr.ID) error {
 			return fmt.Errorf("unindex local deletion request %s: %w", id.Hex(), err)
 		}
 	}
-	return s.backend().DeleteEvent(id)
+	return s.coords().Delete(held[0])
 }
 
 // hasLocked reports whether the store holds the event with this id. Callers
@@ -333,6 +309,12 @@ func (s *Store) hasLocked(id nostr.ID) bool {
 		return true
 	}
 	return false
+}
+
+// coords is the write path for every event the store saves or deletes: it
+// keeps the tag index (tagBucket) in step with the eventstore.
+func (s *Store) coords() boltcoord.Store {
+	return boltcoord.NewStore(s.backend(), tagBucket)
 }
 
 func (s *Store) deletions() boltcoord.DeletionIndex {
@@ -347,14 +329,14 @@ func (s *Store) scan(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
 
 // repairCoordinates brings a store written before the deletion index existed
 // up to what SaveEvent now maintains, once (coordinateRepairMarker): it
-// indexes the stored kind-5 requests, applies them (such a store applied
-// none), and collapses every coordinate to its latest version (ReplaceEvent
-// kept every version of a d the eventstore does not index). Each step is safe
-// to repeat, so a repair interrupted before its marker is written runs again
-// in full on the next open.
+// indexes the stored kind-5 requests, then applies them (such a store applied
+// none) and collapses each coordinate whose d the eventstore does not index to
+// its latest version (ReplaceEvent kept every version of those, and collapsed
+// the rest itself; see boltcoord.Store.Repair). Each step is safe to repeat,
+// so a repair interrupted before its marker is written runs again in full on
+// the next open.
 func (s *Store) repairCoordinates() error {
-	db := s.backend().DB
-	done, err := coordinateRepairMarker.Done(db)
+	done, err := coordinateRepairMarker.Done(s.backend().DB)
 	if err != nil {
 		return fmt.Errorf("read coordinate repair marker: %w", err)
 	}
@@ -365,70 +347,41 @@ func (s *Store) repairCoordinates() error {
 	if err := s.deletions().Backfill(context.Background(), s.QueryEvents(requests), queryPageSize, nil); err != nil {
 		return fmt.Errorf("index stored deletion requests: %w", err)
 	}
-	for request := range s.QueryEvents(requests) {
-		if err := s.applyDeletionLocked(request); err != nil {
-			return fmt.Errorf("apply stored deletion request %s: %w", request.ID.Hex(), err)
-		}
-	}
-	if err := s.collapseVersions(); err != nil {
-		return err
-	}
-	if err := db.Update(coordinateRepairMarker.Set); err != nil {
-		return fmt.Errorf("write coordinate repair marker: %w", err)
-	}
-	return nil
-}
-
-// collapseVersions deletes every stored replaceable or addressable event that
-// is not the latest version of its coordinate.
-func (s *Store) collapseVersions() error {
-	latest := map[boltcoord.Coordinate]nostr.Event{} // only ID and CreatedAt, for nostr.IsOlder
-	var superseded []nostr.ID
-	for event := range s.QueryEvents(nostr.Filter{}) {
-		if !event.Kind.IsReplaceable() && !event.Kind.IsAddressable() {
-			continue
-		}
-		c := boltcoord.CoordinateOf(event)
-		ev := nostr.Event{ID: event.ID, CreatedAt: event.CreatedAt}
-		current, held := latest[c]
-		switch {
-		case !held:
-			latest[c] = ev
-		case nostr.IsOlder(current, ev):
-			superseded = append(superseded, current.ID)
-			latest[c] = ev
-		default:
-			superseded = append(superseded, ev.ID)
-		}
-	}
-	for _, id := range superseded {
-		if err := s.backend().DeleteEvent(id); err != nil {
-			return fmt.Errorf("delete superseded local event %s: %w", id.Hex(), err)
-		}
-	}
-	return nil
+	return s.coords().Repair(context.Background(), s.scan, coordinateRepairMarker)
 }
 
 // QueryEvents yields the stored events matching filter, newest first, up to
 // filter.Limit (all of them when the filter has no limit). Reads are paged, and
 // each page is copied out of its bbolt read transaction before it is yielded,
 // so a consumer that blocks or writes to the store cannot stall bbolt writers.
+// A filter on a tag value the eventstore does not index (empty, or over 100
+// bytes) is read through the tag index (boltcoord.Store.Query).
 func (s *Store) QueryEvents(filter nostr.Filter) iter.Seq[nostr.Event] {
-	return func(yield func(nostr.Event) bool) {
-		if len(filter.IDs) > 0 {
+	if len(filter.IDs) > 0 {
+		return func(yield func(nostr.Event) bool) {
 			for _, ev := range slices.Collect(s.backend().QueryEvents(filter, len(filter.IDs))) {
 				if !yield(ev) {
 					return
 				}
 			}
-			return
 		}
-		if filter.LimitZero {
-			return
-		}
+	}
+	if filter.LimitZero {
+		return func(func(nostr.Event) bool) {}
+	}
+	if boltcoord.NeedsTagIndex(filter) {
+		return s.coords().Query(s.pagedQuery, filter, filter.Limit)
+	}
+	return s.pagedQuery(filter, filter.Limit)
+}
+
+// pagedQuery reads up to limit (<= 0: all) events matching filter, newest
+// first, from the eventstore's own indexes, a page at a time.
+func (s *Store) pagedQuery(filter nostr.Filter, limit int) iter.Seq[nostr.Event] {
+	return func(yield func(nostr.Event) bool) {
 		remaining := math.MaxInt
-		if filter.Limit > 0 {
-			remaining = filter.Limit
+		if limit > 0 {
+			remaining = limit
 		}
 		page := filter
 		page.Limit = 0

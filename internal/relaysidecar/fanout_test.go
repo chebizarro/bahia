@@ -178,6 +178,7 @@ type relayFrame struct {
 	event  nostr.Event
 	reason string
 	ok     bool
+	count  uint32 // NIP-45 COUNT
 }
 
 func dialRawRelay(t *testing.T, ctx context.Context, httpURL string) *rawRelayClient {
@@ -273,6 +274,13 @@ func (c *rawRelayClient) next() relayFrame {
 	case "CLOSED":
 		require.NoError(c.t, json.Unmarshal(parts[1], &frame.subID))
 		require.NoError(c.t, json.Unmarshal(parts[2], &frame.reason))
+	case "COUNT":
+		require.NoError(c.t, json.Unmarshal(parts[1], &frame.subID))
+		var count struct {
+			Count uint32 `json:"count"`
+		}
+		require.NoError(c.t, json.Unmarshal(parts[2], &count))
+		frame.count = count.Count
 	case "OK":
 		var id string
 		require.NoError(c.t, json.Unmarshal(parts[1], &id))
