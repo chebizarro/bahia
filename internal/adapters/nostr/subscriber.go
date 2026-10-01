@@ -81,9 +81,12 @@ type IngestionObserver interface {
 // (C-14), and which keeps the per-(relay, filter) cursors (see
 // replay_cursor.go).
 //
-// NIP-42 is answered by the pool's connection AuthHandler. A relay that CLOSEs
-// a REQ "auth-required:" ends the session like any other CLOSED and is resynced
-// with backoff, by which time the connection has authenticated.
+// NIP-42 is answered by the pool's connection AuthHandler. A CLOSED ends the
+// session and goes through the pool's CLOSED policy for that (relay, filter),
+// as for the pool's own subscriptions (see runRelay): "auth-required:"
+// authenticates and resyncs at once; a policy refusal, a failed AUTH or a
+// retryable reason beyond nostr.closed_retry_budget in a row gives that filter
+// up on that relay. A dropped connection is always resynced with backoff.
 type Subscriber struct {
 	pool *RelayPool
 	// archive is the optional PostgreSQL nostr_events table, written best

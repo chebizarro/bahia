@@ -222,6 +222,29 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 	defer merged.Close()
 	count := 0
 	var oldest *time.Time
+	handle := func(ev *gonostr.Event) error {
+		if ev == nil {
+			return nil
+		}
+		if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, until); err != nil {
+			r.logger.Warn("skipping invalid relay legacy event during migration backfill", zap.String("event_id", nostrutil.EventIDHex(ev)), zap.Error(err))
+			return nil
+		}
+		count++
+		createdAt := ev.CreatedAt.Time().UTC()
+		if oldest == nil || createdAt.Before(*oldest) {
+			oldest = &createdAt
+		}
+		rec, err := recordFromEvent(ev)
+		if err != nil {
+			return err
+		}
+		if _, err := r.repo.Record(ctx, rec); err != nil {
+			return fmt.Errorf("record relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
+		}
+		summary.RelayScanned++
+		return r.migrateRecord(ctx, *rec, summary)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,7 +252,23 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 		case <-backfillCtx.Done():
 			return count, oldest, fmt.Errorf("relay migration backfill did not reach EOSE: %w", backfillCtx.Err())
 		case <-merged.EndOfStoredEvents:
-			return count, oldest, nil
+			// Stored events precede EOSE, but some may still be buffered on
+			// Events when select picks EndOfStoredEvents: take them first,
+			// or the page looks short and the backfill stops early.
+			for {
+				select {
+				case ev, ok := <-merged.Events:
+					if !ok {
+						return count, oldest, r.relayPageTruncated(merged)
+					}
+					if err := handle(ev); err != nil {
+						return count, oldest, err
+					}
+					continue
+				default:
+				}
+				return count, oldest, r.relayPageTruncated(merged)
+			}
 		case closed, ok := <-merged.Closed:
 			if ok {
 				return count, oldest, fmt.Errorf("relay migration backfill closed by %s subscription %s: %s", closed.RelayURL, closed.SubscriptionID, closed.Reason)
@@ -238,31 +277,24 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 			if !ok {
 				continue
 			}
-			if ev == nil {
-				continue
-			}
-			if err := validateRelayBackfillEvent(ev, time.Now().UTC(), r.config.BackfillSince, until); err != nil {
-				r.logger.Warn("skipping invalid relay legacy event during migration backfill", zap.String("event_id", nostrutil.EventIDHex(ev)), zap.Error(err))
-				continue
-			}
-			count++
-			createdAt := ev.CreatedAt.Time().UTC()
-			if oldest == nil || createdAt.Before(*oldest) {
-				oldest = &createdAt
-			}
-			rec, err := recordFromEvent(ev)
-			if err != nil {
-				return count, oldest, err
-			}
-			if _, err := r.repo.Record(ctx, rec); err != nil {
-				return count, oldest, fmt.Errorf("record relay legacy event %s: %w", nostrutil.EventIDHex(ev), err)
-			}
-			summary.RelayScanned++
-			if err := r.migrateRecord(ctx, *rec, summary); err != nil {
+			if err := handle(ev); err != nil {
 				return count, oldest, err
 			}
 		}
 	}
+}
+
+// relayPageTruncated fails a backfill page that a relay could not serve in
+// full: the pool pages answers past a relay's NIP-11 max_limit, but more
+// events sharing one created_at than a page holds cannot be paged, and
+// skipping them would leave legacy events unmigrated.
+func (r *Runner) relayPageTruncated(merged *nostrAdapter.MergedSubscription) error {
+	for _, outcome := range merged.StoredOutcomes() {
+		if outcome.Truncated {
+			return fmt.Errorf("relay migration backfill: %w", merged.StoredEventsIncomplete(nil))
+		}
+	}
+	return nil
 }
 
 func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRecord, summary *Summary) error {

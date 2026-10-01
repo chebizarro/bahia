@@ -296,7 +296,7 @@ func TestRelayPoolClosedClassificationStopsRefusalsAndRetriesTransients(t *testi
 			require.Equal(t, tc.reason, closed.Reason)
 			require.Equal(t, tc.terminal, closed.Terminal)
 			<-merged.EndOfStoredEvents
-			require.Equal(t, []RelayStoredOutcome{{RelayURL: relayURL, Status: RelayStoredClosed, Reason: tc.reason}}, merged.StoredOutcomes())
+			require.Equal(t, []RelayStoredOutcome{{RelayURL: relayURL, Status: RelayStoredClosed, Reason: tc.reason, Terminal: tc.terminal}}, merged.StoredOutcomes())
 
 			if tc.terminal {
 				// Every REQ refused for good: the merged stream ends and the

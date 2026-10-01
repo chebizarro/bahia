@@ -24,7 +24,6 @@ import (
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
-	"go.uber.org/zap"
 )
 
 var (
@@ -307,12 +306,14 @@ func signetManagementRelays(config Config) []string {
 // newManagementPool returns the management-plane pool for one bunker
 // connection. NIP-42 AUTH events are signed by the bunker, as the
 // provisioner the replies are gift-wrapped to: inbox relays serve kind-1059
-// events only to their authenticated recipient.
+// events only to their authenticated recipient. The pool logs through the
+// client's slog logger.
 func (c *Client) newManagementPool(bunker *nip46.BunkerClient) *nostrpool.RelayPool {
 	if len(c.managementRelays) == 0 {
 		return nil
 	}
-	return nostrpool.NewRelayPool(c.managementRelays, zap.NewNop(), nostrpool.WithAuthSignFunc(bunker.SignEvent))
+	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
+	return nostrpool.NewRelayPool(c.managementRelays, logger, nostrpool.WithAuthSignFunc(bunker.SignEvent))
 }
 
 // replaceManagementPool installs the active connection's management pool and

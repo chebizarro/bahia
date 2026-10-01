@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -42,7 +43,8 @@ func (s *StoreBackedSubscriber) AuthenticateRelay(ctx context.Context, relayURL 
 // SubscribeAllWithEOSE starts a ProcessSync for filters. RelayEOSE fires each
 // time a relay catches up, EndOfStoredEvents closes once (see
 // ProcessSync.CaughtUp), and Events closes when the sync stops. CLOSED frames
-// are handled by the sync workers, so Closed never fires.
+// are handled by the sync workers, so Closed never fires; once Events closes,
+// GaveUp reports a sync that stopped because every relay refused for good.
 func (s *StoreBackedSubscriber) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*MergedSubscription, error) {
 	if s.Pool == nil || s.Store == nil {
 		return nil, errors.New("store-backed subscription requires a relay pool and a local store")
@@ -78,10 +80,16 @@ func (s *StoreBackedSubscriber) SubscribeAllWithEOSE(ctx context.Context, filter
 		},
 		CaughtUp: func() { close(allEOSE) },
 	}
+	var gaveUp atomic.Pointer[error]
 	go func() {
 		defer close(done)
-		if err := syncer.Run(runCtx, filters); err != nil && s.Logger != nil {
-			s.Logger.Error("store-backed subscription stopped", zap.Error(err))
+		if err := syncer.Run(runCtx, filters); err != nil {
+			if errors.Is(err, ErrSubscriptionGaveUp) {
+				gaveUp.Store(&err)
+			}
+			if s.Logger != nil {
+				s.Logger.Error("store-backed subscription stopped", zap.Error(err))
+			}
 		}
 		close(events)
 		close(relayEOSE)
@@ -91,5 +99,11 @@ func (s *StoreBackedSubscriber) SubscribeAllWithEOSE(ctx context.Context, filter
 	return &MergedSubscription{
 		Events: events, RelayEOSE: relayEOSE, EndOfStoredEvents: allEOSE, Closed: closed,
 		closeFn: func() { closeOnce.Do(func() { cancel(); <-done }) },
+		gaveUp: func() error {
+			if err := gaveUp.Load(); err != nil {
+				return *err
+			}
+			return nil
+		},
 	}, nil
 }
