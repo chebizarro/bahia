@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
@@ -85,9 +86,12 @@ func serviceRegistryRecord(svc *domain.Service, deleted bool) (gonostr.Tags, str
 }
 
 // environmentRegistryRecord returns the family tags and content of an
-// environment's registry record. The deployment units are the environment's
-// implicit default unit; explicit units are not part of the record yet.
-func environmentRegistryRecord(env *domain.Environment, deleted bool) (gonostr.Tags, string) {
+// environment's registry record. units is the environment's explicit
+// deployment-unit set; when it is empty the record carries the implicit
+// default unit instead. The relay-first registry passes the set it is about
+// to store and the projector the set it reads back (environmentRecordUnits),
+// so both writers emit one record for one state (bahia-irsry.53).
+func environmentRegistryRecord(env *domain.Environment, units []domain.DeploymentUnit, deleted bool) (gonostr.Tags, string) {
 	snapshot := *env
 	domain.NormalizeEnvironmentTargeting(&snapshot)
 	content := map[string]any{
@@ -106,7 +110,7 @@ func environmentRegistryRecord(env *domain.Environment, deleted bool) (gonostr.T
 		content["protected"] = snapshot.Protected
 		content["deploy_strategy"] = string(snapshot.DeployStrategy)
 		content["targeting"] = snapshot.Targeting
-		content["deployment_units"] = []map[string]any{{"key": snapshot.Targeting.DefaultUnitKey, "implicit": true}}
+		content["deployment_units"] = recordDeploymentUnits(snapshot.Targeting.DefaultUnitKey, units)
 		content["reconcile_mode"] = string(snapshot.Targeting.DefaultReconcileMode)
 		putRecordTime(content, "created_at", snapshot.CreatedAt)
 		tags = append(tags,
@@ -120,15 +124,92 @@ func environmentRegistryRecord(env *domain.Environment, deleted bool) (gonostr.T
 	return tags, string(contentJSON)
 }
 
-// putRecordTime stores a registry timestamp at full precision. updated_at is
-// the revision clients send back as expected_updated_at, so it must survive
-// the round trip exactly; a zero time is omitted rather than written as "",
-// which a time.Time decoder rejects.
+// recordDeploymentUnits is the deployment_units content of an environment
+// record: each explicit unit's id and declared fields, sorted by key, or the
+// implicit default unit when there are none. Unit ids are minted by the
+// registry before the relay-first record is signed (and kept by the
+// repository), so both writers know them; timestamps are left out because
+// the relay-first record is signed before the repository stamps them.
+func recordDeploymentUnits(defaultKey string, units []domain.DeploymentUnit) []map[string]any {
+	if len(units) == 0 {
+		return []map[string]any{{"key": defaultKey, "implicit": true}}
+	}
+	sorted := append([]domain.DeploymentUnit(nil), units...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })
+	out := make([]map[string]any, 0, len(sorted))
+	for _, unit := range sorted {
+		domain.NormalizeDeploymentUnitTargeting(&unit)
+		record := map[string]any{
+			"key":            unit.Key,
+			"implicit":       false,
+			"runtime_type":   string(unit.RuntimeType),
+			"reconcile_mode": string(unit.ReconcileMode),
+			"ownership_mode": string(unit.OwnershipMode),
+		}
+		if unit.ID != uuid.Nil {
+			record["id"] = unit.ID.String()
+		}
+		putRecordString(record, "display_name", unit.DisplayName)
+		putRecordString(record, "endpoint_ref", unit.EndpointRef)
+		putRecordString(record, "compose_dir", unit.ComposeDir)
+		putRecordString(record, "namespace", unit.Namespace)
+		if len(unit.NetworkProfile) > 0 {
+			record["network_profile"] = unit.NetworkProfile
+		}
+		if unit.GitSource != nil && *unit.GitSource != (domain.GitSourceBinding{}) {
+			record["git_source"] = unit.GitSource
+		}
+		if len(unit.RuntimeConfig) > 0 {
+			record["runtime_config"] = unit.RuntimeConfig
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
+func putRecordString(content map[string]any, key, value string) {
+	if value != "" {
+		content[key] = value
+	}
+}
+
+// EnvironmentDeploymentUnitSource is the projector's source of an
+// environment's explicit deployment units (service.RegistryService). A
+// ProjectionSource that does not implement it has none, and its environment
+// records carry the implicit default unit.
+type EnvironmentDeploymentUnitSource interface {
+	ListEnvironmentDeploymentUnits(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error)
+}
+
+// environmentRecordUnits reads the explicit units the projector's record of
+// env carries. A failed read is an error rather than an empty set: publishing
+// the implicit default would replace the record's real units.
+func (p *Projector) environmentRecordUnits(ctx context.Context, env *domain.Environment, deleted bool) ([]domain.DeploymentUnit, error) {
+	if deleted || env == nil {
+		return nil, nil
+	}
+	source, ok := p.source.(EnvironmentDeploymentUnitSource)
+	if !ok || source == nil {
+		return nil, nil
+	}
+	units, err := source.ListEnvironmentDeploymentUnits(ctx, env.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read deployment units of environment %s: %w", env.ID, err)
+	}
+	return units, nil
+}
+
+// putRecordTime stores a registry timestamp. updated_at is the revision
+// clients send back as expected_updated_at, so it must survive the round trip
+// exactly: it is written at the precision Postgres stores
+// (domain.NormalizeRevisionTime), which writers also mint revisions at, so the
+// token read from the relay matches the database. A zero time is omitted
+// rather than written as "", which a time.Time decoder rejects.
 func putRecordTime(content map[string]any, key string, t time.Time) {
 	if t.IsZero() {
 		return
 	}
-	content[key] = t.UTC().Format(time.RFC3339Nano)
+	content[key] = domain.NormalizeRevisionTime(t).Format(time.RFC3339Nano)
 }
 
 // recordObject makes a nil and an empty free-form map serialize alike, so a
@@ -181,13 +262,13 @@ func (r *RelayFirstStatePublisher) PublishServiceRegistry(ctx context.Context, s
 	return r.publish(ctx, KindServiceRegistry, svc.ID, deleted, tags, content, "service.projection")
 }
 
-// PublishEnvironmentRegistry publishes env's environment-registry record (or
-// its tombstone when deleted).
-func (r *RelayFirstStatePublisher) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
+// PublishEnvironmentRegistry publishes env's environment-registry record,
+// with its explicit deployment units, or its tombstone when deleted.
+func (r *RelayFirstStatePublisher) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error {
 	if env == nil {
 		return fmt.Errorf("environment is nil")
 	}
-	tags, content := environmentRegistryRecord(env, deleted)
+	tags, content := environmentRegistryRecord(env, units, deleted)
 	return r.publish(ctx, KindEnvironmentRegistry, env.ID, deleted, tags, content, "environment.projection")
 }
 

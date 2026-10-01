@@ -224,8 +224,25 @@ func (s *RegistryService) ListServicesByOrg(ctx context.Context, orgID uuid.UUID
 	return svcs, nil
 }
 
+// UpdateService stores svc under a freshly minted revision (updated_at).
 func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service) error {
+	if svc == nil {
+		return fmt.Errorf("service is nil")
+	}
+	prepareServiceUpdate(svc)
+	return s.updateStampedService(ctx, svc)
+}
+
+// prepareServiceUpdate applies write normalization and mints the update's
+// revision, so a relay-first record signed before the write carries the
+// revision the repository then stores (bahia-irsry.53).
+func prepareServiceUpdate(svc *domain.Service) {
 	normalizeServiceRepositoryForWrite(svc)
+	svc.UpdatedAt = domain.NextRevisionTime(svc.UpdatedAt)
+}
+
+// updateStampedService writes a service prepared by prepareServiceUpdate.
+func (s *RegistryService) updateStampedService(ctx context.Context, svc *domain.Service) error {
 	if err := s.services.Update(ctx, svc); err != nil {
 		return err
 	}
@@ -265,7 +282,7 @@ func (s *RegistryService) updateServiceWithExpectedRevision(ctx context.Context,
 		if current == nil {
 			return fmt.Errorf("service %s: %w", svc.ID, repository.ErrNotFound)
 		}
-		if !current.UpdatedAt.Equal(expectedUpdatedAt) {
+		if !domain.SameRevision(current.UpdatedAt, expectedUpdatedAt) {
 			return fmt.Errorf(
 				"service %s revision conflict (expected %s, actual %s): %w: %w",
 				svc.ID,
@@ -276,12 +293,17 @@ func (s *RegistryService) updateServiceWithExpectedRevision(ctx context.Context,
 			)
 		}
 		svc.CreatedAt = current.CreatedAt
-		if beforeWrite != nil {
-			if err := beforeWrite(); err != nil {
-				return err
-			}
+		svc.UpdatedAt = domain.NextRevisionTime(current.UpdatedAt)
+		// The row is staged before the signer-first publication so the
+		// record carries the revision the repository stored; the
+		// transaction commits only once the publication succeeded.
+		if err := repos.Services.Update(ctx, svc); err != nil {
+			return err
 		}
-		return repos.Services.Update(ctx, svc)
+		if beforeWrite != nil {
+			return beforeWrite()
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -360,7 +382,24 @@ func prepareServiceCreate(svc *domain.Service) {
 	if svc.DefaultBranch == "" {
 		svc.DefaultBranch = "main"
 	}
+	stampCreateRevision(&svc.CreatedAt, &svc.UpdatedAt)
 	normalizeServiceRepositoryForWrite(svc)
+}
+
+// stampCreateRevision mints a create's timestamps before anything is
+// published or written, so the relay-first record and the stored row carry
+// the same created_at/updated_at and the projection of the row is not signed
+// again (bahia-irsry.53). Timestamps already set (by an earlier preparation
+// of the same create) are kept at the precision the database stores.
+func stampCreateRevision(createdAt, updatedAt *time.Time) {
+	if createdAt.IsZero() {
+		*createdAt = domain.NewRevisionTime()
+	}
+	*createdAt = domain.NormalizeRevisionTime(*createdAt)
+	if updatedAt.IsZero() {
+		*updatedAt = *createdAt
+	}
+	*updatedAt = domain.NormalizeRevisionTime(*updatedAt)
 }
 
 func normalizeServiceRepositoryForWrite(svc *domain.Service) {
@@ -451,7 +490,7 @@ func normalizeServiceRepositoryForRead(svc *domain.Service) {
 // CreateEnvironment stores a new environment under env.ID with the same
 // client-minted-id semantics as CreateService.
 func (s *RegistryService) CreateEnvironment(ctx context.Context, env *domain.Environment) error {
-	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
+	if err := prepareEnvironmentCreate(env, nil); err != nil {
 		return err
 	}
 	if replay, err := s.replayEnvironmentCreate(ctx, env, nil); err != nil || replay {
@@ -471,7 +510,7 @@ func (s *RegistryService) CreateEnvironment(ctx context.Context, env *domain.Env
 
 // CreateEnvironmentWithDeploymentUnits persists an environment and its explicit units in one transaction.
 func (s *RegistryService) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
-	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+	if err := prepareEnvironmentCreate(env, units); err != nil {
 		return err
 	}
 	if s.txExecutor == nil {
@@ -524,10 +563,27 @@ func (s *RegistryService) ListEnvironmentsByOrg(ctx context.Context, orgID uuid.
 	return s.environments.ListByOrg(ctx, orgID)
 }
 
+// UpdateEnvironment stores env under a freshly minted revision (updated_at).
 func (s *RegistryService) UpdateEnvironment(ctx context.Context, env *domain.Environment) error {
+	if err := prepareEnvironmentUpdate(env); err != nil {
+		return err
+	}
+	return s.updateStampedEnvironment(ctx, env)
+}
+
+// prepareEnvironmentUpdate validates env and mints the update's revision (see
+// prepareServiceUpdate).
+func prepareEnvironmentUpdate(env *domain.Environment) error {
 	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
 		return err
 	}
+	env.UpdatedAt = domain.NextRevisionTime(env.UpdatedAt)
+	return nil
+}
+
+// updateStampedEnvironment writes an environment prepared by
+// prepareEnvironmentUpdate.
+func (s *RegistryService) updateStampedEnvironment(ctx context.Context, env *domain.Environment) error {
 	if err := s.environments.Update(ctx, env); err != nil {
 		return err
 	}
@@ -543,10 +599,11 @@ func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Conte
 
 // updateEnvironmentWithDeploymentUnits runs an optional signer-first publication
 // after locking, checking, and staging the environment revision, but before the
-// transaction commits. Staging the write first is significant: environment
-// repositories assign UpdatedAt during Update, and the canonical relay event
-// must carry that exact revision or the next complete-set mutation will always
-// read a stale revision from the relay.
+// transaction commits. The revision is minted here at the precision Postgres
+// stores (domain.NextRevisionTime) and the row is staged before publishing, so
+// the canonical relay event carries exactly the stored revision; otherwise the
+// next complete-set mutation would read a token from the relay that the
+// database never matches (bahia-irsry.53).
 func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 	ctx context.Context,
 	env *domain.Environment,
@@ -578,7 +635,7 @@ func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 		if current == nil {
 			return fmt.Errorf("environment %s: %w", env.ID, repository.ErrNotFound)
 		}
-		if !current.UpdatedAt.Equal(expectedUpdatedAt) {
+		if !domain.SameRevision(current.UpdatedAt, expectedUpdatedAt) {
 			return fmt.Errorf(
 				"environment %s revision conflict (expected %s, actual %s): %w: %w",
 				env.ID,
@@ -594,15 +651,19 @@ func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 			return fmt.Errorf("deployment unit transactional mutation handling is not configured")
 		}
 		env.CreatedAt = current.CreatedAt
+		env.UpdatedAt = domain.NextRevisionTime(current.UpdatedAt)
 		if err := repos.Environments.Update(ctx, env); err != nil {
 			return err
 		}
-		if beforeWrite != nil {
-			if err := beforeWrite(); err != nil {
-				return err
-			}
+		// Units are reconciled before publishing too, so the record carries
+		// each unit's stored id (kept, or minted for a new key).
+		if err := reconcileExplicitDeploymentUnits(ctx, unitWriter, env.ID, units); err != nil {
+			return err
 		}
-		return reconcileExplicitDeploymentUnits(ctx, unitWriter, env.ID, units)
+		if beforeWrite != nil {
+			return beforeWrite()
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -642,6 +703,9 @@ func reconcileExplicitDeploymentUnits(ctx context.Context, repo deploymentUnitMu
 			}
 			continue
 		}
+		if unit.ID == uuid.Nil {
+			unit.ID = domain.NewEntityID()
+		}
 		if err := repo.Create(ctx, unit); err != nil {
 			return fmt.Errorf("creating deployment unit %q: %w", unit.Key, err)
 		}
@@ -659,6 +723,46 @@ func reconcileExplicitDeploymentUnits(ctx context.Context, repo deploymentUnitMu
 		}
 	}
 	return nil
+}
+
+// prepareEnvironmentCreate validates a create and mints its id (when absent)
+// and timestamps before anything is published or written.
+func prepareEnvironmentCreate(env *domain.Environment, units []*domain.DeploymentUnit) error {
+	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+		return err
+	}
+	stampCreateRevision(&env.CreatedAt, &env.UpdatedAt)
+	// The daemon authors the explicit units' ids (UUIDv7) before the
+	// relay-first record is signed, so the record names the stored units.
+	for _, unit := range units {
+		if unit.ID == uuid.Nil {
+			unit.ID = domain.NewEntityID()
+		}
+	}
+	return nil
+}
+
+// ListEnvironmentDeploymentUnits returns the environment's persisted explicit
+// deployment units (none when it only has its implicit default unit). It is
+// the unit source of the environment-registry record both writers build
+// (bahia-irsry.53).
+func (s *RegistryService) ListEnvironmentDeploymentUnits(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	if s.txExecutor == nil {
+		return nil, nil
+	}
+	var units []domain.DeploymentUnit
+	err := s.txExecutor.WithinTx(ctx, func(repos repository.TxRepos) error {
+		if repos.DeploymentUnits == nil {
+			return nil
+		}
+		listed, err := repos.DeploymentUnits.ListByEnvironment(ctx, environmentID)
+		units = listed
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing deployment units for environment %s: %w", environmentID, err)
+	}
+	return units, nil
 }
 
 func normalizeAndValidateEnvironmentMutation(env *domain.Environment, units []*domain.DeploymentUnit) error {

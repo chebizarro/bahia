@@ -19,9 +19,13 @@ import (
 // projector's per-coordinate created_at floor and dedupe memory, so the
 // relay-first record and the projection of the same state are identical and
 // signed once (bahia-irsry.41).
+//
+// units is the environment's explicit deployment-unit set as it will be
+// stored (nil or empty: only the implicit default unit), the same set the
+// projector reads back from the cache (bahia-irsry.53).
 type RelayFirstStatePublisher interface {
 	PublishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error
-	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error
+	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error
 }
 
 // RelayFirstRegistry wraps RegistryService so canonical relay publication succeeds before local cache writes.
@@ -77,11 +81,13 @@ func (r *RelayFirstRegistry) UpdateService(ctx context.Context, svc *domain.Serv
 	if svc == nil {
 		return fmt.Errorf("service is nil")
 	}
-	normalizeServiceRepositoryForWrite(svc)
+	// The revision is minted before publishing and the repository keeps it,
+	// so the projection of the stored row is the record signed here.
+	prepareServiceUpdate(svc)
 	if err := r.publishServiceRegistry(ctx, svc, false); err != nil {
 		return err
 	}
-	return r.delegate.UpdateService(ctx, svc)
+	return r.delegate.updateStampedService(ctx, svc)
 }
 
 // ImportObservedArtifact delegates the operator live-import path. It records
@@ -123,7 +129,7 @@ func (r *RelayFirstRegistry) DeleteService(ctx context.Context, id uuid.UUID, fo
 			}
 		}
 	}
-	if err := r.publishServiceRegistry(ctx, &domain.Service{ID: id, UpdatedAt: time.Now().UTC()}, true); err != nil {
+	if err := r.publishServiceRegistry(ctx, &domain.Service{ID: id, UpdatedAt: domain.NewRevisionTime()}, true); err != nil {
 		return err
 	}
 	return r.delegate.DeleteService(ctx, id, force)
@@ -133,28 +139,28 @@ func (r *RelayFirstRegistry) CreateEnvironment(ctx context.Context, env *domain.
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
-	if err := normalizeAndValidateEnvironmentMutation(env, nil); err != nil {
+	if err := prepareEnvironmentCreate(env, nil); err != nil {
 		return err
 	}
 	defer r.lockCreate(env.ID)()
 	if replay, err := r.delegate.replayEnvironmentCreate(ctx, env, nil); err != nil || replay {
 		return err
 	}
-	if err := r.publishEnvironmentRegistry(ctx, env, false); err != nil {
+	if err := r.publishEnvironmentRegistry(ctx, env, nil, false); err != nil {
 		return err
 	}
 	return r.delegate.CreateEnvironment(ctx, env)
 }
 
 // CreateEnvironmentWithDeploymentUnits publishes the environment's registry
-// record before atomically caching the environment and its units. The record
-// is the projector's (control_state_contract.go), which does not carry
-// explicit units yet.
+// record, including the explicit units it declares, before atomically caching
+// the environment and its units. The record is the projector's
+// (control_state_contract.go).
 func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error {
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
-	if err := normalizeAndValidateEnvironmentMutation(env, units); err != nil {
+	if err := prepareEnvironmentCreate(env, units); err != nil {
 		return err
 	}
 	if units == nil {
@@ -164,7 +170,7 @@ func (r *RelayFirstRegistry) CreateEnvironmentWithDeploymentUnits(ctx context.Co
 	if replay, err := r.delegate.replayEnvironmentCreate(ctx, env, units); err != nil || replay {
 		return err
 	}
-	if err := r.publishEnvironmentRegistry(ctx, env, false); err != nil {
+	if err := r.publishEnvironmentRegistry(ctx, env, derefDeploymentUnits(units), false); err != nil {
 		return err
 	}
 	return r.delegate.CreateEnvironmentWithDeploymentUnits(ctx, env, units)
@@ -174,13 +180,19 @@ func (r *RelayFirstRegistry) UpdateEnvironment(ctx context.Context, env *domain.
 	if r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
-	if env == nil {
-		return fmt.Errorf("environment is nil")
-	}
-	if err := r.publishEnvironmentRegistry(ctx, env, false); err != nil {
+	if err := prepareEnvironmentUpdate(env); err != nil {
 		return err
 	}
-	return r.delegate.UpdateEnvironment(ctx, env)
+	// A plain update keeps the stored explicit units, so the record carries
+	// them as the projection of the updated row will.
+	units, err := r.delegate.ListEnvironmentDeploymentUnits(ctx, env.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.publishEnvironmentRegistry(ctx, env, units, false); err != nil {
+		return err
+	}
+	return r.delegate.updateStampedEnvironment(ctx, env)
 }
 
 // UpdateEnvironmentWithDeploymentUnits publishes the environment's registry
@@ -194,7 +206,7 @@ func (r *RelayFirstRegistry) UpdateEnvironmentWithDeploymentUnits(ctx context.Co
 		return err
 	}
 	return r.delegate.updateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt, func() error {
-		return r.publishEnvironmentRegistry(ctx, env, false)
+		return r.publishEnvironmentRegistry(ctx, env, derefDeploymentUnits(units), false)
 	})
 }
 
@@ -213,7 +225,7 @@ func (r *RelayFirstRegistry) DeleteEnvironment(ctx context.Context, id uuid.UUID
 			}
 		}
 	}
-	if err := r.publishEnvironmentRegistry(ctx, &domain.Environment{ID: id, UpdatedAt: time.Now().UTC()}, true); err != nil {
+	if err := r.publishEnvironmentRegistry(ctx, &domain.Environment{ID: id, UpdatedAt: domain.NewRevisionTime()}, nil, true); err != nil {
 		return err
 	}
 	return r.delegate.DeleteEnvironment(ctx, id, force)
@@ -239,11 +251,11 @@ func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *do
 	return nil
 }
 
-func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
+func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error {
 	if r.publisher == nil {
 		return fmt.Errorf("nostr registry publisher is not configured")
 	}
-	if err := r.publisher.PublishEnvironmentRegistry(ctx, env, deleted); err != nil {
+	if err := r.publisher.PublishEnvironmentRegistry(ctx, env, units, deleted); err != nil {
 		return fmt.Errorf("publish environment registry event: %w", err)
 	}
 	return nil
@@ -266,6 +278,9 @@ func (r *RelayFirstRegistry) GetEnvironment(ctx context.Context, id uuid.UUID) (
 }
 func (r *RelayFirstRegistry) GetEnvironmentByName(ctx context.Context, name string) (*domain.Environment, error) {
 	return r.delegate.GetEnvironmentByName(ctx, name)
+}
+func (r *RelayFirstRegistry) ListEnvironmentDeploymentUnits(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	return r.delegate.ListEnvironmentDeploymentUnits(ctx, environmentID)
 }
 func (r *RelayFirstRegistry) ListEnvironments(ctx context.Context) ([]domain.Environment, error) {
 	return r.delegate.ListEnvironments(ctx)

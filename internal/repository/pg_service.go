@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,9 +32,7 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 	if svc.ID == uuid.Nil {
 		svc.ID = domain.NewEntityID()
 	}
-	now := time.Now().UTC()
-	svc.CreatedAt = now
-	svc.UpdatedAt = now
+	keepCreateTimestamps(&svc.CreatedAt, &svc.UpdatedAt)
 
 	repositoryJSON, err := marshalJSON(svc.Repository, "repository")
 	if err != nil {
@@ -153,8 +152,11 @@ func (r *PgServiceRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([
 	return services, rows.Err()
 }
 
+// Update stores svc. Its updated_at is kept when it is a newer pre-minted
+// revision and otherwise advanced (revisionAssignment); svc.UpdatedAt is set
+// to the stored revision.
 func (r *PgServiceRepository) Update(ctx context.Context, svc *domain.Service) error {
-	svc.UpdatedAt = time.Now().UTC()
+	requested, fallback := updateRevisionArgs(svc.UpdatedAt)
 	repositoryJSON, err := marshalJSON(svc.Repository, "repository")
 	if err != nil {
 		return err
@@ -164,16 +166,19 @@ func (r *PgServiceRepository) Update(ctx context.Context, svc *domain.Service) e
 		return err
 	}
 
-	cmd, err := r.pool.Exec(ctx, `
-		UPDATE services SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, repo_url=$4, repository=$5, artifact_repo=$6, default_branch=$7, runtime_type=$8, runtime_config=$9, updated_at=$10
+	var stored time.Time
+	err = r.pool.QueryRow(ctx, `
+		UPDATE services SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, repo_url=$4, repository=$5, artifact_repo=$6, default_branch=$7, runtime_type=$8, runtime_config=$9, `+revisionAssignment("$10", "$11")+`
 		WHERE id=$1
-	`, svc.ID, svc.OrgID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.UpdatedAt)
+		RETURNING updated_at
+	`, svc.ID, svc.OrgID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, requested, fallback).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("updating service %s: %w", svc.ID, ErrNotFound)
+	}
 	if err != nil {
 		return fmt.Errorf("updating service: %w", err)
 	}
-	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("updating service %s: %w", svc.ID, ErrNotFound)
-	}
+	svc.UpdatedAt = stored.UTC()
 	return nil
 }
 
