@@ -377,6 +377,7 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	m.SetWorkersActive(5)
 	m.RecordCashuPayment("sent", 100)
 	m.SetNostrRelayTransportHealth("wss://relay.example", map[string]int64{"auth-required": 2}, 3, 4)
+	m.SetNostrRelayClosedRetryExhausted("wss://relay.example", 2)
 	m.SetNostrOutboxDepth(5)
 	m.SetNostrOutboxFailed(2)
 	m.SetNostrEventStorage(100, 60, 30, 7, 2, 1234, map[string]int64{"protected": 1})
@@ -400,6 +401,7 @@ func TestProvider_MetricsHandler(t *testing.T) {
 		`bahia_nostr_relay_closed_total{reason="auth-required",relay="wss://relay.example"} 2`,
 		`bahia_nostr_relay_rereq_attempts_total{relay="wss://relay.example"} 3`,
 		`bahia_nostr_relay_reconnect_attempts_total{relay="wss://relay.example"} 4`,
+		`bahia_nostr_relay_closed_retry_exhausted_total{relay="wss://relay.example"} 2`,
 		"bahia_nostr_outbox_depth 5",
 		"# TYPE bahia_nostr_outbox_failed gauge",
 		"bahia_nostr_outbox_failed 2",

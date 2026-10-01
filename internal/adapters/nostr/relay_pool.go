@@ -58,6 +58,9 @@ type RelayPool struct {
 	// newResubscribeBackoff paces the reissue of one relay's REQ after a drop
 	// or a retryable CLOSED; replaceable in tests.
 	newResubscribeBackoff func() *Backoff
+	// maxRetryableClosedRetries bounds consecutive retryable CLOSED reissues
+	// per relay and filter (WithRetryableClosedBudget).
+	maxRetryableClosedRetries int
 	// fetchRelayLimits reads a relay's NIP-11 document after each connect,
 	// bounded by relayInfoTimeout; replaceable in tests.
 	fetchRelayLimits func(context.Context, string) (relayLimits, *nip11.RelayInformationDocument, error)
@@ -136,9 +139,10 @@ func (e *RelayReconnectBackoffError) Error() string {
 func (e *RelayReconnectBackoffError) Unwrap() error { return e.LastErr }
 
 const (
-	defaultRelayConnectTimeout   = 10 * time.Second
-	defaultRelayReconnectTimeout = 5 * time.Second
-	defaultRelayInfoTimeout      = 3 * time.Second
+	defaultRelayConnectTimeout    = 10 * time.Second
+	defaultRelayReconnectTimeout  = 5 * time.Second
+	defaultRelayInfoTimeout       = 3 * time.Second
+	defaultRetryableClosedRetries = 5
 )
 
 // defaultResubscribeBackoff paces the reissue of one relay's REQ: 1s doubling
@@ -180,6 +184,21 @@ func WithResubscribeBackoff(newBackoff func() *Backoff) RelayPoolOption {
 	}
 }
 
+// WithRetryableClosedBudget sets how many times in a row a REQ is reissued
+// after a relay CLOSED it with a retryable reason ("error:", "rate-limited:"
+// or an unknown prefix). The next such CLOSED is terminal: the relay's part of
+// the subscription ends with RelayClosed.Terminal set, as for a policy
+// refusal, and the relay's ClosedRetryExhausted count grows. An EOSE from the
+// relay resets the count. 0 gives up on the first retryable CLOSED; negative
+// values are ignored. The default is defaultRetryableClosedRetries (5).
+func WithRetryableClosedBudget(retries int) RelayPoolOption {
+	return func(p *RelayPool) {
+		if retries >= 0 {
+			p.maxRetryableClosedRetries = retries
+		}
+	}
+}
+
 // WithAuthSignFunc sets the function that signs NIP-42 AUTH events, for
 // callers whose signer is not a nostr.Signer.
 func WithAuthSignFunc(sign func(context.Context, *nostr.Event) error) RelayPoolOption {
@@ -204,23 +223,24 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 	normalizedURLs := normalizeRelayURLs(urls)
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &RelayPool{
-		relays:                make(map[string]*managedRelay),
-		retiredRelays:         make(map[string]*managedRelay),
-		activeSubscriptions:   make(map[uint64]*activeMergedSubscription),
-		relayInfoCache:        make(map[string]*nip11.RelayInformationDocument),
-		health:                NewRelayHealthTracker(),
-		urls:                  normalizedURLs,
-		logger:                logger,
-		ctx:                   ctx,
-		cancel:                cancel,
-		connectRelay:          nostr.RelayConnect,
-		now:                   time.Now,
-		newReconnectBackoff:   defaultReconnectBackoff,
-		connectTimeout:        defaultRelayConnectTimeout,
-		reconnectTimeout:      defaultRelayReconnectTimeout,
-		newResubscribeBackoff: defaultResubscribeBackoff,
-		fetchRelayLimits:      fetchRelayLimits,
-		relayInfoTimeout:      defaultRelayInfoTimeout,
+		relays:                    make(map[string]*managedRelay),
+		retiredRelays:             make(map[string]*managedRelay),
+		activeSubscriptions:       make(map[uint64]*activeMergedSubscription),
+		relayInfoCache:            make(map[string]*nip11.RelayInformationDocument),
+		health:                    NewRelayHealthTracker(),
+		urls:                      normalizedURLs,
+		logger:                    logger,
+		ctx:                       ctx,
+		cancel:                    cancel,
+		connectRelay:              nostr.RelayConnect,
+		now:                       time.Now,
+		newReconnectBackoff:       defaultReconnectBackoff,
+		connectTimeout:            defaultRelayConnectTimeout,
+		reconnectTimeout:          defaultRelayReconnectTimeout,
+		newResubscribeBackoff:     defaultResubscribeBackoff,
+		maxRetryableClosedRetries: defaultRetryableClosedRetries,
+		fetchRelayLimits:          fetchRelayLimits,
+		relayInfoTimeout:          defaultRelayInfoTimeout,
 	}
 	for _, url := range normalizedURLs {
 		p.health.GetOrCreate(url)
@@ -1248,7 +1268,8 @@ func (p *RelayPool) subscriptionRelays(urls []string) []*managedRelay {
 type ClosedAction int
 
 const (
-	// ClosedRetry reissues the REQ on that relay after a backoff.
+	// ClosedRetry reissues the REQ on that relay after a backoff, within the
+	// pool's retry budget (WithRetryableClosedBudget).
 	ClosedRetry ClosedAction = iota
 	// ClosedAuthenticate answers the relay's NIP-42 challenge and reissues.
 	ClosedAuthenticate
@@ -1260,7 +1281,7 @@ const (
 // its machine-readable prefix. "auth-required:" authenticates; "blocked:",
 // "restricted:", "invalid:", "unsupported:", "pow:" and "mute:" are policy
 // refusals that a retry cannot change; "error:", "rate-limited:" and reasons
-// without a known prefix are retried with backoff.
+// without a known prefix are retried with backoff, a bounded number of times.
 func ClassifyClosedReason(reason string) ClosedAction {
 	prefix := strings.ToLower(strings.TrimSpace(reason))
 	if i := strings.IndexByte(prefix, ':'); i >= 0 {
@@ -1564,6 +1585,7 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 		s.setPendingReason(relayURL, worker.pending)
 	}
 	authRetried := false
+	retryableClosed := 0
 	// Only a worker's first EOSE and first CLOSED block on the consumer.
 	eoseEmitted, closedEmitted := false, false
 	for {
@@ -1589,6 +1611,7 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 		}
 		if end.eosed {
 			authRetried = false
+			retryableClosed = 0
 			backoff.Reset()
 		}
 		if !end.closed {
@@ -1621,10 +1644,29 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 			}
 			action = ClosedTerminal
 		}
-		terminal := action == ClosedTerminal
+		// A retryable CLOSED is reissued at most maxRetryableClosedRetries
+		// times in a row (an EOSE resets the count); the next one is given up
+		// on like a policy refusal.
+		exhausted := false
+		if action == ClosedRetry {
+			retryableClosed++
+			exhausted = retryableClosed > s.pool.maxRetryableClosedRetries
+		}
+		terminal := action == ClosedTerminal || exhausted
 		settle(RelayStoredClosed, reason)
-		s.emitClosed(ctx, RelayClosed{RelayURL: relayURL, SubscriptionID: subID, Reason: reason, Terminal: terminal}, !closedEmitted)
+		if exhausted {
+			s.pool.health.GetOrCreate(relayURL).RecordClosedRetryExhausted()
+		}
+		// A terminal CLOSED always reaches the consumer: it ends this relay's
+		// part of the subscription.
+		s.emitClosed(ctx, RelayClosed{RelayURL: relayURL, SubscriptionID: subID, Reason: reason, Terminal: terminal}, !closedEmitted || terminal)
 		closedEmitted = true
+		if exhausted {
+			s.pool.logger.Warn("relay kept closing subscription; retry budget exhausted, not retrying",
+				zap.String("relay", relayURL), zap.String("reason", reason),
+				zap.Int("retries", s.pool.maxRetryableClosedRetries))
+			return
+		}
 		if terminal {
 			s.pool.logger.Warn("relay refused subscription; not retrying",
 				zap.String("relay", relayURL), zap.String("reason", reason))
@@ -2074,17 +2116,18 @@ type RelayHealthSnapshot struct {
 
 // RelayStatus describes the current status of a single relay.
 type RelayStatus struct {
-	URL               string
-	Connected         bool
-	Healthy           bool
-	Degraded          bool
-	SuccessRate       float64
-	LastSeen          time.Time
-	Errors            int
-	LastError         string
-	ClosedReasons     map[string]int64
-	ReREQAttempts     int64
-	ReconnectAttempts int64
+	URL                  string
+	Connected            bool
+	Healthy              bool
+	Degraded             bool
+	SuccessRate          float64
+	LastSeen             time.Time
+	Errors               int
+	LastError            string
+	ClosedReasons        map[string]int64
+	ReREQAttempts        int64
+	ClosedRetryExhausted int64
+	ReconnectAttempts    int64
 }
 
 // HealthSnapshot returns a point-in-time summary of configured relay state.
@@ -2112,6 +2155,7 @@ func (p *RelayPool) HealthSnapshot() RelayHealthSnapshot {
 			status.LastError = stats.LastError
 			status.ClosedReasons = stats.ClosedReasons
 			status.ReREQAttempts = stats.ReREQAttempts
+			status.ClosedRetryExhausted = stats.ClosedRetryExhausted
 			status.ReconnectAttempts = stats.Reconnects
 		} else {
 			status.Healthy = connected

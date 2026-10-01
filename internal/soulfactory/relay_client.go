@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -101,8 +102,11 @@ func withRelayResubscribeBackoff(newBackoff func() *nostradapter.Backoff) RelayC
 
 // RelayClient is SoulFactory's handle on a relay pool for one relay set.
 type RelayClient struct {
-	pool               *nostradapter.RelayPool
-	relays             []string
+	pool   *nostradapter.RelayPool
+	relays []string
+	// view is set on a client made by View: it uses another client's pool
+	// for some of its relays and does not own (or close) that pool.
+	view               bool
 	signer             relayAuthSigner
 	logger             *slog.Logger
 	validateEvent      func(*nostr.Event) bool
@@ -147,6 +151,54 @@ func (c *RelayClient) Relays() []string {
 	return append([]string(nil), c.relays...)
 }
 
+// View returns a client for relays, which must all be relays of c, over c's
+// pool: it shares c's connections, NIP-42 signer, event validation, publish
+// quorum and resubscribe pacing, and reads, writes and authenticates only on
+// relays. Closing a view leaves the pool open; c's owner closes it. ok is
+// false when relays is empty or names a relay c does not hold.
+func (c *RelayClient) View(relays []string) (*RelayClient, bool) {
+	if c == nil || c.pool == nil {
+		return nil, false
+	}
+	selected := make([]string, 0, len(relays))
+	for _, relay := range normalizeSoulRelays(relays) {
+		if !c.holds(relay) {
+			return nil, false
+		}
+		if url := nostr.NormalizeURL(relay); !slices.Contains(selected, url) {
+			selected = append(selected, url)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, false
+	}
+	view := *c
+	view.relays = selected
+	view.view = true
+	return &view, true
+}
+
+// RuntimeTransports returns a runtime-adapter transport factory over c: a
+// View of c's pool for relay sets c holds, and a new client (which the
+// adapter closes after use) for any other set, such as a runtime's own NIP-65
+// relays.
+func (c *RelayClient) RuntimeTransports() RuntimeAdapterTransportFactory {
+	return func(relays []string) (RuntimeAdapterTransport, error) {
+		if view, ok := c.View(relays); ok {
+			return view, nil
+		}
+		opts := []RelayClientOption{WithRelayLogger(c.log())}
+		if c.signer != nil {
+			opts = append(opts, WithRelaySigner(c.signer))
+		}
+		client, err := NewRelayClient(relays, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
+	}
+}
+
 // holds reports whether relay is one of the client's relays.
 func (c *RelayClient) holds(relay string) bool {
 	normalized := nostr.NormalizeURL(relay)
@@ -182,7 +234,7 @@ func (c *RelayClient) PublishWithResults(ctx context.Context, ev nostr.Event) ([
 	if c == nil || c.pool == nil {
 		return nil, fmt.Errorf("soul factory relay client is not configured")
 	}
-	results, _ := c.pool.PublishWithResults(ctx, ev)
+	results, _ := c.publishResults(ctx, ev)
 	accepted := countRelayAccepted(results)
 	required := c.requiredAcceptances()
 	failures := relayPublishFailures(results)
@@ -197,6 +249,15 @@ func (c *RelayClient) PublishWithResults(ctx context.Context, ev nostr.Event) ([
 		return results, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
 	}
 	return results, fmt.Errorf("event accepted by %d of %d required relays: %s", accepted, required, strings.Join(failures, "; "))
+}
+
+// publishResults publishes ev to the client's relays: every relay of the
+// pool, or a view's relays.
+func (c *RelayClient) publishResults(ctx context.Context, ev nostr.Event) ([]RelayPublishResult, error) {
+	if c.view {
+		return c.pool.PublishToRelaysWithResults(ctx, ev, c.relays)
+	}
+	return c.pool.PublishWithResults(ctx, ev)
 }
 
 // publishTo sends ev to the named relays of the client, concurrently, and
@@ -279,6 +340,9 @@ func countRelayAccepted(results []RelayPublishResult) int {
 // challenge is left unauthenticated; its later "auth-required:" answers are
 // handled per REQ and per publish by the pool.
 func (c *RelayClient) Authenticate(ctx context.Context) error {
+	if c != nil && c.view {
+		return c.authenticateRelays(ctx, c.relays)
+	}
 	return c.authenticateRelays(ctx, nil)
 }
 
@@ -325,7 +389,12 @@ func (c *RelayClient) subscribe(ctx context.Context, filters []nostr.Filter, ove
 	if len(filters) == 0 {
 		return nil, fmt.Errorf("at least one Nostr filter is required")
 	}
+	var relays []string
+	if c.view {
+		relays = c.relays
+	}
 	merged, err := c.pool.SubscribeWithOptions(ctx, filters, nostradapter.SubscribeOptions{
+		Relays:                 relays,
 		AwaitUnavailableRelays: true,
 		ResumeOverlap:          overlap,
 		ValidateEvent:          c.validateEvent,
@@ -372,9 +441,10 @@ func (c *RelayClient) Query(ctx context.Context, filters []nostr.Filter) ([]*nos
 	return sub.CollectStoredEvents(ctx)
 }
 
-// Close closes the client's pool and every subscription on it.
+// Close closes the client's pool and every subscription on it. Closing a
+// view does nothing: the pool belongs to the client it was made from.
 func (c *RelayClient) Close() {
-	if c != nil && c.pool != nil {
+	if c != nil && c.pool != nil && !c.view {
 		c.pool.Close()
 	}
 }

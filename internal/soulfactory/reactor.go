@@ -59,14 +59,18 @@ const (
 
 // Reactor subscribes to Nostr events and dispatches handlers.
 type Reactor struct {
-	config                   Config
-	generator                SoulGenerator
-	signer                   Signer
-	provisioner              ProvisioningEngine
-	lifecycleHandler         *LifecycleHandler
-	fleetConfigReconciler    *FleetConfigReconciler
-	logger                   *slog.Logger
+	config                Config
+	generator             SoulGenerator
+	signer                Signer
+	provisioner           ProvisioningEngine
+	lifecycleHandler      *LifecycleHandler
+	fleetConfigReconciler *FleetConfigReconciler
+	logger                *slog.Logger
+	// relayClient is the one relay client for the reactor's relay set: its
+	// subscription, reads and publishes share its pool. ownsRelayClient is
+	// false when WithRelayClient supplied it (its creator closes it).
 	relayClient              *RelayClient
+	ownsRelayClient          bool
 	publishFn                func(context.Context, *nostr.Event, []string) error
 	getSoulFn                func(context.Context, string) (*domain.AgentSoul, error)
 	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
@@ -121,6 +125,18 @@ func WithLifecycleHandler(handler *LifecycleHandler) ReactorOption {
 	}
 }
 
+// WithRelayClient makes the reactor use client, the shared relay client for
+// its relay set (Config.Relays and AdditionalRelays), instead of creating its
+// own. The caller keeps ownership: Reactor.Close leaves it open.
+func WithRelayClient(client *RelayClient) ReactorOption {
+	return func(r *Reactor) {
+		if client != nil {
+			r.relayClient = client
+			r.ownsRelayClient = false
+		}
+	}
+}
+
 // InstallProvisioningEngine installs the production provisioning engine after
 // dependent adapters have been constructed around this reactor.
 func (r *Reactor) InstallProvisioningEngine(engine ProvisioningEngine) error {
@@ -160,15 +176,23 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 		runs:        make(map[string]*domain.ProvisioningRun),
 	}
 	r.runtimeResults = newRuntimeResultWaiters(r.logger)
-	if allRelays := normalizeSoulRelays(append(append([]string{}, config.Relays...), config.AdditionalRelays...)); len(allRelays) > 0 && signer != nil {
-		if relayClient, err := NewRelayClient(allRelays, WithRelaySigner(signer), WithRelayLogger(r.logger)); err == nil {
-			r.relayClient = relayClient
-		}
-	}
-
 	for _, opt := range opts {
 		if opt != nil {
 			opt(r)
+		}
+	}
+	// One pool for the reactor's relay set, shared by its subscription,
+	// reads and publishes (bahia-irsry.47).
+	if r.relayClient == nil {
+		if allRelays := normalizeSoulRelays(append(append([]string{}, config.Relays...), config.AdditionalRelays...)); len(allRelays) > 0 {
+			var clientOpts []RelayClientOption
+			if signer != nil {
+				clientOpts = append(clientOpts, WithRelaySigner(signer))
+			}
+			if relayClient, err := NewRelayClient(allRelays, append(clientOpts, WithRelayLogger(r.logger))...); err == nil {
+				r.relayClient = relayClient
+				r.ownsRelayClient = true
+			}
 		}
 	}
 
@@ -254,15 +278,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 	relayClient := r.relayClient
 	if relayClient == nil {
-		allRelays := normalizeSoulRelays(append(append([]string{}, r.config.Relays...), r.config.AdditionalRelays...))
-		if len(allRelays) == 0 {
-			return fmt.Errorf("at least one Soul Factory relay is required")
-		}
-		var err error
-		relayClient, err = NewRelayClient(allRelays, WithRelaySigner(r.signer), WithRelayLogger(r.logger))
-		if err != nil {
-			return err
-		}
+		return fmt.Errorf("at least one Soul Factory relay is required")
 	}
 
 	// Resumable: after a relay reconnects, its REQ resumes from the newest event
@@ -785,11 +801,15 @@ func (r *Reactor) publish(ctx context.Context, event *nostr.Event, relays []stri
 	if len(relays) == 0 {
 		return fmt.Errorf("no Soul Factory relays configured for publishing kind %d", event.Kind)
 	}
-	relayClient, err := NewRelayClient(relays, WithRelaySigner(r.signer), WithRelayLogger(r.logger))
-	if err != nil {
-		return err
+	if r.relayClient == nil {
+		return fmt.Errorf("soul factory relay client is not configured")
 	}
-	defer relayClient.Close()
+	// Publish over the reactor's shared pool (no pool per publish), with
+	// its publish quorum applied to these relays.
+	relayClient, ok := r.relayClient.View(relays)
+	if !ok {
+		return fmt.Errorf("soul factory publish relays %v are not all in the reactor's relay set", relays)
+	}
 	published, err := relayClient.Publish(ctx, *event)
 	if err != nil {
 		return err
@@ -798,6 +818,14 @@ func (r *Reactor) publish(ctx context.Context, event *nostr.Event, relays []stri
 		return fmt.Errorf("event was not accepted by any relay")
 	}
 	return nil
+}
+
+// Close closes the reactor's relay pool when the reactor created it. Stop Run
+// first; a relay client supplied with WithRelayClient stays open.
+func (r *Reactor) Close() {
+	if r != nil && r.ownsRelayClient && r.relayClient != nil {
+		r.relayClient.Close()
+	}
 }
 
 // GetRun returns the current provisioning run for a request.

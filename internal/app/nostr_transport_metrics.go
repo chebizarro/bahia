@@ -81,10 +81,10 @@ func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 		return
 	}
 	type relayMetrics struct {
-		healthy, degraded         bool
-		successRate               float64
-		closedReasons             map[string]int64
-		reREQAttempts, reconnects int64
+		healthy, degraded                               bool
+		successRate                                     float64
+		closedReasons                                   map[string]int64
+		reREQAttempts, reconnects, closedRetryExhausted int64
 	}
 	aggregated := make(map[string]*relayMetrics)
 	seen := make(map[*nostrAdapter.RelayPool]struct{}, len(r.pools))
@@ -112,11 +112,13 @@ func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 			}
 			values.reREQAttempts += relay.ReREQAttempts
 			values.reconnects += relay.ReconnectAttempts
+			values.closedRetryExhausted += relay.ClosedRetryExhausted
 		}
 	}
 	for relayURL, values := range aggregated {
 		r.metrics.SetNostrRelayHealth(relayURL, values.healthy, values.degraded && !values.healthy, values.successRate)
 		r.metrics.SetNostrRelayTransportHealth(relayURL, values.closedReasons, values.reREQAttempts, values.reconnects)
+		r.metrics.SetNostrRelayClosedRetryExhausted(relayURL, values.closedRetryExhausted)
 	}
 	if r.outbox == nil {
 		if r.storage == nil {

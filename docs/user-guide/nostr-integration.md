@@ -242,9 +242,14 @@ nostr:
     - "wss://contextvm-relay.example.com"
   # Fixed behavior when a relay requires NIP-42 AUTH and no signer is available.
   relay_auth_unavailable: "exclude_and_fail"
+  # REQ reissues after consecutive retryable CLOSED replies, per relay and filter,
+  # before the pool gives up on that relay. EOSE resets the count. 0 or unset = 5; max 100.
+  closed_retry_budget: 5
 ```
 
 Bahia resolves both its ContextVM request-subscription pool and its isolated response-publication pool to the same deduplicated relay union. With `nostr.sidecar.enabled=true`, the preferred sidecar backend URL (or `public_url` when no backend URL is set) augments `nostr.contextvm_relays`; it does not replace them. When `contextvm_relays` is empty, `browser_relays` supplies the direct destinations. This ensures progress acknowledgments and terminal results reach operators subscribed on public ContextVM/browser relays while retaining the local sidecar copy.
+
+The daemon's `RelayPool` owns NIP-42 AUTH, per-relay re-REQ and CLOSED classification. A relay that answers a REQ with `auth-required:` gets the pool's AUTH and the same REQ again on that relay; `blocked:`, `restricted:`, `invalid:`, `unsupported:`, `pow:` and `mute:` are terminal. An `error:`, `rate-limited:` or unknown CLOSED reason is reissued with backoff up to `nostr.closed_retry_budget` times in a row (an EOSE from the relay resets the count); the next one is terminal, surfaced to subscribers like a policy refusal, and counted by `bahia_nostr_relay_closed_retry_exhausted_total{relay=...}`. NIP-77 negentropy sessions use the same AUTH signer and re-open a refused `NEG-OPEN` once after AUTH.
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 

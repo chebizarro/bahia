@@ -70,3 +70,22 @@ func TestNostrLocalStoreLoadsFromYAML(t *testing.T) {
 		t.Fatalf("loaded %+v", store)
 	}
 }
+
+func TestNostrClosedRetryBudgetDefaultsAndValidation(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Nostr.ClosedRetryBudget != ClosedRetryBudgetDefault {
+		t.Fatalf("budget = %d, want %d", cfg.Nostr.ClosedRetryBudget, ClosedRetryBudgetDefault)
+	}
+	for _, budget := range []int{0, 1, ClosedRetryBudgetMax} {
+		cfg.Nostr.ClosedRetryBudget = budget
+		if err := cfg.Validate(); err != nil && strings.Contains(err.Error(), "closed_retry_budget") {
+			t.Fatalf("budget %d rejected: %v", budget, err)
+		}
+	}
+	for _, budget := range []int{-1, ClosedRetryBudgetMax + 1} {
+		cfg.Nostr.ClosedRetryBudget = budget
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "nostr.closed_retry_budget") {
+			t.Fatalf("budget %d validation = %v", budget, err)
+		}
+	}
+}

@@ -249,7 +249,7 @@ func (c *ContextVMRequestClient) Request(ctx context.Context, method string, par
 			sub.Close()
 			return nil, requestError("subscribe for operator ContextVM replies", attempt, fmt.Errorf("no configured relay established a reply subscription"))
 		}
-		activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, sub, filters, activationTimeout)
+		activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, sub, activationTimeout)
 		if activationErr != nil {
 			activatedSub.Close()
 			return nil, requestError("activate operator ContextVM reply subscription", attempt, activationErr)
@@ -271,7 +271,7 @@ func (c *ContextVMRequestClient) Request(ctx context.Context, method string, par
 		everAccepted = true
 
 		attemptCtx, cancelAttempt := context.WithTimeout(ctx, resultTimeout)
-		result, awaitErr := c.awaitOperatorResult(attemptCtx, sub, filters, inner, outerRequestIDs, requestID, onStatus)
+		result, awaitErr := c.awaitOperatorResult(attemptCtx, sub, inner, outerRequestIDs, requestID, onStatus)
 		cancelAttempt()
 		sub.Close()
 		if awaitErr == nil {
