@@ -194,7 +194,7 @@ type Projector struct {
 	dnsPolicySource       DNSPolicyProjectionSource
 	sbomSource            SBOMProjectionSource
 	publisher             ProjectionPublisher
-	eventRepo             repository.NostrEventRepository
+	history               ProjectionHistory
 	privateKey            string
 	enabled               bool
 	repairInterval        time.Duration
@@ -285,15 +285,27 @@ func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) Pro
 	}
 }
 
-// NewProjector creates a canonical Nostr read-model projector.
-func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher ProjectionPublisher, eventRepo repository.NostrEventRepository, logger *zap.Logger, opts ...ProjectorOption) *Projector {
+// ProjectionHistory is the projector's memory of what it published: the
+// daemon's own events, newest first. In the daemon it is the author-scoped
+// view of the local event store (LocalEventRepository.Authored), which holds
+// only the latest version of each addressable coordinate and nothing whose
+// delivery was abandoned (bahia-irsry.10.4, audit B-3); PostgreSQL is not
+// consulted. Every NostrEventRepository satisfies it.
+type ProjectionHistory interface {
+	ListByKind(ctx context.Context, kind int, limit int) ([]repository.NostrEventRecord, error)
+	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]repository.NostrEventRecord, error)
+}
+
+// NewProjector creates a canonical Nostr read-model projector. history may be
+// nil, in which case the dedupe cache starts cold.
+func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher ProjectionPublisher, history ProjectionHistory, logger *zap.Logger, opts ...ProjectorOption) *Projector {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	p := &Projector{
 		source:             source,
 		publisher:          publisher,
-		eventRepo:          eventRepo,
+		history:            history,
 		privateKey:         cfg.PrivateKey,
 		enabled:            cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
 		repairInterval:     10 * time.Minute,
@@ -2110,7 +2122,7 @@ func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
 	if p.dnsPublishedPolicies == nil {
 		p.dnsPublishedPolicies = map[string]dnsPublishedPolicy{}
 	}
-	if p.eventRepo == nil {
+	if p.history == nil {
 		p.dnsCacheHydrated = true
 		return nil
 	}
@@ -2189,9 +2201,9 @@ func (p *Projector) liveRetainedControlState(ctx context.Context, legacyKind int
 	var records []repository.NostrEventRecord
 	var err error
 	if legacyValue != "" {
-		records, err = p.eventRepo.FindByTag(ctx, "legacy_kind", legacyValue, []int{wireKind}, projectionHydrateLimit)
+		records, err = p.history.FindByTag(ctx, "legacy_kind", legacyValue, []int{wireKind}, projectionHydrateLimit)
 	} else {
-		records, err = p.eventRepo.ListByKind(ctx, wireKind, projectionHydrateLimit)
+		records, err = p.history.ListByKind(ctx, wireKind, projectionHydrateLimit)
 	}
 	if err != nil {
 		return nil, err

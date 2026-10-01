@@ -242,9 +242,14 @@ nostr:
     - "wss://contextvm-relay.example.com"
   # Fixed behavior when a relay requires NIP-42 AUTH and no signer is available.
   relay_auth_unavailable: "exclude_and_fail"
+  # REQ reissues after consecutive retryable CLOSED replies, per relay and filter,
+  # before the pool gives up on that relay. EOSE resets the count. 0 or unset = 5; max 100.
+  closed_retry_budget: 5
 ```
 
 Bahia resolves both its ContextVM request-subscription pool and its isolated response-publication pool to the same deduplicated relay union. With `nostr.sidecar.enabled=true`, the preferred sidecar backend URL (or `public_url` when no backend URL is set) augments `nostr.contextvm_relays`; it does not replace them. When `contextvm_relays` is empty, `browser_relays` supplies the direct destinations. This ensures progress acknowledgments and terminal results reach operators subscribed on public ContextVM/browser relays while retaining the local sidecar copy.
+
+The daemon's `RelayPool` owns NIP-42 AUTH, per-relay re-REQ and CLOSED classification. A relay that answers a REQ with `auth-required:` gets the pool's AUTH and the same REQ again on that relay; `blocked:`, `restricted:`, `invalid:`, `unsupported:`, `pow:` and `mute:` are terminal. An `error:`, `rate-limited:` or unknown CLOSED reason is reissued with backoff up to `nostr.closed_retry_budget` times in a row (an EOSE from the relay resets the count); the next one is terminal, surfaced to subscribers like a policy refusal, and counted by `bahia_nostr_relay_closed_retry_exhausted_total{relay=...}`. NIP-77 negentropy sessions use the same AUTH signer and re-open a refused `NEG-OPEN` once after AUTH.
 
 `nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
 
@@ -711,7 +716,20 @@ Policy breach notifications use the existing notification dispatcher with event 
 
 Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
 
-Terminal ContextVM responses use a separate idempotency cache keyed by requester pubkey, method, and progress token. Completed responses are cached in memory and persisted in PostgreSQL for 24 hours. A duplicate request within that window republishes the cached JSON-RPC response without re-running the handler; this recovers a completed command when its first ephemeral response was lost.
+The daemon keeps a ContextVM request ledger in its local bbolt store (`nostr.local_store.path`), next to the per-relay request cursors. The ledger, not PostgreSQL, guarantees that a request runs at most once across restarts:
+
+- Every request is claimed by its request event ID (the inner ID of a gift wrap) before its handler runs. A relay replay, a second relay's copy, or a re-wrapped copy of a handled request is never executed again.
+- A request with an idempotency key (`_meta.progressToken`, scoped to requester and method, bound to a fingerprint of the parameters) keeps its terminal response, saved before it is published. A retry, including a new request reusing the key, gets that response replayed under the retry's own JSON-RPC ID. Reusing the key with different parameters is rejected.
+- A request without a key keeps no response, since responses can carry revealed secrets. Its retry gets error `-32011` instead of a second execution.
+- A request whose execution never recorded an outcome (the daemon crashed mid-handler) also gets `-32011` rather than a blind re-run. Reconcile the resulting state before sending a new request.
+
+PostgreSQL response storage, when configured, remains a 24-hour secondary index. Responses recorded there before the ledger existed are adopted on first retry, but correctness no longer depends on it.
+
+Each relay has its own request subscription and cursor. The cursor is the wall-clock time just before the daemon opened that relay's REQ, committed only when that REQ sends `EOSE`. It is never derived from event timestamps. Resume uses `since = cursor - 49h`, because NIP-59 lets senders randomize a gift wrap's outer `created_at` up to two days into the past; the extra hour covers clock skew. During live delivery, a cursor older than 12 hours is refreshed by opening a new REQ, whose `EOSE` commits a new anchor; the old REQ keeps delivering until then.
+
+Requests whose own `created_at` is more than 7 days old are not run. A new or wiped ledger also refuses requests created more than 2 minutes before it existed, so losing the store can drop old requests but never re-runs them.
+
+Only stored `1059` requests are recovered after downtime, and only while a relay retains them. Plain `25910` and the oversized-request `21059` fallback are ephemeral: relays forward them live and never store them, so a request sent while the daemon is down is lost and the client must retry. Durable client-signed intents are Phase 3 (`bahia-irsry.11`), not part of this interactive transport. The standalone DNS agent does not use this ledger. Its own store-backed subscription (`bahia-irsry.10.5`) delivers each stored wrap at most once, and its transport keeps in-memory request dedup and the 2-minute inner-event window. A transport uses one persisted layer or the other, never both.
 
 The sidecar stores accepted non-ephemeral events in a bbolt `fiatjaf.com/nostr/eventstore` with tag indexes, so retained relay history survives process and container restarts. Replaceable and addressable events retain only the newest event for their coordinate. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay. Kind-5 deletions (NIP-09) remove the author's referenced events and keep them from being re-accepted; NIP-40 `expiration` is honoured.
 

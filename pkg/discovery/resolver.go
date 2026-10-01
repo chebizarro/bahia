@@ -13,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
@@ -113,6 +114,21 @@ func WithPrivateKey(privateKeyHex string) Option {
 	}
 }
 
+// WithStorePath keeps endpoint events and per-relay sync cursors in a local
+// bbolt event store at path (bahia-irsry.10.5). Start then restores endpoints
+// from the store before any relay answers, and syncs each relay on its own:
+// replaceable endpoint state is reconciled with NIP-77 where the relay
+// supports it, so a restart downloads only the events the store lacks, and a
+// relay that was down catches up independently when it returns.
+//
+// The store is a cache: deleting it is safe, and the resolver rebuilds it from
+// its relays. One process may open a path once at a time (other processes are
+// locked out). Without this option the resolver keeps everything in memory and
+// resyncs from its relays on every start.
+func WithStorePath(path string) Option {
+	return func(r *Resolver) { r.storePath = strings.TrimSpace(path) }
+}
+
 type relayPool interface {
 	Connect(context.Context)
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error)
@@ -123,7 +139,8 @@ type relayPool interface {
 type relayPoolFactory func([]string, *zap.Logger, string) relayPool
 
 // Resolver maintains a live cache of DNS endpoints from Bahia's canonical kind
-// 30900 DNS endpoint state.
+// 30900 DNS endpoint state, in memory or (WithStorePath) backed by a local
+// event store.
 type Resolver struct {
 	relayURLs    []string
 	authorPubkey string
@@ -133,8 +150,12 @@ type Resolver struct {
 	authors      []string
 	authorSet    map[string]struct{}
 
-	logger      *zap.Logger
-	privateKey  string
+	logger     *zap.Logger
+	privateKey string
+	// storePath enables the local event store (WithStorePath); store is the
+	// open handle while started.
+	storePath   string
+	store       *localstore.Store
 	poolFactory relayPoolFactory
 
 	mu            sync.RWMutex
@@ -231,13 +252,26 @@ func (r *Resolver) Start(ctx context.Context) error {
 		return nil
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
 	pool := r.poolFactory(r.relayURLs, r.logger, r.privateKey)
+	if r.storePath != "" {
+		if _, ok := pool.(*nostradapter.RelayPool); !ok {
+			pool.Close()
+			return errors.New("discovery resolver start: a local event store needs the default relay pool")
+		}
+		store, err := localstore.Open(r.storePath)
+		if err != nil {
+			pool.Close()
+			return fmt.Errorf("discovery resolver start: open local event store: %w", err)
+		}
+		r.store = store
+		r.restoreStored(store)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
 	r.pool = pool
 	r.cancel = cancel
 	r.started = true
 	r.wg.Add(1)
-	go r.run(runCtx, pool)
+	go r.run(runCtx, pool, r.store)
 	return nil
 }
 
@@ -250,9 +284,11 @@ func (r *Resolver) Stop() error {
 	}
 	cancel := r.cancel
 	pool := r.pool
+	store := r.store
 	r.started = false
 	r.cancel = nil
 	r.pool = nil
+	r.store = nil
 	r.lifecycleMu.Unlock()
 
 	if cancel != nil {
@@ -262,12 +298,19 @@ func (r *Resolver) Stop() error {
 		pool.Close()
 	}
 	r.wg.Wait()
+	if store != nil {
+		return store.Close()
+	}
 	return nil
 }
 
-// Ready is closed once the first subscription has received EOSE from every
-// relay, i.e. stored endpoint state has been backfilled. Lookups before that
-// may miss endpoints that exist on the relays.
+// Ready is closed once stored endpoint state has been backfilled from the
+// relays. In memory, that is when the first subscription has received EOSE
+// from every relay. With a local event store, it is when every relay has
+// caught up or failed its first attempt and at least one has caught up, so a
+// relay that is down does not hold Ready back; lookups before Ready already
+// see the endpoints restored from the store. Lookups before Ready may miss
+// endpoints that exist on the relays.
 func (r *Resolver) Ready() <-chan struct{} {
 	return r.ready
 }
@@ -358,9 +401,13 @@ func newRelayPool(relayURLs []string, logger *zap.Logger, privateKey string) rel
 	return nostradapter.NewRelayPool(relayURLs, logger, opts...)
 }
 
-func (r *Resolver) run(ctx context.Context, pool relayPool) {
+func (r *Resolver) run(ctx context.Context, pool relayPool, store *localstore.Store) {
 	defer r.wg.Done()
 	r.prepareRelays(ctx, pool)
+	if store != nil {
+		r.syncStore(ctx, pool.(*nostradapter.RelayPool), store)
+		return
+	}
 
 	backoff := resolverReconnectInitialBackoff
 	for {
@@ -558,12 +605,7 @@ func (r *Resolver) consume(ctx context.Context, merged *nostradapter.MergedSubsc
 				}
 				return errors.New("subscription event stream closed")
 			}
-			if err := r.applyEvent(ev); err != nil {
-				if errors.Is(err, errNotDNSEndpoint) {
-					r.logger.Debug("skipped non-endpoint control state", zap.String("event_id", eventID(ev)), zap.Error(err))
-				} else {
-					r.logger.Warn("ignored invalid discovery endpoint event", zap.String("event_id", eventID(ev)), zap.Error(err))
-				}
+			if !r.applyLogged(ev) {
 				continue
 			}
 			if caughtUp {
@@ -587,23 +629,77 @@ func (r *Resolver) markSynced(createdAt nostr.Timestamp) {
 	r.readyOnce.Do(func() { close(r.ready) })
 }
 
-// subscriptionFilter scopes the REQ to canonical DNS endpoint state from the
-// trusted Bahia service keys. #t is a single-letter tag, so NIP-01 relays index it; the
-// envelope's domain/schema/legacy_kind tags are multi-letter and are checked
-// locally. After a completed backfill, resubscribes start from the newest seen
-// created_at minus resolverSinceOverlap instead of re-downloading everything.
-func (r *Resolver) subscriptionFilter() nostr.Filter {
+// restoreStored applies the endpoint events already in the local store: the
+// latest version per coordinate and key, tombstones included.
+func (r *Resolver) restoreStored(store *localstore.Store) {
+	restored := 0
+	for ev := range store.QueryEvents(r.endpointFilter()) {
+		if r.applyLogged(&ev) {
+			restored++
+		}
+	}
+	r.logger.Info("restored discovery endpoint events from the local event store", zap.Int("events", restored))
+}
+
+// syncStore keeps the local store and the cache in sync with every relay until
+// ctx ends (see WithStorePath).
+func (r *Resolver) syncStore(ctx context.Context, pool *nostradapter.RelayPool, store *localstore.Store) {
+	syncer := &nostradapter.ProcessSync{
+		Pool:   pool,
+		Store:  store,
+		Logger: r.logger,
+		Apply:  func(_ context.Context, ev *nostr.Event) { r.applyLogged(ev) },
+		RelayCaughtUp: func(relayURL string) {
+			r.logger.Info("relay caught up with stored endpoint state", zap.String("relay", relayURL))
+		},
+		CaughtUp: func() {
+			r.logger.Info("historical endpoint catch-up complete")
+			r.markSynced(0)
+		},
+	}
+	if err := syncer.Run(ctx, []nostr.Filter{r.endpointFilter()}); err != nil && ctx.Err() == nil {
+		r.logger.Error("discovery resolver sync stopped", zap.Error(err))
+	}
+}
+
+// applyLogged applies one event and logs why it was ignored; it reports
+// whether the event was applied.
+func (r *Resolver) applyLogged(ev *nostr.Event) bool {
+	err := r.applyEvent(ev)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, errNotDNSEndpoint):
+		r.logger.Debug("skipped non-endpoint control state", zap.String("event_id", eventID(ev)), zap.Error(err))
+	default:
+		r.logger.Warn("ignored invalid discovery endpoint event", zap.String("event_id", eventID(ev)), zap.Error(err))
+	}
+	return false
+}
+
+// endpointFilter scopes REQs to canonical DNS endpoint state from the trusted
+// Bahia service keys. #t is a single-letter tag, so NIP-01 relays index it;
+// the envelope's domain/schema/legacy_kind tags are multi-letter and are
+// checked locally.
+func (r *Resolver) endpointFilter() nostr.Filter {
 	authors := make([]nostr.PubKey, 0, len(r.authors))
 	for _, author := range r.authors {
 		if pubkey, err := nostrutil.PubKeyFromHex(author); err == nil {
 			authors = append(authors, pubkey)
 		}
 	}
-	filter := nostr.Filter{
+	return nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 		Authors: authors,
 		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
 	}
+}
+
+// subscriptionFilter is the in-memory resolver's REQ: endpointFilter and,
+// after a completed backfill, a since of the newest seen created_at minus
+// resolverSinceOverlap instead of re-downloading everything.
+func (r *Resolver) subscriptionFilter() nostr.Filter {
+	filter := r.endpointFilter()
 	r.mu.RLock()
 	synced := r.syncedThrough
 	r.mu.RUnlock()

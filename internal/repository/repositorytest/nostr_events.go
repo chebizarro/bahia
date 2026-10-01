@@ -1,4 +1,8 @@
-package repository
+// Package repositorytest holds in-memory doubles of repository interfaces for
+// tests. Production code must not use it: the daemon's in-memory nostr_events
+// fallback was removed (bahia-irsry.10.4, audit B-12), and PostgreSQL-less mode
+// reads the local event store instead (nostr.LocalEventRepository).
+package repositorytest
 
 import (
 	"context"
@@ -7,25 +11,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openagentsinc/bahia/internal/repository"
+
 	"github.com/google/uuid"
 )
 
-// InMemoryNostrEventRepository is a mutex-protected in-memory implementation of NostrEventRepository.
+// InMemoryNostrEventRepository is a mutex-protected in-memory implementation of repository.NostrEventRepository.
 type InMemoryNostrEventRepository struct {
 	mu      sync.RWMutex
-	records map[string]NostrEventRecord
-	cursors map[string]NostrMigrationCursor
+	records map[string]repository.NostrEventRecord
+	cursors map[string]repository.NostrMigrationCursor
 }
 
-var _ NostrEventOutboxRepository = (*InMemoryNostrEventRepository)(nil)
+var _ repository.NostrEventOutboxRepository = (*InMemoryNostrEventRepository)(nil)
 
 // NewInMemoryNostrEventRepository creates an empty in-memory Nostr event repository.
 func NewInMemoryNostrEventRepository() *InMemoryNostrEventRepository {
-	return &InMemoryNostrEventRepository{records: make(map[string]NostrEventRecord), cursors: make(map[string]NostrMigrationCursor)}
+	return &InMemoryNostrEventRepository{records: make(map[string]repository.NostrEventRecord), cursors: make(map[string]repository.NostrMigrationCursor)}
 }
 
 // Record stores rec by ID. Duplicate IDs are accepted idempotently and reported as inserted=false.
-func (r *InMemoryNostrEventRepository) Record(_ context.Context, rec *NostrEventRecord) (bool, error) {
+func (r *InMemoryNostrEventRepository) Record(_ context.Context, rec *repository.NostrEventRecord) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -41,14 +47,14 @@ func (r *InMemoryNostrEventRepository) Record(_ context.Context, rec *NostrEvent
 		stored.Tags = json.RawMessage("[]")
 	}
 	if stored.PublishState == "" {
-		stored.PublishState = NostrPublishStateNotApplicable
+		stored.PublishState = repository.NostrPublishStateNotApplicable
 	}
 	r.records[stored.ID] = stored
 	return true, nil
 }
 
 // GetByID retrieves a Nostr event by ID.
-func (r *InMemoryNostrEventRepository) GetByID(_ context.Context, id string) (*NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) GetByID(_ context.Context, id string) (*repository.NostrEventRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -59,34 +65,31 @@ func (r *InMemoryNostrEventRepository) GetByID(_ context.Context, id string) (*N
 	return cloneNostrEventRecordPtr(&rec), nil
 }
 
-// FindByID retrieves a Nostr event by ID.
-func (r *InMemoryNostrEventRepository) FindByID(ctx context.Context, id string) (*NostrEventRecord, error) {
-	return r.GetByID(ctx, id)
-}
-
 // ListUnpublished returns the oldest pending outbound events first, across
 // every publish target.
-func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit int) ([]NostrEventRecord, error) {
-	return r.listPending(func(NostrEventRecord) bool { return true }, nil, limit), nil
+func (r *InMemoryNostrEventRepository) ListUnpublished(_ context.Context, limit int) ([]repository.NostrEventRecord, error) {
+	return r.listPending(func(rec repository.NostrEventRecord) bool {
+		return !repository.IsLocalOutboxArchiveTarget(rec.PublishTarget)
+	}, nil, limit), nil
 }
 
 // ListUnpublishedAfter returns pending outbound events for one publish target
 // after the keyset cursor, oldest first, matching the PostgreSQL
 // (received_at, id) ordering.
-func (r *InMemoryNostrEventRepository) ListUnpublishedAfter(_ context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
-	return r.listPending(func(rec NostrEventRecord) bool { return rec.PublishTarget == target }, after, limit), nil
+func (r *InMemoryNostrEventRepository) ListUnpublishedAfter(_ context.Context, target string, after *repository.NostrOutboxCursor, limit int) ([]repository.NostrEventRecord, error) {
+	return r.listPending(func(rec repository.NostrEventRecord) bool { return rec.PublishTarget == target }, after, limit), nil
 }
 
-func (r *InMemoryNostrEventRepository) listPending(match func(NostrEventRecord) bool, after *NostrOutboxCursor, limit int) []NostrEventRecord {
+func (r *InMemoryNostrEventRepository) listPending(match func(repository.NostrEventRecord) bool, after *repository.NostrOutboxCursor, limit int) []repository.NostrEventRecord {
 	if limit <= 0 {
 		limit = 100
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	records := make([]NostrEventRecord, 0)
+	records := make([]repository.NostrEventRecord, 0)
 	for _, rec := range r.records {
-		if rec.PublishState != NostrPublishStatePending || !match(rec) {
+		if rec.PublishState != repository.NostrPublishStatePending || !match(rec) {
 			continue
 		}
 		if after != nil && !outboxKeyAfter(rec.ReceivedAt, rec.ID, *after) {
@@ -103,7 +106,7 @@ func (r *InMemoryNostrEventRepository) listPending(match func(NostrEventRecord) 
 	return limitNostrEventRecords(records, limit)
 }
 
-func outboxKeyAfter(receivedAt time.Time, id string, cursor NostrOutboxCursor) bool {
+func outboxKeyAfter(receivedAt time.Time, id string, cursor repository.NostrOutboxCursor) bool {
 	if receivedAt.Equal(cursor.ReceivedAt) {
 		return id > cursor.ID
 	}
@@ -116,7 +119,7 @@ func (r *InMemoryNostrEventRepository) CountUnpublished(_ context.Context) (int6
 	defer r.mu.RUnlock()
 	var count int64
 	for _, rec := range r.records {
-		if rec.PublishState == NostrPublishStatePending {
+		if rec.PublishState == repository.NostrPublishStatePending && !repository.IsLocalOutboxArchiveTarget(rec.PublishTarget) {
 			count++
 		}
 	}
@@ -129,7 +132,7 @@ func (r *InMemoryNostrEventRepository) CountPublishFailed(_ context.Context) (in
 	defer r.mu.RUnlock()
 	var count int64
 	for _, rec := range r.records {
-		if rec.PublishState == NostrPublishStateFailed {
+		if rec.PublishState == repository.NostrPublishStateFailed && !repository.IsLocalOutboxArchiveTarget(rec.PublishTarget) {
 			count++
 		}
 	}
@@ -145,7 +148,7 @@ func (r *InMemoryNostrEventRepository) MarkPublished(_ context.Context, id strin
 	if !ok {
 		return nil
 	}
-	rec.PublishState = NostrPublishStatePublished
+	rec.PublishState = repository.NostrPublishStatePublished
 	rec.PublishAttempts++
 	rec.LastPublishError = ""
 	rec.PublishedAt = &publishedAt
@@ -161,7 +164,7 @@ func (r *InMemoryNostrEventRepository) RecordPublishFailure(_ context.Context, i
 	if !ok {
 		return nil
 	}
-	rec.PublishState = NostrPublishStatePending
+	rec.PublishState = repository.NostrPublishStatePending
 	rec.PublishAttempts++
 	rec.LastPublishError = publishError
 	r.records[id] = rec
@@ -174,46 +177,22 @@ func (r *InMemoryNostrEventRepository) AbandonPublish(_ context.Context, id, rea
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.records[id]
-	if !ok || rec.PublishState != NostrPublishStatePending {
+	if !ok || rec.PublishState != repository.NostrPublishStatePending {
 		return nil
 	}
-	rec.PublishState = NostrPublishStateFailed
+	rec.PublishState = repository.NostrPublishStateFailed
 	rec.PublishAttempts++
 	rec.LastPublishError = reason
 	r.records[id] = rec
 	return nil
 }
 
-// FindSince returns events created after since, filtered by kinds when provided.
-func (r *InMemoryNostrEventRepository) FindSince(_ context.Context, since time.Time, kinds []int) ([]NostrEventRecord, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	kindSet := intSet(kinds)
-	records := make([]NostrEventRecord, 0)
-	for _, rec := range r.records {
-		if !rec.CreatedAt.After(since) {
-			continue
-		}
-		if len(kindSet) > 0 {
-			if _, ok := kindSet[rec.Kind]; !ok {
-				continue
-			}
-		}
-		records = append(records, cloneNostrEventRecord(&rec))
-	}
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].CreatedAt.Before(records[j].CreatedAt)
-	})
-	return records, nil
-}
-
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
-func (r *InMemoryNostrEventRepository) FindLatestByKindPubkeyDTag(_ context.Context, kind int, pubkey, dTag, excludeID string) (*NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) FindLatestByKindPubkeyDTag(_ context.Context, kind int, pubkey, dTag, excludeID string) (*repository.NostrEventRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var newest *NostrEventRecord
+	var newest *repository.NostrEventRecord
 	for _, rec := range r.records {
 		if rec.ID == excludeID || rec.Kind != kind || rec.PubKey != pubkey || !recordHasDTag(rec.Tags, dTag) {
 			continue
@@ -227,14 +206,14 @@ func (r *InMemoryNostrEventRepository) FindLatestByKindPubkeyDTag(_ context.Cont
 }
 
 // ListByKind returns the most recent events of a given kind.
-func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, limit int) ([]NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, limit int) ([]repository.NostrEventRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if limit <= 0 {
 		limit = 50
 	}
-	records := make([]NostrEventRecord, 0)
+	records := make([]repository.NostrEventRecord, 0)
 	for _, rec := range r.records {
 		if rec.Kind == kind {
 			records = append(records, cloneNostrEventRecord(&rec))
@@ -245,11 +224,11 @@ func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, l
 }
 
 // ListByKinds returns the oldest events for any of kinds so migrations process deterministically.
-func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []int, limit int) ([]NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []int, limit int) ([]repository.NostrEventRecord, error) {
 	return r.ListByKindsPage(context.Background(), kinds, nil, limit)
 }
 
-func (r *InMemoryNostrEventRepository) ListByKindsPage(_ context.Context, kinds []int, after *NostrMigrationCursor, limit int) ([]NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) ListByKindsPage(_ context.Context, kinds []int, after *repository.NostrMigrationCursor, limit int) ([]repository.NostrEventRecord, error) {
 	if len(kinds) == 0 {
 		return nil, nil
 	}
@@ -260,7 +239,7 @@ func (r *InMemoryNostrEventRepository) ListByKindsPage(_ context.Context, kinds 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	records := make([]NostrEventRecord, 0)
+	records := make([]repository.NostrEventRecord, 0)
 	for _, rec := range r.records {
 		if _, ok := kindSet[rec.Kind]; ok {
 			if after != nil && (rec.CreatedAt.Before(after.CreatedAt) || (rec.CreatedAt.Equal(after.CreatedAt) && rec.ID <= after.EventID)) {
@@ -278,7 +257,7 @@ func (r *InMemoryNostrEventRepository) ListByKindsPage(_ context.Context, kinds 
 	return limitNostrEventRecords(records, limit), nil
 }
 
-func (r *InMemoryNostrEventRepository) GetMigrationCursor(_ context.Context, name string) (*NostrMigrationCursor, error) {
+func (r *InMemoryNostrEventRepository) GetMigrationCursor(_ context.Context, name string) (*repository.NostrMigrationCursor, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	cursor, ok := r.cursors[name]
@@ -289,7 +268,7 @@ func (r *InMemoryNostrEventRepository) GetMigrationCursor(_ context.Context, nam
 	return &copy, nil
 }
 
-func (r *InMemoryNostrEventRepository) SaveMigrationCursor(_ context.Context, cursor NostrMigrationCursor) error {
+func (r *InMemoryNostrEventRepository) SaveMigrationCursor(_ context.Context, cursor repository.NostrMigrationCursor) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	existing, ok := r.cursors[cursor.Name]
@@ -300,7 +279,7 @@ func (r *InMemoryNostrEventRepository) SaveMigrationCursor(_ context.Context, cu
 }
 
 // FindByTag returns events containing tagName=tagValue, optionally restricted by kind.
-func (r *InMemoryNostrEventRepository) FindByTag(_ context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) FindByTag(_ context.Context, tagName, tagValue string, kinds []int, limit int) ([]repository.NostrEventRecord, error) {
 	if tagName == "" || tagValue == "" {
 		return nil, nil
 	}
@@ -311,7 +290,7 @@ func (r *InMemoryNostrEventRepository) FindByTag(_ context.Context, tagName, tag
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	records := make([]NostrEventRecord, 0)
+	records := make([]repository.NostrEventRecord, 0)
 	for _, rec := range r.records {
 		if len(kindSet) > 0 {
 			if _, ok := kindSet[rec.Kind]; !ok {
@@ -327,14 +306,14 @@ func (r *InMemoryNostrEventRepository) FindByTag(_ context.Context, tagName, tag
 }
 
 // ListByEntity returns the most recent events for a given entity.
-func (r *InMemoryNostrEventRepository) ListByEntity(_ context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error) {
+func (r *InMemoryNostrEventRepository) ListByEntity(_ context.Context, entityType string, entityID uuid.UUID, limit int) ([]repository.NostrEventRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if limit <= 0 {
 		limit = 50
 	}
-	records := make([]NostrEventRecord, 0)
+	records := make([]repository.NostrEventRecord, 0)
 	for _, rec := range r.records {
 		if rec.EntityType == entityType && rec.EntityID != nil && *rec.EntityID == entityID {
 			records = append(records, cloneNostrEventRecord(&rec))
@@ -417,7 +396,7 @@ func recordHasTag(raw json.RawMessage, tagName, tagValue string) bool {
 	return false
 }
 
-func cloneNostrEventRecordPtr(rec *NostrEventRecord) *NostrEventRecord {
+func cloneNostrEventRecordPtr(rec *repository.NostrEventRecord) *repository.NostrEventRecord {
 	if rec == nil {
 		return nil
 	}
@@ -425,7 +404,7 @@ func cloneNostrEventRecordPtr(rec *NostrEventRecord) *NostrEventRecord {
 	return &cloned
 }
 
-func cloneNostrEventRecord(rec *NostrEventRecord) NostrEventRecord {
+func cloneNostrEventRecord(rec *repository.NostrEventRecord) repository.NostrEventRecord {
 	cloned := *rec
 	if rec.Tags != nil {
 		cloned.Tags = append(json.RawMessage(nil), rec.Tags...)
@@ -457,7 +436,7 @@ func stringSet(values []string) map[string]struct{} {
 	return set
 }
 
-func sortNostrEventRecordsNewestFirst(records []NostrEventRecord) {
+func sortNostrEventRecordsNewestFirst(records []repository.NostrEventRecord) {
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -466,7 +445,7 @@ func sortNostrEventRecordsNewestFirst(records []NostrEventRecord) {
 	})
 }
 
-func limitNostrEventRecords(records []NostrEventRecord, limit int) []NostrEventRecord {
+func limitNostrEventRecords(records []repository.NostrEventRecord, limit int) []repository.NostrEventRecord {
 	if len(records) <= limit {
 		return records
 	}

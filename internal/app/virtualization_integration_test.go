@@ -26,6 +26,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -190,7 +191,7 @@ func TestVirtualizationPostgresIntentRecoveryAndPlane(t *testing.T) {
 	session := uuid.New()
 	require.NoError(t, repo.RotateObservationSession(ctx, repository.VirtualizationResourceRef{OrgID: org, Kind: domain.VirtualizationHostResource, ID: h.ID}, 1, uuid.Nil, session))
 	require.NoError(t, repo.AcceptHostObservation(ctx, org, h.ID, domain.VirtualizationHostObservation{VMObservationStamp: domain.VMObservationStamp{SchemaVersion: 1, ObservedGeneration: 1, SessionID: session, Sequence: 1, ObservedAt: time.Now().UTC()}, LifecycleClasses: h.LifecycleClasses, Availability: domain.VMObservationAvailable, Free: h.Capacity}))
-	store := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
+	store := &vmAppStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
 	pub := vmAppPublisher{store, signer}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	attestation, err := json.Marshal(signing.NostrArtifactAttestation{ImageDigest: digest, Approved: true})

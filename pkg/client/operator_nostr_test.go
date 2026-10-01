@@ -1012,45 +1012,10 @@ func TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason(t *testi
 	}
 }
 
-func TestOperatorReplyAuthClosedAuthenticatesAndResubscribesWithoutRepublish(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, requestKey, transport)
-	client.relays = []string{"wss://auth.example"}
-	transport.relayURLs = append([]string(nil), client.relays...)
-	var published nostr.Event
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		published = ev
-		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
-		return 1, nil
-	}
-	transport.authFn = func(ctx context.Context, relayURL string) error {
-		transport.mu.Lock()
-		transport.calls = append(transport.calls, "auth")
-		transport.mu.Unlock()
-		if relayURL != "wss://auth.example" {
-			t.Fatalf("AuthenticateRelay relay = %q, want auth relay", relayURL)
-		}
-		transport.events <- signedContextVMResult(t, replyKey, published, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
-		return nil
-	}
-
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
-	if err != nil {
-		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
-	}
-	if result.Action != "restart" {
-		t.Fatalf("result action = %q, want restart", result.Action)
-	}
-	if len(transport.published) != 1 {
-		t.Fatalf("published count = %d, want no republish after AUTH", len(transport.published))
-	}
-	if got := transport.calls; len(got) != 4 || got[0] != "subscribe" || got[1] != "publish" || got[2] != "auth" || got[3] != "subscribe" {
-		t.Fatalf("calls = %#v, want subscribe, publish, auth, subscribe", got)
-	}
-}
-
+// TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult: the
+// pool answers "auth-required:" itself, so one that reaches the client means
+// the relay could not be authenticated; it is excluded and the request waits
+// for the remaining relay.
 func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()
@@ -1059,7 +1024,7 @@ func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testi
 	client.relays = []string{"wss://auth.example", "wss://open.example"}
 	transport.relayURLs = append([]string(nil), client.relays...)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
+		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in", Terminal: true}
 		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		return 1, nil
 	}
@@ -1185,46 +1150,6 @@ func TestOperatorPublishProceedsAfterActivationTimeoutWithActiveRelay(t *testing
 	transport.mu.Unlock()
 	if len(calls) != 2 || calls[0] != "subscribe" || calls[1] != "publish" {
 		t.Fatalf("calls = %#v, want subscribe then publish", calls)
-	}
-}
-
-func TestOperatorActivationAuthClosedRelayRecoversWhileHealthyRelayRemains(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	transport.autoActivate = false
-	transport.relayURLs = []string{"wss://auth.example", "wss://healthy.example"}
-	client := newTestOperatorClient(t, requestKey, transport)
-	client.relays = append([]string(nil), transport.relayURLs...)
-	client.activationTimeout = time.Second
-
-	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required: sign in"}
-	transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://healthy.example"}
-	transport.authFn = func(_ context.Context, relayURL string) error {
-		transport.mu.Lock()
-		transport.calls = append(transport.calls, "auth")
-		transport.mu.Unlock()
-		if relayURL != "wss://auth.example" {
-			t.Fatalf("AuthenticateRelay relay = %q, want auth relay", relayURL)
-		}
-		transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://auth.example"}
-		transport.relayEOSE <- nostrpool.RelayEOSE{RelayURL: "wss://healthy.example"}
-		return nil
-	}
-	transport.publishFn = func(_ context.Context, event nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, replyKey, event, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
-		return 1, nil
-	}
-
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
-	if err != nil || result == nil || result.Action != "restart" {
-		t.Fatalf("result=%#v error=%v, want request success after activation AUTH recovery", result, err)
-	}
-	transport.mu.Lock()
-	calls := append([]string(nil), transport.calls...)
-	transport.mu.Unlock()
-	if len(calls) != 4 || calls[0] != "subscribe" || calls[1] != "auth" || calls[2] != "subscribe" || calls[3] != "publish" {
-		t.Fatalf("calls = %#v, want subscribe, auth, subscribe, publish", calls)
 	}
 }
 
@@ -1514,7 +1439,6 @@ type fakeOperatorTransport struct {
 	subscribeNotify  chan struct{}
 	publishFn        func(context.Context, nostr.Event) (int, error)
 	publishResultsFn func(context.Context, nostr.Event) ([]nostrpool.PublishResult, error)
-	authFn           func(context.Context, string) error
 	subscribeErr     error
 	published        []nostr.Event
 	filters          []nostr.Filter
@@ -1565,16 +1489,6 @@ func (f *fakeOperatorTransport) PublishWithResults(ctx context.Context, ev nostr
 		results = append(results, nostrpool.PublishResult{RelayURL: "wss://relay.example", Accepted: true})
 	}
 	return results, err
-}
-
-func (f *fakeOperatorTransport) AuthenticateRelay(ctx context.Context, relayURL string) error {
-	f.mu.Lock()
-	fn := f.authFn
-	f.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, relayURL)
-	}
-	return errors.New("no private key configured for NIP-42 AUTH")
 }
 
 func (f *fakeOperatorTransport) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error) {

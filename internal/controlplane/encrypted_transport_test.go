@@ -503,17 +503,6 @@ func waitForPublishCall(t *testing.T, ch <-chan int, want int) {
 	}
 }
 
-func receiveAuthRequest(t *testing.T, ch <-chan string) string {
-	t.Helper()
-	select {
-	case relayURL := <-ch:
-		return relayURL
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for relay auth")
-		return ""
-	}
-}
-
 func assertNoAuthRequest(t *testing.T, ch <-chan string) {
 	t.Helper()
 	select {
@@ -523,7 +512,7 @@ func assertNoAuthRequest(t *testing.T, ch <-chan string) {
 	}
 }
 
-func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequiredClosed(t *testing.T) {
+func TestEncryptedRequestTransport_RunLeavesAuthToPool(t *testing.T) {
 	subscriber := newScriptedEncryptedRequestSubscriber()
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
@@ -538,27 +527,25 @@ func TestEncryptedRequestTransport_RunAuthenticatesAndResubscribesOnAuthRequired
 	runErr := make(chan error, 1)
 	go func() { runErr <- transport.Run(ctx) }()
 
-	first := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
-	first.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted kind"}
-	if got := receiveAuthRequest(t, subscriber.authRequests); got != "wss://relay.example" {
-		t.Fatalf("unexpected auth relay URL: %s", got)
-	}
-
-	second := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
-	second.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-2", Reason: "auth-required: still restricted"}
-	assertNoAuthRequest(t, subscriber.authRequests)
-
-	request := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"req-1","method":"service/create","params":{}}`)
-	second.events <- request
-
+	// The shared RelayPool answers auth-required CLOSED itself (AuthHandler
+	// plus REQ reissue): the transport neither authenticates nor
+	// resubscribes, and keeps consuming the same subscription.
+	subscription := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
+	subscription.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted kind"}
+	subscription.events <- makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"req-1","method":"service/create","params":{}}`)
 	select {
 	case method := <-processed:
 		if method != ContextVMMethodServiceCreate {
 			t.Fatalf("unexpected processed method: %s", method)
 		}
-		assertNoAuthRequest(t, subscriber.authRequests)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for ContextVM request processing")
+	}
+	assertNoAuthRequest(t, subscriber.authRequests)
+	select {
+	case extra := <-subscriber.subscribeRequests:
+		t.Fatalf("transport resubscribed on its own: %+v", extra)
+	default:
 	}
 
 	cancel()

@@ -597,6 +597,41 @@ func (r *memorySecurityRepo) AbandonSecurityPublication(_ context.Context, event
 	return changed, nil
 }
 
+func (r *memorySecurityRepo) DeliverSecurityPublication(_ context.Context, eventID string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var changed int64
+	runs := map[uuid.UUID]struct{}{}
+	for _, pub := range r.publications {
+		if pub.EventID != eventID || pub.PublishState != domain.SecurityPublicationPending {
+			continue
+		}
+		pub.PublishState = domain.SecurityPublicationPublished
+		pub.LastError = ""
+		pub.NextRetryAt = nil
+		changed++
+		if pub.RunID != nil {
+			runs[*pub.RunID] = struct{}{}
+		}
+	}
+	for runID := range runs {
+		run := r.runs[runID]
+		if run == nil || run.PublishState != domain.SecurityPublicationPending {
+			continue
+		}
+		finished := true
+		for _, pub := range r.publications {
+			if pub.RunID != nil && *pub.RunID == runID && pub.PublishState != domain.SecurityPublicationPublished {
+				finished = false
+			}
+		}
+		if finished {
+			run.PublishState = domain.SecurityPublicationPublished
+		}
+	}
+	return changed, nil
+}
+
 func (r *memorySecurityRepo) hasPublicationState(state domain.SecurityPublicationState) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -654,6 +689,9 @@ func (p *recordingSecurityPublisher) PublishSignedEventWithResults(_ context.Con
 		}
 	}
 	return p.results, fmt.Errorf("%w: no relay accepted", nostrutil.ErrPublishIncomplete)
+}
+func (p *recordingSecurityPublisher) DeliveryOutcome(context.Context, string) (nostrutil.DeliveryOutcome, error) {
+	return nostrutil.DeliveryUnknown, nil
 }
 func (p *recordingSecurityPublisher) hasKind(kind int) bool {
 	for _, ev := range p.events {
@@ -764,6 +802,9 @@ func (r *recordingSBOMCompatibilityUpdater) ListManifestsBySubject(context.Conte
 }
 func (r *recordingSBOMCompatibilityUpdater) ListPublishedManifests(context.Context, int) ([]domain.SBOMManifest, error) {
 	return nil, nil
+}
+func (r *recordingSBOMCompatibilityUpdater) MarkManifestDeliveredByReferenceEvent(context.Context, string) (int64, error) {
+	return 0, nil
 }
 func (r *recordingSBOMCompatibilityUpdater) FailManifestByReferenceEvent(context.Context, string, string) (int64, error) {
 	return 0, nil

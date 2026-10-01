@@ -29,9 +29,9 @@ import (
 // projector signs each fact id once. Distinct facts differ in type, entity or
 // payload and so get distinct ids.
 
-// auditFactCapacity bounds the remembered fact ids; it matches the number of
+// auditFactCapacity bounds the remembered fact ids; it is also the number of
 // retained audit records read back on hydration.
-const auditFactCapacity = projectionHydrateLimit
+const auditFactCapacity = 10000
 
 // auditFactSet is a bounded FIFO set of fact ids. It is guarded by
 // projectionState.mu.

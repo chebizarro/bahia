@@ -451,14 +451,16 @@ func TestRelayClientMultiRelayDeduplicatesSameEvent(t *testing.T) {
 	mustReceiveFilters(t, relay1.subscribeCalls)
 	mustReceiveFilters(t, relay2.subscribeCalls)
 
-	// Same event delivered by both relays — should be deduped to one.
+	// Same event delivered by both relays — should be deduped to one. Each
+	// relay's events are forwarded in order, but two relays race, so the
+	// second relay sends its copy, then a sentinel, after the first copy was
+	// delivered: the sentinel arriving next proves the copy was dropped.
 	shared := signedRelayBusEvent(t, signer, 1, "shared-event")
 	sentinel := signedRelayBusEvent(t, signer, 1, "sentinel-multi")
 	sub1.events <- shared
-	sub2.events <- shared
-	sub1.events <- sentinel
-
 	got1 := mustReceiveRelayEvent(t, sub.Events)
+	sub2.events <- shared
+	sub2.events <- sentinel
 	got2 := mustReceiveRelayEvent(t, sub.Events)
 
 	if got1.ID != shared.ID {

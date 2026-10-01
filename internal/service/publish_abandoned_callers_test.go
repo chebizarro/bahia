@@ -12,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -34,6 +35,10 @@ func (p *abandonedSignedPublisher) PublishSignedEventWithResults(_ context.Conte
 	}
 	p.events = append(p.events, *ev)
 	return []sbomadapter.PublishOKResult{{RelayURL: "wss://relay.example", Reason: "blocked: pubkey not allowed"}}, abandonedPublish
+}
+
+func (p *abandonedSignedPublisher) DeliveryOutcome(context.Context, string) (nostrutil.DeliveryOutcome, error) {
+	return nostrutil.DeliveryAbandoned, nil
 }
 
 func TestSecurityScannerRecordsFirstRoundAbandonedPublishAsTerminal(t *testing.T) {
@@ -137,7 +142,7 @@ func (p *abandoningConfigPublisher) PublishPresignedEvent(ctx context.Context, e
 
 func TestConfigFabricAbandonedPublishIsNotDesiredState(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	accepted := &configTestPublisher{}
 	signer := newConfigTestSigner(t)
 	svc := NewConfigFabricService(repo, accepted, signer)
@@ -168,7 +173,7 @@ func TestConfigFabricAbandonedPublishIsNotDesiredState(t *testing.T) {
 // out of desired state: the service reads the outbox row's state.
 func TestConfigFabricRunnerAbandonedVersionIsNotDesiredState(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	queued := &configTestPublisher{err: queuedPublish}
 	svc := NewConfigFabricService(repo, queued, newConfigTestSigner(t))
 	base := time.Unix(1787625660, 0)

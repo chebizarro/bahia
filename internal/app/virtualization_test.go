@@ -21,6 +21,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
 )
 
@@ -76,7 +77,7 @@ func (m vmAppMembers) ListByPubkey(context.Context, string) ([]domain.OrgMember,
 }
 
 type vmAppStore struct {
-	*repository.InMemoryNostrEventRepository
+	*repositorytest.InMemoryNostrEventRepository
 	checkpoint chan struct{}
 }
 
@@ -131,7 +132,7 @@ func TestVirtualizationCompositionAdmissionProjectionAndShutdown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store := &vmAppStore{InMemoryNostrEventRepository: repository.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
+		store := &vmAppStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
 		v, err := NewVirtualization(VirtualizationDependencies{Repository: repo, PersistentVM: vmAppService{repo, bus}, RBAC: auth.NewRBAC(vmAppMembers{org}), Bus: bus, Store: store, Publisher: vmAppPublisher{store, signer}, Organizations: vmAppOrganizations{org}, CanonicalAuthor: key.Hex()})
 		if err != nil {
 			t.Fatal(err)

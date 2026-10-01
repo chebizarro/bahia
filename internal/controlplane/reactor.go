@@ -617,8 +617,11 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 		ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		r.logger.Warn("failed to audit inbound control-plane event", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
-		return false
+		// The audit table is an archive, not the dedupe authority (B-14): a
+		// database error must not make the reactor deaf to its relays. The
+		// in-memory dedupe still stops relay replays within this process.
+		r.logger.Warn("failed to audit inbound control-plane event; handling it anyway", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
+		return true
 	}
 	if !inserted {
 		r.logger.Debug("skipping already-audited control-plane event", "event_id", event.ID, "kind", event.Kind)

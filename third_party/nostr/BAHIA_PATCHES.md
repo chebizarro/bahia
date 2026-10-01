@@ -166,6 +166,83 @@ Callers must still pass a `handle` that returns when its context ends:
 Test: `nip77/nip77_bahia_test.go` (in-process khatru relay, completed and
 NEG-ERR sessions).
 
+## NIP-77 authenticated sessions (bahia-irsry.47)
+
+`nip77.NegentropySync` dialed with fixed options, so its connection had no
+NIP-42 signer. A relay that answers `NEG-OPEN` with an AUTH challenge and
+`NEG-ERR auth-required:` (khatru does this when `OnRequest` refuses a
+negentropy session) could not be reconciled at all: the daemon fell back to
+paged REQs on its pool connection, and lost negentropy for exactly the
+protected sets.
+
+- `nip77/nip77.go`: new `NegentropySyncWithOptions(…, options nostr.RelayOptions)`;
+  `NegentropySync` keeps its signature and passes empty options. The session
+  connection uses the given options (Bahia passes the pool's
+  `buildRelayOptions`: the same `AuthHandler`, `AuthResultHandler` and NOTICE
+  logging as every pool connection). `options.CustomHandler`, if set, still
+  receives the frames the session does not handle itself.
+- On the first `NEG-ERR` whose reason starts with `auth-required:`, and only
+  when `options.AuthHandler` is set, the session calls `Relay.Auth` (which
+  joins the attempt the challenge already started) from a separate goroutine,
+  because the AUTH OK arrives on the read loop the handler runs on, and then
+  re-sends its original `NEG-OPEN`. This happens once per session: a second
+  refusal, a failed AUTH or no AuthHandler ends the session with the relay's
+  `NEG-ERR`, as before.
+- The local vector and the `NEG-OPEN` frame are built before dialing, and the
+  relay is created with `NewRelay` before `Connect` (instead of
+  `RelayConnect`). The frame handler therefore never sees a nil relay or an
+  unbuilt `NEG-OPEN`, without extra synchronisation. The connection still
+  closes when the session returns.
+
+Tests: `nip77/nip77_bahia_test.go`
+(`TestNegentropySyncWithOptionsAuthenticates`: refusal, AUTH and one re-open
+that downloads the protected event; a refusal after AUTH ends after exactly
+one re-open; no re-open without an AuthHandler) and
+`internal/adapters/nostr/relay_pool_stack_test.go`
+(`TestRelayPoolNegentropyAuthenticates`, through the pool's
+`negentropySyncRelay` with its own signer),
+both against in-process khatru relays that require AUTH for negentropy.
+
+## OK callback reset and dial cancellation (bahia-irsry.47)
+
+- `relay.go` (`Relay.publish`): when the connection closes while a publish
+  waits for its OK, the publish resets `okCallbacks`. That reset assigned the
+  map without `okCallbacksMutex`, while other publishes register callbacks and
+  the read loop dispatches OKs under it: a data race whenever a connection
+  closes with more than one publish (or an AUTH) in flight. The reset now
+  takes the mutex. Test: `relay_callback_reset_race_test.go`
+  (`TestOKCallbacksResetOnCloseIsRaceFree`, run with -race; it reports the
+  race on the unpatched line).
+- `relay.go` (`Relay.newConnection`): the dial context's cancel function from
+  `context.WithTimeoutCause` was discarded (`dialCtx, _ = …`), which
+  `go vet` reports as a lost cancel and which kept the 7-second timer alive
+  after the dial. It is now kept and deferred. `go vet` on this package is
+  clean.
+
+## khatru: concurrent NIP-11 requests (bahia-irsry.47)
+
+`HandleNIP11` copied the document with `info := *rl.Info` and then appended
+the NIPs implied by the relay's configuration (9 with `DeleteEvent`, 45 with
+`Count`, 77 with `Negentropy`) to `info.SupportedNIPs`. The struct copy shares
+the slice's backing array, and `UseEventstore` leaves spare capacity in it (it
+appends NIP-40 to the five-element default, giving length 6 and capacity 10).
+Every NIP-11 GET to a relay with an eventstore therefore wrote the same slots
+of `rl.Info`'s array: a data race between overlapping requests, which could
+also leak one response's entries into another. K4 found it in fipsbridge and
+discovery tests, which had worked around it by pre-seeding the NIP list.
+
+- `khatru/nip11.go`: each request clones `SupportedNIPs` before appending.
+
+Test: `khatru/nip11_race_bahia_test.go`
+(`TestHandleNIP11ConcurrentRequestsAreRaceFree`: 16 concurrent GETs against
+an in-process relay with an eventstore and negentropy; every document lists
+9, 40 and 77 once, and `rl.Info` is unchanged). On the unpatched handler,
+`-race` reports the race at the `AddSupportedNIP` calls.
+
+Not patched: `go vet` on `khatru` still reports a lost cancel in
+`handlers.go` (`cancelReqCtx`) and an `unsafe.Pointer` conversion in
+`relay.go`. Both are upstream code that this wave does not touch.
+
 ## Removal criteria
 
 Drop the `replace` and this directory once upstream carries equivalent fixes

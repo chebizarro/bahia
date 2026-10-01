@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -90,7 +91,7 @@ func (s *relayScript) totalCalls() int {
 
 // newOutboxProjector builds a Projector publishing through a control-plane
 // outbox Publisher, wired like app.go (abandon hook included).
-func newOutboxProjector(t *testing.T, repo *repository.InMemoryNostrEventRepository, script *relayScript, source *fakeProjectionSource, opts ...ProjectorOption) (*Projector, *Publisher) {
+func newOutboxProjector(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, script *relayScript, source *fakeProjectionSource, opts ...ProjectorOption) (*Projector, *Publisher) {
 	t.Helper()
 	publisher := NewPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), repo, zap.NewNop(),
 		WithPublishTarget(repository.NostrPublishTargetControlPlane))
@@ -105,7 +106,7 @@ func newOutboxProjector(t *testing.T, repo *repository.InMemoryNostrEventReposit
 	return projector, publisher
 }
 
-func outboxRows(t *testing.T, repo *repository.InMemoryNostrEventRepository, kind int) []repository.NostrEventRecord {
+func outboxRows(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, kind int) []repository.NostrEventRecord {
 	t.Helper()
 	rows, err := repo.ListByKind(context.Background(), kind, 1000)
 	require.NoError(t, err)
@@ -117,7 +118,7 @@ func outboxRows(t *testing.T, repo *repository.InMemoryNostrEventRepository, kin
 // down relay is retried with the same signed event until it accepts.
 func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	script.setDown(cpRelayB, true)
 	script.acceptFrom = cpRelayB
@@ -175,7 +176,7 @@ func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 // counts it as queued, and does not re-sign it on the next trigger.
 func TestProjectorTreatsIncompletePublishAsQueued(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	script.setDown(cpRelayA, true)
 	script.setDown(cpRelayB, true)
@@ -221,7 +222,7 @@ func testSBOMManifest() domain.SBOMManifest {
 // a restart that hydrates from the outbox.
 func TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	source := newFakeProjectionSource()
 	svc := domain.Service{ID: uuid.New(), Name: "api"}
@@ -253,7 +254,7 @@ func TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures(t *testing.T)
 // in the dedupe cache, or repair would never republish that content.
 func TestProjectorRepublishesAbandonedProjection(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	script.reject[cpRelayA] = "blocked: not on the allow list"
 	script.reject[cpRelayB] = "blocked: not on the allow list"
@@ -288,7 +289,7 @@ func TestProjectorRepublishesAbandonedProjection(t *testing.T) {
 }
 
 // requireLatestPublished asserts the newest control-state row was delivered.
-func requireLatestPublished(t *testing.T, repo *repository.InMemoryNostrEventRepository) {
+func requireLatestPublished(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository) {
 	t.Helper()
 	rows := outboxRows(t, repo, KindCASControlState)
 	require.NotEmpty(t, rows)
@@ -305,7 +306,7 @@ func requireLatestPublished(t *testing.T, repo *repository.InMemoryNostrEventRep
 // drops the coordinate from the dedupe cache through the abandon hook.
 func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	script.setDown(cpRelayA, true)
 	script.setDown(cpRelayB, true)
@@ -336,9 +337,9 @@ func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 	requireLatestPublished(t, repo)
 }
 
-func outboxRowCount(t *testing.T, repo *repository.InMemoryNostrEventRepository) int {
+func outboxRowCount(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository) int {
 	t.Helper()
-	rows, err := repo.FindSince(context.Background(), time.Time{}, nil)
+	rows, err := repo.ListByKinds(context.Background(), []int{KindCASControlState, KindCASAudit}, 10000)
 	require.NoError(t, err)
 	return len(rows)
 }
@@ -347,7 +348,7 @@ func outboxRowCount(t *testing.T, repo *repository.InMemoryNostrEventRepository)
 // published content, or the coordinate would never be repaired.
 func TestProjectorHydrationSkipsFailedOutboxRows(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	script := newRelayScript()
 	script.reject[cpRelayA] = "blocked: nope"
 	script.reject[cpRelayB] = "blocked: nope"

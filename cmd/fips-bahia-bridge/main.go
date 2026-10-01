@@ -20,6 +20,7 @@ func main() {
 	bahiaPubkey := flag.String("bahia-pubkey", strutil.Env("FIPS_BAHIA_BAHIA_PUBKEY", ""), "Bahia service pubkey as hex or npub")
 	relays := flag.String("relays", strutil.Env("FIPS_BAHIA_RELAYS", ""), "comma-separated Nostr relay URLs")
 	hostsPath := flag.String("hosts-path", strutil.Env("FIPS_BAHIA_HOSTS_PATH", ""), "FIPS hosts file path")
+	storePath := flag.String("store-path", strutil.Env("FIPS_BAHIA_STORE_PATH", ""), "local Nostr event store: a rebuildable cache of endpoint events and per-relay sync cursors (default: .bahia-fips-bridge.bolt beside the hosts file)")
 	marker := flag.String("managed-section-marker", strutil.Env("FIPS_BAHIA_MANAGED_SECTION_MARKER", ""), "managed section marker")
 	healthFilter := flag.Bool("health-filter", envBool("FIPS_BAHIA_HEALTH_FILTER", true), "only write healthy endpoints")
 	capabilities := flag.String("capability-filter", strutil.Env("FIPS_BAHIA_CAPABILITY_FILTER", ""), "comma-separated required endpoint capabilities")
@@ -50,6 +51,9 @@ func main() {
 	}
 	if strings.TrimSpace(*hostsPath) != "" {
 		cfg.HostsPath = *hostsPath
+	}
+	if strings.TrimSpace(*storePath) != "" {
+		cfg.StorePath = *storePath
 	}
 	if strings.TrimSpace(*marker) != "" {
 		cfg.ManagedSectionMarker = *marker

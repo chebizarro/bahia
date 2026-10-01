@@ -468,7 +468,7 @@ func TestInboundSyncPerRelayCursorsSurviveRestartAndDedupWithoutPostgres(t *test
 	path := filepath.Join(t.TempDir(), "daemon.bolt")
 	store, err := localstore.Open(path)
 	require.NoError(t, err)
-	run := startSyncRun(t, newSyncTestPool(a, b), store, repository.NewInMemoryNostrEventRepository(), syncTestConfig())
+	run := startSyncRun(t, newSyncTestPool(a, b), store, nil, syncTestConfig())
 	run.waitCaughtUp(t, ctx, a.url, 1)
 	run.waitCaughtUp(t, ctx, b.url, 1)
 	require.ElementsMatch(t, eventIDs(shared, newestOnA, newestOnB), drainIDs(run.handled), "an event on two relays is handled once")
@@ -488,7 +488,7 @@ func TestInboundSyncPerRelayCursorsSurviveRestartAndDedupWithoutPostgres(t *test
 
 	a.resetRecorded()
 	b.resetRecorded()
-	restarted := startSyncRun(t, newSyncTestPool(a, b), reopened, repository.NewInMemoryNostrEventRepository(), syncTestConfig())
+	restarted := startSyncRun(t, newSyncTestPool(a, b), reopened, nil, syncTestConfig())
 	restarted.waitCaughtUp(t, ctx, a.url, 1)
 	restarted.waitCaughtUp(t, ctx, b.url, 1)
 	require.Empty(t, drainIDs(restarted.handled), "replay after a restart re-runs no handler")
@@ -578,4 +578,28 @@ func TestInboundSyncSelfPublishedEventsDoNotAdvanceCursors(t *testing.T) {
 	run.waitApplied(t, ctx, foreignLive.ID)
 	waitEvent(t, ctx, run.handled, foreignLive.ID, "the live foreign event")
 	require.Equal(t, foreignLive.CreatedAt, cursor(), "a live foreign event after EOSE advances the cursor")
+}
+
+// A relay that CLOSEs the REQs "auth-required:" is caught up once the pool's
+// connection AuthHandler has answered its NIP-42 challenge: the subscriber
+// resyncs the relay like after any CLOSED, with no AUTH logic of its own.
+func TestInboundSyncCatchesUpAnAuthRequiredRelayThroughThePoolAuthHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	relay.relay.OnRequest = func(ctx context.Context, _ gonostr.Filter) (bool, string) {
+		if _, ok := khatru.GetAuthed(ctx); !ok {
+			return true, "auth-required: authenticated clients only"
+		}
+		return false, ""
+	}
+	ev := syncTestEvent(t, gonostr.Generate(), syncTestRegularKind, gonostr.Now()-60, nil, "behind NIP-42")
+	relay.add(t, ev)
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithPrivateKey(gonostr.Generate().Hex()))
+	pool.newReconnectBackoff = fastTestBackoff
+	defer pool.Close()
+
+	run := startSyncRun(t, pool, openTestLocalStore(t, ""), nil, syncTestConfig())
+	run.waitCaughtUp(t, ctx, relay.url, 1)
+	require.Equal(t, eventIDs(ev), drainIDs(run.handled))
 }

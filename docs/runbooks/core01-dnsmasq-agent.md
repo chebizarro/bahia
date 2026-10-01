@@ -87,6 +87,7 @@ Agent invocation (systemd `ExecStart` or equivalent; see
   --allowed-zones sharegap.net \
   --reload-command "systemctl reload dnsmasq" \
   --state-file /var/lib/bahia-dns-agent/state.json \
+  --store-path /var/lib/bahia-dns-agent/events.bolt \
   --require-encryption
 ```
 

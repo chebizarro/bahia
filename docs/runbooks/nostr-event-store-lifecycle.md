@@ -68,32 +68,45 @@ WHERE conname IN ('security_observable_publications_publish_state_check',
 
 ## Publish outbox health
 
-- `bahia_nostr_outbox_depth`: pending outbound rows (all publish targets). The
-  control-plane target carries the read-model projector, docs, SBOM and
-  config-fabric; the default target carries daemon interop events. Sustained
-  growth means a write relay is not accepting.
-- `bahia_nostr_outbox_failed`: rows whose delivery was abandoned
-  (`publish_state = 'failed'`, reason in `last_publish_error`). It reads `-1`
-  until `idx_nostr_events_publish_failed` exists, and the daemon logs one
-  warning naming `ensure-indexes`; it never counts by scanning the table.
-  `BahiaNostrOutboxFailed` fires while it is above zero (see
-  `docs/runbooks/ws6-alerts.md#bahianostroutboxfailed`). Every producer learns
-  of the abandonment: a publish call whose first round already makes the
-  quorum unreachable returns `ErrPublishAbandoned` (never the queued
+The daemon delivers its own events from the local publish outbox
+(`nostr.local_store.outbox_path`, default `outbox.bolt` next to the local event
+store; `bahia-irsry.10.4`). Unlike the event store it is not a cache: back it
+up with the daemon's data, and do not delete it while it holds pending
+entries. PostgreSQL `nostr_events` still holds outbox rows for audit events
+written inside a registry transaction, and rows left pending by an older
+daemon; the same runner drains them in place. Archive copies of locally
+delivered events carry `publish_target` `local:<target>` and mirror the
+outcome; no runner drains them.
+
+- `bahia_nostr_outbox_depth`: pending local outbox entries plus pending
+  PostgreSQL-drained rows (all publish targets). The control-plane target
+  carries the read-model projector, docs, SBOM and config-fabric; the default
+  target carries daemon interop events. Sustained growth means a write relay
+  is not accepting.
+- `bahia_nostr_outbox_failed`: abandoned local outbox entries (kept seven days,
+  then pruned) plus failed PostgreSQL-drained rows. The PostgreSQL part needs
+  `idx_nostr_events_publish_failed`: until `ensure-indexes` has built it, the
+  daemon logs one warning and counts the local outbox only; it never counts by
+  scanning the table. `BahiaNostrOutboxFailed` fires while it is above zero
+  (see `docs/runbooks/ws6-alerts.md#bahianostroutboxfailed`). Every producer
+  learns of the abandonment: a publish call whose first round already makes
+  the quorum unreachable returns `ErrPublishAbandoned` (never the queued
   `ErrPublishIncomplete`), and a later abandonment by the runner reaches the
-  publisher's `OnDeliveryAbandoned` handlers. Abandoned projector rows are
-  republished by the next projector repair once relays accept again; Security
-  publications (and their runs) become `failed_terminal`, SBOM manifests
-  `failed`, config-fabric versions drop out of desired state, and docs are
-  re-signed on the next sync. Nothing resets a failed row to pending.
-- Per-relay acceptance is held in memory only. After a daemon restart each
-  pending row is resent to every write relay, including relays that had
-  already accepted it; they answer OK `duplicate:`, which counts as
-  acceptance. The event is the stored signed event (same id), so this costs
-  one extra EVENT frame per already-accepting relay per pending row and never
-  creates a second copy. Persisting per-relay state was rejected because it
-  would put relay topology into Postgres and add a write per relay per
-  delivery round.
+  publisher's `OnDeliveryAbandoned` handlers. Abandoned projector events are
+  removed from the local event store and republished by the next projector
+  repair once relays accept again; Security publications (and their runs)
+  become `failed_terminal`, SBOM manifests `failed`, config-fabric versions
+  drop out of desired state, and docs are re-signed on the next sync. Nothing
+  resets a failed entry to pending.
+- Delivery is reported too: `OnDelivered` moves queued Security publications
+  and pending SBOM manifests to published once the publish quorum accepted
+  their event. It is reported at least once (again after a restart), and the
+  producers' updates only touch rows still pending.
+- Per-relay acceptance of local entries is durable: after a restart the runner
+  resends only to the relays that had not accepted. PostgreSQL-drained rows
+  keep per-relay state in memory only, so after a restart they are resent to
+  every write relay; relays that already accepted answer OK `duplicate:`,
+  which counts as acceptance and creates no second copy.
 
 ## Canary export
 

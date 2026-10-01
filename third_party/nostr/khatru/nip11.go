@@ -4,12 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 )
 
 func (rl *Relay) HandleNIP11(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/nostr+json")
 
 	info := *rl.Info
+	// The copy shares SupportedNIPs' backing array, which can have spare
+	// capacity (UseEventstore appends NIP-40): appending below would write
+	// rl.Info's array from concurrent requests. Give each request its own
+	// slice (Bahia patch, see BAHIA_PATCHES.md).
+	info.SupportedNIPs = slices.Clone(info.SupportedNIPs)
 
 	if nil != rl.DeleteEvent {
 		info.AddSupportedNIP("9")

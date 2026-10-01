@@ -19,8 +19,6 @@ type fakeLoomRelayPool struct {
 	subs           []*nostrAdapter.MergedSubscription
 	filters        []nostr.Filter
 	subscribeCalls int
-	authCalls      int
-	authErr        error
 	reREQAttempts  int
 	closedReasons  []string
 }
@@ -41,11 +39,6 @@ func (f *fakeLoomRelayPool) SubscribeAllWithEOSE(_ context.Context, filters []no
 		return nil, errors.New("missing subscription")
 	}
 	return f.sub, nil
-}
-
-func (f *fakeLoomRelayPool) AuthenticateRelay(context.Context, string) error {
-	f.authCalls++
-	return f.authErr
 }
 
 func (f *fakeLoomRelayPool) RecordRelayClosed(_ string, reason string) {
@@ -377,21 +370,22 @@ func TestAwaitJobStatusFromWorker_ContinuesAfterRelayClosedWhenResultArrives(t *
 	}
 }
 
-func TestAwaitJobStatusFromWorker_ClosedAuthFailureIsSurfaced(t *testing.T) {
+// The pool answers "auth-required:" itself; a terminal one means it could
+// not authenticate, and the wait fails instead of resubscribing.
+func TestAwaitJobStatusFromWorker_TerminalAuthClosedIsSurfaced(t *testing.T) {
 	clientSK, _ := generatedKeyPair(t)
 	jobID := strings.Repeat("f", 64)
 	closed := make(chan nostrAdapter.RelayClosed, 1)
-	closed <- nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub", Reason: "auth-required: restricted"}
+	closed <- nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub", Reason: "auth-required: restricted", Terminal: true}
 	sub := testSubscription(nil, nil, nil, closed)
 	client, pool, _ := testClient(t, sub, clientSK)
-	pool.authErr = errors.New("auth failed")
 
-	_, err := client.AwaitJobStatusFromWorker(context.Background(), jobID, "")
-	if err == nil || !strings.Contains(err.Error(), "auth") {
-		t.Fatalf("error = %v, want auth error", err)
+	_, err := client.AwaitJobStatusFromWorker(t.Context(), jobID, "")
+	if err == nil || !strings.Contains(err.Error(), "auth failed") || !strings.Contains(err.Error(), "auth-required: restricted") {
+		t.Fatalf("error = %v, want the relay's auth-required reason", err)
 	}
-	if pool.authCalls != 1 {
-		t.Fatalf("auth calls = %d, want 1", pool.authCalls)
+	if pool.subscribeCalls != 1 || pool.reREQAttempts != 0 {
+		t.Fatalf("consumer subscribed %d times, recorded %d re-REQs", pool.subscribeCalls, pool.reREQAttempts)
 	}
 	if len(pool.closedReasons) != 1 || pool.closedReasons[0] != "auth-required: restricted" {
 		t.Fatalf("closed reasons = %v", pool.closedReasons)

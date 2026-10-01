@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip11"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
@@ -23,6 +24,9 @@ import (
 const (
 	DefaultHostsPath            = "/etc/fips/hosts"
 	DefaultManagedSectionMarker = "# bahia-managed"
+	// defaultStoreFile is the local event store's file name beside the hosts
+	// file when no store path is configured.
+	defaultStoreFile = ".bahia-fips-bridge.bolt"
 )
 
 // Bahia publishes DNS endpoint state (live and tombstone) only through the
@@ -42,6 +46,18 @@ type Config struct {
 	HealthFilter         bool     `yaml:"health_filter"`
 	CapabilityFilter     []string `yaml:"capability_filter"`
 	EnvironmentFilter    []string `yaml:"environment_filter"`
+	// StorePath is the local Nostr event store (a rebuildable cache of
+	// endpoint events plus per-relay sync cursors). Empty means
+	// .bahia-fips-bridge.bolt beside HostsPath.
+	StorePath string `yaml:"store_path"`
+}
+
+// EffectiveStorePath is StorePath, or the default beside HostsPath.
+func (c Config) EffectiveStorePath() string {
+	if path := strings.TrimSpace(c.StorePath); path != "" {
+		return path
+	}
+	return filepath.Join(filepath.Dir(c.HostsPath), defaultStoreFile)
 }
 
 type configFile struct {
@@ -56,6 +72,7 @@ type rawConfig struct {
 	HealthFilter         *bool    `yaml:"health_filter"`
 	CapabilityFilter     []string `yaml:"capability_filter"`
 	EnvironmentFilter    []string `yaml:"environment_filter"`
+	StorePath            string   `yaml:"store_path"`
 }
 
 // DefaultConfig returns the Phase A.2 defaults from the integration design.
@@ -101,6 +118,9 @@ func LoadConfig(data []byte) (Config, error) {
 	if loaded.EnvironmentFilter != nil {
 		cfg.EnvironmentFilter = loaded.EnvironmentFilter
 	}
+	if loaded.StorePath != "" {
+		cfg.StorePath = loaded.StorePath
+	}
 	cfg.normalize()
 	return cfg, nil
 }
@@ -116,6 +136,7 @@ func (c *Config) normalize() {
 	}
 	c.CapabilityFilter = compactStrings(c.CapabilityFilter)
 	c.EnvironmentFilter = compactStrings(c.EnvironmentFilter)
+	c.StorePath = strings.TrimSpace(c.StorePath)
 }
 
 func (c Config) validate() error {
@@ -131,13 +152,24 @@ func (c Config) validate() error {
 	return nil
 }
 
-// Bridge subscribes to Bahia endpoint events and rewrites the managed FIPS hosts section.
+// Bridge syncs Bahia endpoint events into a local event store and rewrites
+// the managed FIPS hosts section from them (bahia-irsry.10.5, C-37).
+//
+// On start it rebuilds its routes from the store, then syncs each relay
+// independently with nostradapter.ProcessSync: a restart fetches only the
+// endpoint events the store lacks, and a relay that was down catches up on
+// its own when it returns. The hosts section is written once when the first
+// catch-up completes and then once per live change.
 type Bridge struct {
-	cfg    Config
-	pool   relayPool
-	writer hostsWriter
-	logger *slog.Logger
-	now    func() time.Time
+	cfg  Config
+	pool *nostradapter.RelayPool
+	// syncLogger is the zap logger of the relay pool and sync engine.
+	syncLogger *zap.Logger
+	// relayBackoff, when set by tests, paces relay resyncs.
+	relayBackoff func() *nostradapter.Backoff
+	writer       hostsWriter
+	logger       *slog.Logger
+	now          func() time.Time
 	// latest is the newest accepted event per (kind, pubkey, d) coordinate.
 	latest map[string]replaceableCursor
 	// routes holds the hosts entry each coordinate currently contributes.
@@ -146,8 +178,9 @@ type Bridge struct {
 	routes map[string]hostRoute
 	// entries is the managed hosts section derived from routes.
 	entries map[string]string
-	// caughtUp is set once the relays report EOSE; until then backfill only
-	// updates state and pendingFlush records that a write is owed.
+	// caughtUp is set once the first catch-up completes; until then the
+	// stored state and backfill only update routes, and pendingFlush records
+	// that a write is owed.
 	caughtUp     bool
 	pendingFlush bool
 }
@@ -167,12 +200,6 @@ type hostRoute struct {
 	Cursor replaceableCursor
 }
 
-type relayPool interface {
-	Connect(context.Context)
-	Close()
-	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error)
-}
-
 // NewBridge constructs a bridge using Bahia's Nostr relay pool implementation.
 func NewBridge(cfg Config, logger *slog.Logger) (*Bridge, error) {
 	cfg.normalize()
@@ -182,84 +209,96 @@ func NewBridge(cfg Config, logger *slog.Logger) (*Bridge, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	pool := nostradapter.NewRelayPool(cfg.RelayURLs, zap.NewNop())
-	return newBridgeWithPool(cfg, pool, logger), nil
+	syncLogger, err := zap.NewProduction()
+	if err != nil {
+		return nil, fmt.Errorf("create relay sync logger: %w", err)
+	}
+	syncLogger = syncLogger.Named("fips-bahia-bridge")
+	bridge := newBridgeWithPool(cfg, nostradapter.NewRelayPool(cfg.RelayURLs, syncLogger), logger)
+	bridge.syncLogger = syncLogger
+	return bridge, nil
 }
 
-func newBridgeWithPool(cfg Config, pool relayPool, logger *slog.Logger) *Bridge {
+func newBridgeWithPool(cfg Config, pool *nostradapter.RelayPool, logger *slog.Logger) *Bridge {
 	cfg.normalize()
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Bridge{
-		cfg:     cfg,
-		pool:    pool,
-		writer:  NewHostsWriter(cfg.HostsPath, cfg.ManagedSectionMarker),
-		logger:  logger.With("component", "fips-bahia-bridge"),
-		now:     func() time.Time { return time.Now().UTC() },
-		latest:  make(map[string]replaceableCursor),
-		routes:  make(map[string]hostRoute),
-		entries: make(map[string]string),
+		cfg:        cfg,
+		pool:       pool,
+		syncLogger: zap.NewNop(),
+		writer:     NewHostsWriter(cfg.HostsPath, cfg.ManagedSectionMarker),
+		logger:     logger.With("component", "fips-bahia-bridge"),
+		now:        func() time.Time { return time.Now().UTC() },
+		latest:     make(map[string]replaceableCursor),
+		routes:     make(map[string]hostRoute),
+		entries:    make(map[string]string),
 	}
 }
 
-// Run keeps the Nostr subscription open until the context is canceled.
+// Run syncs endpoint state until ctx is cancelled. It returns nil on
+// cancellation and an error when the local store cannot be opened.
 func (b *Bridge) Run(ctx context.Context) error {
 	if b.pool == nil {
 		return fmt.Errorf("relay pool is not configured")
 	}
-	b.pool.Connect(ctx)
-	b.fetchRelayMetadata(ctx)
 	defer b.pool.Close()
-
-	backoff := time.Second
-	for {
-		err := b.subscribeOnce(ctx)
-		if ctx.Err() != nil {
-			return nil
-		}
-		b.logger.Warn("subscription ended; reconnecting", "error", err, "delay", backoff)
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(backoff):
-		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-			if backoff > 30*time.Second {
-				backoff = 30 * time.Second
+	storePath := b.cfg.EffectiveStorePath()
+	store, err := localstore.Open(storePath)
+	if err != nil {
+		return fmt.Errorf("open FIPS bridge event store: %w", err)
+	}
+	defer store.Close()
+	filter := b.subscriptionFilter()
+	b.logger.Info("restored endpoints from the local event store", "store", storePath, "events", b.hydrate(ctx, store, filter))
+	b.fetchRelayMetadata(ctx)
+	b.pool.Connect(ctx)
+	syncer := &nostradapter.ProcessSync{
+		Pool:         b.pool,
+		Store:        store,
+		Logger:       b.syncLogger,
+		RelayBackoff: b.relayBackoff,
+		Apply: func(ctx context.Context, ev *nostr.Event) {
+			if err := b.HandleEvent(ctx, ev); err != nil {
+				b.logger.Warn("endpoint event ignored", "event_id", eventID(ev), "error", err)
 			}
+		},
+		RelayCaughtUp: func(relayURL string) {
+			b.logger.Info("relay caught up with stored endpoint events", "relay", relayURL)
+		},
+		CaughtUp: func() {
+			b.logger.Info("historical endpoint catch-up complete")
+			if err := b.markCaughtUp(ctx); err != nil {
+				b.logger.Warn("hosts write after catch-up failed", "error", err)
+			}
+		},
+	}
+	return syncer.Run(ctx, []nostr.Filter{filter})
+}
+
+// hydrate rebuilds routes from the endpoint events already in the store (the
+// latest version per coordinate, tombstones included) and returns how many it
+// read. Nothing is written until the relays have caught up.
+func (b *Bridge) hydrate(ctx context.Context, store *localstore.Store, filter nostr.Filter) int {
+	count := 0
+	for ev := range store.QueryEvents(filter) {
+		count++
+		if err := b.HandleEvent(ctx, &ev); err != nil {
+			b.logger.Debug("stored endpoint event ignored", "event_id", eventID(&ev), "error", err)
 		}
 	}
+	return count
 }
 
 func (b *Bridge) fetchRelayMetadata(ctx context.Context) {
-	fetcher, ok := b.pool.(interface {
-		FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument
-	})
-	if !ok {
-		return
-	}
-	infos := fetcher.FetchAllRelayInfo(ctx)
-	for relayURL, info := range infos {
+	for relayURL, info := range b.pool.FetchAllRelayInfo(ctx) {
 		if info == nil {
 			b.logger.Warn("relay NIP-11 metadata unavailable", "relay", relayURL)
 			continue
 		}
 		b.logger.Info("relay NIP-11 metadata loaded", "relay", relayURL, "name", info.Name, "supported_nips", info.SupportedNIPs)
 	}
-}
-
-// subscribeOnce runs one subscription until its event stream ends. The pool
-// answers NIP-42 challenges and reissues a relay's REQ after an
-// "auth-required:" or transient CLOSED or a dropped connection, so a CLOSED
-// here is only logged.
-func (b *Bridge) subscribeOnce(ctx context.Context) error {
-	merged, err := b.pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{b.subscriptionFilter()})
-	if err != nil {
-		return err
-	}
-	return b.consume(ctx, merged)
 }
 
 func (b *Bridge) subscriptionFilter() nostr.Filter {
@@ -276,55 +315,19 @@ func (b *Bridge) subscriptionFilter() nostr.Filter {
 	}
 }
 
-func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription) error {
-	if merged == nil {
-		return nil
-	}
-	defer merged.Close()
-	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case eose, ok := <-merged.RelayEOSE:
-			if ok {
-				b.logger.Info("relay sent EOSE", "relay", eose.RelayURL, "subscription_id", eose.SubscriptionID)
-			} else {
-				merged.RelayEOSE = nil
-			}
-		case <-merged.EndOfStoredEvents:
-			b.logger.Info("all relays sent EOSE; historical endpoint catch-up complete")
-			merged.EndOfStoredEvents = nil
-			if err := b.markCaughtUp(ctx); err != nil {
-				b.logger.Warn("hosts write after catch-up failed", "error", err)
-			}
-		case closed, ok := <-merged.Closed:
-			if ok {
-				b.logger.Warn("relay closed subscription", "relay", closed.RelayURL, "subscription_id", closed.SubscriptionID,
-					"reason", closed.Reason, "terminal", closed.Terminal)
-			} else {
-				merged.Closed = nil
-			}
-		case ev, ok := <-merged.Events:
-			if !ok {
-				return nil
-			}
-			if err := b.HandleEvent(ctx, ev); err != nil {
-				b.logger.Warn("endpoint event ignored", "event_id", eventID(ev), "error", err)
-			}
-		}
-	}
-	return nil
-}
-
 // markCaughtUp ends the backfill phase and writes the hosts section once if
-// backfill changed anything, instead of rewriting it per stored event.
+// the stored state or the backfill changed anything, instead of rewriting it
+// per stored event. A failed write stays owed until the next change.
 func (b *Bridge) markCaughtUp(ctx context.Context) error {
 	b.caughtUp = true
 	if !b.pendingFlush {
 		return nil
 	}
+	if err := b.writer.Write(ctx, b.entries); err != nil {
+		return err
+	}
 	b.pendingFlush = false
-	return b.writer.Write(ctx, b.entries)
+	return nil
 }
 
 // HandleEvent validates and applies a single Bahia endpoint event.

@@ -30,6 +30,21 @@ type NostrLocalStoreConfig struct {
 	// (repairing a relay from its peers). Off by default: the daemon is a
 	// consumer of these subscriptions, not their publisher.
 	NegentropyUpload bool `koanf:"negentropy_upload" yaml:"negentropy_upload" secret:"false"`
+	// OutboxPath is the bbolt file of the daemon's publish outbox: signed
+	// events waiting for relay acceptance, with each relay's delivery state
+	// (bahia-irsry.10.4). Unlike Path it is not a cache, so it is a separate
+	// file: deleting it drops events that no relay may hold yet. Empty means
+	// "outbox.bolt" next to Path.
+	OutboxPath string `koanf:"outbox_path" yaml:"outbox_path" secret:"false"`
+}
+
+// ResolvedOutboxPath returns OutboxPath, or "outbox.bolt" in Path's directory
+// when it is unset.
+func (c NostrLocalStoreConfig) ResolvedOutboxPath() string {
+	if path := strings.TrimSpace(c.OutboxPath); path != "" {
+		return path
+	}
+	return filepath.Join(filepath.Dir(strings.TrimSpace(c.Path)), defaultNostrOutboxFile)
 }
 
 const (
@@ -42,6 +57,8 @@ const (
 	// relaySidecarEventStoreFile is internal/relaysidecar's store file name
 	// under nostr.sidecar.data_dir.
 	relaySidecarEventStoreFile = "events.bolt"
+	// defaultNostrOutboxFile is the outbox file name next to the event store.
+	defaultNostrOutboxFile = "outbox.bolt"
 )
 
 // DefaultNostrLocalStoreConfig returns the local event store defaults.
@@ -62,11 +79,24 @@ func (c *Config) validateNostrLocalStore() error {
 	if info, err := os.Stat(store.Path); err == nil && info.IsDir() {
 		return fmt.Errorf("config validation failed: nostr.local_store.path %q is a directory; it must name the store file", store.Path)
 	}
+	store.OutboxPath = strings.TrimSpace(store.OutboxPath)
+	outboxPath := store.ResolvedOutboxPath()
+	if info, err := os.Stat(outboxPath); err == nil && info.IsDir() {
+		return fmt.Errorf("config validation failed: nostr.local_store.outbox_path %q is a directory; it must name the outbox file", outboxPath)
+	}
+	storeAbs, storeErr := filepath.Abs(store.Path)
+	outboxAbs, outboxErr := filepath.Abs(outboxPath)
+	if storeErr == nil && outboxErr == nil && storeAbs == outboxAbs {
+		return fmt.Errorf("config validation failed: nostr.local_store.outbox_path must not be the event store file %q", storeAbs)
+	}
 	if c.Nostr.Sidecar.Enabled && strings.TrimSpace(c.Nostr.Sidecar.DataDir) != "" {
-		storePath, storeErr := filepath.Abs(store.Path)
 		sidecarPath, sidecarErr := filepath.Abs(filepath.Join(c.Nostr.Sidecar.DataDir, relaySidecarEventStoreFile))
-		if storeErr == nil && sidecarErr == nil && storePath == sidecarPath {
-			return fmt.Errorf("config validation failed: nostr.local_store.path must not be the relay sidecar's event store %q", sidecarPath)
+		if sidecarErr == nil {
+			for name, path := range map[string]string{"path": storeAbs, "outbox_path": outboxAbs} {
+				if path == sidecarPath {
+					return fmt.Errorf("config validation failed: nostr.local_store.%s must not be the relay sidecar's event store %q", name, sidecarPath)
+				}
+			}
 		}
 	}
 	if store.ResumeOverlap < time.Second || store.ResumeOverlap > MaxNostrLocalStoreResumeOverlap {

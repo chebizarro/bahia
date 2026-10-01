@@ -703,6 +703,12 @@ type NostrConfig struct {
 	// the attempt budget). Only then is the row marked published (quorum
 	// reached) or abandoned (quorum not reached).
 	PublishQuorum int `koanf:"publish_quorum" yaml:"publish_quorum" secret:"false"`
+	// ClosedRetryBudget is how many times in a row the relay pool reissues a
+	// REQ that a relay CLOSED with a retryable reason ("error:",
+	// "rate-limited:" or an unknown prefix) before it gives up on that relay
+	// and filter, surfacing a terminal CLOSED. A relay's EOSE resets the
+	// count. 0 (unset) uses the pool default of 5; at most 100.
+	ClosedRetryBudget int `koanf:"closed_retry_budget" yaml:"closed_retry_budget" secret:"false"`
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
 	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
@@ -737,6 +743,15 @@ const (
 	PublishQuorumDefault = 1
 	// PublishQuorumAllRelays succeeds only once every write relay has accepted.
 	PublishQuorumAllRelays = -1
+)
+
+// Bounds for NostrConfig.ClosedRetryBudget.
+const (
+	// ClosedRetryBudgetDefault matches the relay pool's own default.
+	ClosedRetryBudgetDefault = 5
+	// ClosedRetryBudgetMax caps the budget so a misconfiguration cannot
+	// bring back retry-forever.
+	ClosedRetryBudgetMax = 100
 )
 
 // RelayQuorumConfig holds readiness quorum thresholds by operating mode.
@@ -1363,6 +1378,7 @@ func Defaults() *Config {
 			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
 			PublishQuorum:              PublishQuorumDefault,
+			ClosedRetryBudget:          ClosedRetryBudgetDefault,
 			StaleRunAfter:              5 * time.Minute,
 			RelayAuthUnavailablePolicy: RelayAuthUnavailableExcludeAndFail,
 			RelayQuorum: RelayQuorumConfig{
@@ -1967,6 +1983,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.validateNostrLocalStore(); err != nil {
 		return err
+	}
+	if c.Nostr.ClosedRetryBudget < 0 || c.Nostr.ClosedRetryBudget > ClosedRetryBudgetMax {
+		return fmt.Errorf("config validation failed: nostr.closed_retry_budget must be between 0 (default) and %d", ClosedRetryBudgetMax)
 	}
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)

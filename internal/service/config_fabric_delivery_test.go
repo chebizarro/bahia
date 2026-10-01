@@ -9,14 +9,15 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 )
 
-// A publish below the quorum is durably queued for the control-plane runner:
+// A publish below the quorum is durably queued in the control-plane outbox:
 // the caller gets a queued receipt, not an error, so it has no reason to
 // re-sign and republish the same desired version.
 func TestConfigFabricPublishBelowQuorumIsQueuedForControlPlaneRunner(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	publisher := &configTestPublisher{err: fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)}
 	svc := NewConfigFabricService(repo, publisher, newConfigTestSigner(t))
 	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
@@ -39,15 +40,19 @@ func TestConfigFabricPublishBelowQuorumIsQueuedForControlPlaneRunner(t *testing.
 	if err != nil || rec == nil {
 		t.Fatalf("desired row missing: rec=%v err=%v", rec, err)
 	}
-	if rec.PublishState != repository.NostrPublishStatePending || rec.PublishTarget != repository.NostrPublishTargetControlPlane {
-		t.Fatalf("desired row state=%q target=%q, want pending for the control-plane runner", rec.PublishState, rec.PublishTarget)
+	if rec.PublishState != repository.NostrPublishStatePending || rec.PublishTarget != repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane) {
+		t.Fatalf("desired row state=%q target=%q, want the pending archive row of the control-plane local outbox", rec.PublishState, rec.PublishTarget)
 	}
-	interop, err := repo.ListUnpublishedAfter(ctx, repository.NostrPublishTargetDefault, nil, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(interop) != 0 {
-		t.Fatalf("interop runner would adopt %d config-fabric rows", len(interop))
+	// The local outbox delivers the event: no PostgreSQL runner adopts the
+	// archive row, so it is not delivered twice.
+	for _, target := range []string{repository.NostrPublishTargetDefault, repository.NostrPublishTargetControlPlane} {
+		rows, err := repo.ListUnpublishedAfter(ctx, target, nil, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("the %q PostgreSQL runner would adopt %d config-fabric rows", target, len(rows))
+		}
 	}
 
 	// Retrying the same version is refused, so a caller cannot queue a
@@ -61,7 +66,7 @@ func TestConfigFabricPublishBelowQuorumIsQueuedForControlPlaneRunner(t *testing.
 }
 
 func TestConfigFabricPublishHardFailureIsReturned(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	publisher := &configTestPublisher{err: errors.New("persist signed nostr event before publish: disk full")}
 	svc := NewConfigFabricService(repo, publisher, newConfigTestSigner(t))
 
@@ -71,7 +76,7 @@ func TestConfigFabricPublishHardFailureIsReturned(t *testing.T) {
 }
 
 func TestConfigFabricPublishAcceptedReceipt(t *testing.T) {
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	svc := NewConfigFabricService(repo, &configTestPublisher{}, newConfigTestSigner(t))
 
 	receipt, err := svc.Publish(context.Background(), validPolicyRequest(1))

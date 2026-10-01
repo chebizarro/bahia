@@ -42,9 +42,10 @@ groups:
           summary: "Bahia relay connectivity is degraded"
           runbook_url: "/docs/runbooks/ws6-alerts.md#bahiarelaydegraded"
       - alert: BahiaNostrOutboxFailed
-        # Durable count of outbox rows whose delivery was abandoned
-        # (publish_state=failed). -1 means the count is unavailable until
-        # ensure-indexes builds its index, so it never fires this rule.
+        # Durable count of abandoned outbound events: local outbox entries
+        # (kept seven days) plus failed PostgreSQL outbox rows. -1 means the
+        # count is unavailable (no local outbox and no ensure-indexes index
+        # yet), so it never fires this rule.
         expr: bahia_nostr_outbox_failed > 0
         labels:
           severity: warning

@@ -8,7 +8,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr"
-	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +37,7 @@ func TestReactorHandleEventDropsInvalidBeforeDedupAndDispatch(t *testing.T) {
 
 func TestReactorHandleEventDropsLegacyRuntimeKindBeforeAudit(t *testing.T) {
 	ctx := context.Background()
-	repo := repository.NewInMemoryNostrEventRepository()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 	r := NewReactor(Config{}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithNostrEventRepository(repo))
 	event := signedControlPlaneTestEvent(t, KindDeployRequest)
 
