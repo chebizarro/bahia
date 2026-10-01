@@ -143,9 +143,9 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 		}
 		stored := true
 		if event.Kind.IsReplaceable() || event.Kind.IsAddressable() {
-			if current, found := store.latest(coordinateFilter(event.Kind, event.PubKey, event.Tags.GetD())); found && !nostr.IsOlder(current, event) {
+			if err := store.replace(event); errors.Is(err, eventstore.ErrDupEvent) {
 				stored = false
-			} else if _, err := backend.ReplaceEvent(event); err != nil {
+			} else if err != nil {
 				return fmt.Errorf("import legacy relay event %s: %w", event.ID.Hex(), err)
 			}
 		} else if err := backend.SaveEvent(event); errors.Is(err, eventstore.ErrDupEvent) {
@@ -159,6 +159,11 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 		}
 		if err := store.indexExpiration(event); err != nil {
 			return err
+		}
+		if event.Kind == nostr.KindDeletion {
+			if err := store.indexDeletion(event); err != nil {
+				return err
+			}
 		}
 		result.Imported++
 	}
