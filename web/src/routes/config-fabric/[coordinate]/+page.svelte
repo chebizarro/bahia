@@ -6,8 +6,11 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import ConfigPublishForm from '$lib/config-fabric/ConfigPublishForm.svelte';
+  import ConfigWithdrawnNotice from '$lib/config-fabric/ConfigWithdrawnNotice.svelte';
   import {
     configPayload,
+    configRowState,
+    configStatusVariant,
     findConfigCoordinate,
     initialConfigPublishForm,
     shortEventId
@@ -96,8 +99,10 @@
     <div class="cards">
       <Card title="Desired version" value={`v${record.desired_version}`} subtitle={shortEventId(record.desired_event_id)} />
       <Card title="Effective version" value={record.applied_version ? `v${record.applied_version}` : 'None'} subtitle={shortEventId(record.applied_event_id)} />
-      <Card title="Drift" value={record.drift ? 'Drifted' : 'In sync'} status={record.drift ? 'warning' : 'success'} />
+      <Card title="Drift" value={configRowState(record).label} status={configRowState(record).variant} />
     </div>
+
+    <ConfigWithdrawnNotice row={record} onPublish={() => { publishOpen = true; }} />
 
     {#if record.last_rejection_reason}
       <section class="rejection" aria-label="Last rejection">
@@ -136,7 +141,9 @@
                 <td>{version.kind}</td>
                 <td>{displayTime(version.created_at)}</td>
                 <td>
-                  {#if version.event_id === record.desired_event_id}
+                  {#if version.event_id === record.desired_event_id && record.withdrawn}
+                    <Badge variant="warning">Withdrawn</Badge>
+                  {:else if version.event_id === record.desired_event_id}
                     <Badge variant="primary">Desired</Badge>
                   {:else if version.event_id === record.applied_event_id}
                     <Badge variant="success">Effective</Badge>
@@ -148,7 +155,7 @@
                   <LoadingButton
                     variant="secondary"
                     onclick={() => { rollbackError = ''; rollbackTarget = version; }}
-                    disabled={version.event_id === record.desired_event_id}
+                    disabled={version.event_id === record.desired_event_id && !record.withdrawn}
                   >
                     Rollback
                   </LoadingButton>
@@ -163,20 +170,22 @@
     <section class="panel">
       <h2>Status and audit history</h2>
       {#if (record.status_history || []).length === 0}
-        <p class="muted">No applied or rejected status events have been received.</p>
+        <p class="muted">No accepted, applied, rejected, or withdrawn status events have been received.</p>
       {:else}
         <div class="timeline">
           {#each record.status_history as status}
-            <article class:rejected={status.status === 'rejected'}>
+            <article class:rejected={status.status === 'rejected'} class:withdrawn={status.status === 'withdrawn'}>
               <div>
-                <Badge variant={status.status === 'applied' ? 'success' : 'error'}>{status.status}</Badge>
+                <Badge variant={configStatusVariant(status.status)}>{status.status}</Badge>
                 <strong>v{status.version}</strong>
                 <time>{displayTime(status.created_at)}</time>
               </div>
               <p>Desired event <code>{shortEventId(status.config_event_id)}</code></p>
               {#if status.status === 'applied'}
                 <p>Effective v{status.effective_version}, event <code>{shortEventId(status.last_applied_event_id)}</code></p>
-              {:else}
+              {:else if status.status === 'withdrawn'}
+                <p>{status.reason}. The last applied config stays live.</p>
+              {:else if status.reason}
                 <p class="reason">{status.reason}</p>
               {/if}
             </article>
@@ -232,6 +241,7 @@
   .timeline { display: flex; flex-direction: column; gap: 0.75rem; }
   .timeline article { border-left: 4px solid #10b981; background: var(--bg); border-radius: 4px; padding: 0.75rem; }
   .timeline article.rejected { border-left-color: var(--error); }
+  .timeline article.withdrawn { border-left-color: #f59e0b; }
   .timeline article div { align-items: center; display: flex; gap: 0.75rem; }
   .timeline article p { font-size: 0.8rem; margin: 0.5rem 0 0; }
   time { color: var(--text-muted); font-size: 0.75rem; margin-left: auto; }

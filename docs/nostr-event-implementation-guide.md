@@ -257,12 +257,24 @@ signed desired config event and one phase, with this address:
 
 `d=config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`
 
-The phases are `accepted`, `applied`, and `rejected`. The existing `service`,
+The phases are `accepted`, `applied`, `rejected`, and `withdrawn`. The existing `service`,
 `scope`, `version`, `status`, and `e=<config_event_id>` tags match the content.
 An `applied` receipt must bind `last_applied_event_id` to `config_event_id` and
 `effective_version` to `version`. `accepted` only acknowledges durable admission;
 it is not proof of activation. A rejection of a duplicate desired event does
 not retract a previously published applied fact.
+
+`withdrawn` (v2 only, with a non-empty `reason`) means the consumer dropped the
+desired event because its author deleted it (NIP-09) or it expired (NIP-40).
+Pending activation of that event is cancelled, but the consumer keeps enforcing
+the last applied config: it does **not** revert the live relay policy, because
+an absent membership list or policy document would read as an empty allowlist,
+and an empty allowlist admits every pubkey. The withdrawn event keeps its
+version floor, so the consumer will not re-accept it. To change the live config,
+publish a newer version (or roll back, which republishes older content at a
+newer version). Readers report a coordinate as withdrawn only while the
+withdrawn event is still the latest desired event; a newer desired version
+supersedes the withdrawal.
 
 This address separates both phases and target events. A relay retaining one
 event per `(kind, pubkey, d)` therefore cannot replace applied truth with

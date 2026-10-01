@@ -43,7 +43,11 @@ func configCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return output(drift, []string{"SERVICE", "POLICY", "SCOPE", "DESIRED", "APPLIED", "DRIFT", "LAST REJECTION"}, func(item client.ConfigDrift) []string {
+			return output(drift, []string{"SERVICE", "POLICY", "SCOPE", "DESIRED", "APPLIED", "DRIFT", "LAST REJECTION", "WITHDRAWN"}, func(item client.ConfigDrift) []string {
+				withdrawn := ""
+				if item.Withdrawn {
+					withdrawn = "withdrawn: " + item.WithdrawnReason + " (last applied config kept; publish a newer version)"
+				}
 				return []string{
 					item.ServiceID,
 					item.PolicyName,
@@ -52,6 +56,7 @@ func configCommands() *cobra.Command {
 					fmt.Sprintf("%d:%s", item.AppliedVersion, item.AppliedEventID),
 					fmt.Sprintf("%t", item.Drift),
 					item.LastRejectionReason,
+					withdrawn,
 				}
 			})
 		},

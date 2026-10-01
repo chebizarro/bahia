@@ -374,7 +374,9 @@ bahia policies create \
 # Publish a validated desired-state request; Bahia signs through operator Signet
 bahia config publish --file config-request.json
 
-# Compare desired events with applied/rejected status
+# Compare desired events with applied/rejected/withdrawn status
+# (WITHDRAWN: the desired event was deleted or expired; the last applied
+# config stays live until a newer version is published)
 bahia config drift
 
 # Republish a prior desired event at the next version

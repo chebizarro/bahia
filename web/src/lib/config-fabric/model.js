@@ -29,6 +29,44 @@ export function shortEventId(eventId = '') {
   return eventId ? `${eventId.slice(0, 8)}…${eventId.slice(-6)}` : 'Not applied';
 }
 
+// A desired event is withdrawn when its author deleted it (NIP-09) or it
+// expired (NIP-40). The consumer keeps enforcing the last applied config, so
+// a withdrawn row is neither converging nor in sync: show it on its own.
+export function configRowState(row = {}) {
+  if (row?.withdrawn) return { label: 'Withdrawn', variant: 'warning' };
+  return row?.drift
+    ? { label: 'Drifted', variant: 'warning' }
+    : { label: 'In sync', variant: 'success' };
+}
+
+const STATUS_BADGE_VARIANTS = {
+  applied: 'success',
+  accepted: 'info',
+  rejected: 'error',
+  withdrawn: 'warning'
+};
+
+export function configStatusVariant(status = '') {
+  return STATUS_BADGE_VARIANTS[status] || 'default';
+}
+
+// withdrawnGuidance explains a withdrawn row: what was withdrawn, what stays
+// live and why, and the next action. Null when the row is not withdrawn.
+export function withdrawnGuidance(row = {}) {
+  if (!row?.withdrawn) return null;
+  const desiredVersion = Number(row.desired_version || 0);
+  const appliedVersion = Number(row.applied_version || 0);
+  return {
+    withdrawn: `Desired v${desiredVersion} was withdrawn: ${row.withdrawn_reason || 'the desired event was deleted or has expired'}.`,
+    kept: appliedVersion > 0
+      ? `The relay keeps enforcing the last applied config, v${appliedVersion}.`
+      : 'No version was applied, so the relay keeps its current mounted policy.',
+    why: 'The live allowlist is intentionally not reverted: an empty allowlist would admit every pubkey.',
+    next: `To change the live config, publish v${desiredVersion + 1} or later, or use Rollback to republish a retained version (including the withdrawn one) at a newer version.`,
+    nextVersion: desiredVersion + 1
+  };
+}
+
 export function configPayload(version) {
   if (!version) return null;
   const payload = version.kind === CONFIG_ACL_LIST
