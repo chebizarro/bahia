@@ -188,8 +188,10 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 		return nil, err
 	}
 	if err := add(eventSpec{Kind: kindNIP38Status, Author: serviceKey, Tags: nostr.Tags{
+		{"d", "bahia.assistant-status.v1:assistant-session-1:completed:1"},
 		{"domain", "assistant"},
 		{"schema", "bahia.assistant-status.v1"},
+		{"t", kinds.AssistantStatusTopic},
 		{"session", "assistant-session-1"},
 		{"status", "completed"},
 		{"agent", "bahia-assistant"},

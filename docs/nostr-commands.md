@@ -245,7 +245,7 @@ Legacy Bahia discovery kind `31974` is not a production bootstrap contract. It m
 
 ## Migration App
 
-Bahia includes a startup migration app in `internal/nostrmigration`. It converts stored and optionally relay-backfilled legacy events into canonical ContextVM/canonical observable events before production runtime handles live traffic.
+Bahia includes an offline migration tool, `bahia-migrate nostr` (code in `internal/nostrmigration`). It converts stored and optionally relay-backfilled legacy events into canonical ContextVM/canonical observable events. Operators run it explicitly after upgrading; the daemon does not run it on startup (see [the CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
 
 The migration app:
 

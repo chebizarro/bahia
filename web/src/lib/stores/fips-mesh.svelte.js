@@ -12,7 +12,7 @@ import {
   parseJsonContent,
   upsertReplaceableEvent
 } from '../nostr/client.js';
-import { controlStateSchema } from '../nostr/cp-state.js';
+import { controlStateSchema, workerRecordId } from '../nostr/cp-state.js';
 
 // Producer contract: DNS endpoints are canonical 30900 records (schema
 // bahia.cp-state.v1, legacy_kind 31976, deleted=true|false, t=dns-endpoint)
@@ -230,7 +230,7 @@ export function classifyHealth({ worker = null, endpoint = null } = {}) {
 
 function normalizeWorker(event) {
   const content = contentWithMeta(event);
-  const pubkey = trimString(content.pubkey || content.worker_pubkey || getTagValue(event, 'worker', '') || getDTag(event));
+  const pubkey = trimString(content.pubkey || content.worker_pubkey || getTagValue(event, 'worker', '') || workerRecordId(event));
   if (!pubkey) return null;
   const fipsEndpoints = asArray(content.fips_endpoints || content.fipsEndpoints).map((endpoint) => ({
     transport: endpoint.transport || endpoint.Transport || '',
@@ -267,6 +267,11 @@ function refreshCollections() {
 
   for (const worker of workerMap.values()) {
     if (!worker.overlayAddress && worker.fipsEndpoints.length === 0 && worker.health === 'unknown') continue;
+    // workerMap is keyed by coordinate: a worker can have its canonical
+    // worker:state:<pubkey> record and a migrated per-event record. The newest
+    // signed record describes the worker, whatever order they arrived in.
+    const current = nodesByPubkey.get(worker.pubkey);
+    if (current && Number(current.nostrCreatedAt || 0) >= Number(worker.nostrCreatedAt || 0)) continue;
     nodesByPubkey.set(worker.pubkey, {
       ...worker,
       endpoints: [],

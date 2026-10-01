@@ -18,7 +18,7 @@ import {
   getTagValues,
   parseJsonContent
 } from '$lib/nostr/client.js';
-import { controlStateSchema } from '$lib/nostr/cp-state.js';
+import { controlStateSchema, workerRecordId } from '$lib/nostr/cp-state.js';
 import { subscribeToRetainedEvents } from '$lib/nostr/retained-domain-subscription.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
@@ -407,7 +407,7 @@ function isWorkerStateRecord(event: ContinuityNostrEvent): boolean {
 function standbyDefinitionsFromWorkerState(event: ContinuityNostrEvent): ContinuityStandbyDefinition[] {
   const content = contentObject(event);
 
-  const workerPubKey = text(content.worker_pubkey) || text(content.pubkey) || eventTagValue(event, 'worker') || getDTag(event);
+  const workerPubKey = text(content.worker_pubkey) || text(content.pubkey) || eventTagValue(event, 'worker') || workerRecordId(event, content);
   if (!workerPubKey || !Array.isArray(content.standby_assignments)) return [];
   return content.standby_assignments
     .map((assignment: any) => {

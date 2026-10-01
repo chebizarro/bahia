@@ -34,6 +34,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	routingAdapter "github.com/openagentsinc/bahia/internal/adapters/routing"
@@ -56,7 +57,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
-	"github.com/openagentsinc/bahia/internal/nostrmigration"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/readmodel"
@@ -93,6 +94,7 @@ type App struct {
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
 	hiveCIInitiator           *giteaAdapter.Initiator
+	localEventStore           *localstore.Store
 	reloadMu                  sync.Mutex
 }
 
@@ -629,7 +631,18 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	catalog := nostrAdapter.NewKindCatalog()
-	cursorPlanner := nostrAdapter.NewReplayCursorPlanner(time.Second, nostrAdapter.NewNostrEventRepositoryCursorSource(nostrEventRepo))
+	// Local event store: the inbound subscriptions' rebuildable cache, dedup
+	// set and per-(relay, filter) cursors (bahia-irsry.10.1).
+	localEventStore, err := localstore.Open(cfg.Nostr.LocalStore.Path)
+	if err != nil {
+		return nil, fmt.Errorf("opening local Nostr event store: %w", err)
+	}
+	localEventStoreReleased := false
+	defer func() {
+		if !localEventStoreReleased {
+			_ = localEventStore.Close()
+		}
+	}()
 
 	// Relay projection cache: applies decoded relay events to local repositories.
 	// When DB is unavailable, appliers are skipped (tier1-only mode has no
@@ -648,6 +661,8 @@ func New(cfg *config.Config) (*App, error) {
 			Policies:     policyRepo,
 		})
 		bootstrapCache = &bootstrapCacheAdapter{cache: projectionCache}
+		// Tombstones cached projections when their NIP-40 expiration passes.
+		bgManager.RegisterWithOptions(projectionCache, RunnerTier(Tier1), RunnerRequired(false))
 	}
 
 	// Bahia self-identity publisher: emits 31410/31411/30360 events to relays.
@@ -666,10 +681,13 @@ func New(cfg *config.Config) (*App, error) {
 	// Request no more than the constructed dependencies support: without
 	// Postgres the tier2/tier3 repositories are nil, so the bootstrapper must
 	// neither report nor raise a tier above policy.MaxTier().
-	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
+	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
+	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, localEventStore, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
 		RequestedTier:       int(policy.MaxTier()),
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
-		ControlPlaneAuthors: compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys),
+		ControlPlaneAuthors: controlPlaneAuthors,
+		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
+		Resume:              inboundSyncConfig(cfg.Nostr.LocalStore),
 	})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
@@ -689,24 +707,16 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		return details
 	})
-	migrationEventRepo, ok := nostrEventRepo.(nostrmigration.EventRepository)
-	if !ok {
-		return nil, fmt.Errorf("nostr event repository does not support durable migration cursors")
-	}
-	migrationRunner := nostrmigration.NewRunner(migrationEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
-		PrivateKey:    cfg.Nostr.PrivateKey,
-		RelayBackfill: cfg.Nostr.LegacyRelayBackfill && len(relayURLs) > 0 && strings.TrimSpace(cfg.Nostr.PrivateKey) != "",
-	}, logger)
-	bgManager.RegisterWithOptions(&orderedStartupRunner{runners: []BackgroundRunner{
-		migrationRunner,
-		&bootstrapperRunner{
-			bootstrapper:    bootstrapper,
-			policy:          policy,
-			statusProjector: bahiaStatusProjector,
-			catalogVersion:  catalog.Version,
-			logger:          logger,
-		},
-	}}, RunnerTier(Tier0), RunnerRequired(false))
+	// The legacy nostr_events migration (internal/nostrmigration) is not on
+	// the startup path (B-28): operators run it once with
+	// `bahia-migrate nostr` (see docs/user-guide/cli-reference.md).
+	bgManager.RegisterWithOptions(&bootstrapperRunner{
+		bootstrapper:    bootstrapper,
+		policy:          policy,
+		statusProjector: bahiaStatusProjector,
+		catalogVersion:  catalog.Version,
+		logger:          logger,
+	}, RunnerTier(Tier0), RunnerRequired(false))
 
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
@@ -1434,6 +1444,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
+		nostrAdapter.WithLocalStore(localEventStore),
+		nostrAdapter.WithSelfAuthors(servicePubkey),
+		nostrAdapter.WithInboundSync(inboundSyncConfig(cfg.Nostr.LocalStore)),
+		// NIP-09 deletions from the control-plane authors reach the
+		// projection cache live, as the bootstrapper's deletion group does.
+		nostrAdapter.WithDeletionAuthors(controlPlaneAuthors),
+		nostrAdapter.WithObserver(bootstrapper.ApplyDeletion),
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
 		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
@@ -1851,8 +1868,10 @@ func New(cfg *config.Config) (*App, error) {
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 		hiveCIInitiator:           hiveCIInitiator,
+		localEventStore:           localEventStore,
 	}
 	soulFactoryRuntimeReleased = true
+	localEventStoreReleased = true
 	return application, nil
 }
 
@@ -2036,11 +2055,18 @@ func (r *inMemoryProjectionMetaRepo) Upsert(_ context.Context, meta repository.R
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := meta.Stream + "/" + meta.EntityKey
-	if existing, ok := r.store[key]; ok && !meta.UpdatedAt.After(existing.UpdatedAt) {
+	if existing, ok := r.store[key]; ok && !projectionMetaVersion(meta).Supersedes(projectionMetaVersion(*existing)) {
 		return nil
 	}
 	r.store[key] = &meta
 	return nil
+}
+
+// projectionMetaVersion orders metadata like the cache orders projections:
+// later timestamp, then lowest source event id (C-13). Keeping the higher id on
+// a same-second tie would let a third version between the two win.
+func projectionMetaVersion(meta repository.RelayProjectionMeta) nostrutil.Version {
+	return nostrutil.Version{CreatedAt: nostr.Timestamp(meta.UpdatedAt.Unix()), ID: meta.SourceEventID}
 }
 
 func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream string) ([]repository.RelayProjectionMeta, error) {
@@ -2053,23 +2079,6 @@ func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream stri
 		}
 	}
 	return result, nil
-}
-
-type orderedStartupRunner struct {
-	runners []BackgroundRunner
-}
-
-func (r *orderedStartupRunner) Name() string { return "tier0-startup" }
-func (r *orderedStartupRunner) Run(ctx context.Context) error {
-	for _, runner := range r.runners {
-		if runner == nil {
-			continue
-		}
-		if err := runner.Run(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type bootstrapperRunner struct {
@@ -2591,6 +2600,11 @@ func (a *App) RunContext(ctx context.Context) error {
 
 	// Close Nostr relay connections.
 	closeRelayPools(a.relayPools...)
+	if a.localEventStore != nil {
+		if err := a.localEventStore.Close(); err != nil {
+			a.Logger.Warn("local Nostr event store close failed", zap.Error(err))
+		}
+	}
 
 	if a.DB != nil {
 		a.DB.Close()
@@ -3397,22 +3411,6 @@ type auditedNostrPublisher struct {
 
 type relayFirstNostrPublisher struct {
 	pool *nostrAdapter.RelayPool
-}
-
-type migrationRelayPublisher struct {
-	pool *nostrAdapter.RelayPool
-}
-
-func (p migrationRelayPublisher) PublishMigrationEvent(ctx context.Context, ev nostr.Event) ([]nostrmigration.PublishOutcome, error) {
-	if p.pool == nil {
-		return nil, fmt.Errorf("migration relay pool is not configured")
-	}
-	results, err := p.pool.PublishWithResults(ctx, ev)
-	outcomes := make([]nostrmigration.PublishOutcome, 0, len(results))
-	for _, result := range results {
-		outcomes = append(outcomes, nostrmigration.PublishOutcome{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
-	}
-	return outcomes, err
 }
 
 func (p relayFirstNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {

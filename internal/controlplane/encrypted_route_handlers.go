@@ -278,6 +278,8 @@ func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedReques
 }
 
 type encryptedEnvironmentCreatePayload struct {
+	// ID is the optional client-minted entity id (see dto.CreateServiceRequest.ID).
+	ID                 string                           `json:"id,omitempty"`
 	OrgID              uuid.UUID                        `json:"org_id,omitempty"`
 	Name               string                           `json:"name"`
 	LoomWorkerSelector json.RawMessage                  `json:"loom_worker_selector,omitempty"`
@@ -366,6 +368,10 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 	if name == "" || artifactRepo == "" {
 		return nil, fmt.Errorf("name and artifact_repo are required")
 	}
+	serviceID, _, err := domain.ResolveCreateEntityID(payload.ID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid id: %w", err)
+	}
 	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
 	if err := authorizer.authorizeOrg(ctx, request.Event, payload.OrgID, domain.PermWriteServices); err != nil {
 		return nil, err
@@ -387,7 +393,7 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 		repoURL = strings.TrimSpace(repositoryRef.CloneURL)
 	}
 	svc := &domain.Service{
-		ID:            uuid.New(),
+		ID:            serviceID,
 		OrgID:         payload.OrgID,
 		Name:          name,
 		RepoURL:       repoURL,
@@ -590,6 +596,10 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 	if payload.OrgID == uuid.Nil {
 		return nil, fmt.Errorf("org_id is required")
 	}
+	environmentID, _, err := domain.ResolveCreateEntityID(payload.ID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid id: %w", err)
+	}
 	deployStrategy := domain.DeployStrategyReplace
 	if strings.TrimSpace(payload.DeployStrategy) != "" {
 		deployStrategy = domain.DeployStrategy(strings.TrimSpace(payload.DeployStrategy))
@@ -606,7 +616,7 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 		selector = parsed
 	}
 	env := &domain.Environment{
-		ID:                 uuid.New(),
+		ID:                 environmentID,
 		OrgID:              payload.OrgID,
 		Name:               name,
 		LoomWorkerSelector: selector,

@@ -145,6 +145,27 @@ Bahia side: the shared `RelayPool` wires `AuthHandler` and
 `AuthResultHandler` once per connection (see `internal/adapters/nostr`
 `relay_pool_stack_test.go` (`TestRelayPoolNIP42ThroughAuthHandlerIsRaceFree`)).
 
+## nip77: NegentropySync connection lifecycle (bahia-irsry.10.1)
+
+`NegentropySync` dials its own connection with `nostr.RelayConnect`, which
+binds it to `context.Background()`, and never closed it: every sync left a
+websocket and its goroutines open for the life of the process. The daemon
+runs a sync per relay and filter on startup and on every reconnect, so this
+leaked without bound. Its relay-frame handler also sent outcomes on an
+unbuffered channel, so a second frame (a NEG-ERR or NEG-CLOSE after the first
+outcome was taken) blocked the connection's read loop forever.
+
+- `nip77/nip77.go`: close the relay when `NegentropySync` returns (also after a
+  failed dial), and report outcomes through a one-slot channel with a
+  non-blocking send, so only the first outcome is kept.
+
+Callers must still pass a `handle` that returns when its context ends:
+`Direction.Items` is never closed when a relay refuses or abandons a session.
+`internal/adapters/nostr/relay_pool_sync.go` does this.
+
+Test: `nip77/nip77_bahia_test.go` (in-process khatru relay, completed and
+NEG-ERR sessions).
+
 ## Removal criteria
 
 Drop the `replace` and this directory once upstream carries equivalent fixes

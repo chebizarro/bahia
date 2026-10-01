@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,61 +86,53 @@ func TestBackupSchedulerRunnerProcessesDueSchedulesOnStartup(t *testing.T) {
 	}
 }
 
-func TestBackupSchedulerRunnerPeriodicProcessing(t *testing.T) {
-	var callCount int32
-	stopAfter := make(chan struct{})
-	mock := &mockScheduler{
+// cancelAfterCalls returns a scheduler that cancels its context from inside
+// the nth call. Cancellation happens exactly once (bahia-fz9gs: the old fake
+// closed a channel on every call from the 4th on, so a 5th tick racing the
+// cancellation panicked), and the runner's return is driven by that call,
+// not by elapsed time.
+func cancelAfterCalls(n int32, cancel context.CancelFunc, calls *atomic.Int32) *mockScheduler {
+	var once sync.Once
+	return &mockScheduler{
 		processFunc: func(ctx context.Context) (*service.BackupScheduleProcessResult, error) {
-			if n := atomic.AddInt32(&callCount, 1); n >= 4 {
-				close(stopAfter)
+			if calls.Add(1) >= n {
+				once.Do(cancel)
 			}
 			return &service.BackupScheduleProcessResult{Checked: 1}, nil
 		},
 	}
-	r := NewBackupSchedulerRunner(mock, time.Millisecond, zap.NewNop())
-	ctx, cancel := context.WithCancel(context.Background())
+}
 
-	go func() {
-		<-stopAfter
-		cancel()
-	}()
+func TestBackupSchedulerRunnerPeriodicProcessing(t *testing.T) {
+	var calls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := NewBackupSchedulerRunner(cancelAfterCalls(4, cancel, &calls), time.Millisecond, zap.NewNop())
 
 	if err := r.Run(ctx); err != nil {
 		t.Errorf("Run() = %v, want nil", err)
 	}
-	count := atomic.LoadInt32(&callCount)
-	if count < 4 {
+	if count := calls.Load(); count < 4 {
 		t.Errorf("ProcessDueSchedules called %d times, want at least 4 (initial + 3 periodic)", count)
 	}
 }
 
 func TestBackupSchedulerRunnerIdempotentRestart(t *testing.T) {
-	var callCount int32
-	var tickTrigger atomic.Int32
-	mock := &mockScheduler{
-		processFunc: func(ctx context.Context) (*service.BackupScheduleProcessResult, error) {
-			atomic.AddInt32(&callCount, 1)
-			tickTrigger.Add(1)
-			return &service.BackupScheduleProcessResult{Checked: 1, Dispatched: 0}, nil
-		},
-	}
-	r := NewBackupSchedulerRunner(mock, time.Millisecond, zap.NewNop())
-
+	var total int32
 	for i := 0; i < 3; i++ {
-		tickTrigger.Store(0)
+		var calls atomic.Int32
 		ctx, cancel := context.WithCancel(context.Background())
-		go func() {
-			for tickTrigger.Load() < 3 {
-				time.Sleep(time.Millisecond)
-			}
-			cancel()
-		}()
+		r := NewBackupSchedulerRunner(cancelAfterCalls(3, cancel, &calls), time.Millisecond, zap.NewNop())
 		if err := r.Run(ctx); err != nil {
 			t.Errorf("Run iteration %d: %v", i, err)
 		}
+		cancel()
+		if count := calls.Load(); count < 3 {
+			t.Errorf("Run iteration %d: ProcessDueSchedules called %d times, want at least 3 (initial + 2 periodic)", i, count)
+		}
+		total += calls.Load()
 	}
-	// Each restart: 1 initial + at least 2 periodic = at least 3 per iteration, 9 total.
-	if atomic.LoadInt32(&callCount) < 9 {
-		t.Errorf("ProcessDueSchedules called %d times across 3 restarts, want at least 9", atomic.LoadInt32(&callCount))
+	if total < 9 {
+		t.Errorf("ProcessDueSchedules called %d times across 3 restarts, want at least 9", total)
 	}
 }

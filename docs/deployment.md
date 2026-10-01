@@ -235,7 +235,7 @@ Existing single-runtime environments do not need a persisted unit row. When no e
 
 Backward compatibility is read-tolerant and write-forward. Runtime fields moved into typed targeting are read from typed fields first and then from `runtime_config` (`default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, `default_reconcile_mode`, `reconcile_mode`, `type`, `endpoint_ref`, `compose_dir`, `namespace`, `kube_namespace`, and `network_profile`). Environment and unit writes normalize those values into typed targeting columns/JSON so new reads do not depend on raw runtime JSON alone.
 
-Environment and deployment-unit writes are signer-first. An authorized signer publishes ContextVM `environment/create` or `environment/update` with this payload shape (create requires `name`; update requires `id`):
+Environment and deployment-unit writes are signer-first. An authorized signer publishes ContextVM `environment/create` or `environment/update` with this payload shape (create requires `name` and may carry a client-minted UUIDv7 `id` that fixes the environment's coordinate, see [entity identity](event-spec.md#entity-identity-and-coordinates); update requires `id`):
 
 ```json
 {

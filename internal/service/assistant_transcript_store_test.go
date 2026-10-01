@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func TestAssistantTranscriptStorePublishesEncrypted30316Envelope(t *testing.T) {
@@ -55,6 +56,18 @@ func TestAssistantTranscriptStorePublishesEncrypted30316Envelope(t *testing.T) {
 			t.Fatalf("tag %s = %q, want %q", want[0], got, want[1])
 		}
 	}
+	topics := 0
+	for range ev.Tags.FindAll("t") {
+		topics++
+	}
+	if topics != 2 {
+		t.Fatalf("transcript t topics = %v, want family and session topics", ev.Tags)
+	}
+	for _, topic := range []string{kinds.AssistantTranscriptTopic, kinds.AssistantTranscriptSessionTopic("session-1")} {
+		if !ev.Tags.ContainsAny("t", []string{topic}) {
+			t.Fatalf("transcript lacks t=%s: %v", topic, ev.Tags)
+		}
+	}
 	var envelope domain.AssistantTranscriptAEADEnvelope
 	mustUnmarshalEventContent(t, &ev, &envelope)
 	if envelope.Envelope != domain.AssistantTranscriptEnvelopeServiceHeldAEAD || envelope.Algorithm != domain.AssistantTranscriptAEADAlgorithmXChaCha20 || envelope.KeyRef != testAssistantTranscriptKey().Ref {
@@ -88,9 +101,26 @@ func TestAssistantTranscriptStoreReplayOrdersAndDedupes(t *testing.T) {
 	if records[1].Payload.Sequence != 2 || messageText(records[1].Payload.Message) != "second" {
 		t.Fatalf("second replay record = %+v", records[1].Payload)
 	}
+	// The replay REQ scopes the session by its single-letter topic only
+	// (bahia-irsry.37); relays do not index #schema/#domain/#session.
 	filter := subscriber.lastFilter(t)
-	if got := filter.Tags[domain.AssistantTranscriptTagSession]; len(got) != 1 || got[0] != "session-1" {
-		t.Fatalf("replay filter session tag = %#v", got)
+	for key := range filter.Tags {
+		if len(key) != 1 {
+			t.Fatalf("replay filter sends multi-letter tag #%s: %#v", key, filter.Tags)
+		}
+	}
+	if got := filter.Tags["t"]; len(got) != 1 || got[0] != kinds.AssistantTranscriptSessionTopic("session-1") {
+		t.Fatalf("replay filter #t = %#v, want [%s]", got, kinds.AssistantTranscriptSessionTopic("session-1"))
+	}
+	for _, ev := range published {
+		if !filter.Matches(ev) {
+			t.Fatalf("producer-shaped transcript event does not match the replay filter: tags=%v", ev.Tags)
+		}
+	}
+	appendTranscriptForTest(t, store, "session-2", "turn-1", 1, domain.AssistantAgentMessageRoleUser, "other session")
+	other := publisher.eventsOfKind(domain.KindAssistantTranscript)
+	if filter.Matches(other[len(other)-1]) {
+		t.Fatalf("another session's transcript matches the session-1 replay filter: tags=%v", other[len(other)-1].Tags)
 	}
 }
 

@@ -706,12 +706,15 @@ type NostrConfig struct {
 	// StaleRunAfter is the maximum silence allowed between Loom kind-30100
 	// status events before Bahia publishes a domain-health status event.
 	StaleRunAfter time.Duration `koanf:"stale_run_after" yaml:"stale_run_after" secret:"false"`
-	// LegacyRelayBackfill explicitly enables startup reads of retired Bahia
+	// LegacyRelayBackfill makes `bahia-migrate nostr` also read retired Bahia
 	// request kinds from an external migration relay. The hardened Bahia
 	// sidecar intentionally refuses those reads, so this must remain opt-in.
 	LegacyRelayBackfill bool               `koanf:"legacy_relay_backfill" yaml:"legacy_relay_backfill" secret:"false"`
 	RelayQuorum         RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar             RelaySidecarConfig `koanf:"sidecar"`
+
+	// LocalStore is the daemon's local event store and inbound cursors.
+	LocalStore NostrLocalStoreConfig `koanf:"local_store" yaml:"local_store"`
 }
 
 const (
@@ -1383,6 +1386,7 @@ func Defaults() *Config {
 				RequestRetentionKinds: DefaultRelaySidecarRequestRetentionKinds(),
 				NegentropyMaxEvents:   DefaultRelaySidecarNegentropyMaxEvents,
 			},
+			LocalStore: DefaultNostrLocalStoreConfig(),
 		},
 		Reconcile: ReconcileConfig{
 			Interval: 60 * time.Second,
@@ -1959,6 +1963,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateNostrRelayPolicy(); err != nil {
+		return err
+	}
+	if err := c.validateNostrLocalStore(); err != nil {
 		return err
 	}
 

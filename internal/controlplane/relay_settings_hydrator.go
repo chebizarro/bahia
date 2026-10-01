@@ -299,14 +299,16 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 	}
 }
 
+// filter REQs the operator policy by its exact addressable coordinate: kind,
+// service author and the single-letter #d. NIP-01 relays index only
+// single-letter tags, so domain and schema are checked locally (decode), never
+// sent as #domain/#schema. The record also carries t=kinds.RelaySettingsTopic
+// for topic readers, but #t is not added here: it would AND with #d and miss
+// the policy retained from before the topic was stamped.
 func (h *RelaySettingsHydrator) filter() gonostr.Filter {
 	filter := gonostr.Filter{
 		Kinds: []gonostr.Kind{kinds.CASControlState},
-		Tags: gonostr.TagMap{
-			kinds.CASControlStateTagD:      []string{RelaySettingsDTag},
-			kinds.CASControlStateTagDomain: []string{RelaySettingsDomain},
-			kinds.CASControlStateTagSchema: []string{RelaySettingsSchema},
-		},
+		Tags:  gonostr.TagMap{kinds.CASControlStateTagD: []string{RelaySettingsDTag}},
 		Limit: 10,
 	}
 	if h.servicePubkey != "" {

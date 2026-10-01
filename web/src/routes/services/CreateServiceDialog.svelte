@@ -10,6 +10,7 @@
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { createService as createServiceCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { toast } from '$lib/components/toast.js';
+  import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
 
   // Reusable create-service dialog shared by the services page and the dashboard.
@@ -24,6 +25,11 @@
   let selectedRegistry = $state('custom');
   let repoPath = $state('');
   let registriesInitialized = $state(false);
+
+  // Client-minted entity id for this create attempt (bahia-irsry.35). It is kept
+  // across retries of the same form so a retry after a lost reply is idempotent,
+  // and re-minted only when the form is reset.
+  let createEntityId = mintEntityId();
 
   // Create form state
   let creating = $state(false);
@@ -105,6 +111,7 @@
   }
 
   function resetForm() {
+    createEntityId = mintEntityId();
     createForm = {
       name: '',
       repositorySelection: createManualRepositorySelection(''),
@@ -141,7 +148,7 @@
     createError = null;
 
     try {
-      const payload = buildCreateServicePayload(createForm);
+      const payload = buildCreateServicePayload(createForm, { id: createEntityId });
       const resultEvent = await createServiceCommand(payload);
       const result = resultContent(resultEvent);
       const serviceId = result?.service?.id || result?.service_id || result?.id;
@@ -163,7 +170,9 @@
       const message = err?.message || 'Failed to create service';
       createError = /method not found/i.test(message)
         ? 'Service creation is not available from this Bahia service yet (missing service/create handler on the backend).'
-        : message;
+        : isEntityIdConflict(err)
+          ? 'This service was already created with different settings. Close the dialog and start again to create another service.'
+          : message;
       toast.error(createError);
     } finally {
       creating = false;

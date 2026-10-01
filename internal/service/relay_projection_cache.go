@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -19,10 +22,31 @@ import (
 type FamilyApplier func(ctx context.Context, event any) error
 
 // RelayProjectionCache applies relay-canonical projection events to local cache repositories.
+//
+// Events decoded with their source event (every KindCatalog decoder sets it)
+// are resolved through nostrutil.Lifecycle (C-12, C-13): replaceable and
+// addressable state is latest-wins per (kind, pubkey, d) with the lowest-id
+// tie-break, NIP-09 deletions tombstone what they delete and keep it from
+// coming back, and NIP-40 expired events are ignored on arrival and
+// tombstoned when they expire (Run). Regular events keep the (family, d)
+// ordering in the meta repository.
 type RelayProjectionCache struct {
-	meta     repository.RelayProjectionMetaRepository
-	logger   *zap.Logger
-	appliers map[string]FamilyApplier
+	meta      repository.RelayProjectionMetaRepository
+	logger    *zap.Logger
+	appliers  map[string]FamilyApplier
+	lifecycle *nostrutil.Lifecycle
+	now       func() time.Time
+
+	mu sync.Mutex
+	// applied holds the decoded projection behind each live Lifecycle entry,
+	// so a deletion or expiry can replay it as a tombstone.
+	applied map[gonostr.ID]any
+}
+
+// projectionSource is implemented by decoded projections that carry the
+// signed event they were decoded from.
+type projectionSource interface {
+	SourceEvent() *gonostr.Event
 }
 
 func NewRelayProjectionCache(meta repository.RelayProjectionMetaRepository, logger *zap.Logger) *RelayProjectionCache {
@@ -30,10 +54,26 @@ func NewRelayProjectionCache(meta repository.RelayProjectionMetaRepository, logg
 		logger = zap.NewNop()
 	}
 	return &RelayProjectionCache{
-		meta:     meta,
-		logger:   logger,
-		appliers: make(map[string]FamilyApplier),
+		meta:      meta,
+		logger:    logger,
+		appliers:  make(map[string]FamilyApplier),
+		lifecycle: nostrutil.NewLifecycle(),
+		now:       time.Now,
+		applied:   make(map[gonostr.ID]any),
 	}
+}
+
+// Name identifies the cache's expiry runner.
+func (c *RelayProjectionCache) Name() string { return "relay-projection-expiry" }
+
+// Run tombstones applied projections when their NIP-40 expiration passes. It
+// waits on a timer for the next expiration and returns when ctx ends.
+func (c *RelayProjectionCache) Run(ctx context.Context) error {
+	return c.lifecycle.RunExpiry(ctx, c.now, func(expired []nostrutil.Entry) {
+		if err := c.remove(ctx, expired); err != nil {
+			c.logger.Warn("tombstoning expired relay projections failed", zap.Error(err))
+		}
+	})
 }
 
 func (c *RelayProjectionCache) RegisterApplier(family any, fn FamilyApplier) {
@@ -81,26 +121,45 @@ func (c *RelayProjectionCache) Apply(ctx context.Context, event any) error {
 	if c == nil || c.meta == nil {
 		return errors.New("relay projection cache requires a meta repository")
 	}
+	source := sourceEventOf(event)
+	var replaced *nostrutil.Entry
+	if source != nil {
+		decision := c.lifecycle.Observe(source, c.now())
+		switch decision.Outcome {
+		case nostrutil.OutcomeAccept:
+			replaced = decision.Replaced
+		case nostrutil.OutcomeDeletion:
+			return c.remove(ctx, decision.Removed)
+		default:
+			c.logger.Debug("skipping relay projection event", zap.String("source_event_id", source.ID.Hex()), zap.Stringer("outcome", decision.Outcome))
+			return nil
+		}
+	}
 	projection, err := projectionFields(event)
 	if err != nil {
+		c.release(source)
 		return err
 	}
 
-	existing, err := c.meta.Get(ctx, projection.stream, projection.entityKey)
-	if err != nil {
-		return fmt.Errorf("getting relay projection meta for %s/%s: %w", projection.stream, projection.entityKey, err)
-	}
-	if existing != nil && (projection.updatedAt.Before(existing.UpdatedAt) ||
-		(projection.updatedAt.Equal(existing.UpdatedAt) && projection.sourceEventID >= existing.SourceEventID)) {
-		c.logger.Debug("skipping stale relay projection event", zap.String("stream", projection.stream), zap.String("entity_key", projection.entityKey), zap.String("source_event_id", projection.sourceEventID))
-		return nil
+	if source == nil || !nostrutil.IsStateKind(source.Kind) {
+		existing, err := c.meta.Get(ctx, projection.stream, projection.entityKey)
+		if err != nil {
+			c.release(source)
+			return fmt.Errorf("getting relay projection meta for %s/%s: %w", projection.stream, projection.entityKey, err)
+		}
+		if existing != nil && !projectionVersion(projection.updatedAt, projection.sourceEventID).Supersedes(projectionVersion(existing.UpdatedAt, existing.SourceEventID)) {
+			c.logger.Debug("skipping stale relay projection event", zap.String("stream", projection.stream), zap.String("entity_key", projection.entityKey), zap.String("source_event_id", projection.sourceEventID))
+			return nil
+		}
 	}
 
 	if applier := c.appliers[projection.stream]; applier != nil {
 		if err := applier(ctx, event); err != nil {
+			c.release(source)
 			return fmt.Errorf("applying relay projection family %s: %w", projection.stream, err)
 		}
 	}
+	c.track(source, replaced, event)
 
 	meta := repository.RelayProjectionMeta{
 		Stream:        projection.stream,
@@ -113,6 +172,95 @@ func (c *RelayProjectionCache) Apply(ctx context.Context, event any) error {
 		return fmt.Errorf("upserting relay projection meta for %s/%s: %w", projection.stream, projection.entityKey, err)
 	}
 	return nil
+}
+
+func sourceEventOf(event any) *gonostr.Event {
+	if carrier, ok := event.(projectionSource); ok {
+		return carrier.SourceEvent()
+	}
+	return nil
+}
+
+// projectionVersion orders projections without a source event by the same
+// NIP-01 rule: later timestamp, then lowest source event id.
+func projectionVersion(at time.Time, sourceEventID string) nostrutil.Version {
+	return nostrutil.Version{CreatedAt: gonostr.Timestamp(at.Unix()), ID: sourceEventID}
+}
+
+func (c *RelayProjectionCache) release(source *gonostr.Event) {
+	if source != nil {
+		c.lifecycle.Release(source.ID)
+	}
+}
+
+// track remembers an applied projection the Lifecycle may later delete or
+// expire, and forgets the version it replaced.
+func (c *RelayProjectionCache) track(source *gonostr.Event, replaced *nostrutil.Entry, event any) {
+	if source == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if replaced != nil {
+		delete(c.applied, replaced.ID)
+	}
+	if nostrutil.IsStateKind(source.Kind) || nostrutil.ExpiresAt(source) > 0 {
+		c.applied[source.ID] = event
+	}
+}
+
+// remove replays each deleted or expired projection as a tombstone through
+// its family applier.
+func (c *RelayProjectionCache) remove(ctx context.Context, entries []nostrutil.Entry) error {
+	var errs []error
+	for _, entry := range entries {
+		c.mu.Lock()
+		event, ok := c.applied[entry.ID]
+		delete(c.applied, entry.ID)
+		c.mu.Unlock()
+		if !ok {
+			continue
+		}
+		tombstone, err := tombstoneOf(event)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		projection, err := projectionFields(tombstone)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if applier := c.appliers[projection.stream]; applier != nil {
+			if err := applier(ctx, tombstone); err != nil {
+				errs = append(errs, fmt.Errorf("tombstoning relay projection %s/%s: %w", projection.stream, projection.entityKey, err))
+				continue
+			}
+		}
+		c.logger.Info("relay projection withdrawn", zap.String("stream", projection.stream), zap.String("entity_key", projection.entityKey), zap.String("source_event_id", projection.sourceEventID))
+	}
+	return errors.Join(errs...)
+}
+
+// tombstoneOf copies a decoded projection with Tombstone set.
+func tombstoneOf(event any) (any, error) {
+	value := reflect.ValueOf(event)
+	isPointer := value.Kind() == reflect.Pointer
+	elem := indirect(value)
+	if elem.Kind() != reflect.Struct {
+		return nil, errors.New("decoded projection event must be a struct or struct pointer")
+	}
+	copied := reflect.New(elem.Type())
+	copied.Elem().Set(elem)
+	field := copied.Elem().FieldByName("Tombstone")
+	if !field.IsValid() || field.Kind() != reflect.Bool || !field.CanSet() {
+		return nil, errors.New("decoded projection event has no Tombstone field")
+	}
+	field.SetBool(true)
+	if isPointer {
+		return copied.Interface(), nil
+	}
+	return copied.Elem().Interface(), nil
 }
 
 func workerApplier(repo repository.WorkerRepository) FamilyApplier {

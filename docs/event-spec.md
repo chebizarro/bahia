@@ -13,7 +13,7 @@ separately reports registered server methods. See the [publisher contract](nostr
 | Surface | Kind | Schema / coordinate |
 |---|---|---|
 | Intent/acknowledgment | 25910 | ContextVM registered virtualization methods |
-| State | 30900 | `bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>` |
+| State | 30900 | `bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>` (`<uuid>` is the author-minted entity id, see [Entity identity and coordinates](#entity-identity-and-coordinates)) |
 | Audit | 4903 | `bahia.audit.virtualization.v1`, `state=<coordinate>`, no `d` |
 
 `vm-operation/approve-plan` adds an approval-only acknowledgment (`status=approved`,
@@ -76,6 +76,80 @@ Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `3196
 | `30617`, `30618` | Repository | NIP-34 repository announcements and state; repository relay hints are repository-specific routing inputs. |
 | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | SoulFactory interop | Direct Nostr agent templates, drafts, souls, provisioning/lifecycle events, runtime capabilities, runtime-control requests, and correlated results. |
 | `5` | Deletion | NIP-09 deletion event for relay-level deletion semantics. |
+
+## Entity identity and coordinates
+
+Normative (bahia-irsry.35, audit C-40/RC-1; decision record [`docs/designs/decision-client-minted-entity-ids.md`](designs/decision-client-minted-entity-ids.md)). An entity exists once its author has fixed its id. A database never needs to mint it first.
+
+**Entity id.**
+- An entity id is an RFC 9562 UUID in canonical form: 36 characters, lowercase, hyphenated. The author of the create intent chooses it and it never changes; a rename keeps the id.
+- New ids MUST be **UUIDv7**: a 48-bit Unix-millisecond timestamp followed by 74 random bits, so ids sort by creation time and index well.
+- A create intent MAY carry a UUIDv4. That covers legacy rows and `crypto.randomUUID()`.
+- Bahia rejects the following in a create intent:
+  - any other version: v1/v6 leak clock or MAC state, and v3/v5 are derivable from a name, so a third party could pre-claim them;
+  - the nil and max UUIDs;
+  - non-RFC variants;
+  - any non-canonical spelling: uppercase, braces, `urn:uuid:`, or missing hyphens.
+- Decoders accept **any** UUID version in an existing coordinate.
+
+**Coordinate.** Each family's `d` grammar is unchanged; the entity segment is simply author-minted:
+- families written as `d=<resource-prefix>:<uuid>` stay `<resource-prefix>:<id>`;
+- service and environment registry state stay a bare `<id>`;
+- composite coordinates stay deterministic because each component is an author-minted id, e.g. `service:<service-id>:environment:<environment-id>` and `runtime-release:<id>`.
+
+Every existing Postgres-minted `<prefix>:<uuid>` coordinate remains valid and round-trips byte for byte. Nothing is re-keyed.
+
+**Carrying the id.**
+- *Today (ContextVM create intents).* `service/create` and `environment/create` params accept an optional `id` holding the entity id. The result echoes it as `service_id`/`environment_id` and in the returned entity. When `id` is absent, Bahia mints a UUIDv7, so existing clients keep working.
+- *Phase 3 (`bahia-irsry.11`).* The client publishes the signed addressable desired-state event itself, with `d` = the coordinate built from the id and `content.id` = the id. The daemon consumes it.
+- In both cases the id is fixed before the first write. The relay coordinate and any cached row therefore agree, and a retry names the same entity.
+
+**Idempotency and conflicts.** A create is resolved by id, then by content. "Content" is the declared desired state: every field except the id and server-stamped timestamps, after write-path normalization. For environments it includes the explicit deployment-unit set when one is declared.
+
+| Stored entity with this id | Result |
+|---|---|
+| none | Created under the supplied id. |
+| same content | Idempotent retry: the stored entity is returned unchanged (same timestamps, same deployment-unit ids). Nothing is written, published, or emitted again. |
+| different content, including a different `org_id` | Rejected with JSON-RPC error `-32010` (`id already exists with different content`). Nothing is written or published. The client must mint a new id to create a different entity. |
+
+A relay-first create checks the id before publishing, so a conflicting create can never overwrite the existing coordinate. A create that lost a concurrent insert race on the same id is re-resolved by content in the same way.
+
+**Collisions and authorization.** No central database is needed to keep ids unique:
+- *Accidental collision* of two UUIDv7s needs the same millisecond and the same 74 random bits, so it is treated as impossible.
+- *Deliberate reuse* of someone else's id cannot hijack the entity:
+  - Relays key addressable events by `(kind, pubkey, d)`, so a different signer's event with the same `d` is a different relay coordinate and never replaces the original.
+  - The consumer (the daemon today, the Phase 3 intent applier later) applies the first accepted create for an id. A later create for that id is authorized against the org it names *and* compared to the stored entity, whose org is part of its content. A reused id from another org or author is therefore a conflict, never a write into someone else's entity. Existence of an id is the only thing a conflict reveals.
+- *Natural keys* such as `(org, name)` are uniqueness **constraints**, never identity. The authoritative index enforces them; today that is the Postgres `services.name` / `environments.name` unique indexes. When two signers pick the same name with different ids:
+  - Today the first committed create wins and the loser gets a name-in-use error.
+  - In Phase 3 the applier processes intents in `(created_at, event id)` order: the lowest wins and the loser receives a rejection status referencing its intent event id.
+  - Renaming never changes the coordinate.
+
+**Keeping natural or derived coordinates.** Some coordinates are already deterministic and keep their grammar, because their identity is inherent in the key:
+- DNS zones and backends: `zone:<name>`, `dnsbackend:<ref>`;
+- content-addressed references: `sbom:ref:…:<sha256>`, `security:target:<hash>`;
+- request-correlated state keyed by the intent event id, e.g. `soul-factory:provisioning:<request-event-id>`.
+
+Entities authored by the daemon itself (runs, observations, backup runs, and so on) are minted by the daemon as author (UUIDv7 in code, never a database default).
+
+**Migration path for the remaining domains.** Services and environments implement the rule. Every other create path adopts it the same way:
+1. Add an optional `id` to the create intent.
+2. Resolve it with `domain.ResolveCreateEntityID`.
+3. Do the replay-or-conflict check before any publish.
+4. Have the repository store the id verbatim and report a primary-key hit as `repository.ErrAlreadyExists`.
+5. Have the web store send an id minted once per create attempt.
+
+Existing rows keep their v4 ids. No migration rewrites keys.
+
+| Domain | Create path today | Adoption |
+|---|---|---|
+| Services, environments | client `id` accepted (ContextVM, relay-first registry, web) | done (bahia-irsry.35) |
+| Deployment intents, policies, secrets, notification channels | handler/repository `uuid.New()` | client-minted, same pattern, with their Phase 3 slice |
+| DNS zones/backends | natural key (`zone:<name>`, `dnsbackend:<ref>`) | keep; ownership conflict by org |
+| DNS policies, endpoints | DB/handler UUID | client-minted with the DNS slice |
+| Backup definitions/policies/repositories/retention/recipes, LLM routes, ML models/datasets/recipes/endpoints, package repositories | handler/repository UUID | client-minted with their Phase 3 slice |
+| Runs, observations, verification/restore results, runtime releases | daemon-authored | daemon mints UUIDv7 in code (drop reliance on `DEFAULT gen_random_uuid()`) |
+| Orgs, memberships, invites | REST + Postgres | client-minted with the membership-events slice (B-27) |
+| Assistant transcript entries | `uuid.NewString()` fallback in `d` | deterministic `(session, seq)` per C-41 (separate issue) |
 
 ## SoulFactory Fleet Configuration — Kind `31953`
 
@@ -390,9 +464,9 @@ Bahia also emits typed in-process audit events used by projectors, automation su
 | `llm_gateway_route.synced` | Gateway model route synchronized | `route_id`, `environment_id` |
 | `security.policy_breached` | Security policy breach became new or materially changed | `policy_id`, `target_key_hash`, `fingerprint`, `severity_counts`, `violated_rules` |
 
-## Startup Migration App
+## Migration Tool
 
-The startup migration app in `internal/nostrmigration` converts historical Bahia custom events to the canonical contract before production runtime processes live traffic.
+The offline migration tool `bahia-migrate nostr` (code in `internal/nostrmigration`) converts historical Bahia custom events to the canonical contract. Operators run it explicitly after upgrading; the daemon does not run it on startup (see [the CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
 
 It performs these steps:
 
@@ -416,7 +490,7 @@ This is idempotent and safe to run every startup. If the migration fails because
 | `7961`-`7997` excluding SoulFactory interop `7950`, `1951`, `38386` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
 | `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
 | `30079` | historical SBOM index | read-only compatibility; canonical SBOM availability uses NIP-51 `30004` |
-| `32000`-`32003` worker read models, worker cleanup lifecycle | worker state, assignment, drain, eligibility preview, resource-pressure cleanup | `30900` cp-state envelope (`schema=bahia.cp-state.v1`, `domain=worker`, `deleted`) with `legacy_kind` = `kinds.CPStateFamilyWorker*` (`32000`-`32004`, discriminators only, never wire kinds) and `t` = `worker-state`, `worker-assignment`, `worker-drain`, `worker-eligibility`, `worker-cleanup`; REQ on `#t` |
+| `32000`-`32003` worker read models, worker cleanup lifecycle | worker state, assignment, drain, eligibility preview, resource-pressure cleanup | `30900` cp-state envelope (`schema=bahia.cp-state.v1`, `domain=worker`, `deleted`) with `legacy_kind` = `kinds.CPStateFamilyWorker*` (`32000`-`32004`, discriminators only, never wire kinds) and `t` = `worker-state`, `worker-assignment`, `worker-drain`, `worker-eligibility`, `worker-cleanup`; REQ on `#t`. Each family has its own coordinate: `d` = `worker:state:<pubkey>`, `worker:assignment:<pubkey>`, `worker:drain:<pubkey>`, `worker:eligibility:<preview id>`, `worker:cleanup:<pubkey>:<run>` (bahia-irsry.36; records on the old shared bare-pubkey `d` are ignored) |
 | `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
 | `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
 | `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |

@@ -67,14 +67,11 @@
 1	internal/adapters/nostr.RelayHealthTracker.HealthyCount
 1	internal/adapters/nostr.RelayHealthTracker.TotalCount
 1	internal/adapters/nostr.RelayHealthTracker.UnhealthyRelays
-1	internal/adapters/nostr.RelayPool.GetMaxLimit
 1	internal/adapters/nostr.RelayPool.GetMaxSubscriptions
 1	internal/adapters/nostr.RelayPool.IsAuthRequired
 1	internal/adapters/nostr.RelayPool.ReconfigureRelayURLs
-1	internal/adapters/nostr.RelayPool.SupportsNIP
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
-1	internal/adapters/nostr.WithBackfillLimit
 1	internal/adapters/nostr.WithKinds
 1	internal/adapters/qdrant.Client.CollectionExists
 1	internal/adapters/qdrant.Client.DeleteCollection
@@ -238,7 +235,6 @@
 1	internal/controlplane.WithEventPublisher
 1	internal/controlplane.WithKindCatalog
 1	internal/controlplane.WithMLInferenceExecutor
-1	internal/controlplane.WithReplayCursorPlanner
 1	internal/controlplane.WorkerCommandPublisher.PublishWorkerPolicyApplyRequest
 1	internal/controlplane.WorkerCommandPublisher.PublishWorkloadPinRequest
 1	internal/dnsagent/engine.ParseZoneFile

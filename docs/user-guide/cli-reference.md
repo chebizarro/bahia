@@ -64,6 +64,34 @@ in one transaction. A missing `.down.sql` refuses the entire plan before any
 rollback. A failed SQL guard leaves its version row intact. Do not substitute a
 numeric prefix for a stem: seven historic prefixes have multiple migrations.
 
+### Legacy Nostr event migration (`bahia-migrate nostr`)
+
+`bahia-migrate nostr` converts legacy Bahia custom events recorded in
+`nostr_events` (`internal/nostrmigration.LegacyKinds()`) into canonical events,
+signs them with `nostr.private_key`, and publishes them. The daemon does not run
+this on startup: re-signing and republishing old rows is not something a
+restart should do (audit B-28).
+
+```bash
+# Report what would be migrated; signs and publishes nothing.
+bahia-migrate --config /etc/bahia/config.yaml --dry-run nostr
+# Migrate and publish to the sidecar plus nostr.relays (the default target).
+bahia-migrate --config /etc/bahia/config.yaml nostr
+# Publish elsewhere, and also read legacy events back from those relays.
+bahia-migrate --config /etc/bahia/config.yaml --relays wss://relay.example --relay-backfill nostr
+```
+
+Run it once per deployment after upgrading from a release that still wrote
+legacy kinds, with the Bahia database reachable. Then run it again only if a
+dry run reports unmigrated records, for example after restoring an old
+database backup. It is resumable (durable cursors in `nostr_events`) and
+idempotent (a record whose canonical output tagged `migrated-from=<id>` exists
+is skipped), so re-running is safe. `--relay-backfill` (default:
+`nostr.legacy_relay_backfill`) also reads legacy kinds from the target relays;
+the hardened sidecar refuses those reads, so point `--relays` at the legacy
+relay when you need it. `--dry-run`, `--relays` and `--relay-backfill` are only
+valid for `nostr`.
+
 ## Authentication
 
 The CLI does not implement interactive `login` commands. The only built-in auth helper is:

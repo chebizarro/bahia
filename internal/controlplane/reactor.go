@@ -170,9 +170,8 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 
-	replayCursorPlanner *nostrpool.ReplayCursorPlanner
-	kindCatalog         *nostrpool.KindCatalog
-	lastSeenByGroup     map[string]nostr.Timestamp
+	kindCatalog     *nostrpool.KindCatalog
+	lastSeenByGroup map[string]nostr.Timestamp
 
 	toolProvisioning              repository.ToolProvisioningRepository
 	toolResponder                 *ToolResponder
@@ -359,11 +358,6 @@ func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOptio
 			r.workerStatePublisher.ConfigureAudit(repo, r.zapLog)
 		}
 	}
-}
-
-// WithReplayCursorPlanner enables persisted cursor replay for control-plane subscriptions.
-func WithReplayCursorPlanner(planner *nostrpool.ReplayCursorPlanner) ReactorOption {
-	return func(r *Reactor) { r.replayCursorPlanner = planner }
 }
 
 // WithKindCatalog configures the replay group catalog used for cursor tracking.
@@ -1500,20 +1494,9 @@ func (r *Reactor) buildRequestSubscriptionFiltersForCurrentCursor(ctx context.Co
 	return r.buildRequestSubscriptionFilters(r.requestSubscriptionSince(ctx))
 }
 
-func (r *Reactor) requestSubscriptionSince(ctx context.Context) nostr.Timestamp {
-	kinds := requestSubscriptionKinds()
-	var since *nostr.Timestamp
-	if r.replayCursorPlanner != nil {
-		since = r.replayCursorPlanner.ComputeSince(ctx, kinds)
-	}
-	if lastSeen := r.latestLastSeen(kinds); lastSeen != nil {
-		adjusted := replayCursorWithOverlap(*lastSeen)
-		if since == nil || adjusted > *since {
-			since = &adjusted
-		}
-	}
-	if since != nil {
-		return *since
+func (r *Reactor) requestSubscriptionSince(_ context.Context) nostr.Timestamp {
+	if lastSeen := r.latestLastSeen(requestSubscriptionKinds()); lastSeen != nil {
+		return replayCursorWithOverlap(*lastSeen)
 	}
 	return nostr.Now()
 }

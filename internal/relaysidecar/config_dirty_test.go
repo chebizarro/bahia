@@ -17,6 +17,7 @@ func startConfigWorkersForTest(t *testing.T, server *Server) context.Context {
 	t.Cleanup(func() {
 		cancel()
 		server.wg.Wait()
+		server.consumer.wait()
 	})
 	server.consumer.Start(ctx)
 	server.startConfigWorker(ctx)

@@ -83,7 +83,7 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		{"Deployment result", DeploymentResult, false},
 		{"Service registry", ServiceRegistry, false},
 		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
-		{"Build registered audit", BuildRegistered, false},
+		{"Retired build registered audit kind", 31000, false},
 		// Requests and open interop kinds are not Bahia projections.
 		{"Deploy request", DeployRequest, false},
 		{"DNS zone create request", DNSZoneCreateRequest, false},
