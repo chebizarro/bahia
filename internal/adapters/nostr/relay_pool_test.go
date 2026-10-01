@@ -613,7 +613,37 @@ func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
 	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}
 	}
+	testPoolsMu.Lock()
+	testPools = append(testPools, pool)
+	testPoolsMu.Unlock()
 	return pool
+}
+
+// testPools are the fake-relay pools created since the last hook cleanup.
+// Their subscription workers reissue REQs through subscribeOnRelay, so they
+// are stopped, and waited for, before a test restores that hook.
+var (
+	testPoolsMu sync.Mutex
+	testPools   []*RelayPool
+)
+
+func stopTestPools() {
+	testPoolsMu.Lock()
+	pools := testPools
+	testPools = nil
+	testPoolsMu.Unlock()
+	for _, pool := range pools {
+		pool.subscriptionsMu.Lock()
+		active := make([]*activeMergedSubscription, 0, len(pool.activeSubscriptions))
+		for _, subscription := range pool.activeSubscriptions {
+			active = append(active, subscription)
+		}
+		pool.subscriptionsMu.Unlock()
+		for _, subscription := range active {
+			subscription.close()
+			subscription.workers.Wait()
+		}
+	}
 }
 
 func markRelayConnectedForSubscribeTest(pool *RelayPool, relayURL string) {
@@ -626,7 +656,10 @@ func setSubscribeOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Co
 	t.Helper()
 	original := subscribeOnRelay
 	subscribeOnRelay = fn
-	t.Cleanup(func() { subscribeOnRelay = original })
+	t.Cleanup(func() {
+		stopTestPools()
+		subscribeOnRelay = original
+	})
 }
 
 func setPublishOnRelayForTest(t *testing.T, fn func(*gonostr.Relay, context.Context, gonostr.Event) error) {

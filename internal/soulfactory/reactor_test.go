@@ -92,7 +92,13 @@ func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 	factory := newFakeSigner(t)
 	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
-	endpoint.subscribeQueue <- subscription
+	// One REQ per filter: the provisioning-request REQ carries the backlog.
+	endpoint.scriptFor = func(filters []nostr.Filter) *fakeRelaySubscription {
+		if slices.Contains(filters[0].Kinds, nostr.Kind(domain.KindProvisioningRequest)) {
+			return subscription
+		}
+		return eoseScript()
+	}
 	bus, err := newRelayClientFromEndpoints(
 		[]*fakeRelayEndpoint{endpoint},
 		withRelayResubscribeBackoff(fastRelayBackoff),
@@ -123,7 +129,7 @@ func TestReactorBoundsAndDrainsHandlersBeforeRunReturns(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- reactor.Run(ctx) }()
-	<-endpoint.subscribeCalls
+	receiveREQFor(t, endpoint, nostr.Kind(domain.KindProvisioningRequest))
 
 	for i := 0; i < reactorHandlerWorkers+1; i++ {
 		event := &nostr.Event{

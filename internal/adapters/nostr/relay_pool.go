@@ -1187,9 +1187,11 @@ func (p *RelayPool) SubscribeWithOptions(ctx context.Context, filters []nostr.Fi
 		groupCtx, groupCancel := context.WithCancel(subCtx)
 		group := &activeRelayGroup{ctx: groupCtx, cancel: groupCancel}
 		workers, err := p.openRelayWorkers(ctx, groupCtx, mr, state.filters, opts)
-		if err != nil {
+		switch {
+		case errors.Is(err, errRelayDialDeferred):
+		case err != nil:
 			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
-		} else {
+		default:
 			established++
 		}
 		opened = append(opened, openedRelay{mr: mr, group: group, workers: workers, initial: err == nil || opts.AwaitUnavailableRelays})
@@ -1316,10 +1318,15 @@ func (w *relayFilterWorker) reqFilter(pool *RelayPool, limits relayLimits) nostr
 	return filter
 }
 
+// errRelayDialDeferred marks a relay left for its workers to dial.
+var errRelayDialDeferred = errors.New("relay not connected yet; dialing in the background")
+
 // openRelayWorkers connects mr if needed and sends one REQ per filter under
 // groupCtx. Filters that cannot be sent now (no free subscription slot, or a
 // failed REQ) get a worker without a REQ that keeps trying. The error is
-// non-nil when no REQ reached the relay.
+// non-nil when no REQ reached the relay. Under AwaitUnavailableRelays an
+// unconnected relay is not dialed here, so one unreachable relay cannot delay
+// the REQs to the others: its workers dial it themselves.
 func (p *RelayPool) openRelayWorkers(connectCtx, groupCtx context.Context, mr *managedRelay, filters []nostr.Filter, opts SubscribeOptions) ([]*relayFilterWorker, error) {
 	workers := make([]*relayFilterWorker, len(filters))
 	for i, filter := range filters {
@@ -1331,6 +1338,13 @@ func (p *RelayPool) openRelayWorkers(connectCtx, groupCtx context.Context, mr *m
 	}
 
 	if !managedRelayConnected(mr) {
+		if opts.AwaitUnavailableRelays {
+			for _, worker := range workers {
+				worker.pending = "connecting"
+				worker.immediate = true
+			}
+			return workers, errRelayDialDeferred
+		}
 		p.recordRelayReconnect(mr.url)
 		p.connectOne(connectCtx, mr)
 	}
