@@ -908,6 +908,7 @@ bridge:
   relay_urls:
     - "wss://private-relay.example.com"
   hosts_path: "/etc/fips/hosts"
+  store_path: "/etc/fips/.bahia-fips-bridge.bolt"  # rebuildable cache and per-relay cursors
   managed_section_marker: "# bahia-managed"
   health_filter: true                # only write healthy endpoints
   capability_filter: []              # empty = all capabilities
