@@ -24,6 +24,7 @@ type ConfidentialStateEncryptor interface {
 	DecryptConfidential(ctx context.Context, content string, legacyKind int, dTag, topic string) ([]byte, error)
 	DecryptServiceInner(ctx context.Context, content string) ([]byte, error)
 	RotateKey(ctx context.Context, orgID string) error
+	WrapKeyForMember(ctx context.Context, orgID string, pubkey string) error
 }
 
 // LegacyOrgStateDecryptor is the read-only legacy decryption interface.
@@ -87,8 +88,16 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 	return err
 }
 
-// PublishMember publishes a canonical org member record.
-func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool) error {
+// PublishMember publishes a canonical org member record. After publishing, it
+// drives the OCK key lifecycle:
+//   - Deleted member → RotateKey so the removed member cannot decrypt future records.
+//   - Added/updated member → WrapKeyForMember so they can read existing records.
+//   - Role downgrade (prevRole provided and higher than current) → RotateKey.
+//
+// prevRole is optional; pass the old role when known (role-change paths in
+// OrgIntentHandler and EncryptedDomainHandlers) so the publisher can detect
+// downgrades. When omitted, no downgrade check is performed.
+func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error {
 	dTag := orgMemberDTag(member.OrgID, member.Pubkey)
 	content := map[string]any{
 		"deleted": deleted,
@@ -112,7 +121,44 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 	if err == nil && p.onMemberPublished != nil && encryptedContent != "" {
 		p.onMemberPublished(ctx, encryptedContent, legacyKind, dTag, topic)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Key lifecycle (Phase 3 C1). Errors are logged but do not fail the
+	// publish — the member record is already committed.
+	orgID := member.OrgID.String()
+	if deleted {
+		// (a) Member removed → rotate so they can't decrypt future records.
+		if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
+			p.logger.Warn("OCK rotation after member removal failed",
+				zap.String("org_id", orgID), zap.Error(rotErr))
+		} else {
+			p.logger.Info("OCK rotated after member removal",
+				zap.String("org_id", orgID))
+		}
+	} else {
+		// (b) Member added or updated → wrap current OCK so they can read.
+		if wrapErr := p.encryptor.WrapKeyForMember(ctx, orgID, member.Pubkey); wrapErr != nil {
+			p.logger.Warn("OCK wrap for new member failed",
+				zap.String("org_id", orgID), zap.Error(wrapErr))
+		}
+		// (a) Role downgrade → rotate (re-key even though the member still
+		// gets the new key; semantically correct for future role-filtered
+		// wrapping and provides an audit boundary).
+		if len(prevRole) > 0 && prevRole[0] != "" {
+			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
+				if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
+					p.logger.Warn("OCK rotation after role downgrade failed",
+						zap.String("org_id", orgID), zap.Error(rotErr))
+				} else {
+					p.logger.Info("OCK rotated after role downgrade",
+						zap.String("org_id", orgID))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // PublishInvite publishes a canonical org invite record.

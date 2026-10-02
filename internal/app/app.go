@@ -1435,18 +1435,7 @@ func New(cfg *config.Config) (*App, error) {
 					zap.String("org_id", orgID.String()),
 					zap.Int("member_count", len(members)))
 			},
-			OnKeyRotation: func(ctx context.Context, orgID uuid.UUID) {
-				if confidentialEncryptor == nil {
-					return
-				}
-				if err := confidentialEncryptor.RotateKey(ctx, orgID.String()); err != nil {
-					logger.Warn("OCK rotation failed after membership change",
-						zap.String("org_id", orgID.String()), zap.Error(err))
-				} else {
-					logger.Info("OCK rotated after membership change",
-						zap.String("org_id", orgID.String()))
-				}
-			},
+
 		})
 		intentProcessor.RegisterHandler("org", orgHandler)
 		logger.Info("org intent handler registered")

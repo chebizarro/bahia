@@ -279,7 +279,7 @@ func (p *stubOrgPublisher) PublishOrg(_ context.Context, org *domain.Organizatio
 	return nil
 }
 
-func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMember, deleted bool) error {
+func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMember, deleted bool, _ ...domain.Role) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.publishedMembers = append(p.publishedMembers, memberPublishRecord{Member: member, Deleted: deleted})

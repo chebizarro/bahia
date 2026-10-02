@@ -135,9 +135,11 @@ All confidential cp-state records (org, member, invite, secret metadata, notific
 - A deterministic HMAC(conversation_key, org|version) handle would reduce discovery to O(1) lookup. However, the NIP-44 conversation key is not accessible through the bunker signer interface (`Keyer.Encrypt`/`Decrypt` are opaque). Phase 4 web clients hold their own key material and could use deterministic handles.
 - Future: when bunker signers support conversation key derivation or a `DeriveHandle(pubkey, context)` method, switch to HMAC-based deterministic handles.
 
-**Key rotation:**
-- Triggered on member removal or role downgrade.
-- New OCK version created, wrapped to remaining members only.
+**Key lifecycle (driven by OrgCanonicalPublisher.PublishMember):**
+All key lifecycle operations are triggered from `OrgCanonicalPublisher.PublishMember`, the single choke point that all member mutation paths (intent, legacy ContextVM, relay-sourced hydration) flow through:
+- **(a) Member deleted** → `RotateKey(orgID)`. New OCK version created, wrapped to remaining members only. The removed member cannot decrypt future records.
+- **(b) Member added/updated** → `WrapKeyForMember(orgID, pubkey)`. Wraps the current OCK to the new member so they can read existing records immediately. If no OCK exists yet (first member of a new org), the next `EncryptConfidential` call will create and distribute.
+- **(c) Role downgrade** (prevRole weight > new role weight) → `RotateKey(orgID)`. Re-keys even though the downgraded member still receives the new key; semantically correct for future role-filtered wrapping and provides an audit boundary.
 - Old versions remain readable for historical records (acceptable; noted in design).
 - New publishes use the current version.
 
@@ -172,7 +174,8 @@ All confidential cp-state records (org, member, invite, secret metadata, notific
 
 **Fleet-scoped resources:**
 - Notification channels with no org (`OrgID == uuid.Nil`) are fleet-scoped.
-- Fleet-scoped channels use a synthetic "fleet" org key scope. Org-visible metadata is minimal; the full config is in service_inner.
+- Fleet-scoped channels use a synthetic `"fleet"` org key scope. `TrustSetMemberSource` for `"fleet"` returns no members (not a valid UUID, no relay members), so only the service pubkey receives an OCK envelope. The `"fleet"` string is never `uuid.Parse`d — it flows through the OCK code as a plain string key without triggering Postgres errors.
+- Fleet-scoped channels are service-only until a fleet-ops key set is defined. Org-visible metadata is minimal (name, type, enabled, `fleet_scoped: true`); the full config is in service_inner.
 - Fleet ops manage these channels through the daemon API, not relay discovery.
 
 **Migration:**
@@ -181,7 +184,15 @@ All confidential cp-state records (org, member, invite, secret metadata, notific
 - Legacy N1 `selfDecryptNIP44Legacy` retained for read-only fallback. N1 secret/notification records are audit copies (database is source of truth); no relay read-back path decodes them.
 - New publishes always use the unified confidential path. No plaintext fallback.
 - `OrgStateEncryptor` interface renamed to `LegacyOrgStateDecryptor` (decrypt-only).
-- TODO: warm-start re-publication of legacy records under the OCK scheme on daemon startup.
+- TODO: warm-start re-publication of legacy records under the OCK scheme:
+  1. On daemon startup, after OCKManager and TrustSet are initialized, scan `projectionHistory.FindByTag(ctx, "t", <topic>, nil, limit)` for each confidential cp-state topic (org, org-member, org-invite, secret, notification-channel).
+  2. For each record, try parsing as the new `bahia.confidential.aead.v1` schema. If it parses, skip (already migrated).
+  3. If it doesn't parse as new format, try legacy O1 `decryptOrgState` (for org/member/invite) or `selfDecryptNIP44Legacy` (for secret/notification).
+  4. If legacy decrypt succeeds, re-encrypt the plaintext with `ConfidentialEncryptor.EncryptConfidential` using the record's coordinate identity (kind, d-tag, topic).
+  5. Re-publish through `publishControlState` (same coordinate, new content).
+  6. Log progress: "migrated N/M records for topic T".
+  7. Gate: run at most once per daemon lifetime (track in-memory "migration-done" flag).
+  8. After all deployments have run the warm-start, remove legacy decrypt code and the `LegacyOrgStateDecryptor` interface.
 
 **Implementation files:**
 - `internal/controlplane/org_content_key.go` — OCK types, AEAD encrypt/decrypt, AD binding

@@ -67,6 +67,10 @@ func (m *mockConfidentialEncryptor) RotateKey(_ context.Context, _ string) error
 	return nil
 }
 
+func (m *mockConfidentialEncryptor) WrapKeyForMember(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // TestNotificationPublishRoundTripFullConfig verifies that the notification
 // canonical publisher publishes the FULL channel config (including webhook URLs
 // and secrets) via the confidential encryptor, and that org-visible content is

@@ -979,3 +979,274 @@ func findMemberEnvelopeForVersion(t *testing.T, ctx context.Context, envelopes [
 	}
 	return OrgContentKey{}
 }
+
+// --- Test 14: Legacy EncryptedDomainHandlers path — add member wraps OCK ---
+
+// lifecycleTrackingPublisher records key lifecycle calls made by the publisher.
+type lifecycleTrackingPublisher struct {
+	published []memberPublishEvent
+	encryptor *ConfidentialEncryptor
+	rotations []string // orgIDs that triggered RotateKey
+	wraps     []struct{ OrgID, Pubkey string }
+}
+
+type memberPublishEvent struct {
+	OrgID   uuid.UUID
+	Pubkey  string
+	Deleted bool
+	Role    domain.Role
+}
+
+func (p *lifecycleTrackingPublisher) PublishOrg(_ context.Context, _ *domain.Organization, _ bool) error {
+	return nil
+}
+func (p *lifecycleTrackingPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error {
+	p.published = append(p.published, memberPublishEvent{
+		OrgID: member.OrgID, Pubkey: member.Pubkey, Deleted: deleted, Role: member.Role,
+	})
+	// Drive key lifecycle exactly as OrgCanonicalPublisher does.
+	orgID := member.OrgID.String()
+	if deleted {
+		if err := p.encryptor.RotateKey(ctx, orgID); err == nil {
+			p.rotations = append(p.rotations, orgID)
+		}
+	} else {
+		if err := p.encryptor.WrapKeyForMember(ctx, orgID, member.Pubkey); err == nil {
+			p.wraps = append(p.wraps, struct{ OrgID, Pubkey string }{orgID, member.Pubkey})
+		}
+		if len(prevRole) > 0 && prevRole[0] != "" {
+			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
+				if err := p.encryptor.RotateKey(ctx, orgID); err == nil {
+					p.rotations = append(p.rotations, orgID)
+				}
+			}
+		}
+	}
+	return nil
+}
+func (p *lifecycleTrackingPublisher) PublishInvite(_ context.Context, _ *domain.OrgInvite, _ bool) error {
+	return nil
+}
+
+func TestLegacyPathAddMemberWrapsOCK(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+	publisher := &fakeOCKPublisher{}
+
+	// Pre-create an OCK for the org.
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     publisher,
+		History:       &fakeOCKHistory{},
+		Members:       &fakeOCKMemberSource{pubkeys: []string{}}, // empty initially
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	orgID := uuid.New()
+
+	// Create the OCK by encrypting a record (triggers key creation).
+	_, err := encryptor.EncryptConfidential(ctx, orgID.String(), []byte(`{"test":"init"}`), 32005, "init-d", "org", nil)
+	if err != nil {
+		t.Fatalf("init encrypt: %v", err)
+	}
+
+	envelopesBefore := len(publisher.envelopes)
+
+	// Simulate legacy path: EncryptedDomainHandlers.UpdateMemberRole calls
+	// PublishMember(ctx, member, false) without intent processor.
+	// The publisher (via lifecycle tracking) wraps OCK for the new member.
+	pub := &lifecycleTrackingPublisher{encryptor: encryptor}
+	member := &domain.OrgMember{OrgID: orgID, Pubkey: memberAPubkey, Role: domain.RoleAdmin}
+	if err := pub.PublishMember(ctx, member, false); err != nil {
+		t.Fatalf("publish member: %v", err)
+	}
+
+	// Verify: wrap was called for the new member.
+	if len(pub.wraps) != 1 || pub.wraps[0].Pubkey != memberAPubkey {
+		t.Fatalf("expected 1 wrap for member A, got %d", len(pub.wraps))
+	}
+
+	// Verify: a new envelope was published for member A.
+	envelopesAfter := len(publisher.envelopes)
+	if envelopesAfter <= envelopesBefore {
+		t.Fatal("expected new envelope published for member A")
+	}
+
+	// Member A can decrypt the new envelope.
+	memberASigner := newTestKeySigner(t, memberAKeyHex)
+	memberAOCK := findMemberEnvelope(t, ctx, publisher.envelopes, memberASigner, servicePubkey, memberAPubkey)
+	if memberAOCK.Version == 0 {
+		t.Fatal("member A should find their key envelope after wrap")
+	}
+
+	// Member A can decrypt a record encrypted with the current OCK.
+	recordCtx := ConfidentialRecordContext{LegacyKind: 32005, DTag: "test-record", Topic: "org"}
+	encrypted, err := encryptor.EncryptConfidential(ctx, orgID.String(), []byte(`{"after":"add"}`), recordCtx.LegacyKind, recordCtx.DTag, recordCtx.Topic, nil)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	decrypted, err := DecryptConfidentialContent(memberAOCK, encrypted, recordCtx)
+	if err != nil {
+		t.Fatalf("member A should decrypt: %v", err)
+	}
+	if string(decrypted) != `{"after":"add"}` {
+		t.Fatalf("wrong plaintext: %q", decrypted)
+	}
+}
+
+func TestLegacyPathRemoveMemberRotates(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+	memberBPubkey := pubkeyFromHex(t, memberBKeyHex)
+
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+	ockPublisher := &fakeOCKPublisher{}
+
+	// Set up TrustSet with both members.
+	trustSet := NewTrustSet(nil, nil)
+	trustSet.SetRelayMembers("placeholder", map[string]domain.Role{
+		memberAPubkey: domain.RoleAdmin,
+		memberBPubkey: domain.RoleAdmin,
+	})
+
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     ockPublisher,
+		History:       &fakeOCKHistory{},
+		Members:       &fakeOCKMemberSource{pubkeys: []string{memberAPubkey, memberBPubkey}},
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	orgID := uuid.New()
+
+	// Create OCK v1 with both members.
+	recordCtx := ConfidentialRecordContext{LegacyKind: 32005, DTag: "pre-remove", Topic: "org"}
+	preRemoval, err := encryptor.EncryptConfidential(ctx, orgID.String(), []byte(`{"before":"removal"}`), recordCtx.LegacyKind, recordCtx.DTag, recordCtx.Topic, nil)
+	if err != nil {
+		t.Fatalf("pre-removal encrypt: %v", err)
+	}
+
+	// Member B has v1 key.
+	memberBSigner := newTestKeySigner(t, memberBKeyHex)
+	memberBv1 := findMemberEnvelope(t, ctx, ockPublisher.envelopes, memberBSigner, servicePubkey, memberBPubkey)
+	if memberBv1.Version == 0 {
+		t.Fatal("member B should have v1 key before removal")
+	}
+
+	// B can decrypt pre-removal.
+	_, err = DecryptConfidentialContent(memberBv1, preRemoval, recordCtx)
+	if err != nil {
+		t.Fatalf("member B should decrypt pre-removal: %v", err)
+	}
+
+	// Now "remove" member B from the member source.
+	manager.members = &fakeOCKMemberSource{pubkeys: []string{memberAPubkey}}
+
+	// Simulate legacy EncryptedDomainHandlers.RemoveMember:
+	// h.members.Remove(ctx, orgID, targetPubkey) → then →
+	// h.orgPublisher.PublishMember(ctx, targetMember, true) → rotation.
+	pub := &lifecycleTrackingPublisher{encryptor: encryptor}
+	removedMember := &domain.OrgMember{OrgID: orgID, Pubkey: memberBPubkey, Role: domain.RoleAdmin}
+	if err := pub.PublishMember(ctx, removedMember, true); err != nil {
+		t.Fatalf("publish member deletion: %v", err)
+	}
+
+	// Verify: rotation was triggered.
+	if len(pub.rotations) != 1 {
+		t.Fatalf("expected 1 rotation after removal, got %d", len(pub.rotations))
+	}
+
+	// Post-removal record encrypted with v2 key.
+	postRemoval, err := encryptor.EncryptConfidential(ctx, orgID.String(), []byte(`{"after":"removal"}`), recordCtx.LegacyKind, recordCtx.DTag, recordCtx.Topic, nil)
+	if err != nil {
+		t.Fatalf("post-removal encrypt: %v", err)
+	}
+
+	// Member B CANNOT decrypt post-removal with v1 key.
+	_, err = DecryptConfidentialContent(memberBv1, postRemoval, recordCtx)
+	if err == nil {
+		t.Fatal("member B should NOT decrypt post-removal record with v1 key")
+	}
+
+	// Member B does NOT have a v2 envelope (excluded from rotation member set).
+	memberBv2 := findMemberEnvelopeForVersion(t, ctx, ockPublisher.envelopes, memberBSigner, servicePubkey, memberBPubkey, 2)
+	if memberBv2.Version != 0 {
+		t.Fatal("member B should NOT have v2 key envelope")
+	}
+
+	// Member A DOES have a v2 envelope and can decrypt.
+	memberASigner := newTestKeySigner(t, memberAKeyHex)
+	memberAv2 := findMemberEnvelopeForVersion(t, ctx, ockPublisher.envelopes, memberASigner, servicePubkey, memberAPubkey, 2)
+	if memberAv2.Version == 0 {
+		t.Fatal("member A should have v2 key")
+	}
+	decrypted, err := DecryptConfidentialContent(memberAv2, postRemoval, recordCtx)
+	if err != nil {
+		t.Fatalf("member A post-removal decrypt: %v", err)
+	}
+	if string(decrypted) != `{"after":"removal"}` {
+		t.Fatalf("wrong plaintext: %q", decrypted)
+	}
+}
+
+// --- Test 15: Role downgrade through legacy path triggers rotation ---
+
+func TestLegacyPathRoleDowngradeRotates(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+	ockPublisher := &fakeOCKPublisher{}
+
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     ockPublisher,
+		History:       &fakeOCKHistory{},
+		Members:       &fakeOCKMemberSource{pubkeys: []string{memberAPubkey}},
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	orgID := uuid.New()
+
+	// Create initial OCK.
+	_, err := encryptor.EncryptConfidential(ctx, orgID.String(), []byte(`{"init":"data"}`), 32005, "init", "org", nil)
+	if err != nil {
+		t.Fatalf("init encrypt: %v", err)
+	}
+
+	// Simulate legacy UpdateMemberRole: admin → viewer (downgrade).
+	// EncryptedDomainHandlers passes targetMember.Role (old role) as prevRole.
+	pub := &lifecycleTrackingPublisher{encryptor: encryptor}
+	downgradedMember := &domain.OrgMember{OrgID: orgID, Pubkey: memberAPubkey, Role: domain.RoleViewer}
+	if err := pub.PublishMember(ctx, downgradedMember, false, domain.RoleAdmin); err != nil {
+		t.Fatalf("publish role change: %v", err)
+	}
+
+	// Verify: rotation was triggered (downgrade: admin → viewer).
+	if len(pub.rotations) != 1 {
+		t.Fatalf("expected 1 rotation after role downgrade, got %d", len(pub.rotations))
+	}
+
+	// Verify: wrap was also called (member gets new key).
+	if len(pub.wraps) != 1 {
+		t.Fatalf("expected 1 wrap, got %d", len(pub.wraps))
+	}
+
+	// Simulate upgrade: viewer → admin (NOT a downgrade → no rotation).
+	pub2 := &lifecycleTrackingPublisher{encryptor: encryptor}
+	upgradedMember := &domain.OrgMember{OrgID: orgID, Pubkey: memberAPubkey, Role: domain.RoleAdmin}
+	if err := pub2.PublishMember(ctx, upgradedMember, false, domain.RoleViewer); err != nil {
+		t.Fatalf("publish role upgrade: %v", err)
+	}
+	if len(pub2.rotations) != 0 {
+		t.Fatalf("expected 0 rotations after role upgrade, got %d", len(pub2.rotations))
+	}
+}

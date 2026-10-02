@@ -19,18 +19,16 @@ import (
 // by internal/adapters/nostr.OrgCanonicalPublisher.
 type OrgCanonicalPublisher interface {
 	PublishOrg(ctx context.Context, org *domain.Organization, deleted bool) error
-	PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool) error
+	// PublishMember publishes a canonical member record and drives key lifecycle.
+	// prevRole is optional; pass the old role on role-change so the publisher
+	// can detect downgrades and rotate the OCK.
+	PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error
 	PublishInvite(ctx context.Context, invite *domain.OrgInvite, deleted bool) error
 }
 
 // OrgMemberChangeCallback is invoked after every member add/remove/role-change
 // so the TrustSet relay source and IntentAuthorsSyncer stay in sync.
 type OrgMemberChangeCallback func(orgID uuid.UUID)
-
-// OrgKeyRotationCallback is invoked after a member removal or role downgrade
-// to trigger OCK rotation. The new key version excludes the removed/downgraded
-// member so they cannot decrypt future records.
-type OrgKeyRotationCallback func(ctx context.Context, orgID uuid.UUID)
 
 // OrgIntentHandler processes org/member/invite intents. It is the O1 domain
 // handler for the Phase 3 intent framework.
@@ -53,9 +51,6 @@ type OrgIntentHandler struct {
 	// onMemberChange is called after member add/remove/role-change.
 	onMemberChange OrgMemberChangeCallback
 
-	// onKeyRotation is called after member removal or role downgrade to
-	// trigger OCK rotation.
-	onKeyRotation OrgKeyRotationCallback
 }
 
 // DecryptMemberContent decrypts an encrypted membership event content string
@@ -121,7 +116,6 @@ type OrgIntentHandlerConfig struct {
 	Status         *IntentStatusPublisher
 	Logger         *zap.Logger
 	OnMemberChange OrgMemberChangeCallback
-	OnKeyRotation  OrgKeyRotationCallback
 }
 
 // NewOrgIntentHandler creates an org intent handler.
@@ -138,7 +132,6 @@ func NewOrgIntentHandler(cfg OrgIntentHandlerConfig) *OrgIntentHandler {
 		status:         cfg.Status,
 		logger:         logger.Named("org-intent"),
 		onMemberChange: cfg.OnMemberChange,
-		onKeyRotation:  cfg.OnKeyRotation,
 	}
 }
 
@@ -422,16 +415,12 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 		}
 		existing.Role = role
 		if h.publisher != nil {
-			if err := h.publisher.PublishMember(ctx, existing, false); err != nil {
+			// Pass oldRole so the publisher can detect downgrade and rotate.
+			if err := h.publisher.PublishMember(ctx, existing, false, oldRole); err != nil {
 				h.logger.Warn("failed to publish member state", zap.Error(err))
 			}
 		}
 		h.notifyMemberChange(intent.OrgID)
-		// Rotate OCK on role downgrade so the member cannot decrypt future
-		// records with their old (higher) privileges.
-		if domain.RoleWeight(role) < domain.RoleWeight(oldRole) {
-			h.triggerKeyRotation(ctx, intent.OrgID)
-		}
 		h.logger.Info("member role updated via intent",
 			zap.String("org_id", intent.OrgID.String()),
 			zap.String("pubkey", pubkey),
@@ -504,7 +493,6 @@ func (h *OrgIntentHandler) removeMember(ctx context.Context, intent *Intent) err
 		}
 	}
 	h.notifyMemberChange(intent.OrgID)
-	h.triggerKeyRotation(ctx, intent.OrgID)
 
 	h.logger.Info("member removed via intent",
 		zap.String("org_id", intent.OrgID.String()),
@@ -614,13 +602,6 @@ func (h *OrgIntentHandler) revokeInvite(ctx context.Context, intent *Intent) err
 		zap.String("intent_id", intent.IntentID),
 	)
 	return nil
-}
-
-// triggerKeyRotation fires the key rotation callback when configured.
-func (h *OrgIntentHandler) triggerKeyRotation(ctx context.Context, orgID uuid.UUID) {
-	if h.onKeyRotation != nil {
-		h.onKeyRotation(ctx, orgID)
-	}
 }
 
 // --- Helpers ---

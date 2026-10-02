@@ -172,6 +172,22 @@ func (m *OCKManager) ServiceDecrypt(ctx context.Context, ciphertext string) (str
 	return m.signer.Decrypt(ctx, ciphertext, pubkey)
 }
 
+// WrapForRecipient wraps the current OCK for the given org to a specific
+// recipient pubkey and publishes the envelope. Used when a new member is added
+// to give them immediate access to existing records encrypted under the
+// current OCK version. If no key exists for the org yet, this is a no-op
+// (the next EncryptConfidential call will create and distribute the key).
+func (m *OCKManager) WrapForRecipient(ctx context.Context, orgID string, recipientPubkey string) error {
+	m.mu.RLock()
+	state, ok := m.cache[orgID]
+	m.mu.RUnlock()
+	if !ok {
+		// No key exists yet — EnsureKey at next encrypt will distribute to all members.
+		return nil
+	}
+	return m.wrapAndPublish(ctx, state.current, recipientPubkey)
+}
+
 func (m *OCKManager) recoverOrCreate(ctx context.Context, orgID string) (OrgContentKey, error) {
 	if err := m.recoverFromHistory(ctx, orgID); err != nil {
 		m.logger.Debug("OCK history recovery failed, will create new",

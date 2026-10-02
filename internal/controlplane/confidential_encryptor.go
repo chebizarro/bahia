@@ -113,3 +113,11 @@ func (e *ConfidentialEncryptor) RotateKey(ctx context.Context, orgID string) err
 	_, err := e.ockManager.RotateKey(ctx, orgID)
 	return err
 }
+
+// WrapKeyForMember wraps the current OCK for the org to a specific member
+// pubkey so they can immediately read existing records. Called when a new
+// member is added. If no OCK exists yet, this is a no-op (the next encrypt
+// call will create and distribute to all members including the new one).
+func (e *ConfidentialEncryptor) WrapKeyForMember(ctx context.Context, orgID string, pubkey string) error {
+	return e.ockManager.WrapForRecipient(ctx, orgID, pubkey)
+}
