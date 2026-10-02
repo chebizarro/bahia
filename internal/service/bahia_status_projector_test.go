@@ -27,11 +27,9 @@ func TestBahiaStatusProjectorPublishesEachStatusEvent(t *testing.T) {
 		Phase:          "snapshot",
 	}))
 	require.NoError(t, projector.PublishReadiness(ctx, ReadinessStatusPayload{
-		Phase:         "ready",
-		ActiveTier:    2,
-		RequestedTier: 3,
-		Ready:         false,
-		Checks:        map[string]string{"relay_quorum": "ok"},
+		Phase:  "ready",
+		Ready:  false,
+		Checks: map[string]string{"relay_quorum": "ok"},
 	}))
 
 	require.Len(t, recorder.events, 3)
@@ -55,11 +53,9 @@ func TestBahiaStatusProjectorDeduplicatesUnchangedPublish(t *testing.T) {
 	recorder := &bahiaStatusRecorder{}
 	projector := NewBahiaStatusProjector(recorder, nil, "bahia-instance-1")
 	payload := ReadinessStatusPayload{
-		Phase:         "bootstrap",
-		ActiveTier:    1,
-		RequestedTier: 2,
-		Ready:         false,
-		Checks:        map[string]string{"live_catchup": "pending"},
+		Phase:  "bootstrap",
+		Ready:  false,
+		Checks: map[string]string{"live_catchup": "pending"},
 	}
 
 	require.NoError(t, projector.PublishReadiness(ctx, payload))

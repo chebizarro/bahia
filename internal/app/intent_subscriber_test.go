@@ -44,7 +44,7 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeEmergency)
+	cfg := startupTestConfig("emergency")
 	// Generate a separate keypair for the intent actor.
 	actorKey := nostr.Generate()
 	actorPubkey := actorKey.Public().Hex()
@@ -121,7 +121,7 @@ func TestIntentSubscriberNotWiredWithoutDomains(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeEmergency)
+	cfg := startupTestConfig("emergency")
 	// No intent domains configured.
 
 	app, err := New(cfg)

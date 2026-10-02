@@ -39,15 +39,13 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeEmergency)
+	cfg := startupTestConfig("emergency")
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
 	require.Nil(t, app.DB)
-	require.NotNil(t, app.ModePolicy)
-	require.Equal(t, Tier1, app.ModePolicy.ActiveTier())
 	require.NotNil(t, app.Health)
 }
 
@@ -55,15 +53,12 @@ func TestNewKeepsFullModeWhenDatabaseAvailable(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, nil, nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
-	require.NotNil(t, app.ModePolicy)
-	require.Equal(t, Tier3, app.ModePolicy.ActiveTier())
-	require.Equal(t, Tier3, app.ModePolicy.RequestedTier)
 	require.NotNil(t, app.Health)
 }
 
@@ -85,7 +80,7 @@ func TestNewDoesNotRegisterSoulFactoryWhenDisabled(t *testing.T) {
 		restoreSoulFactoryHooks()
 	}()
 
-	cfg := startupTestConfig(ModeEmergency)
+	cfg := startupTestConfig("emergency")
 	cfg.SoulFactory.Enabled = false
 	app, err := New(cfg)
 	require.NoError(t, err)
@@ -108,7 +103,7 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	})
 	defer restoreSoulFactoryHooks()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	cfg.Nostr.BrowserRelays = []string{"wss://browser.example", "wss://relay.example"}
 	app, err := New(cfg)
@@ -148,7 +143,7 @@ func TestNewWiresBahiaIntegrationIntoSoulFactory(t *testing.T) {
 	}
 	defer func() { newSoulFactoryBahiaIntegration = previousFactory }()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	app, err := New(cfg)
 	require.NoError(t, err)
@@ -171,7 +166,7 @@ func TestNewFailsClosedWhenBahiaIntegrationCannotStart(t *testing.T) {
 	}
 	defer func() { newSoulFactoryBahiaIntegration = previousFactory }()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	app, err := New(cfg)
 	require.Nil(t, app)
@@ -190,7 +185,7 @@ func TestNewRegistersMultipleSoulFactoryRuntimes(t *testing.T) {
 	})
 	defer restoreSoulFactoryHooks()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq", "synthetic-3"}
 	app, err := New(cfg)
@@ -224,7 +219,7 @@ func TestNewFailsStartupOnDuplicateAgentRuntime(t *testing.T) {
 	})
 	defer restoreSoulFactoryHooks()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "openclaw"}
 	_, err := New(cfg)
@@ -245,7 +240,7 @@ func TestNewRejectsInvalidSoulFactoryConfig(t *testing.T) {
 	}
 	defer func() { newSoulFactorySignetClient = previousSignetFactory }()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	cfg.SoulFactory.Enabled = true
 	_, err := New(cfg)
 	require.Error(t, err)
@@ -253,39 +248,11 @@ func TestNewRejectsInvalidSoulFactoryConfig(t *testing.T) {
 	require.False(t, factoryCalled)
 }
 
-func TestStartBackgroundRunnersRespectsActiveTier(t *testing.T) {
-	manager := NewBackgroundManager(zap.NewNop())
-	policy := NewModePolicy(ModeFull)
-	policy.SetActiveTier(Tier1)
-
-	tier0 := newGatedRunner("tier0")
-	tier1 := newGatedRunner("tier1")
-	tier2 := newGatedRunner("tier2")
-	manager.RegisterWithOptions(tier0, RunnerTier(Tier0))
-	manager.RegisterWithOptions(tier1, RunnerTier(Tier1))
-	manager.RegisterWithOptions(tier2, RunnerTier(Tier2))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	startBackgroundRunners(ctx, manager, policy, nil)
-
-	requireRunnerStarted(t, tier0)
-	requireRunnerStarted(t, tier1)
-	select {
-	case <-tier2.started:
-		require.Fail(t, "tier2 runner started despite active tier1")
-	default:
-	}
-
-	cancel()
-	manager.Wait()
-}
-
 func TestNewRegistersDatabaseRecoveryRunnerWhenHigherTierStartupLosesDB(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)
@@ -294,29 +261,29 @@ func TestNewRegistersDatabaseRecoveryRunnerWhenHigherTierStartupLosesDB(t *testi
 	require.True(t, appHasRunner(app, "database-recovery"))
 }
 
-func TestNewSkipsDatabaseRecoveryRunnerInEmergencyMode(t *testing.T) {
+func TestNewRegistersDatabaseRecoveryRunnerEvenInEmergencyMode(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig(ModeEmergency)
+	cfg := startupTestConfig("emergency")
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
-	require.False(t, appHasRunner(app, "database-recovery"))
+	// With tier gates deleted, the daemon always attempts DB recovery.
+	require.True(t, appHasRunner(app, "database-recovery"))
 }
 
 func TestStartBackgroundRunnersReportsRestartRequest(t *testing.T) {
 	manager := NewBackgroundManager(zap.NewNop())
-	manager.RegisterWithOptions(&restartRequestRunner{}, RunnerTier(Tier1), RunnerRequired(false))
+	manager.RegisterWithOptions(&restartRequestRunner{}, RunnerRequired(false))
 
-	policy := NewModePolicy(ModeEmergency)
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	startBackgroundRunners(ctx, manager, policy, errCh)
+	startBackgroundRunners(ctx, manager, errCh)
 
 	select {
 	case err := <-errCh:
@@ -428,9 +395,9 @@ func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAd
 	}
 }
 
-func startupTestConfig(mode Mode) *config.Config {
+func startupTestConfig(mode string) *config.Config {
 	cfg := config.Defaults()
-	cfg.Mode = string(mode)
+	cfg.Mode = mode
 	cfg.Nostr.PrivateKey = nostr.Generate().Hex()
 	cfg.Nostr.Relays = nil
 	cfg.Loom.Relays = nil

@@ -66,7 +66,7 @@ func (p *failingMLRESTPublisher) PublishMLInferenceRollbackRequest(context.Conte
 
 func TestMLRESTAsyncRoutesReturnNostrCorrelationMetadata(t *testing.T) {
 	publisher := &captureMLRESTPublisher{}
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: publisher})
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: publisher})
 
 	tests := []struct {
 		path     string
@@ -114,7 +114,7 @@ func TestMLRESTAsyncRoutesReturnNostrCorrelationMetadata(t *testing.T) {
 }
 
 func TestMLRESTAsyncRoutePublishFailureDoesNotReturnSubmittedReceipt(t *testing.T) {
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: &failingMLRESTPublisher{err: errors.New("relay publish unavailable")}})
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: &failingMLRESTPublisher{err: errors.New("relay publish unavailable")}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ml/deployments", strings.NewReader(`{"idempotency_key":"deploy:failure","endpoint":"endpoint:qwen:prod","model_version":"model-version:qwen:v1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -133,7 +133,7 @@ func TestMLRESTAsyncRoutePublishFailureDoesNotReturnSubmittedReceipt(t *testing.
 }
 
 func TestMLRESTReadRouteMountedWithoutBreakingLLM(t *testing.T) {
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: &captureMLRESTPublisher{}})
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: config.Defaults(), MLCommands: &captureMLRESTPublisher{}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/llm/routes", strings.NewReader(`not-json`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

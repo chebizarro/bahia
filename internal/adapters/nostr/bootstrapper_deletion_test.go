@@ -81,7 +81,7 @@ func deletionTestCatalog(t *testing.T) *KindCatalog {
 	require.Equal(t, []int{int(gonostr.KindDeletion)}, deletion.Kinds, "the production catalog replays NIP-09 deletions")
 	require.Equal(t, ReplayAuthorsControlPlane, deletion.Authors, "only trusted control-plane authors' deletions are replayed")
 	catalog := &KindCatalog{Version: "deletion-test", decoders: make(map[int]DecodeFunc), Groups: []ReplayGroup{
-		{Name: "state", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		{Name: "state", Kinds: []int{testKindTier1Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
 		deletion,
 	}}
 	for _, kind := range []int{testKindTier1Snapshot, int(gonostr.KindDeletion)} {
@@ -106,7 +106,6 @@ func deletionTestBootstrapper(t *testing.T, pool *RelayPool, cache BootstrapCach
 	t.Helper()
 	service := bootstrapTestPubkey(t, testNostrPrivateKey)
 	return NewBootstrapper(pool, deletionTestCatalog(t), nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:       1,
 		SnapshotTimeout:     time.Minute,
 		CatchupTimeout:      time.Minute,
 		ProjectionAuthors:   []string{service},

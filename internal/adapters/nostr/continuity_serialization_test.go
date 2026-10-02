@@ -51,10 +51,8 @@ func TestReplayCheckpointSerializationRoundTrip(t *testing.T) {
 
 func TestReadinessStatusSerializationRoundTrip(t *testing.T) {
 	payload := ReadinessStatusPayload{
-		Phase:         "ready",
-		ActiveTier:    2,
-		RequestedTier: 3,
-		Ready:         false,
+		Phase: "ready",
+		Ready: false,
 		Checks: map[string]string{
 			"relay_quorum":              "ok",
 			"extended_projection_cache": "degraded",

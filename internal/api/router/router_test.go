@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -819,7 +818,7 @@ func TestContinuityRESTRoutesAreRemoved(t *testing.T) {
 func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	cfg := config.Defaults()
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
-	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
 		Config: cfg,
 		MCP:    mcpH,
 	})
@@ -851,7 +850,7 @@ func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) 
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
-	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -882,7 +881,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 	}
 	cfg.Auth.BootstrapOwnerPubkeys = []string{secret.Public().Hex()}
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
-	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -906,7 +905,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 }
 
 func TestHealth(t *testing.T) {
-	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeDegraded), nil)
+	healthProvider := app.NewHealthProvider(nil, nil)
 	srv := newHealthTestServer(healthProvider)
 	defer srv.Close()
 
@@ -916,12 +915,6 @@ func TestHealth(t *testing.T) {
 	}
 	if body["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", body["status"])
-	}
-	if body["mode"] != "degraded" {
-		t.Errorf("expected mode degraded, got %v", body["mode"])
-	}
-	if body["requested_tier"] != float64(2) || body["active_tier"] != float64(2) {
-		t.Errorf("expected requested/active tier 2, got %v/%v", body["requested_tier"], body["active_tier"])
 	}
 }
 
@@ -943,7 +936,7 @@ func TestRouterRateLimitDoesNotTrustForwardedClientIP(t *testing.T) {
 }
 
 func TestReady(t *testing.T) {
-	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeEmergency), nil)
+	healthProvider := app.NewHealthProvider(nil, nil)
 	srv := newHealthTestServer(healthProvider)
 	defer srv.Close()
 
@@ -954,18 +947,12 @@ func TestReady(t *testing.T) {
 	if body["ready"] != true {
 		t.Errorf("expected ready true, got %v", body["ready"])
 	}
-	if body["mode"] != "emergency" {
-		t.Errorf("expected mode emergency, got %v", body["mode"])
-	}
-	if body["requested_tier"] != float64(1) || body["active_tier"] != float64(1) {
-		t.Errorf("expected requested/active tier 1, got %v/%v", body["requested_tier"], body["active_tier"])
-	}
 }
 
 func TestReadyReturnsServiceUnavailableWhenReadinessCheckFails(t *testing.T) {
-	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeEmergency), nil)
-	healthProvider.RegisterCheck("continuity_runtime", int(app.Tier1), func() app.HealthCheck {
-		return app.HealthCheck{Name: "continuity_runtime", Status: app.HealthStatusFail, Message: "not running", Tier: int(app.Tier1)}
+	healthProvider := app.NewHealthProvider(nil, nil)
+	healthProvider.RegisterCheck("continuity_runtime", func() app.HealthCheck {
+		return app.HealthCheck{Name: "continuity_runtime", Status: app.HealthStatusFail, Message: "not running"}
 	})
 	srv := newHealthTestServer(healthProvider)
 	defer srv.Close()
@@ -979,79 +966,6 @@ func TestReadyReturnsServiceUnavailableWhenReadinessCheckFails(t *testing.T) {
 	}
 	if body["status"] != "unhealthy" {
 		t.Errorf("expected status unhealthy, got %v", body["status"])
-	}
-}
-
-func TestTier0RoutesAlwaysAccessibleWithModePolicy(t *testing.T) {
-	policy := app.NewModePolicy(app.ModeFull)
-	policy.SetActiveTier(app.Tier1)
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy})
-
-	for _, path := range []string{"/health", "/ready"} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			w := httptest.NewRecorder()
-			h.ServeHTTP(w, req)
-			if w.Code != http.StatusOK {
-				t.Fatalf("status=%d, want 200, body=%s", w.Code, w.Body.String())
-			}
-		})
-	}
-}
-
-func TestTier2RoutesReturnServiceUnavailableWhenActiveTier1(t *testing.T) {
-	policy := app.NewModePolicy(app.ModeFull)
-	policy.SetActiveTier(app.Tier1)
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d, want 503, body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestTier3RoutesReturnServiceUnavailableWithTierBodyWhenActiveTier2(t *testing.T) {
-	policy := app.NewModePolicy(app.ModeFull)
-	policy.SetActiveTier(app.Tier2)
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy, MLCommands: &captureMLRESTPublisher{}})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ml/imports", strings.NewReader(`{"idempotency_key":"import:1","model":"model:qwen","source":"huggingface"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d, want 503, body=%s", w.Code, w.Body.String())
-	}
-	var body map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body["error"] != "route unavailable in current mode" || body["mode"] != "full" || body["active_tier"] != float64(2) || body["required_tier"] != float64(3) {
-		t.Fatalf("unexpected body: %#v", body)
-	}
-}
-
-func TestTieredRoutesAccessibleWhenActiveTier3(t *testing.T) {
-	policy := app.NewModePolicy(app.ModeFull)
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy, MLCommands: &captureMLRESTPublisher{}})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("tier2 status=%d, want 200, body=%s", w.Code, w.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/ml/imports", strings.NewReader(`{"idempotency_key":"import:1","model":"model:qwen","source":"huggingface"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("tier3 status=%d, want 202, body=%s", w.Code, w.Body.String())
 	}
 }
 

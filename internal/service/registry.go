@@ -72,6 +72,13 @@ type BuildDeployStatePublisher interface {
 	PublishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error
 }
 
+// ServiceRepository returns the underlying ServiceRepository. Used by
+// router.New to populate the dbGate dependency when the caller does not
+// supply explicit RouterDeps.
+func (r *RegistryService) ServiceRepository() repository.ServiceRepository {
+	return r.services
+}
+
 // RegistryOption configures optional registry capabilities.
 type RegistryOption func(*RegistryService)
 
