@@ -10,7 +10,8 @@
   import CreateServiceDialog from './CreateServiceDialog.svelte';
   import OperationalActivity from '../OperationalActivity.svelte';
   import { ArtifactIcon, ServiceIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
-  import { services, loading, loadServices, operations, operationsForDomain } from '$lib/stores';
+  import { services, operations, operationsForDomain } from '$lib/stores';
+  import { syncStatus } from '$lib/stores/sync-status.svelte.js';
 
   let servicesPageInitialized = $state(false);
   let liveServiceOperations = $derived(operationsForDomain(operations, 'service'));
@@ -26,8 +27,6 @@
   });
 
   function initializeServicesPage() {
-    loadServices();
-
     // Cross-agent stitch (bahia-2v2k.11): the dashboard historically navigated to
     // /services?create=1 to auto-open this dialog. Runs once from the guarded init
     // effect, so it does not reopen on later reactive updates.
@@ -92,6 +91,13 @@
     { key: 'default_branch', label: 'Branch' },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
   ]);
+
+  /** @type {'syncing' | 'live' | null} */
+  const syncBadge = $derived(
+    syncStatus.phase === 'syncing' ? 'syncing'
+      : syncStatus.phase === 'live' ? 'live'
+      : null
+  );
 </script>
 
 <div class="page">
@@ -102,6 +108,11 @@
         Services
       </h1>
       <span class="count">{services.length} services</span>
+      {#if syncBadge === 'syncing'}
+        <span class="sync-badge syncing" title="Syncing with relays…">syncing…</span>
+      {:else if syncBadge === 'live'}
+        <span class="sync-badge live" title="Live — all relays caught up">live</span>
+      {/if}
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Service
@@ -127,9 +138,7 @@
     </div>
   </div>
 
-  {#if loading.services}
-    <p class="loading">Loading...</p>
-  {:else if services.length === 0}
+  {#if services.length === 0}
     <EmptyState
       iconComponent={ServiceIcon}
       title="No services yet"
@@ -184,10 +193,20 @@
     color: var(--text-muted);
     font-size: 0.875rem;
   }
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
+
+  .sync-badge {
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-weight: 500;
+  }
+  .sync-badge.syncing {
+    background: var(--warning);
+    color: #000;
+  }
+  .sync-badge.live {
+    background: var(--success);
+    color: #fff;
   }
 
   .filters {

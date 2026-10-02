@@ -24,6 +24,10 @@ vi.mock('$lib/stores', () => ({
   operationsForDomain: () => []
 }));
 
+vi.mock('$lib/stores/sync-status.svelte.js', () => ({
+  syncStatus: { phase: 'idle', eoseCount: 0, relayCount: 0, relays: [], lastError: null, lastEventAt: null, lastEoseAt: null }
+}));
+
 vi.mock('$lib/stores/public-controlplane.svelte.js', () => ({
   createEnvironment: createEnvironmentMock
 }));
@@ -96,7 +100,6 @@ describe('environments page create modal client-minted entity id (bahia-irsry.42
     await submit(target);
     expect(createEnvironmentMock).toHaveBeenCalledTimes(2);
     expect(createEnvironmentMock.mock.calls[1][0].id).toBe(first.id);
-    expect(loadEnvironmentsMock).toHaveBeenCalled();
   });
 
   it('explains an id conflict and mints a fresh id once the modal is closed', async () => {
