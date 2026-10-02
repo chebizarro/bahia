@@ -10,6 +10,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
@@ -210,10 +211,49 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// Phase 3 L1: TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot removed —
-// LLM projection legs were removed from the projector. LLM 30900 records are
-// now published by the intent handler, ContextVM handler, and registry service
-// directly, so the projector no longer has an LLM-unmigrated domain to test.
+// TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot verifies that a domain
+// family still on the legacy RepublishSnapshot path (ML) is published by the
+// legacy snapshot when it is NOT listed in intent_domains. Services and
+// environments are migrated; ML models are not yet.
+func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
+	ctx := t.Context()
+	logger := zap.NewNop()
+	cfg := warmStartTestCfg()
+
+	modelID := uuid.New()
+	source := newFakeProjectionSource()
+	source.mlModels[modelID] = domain.MLModel{
+		ID:   modelID,
+		Slug: "test-model",
+		Name: "Test Model",
+	}
+
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	sink := &captureProjectionPublisher{}
+	// Service and environment are migrated; ML is NOT.
+	p := newTestProjector(cfg, source, sink, repo, logger,
+		WithMLProjectionSource(source),
+		WithIntentDomains([]string{"service", "environment"}),
+		WithReadinessTracker(newImmediateReadiness()),
+		WithProjectorRepairInterval(-1))
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	// ML is NOT migrated → still published via RepublishSnapshot.
+	mlCount := countByDomain(sink.events, "ml")
+	if mlCount == 0 {
+		t.Errorf("unmigrated domain: expected ML model publishes from legacy snapshot, got 0")
+	}
+	// Migrated domains should NOT be republished (no history seeded).
+	if n := countByDomain(sink.events, "service"); n != 0 {
+		t.Errorf("migrated domain: expected 0 service publishes, got %d", n)
+	}
+}
 
 func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	ctx := t.Context()
