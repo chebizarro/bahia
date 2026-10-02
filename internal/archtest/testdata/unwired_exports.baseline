@@ -68,7 +68,6 @@
 1	internal/adapters/nostr.RelayPool.GetMaxSubscriptions
 1	internal/adapters/nostr.RelayPool.IsAuthRequired
 1	internal/adapters/nostr.RelayPool.ReconfigureRelayURLs
-1	internal/adapters/nostr.RelayPool.RecordRelayError
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
 1	internal/adapters/nostr.WithKinds

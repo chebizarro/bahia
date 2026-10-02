@@ -284,7 +284,11 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 			if !ok {
 				eventsCh = nil
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					return fmt.Errorf("relay settings subscription gave up: %w", gaveUp)
+					h.logger.Error("relay settings subscription gave up — waiting for topology change", zap.Error(gaveUp))
+					if err := h.pool.WaitForTopologyChange(ctx); err != nil {
+						return err
+					}
+					return nil // outer loop will resubscribe
 				}
 				if allEOSECh != nil {
 					select {

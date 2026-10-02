@@ -118,6 +118,7 @@ const (
 // the transport never authenticates on its own.
 type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
+	WaitForTopologyChange(ctx context.Context) error
 }
 
 // EncryptedRequestEnvelope is the deprecated encrypted request payload shape.
@@ -559,62 +560,70 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	// inner event must be at most two minutes old. A subscriber may still
 	// deliver from its own store (the DNS agent's StoreBackedSubscriber,
 	// irsry.10.5); the daemon uses the ledger (contextvm_local_run.go).
-	now := time.Now().UTC()
-	innerSince := nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix())
-	filters := contextVMSubscriptionFilters(t.responder.ServicePubkey(), now)
-	t.logger.Info("subscribing to ContextVM encrypted request events",
-		zap.Any("filters", filters),
-		zap.Time("inner_since", time.Unix(int64(innerSince), 0).UTC()),
-		zap.Duration("nip59_outer_lookback", contextVMNIP59OuterLookback),
-	)
-	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
-	}
-	defer merged.Close()
-	t.logger.Info("subscribed to ContextVM encrypted request events")
 	for {
-		select {
-		case <-ctx.Done():
-			t.logger.Info("ContextVM encrypted request transport shutting down")
-			return ctx.Err()
-		case eose, ok := <-merged.RelayEOSE:
-			if ok {
-				t.logger.Debug("relay sent ContextVM encrypted request EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
-			} else {
-				merged.RelayEOSE = nil
-			}
-		case closed, ok := <-merged.Closed:
-			if ok {
-				t.logger.Warn("relay closed ContextVM encrypted request subscription",
-					zap.String("relay", closed.RelayURL),
-					zap.String("subscription_id", closed.SubscriptionID),
-					zap.String("reason", closed.Reason),
-				)
-			} else {
-				merged.Closed = nil
-			}
-		case _, ok := <-merged.EndOfStoredEvents:
-			if !ok {
-				merged.EndOfStoredEvents = nil
-			} else {
-				t.logger.Debug("ContextVM encrypted request subscription caught up with stored events")
-			}
-		case ev, ok := <-merged.Events:
-			if !ok {
-				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					t.logger.Error("ContextVM encrypted request subscription gave up", zap.Error(gaveUp))
-					return fmt.Errorf("ContextVM subscription gave up: %w", gaveUp)
+		now := time.Now().UTC()
+		innerSince := nostr.Timestamp(now.Add(-encryptedRequestReplayLookback).Unix())
+		filters := contextVMSubscriptionFilters(t.responder.ServicePubkey(), now)
+		t.logger.Info("subscribing to ContextVM encrypted request events",
+			zap.Any("filters", filters),
+			zap.Time("inner_since", time.Unix(int64(innerSince), 0).UTC()),
+			zap.Duration("nip59_outer_lookback", contextVMNIP59OuterLookback),
+		)
+		merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, filters)
+		if err != nil {
+			return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
+		}
+		t.logger.Info("subscribed to ContextVM encrypted request events")
+		resubscribe := false
+		for !resubscribe {
+			select {
+			case <-ctx.Done():
+				merged.Close()
+				t.logger.Info("ContextVM encrypted request transport shutting down")
+				return ctx.Err()
+			case eose, ok := <-merged.RelayEOSE:
+				if ok {
+					t.logger.Debug("relay sent ContextVM encrypted request EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
+				} else {
+					merged.RelayEOSE = nil
 				}
-				t.logger.Warn("ContextVM encrypted request subscription events channel closed")
-				return nil
+			case closed, ok := <-merged.Closed:
+				if ok {
+					t.logger.Warn("relay closed ContextVM encrypted request subscription",
+						zap.String("relay", closed.RelayURL),
+						zap.String("subscription_id", closed.SubscriptionID),
+						zap.String("reason", closed.Reason),
+					)
+				} else {
+					merged.Closed = nil
+				}
+			case _, ok := <-merged.EndOfStoredEvents:
+				if !ok {
+					merged.EndOfStoredEvents = nil
+				} else {
+					t.logger.Debug("ContextVM encrypted request subscription caught up with stored events")
+				}
+			case ev, ok := <-merged.Events:
+				if !ok {
+					merged.Close()
+					if gaveUp := merged.GaveUp(); gaveUp != nil {
+						t.logger.Error("ContextVM encrypted request subscription gave up â waiting for topology change", zap.Error(gaveUp))
+						if err := t.subscriber.WaitForTopologyChange(ctx); err != nil {
+							return err
+						}
+						resubscribe = true
+						break
+					}
+					t.logger.Warn("ContextVM encrypted request subscription events channel closed")
+					return nil
+				}
+				t.logger.Debug("received ContextVM encrypted request event",
+					zap.String("event_id", ev.ID.Hex()),
+					zap.Int("kind", int(ev.Kind)),
+					zap.String("pubkey", ev.PubKey.Hex()),
+				)
+				t.handleEventSince(ctx, ev, innerSince)
 			}
-			t.logger.Debug("received ContextVM encrypted request event",
-				zap.String("event_id", ev.ID.Hex()),
-				zap.Int("kind", int(ev.Kind)),
-				zap.String("pubkey", ev.PubKey.Hex()),
-			)
-			t.handleEventSince(ctx, ev, innerSince)
 		}
 	}
 }

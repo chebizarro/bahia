@@ -441,6 +441,7 @@ func unwrapContextVMResponse(t *testing.T, ev nostr.Event, requesterKey string) 
 type scriptedEncryptedRequestSubscriber struct {
 	subscribeRequests chan *scriptedEncryptedSubscription
 	authRequests      chan string
+	topologyChanged   chan struct{}
 }
 
 type scriptedEncryptedSubscription struct {
@@ -476,6 +477,19 @@ func (s *scriptedEncryptedRequestSubscriber) SubscribeAllWithEOSE(_ context.Cont
 func (s *scriptedEncryptedRequestSubscriber) AuthenticateRelay(_ context.Context, relayURL string) error {
 	s.authRequests <- relayURL
 	return nil
+}
+
+func (s *scriptedEncryptedRequestSubscriber) WaitForTopologyChange(ctx context.Context) error {
+	if s.topologyChanged == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.topologyChanged:
+		return nil
+	}
 }
 
 func receiveEncryptedSubscription(t *testing.T, ch <-chan *scriptedEncryptedSubscription) *scriptedEncryptedSubscription {

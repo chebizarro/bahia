@@ -23,10 +23,11 @@ type testHiveRepo struct {
 }
 
 type fakeRelaySubscriber struct {
-	subscriptions []*nostrAdapter.MergedSubscription
-	filters       [][]nostr.Filter
-	authCalls     []string
-	authErr       error
+	subscriptions   []*nostrAdapter.MergedSubscription
+	filters         [][]nostr.Filter
+	authCalls       []string
+	authErr         error
+	topologyChanged chan struct{}
 }
 
 func (f *fakeRelaySubscriber) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*nostrAdapter.MergedSubscription, error) {
@@ -43,6 +44,19 @@ func (f *fakeRelaySubscriber) SubscribeAllWithEOSE(_ context.Context, filters []
 func (f *fakeRelaySubscriber) AuthenticateRelay(_ context.Context, relayURL string) error {
 	f.authCalls = append(f.authCalls, relayURL)
 	return f.authErr
+}
+
+func (f *fakeRelaySubscriber) WaitForTopologyChange(ctx context.Context) error {
+	if f.topologyChanged == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-f.topologyChanged:
+		return nil
+	}
 }
 
 func signedHiveCIEvent(t *testing.T, kind int, createdAt time.Time, tags nostr.Tags) *nostr.Event {

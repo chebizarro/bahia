@@ -13,10 +13,11 @@ import (
 )
 
 type continuityTestPool struct {
-	subscription *nostradapter.MergedSubscription
-	filters      chan []nostr.Filter
-	closed       int
-	auth         int
+	subscription    *nostradapter.MergedSubscription
+	filters         chan []nostr.Filter
+	closed          int
+	auth            int
+	topologyChanged chan struct{} // nil = WaitForTopologyChange blocks forever
 }
 
 func (p *continuityTestPool) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Filter) (*nostradapter.MergedSubscription, error) {
@@ -26,6 +27,18 @@ func (p *continuityTestPool) SubscribeAllWithEOSE(_ context.Context, filters []n
 func (p *continuityTestPool) AuthenticateRelay(context.Context, string) error { p.auth++; return nil }
 func (p *continuityTestPool) RecordRelayClosed(string, string)                { p.closed++ }
 func (*continuityTestPool) RecordRelayReREQ()                                 {}
+func (p *continuityTestPool) WaitForTopologyChange(ctx context.Context) error {
+	if p.topologyChanged == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.topologyChanged:
+		return nil
+	}
+}
 
 func TestContinuityDefinitionsEOSEBackfillAndRealtime(t *testing.T) {
 	_, h, store, _, _ := continuityFixture(t, NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)}))

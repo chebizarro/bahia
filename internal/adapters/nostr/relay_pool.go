@@ -2387,6 +2387,26 @@ func (p *RelayPool) signalRelayRemoved() {
 	}
 }
 
+// WaitForTopologyChange blocks until a relay connects, a relay is removed
+// from the configured topology, or the context is cancelled. Consumers
+// call this after GaveUp to avoid futile resubscription loops: the topology
+// change that might resolve the refusal (new relays, reconfigured AUTH,
+// reconnects) is entirely event-driven, with no timer polling.
+func (p *RelayPool) WaitForTopologyChange(ctx context.Context) error {
+	connected, stopC := p.NotifyRelayConnected()
+	removed, stopR := p.NotifyRelayRemoved()
+	defer stopC()
+	defer stopR()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-connected:
+		return nil
+	case <-removed:
+		return nil
+	}
+}
+
 func (p *RelayPool) recordRelayReconnect(relayURL string) {
 	if p.health == nil {
 		return
@@ -2435,19 +2455,6 @@ func (p *RelayPool) RecordRelayReREQ() {
 	for _, relayURL := range p.URLs() {
 		p.health.GetOrCreate(relayURL).RecordReREQ()
 	}
-}
-
-// RecordRelayError records relay-level protocol or transport metadata for
-// callers that observe CLOSED/AUTH failures outside the pool internals.
-func (p *RelayPool) RecordRelayError(relayURL, reason string) {
-	if p == nil {
-		return
-	}
-	normalizedURL := nostr.NormalizeURL(relayURL)
-	if normalizedURL == "" {
-		return
-	}
-	p.recordRelayError(normalizedURL, strings.TrimSpace(reason))
 }
 
 // URLs returns the list of configured relay URLs.

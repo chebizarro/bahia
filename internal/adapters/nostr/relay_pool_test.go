@@ -89,28 +89,6 @@ func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
 	require.Equal(t, "dial tcp: connection refused", statuses["wss://relay-two.example"].LastError)
 }
 
-func TestRelayPoolRecordRelayErrorSurfacesAuthUnavailableMetadata(t *testing.T) {
-	pool := newRelayPoolWithManagedRelays("wss://auth.example")
-	pool.RecordRelayError("wss://auth.example", "auth-unavailable: auth-required: sign in: no private key configured for NIP-42 AUTH")
-
-	snapshot := pool.HealthSnapshot()
-	require.Len(t, snapshot.Relays, 1)
-	require.Equal(t, 1, snapshot.Relays[0].Errors)
-	require.Contains(t, snapshot.Relays[0].LastError, "auth-unavailable")
-	require.False(t, snapshot.Relays[0].Healthy)
-}
-
-func TestRelayPoolRecordRelayErrorNormalizesRelayURL(t *testing.T) {
-	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop())
-	pool.RecordRelayError("relay.example", "auth-required: sign in")
-
-	snapshot := pool.HealthSnapshot()
-	require.Len(t, snapshot.Relays, 1)
-	require.Equal(t, "wss://relay.example", snapshot.Relays[0].URL)
-	require.Equal(t, 1, snapshot.Relays[0].Errors)
-	require.Equal(t, "auth-required: sign in", snapshot.Relays[0].LastError)
-}
-
 // The tests below pin MergedSubscription semantics through the production
 // SubscribeAllWithEOSE path. They replace tests of the deleted, test-only
 // mergeSubscriptions/mergeRelaySubscriptions helpers (C-8, bahia-irsry.8).
@@ -709,4 +687,92 @@ func TestNotifyRelayRemovedSignalsWhenRelaysLeaveTopology(t *testing.T) {
 	default:
 		// expected: channel stays blocked
 	}
+}
+func TestWaitForTopologyChangeUnblocksOnRelayConnected(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://r1.example")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	// Signal from a goroutine after a brief yield.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		pool.recordRelayConnectionState("wss://r1.example", true)
+	}()
+
+	err := pool.WaitForTopologyChange(ctx)
+	require.NoError(t, err)
+}
+
+func TestWaitForTopologyChangeUnblocksOnRelayRemoved(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://r1.example", "wss://r2.example")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		pool.ReconfigureRelayURLs([]string{"wss://r1.example"})
+	}()
+
+	err := pool.WaitForTopologyChange(ctx)
+	require.NoError(t, err)
+}
+
+func TestWaitForTopologyChangeRespectsContextCancellation(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://r1.example")
+	ctx, cancel := context.WithCancel(t.Context())
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := pool.WaitForTopologyChange(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGaveUpConsumerSurvivesAfterTopologyChange(t *testing.T) {
+	const relayURL = "wss://gave-up-survives.example"
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	WithRetryableClosedBudget(0)(pool)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	fastResubscribeBackoff(pool)
+	reqs := newScriptedSubscribes(t)
+
+	// First subscription: make the pool give up immediately.
+	merged, err := pool.SubscribeAllWithEOSE(t.Context(), []gonostr.Filter{{Kinds: []gonostr.Kind{1}}})
+	require.NoError(t, err)
+	first := reqs.next(t).sub
+	close(first.EndOfStoredEvents)
+	<-merged.EndOfStoredEvents
+	closeScripted(first, "error: overloaded")
+	require.True(t, (<-merged.Closed).Terminal)
+	for range merged.Events {
+	}
+	require.ErrorIs(t, merged.GaveUp(), ErrSubscriptionGaveUp)
+	merged.Close()
+
+	// Mark relay as disconnected so the next reconnect triggers signalRelayConnected.
+	pool.recordRelayConnectionState(relayURL, false)
+
+	// Simulate what a consumer does: wait for topology change rather than dying.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		pool.recordRelayConnectionState(relayURL, true)
+	}()
+
+	err = pool.WaitForTopologyChange(ctx)
+	require.NoError(t, err, "topology change should unblock the consumer")
+
+	// Consumer resubscribes successfully.
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	merged2, err := pool.SubscribeAllWithEOSE(t.Context(), []gonostr.Filter{{Kinds: []gonostr.Kind{1}}})
+	require.NoError(t, err)
+	defer merged2.Close()
+	second := reqs.next(t).sub
+	close(second.EndOfStoredEvents)
+	<-merged2.EndOfStoredEvents
+	require.NoError(t, merged2.GaveUp(), "new subscription should not inherit old give-up")
 }

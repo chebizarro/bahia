@@ -541,12 +541,16 @@ func (r *Reactor) Run(ctx context.Context) error {
 			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
-				// GaveUp means every relay permanently refused the subscription
-				// (e.g. access policy, terminal auth failure). Resubscribing
-				// would repeat the same refusal; surface the error and stop.
+				// GaveUp means every relay permanently refused the subscription.
+				// This is recoverable when the topology changes (relay added,
+				// reconnect, reconfigured AUTH), so wait event-driven instead
+				// of killing the consumer.
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					r.logger.Error("control-plane subscription gave up", "error", gaveUp)
-					return fmt.Errorf("control-plane subscription gave up: %w", gaveUp)
+					r.logger.Error("control-plane subscription gave up — waiting for topology change", "error", gaveUp)
+					if err := r.pool.WaitForTopologyChange(ctx); err != nil {
+						r.pool.Close()
+						return err
+					}
 				}
 				delay := r.backoff.Next()
 				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)

@@ -54,6 +54,7 @@ type ReleaseIngestAuditor interface {
 type relaySubscriber interface {
 	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error)
 	AuthenticateRelay(context.Context, string) error
+	WaitForTopologyChange(context.Context) error
 }
 
 // Subscriber ingests Hive-CI retired-kind/retired-kind events from relays and persists parsed records.
@@ -259,7 +260,11 @@ func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapt
 		case ev, ok := <-merged.Events:
 			if !ok {
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					return fmt.Errorf("hiveci subscription gave up: %w", gaveUp)
+					s.logger.Error("hiveci subscription gave up â waiting for topology change", zap.Error(gaveUp))
+					if err := s.pool.WaitForTopologyChange(ctx); err != nil {
+						return err
+					}
+					return nil // outer loop will resubscribe
 				}
 				return nil
 			}

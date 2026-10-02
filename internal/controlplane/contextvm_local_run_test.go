@@ -351,6 +351,11 @@ func newContextVMScriptedPool(urls ...string) *contextVMScriptedPool {
 
 func (p *contextVMScriptedPool) URLs() []string { return p.urls }
 
+func (p *contextVMScriptedPool) WaitForTopologyChange(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (p *contextVMScriptedPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrpool.MergedSubscription, error) {
 	panic("the local-store transport subscribes per relay")
 }
@@ -656,6 +661,11 @@ type storeFilteredSubscriber struct{}
 
 func (storeFilteredSubscriber) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrpool.MergedSubscription, error) {
 	panic("must not subscribe")
+}
+
+func (storeFilteredSubscriber) WaitForTopologyChange(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func TestContextVMLedgerRefusesASecondStoreLayer(t *testing.T) {

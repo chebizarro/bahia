@@ -74,7 +74,11 @@ func (h *ContinuityRuntime) consumeDefinitions(ctx context.Context, merged *nost
 		case event, ok := <-merged.Events:
 			if !ok {
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					return fmt.Errorf("continuity subscription gave up: %w", gaveUp)
+					h.logger.Error("continuity subscription gave up — waiting for topology change", zap.Error(gaveUp))
+					if err := h.pool.WaitForTopologyChange(ctx); err != nil {
+						return err
+					}
+					return nil // outer loop will resubscribe
 				}
 				return fmt.Errorf("continuity event stream closed")
 			}
