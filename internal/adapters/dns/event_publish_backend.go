@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -55,4 +56,31 @@ func (b *EventPublishDNSBackend) SyncZone(ctx context.Context, zone domain.DNSZo
 	}
 	b.logger.Info("published zone sync event", zap.String("zone", zone.Name), zap.Int("records", len(records)))
 	return nil
+}
+
+// DeferredZoneSyncPublisher is a ZoneSyncPublisher that delegates to a real
+// publisher once it is wired. This allows the DNS backend to be created before
+// the canonical publisher exists (the publisher requires the nostr projector
+// which is created after buildDNSRuntime).
+type DeferredZoneSyncPublisher struct {
+	mu        sync.Mutex
+	delegate  ZoneSyncPublisher
+}
+
+// SetDelegate sets the real publisher. Must be called before any SyncZone.
+func (d *DeferredZoneSyncPublisher) SetDelegate(pub ZoneSyncPublisher) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.delegate = pub
+}
+
+// PublishZoneSync delegates to the real publisher, or returns an error if not wired.
+func (d *DeferredZoneSyncPublisher) PublishZoneSync(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {
+	d.mu.Lock()
+	pub := d.delegate
+	d.mu.Unlock()
+	if pub == nil {
+		return fmt.Errorf("zone sync publisher not yet wired")
+	}
+	return pub.PublishZoneSync(ctx, zone, records)
 }
