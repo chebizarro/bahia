@@ -16,7 +16,7 @@ import Table from '$lib/components/Table.svelte';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_CONTEXTVM_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { ensureRelayConnection, getTagValue, nostr, parseJsonContent } from '$lib/nostr/client.js';
-  import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE } from '$lib/nostr/kinds.gen.js';
+  import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
     ArtifactIcon,
     CopyIcon,
