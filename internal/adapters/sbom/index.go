@@ -38,6 +38,13 @@ const (
 )
 
 // Tag names for SBOM events.
+// SBOMReferenceTopic and SBOMAvailabilityTopic are the single-letter "t"
+// topics stamped on SBOM events so relay consumers can scope on #t.
+const (
+	SBOMReferenceTopic    = "sbom-reference"
+	SBOMAvailabilityTopic = "sbom-availability"
+)
+
 const (
 	TagDIdentifier   = "d"
 	TagSubjectDigest = "subject"
@@ -175,6 +182,7 @@ func BuildSBOMReferenceEvent(input BuildSBOMReferenceEventInput) (*nostr.Event, 
 		{TagDIdentifier, dTag},
 		{TagDomain, "sbom"},
 		{TagSchema, "bahia.sbom.ref.v1"},
+		{"t", SBOMReferenceTopic},
 		{TagSubjectType, string(input.Subject.Type)},
 		{TagSubjectDigest, input.Subject.Digest},
 		{TagFormat, string(input.Attestation.Predicate.Format)},
@@ -228,6 +236,7 @@ func BuildSBOMAvailabilityListEvent(input BuildSBOMAvailabilityListEventInput) (
 		{TagTitle, fmt.Sprintf("SBOMs for %s", titleSubject)},
 		{TagDomain, "sbom"},
 		{TagSchema, "bahia.sbom.available-list.v1"},
+		{"t", SBOMAvailabilityTopic},
 		{TagSubjectType, string(input.Subject.Type)},
 		{TagSubjectDigest, input.Subject.Digest},
 	}

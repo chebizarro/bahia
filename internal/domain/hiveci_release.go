@@ -18,6 +18,9 @@ const (
 	ReleaseAttestationAuditType    = "attestation"
 	ReleaseAttestationSchema       = "bahia.audit.release.v1"
 	ReleaseAttestationEnvelopeType = "release.attestation"
+	// ReleaseAttestationTopic is the single-letter "t" topic stamped on
+	// every release attestation so relay consumers can scope on #t.
+	ReleaseAttestationTopic = "release-attestation"
 )
 
 // ReleaseAttestationPayload is the canonical bahia.audit.release.v1 payload.

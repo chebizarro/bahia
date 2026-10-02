@@ -10,6 +10,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 // StandbyNodeDefinition is the Nostr wire shape for kind 31402 continuity standby definitions.
@@ -359,6 +360,7 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 		{"d", "continuity:heartbeat:" + obs.WorkerPubKey},
 		{"domain", "continuity"},
 		{"schema", heartbeatObservationStatusSchema},
+		{"t", kinds.ContinuityHeartbeatTopic},
 		{"status", "online"},
 		{"worker", obs.WorkerPubKey},
 		{"p", obs.WorkerPubKey},

@@ -24,6 +24,10 @@ export const securityState = $state({
 });
 
 const SECURITY_FINDINGS_SCHEMA = 'bahia.security.findings.v1';
+const SECURITY_FINDINGS_TOPIC = 'security-findings';
+const SECURITY_SCAN_STATUS_TOPIC = 'security-scan-status';
+const SECURITY_SUMMARY_TOPIC = 'security-summary';
+const SECURITY_AUDIT_TOPIC = 'security-audit';
 const SECURITY_EVENT_LIMIT = 500;
 const securityFindingEvents = new Map();
 let securitySnapshotFindings = [];
@@ -269,8 +273,7 @@ function securityFilters(servicePubkey, scope = null) {
   const findingFilter = {
     kinds: [NIP78_APP_DATA],
     authors: [servicePubkey],
-    '#domain': ['security'],
-    '#schema': [SECURITY_FINDINGS_SCHEMA],
+    '#t': [SECURITY_FINDINGS_TOPIC],
     limit: SECURITY_EVENT_LIMIT
   };
   if (scope?.run_id) findingFilter['#run'] = [String(scope.run_id)];
@@ -281,7 +284,7 @@ function securityFilters(servicePubkey, scope = null) {
     {
       kinds: [CASCADIA_CONTROLPLANE_STATE, NIP38_STATUS, CASCADIA_AUDIT],
       authors: [servicePubkey],
-      '#domain': ['security'],
+      '#t': [SECURITY_SCAN_STATUS_TOPIC, SECURITY_SUMMARY_TOPIC, SECURITY_AUDIT_TOPIC],
       limit: SECURITY_EVENT_LIMIT
     }
   ];

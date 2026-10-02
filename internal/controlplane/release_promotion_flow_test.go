@@ -362,7 +362,7 @@ func ingestPromotionFlowRelease(
 		Kind: kinds.CASAudit, CreatedAt: nostr.Timestamp(now.Unix()), Content: string(content),
 		Tags: nostr.Tags{
 			{"domain", domain.ReleaseAttestationDomain}, {"type", domain.ReleaseAttestationAuditType},
-			{"schema", domain.ReleaseAttestationSchema}, {"run", lineage.WorkflowRunEventID},
+			{"schema", domain.ReleaseAttestationSchema}, {"t", domain.ReleaseAttestationTopic}, {"run", lineage.WorkflowRunEventID},
 			{"artifact", manifest.Repository + "@" + manifest.Digest},
 			{"release", releaseIdentity}, {"trigger-envelope", lineage.TriggerIdentity},
 			{"trigger-source", lineage.TriggerSource}, {"trigger-id", lineage.TriggerID},

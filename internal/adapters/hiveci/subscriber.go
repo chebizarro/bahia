@@ -195,7 +195,7 @@ func (s *Subscriber) subscriptionFilters() []nostr.Filter {
 		}
 		filters = append(filters, nostr.Filter{
 			Kinds: []nostr.Kind{kinds.CASAudit}, Authors: attestors,
-			Tags: nostr.TagMap{"domain": []string{domain.ReleaseAttestationDomain}},
+			Tags: nostr.TagMap{"t": []string{domain.ReleaseAttestationTopic}},
 		})
 	}
 	return filters

@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 // AssistantSessionRecoveryConfig configures startup recovery of assistant sessions.
@@ -114,7 +115,13 @@ func (r *AssistantSessionRecoveryRunner) collectSources(ctx context.Context) ([]
 	if err != nil {
 		return nil, fmt.Errorf("decode service pubkey: %w", err)
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{domain.AssistantSessionTagSchema: []string{domain.AssistantSessionSchema, domain.AssistantSessionSchemaV2}}, Limit: r.limit}
+	// bahia-irsry.43: scope the REQ with #t (single-letter) instead of
+	// #schema (multi-letter, invisible to NIP-01 relays). No backfill of
+	// pre-.43 session-state events is needed: these are replaceable 30900
+	// records re-published on every state change, so active sessions that
+	// need recovery will already carry the new tag after the first write.
+	// Completed/abandoned sessions are inert and never recovered.
+	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"t": []string{kinds.AssistantSessionTopic}}, Limit: r.limit}
 	sub, err := r.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
 		return nil, err

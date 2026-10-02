@@ -31,7 +31,7 @@ describe('continuity Nostr read models', () => {
       expect.objectContaining({ kinds: [30353], '#t': ['continuity', 'recovery-progress'] }),
       expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404] }),
       expect.objectContaining({ kinds: [38430, 38431] }),
-      expect.objectContaining({ kinds: [30315], '#domain': ['continuity'] }),
+      expect.objectContaining({ kinds: [30315], '#t': ['continuity-heartbeat'] }),
       { kinds: [30900], '#t': ['worker-state'], limit: 1000 }
     ]));
     expect(continuityNostrFilters()).not.toEqual(expect.arrayContaining([
