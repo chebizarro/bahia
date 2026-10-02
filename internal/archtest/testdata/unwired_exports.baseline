@@ -53,11 +53,9 @@
 1	internal/adapters/nostr.KindCatalog.SnapshotGroups
 1	internal/adapters/nostr.KindSystemDiscovery
 1	internal/adapters/nostr.NewProcessor
-1	internal/adapters/nostr.Projector.IntentDomainsMigrated
 1	internal/adapters/nostr.Projector.ProjectionMetrics
 1	internal/adapters/nostr.Projector.PublishAgentRuntimeRelease
 1	internal/adapters/nostr.Projector.PublishAgentServiceReleaseBinding
-1	internal/adapters/nostr.Projector.WarmStartConfigured
 1	internal/adapters/nostr.PublishResult.IsAuthRequired
 1	internal/adapters/nostr.PublishResult.IsBlocked
 1	internal/adapters/nostr.Publisher.Pool

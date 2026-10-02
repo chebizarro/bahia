@@ -164,18 +164,3 @@ func (p *Projector) isDomainMigrated(domain string) bool {
 	return false
 }
 
-// WarmStartConfigured reports whether the projector has been configured for
-// warm-start (both a readiness waiter and intent domains). Used by app-level
-// tests to verify wiring.
-func (p *Projector) WarmStartConfigured() bool {
-	return p != nil && p.readiness != nil && len(p.intentDomains) > 0
-}
-
-// IntentDomainsMigrated returns the list of domain families configured for
-// warm-start. Used by app-level tests to verify wiring.
-func (p *Projector) IntentDomainsMigrated() []string {
-	if p == nil {
-		return nil
-	}
-	return p.intentDomains
-}

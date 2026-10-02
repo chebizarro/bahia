@@ -105,8 +105,6 @@ type App struct {
 	IntentSubscriber  *controlplane.IntentSubscriber
 	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
 
-	// Phase 3 F4: exposed for app-level wiring tests.
-	NostrProjector *nostrAdapter.Projector
 }
 
 var (
@@ -2043,7 +2041,6 @@ func New(cfg *config.Config) (*App, error) {
 		IntentReadiness:           intentReadiness,
 		IntentSubscriber:          intentSubscriber,
 		IntentAuthorsSyncer:       intentAuthorsSyncer,
-		NostrProjector:            nostrProjector,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
