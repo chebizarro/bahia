@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
@@ -138,10 +139,16 @@ func TestProjectedControlStateCarriesFamilyTopic(t *testing.T) {
 			return projector.publishControlState(ctx, KindServiceState, serviceStateDTag(serviceID, envID), true, tags, contentJSON, "state.projection", &serviceID)
 		},
 		func() error {
-			return projector.publishDNSZone(ctx, domain.DNSZone{Name: "prod.cascadia", BackendRef: "fs"}, false)
+			// Phase 3 D1: DNS publish methods moved to DNSCanonicalPublisher;
+			// use publishControlState directly for the envelope topic test.
+			content, _ := json.Marshal(map[string]any{"deleted": false, "name": "prod.cascadia", "backend_ref": "fs"})
+			tags := gonostr.Tags{{"zone", "prod.cascadia"}, {"backend", "fs"}, {"t", "bahia"}}
+			return projector.publishControlState(ctx, KindDNSZoneState, dnsZoneDTag("prod.cascadia"), false, tags, string(content), "dns_zone.projection", nil)
 		},
 		func() error {
-			return projector.publishDNSEndpointTombstone(ctx, "endpoint:service:api:prod", "api.prod.cascadia")
+			content, _ := json.Marshal(map[string]any{"deleted": true, "coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"})
+			tags := gonostr.Tags{{"t", "bahia"}, {"dns", "api.prod.cascadia"}}
+			return projector.publishControlState(ctx, KindDNSEndpointState, "endpoint:service:api:prod", true, tags, string(content), "dns_endpoint.projection", nil)
 		},
 	}
 	for i, step := range steps {

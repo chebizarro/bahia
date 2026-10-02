@@ -593,3 +593,111 @@ func assertRecordChange(t *testing.T, events []events.Event, operation, fqdn, ol
 	t.Fatalf("missing record change operation=%s fqdn=%s in %#v", operation, fqdn, events)
 }
 
+
+// TestRule3LegacyPathPublishesCanonicalEndpoints verifies that, with no intent
+// domains enabled (the default), a service or environment state change still
+// produces canonical DNS endpoint records through the DNSCanonicalPublisher.
+// This is review rule 3: deleting projector legs must not regress the legacy
+// path which publishes one canonical record per mutation.
+func TestRule3LegacyPathPublishesCanonicalEndpoints(t *testing.T) {
+	projector, zone, expectedRecords := testReconcilerProjector()
+	backend := &fakeDNSBackend{}
+	resolver := &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, resolver, 0, nil)
+
+	pub := &fakeCanonicalPublisher{}
+	reconciler.SetCanonicalPublisher(pub)
+
+	// Wire up event subscriptions the way production does.
+	busPub := newSubscriptionDNSPublisher()
+	reconciler.SetupSubscriptions(busPub)
+
+	ctx := context.Background()
+
+	// Simulate an environment-service state change event (the trigger that
+	// fires when a deployment or convergence occurs on the legacy path).
+	handler := busPub.handlers[events.EventEnvironmentServiceStateChanged]
+	if handler == nil {
+		t.Fatal("no subscription handler for EventEnvironmentServiceStateChanged")
+	}
+	handler(ctx, events.Event{Type: events.EventEnvironmentServiceStateChanged})
+
+	// The trigger should have signalled the reconciler's channel. Drain it
+	// and run reconciliation manually (we're not running the Run() loop).
+	select {
+	case <-reconciler.triggerCh:
+	default:
+		t.Fatal("event did not trigger reconcile")
+	}
+
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+
+	// Verify the backend received zone records (the sync still happened).
+	synced := backend.syncedRecords()
+	if len(synced) == 0 {
+		t.Fatal("backend received no synced records")
+	}
+	assertRecordsEqual(t, synced, expectedRecords)
+
+	// Verify the canonical publisher was called with endpoints.
+	pub.mu.Lock()
+	endpoints := append([]domain.DNSEndpoint(nil), pub.endpoints...)
+	calls := pub.endpointCalls
+	pub.mu.Unlock()
+
+	if calls == 0 {
+		t.Fatal("DNSCanonicalPublisher.PublishEndpoints was never called")
+	}
+	if len(endpoints) == 0 {
+		t.Fatal("PublishEndpoints was called with empty endpoint list")
+	}
+
+	// Verify endpoint matches expected service endpoint.
+	found := false
+	for _, ep := range endpoints {
+		if ep.Name == "api" && ep.Environment == "prod" && ep.Zone == zone.Name && ep.Address == "10.0.0.10" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected canonical endpoint for api.prod not found in %d endpoints: %+v", len(endpoints), endpoints)
+	}
+}
+
+// fakeCanonicalPublisher records calls to DNSCanonicalPublisher methods.
+type fakeCanonicalPublisher struct {
+	mu            sync.Mutex
+	endpointCalls int
+	endpoints     []domain.DNSEndpoint
+	zoneSyncs     []struct {
+		zone    domain.DNSZone
+		records []domain.DNSRecord
+	}
+}
+
+func (p *fakeCanonicalPublisher) PublishEndpoints(_ context.Context, endpoints []domain.DNSEndpoint) (int, int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.endpointCalls++
+	p.endpoints = append(p.endpoints[:0], endpoints...)
+	return len(endpoints), 0, nil
+}
+
+func (p *fakeCanonicalPublisher) PublishZone(context.Context, domain.DNSZone) error { return nil }
+func (p *fakeCanonicalPublisher) PublishZoneTombstone(context.Context, string) error { return nil }
+func (p *fakeCanonicalPublisher) PublishBackend(context.Context, domain.DNSBackendState) error {
+	return nil
+}
+func (p *fakeCanonicalPublisher) PublishPolicy(context.Context, domain.DNSPolicy) error { return nil }
+func (p *fakeCanonicalPublisher) PublishZoneSync(_ context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.zoneSyncs = append(p.zoneSyncs, struct {
+		zone    domain.DNSZone
+		records []domain.DNSRecord
+	}{zone, records})
+	return nil
+}

@@ -968,12 +968,19 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var dnsProjector *reconcile.DNSProjector
+	var dnsReconciler *reconcile.DNSReconciler
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
 	var dnsOperator controlplane.DNSControlPlaneOperator
 	var dnsBackendClosers []io.Closer
+	var dnsAgentHealthReader *dnsAdapter.AgentHealthReader
+	var dnsZoneSyncPublisher *dnsAdapter.DeferredZoneSyncPublisher
 	if cfg.DNS.Enabled {
-		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, logger)
+		// Phase 3 D1: create agent health reader and deferred publisher for
+		// capability-negotiated backend switching (C-34).
+		dnsAgentHealthReader = dnsAdapter.NewAgentHealthReader(logger)
+		dnsZoneSyncPublisher = &dnsAdapter.DeferredZoneSyncPublisher{}
+		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, dnsAgentHealthReader, dnsZoneSyncPublisher, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -994,7 +1001,7 @@ func New(cfg *config.Config) (*App, error) {
 		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
 			dnsProjector.SetPolicySource(policySource)
 		}
-		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		dnsReconciler = reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		dnsReconciler.SetPublisher(publisher)
 		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
 		dnsReconciler.SetupSubscriptions(publisher)
@@ -1004,6 +1011,26 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
 		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
+
+		// Phase 3 D1: subscribe to NIP-38 agent health events so the daemon
+		// reads agent health and capabilities from events instead of RPC.
+		if dnsAgentHealthReader != nil {
+			var agentPubkeys []string
+			for _, backendCfg := range cfg.DNS.Backends {
+				if backendCfg.Type == string(domain.DNSBackendTypeDnsmasqAgent) && backendCfg.AgentPubkey != "" {
+					agentPubkeys = append(agentPubkeys, backendCfg.AgentPubkey)
+				}
+			}
+			if len(agentPubkeys) > 0 {
+				bgManager.RegisterWithOptions(&agentHealthSubscriber{
+					pool:     controlPlanePool,
+					pubkeys:  agentPubkeys,
+					reader:   dnsAgentHealthReader,
+					logger:   logger,
+				}, RunnerTier(Tier3))
+				logger.Info("DNS agent health subscriber registered", zap.Int("agents", len(agentPubkeys)))
+			}
+		}
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
 
@@ -1127,6 +1154,23 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
+	// each material reconcile so DNS records publish once per mutation instead
+	// of O(fleet) per projector tick (B-17).
+	if dnsReconciler != nil {
+		dnsCanonicalPub := nostrAdapter.NewDNSCanonicalPublisher(nostrProjector, logger)
+		if err := dnsCanonicalPub.HydrateFromStore(ctx); err != nil {
+			logger.Warn("DNS canonical publisher hydration failed", zap.Error(err))
+		}
+		dnsReconciler.SetCanonicalPublisher(dnsCanonicalPub)
+		// Wire the deferred zone sync publisher to the real canonical publisher
+		// so the capability-aware backend can publish zone sync events.
+		if dnsZoneSyncPublisher != nil {
+			dnsZoneSyncPublisher.SetDelegate(dnsCanonicalPub)
+		}
+		logger.Info("DNS canonical publisher wired to reconciler (Phase 3 D1)")
+	}
 
 	// Phase 3 F2: register service domain intent handler.
 	// Uses the relay-first registry when available (canonical 30900 published
@@ -3273,7 +3317,7 @@ func internalRoutingConfigHash(cfg config.InternalRoutingConfig) string {
 // buildDNSRuntime returns the configured zones and backend resolver plus the
 // closers for backends that own remote transports; the caller must close them
 // on shutdown. On error, any already-created backends are closed before return.
-func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRelays []string, signer nostr.Signer, senderPubkey string, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, []io.Closer, error) {
+func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRelays []string, signer nostr.Signer, senderPubkey string, agentHealthReader *dnsAdapter.AgentHealthReader, deferredPublisher *dnsAdapter.DeferredZoneSyncPublisher, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, []io.Closer, error) {
 	var closers []io.Closer
 	succeeded := false
 	defer func() {
@@ -3346,7 +3390,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			if len(relays) == 0 {
 				relays = controlPlaneRelays
 			}
-			backend, err := dnsAdapter.NewRelayDnsmasqAgentBackend(dnsAdapter.DnsmasqAgentConfig{
+			rpcBackend, err := dnsAdapter.NewRelayDnsmasqAgentBackend(dnsAdapter.DnsmasqAgentConfig{
 				Relays:        relays,
 				Signer:        signer,
 				SenderPubkey:  senderPubkey,
@@ -3358,7 +3402,19 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("configuring DNS dnsmasq agent backend %q: %w", ref, err)
 			}
-			closers = append(closers, backend)
+			// Phase 3 D1 (C-34): wrap with capability-aware backend. When the
+			// agent advertises "zone-subscribe" via NIP-38, use event publish;
+			// otherwise fall back to ContextVM RPC for old agents.
+			var backend dnsAdapter.Backend
+			if agentHealthReader != nil && deferredPublisher != nil {
+				eventBackend := dnsAdapter.NewEventPublishDNSBackend(deferredPublisher, logger)
+				capBackend := dnsAdapter.NewCapabilityAwareDNSBackend(rpcBackend, eventBackend, agentHealthReader, backendConfig.AgentPubkey, logger)
+				closers = append(closers, capBackend)
+				backend = capBackend
+			} else {
+				closers = append(closers, rpcBackend)
+				backend = rpcBackend
+			}
 			// The agent is a remote, relay-backed dependency. Do not make Bahia's
 			// process startup depend on a synchronous ContextVM round trip: the DNS
 			// reconciler performs the same health check continuously and surfaces
@@ -3391,6 +3447,58 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 	}
 	succeeded = true
 	return zones, resolver, closers, nil
+}
+
+
+// agentHealthSubscriber is a BackgroundRunner that subscribes to NIP-38 kind
+// 30315 health status events from DNS agents, feeding them to the
+// AgentHealthReader so the daemon reads agent health and capabilities from
+// events instead of ContextVM Health() RPCs (C-34, Phase 3 D1).
+type agentHealthSubscriber struct {
+	pool    *nostrAdapter.RelayPool
+	pubkeys []string
+	reader  *dnsAdapter.AgentHealthReader
+	logger  *zap.Logger
+}
+
+func (s *agentHealthSubscriber) Name() string { return "dns-agent-health-subscriber" }
+
+func (s *agentHealthSubscriber) Run(ctx context.Context) error {
+	return subscribeAgentHealth(ctx, s.pool, s.pubkeys, s.reader, s.logger)
+}
+
+// subscribeAgentHealth subscribes to NIP-38 kind 30315 events from the given
+// agent pubkeys and forwards them to the health reader.
+func subscribeAgentHealth(ctx context.Context, pool *nostrAdapter.RelayPool, agentPubkeys []string, reader *dnsAdapter.AgentHealthReader, logger *zap.Logger) error {
+	pubkeys := make([]nostr.PubKey, 0, len(agentPubkeys))
+	for _, hex := range agentPubkeys {
+		pk, err := nostr.PubKeyFromHex(hex)
+		if err != nil {
+			logger.Warn("invalid agent pubkey for health subscription", zap.String("pubkey", hex), zap.Error(err))
+			continue
+		}
+		pubkeys = append(pubkeys, pk)
+	}
+	if len(pubkeys) == 0 {
+		return nil
+	}
+
+	filter := nostr.Filter{
+		Kinds:   []nostr.Kind{30315},
+		Authors: pubkeys,
+		Tags:    nostr.TagMap{"d": []string{"dns-agent"}},
+	}
+	events, err := pool.SubscribeAll(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return fmt.Errorf("subscribe to agent health events: %w", err)
+	}
+	logger.Info("agent health subscription started", zap.Int("agents", len(pubkeys)))
+	for ev := range events {
+		if ev != nil {
+			reader.HandleEvent(ctx, *ev)
+		}
+	}
+	return nil
 }
 
 func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
