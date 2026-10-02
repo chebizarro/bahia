@@ -260,7 +260,7 @@ func releaseEventFromResult(t *testing.T, result domain.HiveCIReleaseResult, sig
 		Content: string(content),
 		Tags: nostr.Tags{
 			{"domain", domain.ReleaseAttestationDomain}, {"type", domain.ReleaseAttestationAuditType},
-			{"schema", domain.ReleaseAttestationSchema}, {"run", result.Lineage.WorkflowRunEventID},
+			{"schema", domain.ReleaseAttestationSchema}, {"t", domain.ReleaseAttestationTopic}, {"run", result.Lineage.WorkflowRunEventID},
 			{"artifact", result.Manifest.Repository + "@" + result.Manifest.Digest},
 			{"release", result.ReleaseIdentity}, {"trigger-envelope", result.Lineage.TriggerIdentity},
 			{"trigger-source", result.Lineage.TriggerSource}, {"trigger-id", result.Lineage.TriggerID},

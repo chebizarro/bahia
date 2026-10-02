@@ -364,7 +364,7 @@ func validateReleaseEnvelope(event *nostr.Event, result domain.HiveCIReleaseResu
 	}
 
 	expectedTags := map[string]string{
-		"domain": domain.ReleaseAttestationDomain, "type": domain.ReleaseAttestationAuditType,
+		"domain": domain.ReleaseAttestationDomain, "type": domain.ReleaseAttestationAuditType, "t": domain.ReleaseAttestationTopic,
 		"schema": domain.ReleaseAttestationSchema, "run": result.Lineage.WorkflowRunEventID,
 		"artifact": releaseArtifactReference(result.Manifest),
 		"release":  result.ReleaseIdentity, "trigger-envelope": result.Lineage.TriggerIdentity,

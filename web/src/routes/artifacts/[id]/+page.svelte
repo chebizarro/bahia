@@ -229,8 +229,8 @@ import Table from '$lib/components/Table.svelte';
       ];
       if (digest) {
         filters.push(
-          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
+          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
         );
       }
       const events = await new Promise((resolve) => {
@@ -417,8 +417,8 @@ import Table from '$lib/components/Table.svelte';
     ];
     if (digest) {
       filters.push(
-        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
+        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
       );
     }
     sbomReferenceUnsubscribe = nostr.subscribe(filters, {

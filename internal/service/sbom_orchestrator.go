@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -598,8 +599,7 @@ func (s *SBOMOrchestrator) availabilityListFilter(subject domain.SBOMSubject) (n
 		Authors: []nostr.PubKey{pubkey},
 		Tags: nostr.TagMap{
 			"d":            []string{dTag},
-			"domain":       []string{"sbom"},
-			"schema":       []string{"bahia.sbom.available-list.v1"},
+			"t":            []string{kinds.SBOMAvailabilityTopic},
 			"subject_type": []string{string(subject.Type)},
 			"subject":      []string{subject.Digest},
 		},

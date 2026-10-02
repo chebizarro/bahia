@@ -123,7 +123,7 @@ export function continuityNostrFilters() {
     { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], limit: CONTINUITY_EVENT_LIMIT },
     { kinds: CONTINUITY_DEFINITION_KINDS, limit: CONTINUITY_EVENT_LIMIT },
     { kinds: CONTINUITY_COMMAND_KINDS, limit: CONTINUITY_EVENT_LIMIT },
-    { kinds: [HEARTBEAT_OBSERVATION], '#domain': ['continuity'], limit: CONTINUITY_EVENT_LIMIT },
+    { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], limit: CONTINUITY_EVENT_LIMIT },
     // Worker state is canonical cp-state; its single-letter topic is
     // relay-indexed, and the family is re-checked locally.
     { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], limit: CONTINUITY_EVENT_LIMIT }

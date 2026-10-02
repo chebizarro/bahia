@@ -15,6 +15,7 @@ import (
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -370,7 +371,7 @@ func assertStartupRecoveryResumesApprovedBatch(t *testing.T, cfg *config.Config)
 		t.Fatal(err)
 	}
 	projection, _ := json.Marshal(domain.AssistantSessionV2{Schema: domain.AssistantSessionSchemaV2, SessionID: "s-resume", OperatorPubkey: "operator", ExecutionVersion: 2, Workflow: domain.AssistantWorkflowBatch, CurrentRunID: "run-resume", ExecutionRevision: 1, Phase: domain.AssistantExecutionWaitingAsync, CheckpointEventID: checkpoint})
-	ev := nostr.Event{Kind: domain.KindAssistantSessionState, CreatedAt: nostr.Now() - 60, Tags: nostr.Tags{{"d", domain.AssistantSessionSchemaV2 + ":s-resume"}, {domain.AssistantSessionTagSchema, domain.AssistantSessionSchemaV2}, {"session", "s-resume"}}, Content: string(projection)}
+	ev := nostr.Event{Kind: domain.KindAssistantSessionState, CreatedAt: nostr.Now() - 60, Tags: nostr.Tags{{"d", domain.AssistantSessionSchemaV2 + ":s-resume"}, {domain.AssistantSessionTagSchema, domain.AssistantSessionSchemaV2}, {"t", kinds.AssistantSessionTopic}, {"session", "s-resume"}}, Content: string(projection)}
 	if err := signer.SignEvent(context.Background(), &ev); err != nil {
 		t.Fatal(err)
 	}
