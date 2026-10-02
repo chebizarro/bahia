@@ -32,12 +32,13 @@ type AssistantSessionRecoveryConfig struct {
 // pure compatibility classifier, checkpoint the conversion idempotently, then
 // hand the newest valid execution checkpoint to the engine's Recover entry.
 type AssistantSessionRecoveryRunner struct {
-	engine        AssistantTurnEngine
-	store         AssistantCheckpointStore
-	subscriber    AssistantRelaySubscriber
-	limit         int
-	servicePubkey string
-	logger        *slog.Logger
+	engine         AssistantTurnEngine
+	store          AssistantCheckpointStore
+	subscriber     AssistantRelaySubscriber
+	limit          int
+	servicePubkey  string
+	logger         *slog.Logger
+	topicMigration *AssistantSessionTopicMigration
 }
 
 func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg AssistantSessionRecoveryConfig) *AssistantSessionRecoveryRunner {
@@ -62,6 +63,14 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, limit: limit, servicePubkey: servicePubkey, logger: logger.With("component", "assistant_session_recovery")}
 }
 
+// SetTopicMigration attaches the startup migration that adds t=assistant-session
+// tags to legacy records. It runs synchronously before recovery queries the relay.
+func (r *AssistantSessionRecoveryRunner) SetTopicMigration(m *AssistantSessionTopicMigration) {
+	if r != nil {
+		r.topicMigration = m
+	}
+}
+
 func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-session-recovery" }
 
 // assistantRecoverySource is the NIP-01-selected latest session projection for
@@ -84,6 +93,17 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 		r.logger.Warn("assistant recovery skipped: relay subscriber or service pubkey not configured")
 		return nil
 	}
+	// bahia-irsry.43: re-tag legacy assistant session events before recovery
+	// queries the relay with #t. The migration reads from the local event
+	// store, adds t=assistant-session to untagged records, and re-publishes
+	// them so the relay indexes them under #t. Idempotent: a no-op once
+	// all records carry the tag.
+	if r.topicMigration != nil {
+		if err := r.topicMigration.Run(ctx); err != nil {
+			r.logger.Warn("assistant session topic migration failed; recovery proceeds without it", "error", err)
+		}
+	}
+
 	sources, err := r.collectSources(ctx)
 	if err != nil {
 		r.logger.Warn("assistant recovery query failed; sessions remain parked", "error", err)
@@ -116,11 +136,15 @@ func (r *AssistantSessionRecoveryRunner) collectSources(ctx context.Context) ([]
 		return nil, fmt.Errorf("decode service pubkey: %w", err)
 	}
 	// bahia-irsry.43: scope the REQ with #t (single-letter) instead of
-	// #schema (multi-letter, invisible to NIP-01 relays). No backfill of
-	// pre-.43 session-state events is needed: these are replaceable 30900
-	// records re-published on every state change, so active sessions that
-	// need recovery will already carry the new tag after the first write.
-	// Completed/abandoned sessions are inert and never recovered.
+	// #schema (multi-letter, invisible to NIP-01 relays). Legacy records
+	// published before .43 are re-tagged by the topic migration that runs
+	// synchronously before this query (SetTopicMigration). The migration
+	// reads the local event store — not a relay REQ — and re-publishes
+	// untagged records with the t tag added.
+	//
+	// The web assistant store (assistant.svelte.js) also scopes on #t, so
+	// legacy sessions are invisible to the browser until the daemon
+	// re-publishes them with the tag. No browser-side fix is needed.
 	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"t": []string{kinds.AssistantSessionTopic}}, Limit: r.limit}
 	sub, err := r.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
