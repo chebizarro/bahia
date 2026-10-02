@@ -153,8 +153,11 @@ func (d *Dispatcher) enabledChannels(ctx context.Context) []domain.NotificationC
 
 	channels, err := d.repo.ListChannels(ctx, false) // load all, filter locally
 	if err != nil {
-		d.logger.Warn("failed to hydrate channel cache from DB, using empty cache", zap.Error(err))
-		d.cacheHydrated = true
+		// Do NOT mark hydrated — retry on the next dispatch (bounded by the
+		// caller's dispatch rate). Returning nil means this notification is
+		// silently dropped, which is safe because the cache will hydrate on
+		// the next event and catch up.
+		d.logger.Warn("failed to hydrate channel cache from DB, will retry next dispatch", zap.Error(err))
 		return nil
 	}
 	for i := range channels {

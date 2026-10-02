@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
 import {
   KIND_GIFT_WRAP,
+  KIND_CONTEXTVM,
   createEncryptedNotificationsSystemInfo,
   installEncryptedNotificationHarness
 } from './harnesses/notifications-encrypted.js';
@@ -62,7 +63,7 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     const encryptedErrors = await page.evaluate(() => window.__BAHIA_E2E_ENCRYPTED_RESULTS);
     expect(encryptedErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: KIND_GIFT_WRAP,
+        kind: KIND_CONTEXTVM,
         operation: 'notifications.channels.create',
         status: 'error',
         error: expect.objectContaining(createError)

@@ -145,7 +145,8 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.goto(`/services/${SERVICE_ID}`);
     await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.create', { name: 'NEW_SECRET', value: 'super-secret-value-123' }));
+    // Phase 3 N1: create goes through publishCommand (kind 25910), handled directly
+    // by the mock without queue consumption. Only queue the post-mutation re-list.
     await queueContextVMOperation(page, secretOperation('services.secrets.list'));
 
     await page.getByRole('button', { name: 'Add Secret' }).click();
@@ -181,7 +182,7 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(await page.evaluate(() => window.__copied_secret_value)).toBe('postgres://hidden.example/db');
     await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByText('Close', { exact: true }).click();
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.update', { secret_id: 'secret-1', value: 'updated-secret-value-xyz' }));
+    // Phase 3 N1: update goes through publishCommand (kind 25910), handled directly.
     await queueContextVMOperation(page, secretOperation('services.secrets.list'));
     await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Update")').click();
     await page.locator('#secret-update-value').fill('updated-secret-value-xyz');
@@ -189,7 +190,7 @@ test.describe('Service Secrets Smoke Test', () => {
     await expect(page.getByRole('dialog', { name: 'Update Secret' })).not.toBeVisible();
     expect(await page.content()).not.toContain('updated-secret-value-xyz');
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.delete', { secret_id: 'secret-2' }));
+    // Phase 3 N1: delete goes through publishCommand (kind 25910), handled directly.
     await queueContextVMOperation(page, secretOperation('services.secrets.list'));
     await page.locator('.secret-row:has-text("API_KEY") button:has-text("Delete")').click();
     await expect(page.getByRole('dialog', { name: 'Delete Secret' })).toBeVisible();

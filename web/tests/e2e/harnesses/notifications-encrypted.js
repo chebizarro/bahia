@@ -156,7 +156,8 @@ export async function installEncryptedNotificationHarness(
     function canonicalNotificationOperation(operation) {
       return String(operation || '')
         .replace(/^notifications\/channels-/, 'notifications.channels.')
-        .replace(/^notifications\/logs-/, 'notifications.logs.');
+        .replace(/^notifications\/logs-/, 'notifications.logs.')
+        .replace(/^notification\//, 'notifications.channels.');
     }
 
     function notificationResult(operation, payload = {}) {
@@ -252,7 +253,13 @@ export async function installEncryptedNotificationHarness(
       if (Array.isArray(message) && message[0] === 'EVENT' && [KIND_CONTEXTVM, KIND_GIFT_WRAP].includes(message[1]?.kind) && isRelayUrl(this.url, encryptedRelay)) {
         const event = message[1];
         const relay = this.url;
-        const signedContext = event.kind === KIND_GIFT_WRAP ? window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM.shift() : null;
+        // For gift-wrap events, consume the captured inner event to get the envelope.
+        // For direct ContextVM events (Phase 3 N1 mutations), discard the matching
+        // captured entry to keep the queue in sync with subsequent gift-wrapped
+        // requests that also push to the array during signEvent.
+        const signedContext = event.kind === KIND_GIFT_WRAP
+          ? (window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM.shift() || null)
+          : (() => { window.__BAHIA_E2E_ENCRYPTED_SIGNED_CONTEXTVM.shift(); return null; })();
         const { envelope, operation: rawOperation, payload, signedEvent } = signedContext || parseContextVMRequest(event);
         const operation = canonicalNotificationOperation(rawOperation);
         const requesterPubkey = event.kind === KIND_GIFT_WRAP ? (signedEvent?.pubkey || operatorPubkey) : event.pubkey;

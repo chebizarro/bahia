@@ -98,6 +98,14 @@ type EncryptedRouteHandlersConfig struct {
 	IntentProcessor *IntentProcessor
 	Secrets         repository.SecretRepository
 	Encryptor       *secrets.Encryptor
+	// SecretPublisher publishes canonical secret records in the legacy path
+	// (when the secret domain is not routed through the intent processor).
+	SecretPublisher SecretIntentPublisher
+	// NotifRepo, NotifPublisher, and NotifNotifier support the notification
+	// legacy path (when the notification domain is not intent-enabled).
+	NotifRepo       repository.NotificationRepository
+	NotifPublisher  NotificationIntentPublisher
+	NotifNotifier   NotificationChannelChangeNotifier
 	Runs            repository.DeploymentRunRepository
 	RunLogs         RunLogFetcher
 	Artifacts       repository.ArtifactRepository
@@ -115,6 +123,10 @@ type EncryptedRouteHandlers struct {
 	intentProcessor *IntentProcessor
 	secrets         repository.SecretRepository
 	encryptor       *secrets.Encryptor
+	secretPublisher SecretIntentPublisher
+	notifRepo       repository.NotificationRepository
+	notifPublisher  NotificationIntentPublisher
+	notifNotifier   NotificationChannelChangeNotifier
 	runs            repository.DeploymentRunRepository
 	runLogs         RunLogFetcher
 	artifacts       repository.ArtifactRepository
@@ -140,6 +152,10 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		intentProcessor: cfg.IntentProcessor,
 		secrets:         cfg.Secrets,
 		encryptor:       cfg.Encryptor,
+		secretPublisher: cfg.SecretPublisher,
+		notifRepo:       cfg.NotifRepo,
+		notifPublisher:  cfg.NotifPublisher,
+		notifNotifier:   cfg.NotifNotifier,
 		runs:            cfg.Runs,
 		runLogs:         cfg.RunLogs,
 		artifacts:       cfg.Artifacts,
@@ -1334,8 +1350,16 @@ func (h *EncryptedRouteHandlers) CreateSecret(ctx context.Context, request Encry
 		if created, _ := h.secrets.GetByID(ctx, secret.ID); created != nil {
 			secret = created
 		}
-	} else if err := h.secrets.Create(ctx, secret); err != nil {
-		return nil, fmt.Errorf("failed to create secret")
+	} else {
+		if err := h.secrets.Create(ctx, secret); err != nil {
+			return nil, fmt.Errorf("failed to create secret")
+		}
+		// Legacy path: publish canonical record so relay state stays current.
+		if h.secretPublisher != nil {
+			if pubErr := h.secretPublisher.PublishSecretRef(ctx, secret.ToRef()); pubErr != nil {
+				h.logger.Warn("failed to publish secret canonical record (legacy path)", zap.Error(pubErr))
+			}
+		}
 	}
 	return map[string]any{"secret": secret.ToRef(), "status": "created"}, nil
 }
@@ -1406,6 +1430,12 @@ func (h *EncryptedRouteHandlers) UpdateSecret(ctx context.Context, request Encry
 		if err := h.secrets.Update(ctx, secret); err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
 		}
+		// Legacy path: publish canonical record so relay state stays current.
+		if h.secretPublisher != nil {
+			if pubErr := h.secretPublisher.PublishSecretRef(ctx, secret.ToRef()); pubErr != nil {
+				h.logger.Warn("failed to publish secret canonical record (legacy path)", zap.Error(pubErr))
+			}
+		}
 	}
 	if updated, _ := h.secrets.GetByID(ctx, secretID); updated != nil {
 		secret = updated
@@ -1450,8 +1480,16 @@ func (h *EncryptedRouteHandlers) DeleteSecret(ctx context.Context, request Encry
 		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
 			return nil, fmt.Errorf("failed to delete secret: %w", err)
 		}
-	} else if err := h.secrets.Delete(ctx, secretID); err != nil {
-		return nil, fmt.Errorf("failed to delete secret")
+	} else {
+		if err := h.secrets.Delete(ctx, secretID); err != nil {
+			return nil, fmt.Errorf("failed to delete secret")
+		}
+		// Legacy path: publish tombstone so relay state stays current.
+		if h.secretPublisher != nil {
+			if pubErr := h.secretPublisher.PublishSecretDeleted(ctx, secretID); pubErr != nil {
+				h.logger.Warn("failed to publish secret tombstone (legacy path)", zap.Error(pubErr))
+			}
+		}
 	}
 	return map[string]string{"status": "deleted", "secret_id": secretID.String()}, nil
 }
@@ -1757,12 +1795,11 @@ func (h *EncryptedRouteHandlers) VerifyArtifactSignatures(ctx context.Context, r
 // these are the sole remaining path for web-originated channel mutations
 // until O1 gift-wrap ingress is live.
 
-// CreateNotificationChannel handles notification/create ContextVM requests
-// by dual-dispatching through the intent processor.
+// CreateNotificationChannel handles notification/create ContextVM requests.
+// When the notification domain is enabled, it dual-dispatches through the
+// intent processor. Otherwise it falls back to the legacy path: tenant RBAC,
+// repo write, canonical publish, dispatcher notify.
 func (h *EncryptedRouteHandlers) CreateNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
-	if !h.notificationIntentEnabled() {
-		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
-	}
 	var payload notificationChannelPayload
 	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
@@ -1779,28 +1816,48 @@ func (h *EncryptedRouteHandlers) CreateNotificationChannel(ctx context.Context, 
 		ch.ID = domain.NewEntityID()
 	}
 
-	content := BuildNotificationIntentContent(ch)
-	intent := &Intent{
-		Domain:     "notification",
-		Op:         "create",
-		OrgID:      ch.OrgID,
-		IntentID:   uuid.New().String(),
-		Coordinate: ch.ID.String(),
-		Content:    content,
-		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	if h.notificationIntentEnabled() {
+		content := BuildNotificationIntentContent(ch)
+		intent := &Intent{
+			Domain:     "notification",
+			Op:         "create",
+			OrgID:      ch.OrgID,
+			IntentID:   uuid.New().String(),
+			Coordinate: ch.ID.String(),
+			Content:    content,
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to create notification channel: %w", err)
+		}
+		return map[string]any{"channel": content, "status": "created"}, nil
 	}
-	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+
+	// Legacy path: authorise with tenant RBAC, write via repo, publish, notify.
+	if err := h.authorizeNotificationOrg(ctx, request, ch.OrgID, domain.PermManageSettings); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	ch.CreatedAt = now
+	ch.UpdatedAt = now
+	if err := h.notifRepo.CreateChannel(ctx, ch); err != nil {
 		return nil, fmt.Errorf("failed to create notification channel: %w", err)
 	}
-	return map[string]any{"channel": content, "status": "created"}, nil
+	if h.notifPublisher != nil {
+		if pubErr := h.notifPublisher.PublishChannel(ctx, ch); pubErr != nil {
+			h.logger.Warn("failed to publish notification channel (legacy path)", zap.Error(pubErr))
+		}
+	}
+	if h.notifNotifier != nil {
+		h.notifNotifier.OnChannelChanged(ch, false)
+	}
+	return map[string]any{"channel": BuildNotificationIntentContent(ch), "status": "created"}, nil
 }
 
-// UpdateNotificationChannel handles notification/update ContextVM requests
-// by dual-dispatching through the intent processor.
+// UpdateNotificationChannel handles notification/update ContextVM requests.
+// When the notification domain is enabled, it dual-dispatches through the
+// intent processor. Otherwise it falls back to the legacy path.
 func (h *EncryptedRouteHandlers) UpdateNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
-	if !h.notificationIntentEnabled() {
-		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
-	}
 	var payload notificationChannelPayload
 	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
@@ -1813,28 +1870,51 @@ func (h *EncryptedRouteHandlers) UpdateNotificationChannel(ctx context.Context, 
 	ch := buildNotificationChannelFromPayload(payload)
 	ch.ID = channelID
 
-	content := BuildNotificationIntentContent(ch)
-	intent := &Intent{
-		Domain:     "notification",
-		Op:         "update",
-		OrgID:      ch.OrgID,
-		IntentID:   uuid.New().String(),
-		Coordinate: channelID.String(),
-		Content:    content,
-		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	if h.notificationIntentEnabled() {
+		content := BuildNotificationIntentContent(ch)
+		intent := &Intent{
+			Domain:     "notification",
+			Op:         "update",
+			OrgID:      ch.OrgID,
+			IntentID:   uuid.New().String(),
+			Coordinate: channelID.String(),
+			Content:    content,
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to update notification channel: %w", err)
+		}
+		return map[string]any{"channel": content, "status": "updated"}, nil
 	}
-	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+
+	// Legacy path: load existing for org-scoped RBAC, merge, write, publish, notify.
+	existing, loadErr := h.notifRepo.GetChannelByID(ctx, channelID)
+	if loadErr != nil || existing == nil {
+		return nil, fmt.Errorf("notification channel not found")
+	}
+	if err := h.authorizeNotificationOrg(ctx, request, existing.OrgID, domain.PermManageSettings); err != nil {
+		return nil, err
+	}
+	mergeNotificationChannelOntoExisting(existing, ch)
+	existing.UpdatedAt = time.Now().UTC()
+	if err := h.notifRepo.UpdateChannel(ctx, existing); err != nil {
 		return nil, fmt.Errorf("failed to update notification channel: %w", err)
 	}
-	return map[string]any{"channel": content, "status": "updated"}, nil
+	if h.notifPublisher != nil {
+		if pubErr := h.notifPublisher.PublishChannel(ctx, existing); pubErr != nil {
+			h.logger.Warn("failed to publish notification channel (legacy path)", zap.Error(pubErr))
+		}
+	}
+	if h.notifNotifier != nil {
+		h.notifNotifier.OnChannelChanged(existing, false)
+	}
+	return map[string]any{"channel": BuildNotificationIntentContent(existing), "status": "updated"}, nil
 }
 
-// DeleteNotificationChannel handles notification/delete ContextVM requests
-// by dual-dispatching through the intent processor.
+// DeleteNotificationChannel handles notification/delete ContextVM requests.
+// When the notification domain is enabled, it dual-dispatches through the
+// intent processor. Otherwise it falls back to the legacy path.
 func (h *EncryptedRouteHandlers) DeleteNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
-	if !h.notificationIntentEnabled() {
-		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
-	}
 	var payload notificationChannelPayload
 	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
@@ -1844,20 +1924,58 @@ func (h *EncryptedRouteHandlers) DeleteNotificationChannel(ctx context.Context, 
 		return nil, fmt.Errorf("channel id is required for delete")
 	}
 
-	content := map[string]interface{}{"id": channelID.String()}
-	intent := &Intent{
-		Domain:     "notification",
-		Op:         "delete",
-		OrgID:      uuid.Nil, // resolved from channel by handler
-		IntentID:   uuid.New().String(),
-		Coordinate: channelID.String(),
-		Content:    content,
-		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	if h.notificationIntentEnabled() {
+		content := map[string]interface{}{"id": channelID.String()}
+		intent := &Intent{
+			Domain:     "notification",
+			Op:         "delete",
+			OrgID:      uuid.Nil, // resolved from channel by handler
+			IntentID:   uuid.New().String(),
+			Coordinate: channelID.String(),
+			Content:    content,
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to delete notification channel: %w", err)
+		}
+		return map[string]any{"status": "deleted", "channel_id": channelID.String()}, nil
 	}
-	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+
+	// Legacy path: load for RBAC + notifier, delete, publish tombstone, notify.
+	existing, loadErr := h.notifRepo.GetChannelByID(ctx, channelID)
+	if loadErr != nil || existing == nil {
+		return nil, fmt.Errorf("notification channel not found")
+	}
+	if err := h.authorizeNotificationOrg(ctx, request, existing.OrgID, domain.PermManageSettings); err != nil {
+		return nil, err
+	}
+	if err := h.notifRepo.DeleteChannel(ctx, channelID); err != nil {
 		return nil, fmt.Errorf("failed to delete notification channel: %w", err)
 	}
+	if h.notifPublisher != nil {
+		if pubErr := h.notifPublisher.PublishChannelDeleted(ctx, channelID); pubErr != nil {
+			h.logger.Warn("failed to publish notification channel tombstone (legacy path)", zap.Error(pubErr))
+		}
+	}
+	if h.notifNotifier != nil {
+		h.notifNotifier.OnChannelChanged(existing, true)
+	}
 	return map[string]any{"status": "deleted", "channel_id": channelID.String()}, nil
+}
+
+// authorizeNotificationOrg checks ContextVM tenant RBAC for a notification
+// channel mutation against the given org. Used by the legacy (non-intent) path.
+func (h *EncryptedRouteHandlers) authorizeNotificationOrg(ctx context.Context, request ContextVMRequest, orgID uuid.UUID, permission domain.Permission) error {
+	if orgID == uuid.Nil {
+		return fmt.Errorf("notification channel organization is required")
+	}
+	if h.rbac == nil {
+		return fmt.Errorf("notification RBAC is not configured")
+	}
+	if request.Event == nil {
+		return fmt.Errorf("signed ContextVM request event is required")
+	}
+	return h.rbac.CheckPermission(ctx, requestPrincipal(EncryptedRequest{Event: request.Event}), orgID, permission)
 }
 
 // buildNotificationChannelFromPayload converts a ContextVM payload into a

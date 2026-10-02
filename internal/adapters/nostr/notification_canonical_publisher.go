@@ -11,9 +11,10 @@ import (
 )
 
 // NotificationCanonicalPublisher publishes authoritative notification channel
-// state records through the shared builder and outbox. Webhook URLs and
-// credentials are stripped from the published content; only non-sensitive
-// configuration metadata is included.
+// state records through the shared builder and outbox. Channel config including
+// webhook URLs and credentials is published as NIP-44 self-encrypted content
+// via publishConfidentialControlState — plaintext envelope tags contain only
+// non-sensitive metadata (org_id, channel_type, name).
 //
 // Follows the BackupCanonicalPublisher pattern.
 type NotificationCanonicalPublisher struct {
@@ -34,13 +35,14 @@ func NewNotificationCanonicalPublisher(projector *Projector, logger *zap.Logger)
 }
 
 // PublishChannel publishes a canonical notification channel config record.
-// Sensitive fields (webhook URLs, secrets, credentials) are stripped.
+// The full channel config (including webhook URLs and secrets) is included
+// in the content because it is NIP-44 encrypted by publishConfidentialControlState.
 func (p *NotificationCanonicalPublisher) PublishChannel(ctx context.Context, ch *domain.NotificationChannel) error {
 	if p.projector == nil || !p.projector.Enabled() || ch == nil {
 		return nil
 	}
 	dTag := NotificationChannelDTag(ch.ID)
-	tags, content := NotificationChannelRegistryRecord(ch, false)
+	tags, content := NotificationChannelRegistryRecord(ch, false, true)
 	return p.projector.publishConfidentialControlState(ctx, KindNotificationChannelRegistry, dTag, false, tags, content, "notification_channel.projection", &ch.ID)
 }
 
@@ -61,24 +63,32 @@ func NotificationChannelDTag(id uuid.UUID) string {
 }
 
 // NotificationChannelRegistryRecord builds the tags and content for a
-// notification channel registry canonical state record. Config values are
-// sanitized: webhook URLs and secrets are redacted.
-func NotificationChannelRegistryRecord(ch *domain.NotificationChannel, deleted bool) (gonostr.Tags, string) {
+// notification channel registry canonical state record. When confidential is
+// true the full config is included (the caller encrypts); when false, webhook
+// URLs and secrets are redacted for any non-encrypted context.
+func NotificationChannelRegistryRecord(ch *domain.NotificationChannel, deleted bool, confidential bool) (gonostr.Tags, string) {
 	tags := gonostr.Tags{
 		{"org_id", ch.OrgID.String()},
 		{"channel_type", string(ch.ChannelType)},
 		{"name", ch.Name},
 	}
 
-	// Sanitize config: strip secrets and webhook URLs from the published record.
-	sanitizedConfig := sanitizeNotificationConfig(ch.Config, ch.ChannelType)
+	// When publishing confidentially (NIP-44 encrypted), include the full config
+	// so the daemon can reconstitute the channel from the relay copy. When not
+	// confidential, sanitize to strip secrets and webhook URLs.
+	var publishedConfig map[string]any
+	if confidential {
+		publishedConfig = ch.Config
+	} else {
+		publishedConfig = sanitizeNotificationConfig(ch.Config, ch.ChannelType)
+	}
 
 	payload := map[string]any{
 		"id":           ch.ID.String(),
 		"org_id":       ch.OrgID.String(),
 		"name":         ch.Name,
 		"channel_type": string(ch.ChannelType),
-		"config":       sanitizedConfig,
+		"config":       publishedConfig,
 		"event_filter": ch.EventFilter,
 		"enabled":      ch.Enabled,
 		"deleted":      deleted,

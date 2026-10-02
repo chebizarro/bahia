@@ -76,21 +76,25 @@ test.describe('Notifications encrypted transport smoke', () => {
     ]));
 
     for (const request of transportTrace.requests) {
-      expect(request.kind).toBe(KIND_GIFT_WRAP);
-      expect(request.innerKind).toBe(KIND_CONTEXTVM);
+      // Phase 3 N1: mutations use kind 25910 (ContextVM) directly; reads still
+      // gift-wrap (kind 1059). Both must route through the encrypted relay.
+      expect([KIND_GIFT_WRAP, KIND_CONTEXTVM]).toContain(request.kind);
+      if (request.kind === KIND_GIFT_WRAP) {
+        expect(request.innerKind).toBe(KIND_CONTEXTVM);
+        expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
+        expect(request.wrapperPubkey).not.toBe(TEST_PUBKEY);
+      }
       expect(request.requesterPubkey).toBe(TEST_PUBKEY);
-      expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
-      expect(request.wrapperPubkey).not.toBe(TEST_PUBKEY);
       expect(request.tags).toEqual(expect.arrayContaining([['p', SERVICE_PUBKEY]]));
       expect(normalizeRelay(request.relay)).toBe(ENCRYPTED_RELAY);
       expect(normalizeRelay(request.relay)).not.toBe(PUBLIC_RELAY);
       expect(transportTrace.oks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: KIND_GIFT_WRAP, accepted: true })
+        expect.objectContaining({ eventId: request.eventId, kind: request.kind, accepted: true })
       ]));
       expect(transportTrace.results).toEqual(expect.arrayContaining([
         expect.objectContaining({
           requestEventId: request.eventId,
-          kind: KIND_GIFT_WRAP,
+          kind: request.kind,
           requesterPubkey: TEST_PUBKEY,
           status: 'ok',
           tags: expect.arrayContaining([

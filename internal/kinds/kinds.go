@@ -360,12 +360,13 @@ const (
 	BackupRuntimeObservationState = 31999
 )
 
-// Secret and Notification Read-Model Kinds (32005-32006)
+// Secret and Notification Read-Model Kinds (32008-32009)
 // These are "legacy kinds" used as keys in cpStateFamilies; the wire kind
-// is always 30900 (CASControlState). 32001-32004 are taken by worker families.
+// is always 30900 (CASControlState). 32001-32004 are taken by worker families;
+// 32005-32007 are taken by org/member/invite (sibling O1).
 const (
-	SecretRegistry              = 32005
-	NotificationChannelRegistry = 32006
+	SecretRegistry              = 32008
+	NotificationChannelRegistry = 32009
 )
 
 // =============================================================================
