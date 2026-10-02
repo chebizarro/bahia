@@ -1899,3 +1899,77 @@ func TestProjectorStateSecretPlaintextNeverProjected(t *testing.T) {
 	assertJSONField(t, stateEvent.Content, "renderer", "compose")
 	assertJSONField(t, stateEvent.Content, "target", "api-prod")
 }
+
+// Phase 3 S2: a deployment run event still triggers immediate worker
+// read-model refresh (assignment/drain) even though the run's own cp-state
+// is published directly from RegistryService (bahia-irsry.11.7).
+func TestRunEventRefreshesWorkerReadModelImmediately(t *testing.T) {
+	ctx := context.Background()
+	workerPubkey := strings.Repeat("cd", 32)
+	runID := uuid.New()
+	intentID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.runs[runID] = domain.DeploymentRun{
+		ID:                 runID,
+		DeploymentIntentID: intentID,
+		WorkerPubkey:       workerPubkey,
+		Status:             domain.RunStatusRunning,
+	}
+
+	workerSource := &fakeWorkerReadModelSource{
+		assignment: domain.WorkerAssignmentState{
+			WorkerPubKey:      workerPubkey,
+			ActiveAssignments: []domain.WorkerAssignment{{Type: domain.WorkerAssignmentService, WorkloadID: "svc-1"}},
+		},
+		drain: domain.WorkerDrainStatus{
+			WorkerPubKey:    workerPubkey,
+			SchedulingState: domain.WorkerSchedulingActive,
+		},
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(
+		projectorTestConfig(), source, sink, newMemoryNostrEventRepo(), zap.NewNop(),
+		WithWorkerReadModelProjectionSource(workerSource),
+	)
+
+	// A run status change triggers worker read model refresh immediately.
+	projector.handleEvent(ctx, events.Event{
+		Type:     events.EventDeploymentRunStatusChanged,
+		EntityID: runID.String(),
+		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
+	})
+
+	// Worker assignment and drain records should be published (kind 30900 with
+	// legacy_kind matching the worker families).
+	assignments := sink.byKind(KindWorkerAssignmentState)
+	if len(assignments) != 1 {
+		t.Fatalf("expected 1 worker assignment record, got %d", len(assignments))
+	}
+	if !hasTag(assignments[0].Tags, "worker", workerPubkey) {
+		t.Fatalf("worker assignment record missing worker tag: %v", assignments[0].Tags)
+	}
+	drains := sink.byKind(KindWorkerDrainStatus)
+	if len(drains) != 1 {
+		t.Fatalf("expected 1 worker drain record, got %d", len(drains))
+	}
+
+	// The run's own cp-state must NOT be published by the projector (S2: moved
+	// to RegistryService).
+	runRecords := sink.byKind(KindDeploymentRunRegistry)
+	if len(runRecords) != 0 {
+		t.Fatalf("projector should not publish run cp-state (S2 moved to RegistryService), got %d", len(runRecords))
+	}
+
+	// Unchanged repeat: fingerprint dedup suppresses re-signing.
+	projector.handleEvent(ctx, events.Event{
+		Type:     events.EventDeploymentRunStatusChanged,
+		EntityID: runID.String(),
+		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
+	})
+	assignments2 := sink.byKind(KindWorkerAssignmentState)
+	if len(assignments2) != 1 {
+		t.Fatalf("unchanged repeat should be suppressed: expected 1 worker assignment, got %d", len(assignments2))
+	}
+}

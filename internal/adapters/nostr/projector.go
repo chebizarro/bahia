@@ -340,8 +340,13 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
 		//
 		// Phase 3 S2: build, artifact, deployment intent and deployment run
-		// subscriptions removed — their cp-state is published directly from
-		// the RegistryService mutation methods (bahia-irsry.11.7).
+		// cp-state subscriptions removed — their cp-state is published directly
+		// from the RegistryService mutation methods (bahia-irsry.11.7).
+		// Run events are kept for worker read-model refresh (assignment/drain
+		// state must update immediately, not on the RepublishSnapshot ticker).
+		events.EventDeploymentRunCreated,
+		events.EventDeploymentRunStatusChanged,
+		events.EventDeploymentRunCompleted,
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -564,10 +569,16 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 
 	res := resourceFromEvent(e)
 	switch e.Type {
-	// Phase 3 S2: build, artifact, deployment intent and deployment run
-	// handleEvent cases removed — their cp-state is published directly from
-	// the RegistryService mutation methods (bahia-irsry.11.7).
-	//
+	// Phase 3 S2: deployment run events are still handled for worker
+	// read-model refresh (assignment/drain state). The run's own cp-state
+	// is published directly from RegistryService (bahia-irsry.11.7).
+	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
+		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
+			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
+				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
+			}
+		}
+
 	// Phase 3 F2/F3: service and environment handleEvent cases removed — their
 	// state is published by the intent handlers via PublishBeforeCommit
 	// (bahia-irsry.11.3, bahia-irsry.11.4).
