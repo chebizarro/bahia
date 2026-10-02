@@ -275,3 +275,122 @@ subscription id is unaffected):
 bump `fiatjaf.com/nostr` to that version and keep both regression tests (the
 Bahia-side one must keep passing under -race). The previous local copy was
 removed the same way in c70042c0.
+
+## Per-subscription event delivery order (bahia-irsry.58)
+
+`Subscription.dispatchEvent` spawned a new goroutine for every event. The
+goroutines raced to send on `sub.Events`, so events arrived in random order.
+This is observable under `-cpu=2` or higher with bursts of 256+ events, and
+always observable on single-CPU machines under contention. Any consumer that
+assumes the relay's wire order (e.g. a cursor that tracks the most recent
+`created_at`) could skip events or move a resume cursor backward.
+
+- `subscription.go`: new `dispatchItem` struct and `inbox chan dispatchItem`.
+  `dispatchEvent` sends to the bounded inbox (capacity 256) under `mu.RLock`;
+  the dispatcher goroutine reads from the inbox and sends to `Events` in FIFO
+  order, also under `mu.RLock`. When the inbox is full the caller blocks, which
+  applies bounded backpressure to the relay's read loop (the caller is
+  `handleMessage`, running on the main loop goroutine). `eoseTimedOut` and
+  `Context.Done` are still available as early exits, preserving overflow
+  semantics. Subscriptions created without `PrepareSubscription` (test helpers
+  that build a `Subscription` literal) have a nil inbox and fall back to the
+  legacy per-goroutine path.
+- `relay.go` (`PrepareSubscription`): creates the inbox and starts the
+  dispatcher goroutine. The teardown goroutine now closes the inbox under
+  `mu.Lock` (preventing further sends), waits for the dispatcher to drain the
+  remaining items, and then closes `Events` and `countResult`. This preserves
+  the `mu` discipline from bahia-irsry.17.
+
+Tests: `subscription_order_test.go`:
+- `TestDispatchEventPreservesOrderLive`: 1024 live events arrive in wire order.
+- `TestDispatchEventPreservesOrderStored`: 256 stored events arrive in wire
+  order with EOSE after the last one.
+- `TestDispatchEventOrderAcrossStoredAndLive`: stored burst, EOSE, live burst,
+  each sub-sequence in order.
+- `TestDispatchEventBackpressureUnblocksOnCancel`: full inbox + context cancel.
+
+Run with: `CGO_ENABLED=0 go test fiatjaf.com/nostr -cpu=1,2,8 -count=20 -run TestDispatchEventPreservesOrder`.
+
+## Second CLOSED goroutine leak (bahia-irsry.26)
+
+`Subscription.handleClosed` started a goroutine unconditionally. A relay that
+sends two CLOSED frames (e.g. an overflow close followed by a disconnect close)
+leaked the second goroutine: `ClosedReason` is buffered with capacity 1, and
+the second send blocked forever.
+
+- `subscription.go`: new `closedHandled atomic.Bool` with `CompareAndSwap`
+  guard. Only the first call starts the goroutine; subsequent calls return
+  immediately.
+
+Test: `subscription_closed_test.go` `TestSecondClosedDoesNotLeak`.
+
+## countInternal data race (bahia-irsry.26)
+
+`Relay.countInternal` created the subscription via `PrepareSubscription`, which
+stores it in the subscription map at line 715, and then set
+`sub.countResult = make(chan CountEnvelope, 1)` AFTER the store. A COUNT reply
+arriving between the store and the assignment found `countResult == nil` and
+was dropped, causing the count to time out.
+
+- `subscription.go` (`SubscriptionOptions`): new unexported `isCount bool` field.
+- `relay.go` (`PrepareSubscription`): when `opts.isCount`, creates `countResult`
+  before the store. `countInternal` sets `opts.isCount = true` instead of
+  assigning `sub.countResult` after `PrepareSubscription`.
+
+No dedicated test: the existing `TestCountAfterTeardownIsDropped` covers the
+post-teardown path, and `TestCount` (upstream, needs a public relay) covers the
+happy path. The race window is eliminated by construction.
+
+## khatru: listener-before-query (NOT APPLIED — bahia-irsry.26)
+
+Khatru registers a REQ's live listener AFTER its stored query, leaving a gap
+where a client CLOSE finds nothing to remove and the listener lingers until
+disconnect. The natural upstream fix is to register the listener before the
+stored query, which this wave prototyped and tested.
+
+**Not applied to Bahia's vendored copy**: the relay sidecar's `pendingListener`
+mechanism deduplicates events delivered by both the stored query and the live
+listener, and it assumes the original ordering (listener after query). Changing
+khatru to listener-before-query causes duplicates (the stored query returns
+an event, and the now-active live listener delivers it again during the query).
+Adapting the sidecar would require a per-subscription stored-ID set with
+cross-goroutine synchronization, which is complex and error-prone.
+
+The sidecar already handles both issues:
+- **Gap closing**: `beginRequest` / `trackStored` / `listenerAdded` buffer and
+  deduplicate events that match during the gap.
+- **CLOSE during query**: `listenerAdded` checks `pending.ctx.Err()` and
+  schedules removal if the REQ was already canceled.
+
+An upstream patch for listener-before-query is prepared in
+`third_party/nostr/upstream-patches/` for submission when the sidecar's
+dedup can be simplified, or when upstream adopts it.
+
+## NIP-42 AUTH state (bahia-irsry.10.2) — verified
+
+(Already documented above.) Verified in this wave: `authMu` guards
+`challenge`, `authed` and `authing`. The `startAuthLocked` / `runAuth` /
+`authAttempt` pattern is correct. `Relay.Auth` joins an in-flight attempt
+instead of starting a concurrent one.
+
+**SoulFactory implications**: SoulFactory delegates relay connections to
+Bahia's `RelayPool`, which wires `AuthHandler` and `AuthResultHandler` once per
+connection. SoulFactory itself does not call `Relay.Auth` directly or hold any
+AUTH state. No SoulFactory changes are needed.
+
+## RelayPool consumer order-independence audit (bahia-irsry.58)
+
+All Bahia consumers of `Subscription.Events` are order-independent: they use
+`created_at` for cursor tracking and event IDs for deduplication, not arrival
+order. Per-subscription ordering (the inbox fix above) improves determinism but
+is not required for correctness.
+
+| Consumer | File | Cursor / dedup | Order assumption |
+|---|---|---|---|
+| `activeMergedSubscription.consume()` | `relay_pool.go:1813` | `relayResumeCursor.observe(ev)` tracks max `created_at`; `EventDeduplicator` by ID | None |
+| `Subscriber.drainStored()` | `inbound_sync.go:440` | Tracks min `created_at`; seen map by ID | None |
+| `Subscriber.forwardLive()` | `inbound_sync.go:530` | Forwards to `inboundItem` channel; cursor by created_at in downstream `cursorTracker` | None |
+| `RelaySubscription.CollectStoredEvents()` | `soulfactory/relay_client.go:505` | Appends to slice; delegates dedup to pool | None |
+| `Pool.subMany()` | `pool.go:434` | Forwards `IncomingEvent{Event, Relay}` | None |
+| `Pool.subManyEose()` | `pool.go:625` | Same as subMany, with EOSE collection | None |
+| `FetchManyReplaceable()` | `pool.go` | Compares by `created_at` (latest wins) | None |

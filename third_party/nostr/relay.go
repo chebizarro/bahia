@@ -700,6 +700,12 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 		eoseTimedOut:      make(chan struct{}),
 	}
 
+	// bahia-irsry.26: create countResult before Store so that a COUNT reply
+	// arriving between Store and Fire cannot see a nil channel.
+	if opts.isCount {
+		sub.countResult = make(chan CountEnvelope, 1)
+	}
+
 	sub.checkDuplicate = opts.CheckDuplicate
 	sub.checkDuplicateReplaceable = opts.CheckDuplicateReplaceable
 
@@ -710,6 +716,39 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 	buf = append(buf, opts.Label...)
 	defer subIdPool.Put(buf)
 	sub.id = string(buf)
+
+	// bahia-irsry.58: per-subscription ordered delivery. The inbox is a bounded
+	// FIFO that preserves the relay's event order. The dispatcher goroutine
+	// reads from inbox and delivers to Events in order.
+	sub.inbox = make(chan dispatchItem, 256)
+	sub.dispatcherDone = make(chan struct{})
+	go func() {
+		defer close(sub.dispatcherDone)
+		for item := range sub.inbox {
+			sub.mu.RLock()
+			if sub.channelsClosed {
+				if item.isStored {
+					sub.storedwg.Done()
+				}
+				sub.mu.RUnlock()
+				continue
+			}
+			if item.isStored {
+				select {
+				case sub.Events <- item.event:
+				case <-sub.Context.Done():
+				case <-sub.eoseTimedOut:
+				}
+				sub.storedwg.Done()
+			} else {
+				select {
+				case sub.Events <- item.event:
+				case <-sub.Context.Done():
+				}
+			}
+			sub.mu.RUnlock()
+		}
+	}()
 
 	// we track subscriptions only by their counter, no need for the full id
 	r.Subscriptions.Store(int64(sub.counter), sub)
@@ -753,14 +792,22 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 		// remove subscription from our map
 		sub.Relay.Subscriptions.Delete(sub.counter)
 
-		// do this so we don't have the possibility of closing the Events channel and then trying to send to it
+		// Stop accepting new items into inbox and signal the dispatcher to
+		// drain. channelsClosed prevents dispatchEvent from sending to the
+		// (now closed) inbox channel.
 		sub.mu.Lock()
 		sub.channelsClosed = true
+		close(sub.inbox)
+		sub.mu.Unlock()
+
+		// Wait for the dispatcher to finish draining the inbox. After this
+		// point no goroutine will send on Events or countResult.
+		<-sub.dispatcherDone
+
 		close(sub.Events)
 		if sub.countResult != nil {
 			close(sub.countResult)
 		}
-		sub.mu.Unlock()
 	}()
 
 	return sub
@@ -824,9 +871,10 @@ func (r *Relay) countInternal(ctx context.Context, filter Filter, opts Subscript
 
 	hasAuthed := false
 
+	opts.isCount = true // bahia-irsry.26: create countResult inside PrepareSubscription
+
 	for {
 		sub := r.PrepareSubscription(ctx, filter, opts)
-		sub.countResult = make(chan CountEnvelope, 1)
 
 		if err := sub.Fire(); err != nil {
 			sub.cancel(ErrFireFailed)

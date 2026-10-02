@@ -14,6 +14,12 @@ var (
 	ErrFireFailed   = errors.New("failed to fire")
 )
 
+// dispatchItem is an event queued in the per-subscription inbox for FIFO delivery.
+type dispatchItem struct {
+	event    Event
+	isStored bool
+}
+
 // Subscription represents a subscription to a relay.
 type Subscription struct {
 	counter int64
@@ -29,8 +35,8 @@ type Subscription struct {
 	// will be closed when the subscription ends
 	Events chan Event
 
-	// mu guards the closing of Events and countResult. Senders hold the read
-	// lock for the whole send and check channelsClosed first; the teardown
+	// mu guards the closing of Events, countResult and inbox. Senders hold the
+	// read lock for the whole send and check channelsClosed first; the teardown
 	// goroutine takes the write lock, sets channelsClosed and closes the
 	// channels. Because teardown only runs after Context is done, and every
 	// sender also selects on Context.Done(), the write lock is always granted
@@ -38,6 +44,14 @@ type Subscription struct {
 	// close Events while a dispatch goroutine was sending on it.)
 	mu             sync.RWMutex
 	channelsClosed bool
+
+	// inbox is the per-subscription ordered delivery queue. Events are
+	// enqueued by dispatchEvent (called on the relay's main-loop goroutine)
+	// and delivered to Events in FIFO order by the dispatcher goroutine
+	// started in PrepareSubscription. nil for subscriptions created
+	// without PrepareSubscription (test helpers). (bahia-irsry.58)
+	inbox          chan dispatchItem
+	dispatcherDone chan struct{} // closed when the dispatcher goroutine exits
 
 	// the EndOfStoredEvents channel receives a value when an EOSE comes for that subscription
 	EndOfStoredEvents chan EndOfStoredEvent
@@ -61,6 +75,10 @@ type Subscription struct {
 	eosed        atomic.Bool
 	eoseTimedOut chan struct{}
 	cancel       context.CancelCauseFunc
+
+	// closedHandled guards handleClosed so that a second CLOSED from the relay
+	// does not leak a goroutine. (bahia-irsry.26)
+	closedHandled atomic.Bool
 
 	// this keeps track of the events we've received before the EOSE that we must dispatch before
 	// closing the EndOfStoredEvents channel
@@ -88,6 +106,12 @@ type SubscriptionOptions struct {
 	// a fake EndOfStoredEvents will be dispatched at this time if nothing is received before.
 	// defaults to 7s (in order to disable, set it to time.Duration(math.MaxInt64))
 	MaxWaitForEOSE time.Duration
+
+	// isCount is set by countInternal so that PrepareSubscription creates
+	// countResult before the subscription is stored in the map.
+	// (bahia-irsry.26: fixes the race where a COUNT reply arrives before
+	// countInternal can set countResult.)
+	isCount bool
 }
 
 // GetID returns the subscription ID.
@@ -100,6 +124,31 @@ func (sub *Subscription) dispatchEvent(evt Event) {
 		isStored = true
 	}
 
+	if inbox := sub.inbox; inbox != nil {
+		// Ordered path (bahia-irsry.58): enqueue via the inbox FIFO.
+		// The dispatcher goroutine delivers items to Events in order.
+		// Hold the read lock so teardown cannot close inbox underneath us.
+		sub.mu.RLock()
+		if sub.channelsClosed || !sub.live.Load() {
+			if isStored {
+				sub.storedwg.Done()
+			}
+			sub.mu.RUnlock()
+			return
+		}
+		select {
+		case inbox <- dispatchItem{event: evt, isStored: isStored}:
+		case <-sub.Context.Done():
+			if isStored {
+				sub.storedwg.Done()
+			}
+		}
+		sub.mu.RUnlock()
+		return
+	}
+
+	// Legacy path: per-event goroutine (used by test helpers that create
+	// subscriptions without PrepareSubscription).
 	go func() {
 		if isStored {
 			defer sub.storedwg.Done()
@@ -154,6 +203,13 @@ func (sub *Subscription) dispatchEose(hint []string) {
 
 // handleClosed handles the CLOSED message from a relay.
 func (sub *Subscription) handleClosed(reason string) {
+	// Guard against a second CLOSED leaking a goroutine. A relay may send
+	// CLOSED more than once (e.g. an overflow close followed by a
+	// disconnect close), but only the first should be delivered.
+	// (bahia-irsry.26)
+	if !sub.closedHandled.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		// A relay can close a completed ID query immediately after EOSE.
 		// Deliver pending history before notifying consumers or canceling it.
