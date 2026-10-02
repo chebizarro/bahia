@@ -109,10 +109,11 @@ type IntentProcessor struct {
 	handlers map[string]DomainHandler
 	config   IntentProcessorConfig
 
-	trustSet *TrustSet
-	store    *localstore.Store
-	status   *IntentStatusPublisher
-	logger   *zap.Logger
+	trustSet        *TrustSet
+	store           *localstore.Store
+	status          *IntentStatusPublisher
+	giftWrapIngress *IntentGiftWrapIngress
+	logger          *zap.Logger
 }
 
 // NewIntentProcessor creates a processor with the given trust set and local
@@ -143,6 +144,12 @@ func (p *IntentProcessor) RegisterHandler(domain string, handler DomainHandler) 
 	p.logger.Info("registered intent domain handler", zap.String("domain", domain))
 }
 
+// SetGiftWrapIngress sets the gift-wrap ingress for sensitive-domain plaintext
+// rejection on the relay path. Call after constructing the ingress in app.go.
+func (p *IntentProcessor) SetGiftWrapIngress(ig *IntentGiftWrapIngress) {
+	p.giftWrapIngress = ig
+}
+
 // Handler returns the registered handler for a domain, or nil.
 func (p *IntentProcessor) Handler(domain string) DomainHandler {
 	p.mu.RLock()
@@ -163,6 +170,12 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 		return nil // silent drop for malformed events
 	}
 	intent.Actor = ev.PubKey.Hex()
+
+	// Reject plaintext intents for sensitive domains (§1.7).
+	if p.giftWrapIngress != nil && p.giftWrapIngress.RejectPlaintextSensitiveIntent(ctx, intent) {
+		return fmt.Errorf("plaintext intent rejected for sensitive domain %q", intent.Domain)
+	}
+
 	return p.process(ctx, intent)
 }
 

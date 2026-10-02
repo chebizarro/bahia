@@ -42,6 +42,7 @@ type EncryptedDomainHandlers struct {
 	invites               repository.OrgInviteRepository
 	rbac                  *auth.RBAC
 	intentProcessor       *IntentProcessor
+	orgPublisher          OrgCanonicalPublisher
 	bootstrapOwnerPubkeys map[string]struct{}
 	logger                *zap.Logger
 }
@@ -53,6 +54,7 @@ type EncryptedDomainHandlersConfig struct {
 	Invites               repository.OrgInviteRepository
 	RBAC                  *auth.RBAC
 	IntentProcessor       *IntentProcessor
+	OrgPublisher          OrgCanonicalPublisher
 	BootstrapOwnerPubkeys []string
 	Logger                *zap.Logger
 }
@@ -76,6 +78,7 @@ func NewEncryptedDomainHandlers(cfg EncryptedDomainHandlersConfig) *EncryptedDom
 		invites:               cfg.Invites,
 		rbac:                  cfg.RBAC,
 		intentProcessor:       cfg.IntentProcessor,
+		orgPublisher:          cfg.OrgPublisher,
 		bootstrapOwnerPubkeys: allowlist,
 		logger:                logger.Named("encrypted-domain-handlers"),
 	}
@@ -259,6 +262,15 @@ func (h *EncryptedDomainHandlers) CreateOrg(ctx context.Context, request Encrypt
 		if err := h.members.Add(ctx, member); err != nil {
 			h.logger.Error("failed to add encrypted request org creator as owner", zap.Error(err))
 		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishOrg(ctx, org, false); pubErr != nil {
+				h.logger.Warn("legacy org create publish failed", zap.Error(pubErr))
+			}
+			if pubErr := h.orgPublisher.PublishMember(ctx, member, false); pubErr != nil {
+				h.logger.Warn("legacy member create publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return org, nil
 }
@@ -427,6 +439,12 @@ func (h *EncryptedDomainHandlers) CreateInvite(ctx context.Context, request Encr
 		if err := h.invites.Create(ctx, invite); err != nil {
 			return nil, fmt.Errorf("failed to create invite: %w", err)
 		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishInvite(ctx, invite, false); pubErr != nil {
+				h.logger.Warn("legacy invite create publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return invite, nil
 }
@@ -462,11 +480,18 @@ func (h *EncryptedDomainHandlers) RevokeInvite(ctx context.Context, request Encr
 			return nil, fmt.Errorf("failed to revoke invite: %w", err)
 		}
 	} else {
+		invite, _ := h.invites.GetByID(ctx, orgID, inviteID)
 		if err := h.invites.Delete(ctx, inviteID); err != nil {
 			if err == repository.ErrNotFound {
 				return nil, fmt.Errorf("invite not found")
 			}
 			return nil, fmt.Errorf("failed to revoke invite: %w", err)
+		}
+		// Legacy path: publish encrypted tombstone (review rule 5).
+		if h.orgPublisher != nil && invite != nil {
+			if pubErr := h.orgPublisher.PublishInvite(ctx, invite, true); pubErr != nil {
+				h.logger.Warn("legacy invite revoke publish failed", zap.Error(pubErr))
+			}
 		}
 	}
 	return map[string]string{"message": "invite revoked"}, nil
@@ -524,6 +549,15 @@ func (h *EncryptedDomainHandlers) UpdateMemberRole(ctx context.Context, request 
 	} else {
 		if err := h.members.UpdateRole(ctx, orgID, targetPubkey, payload.Role); err != nil {
 			return nil, fmt.Errorf("failed to update role: %w", err)
+		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			updated, _ := h.members.GetMember(ctx, orgID, targetPubkey)
+			if updated != nil {
+				if pubErr := h.orgPublisher.PublishMember(ctx, updated, false); pubErr != nil {
+					h.logger.Warn("legacy member role update publish failed", zap.Error(pubErr))
+				}
+			}
 		}
 	}
 	return map[string]string{"message": "role updated"}, nil
@@ -584,6 +618,12 @@ func (h *EncryptedDomainHandlers) RemoveMember(ctx context.Context, request Encr
 	} else {
 		if err := h.members.Remove(ctx, orgID, targetPubkey); err != nil {
 			return nil, fmt.Errorf("failed to remove member: %w", err)
+		}
+		// Legacy path: publish encrypted tombstone (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishMember(ctx, targetMember, true); pubErr != nil {
+				h.logger.Warn("legacy member remove publish failed", zap.Error(pubErr))
+			}
 		}
 	}
 	return map[string]string{"message": "member removed"}, nil

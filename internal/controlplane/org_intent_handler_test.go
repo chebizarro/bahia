@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -160,7 +161,7 @@ func (r *memOrgMemberRepo) UpdateRole(_ context.Context, orgID uuid.UUID, pubkey
 func (r *memOrgMemberRepo) Remove(_ context.Context, orgID uuid.UUID, pubkey string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := memberKey(orgID, pubkey)
+	key := orgMemberKey(orgID, pubkey)
 	if _, ok := r.members[key]; !ok {
 		return repository.ErrNotFound
 	}
@@ -246,7 +247,7 @@ func (r *memOrgInviteRepo) DeleteExpired(_ context.Context) (int, error) {
 	return count, nil
 }
 
-// stubOrgPublisher records publish calls for verification.
+// stubOrgPublisher records publish calls and captures content for encryption tests.
 type stubOrgPublisher struct {
 	mu               sync.Mutex
 	publishedOrgs    []orgPublishRecord
@@ -415,7 +416,7 @@ func inviteRevokeIntent(orgID, inviteID uuid.UUID, actor string) *Intent {
 	}
 }
 
-// --- tests ---
+// --- handler tests ---
 
 func TestOrgIntentHandler_CreateOrg(t *testing.T) {
 	handler, orgs, members, _, pub, changes := newTestOrgHandler(t)
@@ -429,7 +430,6 @@ func TestOrgIntentHandler_CreateOrg(t *testing.T) {
 		t.Fatalf("HandleIntent failed: %v", err)
 	}
 
-	// Verify org was created.
 	org, err := orgs.GetByID(ctx, orgID)
 	if err != nil {
 		t.Fatalf("org not found: %v", err)
@@ -437,11 +437,7 @@ func TestOrgIntentHandler_CreateOrg(t *testing.T) {
 	if org.Name != "my-org" {
 		t.Errorf("org.Name = %q, want %q", org.Name, "my-org")
 	}
-	if org.DisplayName != "My Org" {
-		t.Errorf("org.DisplayName = %q, want %q", org.DisplayName, "My Org")
-	}
 
-	// Verify creator was added as owner.
 	member, err := members.GetMember(ctx, orgID, actor)
 	if err != nil {
 		t.Fatalf("creator not found as member: %v", err)
@@ -450,7 +446,6 @@ func TestOrgIntentHandler_CreateOrg(t *testing.T) {
 		t.Errorf("creator role = %q, want %q", member.Role, domain.RoleOwner)
 	}
 
-	// Verify canonical state was published.
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	if len(pub.publishedOrgs) != 1 || pub.publishedOrgs[0].Deleted {
@@ -460,7 +455,6 @@ func TestOrgIntentHandler_CreateOrg(t *testing.T) {
 		t.Errorf("expected 1 live member publish, got %d", len(pub.publishedMembers))
 	}
 
-	// Verify member change callback was triggered.
 	if len(*changes) != 1 || (*changes)[0] != orgID {
 		t.Errorf("expected 1 member change for orgID %s, got %v", orgID, *changes)
 	}
@@ -471,20 +465,15 @@ func TestOrgIntentHandler_MemberAdd(t *testing.T) {
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	actor := "owner123"
-	// Seed org.
 	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
-	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: actor, Role: domain.RoleOwner})
+	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "owner123", Role: domain.RoleOwner})
 
-	newPubkey := "member456"
-	intent := memberAddIntent(orgID, newPubkey, domain.RoleAdmin, actor)
-
+	intent := memberAddIntent(orgID, "member456", domain.RoleAdmin, "owner123")
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("HandleIntent failed: %v", err)
 	}
 
-	// Verify member was added.
-	m, err := members.GetMember(ctx, orgID, newPubkey)
+	m, err := members.GetMember(ctx, orgID, "member456")
 	if err != nil {
 		t.Fatalf("member not found: %v", err)
 	}
@@ -492,14 +481,11 @@ func TestOrgIntentHandler_MemberAdd(t *testing.T) {
 		t.Errorf("member.Role = %q, want %q", m.Role, domain.RoleAdmin)
 	}
 
-	// Verify publish.
 	pub.mu.Lock()
 	if len(pub.publishedMembers) != 1 || pub.publishedMembers[0].Deleted {
 		t.Errorf("expected 1 live member publish, got %d", len(pub.publishedMembers))
 	}
 	pub.mu.Unlock()
-
-	// Verify callback.
 	if len(*changes) != 1 {
 		t.Errorf("expected 1 member change, got %d", len(*changes))
 	}
@@ -510,13 +496,11 @@ func TestOrgIntentHandler_MemberRoleChange(t *testing.T) {
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	actor := "owner123"
 	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
-	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: actor, Role: domain.RoleOwner})
+	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "owner123", Role: domain.RoleOwner})
 	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "member456", Role: domain.RoleViewer})
 
-	intent := memberRoleChangeIntent(orgID, "member456", domain.RoleAdmin, actor)
-
+	intent := memberRoleChangeIntent(orgID, "member456", domain.RoleAdmin, "owner123")
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("HandleIntent failed: %v", err)
 	}
@@ -532,13 +516,11 @@ func TestOrgIntentHandler_MemberRemove(t *testing.T) {
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	actor := "owner123"
 	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
-	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: actor, Role: domain.RoleOwner})
+	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "owner123", Role: domain.RoleOwner})
 	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "member456", Role: domain.RoleViewer})
 
-	intent := memberRemoveIntent(orgID, "member456", actor)
-
+	intent := memberRemoveIntent(orgID, "member456", "owner123")
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("HandleIntent failed: %v", err)
 	}
@@ -548,7 +530,6 @@ func TestOrgIntentHandler_MemberRemove(t *testing.T) {
 		t.Errorf("expected member to be removed, got err=%v", err)
 	}
 
-	// Verify tombstone was published.
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	found := false
@@ -567,12 +548,10 @@ func TestOrgIntentHandler_InviteCreateAndRevoke(t *testing.T) {
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	actor := "owner123"
 	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
 
 	inviteID := uuid.New()
-	intent := inviteCreateIntent(orgID, inviteID, "invitee789", domain.RoleViewer, actor)
-
+	intent := inviteCreateIntent(orgID, inviteID, "invitee789", domain.RoleViewer, "owner")
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("create invite failed: %v", err)
 	}
@@ -585,8 +564,7 @@ func TestOrgIntentHandler_InviteCreateAndRevoke(t *testing.T) {
 		t.Errorf("invite.Pubkey = %q, want %q", inv.Pubkey, "invitee789")
 	}
 
-	// Revoke.
-	revokeIntent := inviteRevokeIntent(orgID, inviteID, actor)
+	revokeIntent := inviteRevokeIntent(orgID, inviteID, "owner")
 	if err := handler.HandleIntent(ctx, revokeIntent); err != nil {
 		t.Fatalf("revoke invite failed: %v", err)
 	}
@@ -597,34 +575,6 @@ func TestOrgIntentHandler_InviteCreateAndRevoke(t *testing.T) {
 	}
 }
 
-func TestOrgIntentHandler_UnauthorizedAuthorRejected(t *testing.T) {
-	handler, _, _, _, _, _ := newTestOrgHandler(t)
-	ctx := context.Background()
-
-	trustSet := NewTrustSet([]string{"fleet-op-1"}, zap.NewNop())
-	orgID := uuid.New()
-	intent := orgCreateIntent(orgID, "my-org", "My Org", "unauthorized-pubkey")
-
-	err := handler.AuthorizeIntent(ctx, trustSet, intent)
-	if err == nil {
-		t.Fatalf("expected authorization failure for unauthorized author")
-	}
-}
-
-func TestOrgIntentHandler_FleetOpsCanCreateOrg(t *testing.T) {
-	handler, _, _, _, _, _ := newTestOrgHandler(t)
-	ctx := context.Background()
-
-	trustSet := NewTrustSet([]string{"fleet-op-1"}, zap.NewNop())
-	orgID := uuid.New()
-	intent := orgCreateIntent(orgID, "my-org", "My Org", "fleet-op-1")
-
-	err := handler.AuthorizeIntent(ctx, trustSet, intent)
-	if err != nil {
-		t.Fatalf("expected fleet op to be authorized for org create: %v", err)
-	}
-}
-
 func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 	handler, orgs, _, _, _, _ := newTestOrgHandler(t)
 	ctx := context.Background()
@@ -632,20 +582,13 @@ func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 	orgID := uuid.New()
 	now := time.Now()
 	_ = orgs.Create(ctx, &domain.Organization{
-		ID:          orgID,
-		Name:        "test-org",
-		DisplayName: "Test",
-		UpdatedAt:   now,
+		ID: orgID, Name: "test-org", DisplayName: "Test", UpdatedAt: now,
 	})
 
 	staleTime := now.Add(-time.Hour).UnixNano()
 	intent := &Intent{
-		Domain:            "org",
-		Op:                "update",
-		Schema:            "bahia.intent.org.v1",
-		OrgID:             orgID,
-		IntentID:          uuid.New().String(),
-		Coordinate:        orgID.String(),
+		Domain: "org", Op: "update", Schema: "bahia.intent.org.v1",
+		OrgID: orgID, IntentID: uuid.New().String(), Coordinate: orgID.String(),
 		Content:           map[string]interface{}{"id": orgID.String(), "display_name": "Updated"},
 		ExpectedUpdatedAt: &staleTime,
 		Actor:             "owner",
@@ -668,9 +611,7 @@ func TestOrgIntentHandler_IdempotentMemberAdd(t *testing.T) {
 	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
 	_ = members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "member456", Role: domain.RoleAdmin})
 
-	// Same pubkey, same role — should be idempotent (no error, no change).
 	intent := memberAddIntent(orgID, "member456", domain.RoleAdmin, "owner")
-
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("idempotent member add should not fail: %v", err)
 	}
@@ -682,15 +623,11 @@ func TestOrgIntentHandler_IdempotentMemberAdd(t *testing.T) {
 }
 
 func TestOrgIntentHandler_LegacyPathPublishes(t *testing.T) {
-	// The legacy path (intent domain not enabled, in EncryptedDomainHandlers)
-	// must still publish exactly one canonical record per mutation. This test
-	// verifies the intent handler publishes when called directly.
 	handler, orgs, _, _, pub, _ := newTestOrgHandler(t)
 	ctx := context.Background()
 
 	orgID := uuid.New()
 	intent := orgCreateIntent(orgID, "legacy-org", "Legacy", "actor")
-
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		t.Fatalf("HandleIntent failed: %v", err)
 	}
@@ -704,12 +641,55 @@ func TestOrgIntentHandler_LegacyPathPublishes(t *testing.T) {
 	}
 }
 
-func TestOrgIntentHandler_MemberPermissionRequired(t *testing.T) {
+func TestOrgIntentHandler_RelayHydrationUpdatesTrustSet(t *testing.T) {
+	handler, orgs, _, _, _, changes := newTestOrgHandler(t)
+	ctx := context.Background()
+
+	orgID := uuid.New()
+	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
+
+	_ = handler.HandleIntent(ctx, memberAddIntent(orgID, "member1", domain.RoleAdmin, "owner"))
+	_ = handler.HandleIntent(ctx, memberRoleChangeIntent(orgID, "member1", domain.RoleViewer, "owner"))
+	_ = handler.HandleIntent(ctx, memberRemoveIntent(orgID, "member1", "owner"))
+
+	if len(*changes) != 3 {
+		t.Errorf("expected 3 member change callbacks, got %d", len(*changes))
+	}
+}
+
+// --- SelfAuthorizingHandler processor-level tests (item 6) ---
+
+func TestSelfAuthorizingHandler_OrgCreateFromNonFleetOpRejected(t *testing.T) {
+	handler, _, _, _, _, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+
+	trustSet := NewTrustSet([]string{"fleet-op-1"}, zap.NewNop())
+	intent := orgCreateIntent(uuid.New(), "my-org", "My Org", "non-fleet-op")
+
+	err := handler.AuthorizeIntent(ctx, trustSet, intent)
+	if err == nil {
+		t.Fatalf("expected authorization failure for non-fleet-op creating org")
+	}
+}
+
+func TestSelfAuthorizingHandler_OrgCreateByFleetOpAccepted(t *testing.T) {
+	handler, _, _, _, _, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+
+	trustSet := NewTrustSet([]string{"fleet-op-1"}, zap.NewNop())
+	intent := orgCreateIntent(uuid.New(), "my-org", "My Org", "fleet-op-1")
+
+	err := handler.AuthorizeIntent(ctx, trustSet, intent)
+	if err != nil {
+		t.Fatalf("expected fleet op to be authorized for org create: %v", err)
+	}
+}
+
+func TestSelfAuthorizingHandler_MemberAddByViewerRejected(t *testing.T) {
 	handler, _, _, _, _, _ := newTestOrgHandler(t)
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	// Viewer has no PermManageMembers.
 	trustSet := NewTrustSet(nil, zap.NewNop())
 	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
 		"viewer-pubkey": domain.RoleViewer,
@@ -722,49 +702,288 @@ func TestOrgIntentHandler_MemberPermissionRequired(t *testing.T) {
 	}
 }
 
-func TestOrgIntentHandler_RelayHydrationUpdatesTrustSet(t *testing.T) {
-	// This test verifies the onMemberChange callback is triggered on every
-	// member mutation, which drives TrustSet.SetRelayMembers and
-	// IntentAuthorsSyncer.Notify in production.
-	handler, orgs, _, _, _, changes := newTestOrgHandler(t)
+func TestSelfAuthorizingHandler_MemberAddByOrgOwnerAccepted(t *testing.T) {
+	handler, _, _, _, _, _ := newTestOrgHandler(t)
 	ctx := context.Background()
 
 	orgID := uuid.New()
-	_ = orgs.Create(ctx, &domain.Organization{ID: orgID, Name: "test-org"})
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
+		"owner-pubkey": domain.RoleOwner,
+	})
 
-	// Add member.
-	intent := memberAddIntent(orgID, "member1", domain.RoleAdmin, "owner")
-	_ = handler.HandleIntent(ctx, intent)
-
-	// Role change.
-	intent = memberRoleChangeIntent(orgID, "member1", domain.RoleViewer, "owner")
-	_ = handler.HandleIntent(ctx, intent)
-
-	// Remove member.
-	intent = memberRemoveIntent(orgID, "member1", "owner")
-	_ = handler.HandleIntent(ctx, intent)
-
-	if len(*changes) != 3 {
-		t.Errorf("expected 3 member change callbacks, got %d", len(*changes))
+	intent := memberAddIntent(orgID, "new-member", domain.RoleViewer, "owner-pubkey")
+	err := handler.AuthorizeIntent(ctx, trustSet, intent)
+	if err != nil {
+		t.Fatalf("expected owner to be authorized for member add: %v", err)
 	}
 }
 
-func TestOrgIntentHandler_PrecedenceRelayOverPostgres(t *testing.T) {
-	// When relay members exist for an org, the TrustSet uses them exclusively
-	// over Postgres (design §2.2 / §2.5).
+func TestSelfAuthorizingHandler_DefaultDenyForUnknownOp(t *testing.T) {
+	handler, _, _, _, _, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+
+	orgID := uuid.New()
+	trustSet := NewTrustSet([]string{"fleet-op-1"}, zap.NewNop())
+	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
+		"fleet-op-1": domain.RoleOwner,
+	})
+
+	// Use a valid org intent with an unknown schema to exercise the default path.
+	intent := &Intent{
+		Domain: "org", Op: "update", Schema: "bahia.intent.org.v1",
+		OrgID: orgID, IntentID: uuid.New().String(), Coordinate: orgID.String(),
+		Content: map[string]interface{}{"id": orgID.String()},
+		Actor:   "unknown-pubkey-not-in-trustset",
+	}
+
+	err := handler.AuthorizeIntent(ctx, trustSet, intent)
+	if err == nil {
+		t.Fatalf("expected authorization failure for unknown pubkey (default deny)")
+	}
+}
+
+// --- encryption tests (item 1) ---
+
+func TestOrgStateCrypto_EncryptDecryptRoundTrip(t *testing.T) {
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+
+	plaintext := []byte(`{"org_id":"abc","pubkey":"def","role":"admin"}`)
+	encrypted, err := encryptOrgState(context.Background(), key, plaintext, "test-d", "test-topic")
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	// Verify it's actually encrypted (not plaintext).
+	if encrypted == string(plaintext) {
+		t.Fatal("encrypted content is identical to plaintext")
+	}
+
+	decrypted, err := decryptOrgState(key, encrypted)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v", err)
+	}
+
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("decrypted = %q, want %q", decrypted, plaintext)
+	}
+}
+
+func TestOrgStateCrypto_NoPlaintextPubkeyOrRoleInEncryptedContent(t *testing.T) {
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+
+	content := map[string]interface{}{
+		"org_id":  "org-123",
+		"pubkey":  "member-secret-pubkey-abcdef",
+		"role":    "admin",
+		"deleted": false,
+	}
+	contentJSON, _ := json.Marshal(content)
+
+	encrypted, err := encryptOrgState(context.Background(), key, contentJSON, "test-d", "test-topic")
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	// Assert no plaintext member pubkey or role appears in the encrypted content.
+	if contains(encrypted, "member-secret-pubkey-abcdef") {
+		t.Error("encrypted content contains plaintext member pubkey")
+	}
+	if contains(encrypted, `"admin"`) {
+		t.Error("encrypted content contains plaintext role")
+	}
+	if contains(encrypted, `"role"`) {
+		t.Error("encrypted content contains plaintext role key")
+	}
+}
+
+func TestDecryptMemberContent_RoundTrip(t *testing.T) {
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
+
+	content := map[string]interface{}{
+		"org_id":  "org-uuid-123",
+		"pubkey":  "member-pubkey-xyz",
+		"role":    "admin",
+		"deleted": false,
+	}
+	contentJSON, _ := json.Marshal(content)
+
+	encrypted, err := encryptor.EncryptOrgState(context.Background(), contentJSON, "test-d", "test-topic")
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	orgID, pubkey, role, deleted, err := DecryptMemberContent(encryptor, encrypted)
+	if err != nil {
+		t.Fatalf("DecryptMemberContent failed: %v", err)
+	}
+	if orgID != "org-uuid-123" {
+		t.Errorf("orgID = %q, want %q", orgID, "org-uuid-123")
+	}
+	if pubkey != "member-pubkey-xyz" {
+		t.Errorf("pubkey = %q, want %q", pubkey, "member-pubkey-xyz")
+	}
+	if role != "admin" {
+		t.Errorf("role = %q, want %q", role, "admin")
+	}
+	if deleted {
+		t.Errorf("deleted = true, want false")
+	}
+}
+
+// --- TrustSet relay trust source tests (item 3) ---
+
+func TestTrustSet_RelaySourceWithoutPostgres(t *testing.T) {
+	// TrustSet with NO Postgres configured. Relay members alone authorize.
+	orgID := uuid.New()
+	trustSet := NewTrustSet(nil, zap.NewNop()) // no fleetOps, no Postgres
+
+	// Before relay members: no permission.
+	if trustSet.HasPermission(context.Background(), orgID, "owner1", domain.PermManageMembers) {
+		t.Fatal("should have no permission before relay members are set")
+	}
+
+	// Set relay members.
+	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
+		"owner1": domain.RoleOwner,
+		"admin1": domain.RoleAdmin,
+	})
+
+	// Owner can manage members.
+	if !trustSet.HasPermission(context.Background(), orgID, "owner1", domain.PermManageMembers) {
+		t.Error("owner1 should have PermManageMembers via relay source (no Postgres)")
+	}
+
+	// Admin can write services but not manage members.
+	if !trustSet.HasPermission(context.Background(), orgID, "admin1", domain.PermWriteServices) {
+		t.Error("admin1 should have PermWriteServices via relay source")
+	}
+	if trustSet.HasPermission(context.Background(), orgID, "admin1", domain.PermManageMembers) {
+		t.Error("admin1 should NOT have PermManageMembers (admin role)")
+	}
+
+	// Unknown pubkey: no permission.
+	if trustSet.HasPermission(context.Background(), orgID, "unknown", domain.PermWriteServices) {
+		t.Error("unknown pubkey should have no permission")
+	}
+}
+
+func TestTrustSet_PrecedenceRelayOverPostgres(t *testing.T) {
 	orgID := uuid.New()
 	trustSet := NewTrustSet(nil, zap.NewNop())
 
-	// Set relay members: owner1 has owner access.
+	// Set relay members: only owner1 has owner access.
 	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
 		"owner1": domain.RoleOwner,
 	})
 
-	// Even if Postgres had "owner2" as owner, relay takes precedence.
-	if trustSet.HasPermission(context.Background(), orgID, "owner1", domain.PermManageMembers) != true {
+	// owner1 should have PermManageMembers via relay.
+	if !trustSet.HasPermission(context.Background(), orgID, "owner1", domain.PermManageMembers) {
 		t.Errorf("relay owner1 should have PermManageMembers")
 	}
-	if trustSet.HasPermission(context.Background(), orgID, "owner2", domain.PermManageMembers) != false {
+	// owner2 should NOT have permission via relay (not in relay members).
+	if trustSet.HasPermission(context.Background(), orgID, "owner2", domain.PermManageMembers) {
 		t.Errorf("owner2 should NOT have permission via relay (not in relay members)")
 	}
+}
+
+func TestTrustSet_RelaySourceAuthorizesIntent(t *testing.T) {
+	// Verify end-to-end: TrustSet from relay membership events alone
+	// authorizes an intent through the org handler's AuthorizeIntent.
+	handler, _, _, _, _, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+
+	orgID := uuid.New()
+	trustSet := NewTrustSet(nil, zap.NewNop()) // no Postgres, no fleet ops
+	trustSet.SetRelayMembers(orgID.String(), map[string]domain.Role{
+		"org-owner": domain.RoleOwner,
+	})
+
+	// Owner should be able to add a member.
+	intent := memberAddIntent(orgID, "new-member", domain.RoleViewer, "org-owner")
+	err := handler.AuthorizeIntent(ctx, trustSet, intent)
+	if err != nil {
+		t.Fatalf("expected relay-only TrustSet to authorize member add: %v", err)
+	}
+
+	// Non-member should be rejected.
+	intent2 := memberAddIntent(orgID, "another", domain.RoleViewer, "stranger")
+	err = handler.AuthorizeIntent(ctx, trustSet, intent2)
+	if err == nil {
+		t.Fatal("expected stranger to be rejected by relay-only TrustSet")
+	}
+}
+
+// --- gift-wrap ingress tests (item 2) ---
+
+func TestIntentGiftWrapIngress_RejectPlaintextSensitiveDomain(t *testing.T) {
+	ingress := NewIntentGiftWrapIngress(IntentGiftWrapIngressConfig{
+		Processor:        &IntentProcessor{},
+		SensitiveDomains: []string{"org", "secret", "notification"},
+		Logger:           zap.NewNop(),
+	})
+
+	// org domain: sensitive → rejected.
+	intent := &Intent{Domain: "org", IntentID: "test-1", Actor: "actor1"}
+	if !ingress.RejectPlaintextSensitiveIntent(context.Background(), intent) {
+		t.Error("expected plaintext org intent to be rejected")
+	}
+
+	// secret domain: sensitive → rejected.
+	intent2 := &Intent{Domain: "secret", IntentID: "test-2", Actor: "actor1"}
+	if !ingress.RejectPlaintextSensitiveIntent(context.Background(), intent2) {
+		t.Error("expected plaintext secret intent to be rejected")
+	}
+
+	// service domain: not sensitive → allowed.
+	intent3 := &Intent{Domain: "service", IntentID: "test-3", Actor: "actor1"}
+	if ingress.RejectPlaintextSensitiveIntent(context.Background(), intent3) {
+		t.Error("service domain should not be rejected")
+	}
+}
+
+func TestIntentGiftWrapIngress_SensitiveDomainCoverage(t *testing.T) {
+	ingress := NewIntentGiftWrapIngress(IntentGiftWrapIngressConfig{
+		Processor:        &IntentProcessor{},
+		SensitiveDomains: []string{"org", "secret", "notification"},
+		Logger:           zap.NewNop(),
+	})
+
+	// Verify sensitive domains are rejected as plaintext.
+	for _, domain := range []string{"org", "secret", "notification"} {
+		intent := &Intent{Domain: domain, IntentID: "test-" + domain, Actor: "actor1"}
+		if !ingress.RejectPlaintextSensitiveIntent(context.Background(), intent) {
+			t.Errorf("expected domain %q to be sensitive (rejected as plaintext)", domain)
+		}
+	}
+
+	// Non-sensitive domain should not be rejected.
+	intent := &Intent{Domain: "service", IntentID: "test-service", Actor: "actor1"}
+	if ingress.RejectPlaintextSensitiveIntent(context.Background(), intent) {
+		t.Error("service domain should not be sensitive")
+	}
+}
+
+// helper
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

@@ -11,21 +11,36 @@ import (
 	"go.uber.org/zap"
 )
 
+// OrgStateEncryptor encrypts and decrypts org state content. Implemented in
+// the controlplane package by encryptOrgState/decryptOrgState using a
+// service-held symmetric key (§1.7, assistant_transcript_store pattern).
+type OrgStateEncryptor interface {
+	EncryptOrgState(ctx context.Context, plaintext []byte, dTag, topic string) (string, error)
+	DecryptOrgState(content string) ([]byte, error)
+}
+
 // OrgCanonicalPublisher publishes canonical cp-state for org, member and invite
-// entities through the shared Projector signing/outbox pipeline. It follows the
-// BackupCanonicalPublisher pattern: the cpStateFamilies table is the single
-// envelope source, and publishControlState is the single publish path.
+// entities through the shared Projector signing/outbox pipeline. Content is
+// encrypted with a service-held symmetric key so org composition and roles are
+// not exposed in plaintext on relays (§1.7).
+//
+// The outer envelope (d, domain, schema, legacy_kind, deleted, t) from
+// controlStateEnvelope is preserved so coordinates and tombstones still work.
+// No p tags are emitted (member pubkeys are confidential).
 //
 // Phase 3 Wave 5 O1.
 type OrgCanonicalPublisher struct {
 	projector *Projector
+	encryptor OrgStateEncryptor
 	logger    *zap.Logger
 }
 
 // NewOrgCanonicalPublisher creates a publisher backed by the given projector.
-func NewOrgCanonicalPublisher(projector *Projector, logger *zap.Logger) *OrgCanonicalPublisher {
+// If encryptor is nil, content is published as plaintext (testing only).
+func NewOrgCanonicalPublisher(projector *Projector, encryptor OrgStateEncryptor, logger *zap.Logger) *OrgCanonicalPublisher {
 	return &OrgCanonicalPublisher{
 		projector: projector,
+		encryptor: encryptor,
 		logger:    logger.Named("org-canonical-publisher"),
 	}
 }
@@ -36,20 +51,14 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 		"deleted": deleted,
 		"id":      org.ID.String(),
 	}
-	tags := gonostr.Tags{}
 	if !deleted {
 		content["name"] = org.Name
 		content["display_name"] = org.DisplayName
 		content["owner_pubkey"] = org.OwnerPubkey
 		putRecordTime(content, "created_at", org.CreatedAt)
 		putRecordTime(content, "updated_at", org.UpdatedAt)
-		tags = append(tags, gonostr.Tag{"name", org.Name})
 	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("marshal org content: %w", err)
-	}
-	return p.projector.publishControlState(ctx, KindOrgRegistry, org.ID.String(), deleted, tags, string(contentJSON), "org.projection", &org.ID)
+	return p.publishEncrypted(ctx, KindOrgRegistry, org.ID.String(), deleted, nil, content, "org.projection", &org.ID)
 }
 
 // PublishMember publishes a canonical org member record.
@@ -60,23 +69,15 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 		"org_id":  member.OrgID.String(),
 		"pubkey":  member.Pubkey,
 	}
-	tags := gonostr.Tags{}
 	if !deleted {
 		content["role"] = string(member.Role)
 		content["nip05"] = member.NIP05
 		putRecordTime(content, "joined_at", member.JoinedAt)
 		putRecordTime(content, "updated_at", member.UpdatedAt)
-		tags = append(tags,
-			gonostr.Tag{"p", member.Pubkey},
-			gonostr.Tag{"org", member.OrgID.String()},
-		)
 	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("marshal member content: %w", err)
-	}
+	// No p tags — member pubkeys are confidential (§1.7).
 	entityID := uuid.NewSHA1(member.OrgID, []byte(member.Pubkey))
-	return p.projector.publishControlState(ctx, KindOrgMemberRegistry, dTag, deleted, tags, string(contentJSON), "org_member.projection", &entityID)
+	return p.publishEncrypted(ctx, KindOrgMemberRegistry, dTag, deleted, nil, content, "org_member.projection", &entityID)
 }
 
 // PublishInvite publishes a canonical org invite record.
@@ -86,23 +87,44 @@ func (p *OrgCanonicalPublisher) PublishInvite(ctx context.Context, invite *domai
 		"id":      invite.ID.String(),
 		"org_id":  invite.OrgID.String(),
 	}
-	tags := gonostr.Tags{}
 	if !deleted {
 		content["pubkey"] = invite.Pubkey
 		content["role"] = string(invite.Role)
 		content["invited_by"] = invite.InvitedBy
 		putRecordTime(content, "expires_at", invite.ExpiresAt)
 		putRecordTime(content, "created_at", invite.CreatedAt)
-		tags = append(tags,
-			gonostr.Tag{"p", invite.Pubkey},
-			gonostr.Tag{"org", invite.OrgID.String()},
-		)
 	}
+	// No p tags — invitee pubkeys are confidential (§1.7).
+	return p.publishEncrypted(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID)
+}
+
+// publishEncrypted marshals content, encrypts it with the encryptor, and
+// publishes through publishControlState. The outer envelope tags are preserved.
+func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content map[string]any, entityType string, entityID *uuid.UUID) error {
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
-		return fmt.Errorf("marshal invite content: %w", err)
+		return fmt.Errorf("marshal org state content: %w", err)
 	}
-	return p.projector.publishControlState(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, tags, string(contentJSON), "org_invite.projection", &invite.ID)
+
+	// Determine topic for associated data binding.
+	topic := ""
+	if fam, ok := cpStateFamilies[legacyKind]; ok {
+		topic = fam.topic
+	}
+
+	var publishContent string
+	if p.encryptor != nil {
+		encrypted, err := p.encryptor.EncryptOrgState(ctx, contentJSON, dTag, topic)
+		if err != nil {
+			return fmt.Errorf("encrypt org state: %w", err)
+		}
+		publishContent = encrypted
+	} else {
+		// No encryptor — testing only.
+		publishContent = string(contentJSON)
+	}
+
+	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, publishContent, entityType, entityID)
 }
 
 // orgMemberDTag returns the d-tag coordinate for an org member record:

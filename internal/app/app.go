@@ -99,11 +99,12 @@ type App struct {
 	reloadMu                  sync.Mutex
 
 	// Phase 3 intent framework (F1).
-	TrustSet            *controlplane.TrustSet
-	IntentProcessor     *controlplane.IntentProcessor
-	IntentReadiness     *controlplane.ReadinessTracker
-	IntentSubscriber    *controlplane.IntentSubscriber
-	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
+	TrustSet                *controlplane.TrustSet
+	IntentProcessor         *controlplane.IntentProcessor
+	IntentReadiness         *controlplane.ReadinessTracker
+	IntentSubscriber        *controlplane.IntentSubscriber
+	IntentAuthorsSyncer     *controlplane.IntentAuthorsSyncer
+	RelayMemberEventHandler *controlplane.RelayMemberEventHandler
 }
 
 var (
@@ -1376,11 +1377,31 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("package intent handler registered")
 	}
 
+	// Phase 3 O1: derive org state encryption key from daemon private key (§1.7).
+	// Follows the assistant transcript key derivation pattern.
+	var orgStateEncryptor *controlplane.OrgStateEncryptorImpl
+	if cfg.Nostr.PrivateKey != "" {
+		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
+		orgStateEncryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
+			Key: controlplane.OrgStateKey{
+				Ref:     "org-state/service-nostr-key",
+				Version: "v1",
+				Key:     orgKeySum[:],
+			},
+		})
+	}
+
+	// Phase 3 O1: create encrypted canonical publisher for org state.
+	// Used by both the intent handler and the legacy EncryptedDomainHandlers path.
+	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
+	if nostrProjector != nil {
+		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, orgStateEncryptor, logger)
+	}
+
 	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
 	// The handler processes org/member/invite intents and publishes canonical
-	// cp-state through the OrgCanonicalPublisher.
+	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
 	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
-		orgCanonicalPub := nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, logger)
 		orgHandler := controlplane.NewOrgIntentHandler(controlplane.OrgIntentHandlerConfig{
 			Orgs:      orgRepo,
 			Members:   orgMemberRepo,
@@ -1389,7 +1410,10 @@ func New(cfg *config.Config) (*App, error) {
 			Status:    intentStatus,
 			Logger:    logger,
 			OnMemberChange: func(orgID uuid.UUID) {
-				// Rebuild relay members for this org from the repository.
+				// Rebuild relay members for this org from Postgres (interim
+				// until the local store hydration replaces this). The published
+				// encrypted events are the source of truth; the callback fires
+				// after both Postgres and relay publishes complete.
 				members, err := orgMemberRepo.ListByOrg(ctx, orgID)
 				if err != nil {
 					logger.Warn("failed to list org members for TrustSet update",
@@ -1412,6 +1436,32 @@ func New(cfg *config.Config) (*App, error) {
 		intentProcessor.RegisterHandler("org", orgHandler)
 		logger.Info("org intent handler registered")
 	}
+
+	// Phase 3 O1: gift-wrapped intent ingress for sensitive domains (§1.7).
+	// Shared by O1 (org) and N1 (secret, notification). Plaintext 30900 intents
+	// for these domains are rejected with a bounded status.
+	if controlPlaneSigner != nil {
+		giftWrapIngress := controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
+			Signer:           controlPlaneSigner,
+			Processor:        intentProcessor,
+			SensitiveDomains: []string{"org", "secret", "notification"},
+			Logger:           logger,
+		})
+		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
+		logger.Info("gift-wrap intent ingress registered for sensitive domains")
+	}
+	// Phase 3 O1: relay member event handler for TrustSet hydration from
+	// encrypted membership events (§2.5 item 3). Wired for warm-start and
+	// live relay subscription. Even when Postgres is configured, the relay
+	// source has highest precedence in TrustSet resolution.
+	var relayMemberEventHandler *controlplane.RelayMemberEventHandler
+	if orgStateEncryptor != nil {
+		relayMemberEventHandler = controlplane.NewRelayMemberEventHandler(
+			orgStateEncryptor, trustSet, orgMemberRepo, logger,
+		)
+		logger.Info("relay member event handler created for TrustSet hydration")
+	}
+
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -2083,6 +2133,7 @@ func New(cfg *config.Config) (*App, error) {
 			Invites:               orgInviteRepo,
 			RBAC:                  tenantRBAC,
 			IntentProcessor:       intentProcessor,
+			OrgPublisher:          orgCanonicalPub,
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
@@ -2412,6 +2463,7 @@ func New(cfg *config.Config) (*App, error) {
 		IntentReadiness:           intentReadiness,
 		IntentSubscriber:          intentSubscriber,
 		IntentAuthorsSyncer:       intentAuthorsSyncer,
+		RelayMemberEventHandler:   relayMemberEventHandler,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),

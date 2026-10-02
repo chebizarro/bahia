@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -46,6 +47,27 @@ type OrgIntentHandler struct {
 
 	// onMemberChange is called after member add/remove/role-change.
 	onMemberChange OrgMemberChangeCallback
+}
+
+// DecryptMemberContent decrypts an encrypted membership event content string
+// and returns the role for TrustSet hydration. Used by the relay trust source
+// at startup and on live membership events.
+func DecryptMemberContent(encryptor interface{ DecryptOrgState(string) ([]byte, error) }, content string) (orgID string, pubkey string, role string, deleted bool, err error) {
+	plaintext, err := encryptor.DecryptOrgState(content)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(plaintext, &parsed); err != nil {
+		return "", "", "", false, fmt.Errorf("unmarshal decrypted member content: %w", err)
+	}
+	orgID, _ = parsed["org_id"].(string)
+	pubkey, _ = parsed["pubkey"].(string)
+	role, _ = parsed["role"].(string)
+	if d, ok := parsed["deleted"].(bool); ok {
+		deleted = d
+	}
+	return orgID, pubkey, role, deleted, nil
 }
 
 // OrgIntentHandlerConfig configures the org intent handler.
@@ -601,4 +623,78 @@ func stringField(m map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// RelayMemberEventHandler processes encrypted member canonical events from the
+// relay subscription and updates TrustSet relay members accordingly. This is the
+// production path for hydrating TrustSet from the daemon's own published
+// encrypted membership events (design §2.5 item 3).
+type RelayMemberEventHandler struct {
+	encryptor interface{ DecryptOrgState(string) ([]byte, error) }
+	trustSet  *TrustSet
+	members   repository.OrgMemberRepository
+	logger    *zap.Logger
+}
+
+// NewRelayMemberEventHandler creates a handler for encrypted relay member events.
+func NewRelayMemberEventHandler(
+	encryptor interface{ DecryptOrgState(string) ([]byte, error) },
+	trustSet *TrustSet,
+	members repository.OrgMemberRepository,
+	logger *zap.Logger,
+) *RelayMemberEventHandler {
+	return &RelayMemberEventHandler{
+		encryptor: encryptor,
+		trustSet:  trustSet,
+		members:   members,
+		logger:    logger,
+	}
+}
+
+// HandleEncryptedMemberEvent decrypts an encrypted member event content string,
+// then updates TrustSet relay members for the org. If Postgres is configured,
+// it reads the full member list from the repo; if not, it merges the single
+// event into the existing relay state.
+func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context, content string) error {
+	orgID, pubkey, role, deleted, err := DecryptMemberContent(h.encryptor, content)
+	if err != nil {
+		return fmt.Errorf("decrypt member event: %w", err)
+	}
+	if orgID == "" || pubkey == "" {
+		return fmt.Errorf("encrypted member event missing org_id or pubkey")
+	}
+
+	orgUUID, err := uuid.Parse(orgID)
+	if err != nil {
+		return fmt.Errorf("invalid org_id in member event: %w", err)
+	}
+
+	// If we have a member repo, rebuild from authoritative source.
+	if h.members != nil {
+		members, err := h.members.ListByOrg(ctx, orgUUID)
+		if err == nil {
+			roleMap := make(map[string]domain.Role, len(members))
+			for _, m := range members {
+				roleMap[m.Pubkey] = m.Role
+			}
+			h.trustSet.SetRelayMembers(orgID, roleMap)
+			return nil
+		}
+		h.logger.Debug("member repo unavailable, using single-event relay update",
+			zap.String("org_id", orgID), zap.Error(err))
+	}
+
+	// No member repo: merge single event into relay state.
+	// Read existing relay members, apply change, write back.
+	existing := h.trustSet.RelayMembersFor(orgID)
+	if existing == nil {
+		existing = make(map[string]domain.Role)
+	}
+	if deleted {
+		delete(existing, pubkey)
+	} else {
+		existing[pubkey] = domain.Role(role)
+	}
+	h.trustSet.SetRelayMembers(orgID, existing)
+	return nil
 }
