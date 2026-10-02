@@ -19,7 +19,6 @@ func TestCASControlStateProjectionFamiliesFilterRoundTrip(t *testing.T) {
 		{"deployment", KindDeploymentIntentRegistry},
 		{"build", KindBuildRegistry},
 		{"policy", KindPolicyRegistry},
-		{"package", KindPackageRepositoryRegistry},
 		{"worker", KindWorkerState},
 		{"dns", KindDNSZoneState},
 		{"ml", KindMLModelRegistry},

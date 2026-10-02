@@ -208,7 +208,7 @@ func (f *packageWireFixture) restart(t *testing.T) {
 	t.Helper()
 	responder := newResponder(t, f.publisher)
 	f.transport = NewEncryptedRequestTransport(nil, responder, []string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey), testNostrPubKeyHexFromPrivateKey(t, testOtherKey)}, zap.NewNop())
-	f.r.RegisterPackageContextVMHandlers(f.transport, f.gate)
+	f.r.RegisterPackageContextVMHandlers(f.transport, f.gate, nil)
 }
 
 func (f *packageWireFixture) send(t *testing.T, key, method string, params any, wrapped bool) ContextVMJSONRPCResponse {

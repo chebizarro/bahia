@@ -1314,6 +1314,76 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("LLM route intent handler registered")
 	}
+	// Phase 3 P1: wire package state cp-state publisher and intent handler.
+	// The publish func signs a CAS control-state event and publishes via
+	// PublishBeforeCommit, matching the policy/LLM pattern.
+	var packageStatePublisher controlplane.PackageStatePublishFunc
+	if nostrPub != nil && controlPlaneSigner != nil {
+		var packagePubMu sync.Mutex
+		packageFingerprints := make(map[string]struct{})
+		packageStatePublisher = func(ctx context.Context, ev controlplane.PackageStateEvent) error {
+			contentJSON, err := json.Marshal(ev.Content)
+			if err != nil {
+				return fmt.Errorf("marshal package state content: %w", err)
+			}
+			fp := fmt.Sprintf("%s:%s", ev.DTag, string(contentJSON))
+			packagePubMu.Lock()
+			if _, dup := packageFingerprints[fp]; dup {
+				packagePubMu.Unlock()
+				return nil // already published for this mutation
+			}
+			packageFingerprints[fp] = struct{}{}
+			packagePubMu.Unlock()
+			// Map entity to legacy kind for the envelope tag.
+			var legacyKind int
+			switch ev.Entity {
+			case "repository":
+				legacyKind = nostrAdapter.KindPackageRepositoryRegistry
+			case "artifact":
+				legacyKind = nostrAdapter.KindPackageArtifactRegistry
+			case "promotion":
+				legacyKind = nostrAdapter.KindPackagePromotionRegistry
+			default:
+				return fmt.Errorf("unknown package entity %q", ev.Entity)
+			}
+			tags := nostr.Tags{
+				{"d", ev.DTag},
+				{"domain", ev.Domain},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", legacyKind)},
+				{"t", ev.Topic},
+			}
+			for k, v := range ev.Tags {
+				tags = append(tags, nostr.Tag{k, v})
+			}
+			nostrEv := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: nostr.Now(),
+				Tags:      tags,
+				Content:   string(contentJSON),
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &nostrEv); err != nil {
+				return fmt.Errorf("sign package state event: %w", err)
+			}
+			return nostrPub.PublishBeforeCommit(ctx, nostrEv, "package_"+ev.Entity, nil)
+		}
+	}
+	// Register the package intent handler when the package domain is enabled.
+	if enabledDomains["package"] && packageRegistrySvc != nil {
+		packageAuthStore, _ := packageProjection.(repository.PackageAuthorizationStore)
+		intentProcessor.RegisterHandler("package", controlplane.NewPackageIntentHandler(
+			controlplane.PackageIntentHandlerConfig{
+				PackageService: packageRegistrySvc,
+				Projection:     packageProjection,
+				Store:          packageAuthStore,
+				Publish:        packageStatePublisher,
+				Status:         intentStatus,
+				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
+				Logger:         logger,
+			},
+		))
+		logger.Info("package intent handler registered")
+	}
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -2171,7 +2241,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
