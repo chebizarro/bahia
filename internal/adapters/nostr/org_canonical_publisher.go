@@ -19,6 +19,11 @@ type OrgStateEncryptor interface {
 	DecryptOrgState(content string) ([]byte, error)
 }
 
+// MemberPublishedCallback is called after a member canonical record is
+// published. The encrypted content string is the published event content.
+// Used by the relay trust source to hydrate TrustSet from published events.
+type MemberPublishedCallback func(ctx context.Context, encryptedContent string)
+
 // OrgCanonicalPublisher publishes canonical cp-state for org, member and invite
 // entities through the shared Projector signing/outbox pipeline. Content is
 // encrypted with a service-held symmetric key so org composition and roles are
@@ -30,9 +35,10 @@ type OrgStateEncryptor interface {
 //
 // Phase 3 Wave 5 O1.
 type OrgCanonicalPublisher struct {
-	projector *Projector
-	encryptor OrgStateEncryptor
-	logger    *zap.Logger
+	projector         *Projector
+	encryptor         OrgStateEncryptor
+	onMemberPublished MemberPublishedCallback
+	logger            *zap.Logger
 }
 
 // NewOrgCanonicalPublisher creates a publisher backed by the given projector.
@@ -43,6 +49,12 @@ func NewOrgCanonicalPublisher(projector *Projector, encryptor OrgStateEncryptor,
 		encryptor: encryptor,
 		logger:    logger.Named("org-canonical-publisher"),
 	}
+}
+
+// SetOnMemberPublished sets a callback invoked after each member canonical
+// record is published. Used to drive relay trust source hydration in real time.
+func (p *OrgCanonicalPublisher) SetOnMemberPublished(cb MemberPublishedCallback) {
+	p.onMemberPublished = cb
 }
 
 // PublishOrg publishes a canonical org registry record.
@@ -58,7 +70,8 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 		putRecordTime(content, "created_at", org.CreatedAt)
 		putRecordTime(content, "updated_at", org.UpdatedAt)
 	}
-	return p.publishEncrypted(ctx, KindOrgRegistry, org.ID.String(), deleted, nil, content, "org.projection", &org.ID)
+	_, err := p.publishEncryptedReturning(ctx, KindOrgRegistry, org.ID.String(), deleted, nil, content, "org.projection", &org.ID)
+	return err
 }
 
 // PublishMember publishes a canonical org member record.
@@ -77,7 +90,11 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 	}
 	// No p tags — member pubkeys are confidential (§1.7).
 	entityID := uuid.NewSHA1(member.OrgID, []byte(member.Pubkey))
-	return p.publishEncrypted(ctx, KindOrgMemberRegistry, dTag, deleted, nil, content, "org_member.projection", &entityID)
+	encryptedContent, err := p.publishEncryptedReturning(ctx, KindOrgMemberRegistry, dTag, deleted, nil, content, "org_member.projection", &entityID)
+	if err == nil && p.onMemberPublished != nil && encryptedContent != "" {
+		p.onMemberPublished(ctx, encryptedContent)
+	}
+	return err
 }
 
 // PublishInvite publishes a canonical org invite record.
@@ -95,15 +112,16 @@ func (p *OrgCanonicalPublisher) PublishInvite(ctx context.Context, invite *domai
 		putRecordTime(content, "created_at", invite.CreatedAt)
 	}
 	// No p tags — invitee pubkeys are confidential (§1.7).
-	return p.publishEncrypted(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID)
+	_, err := p.publishEncryptedReturning(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID)
+	return err
 }
 
-// publishEncrypted marshals content, encrypts it with the encryptor, and
-// publishes through publishControlState. The outer envelope tags are preserved.
-func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content map[string]any, entityType string, entityID *uuid.UUID) error {
+// publishEncryptedReturning marshals content, encrypts it with the encryptor,
+// publishes through publishControlState, and returns the encrypted content.
+func (p *OrgCanonicalPublisher) publishEncryptedReturning(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content map[string]any, entityType string, entityID *uuid.UUID) (string, error) {
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
-		return fmt.Errorf("marshal org state content: %w", err)
+		return "", fmt.Errorf("marshal org state content: %w", err)
 	}
 
 	// Determine topic for associated data binding.
@@ -116,7 +134,7 @@ func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind
 	if p.encryptor != nil {
 		encrypted, err := p.encryptor.EncryptOrgState(ctx, contentJSON, dTag, topic)
 		if err != nil {
-			return fmt.Errorf("encrypt org state: %w", err)
+			return "", fmt.Errorf("encrypt org state: %w", err)
 		}
 		publishContent = encrypted
 	} else {
@@ -124,7 +142,11 @@ func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind
 		publishContent = string(contentJSON)
 	}
 
-	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, publishContent, entityType, entityID)
+	err = p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, publishContent, entityType, entityID)
+	if err != nil {
+		return "", err
+	}
+	return publishContent, nil
 }
 
 // orgMemberDTag returns the d-tag coordinate for an org member record:

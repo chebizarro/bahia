@@ -625,10 +625,25 @@ func stringField(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// MemberEventHistory is a narrow interface for reading the daemon's own
+// published org-member events from history. Satisfied by nostr.Projector's
+// underlying ProjectionHistory, passed through app.go without the
+// controlplane importing the nostr adapter package.
+type MemberEventHistory interface {
+	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]repository.NostrEventRecord, error)
+}
+
 // RelayMemberEventHandler processes encrypted member canonical events from the
 // relay subscription and updates TrustSet relay members accordingly. This is the
 // production path for hydrating TrustSet from the daemon's own published
 // encrypted membership events (design §2.5 item 3).
+//
+// Two entry points:
+//   - HandleEncryptedMemberEvent: live, called after OrgCanonicalPublisher
+//     publishes a member record (both intent and legacy ContextVM paths).
+//   - HydrateTrustSetFromHistory: startup, scans the daemon's own published
+//     member events from history and populates TrustSet before the intent
+//     subscriber's author filter is computed.
 type RelayMemberEventHandler struct {
 	encryptor interface{ DecryptOrgState(string) ([]byte, error) }
 	trustSet  *TrustSet
@@ -697,4 +712,40 @@ func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context
 	}
 	h.trustSet.SetRelayMembers(orgID, existing)
 	return nil
+}
+
+// HydrateTrustSetFromHistory scans the daemon's own published encrypted member
+// events from history and populates TrustSet relay members. This is the
+// startup path (design §2.5 item 3i): TrustSet is populated before the intent
+// subscriber's author filter is computed, so relay-sourced members are included
+// from the start. Runs once at startup; the live path (HandleEncryptedMemberEvent)
+// keeps it in sync afterwards.
+func (h *RelayMemberEventHandler) HydrateTrustSetFromHistory(ctx context.Context, history MemberEventHistory) {
+	if history == nil {
+		return
+	}
+	// Query member events by topic tag. Wire kind is 30900 (CASControlState),
+	// and org member events have t=org-member.
+	records, err := history.FindByTag(ctx, "t", "org-member", nil, 10000)
+	if err != nil {
+		h.logger.Warn("TrustSet warm-start: failed to query member history", zap.Error(err))
+		return
+	}
+	if len(records) == 0 {
+		h.logger.Debug("TrustSet warm-start: no member events in history")
+		return
+	}
+
+	hydrated := 0
+	for _, rec := range records {
+		if err := h.HandleEncryptedMemberEvent(ctx, rec.Content); err != nil {
+			h.logger.Debug("TrustSet warm-start: failed to process member event",
+				zap.String("event_id", rec.ID), zap.Error(err))
+			continue
+		}
+		hydrated++
+	}
+	h.logger.Info("TrustSet warm-start: hydrated relay members from history",
+		zap.Int("records", len(records)),
+		zap.Int("hydrated", hydrated))
 }

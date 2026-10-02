@@ -142,3 +142,69 @@ func (ig *IntentGiftWrapIngress) RejectPlaintextSensitiveIntent(ctx context.Cont
 	}
 	return true
 }
+
+// ProcessUnwrappedIntent handles an inner 30900 intent that was already
+// unwrapped from a kind 1059 gift-wrap by the EncryptedRequestTransport.
+// The transport has already verified the outer routing and unwrapped the
+// NIP-59 seal; this method verifies the inner signature, parses the intent,
+// and hands it to the processor pipeline.
+//
+// This is the production entry point: the transport's event handler calls this
+// when an unwrapped inner event is kind 30900 with t=bahia-intent, instead of
+// dispatching it as a ContextVM message.
+func (ig *IntentGiftWrapIngress) ProcessUnwrappedIntent(ctx context.Context, inner *nostr.Event) error {
+	if inner == nil {
+		return fmt.Errorf("nil inner event")
+	}
+
+	// The inner event must be a 30900 intent.
+	if int(inner.Kind) != 30900 {
+		ig.logger.Debug("unwrapped inner event is not a 30900 intent",
+			zap.String("inner_id", inner.ID.Hex()),
+			zap.Int("inner_kind", int(inner.Kind)),
+		)
+		return nil
+	}
+
+	// Verify inner event signature.
+	if !inner.VerifySignature() {
+		ig.logger.Debug("unwrapped intent inner signature invalid",
+			zap.String("inner_id", inner.ID.Hex()),
+		)
+		return nil
+	}
+
+	// Parse and hand off to the processor.
+	intent, err := ParseIntent(inner)
+	if err != nil {
+		ig.logger.Debug("failed to parse unwrapped inner intent",
+			zap.String("inner_id", inner.ID.Hex()),
+			zap.Error(err),
+		)
+		return nil
+	}
+	intent.Actor = inner.PubKey.Hex()
+
+	if !ig.sensitiveDomains[intent.Domain] {
+		ig.logger.Debug("unwrapped intent for non-sensitive domain, processing normally",
+			zap.String("domain", intent.Domain),
+		)
+	}
+
+	return ig.processor.process(ctx, intent)
+}
+
+// IsIntentEvent checks whether a Nostr event is a kind 30900 event tagged with
+// t=bahia-intent. Used by the EncryptedRequestTransport to route unwrapped
+// gift-wrapped events.
+func IsIntentEvent(ev *nostr.Event) bool {
+	if ev == nil || int(ev.Kind) != 30900 {
+		return false
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "t" && tag[1] == "bahia-intent" {
+			return true
+		}
+	}
+	return false
+}

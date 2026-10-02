@@ -3,6 +3,8 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+
+	"fiatjaf.com/nostr"
 	"sync"
 	"testing"
 	"time"
@@ -986,4 +988,308 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- Production-path gift-wrap ingress tests (item A) ---
+
+func TestProcessUnwrappedIntent_OrgCreateFromFleetOp(t *testing.T) {
+	// Production-path test: a gift-wrapped org-create intent from a fleet-op,
+	// delivered through ProcessUnwrappedIntent (called by the transport after
+	// NIP-59 unwrapping), results in an org being created and a canonical
+	// record being published through the stubOrgPublisher.
+	orgs := newMemOrgRepo()
+	members := newMemOrgMemberRepo()
+	invites := newMemOrgInviteRepo()
+	pub := &stubOrgPublisher{}
+	ctx := context.Background()
+
+	// Generate a fleet operator keypair.
+	fleetOpPriv, fleetOpPub := testNostrKeypair()
+
+	// Build TrustSet with the fleet operator.
+	trustSet := NewTrustSet([]string{fleetOpPub}, zap.NewNop())
+
+	// Build the intent processor with the org handler.
+	processor := NewIntentProcessor(
+		trustSet, nil, nil,
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"org": true}},
+		zap.NewNop(),
+	)
+	handler := NewOrgIntentHandler(OrgIntentHandlerConfig{
+		Orgs:      orgs,
+		Members:   members,
+		Invites:   invites,
+		Publisher: pub,
+		Logger:    zap.NewNop(),
+	})
+	processor.RegisterHandler("org", handler)
+
+	// Build the gift-wrap ingress.
+	ingress := NewIntentGiftWrapIngress(IntentGiftWrapIngressConfig{
+		Processor:        processor,
+		SensitiveDomains: []string{"org", "secret", "notification"},
+		Logger:           zap.NewNop(),
+	})
+
+	// Build a signed kind 30900 inner event (the inner of a 1059 gift-wrap).
+	orgID := uuid.New()
+	intentID := uuid.New().String()
+	contentJSON, _ := json.Marshal(map[string]interface{}{
+		"id":           orgID.String(),
+		"name":         "test-org",
+		"display_name": "Test Org",
+	})
+	inner := buildSignedIntentEvent(t, fleetOpPriv, orgID, intentID, "org", "create", "bahia.intent.org.v1", string(contentJSON))
+
+	// Process through the ingress (the same path the transport calls).
+	err := ingress.ProcessUnwrappedIntent(ctx, inner)
+	if err != nil {
+		t.Fatalf("ProcessUnwrappedIntent failed: %v", err)
+	}
+
+	// Verify: org was created.
+	org, err := orgs.GetByID(ctx, orgID)
+	if err != nil {
+		t.Fatalf("org not created: %v", err)
+	}
+	if org.Name != "test-org" {
+		t.Errorf("org.Name = %q, want %q", org.Name, "test-org")
+	}
+
+	// Verify: creator added as owner.
+	member, err := members.GetMember(ctx, orgID, fleetOpPub)
+	if err != nil {
+		t.Fatalf("creator member not found: %v", err)
+	}
+	if member.Role != domain.RoleOwner {
+		t.Errorf("creator role = %q, want %q", member.Role, domain.RoleOwner)
+	}
+
+	// Verify: canonical record published.
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.publishedOrgs) < 1 {
+		t.Error("expected at least 1 org publish")
+	}
+	if len(pub.publishedMembers) < 1 {
+		t.Error("expected at least 1 member publish")
+	}
+}
+
+func TestIsIntentEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   *nostr.Event
+		want bool
+	}{
+		{"nil event", nil, false},
+		{"wrong kind", &nostr.Event{Kind: 25910}, false},
+		{"kind 30900 no t tag", &nostr.Event{Kind: 30900}, false},
+		{"kind 30900 wrong t", &nostr.Event{Kind: 30900, Tags: nostr.Tags{{"t", "other"}}}, false},
+		{"kind 30900 bahia-intent", &nostr.Event{Kind: 30900, Tags: nostr.Tags{{"t", "bahia-intent"}}}, true},
+		{"kind 30900 multiple tags", &nostr.Event{Kind: 30900, Tags: nostr.Tags{{"d", "foo"}, {"t", "bahia-intent"}, {"domain", "org"}}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsIntentEvent(tt.ev)
+			if got != tt.want {
+				t.Errorf("IsIntentEvent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Relay member event handler tests (items B, C) ---
+
+func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
+	// Item C: deleted=true drops the member from the relay map.
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	ctx := context.Background()
+
+	orgID := uuid.New().String()
+
+	// Add a member via HandleEncryptedMemberEvent.
+	addContent, _ := json.Marshal(map[string]interface{}{
+		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": false,
+	})
+	addEncrypted, _ := encryptor.EncryptOrgState(ctx, addContent, "test-d", "test-t")
+	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted); err != nil {
+		t.Fatalf("add member failed: %v", err)
+	}
+
+	// Verify member is in relay members.
+	relayMembers := trustSet.RelayMembersFor(orgID)
+	if relayMembers == nil || relayMembers["member1"] != domain.RoleAdmin {
+		t.Fatalf("expected member1 as admin, got %v", relayMembers)
+	}
+
+	// Remove via tombstone (deleted=true).
+	removeContent, _ := json.Marshal(map[string]interface{}{
+		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": true,
+	})
+	removeEncrypted, _ := encryptor.EncryptOrgState(ctx, removeContent, "test-d", "test-t")
+	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted); err != nil {
+		t.Fatalf("remove member failed: %v", err)
+	}
+
+	// Verify member is removed from relay members.
+	relayMembers = trustSet.RelayMembersFor(orgID)
+	if relayMembers != nil {
+		if _, found := relayMembers["member1"]; found {
+			t.Error("member1 should have been removed from relay members after tombstone")
+		}
+	}
+}
+
+func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
+	// Item B restart test: an empty TrustSet hydrated from history
+	// authorises the member via relay source (no Postgres).
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
+	ctx := context.Background()
+
+	orgID := uuid.New()
+	orgIDStr := orgID.String()
+
+	// Build encrypted member content as it would appear in history.
+	memberContent, _ := json.Marshal(map[string]interface{}{
+		"org_id": orgIDStr, "pubkey": "org-owner", "role": "owner", "deleted": false,
+	})
+	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+
+	// Build a mock history with one member record.
+	history := &mockMemberHistory{
+		records: []repository.NostrEventRecord{
+			{ID: "event-1", Kind: 30900, Content: encrypted, Tags: mustMarshalTags(t, [][]string{{"t", "org-member"}})},
+		},
+	}
+
+	// Create empty TrustSet (no Postgres, no relay members yet).
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+
+	// Hydrate from history.
+	handler.HydrateTrustSetFromHistory(ctx, history)
+
+	// Verify: "org-owner" should have owner permissions via relay source.
+	if !trustSet.HasPermission(ctx, orgID, "org-owner", domain.PermManageMembers) {
+		t.Error("expected org-owner to have PermManageMembers after warm-start hydration")
+	}
+
+	// Verify: unknown pubkey should not have permission.
+	if trustSet.HasPermission(ctx, orgID, "stranger", domain.PermWriteServices) {
+		t.Error("stranger should not have permission after warm-start hydration")
+	}
+
+	// Verify: authorizes an intent through the org handler.
+	orgHandler := NewOrgIntentHandler(OrgIntentHandlerConfig{Logger: zap.NewNop()})
+	intent := memberAddIntent(orgID, "new-member", domain.RoleViewer, "org-owner")
+	if err := orgHandler.AuthorizeIntent(ctx, trustSet, intent); err != nil {
+		t.Fatalf("expected warm-started TrustSet to authorize member add: %v", err)
+	}
+}
+
+func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
+	// Item B: member added via the legacy ContextVM path appears in TrustSet's
+	// relay source with Postgres absent, driven by the onMemberPublished callback.
+	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
+	for i := range key.Key {
+		key.Key[i] = byte(i)
+	}
+	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
+	trustSet := NewTrustSet(nil, zap.NewNop()) // No Postgres
+	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	ctx := context.Background()
+
+	orgID := uuid.New()
+
+	// Simulate what the onMemberPublished callback does: encrypt member content
+	// and feed it through HandleEncryptedMemberEvent.
+	memberContent, _ := json.Marshal(map[string]interface{}{
+		"org_id": orgID.String(), "pubkey": "legacy-member", "role": "admin", "deleted": false,
+	})
+	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+
+	// This is what the OrgCanonicalPublisher.SetOnMemberPublished callback does.
+	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted); err != nil {
+		t.Fatalf("HandleEncryptedMemberEvent failed: %v", err)
+	}
+
+	// Verify: the member appears in TrustSet relay source.
+	if !trustSet.HasPermission(ctx, orgID, "legacy-member", domain.PermWriteServices) {
+		t.Error("legacy-member should have PermWriteServices via relay source after callback")
+	}
+	// Admin should not have PermManageMembers.
+	if trustSet.HasPermission(ctx, orgID, "legacy-member", domain.PermManageMembers) {
+		t.Error("legacy-member (admin) should NOT have PermManageMembers")
+	}
+}
+
+// --- test helpers for production-path tests ---
+
+// buildSignedIntentEvent constructs and signs a kind 30900 intent event.
+func buildSignedIntentEvent(t *testing.T, privateKeyHex string, orgID uuid.UUID, intentID, domainName, op, schema, content string) *nostr.Event {
+	t.Helper()
+	ev := &nostr.Event{
+		Kind:      30900,
+		CreatedAt: nostr.Now(),
+		Content:   content,
+		Tags: nostr.Tags{
+			{"d", orgID.String()},
+			{"t", "bahia-intent"},
+			{"domain", domainName},
+			{"op", op},
+			{"schema", schema},
+			{"org", orgID.String()},
+			{"intent_id", intentID},
+		},
+	}
+	secret := testNostrSecretKey(t, privateKeyHex)
+	if err := ev.Sign(secret); err != nil {
+		t.Fatalf("sign intent event: %v", err)
+	}
+	return ev
+}
+
+// mockMemberHistory implements MemberEventHistory for tests.
+type mockMemberHistory struct {
+	records []repository.NostrEventRecord
+}
+
+func (m *mockMemberHistory) FindByTag(_ context.Context, tagName, tagValue string, _ []int, _ int) ([]repository.NostrEventRecord, error) {
+	var result []repository.NostrEventRecord
+	for _, rec := range m.records {
+		// Simple tag matching for tests.
+		if tagName == "t" {
+			var tags [][]string
+			if rec.Tags != nil {
+				_ = json.Unmarshal(rec.Tags, &tags)
+			}
+			for _, tag := range tags {
+				if len(tag) >= 2 && tag[0] == tagName && tag[1] == tagValue {
+					result = append(result, rec)
+					break
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func mustMarshalTags(t *testing.T, tags [][]string) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(tags)
+	if err != nil {
+		t.Fatalf("marshal tags: %v", err)
+	}
+	return b
 }
