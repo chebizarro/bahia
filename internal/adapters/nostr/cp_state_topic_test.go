@@ -63,6 +63,9 @@ var cpStateTopicsByFamily = map[int]string{
 	KindSecretRegistry:                  kinds.CPStateTopicSecretRegistry,
 	KindNotificationChannelRegistry:     kinds.CPStateTopicNotificationChannelRegistry,
 	KindOrgKeyEnvelope:                  kinds.CPStateTopicOrgKeyEnvelope,
+	KindPaymentRecord:                   kinds.CPStateTopicPaymentRecord,
+	KindSecurityFindingRecord:           kinds.CPStateTopicSecurityFinding,
+	KindSecurityScheduleRecord:          kinds.CPStateTopicSecuritySchedule,
 }
 
 func topicValues(tags gonostr.Tags) []string {
