@@ -44,11 +44,6 @@ type ProjectionSource interface {
 	ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error)
 }
 
-type PolicyProjectionSource interface {
-	ListPolicies(ctx context.Context, enabledOnly bool) ([]domain.DeploymentPolicy, error)
-	GetPolicy(ctx context.Context, id uuid.UUID) (*domain.DeploymentPolicy, error)
-}
-
 // LLMProjectionSource is the authoritative LLM state reader used by the projector.
 // service.LLMRegistryService satisfies this interface.
 type LLMProjectionSource interface {
@@ -186,7 +181,6 @@ type Projector struct {
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
 	workerReadModelSource WorkerReadModelProjectionSource
-	policySource          PolicyProjectionSource
 	backupSource          BackupProjectionSource
 	dnsSource             DNSProjectionSource
 	dnsZoneSource         DNSZoneProjectionSource
@@ -254,9 +248,6 @@ func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource)
 	return func(p *Projector) { p.workerReadModelSource = source }
 }
 
-func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.policySource = source }
-}
 
 func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.backupSource = source }
@@ -476,7 +467,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshotsFromSource(ctx, snapshotSource, services, envs)
-	policiesPublished := p.publishPolicySnapshots(ctx)
+	policiesPublished := 0 // Phase 3: policy state is published directly by PolicyIntentHandler
 	llmRoutes := 0
 	llmStates := 0
 	if p.llmSource != nil {
@@ -939,25 +930,6 @@ func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, s
 	return buildsPublished, artifactsPublished, intentsPublished, runsPublished
 }
 
-func (p *Projector) publishPolicySnapshots(ctx context.Context) int {
-	if p.policySource == nil {
-		return 0
-	}
-	policies, err := p.policySource.ListPolicies(ctx, false)
-	if err != nil {
-		p.logger.Warn("list policies for projection failed", zap.Error(err))
-		return 0
-	}
-	published := 0
-	for i := range policies {
-		if err := p.publishPolicyRegistry(ctx, &policies[i], false); err != nil {
-			p.logger.Warn("publish policy projection failed", zap.String("policy_id", policies[i].ID.String()), zap.Error(err))
-		} else {
-			published++
-		}
-	}
-	return published
-}
 
 func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, versionsPublished, endpointsPublished, statesPublished, provenancePublished, capabilitiesPublished int) {
 	if p.mlSource != nil {
@@ -2799,26 +2771,6 @@ func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domai
 		}
 	}
 	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), tags, content, "deployment_run.projection", &run.ID)
-}
-
-func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
-	content := map[string]any{"deleted": deleted, "id": policy.ID.String(), "updated_at": formatTime(policy.UpdatedAt)}
-	tags := gonostr.Tags{{"policy", policy.ID.String()}}
-	if !deleted {
-		content["name"] = policy.Name
-		if policy.EnvironmentID != nil {
-			content["environment_id"] = policy.EnvironmentID.String()
-			tags = append(tags, gonostr.Tag{"environment", policy.EnvironmentID.String()})
-		}
-		content["rules"] = policy.Rules
-		content["rule_count"] = len(policy.Rules)
-		content["enforcement"] = string(policy.Enforcement)
-		content["enabled"] = policy.Enabled
-		content["created_at"] = formatTime(policy.CreatedAt)
-		tags = append(tags, gonostr.Tag{"name", policy.Name}, gonostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, gonostr.Tag{"enforcement", string(policy.Enforcement)})
-	}
-	contentJSON, _ := json.Marshal(content)
-	return p.publishControlState(ctx, KindPolicyRegistry, policy.ID.String(), deleted, tags, string(contentJSON), "policy.projection", &policy.ID)
 }
 
 // publishServiceRegistry and publishEnvironmentRegistry publish the records

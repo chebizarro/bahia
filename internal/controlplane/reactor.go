@@ -177,6 +177,7 @@ type Reactor struct {
 	toolResponder                 *ToolResponder
 	toolCoordinator               toolApprovalProcessor
 	policyService                 *service.PolicyService
+	intentProcessor               *IntentProcessor
 	adoption                      AdoptionOperatorService
 	runtimeLifecycle              RuntimeLifecycleOperatorService
 	packageService                *service.PackageRegistryService
@@ -323,6 +324,11 @@ func WithToolProvisioningCoordinator(coordinator *service.ToolProvisioningCoordi
 
 func WithPolicyService(policies *service.PolicyService) ReactorOption {
 	return func(r *Reactor) { r.policyService = policies }
+}
+
+// WithIntentProcessor enables Phase 3 dual dispatch for policy mutations.
+func WithIntentProcessor(ip *IntentProcessor) ReactorOption {
+	return func(r *Reactor) { r.intentProcessor = ip }
 }
 
 // WithAdoptionService enables signer-first adoption scan/import request handling.

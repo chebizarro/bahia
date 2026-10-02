@@ -211,29 +211,28 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// TestWarmStartUnmigratedPolicyStillGetsLegacySnapshot verifies that a domain
-// family with a legacy RepublishSnapshot leg (policy) is still published by
-// the legacy path when it is NOT listed in intent_domains. Services and
-// environments no longer have legacy legs (F2/F3 deleted them).
-func TestWarmStartUnmigratedPolicyStillGetsLegacySnapshot(t *testing.T) {
+// TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot verifies that a domain
+// family with a legacy RepublishSnapshot leg (llm) is still published by
+// the legacy path when it is NOT listed in intent_domains. Services,
+// environments, and policies are migrated; LLM routes are not yet.
+func TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
-	policyID := uuid.New()
+	routeID := uuid.New()
 	source := newFakeProjectionSource()
-	source.policies[policyID] = domain.DeploymentPolicy{
-		ID: policyID, Name: "test-policy", Enabled: true,
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	source.llmRoutes[routeID] = domain.LLMRoute{
+		ID:   routeID,
+		Name: "test-llm-route",
 	}
 
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
-	// Service and environment are migrated; policy is NOT.
+	// Service, environment, and policy are migrated; LLM is NOT.
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithPolicyProjectionSource(source),
-		WithIntentDomains([]string{"service", "environment"}),
+		WithLLMProjectionSource(source),
+		WithIntentDomains([]string{"service", "environment", "policy"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
@@ -244,10 +243,10 @@ func TestWarmStartUnmigratedPolicyStillGetsLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// Policy is NOT migrated → still published via RepublishSnapshot.
-	policyCount := countByDomain(sink.events, "policy")
-	if policyCount == 0 {
-		t.Errorf("unmigrated domain: expected policy publishes from legacy snapshot, got 0")
+	// LLM is NOT migrated → still published via RepublishSnapshot.
+	llmCount := countByDomain(sink.events, "llm")
+	if llmCount == 0 {
+		t.Errorf("unmigrated domain: expected LLM route publishes from legacy snapshot, got 0")
 	}
 }
 

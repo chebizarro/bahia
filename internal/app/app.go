@@ -1028,7 +1028,6 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		nostrAdapter.WithPolicyProjectionSource(policySvc),
 		nostrAdapter.WithBackupProjectionSource(backupRegistry),
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
@@ -1122,6 +1121,51 @@ func New(cfg *config.Config) (*App, error) {
 				Logger:   logger,
 			},
 		))
+	}
+
+	// Phase 3 S3: register policy domain intent handler.
+	// Policies are fleet-scoped (authorized via FleetOperatorGate, not org RBAC).
+	// The handler uses PolicyCRUD for DB writes and a PolicyStatePublisher
+	// closure for canonical 30900 publication via PublishBeforeCommit.
+	if enabledDomains["policy"] && policySvc != nil {
+		var policyPublisher controlplane.PolicyStatePublisher
+		if nostrPub != nil && controlPlaneSigner != nil {
+			policyPublisher = func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+				recordTags, recordContent := controlplane.PolicyRegistryRecord(policy, deleted)
+				deletedStr := "false"
+				if deleted {
+					deletedStr = "true"
+				}
+				tags := nostr.Tags{
+					{"d", policy.ID.String()},
+					{"domain", "policy"},
+					{"schema", "bahia.cp-state.v1"},
+					{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindPolicyRegistry)},
+					{"deleted", deletedStr},
+					{"t", kinds.CPStateTopicPolicyRegistry},
+				}
+				tags = append(tags, recordTags...)
+				ev := nostr.Event{
+					Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+					CreatedAt: nostr.Now(),
+					Tags:      tags,
+					Content:   recordContent,
+				}
+				if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+					return fmt.Errorf("sign policy state event: %w", err)
+				}
+				return nostrPub.PublishBeforeCommit(ctx, ev, "policy", &policy.ID)
+			}
+		}
+		intentProcessor.RegisterHandler("policy", controlplane.NewPolicyIntentHandler(
+			controlplane.PolicyIntentHandlerConfig{
+				Policies: policySvc,
+				Publish:  policyPublisher,
+				Status:   intentStatus,
+				Logger:   logger,
+			},
+		))
+		logger.Info("policy intent handler registered")
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -1929,6 +1973,7 @@ func New(cfg *config.Config) (*App, error) {
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if policyRepo != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithPolicyService(policySvc))
+			reactorOpts = append(reactorOpts, controlplane.WithIntentProcessor(intentProcessor))
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))

@@ -95,7 +95,6 @@ type fakeProjectionSource struct {
 	artifacts    map[uuid.UUID]domain.Artifact
 	intents      map[uuid.UUID]domain.DeploymentIntent
 	runs         map[uuid.UUID]domain.DeploymentRun
-	policies     map[uuid.UUID]domain.DeploymentPolicy
 	llmRoutes    map[uuid.UUID]domain.LLMRoute
 	llmStates    map[string]domain.LLMRouteState
 	llmIntents   map[uuid.UUID]domain.LLMDeploymentIntent
@@ -119,7 +118,6 @@ func newFakeProjectionSource() *fakeProjectionSource {
 		artifacts:    map[uuid.UUID]domain.Artifact{},
 		intents:      map[uuid.UUID]domain.DeploymentIntent{},
 		runs:         map[uuid.UUID]domain.DeploymentRun{},
-		policies:     map[uuid.UUID]domain.DeploymentPolicy{},
 		llmRoutes:    map[uuid.UUID]domain.LLMRoute{},
 		llmStates:    map[string]domain.LLMRouteState{},
 		llmIntents:   map[uuid.UUID]domain.LLMDeploymentIntent{},
@@ -266,24 +264,6 @@ func (s *fakeProjectionSource) ListDeploymentRuns(_ context.Context, intentID uu
 		}
 	}
 	return out, nil
-}
-
-func (s *fakeProjectionSource) ListPolicies(_ context.Context, enabledOnly bool) ([]domain.DeploymentPolicy, error) {
-	out := []domain.DeploymentPolicy{}
-	for _, policy := range s.policies {
-		if !enabledOnly || policy.Enabled {
-			out = append(out, policy)
-		}
-	}
-	return out, nil
-}
-
-func (s *fakeProjectionSource) GetPolicy(_ context.Context, id uuid.UUID) (*domain.DeploymentPolicy, error) {
-	policy, ok := s.policies[id]
-	if !ok {
-		return nil, nil
-	}
-	return &policy, nil
 }
 
 func (s *fakeProjectionSource) ListLLMRoutes(_ context.Context, limit, offset int) ([]domain.LLMRoute, error) {
