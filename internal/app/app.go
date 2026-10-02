@@ -1314,6 +1314,27 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("LLM route intent handler registered")
 	}
+	// Phase 3 P1: register package intent handler, publishing through the
+	// shared cp-state path (controlStateEnvelope + publishAuthoritative).
+	if enabledDomains["package"] && packageRegistrySvc != nil {
+		packageAuthStore, _ := packageProjection.(repository.PackageAuthorizationStore)
+		var packageWriter controlplane.PackageCPStateWriter
+		if nostrProjector != nil && controlPlanePub != nil {
+			packageWriter = nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		}
+		intentProcessor.RegisterHandler("package", controlplane.NewPackageIntentHandler(
+			controlplane.PackageIntentHandlerConfig{
+				PackageService: packageRegistrySvc,
+				Projection:     packageProjection,
+				Store:          packageAuthStore,
+				Writer:         packageWriter,
+				Status:         intentStatus,
+				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
+				Logger:         logger,
+			},
+		))
+		logger.Info("package intent handler registered")
+	}
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -2171,7 +2192,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
