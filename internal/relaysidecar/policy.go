@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -26,6 +27,14 @@ type policy struct {
 	now           func() nostr.Timestamp
 	admin         *adminPolicy
 	servicePubkey string
+
+	// intentAuthors is the set of pubkeys (hex) that may publish intent events
+	// (kind 30900 + t=bahia-intent) through the sidecar. These pubkeys are NOT
+	// added to the general admin allowlist: they may only write intent events.
+	// The daemon updates this set via the NIP-86 setintentauthors method as its
+	// TrustSet changes. Protected by intentAuthorsMu.
+	intentAuthorsMu sync.RWMutex
+	intentAuthors   map[string]bool
 }
 
 func newPolicy(cfg config.NostrConfig) (*policy, error) {
@@ -57,6 +66,14 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 		return true, "invalid: event has expired (NIP-40)"
 	}
 	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
+		// Intent write policy (§7.1): kind 30900 + t=bahia-intent events from
+		// pubkeys in the intentAuthors set are admitted even when not on the
+		// general admin allowlist. The daemon updates intentAuthors via the
+		// NIP-86 setintentauthors method as its TrustSet changes. Non-intent
+		// events from intent authors remain blocked.
+		if isIntentEvent(event) && p.admitsIntentAuthor(event.PubKey.Hex()) {
+			return false, ""
+		}
 		return true, "blocked: pubkey is not admitted by the persisted relay policy"
 	}
 
@@ -102,4 +119,41 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 		return nostr.ZeroPK, ok, err
 	}
 	return sk.Public(), true, nil
+}
+
+// SetIntentAuthors replaces the set of pubkeys that may publish intent events.
+// The daemon calls this via the NIP-86 setintentauthors method whenever its
+// TrustSet changes. These pubkeys gain write access for kind 30900 +
+// t=bahia-intent only; other event kinds remain gated by the admin allowlist.
+func (p *policy) SetIntentAuthors(pubkeys []string) {
+	p.intentAuthorsMu.Lock()
+	defer p.intentAuthorsMu.Unlock()
+	set := make(map[string]bool, len(pubkeys))
+	for _, pk := range pubkeys {
+		if pk != "" {
+			set[pk] = true
+		}
+	}
+	p.intentAuthors = set
+}
+
+// admitsIntentAuthor reports whether pubkey is in the intent authors set.
+func (p *policy) admitsIntentAuthor(pubkey string) bool {
+	p.intentAuthorsMu.RLock()
+	defer p.intentAuthorsMu.RUnlock()
+	return p.intentAuthors[pubkey]
+}
+
+// isIntentEvent reports whether ev is a kind-30900 operator intent event
+// carrying the t=bahia-intent tag.
+func isIntentEvent(ev nostr.Event) bool {
+	if ev.Kind != 30900 {
+		return false
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "t" && tag[1] == "bahia-intent" {
+			return true
+		}
+	}
+	return false
 }

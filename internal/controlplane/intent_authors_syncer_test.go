@@ -1,0 +1,210 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/relaysidecar"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
+
+// sidecarTestHarness holds an in-process sidecar with its admin client and
+// websocket URL, used by syncer tests.
+type sidecarTestHarness struct {
+	sidecar     *relaysidecar.Server
+	adminClient *relayadmin.Client
+	wsURL       string
+}
+
+func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTestHarness {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	policyPath := filepath.Join(dataDir, "relay-admin-policy.json")
+	policy := map[string]any{
+		"version":        1,
+		"administrators": []string{adminKey.Public().Hex()},
+		"allowed_pubkeys": []map[string]string{
+			{"pubkey": adminKey.Public().Hex(), "reason": "admin"},
+		},
+		"banned_pubkeys":      []any{},
+		"metadata":            map[string]string{"name": "test", "description": "test"},
+		"used_authorizations": map[string]any{},
+		"applied_config":      map[string]any{},
+	}
+	policyJSON, err := json.MarshalIndent(policy, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(policyPath, policyJSON, 0o600))
+
+	sidecarCfg := config.Defaults().Nostr
+	sidecarCfg.Sidecar.DataDir = dataDir
+	sidecarCfg.Sidecar.Enabled = true
+	sidecarCfg.Sidecar.PublicURL = "ws://localhost:3334"
+	sidecarCfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
+	sidecarCfg.Sidecar.AdminPolicyPath = policyPath
+	sidecar, err := relaysidecar.New(sidecarCfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sidecar.Close() })
+
+	httpServer := httptest.NewServer(sidecar.Handler())
+	t.Cleanup(httpServer.Close)
+
+	adminClient, err := relayadmin.NewClient(relayadmin.Config{
+		Enabled:       true,
+		PrivateKeyHex: adminKey.Hex(),
+		Targets: []relayadmin.Target{{
+			Ref:                  "test-sidecar",
+			RelayURL:             "ws://localhost:3334",
+			HTTPURL:              httpServer.URL,
+			AdministratorPubkeys: []string{adminKey.Public().Hex()},
+		}},
+	})
+	require.NoError(t, err)
+
+	return sidecarTestHarness{
+		sidecar:     sidecar,
+		adminClient: adminClient,
+		wsURL:       "ws" + strings.TrimPrefix(httpServer.URL, "http"),
+	}
+}
+
+func signedIntentForTest(t *testing.T, sk nostr.SecretKey, orgID string) nostr.Event {
+	t.Helper()
+	ev := nostr.Event{
+		Kind:      30900,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", "svc-test-" + sk.Public().Hex()[:8]},
+			{"t", "bahia-intent"},
+			{"domain", "service"},
+			{"op", "create"},
+			{"org", orgID},
+			{"intent_id", "test-" + sk.Public().Hex()[:8]},
+		},
+		Content: `{"name":"test-service"}`,
+	}
+	require.NoError(t, ev.Sign(sk))
+	return ev
+}
+
+// TestIntentAuthorsSyncerPushesToSidecar verifies the end-to-end flow:
+//   - A TrustSet with a bootstrap owner
+//   - An in-process sidecar with an admin endpoint and restricted writes
+//   - The syncer pushes the bootstrap owner's pubkey to the sidecar
+//   - The owner's intent event is accepted by the sidecar
+//   - A non-member's intent event is blocked
+func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	adminKey := nostr.Generate()
+	memberKey := nostr.Generate()
+	outsiderKey := nostr.Generate()
+
+	h := startSidecarTestHarness(t, adminKey)
+
+	orgID := "00000000-0000-0000-0000-000000000001"
+	trustSet := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{
+		orgID: memberKey.Public().Hex(),
+	}))
+
+	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
+		TrustSet:   trustSet,
+		Admin:      h.adminClient,
+		TargetRefs: []string{"test-sidecar"},
+		Logger:     zap.NewNop(),
+	})
+
+	syncCtx, syncCancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = syncer.Run(syncCtx)
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = relay.Close() })
+
+	err = relay.Publish(ctx, signedIntentForTest(t, memberKey, orgID))
+	require.NoError(t, err, "bootstrap owner's intent should be accepted")
+
+	err = relay.Publish(ctx, signedIntentForTest(t, outsiderKey, orgID))
+	require.Error(t, err, "non-member's intent should be blocked")
+
+	syncCancel()
+	<-done
+}
+
+// TestIntentAuthorsSyncerMembershipMutationReachesSidecar verifies that a
+// Postgres org membership change (via the NotifyingOrgMemberRepository)
+// propagates to the sidecar so the new member's intents are accepted and,
+// after removal, are blocked again.
+func TestIntentAuthorsSyncerMembershipMutationReachesSidecar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	adminKey := nostr.Generate()
+	newMemberKey := nostr.Generate()
+
+	h := startSidecarTestHarness(t, adminKey)
+
+	orgID := "00000000-0000-0000-0000-000000000001"
+	trustSet := NewTrustSet(nil, zap.NewNop())
+
+	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
+		TrustSet:   trustSet,
+		Admin:      h.adminClient,
+		TargetRefs: []string{"test-sidecar"},
+		Logger:     zap.NewNop(),
+	})
+
+	syncCtx, syncCancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = syncer.Run(syncCtx)
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	// Before tracking: new member's intent is blocked.
+	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = relay.Close() })
+
+	err = relay.Publish(ctx, signedIntentForTest(t, newMemberKey, orgID))
+	require.Error(t, err, "should be blocked before membership is added")
+
+	// Simulate Postgres Add via TrackPubkey (what NotifyingOrgMemberRepository does).
+	syncer.TrackPubkey(newMemberKey.Public().Hex())
+	time.Sleep(200 * time.Millisecond)
+
+	// After tracking: new member's intent is accepted.
+	err = relay.Publish(ctx, signedIntentForTest(t, newMemberKey, orgID))
+	require.NoError(t, err, "should be accepted after membership is added")
+
+	// Simulate Postgres Remove via UntrackPubkey.
+	syncer.UntrackPubkey(newMemberKey.Public().Hex())
+	time.Sleep(200 * time.Millisecond)
+
+	// After removal: intent is blocked again.
+	err = relay.Publish(ctx, signedIntentForTest(t, newMemberKey, orgID))
+	require.Error(t, err, "should be blocked after membership is removed")
+
+	// Health status should be in sync.
+	require.False(t, syncer.SyncStatus().OutOfSync)
+
+	syncCancel()
+	<-done
+}

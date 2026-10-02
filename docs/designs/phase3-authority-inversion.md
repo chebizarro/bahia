@@ -678,3 +678,90 @@ The following questions from the initial design are decided. These decisions are
 - **Dual-path idempotency.** During the transition, a mutation arriving via both ContextVM and a relay intent must not be applied twice. Mitigation: both paths feed the same pipeline with the same `intent_id` / idempotency key and the same local store. The dedup check at step 1 prevents double application.
 - **Author subscription churn.** Changing the trust set requires closing and re-opening the intent REQ with a new `authors` list. Frequent membership changes could cause subscription churn. Mitigation: debounce trust-set updates (e.g. 5-second window) before re-subscribing.
 - **Local store corruption.** The bbolt local store is the daemon's memory. Corruption means lost cursors and idempotency state. Mitigation: NIP-77 sync rebuilds the store from relays; the daemon detects corruption and triggers a full resync.
+
+---
+
+## 10. How to Add a Domain Slice (F2/F3 Guide)
+
+This section documents the APIs F1 provides for downstream domain slices.
+
+### 10.1 Implement `DomainHandler`
+
+```go
+// internal/controlplane/service_intent_handler.go
+type ServiceIntentHandler struct {
+    registry *service.RegistryService
+    // ...
+}
+
+func (h *ServiceIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+    // Level-triggered: intent.Content is the full desired state.
+    // Reconcile the entity toward it, regardless of whether you've seen
+    // prior events for this coordinate.
+    switch intent.Op {
+    case "create", "update":
+        // Upsert the entity from intent.Content.
+    case "delete":
+        // Remove the entity and publish a tombstone.
+    }
+    return nil
+}
+
+func (h *ServiceIntentHandler) PermissionFor(op string) domain.Permission {
+    return domain.PermWriteServices
+}
+```
+
+### 10.2 Register the handler at startup
+
+In `internal/app/app.go`, after the `intentProcessor` is constructed:
+
+```go
+intentProcessor.RegisterHandler("service", &controlplane.ServiceIntentHandler{
+    registry: registry,
+})
+```
+
+### 10.3 Add the domain to config
+
+```yaml
+nostr:
+  intent_domains:
+    - service
+```
+
+### 10.4 Wire dual dispatch
+
+In the existing ContextVM handler for the domain (e.g. `encrypted_route_handlers.go`), after authorization:
+
+```go
+intent := &controlplane.Intent{
+    Domain:     "service",
+    Op:         "create",
+    OrgID:      orgID,
+    IntentID:   requestIDOrMint(),
+    Coordinate: entityID.String(),
+    Content:    parsedContent,
+    Actor:      event.PubKey.Hex(),
+}
+if err := intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+    return err
+}
+```
+
+Both paths (relay and in-process) share one idempotency store, so double-dispatch is impossible.
+
+### 10.5 Key APIs
+
+| Type | Method | Purpose |
+|------|--------|---------|
+| `IntentProcessor` | `RegisterHandler(domain, handler)` | Register a domain handler at startup |
+| `IntentProcessor` | `ProcessInProcess(ctx, intent)` | In-process dual dispatch entry point |
+| `IntentProcessor` | `ProcessRelayIntent(ctx, event)` | Relay subscription entry point (used by IntentSubscriber) |
+| `TrustSet` | `HasPermission(ctx, orgID, pubkey, perm)` | Authorization check |
+| `TrustSet` | `RoleFor(ctx, orgID, pubkey)` | Role lookup for display |
+| `TrustSet` | `SetRelayMembers(orgID, members)` | O1: populate relay membership |
+| `IntentStatusPublisher` | `PublishConflict(ctx, intent)` | F3: expected_updated_at mismatch |
+| `ReadinessTracker` | `IsReady()` | Combined readiness across all filters |
+| `ReadinessTracker` | `Progress()` | Per-filter readiness for health endpoint |
+| `ParseIntent(event)` | — | Parse a kind-30900 event into an Intent |

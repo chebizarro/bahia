@@ -39,6 +39,7 @@ var sidecarNIP86Methods = []string{
 	"listbannedpubkeys",
 	"configstatus",
 	"reload",
+	"setintentauthors",
 	"supportedmethods",
 }
 
@@ -496,6 +497,20 @@ func (s *Server) handleNIP86(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.applyMetadata(s.policy.snapshot().Metadata)
+		writeNIP86Response(w, http.StatusOK, nip86.Response{Result: true})
+		return
+	}
+	if request.Method == "setintentauthors" {
+		// Phase 3 F1 (§7.1): the daemon sends the current set of pubkeys
+		// that may publish intent events (kind 30900 + t=bahia-intent).
+		// Params is a flat list of hex pubkey strings.
+		pubkeys := make([]string, 0, len(request.Params))
+		for _, param := range request.Params {
+			if pk, ok := param.(string); ok && pk != "" {
+				pubkeys = append(pubkeys, pk)
+			}
+		}
+		s.admission.SetIntentAuthors(pubkeys)
 		writeNIP86Response(w, http.StatusOK, nip86.Response{Result: true})
 		return
 	}

@@ -46,6 +46,7 @@ type Server struct {
 	retention   retentionPolicy
 	swept       sweepCounters
 	policy      *adminPolicy
+	admission   *policy // event admission policy (wraps adminPolicy + intent authors)
 	httpServer  *http.Server
 	logger      *zap.Logger
 	consumer    *ConfigConsumer
@@ -231,6 +232,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		store:       store,
 		retention:   retention,
 		policy:      admin,
+		admission:   pol,
 		logger:      logger,
 		consumer:    consumer,
 		fanout:      fanout,
@@ -283,6 +285,14 @@ func sidecarPublicPath(rawURL string) string {
 		return "/"
 	}
 	return "/" + strings.Trim(path, "/")
+}
+
+// SetIntentAuthors replaces the set of pubkeys that may publish intent events
+// through the sidecar. This is the in-process equivalent of the NIP-86
+// setintentauthors method; the daemon calls it directly when the sidecar runs
+// in the same process, and via NIP-86 when it runs as a separate binary.
+func (s *Server) SetIntentAuthors(pubkeys []string) {
+	s.admission.SetIntentAuthors(pubkeys)
 }
 
 // Relay returns the underlying Khatru relay for focused package tests.
