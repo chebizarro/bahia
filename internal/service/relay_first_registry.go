@@ -26,6 +26,12 @@ import (
 type RelayFirstStatePublisher interface {
 	PublishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error
 	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error
+	// Phase 3 S2: build/artifact/deployment canonical state published directly
+	// from the mutation site, fingerprint-deduped, outbox-queued.
+	PublishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error
+	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error
+	PublishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error
+	PublishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error
 }
 
 // RelayFirstRegistry wraps RegistryService so canonical relay publication succeeds before local cache writes.
@@ -289,7 +295,11 @@ func (r *RelayFirstRegistry) ListEnvironmentsByOrg(ctx context.Context, orgID uu
 	return r.delegate.ListEnvironmentsByOrg(ctx, orgID)
 }
 func (r *RelayFirstRegistry) RegisterBuild(ctx context.Context, b *domain.Build) error {
-	return r.delegate.RegisterBuild(ctx, b)
+	if err := r.delegate.RegisterBuild(ctx, b); err != nil {
+		return err
+	}
+	r.publishBuildCPState(ctx, b, false)
+	return nil
 }
 func (r *RelayFirstRegistry) GetBuild(ctx context.Context, id uuid.UUID) (*domain.Build, error) {
 	return r.delegate.GetBuild(ctx, id)
@@ -298,22 +308,39 @@ func (r *RelayFirstRegistry) ListBuilds(ctx context.Context, serviceID uuid.UUID
 	return r.delegate.ListBuilds(ctx, serviceID, limit, offset)
 }
 func (r *RelayFirstRegistry) UpdateBuildStatus(ctx context.Context, id uuid.UUID, status domain.BuildStatus) error {
-	return r.delegate.UpdateBuildStatus(ctx, id, status)
+	if err := r.delegate.UpdateBuildStatus(ctx, id, status); err != nil {
+		return err
+	}
+	if build, err := r.delegate.GetBuild(ctx, id); err == nil && build != nil {
+		r.publishBuildCPState(ctx, build, false)
+	}
+	return nil
 }
 func (r *RelayFirstRegistry) RegisterArtifact(ctx context.Context, a *domain.Artifact) error {
-	return r.delegate.RegisterArtifact(ctx, a)
+	if err := r.delegate.RegisterArtifact(ctx, a); err != nil {
+		return err
+	}
+	r.publishArtifactCPState(ctx, a, false)
+	return nil
 }
 func (r *RelayFirstRegistry) RegisterVerifiedArtifact(ctx context.Context, a *domain.Artifact, proof ArtifactVerificationProof) error {
-	return r.delegate.RegisterVerifiedArtifact(ctx, a, proof)
+	if err := r.delegate.RegisterVerifiedArtifact(ctx, a, proof); err != nil {
+		return err
+	}
+	r.publishArtifactCPState(ctx, a, false)
+	return nil
 }
 func (r *RelayFirstRegistry) RegisterReleaseArtifact(ctx context.Context, a *domain.Artifact, proof ReleaseArtifactVerificationProof) error {
-	return r.delegate.RegisterReleaseArtifact(ctx, a, proof)
+	if err := r.delegate.RegisterReleaseArtifact(ctx, a, proof); err != nil {
+		return err
+	}
+	r.publishArtifactCPState(ctx, a, false)
+	return nil
 }
 
 // RegisterReleaseArtifactWithAudit preserves the atomic build/artifact/audit
-// boundary used by Hive-CI registration. Release artifacts have no separate
-// relay-first canonical state event; their signed decision evidence is written
-// to the delegate's durable Nostr outbox in the same transaction.
+// boundary used by Hive-CI registration. After the transaction commits,
+// canonical cp-state records are published for both the build and artifact.
 func (r *RelayFirstRegistry) RegisterReleaseArtifactWithAudit(
 	ctx context.Context,
 	build *domain.Build,
@@ -324,7 +351,12 @@ func (r *RelayFirstRegistry) RegisterReleaseArtifactWithAudit(
 	if r == nil || r.delegate == nil {
 		return fmt.Errorf("registry delegate is not configured")
 	}
-	return r.delegate.RegisterReleaseArtifactWithAudit(ctx, build, artifact, proof, prepareAudit)
+	if err := r.delegate.RegisterReleaseArtifactWithAudit(ctx, build, artifact, proof, prepareAudit); err != nil {
+		return err
+	}
+	r.publishBuildCPState(ctx, build, false)
+	r.publishArtifactCPState(ctx, artifact, false)
+	return nil
 }
 func (r *RelayFirstRegistry) GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error) {
 	return r.delegate.GetArtifact(ctx, id)
@@ -339,7 +371,11 @@ func (r *RelayFirstRegistry) ListArtifactsByBuild(ctx context.Context, buildID u
 	return r.delegate.ListArtifactsByBuild(ctx, buildID)
 }
 func (r *RelayFirstRegistry) CreateDeploymentIntent(ctx context.Context, di *domain.DeploymentIntent) error {
-	return r.delegate.CreateDeploymentIntent(ctx, di)
+	if err := r.delegate.CreateDeploymentIntent(ctx, di); err != nil {
+		return err
+	}
+	r.publishDeploymentIntentCPState(ctx, di, false)
+	return nil
 }
 func (r *RelayFirstRegistry) GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
 	return r.delegate.GetDeploymentIntent(ctx, id)
@@ -348,13 +384,33 @@ func (r *RelayFirstRegistry) ListDeploymentIntents(ctx context.Context, serviceI
 	return r.delegate.ListDeploymentIntents(ctx, serviceID, envID, limit, offset)
 }
 func (r *RelayFirstRegistry) ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error {
-	return r.delegate.ApproveDeploymentIntent(ctx, id)
+	if err := r.delegate.ApproveDeploymentIntent(ctx, id); err != nil {
+		return err
+	}
+	if intent, err := r.delegate.GetDeploymentIntent(ctx, id); err == nil && intent != nil {
+		r.publishDeploymentIntentCPState(ctx, intent, false)
+	}
+	return nil
 }
 func (r *RelayFirstRegistry) RejectDeploymentIntent(ctx context.Context, id uuid.UUID) error {
-	return r.delegate.RejectDeploymentIntent(ctx, id)
+	if err := r.delegate.RejectDeploymentIntent(ctx, id); err != nil {
+		return err
+	}
+	if intent, err := r.delegate.GetDeploymentIntent(ctx, id); err == nil && intent != nil {
+		r.publishDeploymentIntentCPState(ctx, intent, false)
+	}
+	return nil
 }
 func (r *RelayFirstRegistry) CreateDeploymentRun(ctx context.Context, dr *domain.DeploymentRun) error {
-	return r.delegate.CreateDeploymentRun(ctx, dr)
+	if err := r.delegate.CreateDeploymentRun(ctx, dr); err != nil {
+		return err
+	}
+	r.publishDeploymentRunCPState(ctx, dr, false)
+	// The run creation also transitions the parent intent to deploying.
+	if intent, err := r.delegate.GetDeploymentIntent(ctx, dr.DeploymentIntentID); err == nil && intent != nil {
+		r.publishDeploymentIntentCPState(ctx, intent, false)
+	}
+	return nil
 }
 func (r *RelayFirstRegistry) GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.DeploymentRun, error) {
 	return r.delegate.GetDeploymentRun(ctx, id)
@@ -363,7 +419,17 @@ func (r *RelayFirstRegistry) ListDeploymentRuns(ctx context.Context, intentID uu
 	return r.delegate.ListDeploymentRuns(ctx, intentID)
 }
 func (r *RelayFirstRegistry) CompleteDeploymentRun(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
-	return r.delegate.CompleteDeploymentRun(ctx, id, status, exitCode)
+	if err := r.delegate.CompleteDeploymentRun(ctx, id, status, exitCode); err != nil {
+		return err
+	}
+	if run, err := r.delegate.GetDeploymentRun(ctx, id); err == nil && run != nil {
+		r.publishDeploymentRunCPState(ctx, run, false)
+		// Completion also updates the parent intent status.
+		if intent, err := r.delegate.GetDeploymentIntent(ctx, run.DeploymentIntentID); err == nil && intent != nil {
+			r.publishDeploymentIntentCPState(ctx, intent, false)
+		}
+	}
+	return nil
 }
 func (r *RelayFirstRegistry) RecordObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
 	return r.delegate.RecordObservation(ctx, obs)
@@ -382,6 +448,48 @@ func (r *RelayFirstRegistry) ListDriftedStates(ctx context.Context) ([]domain.En
 }
 func (r *RelayFirstRegistry) ListAllStates(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.delegate.ListAllStates(ctx)
+}
+
+// --- Phase 3 S2: cp-state publishing helpers ---
+
+func (r *RelayFirstRegistry) publishBuildCPState(ctx context.Context, build *domain.Build, deleted bool) {
+	if r.publisher == nil || build == nil {
+		return
+	}
+	if err := r.publisher.PublishBuildRegistry(ctx, build, deleted); err != nil {
+		r.logger.Warn("publish build cp-state failed",
+			zap.String("build_id", build.ID.String()), zap.Error(err))
+	}
+}
+
+func (r *RelayFirstRegistry) publishArtifactCPState(ctx context.Context, artifact *domain.Artifact, deleted bool) {
+	if r.publisher == nil || artifact == nil {
+		return
+	}
+	if err := r.publisher.PublishArtifactRegistry(ctx, artifact, deleted); err != nil {
+		r.logger.Warn("publish artifact cp-state failed",
+			zap.String("artifact_id", artifact.ID.String()), zap.Error(err))
+	}
+}
+
+func (r *RelayFirstRegistry) publishDeploymentIntentCPState(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) {
+	if r.publisher == nil || intent == nil {
+		return
+	}
+	if err := r.publisher.PublishDeploymentIntentRegistry(ctx, intent, deleted); err != nil {
+		r.logger.Warn("publish deployment intent cp-state failed",
+			zap.String("intent_id", intent.ID.String()), zap.Error(err))
+	}
+}
+
+func (r *RelayFirstRegistry) publishDeploymentRunCPState(ctx context.Context, run *domain.DeploymentRun, deleted bool) {
+	if r.publisher == nil || run == nil {
+		return
+	}
+	if err := r.publisher.PublishDeploymentRunRegistry(ctx, run, deleted); err != nil {
+		r.logger.Warn("publish deployment run cp-state failed",
+			zap.String("run_id", run.ID.String()), zap.Error(err))
+	}
 }
 
 // EnvironmentIntentRegistry is the contract the environment intent handler

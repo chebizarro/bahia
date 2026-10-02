@@ -300,7 +300,6 @@
 1	internal/service.BackupSchedulerService.PauseSchedule
 1	internal/service.BackupSchedulerService.ResumeSchedule
 1	internal/service.BackupSchedulerService.SetScheduleEnabled
-1	internal/service.BudgetPolicyService.CreatePolicy
 1	internal/service.ContinuityGraph.AssessAll
 1	internal/service.ContinuityGraph.AssessService
 1	internal/service.ContinuityGraph.SimulateFailure

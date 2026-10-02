@@ -583,3 +583,33 @@ func (p *Projector) ForgetAbandonedProjection(ev gonostr.Event) {
 		delete(s.published, key)
 	}
 }
+
+// publishAuthoritative signs one cp-state record for a domain that publishes
+// its canonical state directly from the code that mutates it (Phase 3 S2).
+// It shares publishSigned's per-coordinate lock, created_at floor and
+// fingerprint memory so the record is fingerprint-deduped, and every later
+// event on the coordinate is strictly newer. Unlike publishSigned it does
+// not honour the projector's backoff window (same as publishSignedRelayFirst),
+// because the mutation has already committed and the record must reach the
+// outbox. It delivers with PublishProjection (the normal outbox path), not
+// PublishBeforeCommit.
+func (p *Projector) publishAuthoritative(ctx context.Context, wireKind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+	key := projectionKeyOf(wireKind, tags)
+	fingerprint := projectionFingerprint(wireKind, tags, content)
+	tombstone := isTombstoneTags(tags)
+	// Hydrate retained state; a local-store outage must not block a mutation.
+	_ = p.hydrateProjectionCache(ctx, wireKind)
+	_, unlock := p.lockProjectionKey(key)
+	defer unlock()
+
+	if !tombstone && p.projectionUnchanged(key, fingerprint) {
+		return nil
+	}
+	createdAt := p.nextProjectionCreatedAt(key)
+	_, err := p.publishSignedDirect(ctx, wireKind, createdAt, tags, content, entityType, entityID)
+	if err != nil {
+		return err
+	}
+	p.rememberProjection(key, fingerprint, createdAt)
+	return nil
+}

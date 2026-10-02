@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"sync"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -95,6 +98,56 @@ func (r *mutationWorkerRepository) UpdateSchedulingState(ctx context.Context, ke
 	return r.memoryWorkerRepo.UpdateSchedulingState(ctx, key, state, reason)
 }
 
+// testPolicyPublisher builds a PolicyStatePublisher that uses the same
+// PolicyRegistryRecord builder and cp-state envelope construction as
+// production (app.go). This is the production-assembly path for tests.
+// It enforces monotonic timestamps per policy ID so rapid successive
+// publishes for the same entity produce increasing replaceable timestamps.
+func testPolicyPublisher(publisher NostrEventPublisher, signer nostr.Signer) PolicyStatePublisher {
+	var mu sync.Mutex
+	lastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
+	return func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+		recordTags, recordContent := PolicyRegistryRecord(policy, deleted)
+		deletedStr := "false"
+		if deleted {
+			deletedStr = "true"
+		}
+		tags := nostr.Tags{
+			{"d", policy.ID.String()},
+			{"domain", "policy"},
+			{"schema", "bahia.cp-state.v1"},
+			{"legacy_kind", fmt.Sprintf("%d", kinds.PolicyRegistry)},
+			{"deleted", deletedStr},
+			{"t", kinds.CPStateTopicPolicyRegistry},
+		}
+		tags = append(tags, recordTags...)
+		mu.Lock()
+		createdAt := nostr.Now()
+		if last := lastPublishedAt[policy.ID]; createdAt <= last {
+			createdAt = last + 1
+		}
+		lastPublishedAt[policy.ID] = createdAt
+		mu.Unlock()
+		ev := nostr.Event{
+			Kind:      nostr.Kind(KindCASControlState),
+			CreatedAt: createdAt,
+			Tags:      tags,
+			Content:   recordContent,
+		}
+		if err := SignGoNostrEvent(ctx, signer, &ev); err != nil {
+			return fmt.Errorf("sign policy state event: %w", err)
+		}
+		published, err := publisher.Publish(ctx, ev)
+		if err != nil {
+			return err
+		}
+		if published == 0 {
+			return fmt.Errorf("publish policy state: no relay accepted the event")
+		}
+		return nil
+	}
+}
+
 func newMutationFixture(t *testing.T, method string, gate *FleetOperatorGate) (*EncryptedRequestTransport, *mockEncryptedPublisher, *mutationWorkerRepository, *mutationPolicyRepository) {
 	t.Helper()
 	publisher := &mockEncryptedPublisher{}
@@ -118,7 +171,8 @@ func newMutationFixture(t *testing.T, method string, gate *FleetOperatorGate) (*
 	}}
 	reactor := NewReactor(Config{}, nil, nil, responder.signer, zap.NewNop(),
 		WithControlPlanePublisher(publisher), WithWorkerRepository(workers),
-		WithPolicyService(service.NewPolicyService(policies, &testSignatureRepo{}, nil, zap.NewNop())))
+		WithPolicyService(service.NewPolicyService(policies, &testSignatureRepo{}, nil, zap.NewNop())),
+		WithPolicyStatePublisher(testPolicyPublisher(publisher, responder.signer)))
 	RegisterWorkerContextVMHandlers(transport, gate)
 	reactor.RegisterMutationContextVMHandlers(transport, gate)
 	return transport, publisher, workers, policies
@@ -403,7 +457,8 @@ func TestReactorContextVMMutationsDoNotAcknowledgeRejectedState(t *testing.T) {
 			transport, publisher, workers, policies := newMutationFixture(t, method, gate)
 			reactor := NewReactor(Config{}, nil, nil, transport.responder.signer, zap.NewNop(),
 				WithControlPlanePublisher(rejectMutationStatePublisher{publisher}), WithWorkerRepository(workers),
-				WithPolicyService(service.NewPolicyService(policies, &testSignatureRepo{}, nil, zap.NewNop())))
+				WithPolicyService(service.NewPolicyService(policies, &testSignatureRepo{}, nil, zap.NewNop())),
+				WithPolicyStatePublisher(testPolicyPublisher(rejectMutationStatePublisher{publisher}, transport.responder.signer)))
 			reactor.RegisterMutationContextVMHandlers(transport, gate)
 			transport.HandleEvent(t.Context(), makeRouteRequest(t, method, mutationParams(t, method)))
 			response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
@@ -438,5 +493,86 @@ func TestPolicyContextVMStateOrdering(t *testing.T) {
 	}
 	if states != 2 {
 		t.Fatalf("state events = %d, want update and tombstone", states)
+	}
+}
+
+// TestPolicyLegacyPath_CreatePublishesCanonical30900 verifies that with the
+// policy domain DISABLED in the intent processor, a ContextVM policy create
+// produces exactly one canonical 30900 through the PolicyStatePublisher
+// (sign + publish), not the deleted projector leg.
+func TestPolicyLegacyPath_CreatePublishesCanonical30900(t *testing.T) {
+	gate := NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)})
+	// No intent processor → policyIntentEnabled() returns false → legacy path.
+	transport, publisher, _, _ := newMutationFixture(t, ContextVMMethodPolicyCreate, gate)
+	transport.HandleEvent(t.Context(), makeRouteRequest(t, ContextVMMethodPolicyCreate, mutationParams(t, ContextVMMethodPolicyCreate)))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error != nil {
+		t.Fatalf("policy create failed: %v", response.Error)
+	}
+
+	// Count KindCASControlState events with domain=policy.
+	states := 0
+	for _, ev := range publisher.events {
+		if ev.Kind == nostr.Kind(KindCASControlState) && tagValueNostr(ev.Tags, "domain") == "policy" {
+			states++
+			if tagValueNostr(ev.Tags, "deleted") != "false" {
+				t.Fatalf("create should produce a non-tombstone record")
+			}
+		}
+	}
+	if states != 1 {
+		t.Fatalf("legacy create: expected exactly 1 canonical 30900, got %d", states)
+	}
+}
+
+// TestPolicyLegacyPath_UpdatePublishesCanonical30900 verifies that with the
+// policy domain DISABLED, a ContextVM policy update produces exactly one
+// canonical 30900.
+func TestPolicyLegacyPath_UpdatePublishesCanonical30900(t *testing.T) {
+	gate := NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)})
+	transport, publisher, _, _ := newMutationFixture(t, ContextVMMethodPolicyUpdate, gate)
+	transport.HandleEvent(t.Context(), makeRouteRequest(t, ContextVMMethodPolicyUpdate, mutationParams(t, ContextVMMethodPolicyUpdate)))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error != nil {
+		t.Fatalf("policy update failed: %v", response.Error)
+	}
+
+	states := 0
+	for _, ev := range publisher.events {
+		if ev.Kind == nostr.Kind(KindCASControlState) && tagValueNostr(ev.Tags, "domain") == "policy" {
+			states++
+			if tagValueNostr(ev.Tags, "deleted") != "false" {
+				t.Fatalf("update should produce a non-tombstone record")
+			}
+		}
+	}
+	if states != 1 {
+		t.Fatalf("legacy update: expected exactly 1 canonical 30900, got %d", states)
+	}
+}
+
+// TestPolicyLegacyPath_DeletePublishesTombstone verifies that with the
+// policy domain DISABLED, a ContextVM policy delete produces exactly one
+// canonical 30900 tombstone.
+func TestPolicyLegacyPath_DeletePublishesTombstone(t *testing.T) {
+	gate := NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)})
+	transport, publisher, _, _ := newMutationFixture(t, ContextVMMethodPolicyDelete, gate)
+	transport.HandleEvent(t.Context(), makeRouteRequest(t, ContextVMMethodPolicyDelete, mutationParams(t, ContextVMMethodPolicyDelete)))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error != nil {
+		t.Fatalf("policy delete failed: %v", response.Error)
+	}
+
+	states := 0
+	for _, ev := range publisher.events {
+		if ev.Kind == nostr.Kind(KindCASControlState) && tagValueNostr(ev.Tags, "domain") == "policy" {
+			states++
+			if tagValueNostr(ev.Tags, "deleted") != "true" {
+				t.Fatalf("delete should produce a tombstone record")
+			}
+		}
+	}
+	if states != 1 {
+		t.Fatalf("legacy delete: expected exactly 1 canonical 30900 tombstone, got %d", states)
 	}
 }

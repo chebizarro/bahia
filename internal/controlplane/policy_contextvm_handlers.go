@@ -36,15 +36,25 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMReque
 	if err := validateContextVMPolicy(policy); err != nil {
 		return nil, err
 	}
+
+	// Phase 3 dual dispatch: route through the intent processor when the
+	// policy domain is enabled. Falls through to the legacy path otherwise.
+	if r.policyIntentEnabled() {
+		content := policyToIntentContent(policy)
+		if err := r.policyDualDispatch(ctx, request, "create", policy.ID, content); err != nil {
+			return nil, err
+		}
+		return policyMutationResult("policy_create", policy.ID), nil
+	}
+
 	replayed, err := r.policyService.CreatePolicy(ctx, policy)
 	if err != nil {
 		return nil, err
 	}
 	if replayed {
-		// The stored policy's record is already published.
 		return policyMutationResult("policy_create", policy.ID), nil
 	}
-	if err := r.publishPolicyRegistry(ctx, policy, false); err != nil {
+	if err := r.publishPolicyState(ctx, policy, false); err != nil {
 		return nil, fmt.Errorf("policy created but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_create", policy.ID), nil
@@ -65,6 +75,31 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, request ContextVMReque
 	if req.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
+
+	// Phase 3 dual dispatch.
+	if r.policyIntentEnabled() {
+		content := map[string]interface{}{"id": req.ID.String()}
+		if req.Name != nil {
+			content["name"] = *req.Name
+		}
+		if req.Rules != nil {
+			content["rules"] = req.Rules
+		}
+		if req.Enforcement != nil {
+			content["enforcement"] = *req.Enforcement
+		}
+		if req.Enabled != nil {
+			content["enabled"] = *req.Enabled
+		}
+		if req.EnvironmentID != nil {
+			content["environment_id"] = *req.EnvironmentID
+		}
+		if err := r.policyDualDispatch(ctx, request, "update", req.ID, content); err != nil {
+			return nil, err
+		}
+		return policyMutationResult("policy_update", req.ID), nil
+	}
+
 	policy, err := r.policyService.GetPolicy(ctx, req.ID)
 	if err != nil {
 		return nil, err
@@ -72,7 +107,6 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, request ContextVMReque
 	if policy == nil {
 		return nil, fmt.Errorf("policy not found")
 	}
-	// Do not mutate a repository-owned value until the patch has been validated.
 	updated := *policy
 	if req.Name != nil {
 		updated.Name = *req.Name
@@ -102,7 +136,7 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, request ContextVMReque
 	if err := r.policyService.UpdatePolicy(ctx, &updated); err != nil {
 		return nil, err
 	}
-	if err := r.publishPolicyRegistry(ctx, &updated, false); err != nil {
+	if err := r.publishPolicyState(ctx, &updated, false); err != nil {
 		return nil, fmt.Errorf("policy updated but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_update", updated.ID), nil
@@ -118,10 +152,20 @@ func (r *Reactor) handlePolicyDelete(ctx context.Context, request ContextVMReque
 	if req.ID == uuid.Nil {
 		return nil, fmt.Errorf("policy id is required")
 	}
+
+	// Phase 3 dual dispatch.
+	if r.policyIntentEnabled() {
+		content := map[string]interface{}{"id": req.ID.String()}
+		if err := r.policyDualDispatch(ctx, request, "delete", req.ID, content); err != nil {
+			return nil, err
+		}
+		return policyMutationResult("policy_delete", req.ID), nil
+	}
+
 	if err := r.policyService.DeletePolicy(ctx, req.ID); err != nil {
 		return nil, err
 	}
-	if err := r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: req.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
+	if err := r.publishPolicyState(ctx, &domain.DeploymentPolicy{ID: req.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
 		return nil, fmt.Errorf("policy deleted but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_delete", req.ID), nil
@@ -171,4 +215,54 @@ func validateContextVMPolicy(policy *domain.DeploymentPolicy) error {
 		}
 	}
 	return nil
+}
+
+// publishPolicyState publishes a canonical 30900 for a policy mutation through
+// the injected PolicyStatePublisher (sign + PublishBeforeCommit). This is the
+// legacy (non-intent) publication path; the intent path publishes through the
+// PolicyIntentHandler's own publisher. Both use the same PolicyRegistryRecord
+// builder and PolicyStatePublisher type.
+func (r *Reactor) publishPolicyState(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+	if r.policyPublisher != nil {
+		return r.policyPublisher(ctx, policy, deleted)
+	}
+	// Fallback: no publisher configured. This happens only in legacy configs
+	// where nostr publishing is completely disabled.
+	return fmt.Errorf("policy state publisher not configured")
+}
+
+// policyIntentEnabled reports whether the policy domain is routed through the
+// intent processor (Phase 3 dual dispatch).
+func (r *Reactor) policyIntentEnabled() bool {
+	return r.intentProcessor != nil && r.intentProcessor.Handler("policy") != nil
+}
+
+// policyDualDispatch routes a policy mutation through the intent processor
+// for dual dispatch when the policy domain is enabled.
+func (r *Reactor) policyDualDispatch(ctx context.Context, request ContextVMRequest, op string, entityID uuid.UUID, content map[string]interface{}) error {
+	intent := &Intent{
+		Domain:     "policy",
+		Op:         op,
+		IntentID:   effectiveIdempotencyKey(request, entityID.String()),
+		Coordinate: entityID.String(),
+		Content:    content,
+		Actor:      request.Event.PubKey.Hex(),
+	}
+	return r.intentProcessor.ProcessInProcess(ctx, intent)
+}
+
+// policyToIntentContent converts a domain.DeploymentPolicy to the intent
+// content map used for dual dispatch.
+func policyToIntentContent(policy *domain.DeploymentPolicy) map[string]interface{} {
+	content := map[string]interface{}{
+		"id":          policy.ID.String(),
+		"name":        policy.Name,
+		"enforcement": string(policy.Enforcement),
+		"enabled":     policy.Enabled,
+		"rules":       policy.Rules,
+	}
+	if policy.EnvironmentID != nil {
+		content["environment_id"] = policy.EnvironmentID.String()
+	}
+	return content
 }

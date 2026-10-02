@@ -1028,7 +1028,6 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		nostrAdapter.WithPolicyProjectionSource(policySvc),
 		nostrAdapter.WithBackupProjectionSource(backupRegistry),
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
@@ -1051,16 +1050,24 @@ func New(cfg *config.Config) (*App, error) {
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
 	}
-	// Phase 3 F4: warm-start for intent-migrated domains. When intent domains
-	// are configured, the projector waits for subscriber EOSE then compares
-	// its own history against relay state, re-publishing only stale records.
+	// Phase 3 F4: warm-start for migrated domains. Intent-migrated domains
+	// wait for subscriber EOSE; authoritative domains (build, artifact,
+	// deployment) publish directly from mutation sites and are always
+	// included in warm-start so stale records are re-published on restart.
 	// RepublishSnapshot guards skip migrated domain legs.
-	if len(cfg.Nostr.IntentDomains) > 0 {
-		projectorOpts = append(projectorOpts,
-			nostrAdapter.WithReadinessTracker(intentReadiness),
-			nostrAdapter.WithIntentDomains(cfg.Nostr.IntentDomains),
-		)
+	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
+		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
+	)
+	if len(enabledDomains) == 0 {
+		// No intent subscriber → readiness has no filters. Register and
+		// immediately satisfy a sentinel so warm-start proceeds.
+		intentReadiness.RegisterFilter("authoritative-warmstart")
+		intentReadiness.MarkFilterReady("authoritative-warmstart")
 	}
+	projectorOpts = append(projectorOpts,
+		nostrAdapter.WithReadinessTracker(intentReadiness),
+		nostrAdapter.WithIntentDomains(warmStartDomains),
+	)
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
@@ -1080,7 +1087,12 @@ func New(cfg *config.Config) (*App, error) {
 	// (bahia-irsry.41).
 	var relayFirstRegistry *service.RelayFirstRegistry
 	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
-		relayFirstRegistry = service.NewRelayFirstRegistry(registry, nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub), logger)
+		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		relayFirstRegistry = service.NewRelayFirstRegistry(registry, statePublisher, logger)
+		// Phase 3 S2: wire the cp-state publisher for build/artifact/intent/run
+		// families so RegistryService publishes canonical state directly from
+		// its mutation methods (bahia-irsry.11.7).
+		registry.SetCPStatePublisher(statePublisher)
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", string(policy.RequestedMode)))
 	}
@@ -1104,6 +1116,16 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("environment intent handler registered")
 	}
 
+	// Phase 3 S1: wire the reconciler's direct state publisher and tombstone
+	// handler so runtime state is published to relays without the projector.
+	if rec != nil && relayFirstRegistry != nil {
+		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		rec.SetRuntimeStatePublisher(statePublisher)
+		tombstoneHandler := reconcile.NewStateTombstoneHandler(statePublisher, logger)
+		tombstoneHandler.SetupSubscriptions(publisher)
+		logger.Info("runtime state direct publisher and tombstone handler wired (Phase 3 S1)")
+	}
+
 	nostrProjector.SetupSubscriptions(publisher)
 
 	// Phase 3 F2: register service domain intent handler.
@@ -1122,6 +1144,72 @@ func New(cfg *config.Config) (*App, error) {
 				Logger:   logger,
 			},
 		))
+	}
+
+	// Phase 3 S3: PolicyStatePublisher for canonical 30900 via PublishBeforeCommit.
+	// Created unconditionally so both the legacy (non-intent) ContextVM path and
+	// the intent handler path use the same sign-and-publish closure. Fingerprint
+	// dedupe prevents double-signing if both paths ever fire for the same entity
+	// in a single process lifetime (belt-and-suspenders; the dual-dispatch guard
+	// makes this unreachable in normal operation).
+	var policyPublisher controlplane.PolicyStatePublisher
+	if nostrPub != nil && controlPlaneSigner != nil {
+		var policyPubMu sync.Mutex
+		policyFingerprints := make(map[string]struct{})
+		policyLastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
+		policyPublisher = func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+			fp := fmt.Sprintf("%s:%t:%d", policy.ID, deleted, policy.UpdatedAt.UnixNano())
+			policyPubMu.Lock()
+			if _, dup := policyFingerprints[fp]; dup {
+				policyPubMu.Unlock()
+				return nil // already published for this mutation
+			}
+			policyFingerprints[fp] = struct{}{}
+			// Monotonic timestamp: relays replace an addressable event only
+			// with a newer event on the same (kind, pubkey, d) coordinate.
+			createdAt := nostr.Now()
+			if last := policyLastPublishedAt[policy.ID]; createdAt <= last {
+				createdAt = last + 1
+			}
+			policyLastPublishedAt[policy.ID] = createdAt
+			policyPubMu.Unlock()
+			recordTags, recordContent := controlplane.PolicyRegistryRecord(policy, deleted)
+			deletedStr := "false"
+			if deleted {
+				deletedStr = "true"
+			}
+			tags := nostr.Tags{
+				{"d", policy.ID.String()},
+				{"domain", "policy"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindPolicyRegistry)},
+				{"deleted", deletedStr},
+				{"t", kinds.CPStateTopicPolicyRegistry},
+			}
+			tags = append(tags, recordTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: createdAt,
+				Tags:      tags,
+				Content:   recordContent,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				return fmt.Errorf("sign policy state event: %w", err)
+			}
+			return nostrPub.PublishBeforeCommit(ctx, ev, "policy", &policy.ID)
+		}
+	}
+	// Register the intent handler when the policy domain is enabled.
+	if enabledDomains["policy"] && policySvc != nil {
+		intentProcessor.RegisterHandler("policy", controlplane.NewPolicyIntentHandler(
+			controlplane.PolicyIntentHandlerConfig{
+				Policies: policySvc,
+				Publish:  policyPublisher,
+				Status:   intentStatus,
+				Logger:   logger,
+			},
+		))
+		logger.Info("policy intent handler registered")
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -1929,6 +2017,10 @@ func New(cfg *config.Config) (*App, error) {
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if policyRepo != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithPolicyService(policySvc))
+			reactorOpts = append(reactorOpts, controlplane.WithIntentProcessor(intentProcessor))
+			if policyPublisher != nil {
+				reactorOpts = append(reactorOpts, controlplane.WithPolicyStatePublisher(policyPublisher))
+			}
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
