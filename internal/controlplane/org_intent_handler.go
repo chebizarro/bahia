@@ -19,7 +19,10 @@ import (
 // by internal/adapters/nostr.OrgCanonicalPublisher.
 type OrgCanonicalPublisher interface {
 	PublishOrg(ctx context.Context, org *domain.Organization, deleted bool) error
-	PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool) error
+	// PublishMember publishes a canonical member record and drives key lifecycle.
+	// prevRole is optional; pass the old role on role-change so the publisher
+	// can detect downgrades and rotate the OCK.
+	PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error
 	PublishInvite(ctx context.Context, invite *domain.OrgInvite, deleted bool) error
 }
 
@@ -51,12 +54,44 @@ type OrgIntentHandler struct {
 
 // DecryptMemberContent decrypts an encrypted membership event content string
 // and returns the role for TrustSet hydration. Used by the relay trust source
-// at startup and on live membership events.
+// at startup and on live membership events. Legacy O1 format.
 func DecryptMemberContent(encryptor interface{ DecryptOrgState(string) ([]byte, error) }, content string) (orgID string, pubkey string, role string, deleted bool, err error) {
 	plaintext, err := encryptor.DecryptOrgState(content)
 	if err != nil {
 		return "", "", "", false, err
 	}
+	return parseMemberContentFields(plaintext)
+}
+
+// DecryptMemberContentConfidential decrypts a member event using the new
+// confidential format (per-org content key), falling back to legacy O1.
+// legacyKind, dTag, and topic are the record's coordinate identity for AD
+// verification; pass zero values when unknown (e.g. startup hydration from
+// history where the event tags are not readily available — AD check will fail
+// and the function will fall back to legacy O1).
+func DecryptMemberContentConfidential(
+	confidential *ConfidentialEncryptor,
+	legacyO1 interface{ DecryptOrgState(string) ([]byte, error) },
+	content string,
+	legacyKind int, dTag, topic string,
+) (orgID string, pubkey string, role string, deleted bool, err error) {
+	// Try new confidential format first.
+	if confidential != nil {
+		plaintext, decErr := confidential.DecryptConfidential(context.Background(), content, legacyKind, dTag, topic)
+		if decErr == nil {
+			return parseMemberContentFields(plaintext)
+		}
+	}
+	// Fall back to legacy O1 format.
+	if legacyO1 != nil {
+		return DecryptMemberContent(legacyO1, content)
+	}
+	return "", "", "", false, fmt.Errorf("no decryptor available for member event")
+}
+
+// parseMemberContentFields extracts org_id, pubkey, role, and deleted from
+// decrypted member content JSON.
+func parseMemberContentFields(plaintext []byte) (orgID, pubkey, role string, deleted bool, err error) {
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(plaintext, &parsed); err != nil {
 		return "", "", "", false, fmt.Errorf("unmarshal decrypted member content: %w", err)
@@ -373,12 +408,14 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 			)
 			return nil
 		}
+		oldRole := existing.Role
 		if err := h.members.UpdateRole(ctx, intent.OrgID, pubkey, role); err != nil {
 			return fmt.Errorf("update member role: %w", err)
 		}
 		existing.Role = role
 		if h.publisher != nil {
-			if err := h.publisher.PublishMember(ctx, existing, false); err != nil {
+			// Pass oldRole so the publisher can detect downgrade and rotate.
+			if err := h.publisher.PublishMember(ctx, existing, false, oldRole); err != nil {
 				h.logger.Warn("failed to publish member state", zap.Error(err))
 			}
 		}
@@ -645,33 +682,44 @@ type MemberEventHistory interface {
 //     member events from history and populates TrustSet before the intent
 //     subscriber's author filter is computed.
 type RelayMemberEventHandler struct {
-	encryptor interface{ DecryptOrgState(string) ([]byte, error) }
-	trustSet  *TrustSet
-	members   repository.OrgMemberRepository
-	logger    *zap.Logger
+	confidential *ConfidentialEncryptor
+	legacyO1     interface{ DecryptOrgState(string) ([]byte, error) }
+	trustSet     *TrustSet
+	members      repository.OrgMemberRepository
+	logger       *zap.Logger
 }
 
-// NewRelayMemberEventHandler creates a handler for encrypted relay member events.
+// NewRelayMemberEventHandler creates a handler for encrypted relay member
+// events. confidential is the new per-org content key decryptor; legacyO1 is
+// retained for dual-read during migration.
 func NewRelayMemberEventHandler(
-	encryptor interface{ DecryptOrgState(string) ([]byte, error) },
+	confidential *ConfidentialEncryptor,
+	legacyO1 interface{ DecryptOrgState(string) ([]byte, error) },
 	trustSet *TrustSet,
 	members repository.OrgMemberRepository,
 	logger *zap.Logger,
 ) *RelayMemberEventHandler {
 	return &RelayMemberEventHandler{
-		encryptor: encryptor,
-		trustSet:  trustSet,
-		members:   members,
-		logger:    logger,
+		confidential: confidential,
+		legacyO1:     legacyO1,
+		trustSet:     trustSet,
+		members:      members,
+		logger:       logger,
 	}
 }
 
 // HandleEncryptedMemberEvent decrypts an encrypted member event content string,
 // then updates TrustSet relay members for the org. If Postgres is configured,
 // it reads the full member list from the repo; if not, it merges the single
-// event into the existing relay state.
-func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context, content string) error {
-	orgID, pubkey, role, deleted, err := DecryptMemberContent(h.encryptor, content)
+// event into the existing relay state. Supports both the new confidential
+// format and the legacy O1 format (dual-read during migration).
+//
+// legacyKind, dTag, and topic are the record's coordinate identity from the
+// signed event tags. Pass zero values when unavailable (the decrypt will fall
+// back to legacy O1).
+func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context, content string, legacyKind int, dTag, topic string) error {
+	orgID, pubkey, role, deleted, err := DecryptMemberContentConfidential(
+		h.confidential, h.legacyO1, content, legacyKind, dTag, topic)
 	if err != nil {
 		return fmt.Errorf("decrypt member event: %w", err)
 	}
@@ -738,7 +786,7 @@ func (h *RelayMemberEventHandler) HydrateTrustSetFromHistory(ctx context.Context
 
 	hydrated := 0
 	for _, rec := range records {
-		if err := h.HandleEncryptedMemberEvent(ctx, rec.Content); err != nil {
+		if err := h.HandleEncryptedMemberEvent(ctx, rec.Content, 0, "", ""); err != nil {
 			h.logger.Debug("TrustSet warm-start: failed to process member event",
 				zap.String("event_id", rec.ID), zap.Error(err))
 			continue

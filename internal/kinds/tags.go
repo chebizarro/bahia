@@ -138,4 +138,28 @@ const (
 	CPStateTopicOrgRegistry       = "org-registry"
 	CPStateTopicOrgMemberRegistry = "org-member"
 	CPStateTopicOrgInviteRegistry = "org-invite"
+	CPStateTopicOrgKeyEnvelope    = "org-key-envelope"
+)
+
+// Assistant session-state topic (bahia-irsry.43). NIP-01 relays index
+// single-letter tags only, so the recovery subscription and web session
+// filter scope on #t instead of #schema.
+const AssistantSessionTopic = "assistant-session"
+
+// Security and SBOM observable topics (bahia-irsry.43). These records are
+// published outside the cp-state envelope (the security scanner and SBOM
+// publisher sign them directly), so they carry their own "t" topics rather
+// than inheriting one from controlStateEnvelope.
+// Continuity heartbeat observation topic (bahia-irsry.43). The heartbeat
+// producer stamps this on 30315 observations so the web client can scope
+// with #t instead of #domain.
+const ContinuityHeartbeatTopic = "continuity-heartbeat"
+
+const (
+	SecurityScanStatusTopic = "security-scan-status"
+	SecuritySummaryTopic    = "security-summary"
+	SecurityFindingsTopic   = "security-findings"
+	SecurityAuditTopic      = "security-audit"
+	SBOMReferenceTopic      = "sbom-reference"
+	SBOMAvailabilityTopic   = "sbom-availability"
 )

@@ -195,3 +195,39 @@ func fleetOperationKey(revisionEventID string) string { return "fleet:" + revisi
 // fleetRedriveOperationKey names a deferred re-drive of a soul to the latest
 // fleet revision; one pending re-drive covers every revision deferred behind it.
 const fleetRedriveOperationKey = "fleet"
+
+// forceRelease releases the soul held by agentID regardless of which
+// operation holds it, and runs the soul's deferred work. It is the operator
+// abandon mechanism: an authorized operator breaks the serialization hold a
+// stuck awaiting_terminal operation keeps on the soul. A soul that is not
+// held or has no holder is a no-op.
+func (g *soulOperationGate) forceRelease(ctx context.Context, agentID string) bool {
+	g.mu.Lock()
+	queue := g.souls[agentID]
+	if queue == nil || queue.holder == nil {
+		g.mu.Unlock()
+		return false
+	}
+	hold := queue.holder
+	queue.holder = nil
+	if queue.running {
+		// A goroutine is still inside a run for this soul; it will start
+		// deferred work when it returns. We cleared the holder; that is
+		// enough.
+		g.mu.Unlock()
+		return true
+	}
+	if len(queue.deferred) == 0 {
+		delete(g.souls, agentID)
+		g.mu.Unlock()
+		return true
+	}
+	next := queue.deferred[0]
+	queue.deferred = queue.deferred[1:]
+	nextHold := &soulHold{agentID: hold.agentID, key: next.key}
+	queue.holder = nextHold
+	queue.running = true
+	g.mu.Unlock()
+	g.runAcquired(ctx, nextHold, next)
+	return true
+}

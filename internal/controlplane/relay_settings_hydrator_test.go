@@ -526,9 +526,8 @@ func TestRelaySettingsHydratorPromotionFailureAuthAndTimeoutRetainHead(t *testin
 	if h.handleEvent(context.Background(), newer) {
 		t.Fatal("failed persistence must not promote")
 	}
-	if h.handleRelayClosed(context.Background(), nostradapter.RelayClosed{RelayURL: "wss://auth.example", Reason: "auth-required"}, map[string]struct{}{}) {
-		t.Fatal("unavailable auth must not claim resubscribe success")
-	}
+	// NIP-42 AUTH is handled by the relay pool internally (bahia-irsry.48 item 3);
+	// the consumer no longer performs its own AUTH retry.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	eventCh := make(chan *nostr.Event)

@@ -401,7 +401,7 @@ export async function installE2EMocks(
           kind: 30078,
           pubkey: servicePubkey,
           created_at: now,
-          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
+          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['t', 'sbom-reference'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
           content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: locationUri }, payload_sha256: payloadSha, generator, packages: [{ name: `${format}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }] }),
           };
         referenceEventIds.push(referenceEvent.id);
@@ -413,7 +413,7 @@ export async function installE2EMocks(
         kind: 30004,
         pubkey: servicePubkey,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['t', 'sbom-availability'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
         content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://${sourcePath}/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator, referenceEventId: referenceEventIds[formats.indexOf(format)] })) }),
       };
       publishMockNostrEvent(availabilityEvent);

@@ -53,8 +53,10 @@ func (s *Subscriber) Run(ctx context.Context) error {
 		cancel()
 		workers.Wait()
 	}()
-	connected, stopNotify := s.pool.NotifyRelayConnected()
-	defer stopNotify()
+	connected, stopConnectedNotify := s.pool.NotifyRelayConnected()
+	defer stopConnectedNotify()
+	removed, stopRemovedNotify := s.pool.NotifyRelayRemoved()
+	defer stopRemovedNotify()
 
 	tracker := newCursorTracker(s.store, s.self, s.now, s.logger)
 	progress := make(map[string]relayProgress)
@@ -95,6 +97,11 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			return nil
 		case <-connected:
 			// A relay (re)connected, possibly one added by a reconfigure.
+			startRelays()
+		case <-removed:
+			// A relay was removed from the pool's topology. Clear its
+			// progress (including gaveUp) so it syncs afresh if re-added,
+			// and start any newly configured relays.
 			startRelays()
 		case item := <-inbound:
 			s.consume(runCtx, item, tracker, progress)
@@ -373,7 +380,11 @@ func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboun
 	}
 	if filter.persistent {
 		target := &negentropyTarget{store: s.store, out: out, relay: relayURL, key: key}
-		err := s.pool.negentropySyncRelay(ctx, relayURL, filter.filter, target, s.sync.NegentropyUpload, s.sync.NegentropyTimeout)
+		upload := s.sync.NegentropyUpload
+		if upload && s.sync.NegentropyUploadFilter != nil {
+			upload = s.sync.NegentropyUploadFilter(relayURL)
+		}
+		err := s.pool.negentropySyncRelay(ctx, relayURL, filter.filter, target, upload, s.sync.NegentropyTimeout)
 		if err == nil {
 			sendInbound(ctx, out, inboundItem{op: opCommit, relay: relayURL, key: key})
 			return ctx.Err()
@@ -404,13 +415,27 @@ func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboun
 	return ctx.Err()
 }
 
+// pagingBackdateOverlap is the grace window added after paging completes to
+// catch events that were published during the paging period with a created_at
+// backdated beyond where paging had already passed. The store deduplicates, so
+// overlap-delivered events are safe. 120s covers the typical 60s NIP-01 skew
+// tolerance plus one page round-trip, without a noticeable re-read cost on a
+// set small enough to page.
+const pagingBackdateOverlap = 120
+
 // fetchPaged delivers every stored event matching base from one relay, newest
 // page first. A page that comes back full is followed by a page bounded with
 // `until` at its oldest event (inclusive; ids already delivered are dropped by
 // the store), so a gap larger than one page is never truncated (C-1).
+//
+// After the last page, a widened-overlap REQ rechecks the paged window to catch
+// events backdated beyond the relay's NIP-01 tolerance and published during
+// paging (.56 item 4). The store's dedup makes this idempotent.
 func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursorKey, base nostr.Filter, out chan<- inboundItem) error {
 	limit := s.pool.relayPageLimit(relayURL, s.sync.PageLimit)
 	var until nostr.Timestamp
+	pagingStart := nostr.Now()
+	paged := false
 	for {
 		req := base
 		req.Limit = limit
@@ -420,8 +445,9 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 			return err
 		}
 		if delivered < limit {
-			return nil
+			break
 		}
+		paged = true
 		next := oldest
 		if until != 0 && next >= until {
 			// NIP-01 cannot page within one second: more than a page of
@@ -433,10 +459,30 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 			next = until - 1
 		}
 		if next <= 0 || next < base.Since {
-			return nil
+			break
 		}
 		until = next
 	}
+	if !paged {
+		return nil
+	}
+	// Widened-overlap pass: re-scan the paged window with a since that predates
+	// the first page by pagingBackdateOverlap seconds. Events published during
+	// the paging period with a backdated created_at fall into this window. The
+	// store deduplicates events already delivered above.
+	overlapSince := pagingStart - nostr.Timestamp(pagingBackdateOverlap)
+	if base.Since != 0 && overlapSince < base.Since {
+		overlapSince = base.Since
+	}
+	overlap := base
+	overlap.Since = overlapSince
+	overlap.Limit = 0
+	overlap.Until = 0
+	_, _, err := s.drainStored(ctx, relayURL, key, overlap, out)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // drainStored runs one REQ to EOSE and forwards its events. It returns how

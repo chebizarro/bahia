@@ -33,6 +33,7 @@ type continuityRelayPool interface {
 	AuthenticateRelay(context.Context, string) error
 	RecordRelayClosed(string, string)
 	RecordRelayReREQ()
+	WaitForTopologyChange(context.Context) error
 }
 
 // RegisterContinuityContextVMHandlers returns the definition runner as well as

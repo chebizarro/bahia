@@ -474,6 +474,8 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindOrgInviteRegistry:           {"org", "invite", kinds.CPStateTopicOrgInviteRegistry},
 	KindSecretRegistry:              {"secret", "registry", kinds.CPStateTopicSecretRegistry},
 	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
+	// Org key-envelope family (Phase 3 C1: per-org content key distribution).
+	KindOrgKeyEnvelope: {"org", "key-envelope", kinds.CPStateTopicOrgKeyEnvelope},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

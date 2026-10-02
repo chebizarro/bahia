@@ -551,10 +551,11 @@ func (h *EncryptedDomainHandlers) UpdateMemberRole(ctx context.Context, request 
 			return nil, fmt.Errorf("failed to update role: %w", err)
 		}
 		// Legacy path: publish encrypted canonical record (review rule 5).
+		// Pass old role so the publisher can detect downgrade and rotate OCK.
 		if h.orgPublisher != nil {
 			updated, _ := h.members.GetMember(ctx, orgID, targetPubkey)
 			if updated != nil {
-				if pubErr := h.orgPublisher.PublishMember(ctx, updated, false); pubErr != nil {
+				if pubErr := h.orgPublisher.PublishMember(ctx, updated, false, targetMember.Role); pubErr != nil {
 					h.logger.Warn("legacy member role update publish failed", zap.Error(pubErr))
 				}
 			}

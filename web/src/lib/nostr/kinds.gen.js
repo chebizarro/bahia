@@ -395,6 +395,18 @@ export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
 export const ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX = 'assistant-transcript:';
 export const ASSISTANT_STATUS_TOPIC = 'assistant-status';
 export const RELAY_SETTINGS_TOPIC = 'relay-settings';
+// Assistant session-state topic (bahia-irsry.43).
+export const ASSISTANT_SESSION_TOPIC = 'assistant-session';
+// Security and SBOM observable topics (bahia-irsry.43).
+export const SECURITY_SCAN_STATUS_TOPIC = 'security-scan-status';
+export const SECURITY_SUMMARY_TOPIC = 'security-summary';
+export const SECURITY_FINDINGS_TOPIC = 'security-findings';
+export const SECURITY_AUDIT_TOPIC = 'security-audit';
+export const SBOM_REFERENCE_TOPIC = 'sbom-reference';
+export const SBOM_AVAILABILITY_TOPIC = 'sbom-availability';
+// Release attestation topic (bahia-irsry.43).
+export const RELEASE_ATTESTATION_TOPIC = 'release-attestation';
+export const CONTINUITY_HEARTBEAT_TOPIC = 'continuity-heartbeat';
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,
   [DNS_ENDPOINT_STATE]: DNS_STATE_SCHEMAS.ENDPOINT,
@@ -450,6 +462,7 @@ export const CP_STATE_TOPICS = Object.freeze({
   BACKUP_RUNTIME_OBSERVATION: 'backup-runtime',
   SECRET_REGISTRY: 'secret-registry',
   NOTIFICATION_CHANNEL: 'notification-channel',
+  ORG_KEY_ENVELOPE: 'org-key-envelope',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The

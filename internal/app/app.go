@@ -710,7 +710,7 @@ func New(cfg *config.Config) (*App, error) {
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: controlPlaneAuthors,
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
-		Resume:              inboundSyncConfig(cfg.Nostr.LocalStore),
+		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
@@ -1357,36 +1357,48 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("package intent handler registered")
 	}
 
-	// Phase 3 O1: derive org state encryption key from daemon private key (§1.7).
-	// Follows the assistant transcript key derivation pattern.
-	// When no local private key exists (bunker/remote signer), org state
-	// publishing is impossible — the org domain is disabled and an error is
-	// logged. There is no plaintext fallback in production.
-	var orgStateEncryptor *controlplane.OrgStateEncryptorImpl
+	// Phase 3 C1: unified confidential cp-state crypto (§1.7).
+	// Per-org content key (OCK) encrypted with XChaCha20-Poly1305 AEAD.
+	// OCK distributed to org members + service via NIP-44 through signer interface.
+	// Replaces both the O1 sha256-derived key path and the N1 NIP-44 self-encryption.
+	//
+	// Legacy O1 encryptor retained for dual-read during migration.
+	var legacyO1Encryptor *controlplane.OrgStateEncryptorImpl
 	if cfg.Nostr.PrivateKey != "" {
 		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
-		orgStateEncryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
+		legacyO1Encryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
 			Key: controlplane.OrgStateKey{
 				Ref:     "org-state/service-nostr-key",
 				Version: "v1",
 				Key:     orgKeySum[:],
 			},
 		})
+	}
+
+	// Phase 3 C1: create OCKManager and ConfidentialEncryptor.
+	var confidentialEncryptor *controlplane.ConfidentialEncryptor
+	if controlPlaneSigner != nil && servicePubkey != "" {
+		ockHistory := nostrAdapter.NewProjectorOCKEnvelopeHistory(projectionHistory)
+		ockMemberSource := controlplane.NewTrustSetMemberSource(trustSet, orgMemberRepo)
+		ockManager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{
+			Signer:        controlPlaneSigner,
+			ServicePubkey: servicePubkey,
+			Publisher:     nostrProjector, // implements OCKEnvelopePublisher via structural typing
+			History:       ockHistory,     // implements OCKEnvelopeHistory via structural typing
+			Members:       ockMemberSource,
+			Logger:        logger,
+		})
+		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
 	} else if enabledDomains["org"] {
-		logger.Error("org domain requires a local private key for state encryption; " +
-			"remote/bunker signers cannot derive the org state key. " +
-			"Disabling org domain to prevent plaintext state publication")
+		logger.Error("org domain requires control-plane signer for confidential state; " +
+			"disabling org domain to prevent plaintext state publication")
 		delete(enabledDomains, "org")
 	}
 
-	// Phase 3 O1: create encrypted canonical publisher for org state.
-	// Used by both the intent handler and the legacy EncryptedDomainHandlers path.
-	// The encryptor is mandatory in production — OrgCanonicalPublisher is only
-	// created when an encryptor is available or when a projector exists for the
-	// legacy path (which always has a private key).
+	// Phase 3 C1: create encrypted canonical publisher for org state.
 	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
-	if nostrProjector != nil && orgStateEncryptor != nil {
-		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, orgStateEncryptor, logger)
+	if nostrProjector != nil && confidentialEncryptor != nil {
+		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 	}
 
 	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
@@ -1442,22 +1454,24 @@ func New(cfg *config.Config) (*App, error) {
 		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
 		logger.Info("gift-wrap intent ingress registered for sensitive domains")
 	}
-	// Phase 3 O1: relay member event handler for TrustSet hydration from
+	// Phase 3 C1: relay member event handler for TrustSet hydration from
 	// encrypted membership events (§2.5 item 3). Wired for warm-start and
 	// live member publishes. Even when Postgres is configured, the relay
 	// source has highest precedence in TrustSet resolution.
+	// Uses the new confidential encryptor with legacy O1 fallback for
+	// dual-read during migration.
 	var relayMemberEventHandler *controlplane.RelayMemberEventHandler
-	if orgStateEncryptor != nil {
+	if confidentialEncryptor != nil || legacyO1Encryptor != nil {
 		relayMemberEventHandler = controlplane.NewRelayMemberEventHandler(
-			orgStateEncryptor, trustSet, orgMemberRepo, logger,
+			confidentialEncryptor, legacyO1Encryptor, trustSet, orgMemberRepo, logger,
 		)
 
 		// (ii) Live: after OrgCanonicalPublisher publishes a member record
 		// (both legacy ContextVM and intent paths), feed it through the handler
 		// so TrustSet relay members stay in sync in real time.
 		if orgCanonicalPub != nil {
-			orgCanonicalPub.SetOnMemberPublished(func(ctx context.Context, encryptedContent string) {
-				if err := relayMemberEventHandler.HandleEncryptedMemberEvent(ctx, encryptedContent); err != nil {
+			orgCanonicalPub.SetOnMemberPublished(func(ctx context.Context, encryptedContent string, legacyKind int, dTag, topic string) {
+				if err := relayMemberEventHandler.HandleEncryptedMemberEvent(ctx, encryptedContent, legacyKind, dTag, topic); err != nil {
 					logger.Debug("relay member event handler: post-publish hydration failed",
 						zap.Error(err))
 				}
@@ -1847,7 +1861,8 @@ func New(cfg *config.Config) (*App, error) {
 	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
 	// holds a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. Secret values are NEVER included in published events.
-	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, logger)
+	secretOrgResolver := controlplane.NewServiceBackedSecretOrgResolver(serviceRepo, secretRepo)
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretOrgResolver, logger)
 
 	// Register the secret intent handler when the secret domain is enabled.
 	if enabledDomains["secret"] && secretRepo != nil {
@@ -1865,7 +1880,8 @@ func New(cfg *config.Config) (*App, error) {
 
 	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
 	// secrets, credentials) from published content.
-	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, logger)
+	notifOrgResolver := controlplane.NewRepoBackedNotificationOrgResolver(notifRepo)
+	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, confidentialEncryptor, notifOrgResolver, logger)
 
 	// Register the notification intent handler when the notification domain is
 	// enabled. The dispatcher's OnChannelChanged method is the event-driven
@@ -2055,6 +2071,7 @@ func New(cfg *config.Config) (*App, error) {
 			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
+			History:          projectionHistory,
 		})
 		if err != nil {
 			return nil, err
@@ -2082,7 +2099,7 @@ func New(cfg *config.Config) (*App, error) {
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalStore(localEventStore),
 		nostrAdapter.WithSelfAuthors(servicePubkey),
-		nostrAdapter.WithInboundSync(inboundSyncConfig(cfg.Nostr.LocalStore)),
+		nostrAdapter.WithInboundSync(inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays)),
 		// NIP-09 deletions from the control-plane authors reach the
 		// projection cache live, as the bootstrapper's deletion group does.
 		nostrAdapter.WithDeletionAuthors(controlPlaneAuthors),
@@ -4580,11 +4597,12 @@ func newLoomCanonicalProjectionSigner(cfg *config.Config, relays []string, logge
 		return nil, nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
 	}
 	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
-		BunkerURI:       projection.SignetBunkerURI,
-		Relays:          relays,
-		ClientSecretKey: projection.SignetClientSecretKey,
-		RequireReal:     !cfg.DevMode,
-		AllowMock:       cfg.DevMode,
+		BunkerURI:         projection.SignetBunkerURI,
+		Relays:            relays,
+		ClientSecretKey:   projection.SignetClientSecretKey,
+		RequireReal:       !cfg.DevMode,
+		AllowMock:         cfg.DevMode,
+		ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget,
 	}, slog.Default())
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize Signet client: %w", err)
@@ -4660,7 +4678,7 @@ func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap
 		return identity, nil, nil, nil
 	}
 	slogLogger := slog.Default()
-	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock}, slogLogger)
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget}, slogLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
 		return identity, nil, nil, nil

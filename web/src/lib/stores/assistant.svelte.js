@@ -27,7 +27,7 @@ import {
   ASSISTANT_EXECUTION_TERMINAL_PHASES as TERMINAL_PHASES,
   ASSISTANT_EXECUTION_CANCELLABLE_PHASES as CANCELLABLE_PHASES
 } from '../nostr/client.js';
-import { ASSISTANT_STATUS_TOPIC } from '../nostr/kinds.gen.js';
+import { ASSISTANT_SESSION_TOPIC, ASSISTANT_STATUS_TOPIC } from '../nostr/kinds.gen.js';
 
 const { STALE, INVALID, REJECTED } = ASSISTANT_REQUEST_ERROR_KINDS;
 
@@ -589,7 +589,7 @@ function applyAssistantEvent(event, options = {}) {
 function subscriptionFilters(operatorPubkey, servicePubkey) {
   const since = nowSeconds() - RECENT_TRANSCRIPT_SECONDS;
   return [
-    { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#schema': ['bahia.assistant-session.v1', 'bahia.assistant-session.v2'], limit: SESSION_LIMIT },
+    { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#t': [ASSISTANT_SESSION_TOPIC], limit: SESSION_LIMIT },
     // Assistant status (30315) carries t=assistant-status; the parser checks
     // the schema locally (bahia-irsry.37).
     { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#t': [ASSISTANT_STATUS_TOPIC], since, limit: TRANSCRIPT_LIMIT },

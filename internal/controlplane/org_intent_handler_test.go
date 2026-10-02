@@ -279,7 +279,7 @@ func (p *stubOrgPublisher) PublishOrg(_ context.Context, org *domain.Organizatio
 	return nil
 }
 
-func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMember, deleted bool) error {
+func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMember, deleted bool, _ ...domain.Role) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.publishedMembers = append(p.publishedMembers, memberPublishRecord{Member: member, Deleted: deleted})
@@ -820,7 +820,7 @@ func TestDecryptMemberContent_RoundTrip(t *testing.T) {
 	}
 	contentJSON, _ := json.Marshal(content)
 
-	encrypted, err := encryptor.EncryptOrgState(context.Background(), contentJSON, "test-d", "test-topic")
+	encrypted, err := encryptOrgState(context.Background(), key, contentJSON, "test-d", "test-topic")
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
@@ -1109,7 +1109,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	}
 	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
 	trustSet := NewTrustSet(nil, zap.NewNop())
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 	ctx := context.Background()
 
 	orgID := uuid.New().String()
@@ -1118,8 +1118,8 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	addContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": false,
 	})
-	addEncrypted, _ := encryptor.EncryptOrgState(ctx, addContent, "test-d", "test-t")
-	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted); err != nil {
+	addEncrypted, _ := encryptOrgState(ctx, key, addContent, "test-d", "test-t")
+	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("add member failed: %v", err)
 	}
 
@@ -1133,8 +1133,8 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	removeContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": true,
 	})
-	removeEncrypted, _ := encryptor.EncryptOrgState(ctx, removeContent, "test-d", "test-t")
-	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted); err != nil {
+	removeEncrypted, _ := encryptOrgState(ctx, key, removeContent, "test-d", "test-t")
+	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("remove member failed: %v", err)
 	}
 
@@ -1164,7 +1164,7 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgIDStr, "pubkey": "org-owner", "role": "owner", "deleted": false,
 	})
-	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+	encrypted, _ := encryptOrgState(ctx, key, memberContent, "test-d", "org-member")
 
 	// Build a mock history with one member record.
 	history := &mockMemberHistory{
@@ -1175,7 +1175,7 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 
 	// Create empty TrustSet (no Postgres, no relay members yet).
 	trustSet := NewTrustSet(nil, zap.NewNop())
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 
 	// Hydrate from history.
 	handler.HydrateTrustSetFromHistory(ctx, history)
@@ -1207,7 +1207,7 @@ func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	}
 	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
 	trustSet := NewTrustSet(nil, zap.NewNop()) // No Postgres
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 	ctx := context.Background()
 
 	orgID := uuid.New()
@@ -1217,10 +1217,10 @@ func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID.String(), "pubkey": "legacy-member", "role": "admin", "deleted": false,
 	})
-	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+	encrypted, _ := encryptOrgState(ctx, key, memberContent, "test-d", "org-member")
 
 	// This is what the OrgCanonicalPublisher.SetOnMemberPublished callback does.
-	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted); err != nil {
+	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted, 0, "", ""); err != nil {
 		t.Fatalf("HandleEncryptedMemberEvent failed: %v", err)
 	}
 

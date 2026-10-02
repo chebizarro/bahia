@@ -2,46 +2,39 @@ package nostr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	gonostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
-	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// publishConfidentialControlState publishes a control-state record whose content
-// is NIP-44 encrypted to the service's own pubkey. The outer envelope tags
-// (d, domain, schema, legacy_kind, deleted, topic) remain plaintext so relay
-// coordination and tombstone replacement work as usual. Only the payload in the
-// event's Content field is encrypted.
+// Legacy NIP-44 self-encryption (Phase 3 N1). Retained as a read-only path
+// during migration from the old per-private-key scheme to the per-org content
+// key (OCK) scheme. New publishes use ConfidentialStateEncryptor.
 //
-// This is used by sensitive domains (secret, notification) where canonical state
-// must never appear in plaintext on any relay event (design §1.7).
+// N1 migration coverage:
+// - N1-era secret/notification records on relays used NIP-44 self-encryption
+//   to the service pubkey. These records are audit/backup copies — the daemon's
+//   source of truth for secrets and notifications is the database, not relay
+//   events. No relay read-back path decodes them.
+// - O1-era org/member/invite records used the sha256-derived key AEAD. The
+//   RelayMemberEventHandler.HydrateTrustSetFromHistory path does read these
+//   back and has a dual-read (new format first, legacy O1 fallback).
+// - selfDecryptNIP44Legacy is retained for future relay recovery tooling and
+//   warm-start re-publication of N1 records under the OCK scheme.
 //
-// The encryption is self-addressed: the daemon encrypts to its own pubkey using
-// a NIP-44 conversation key derived from (servicePubKey, servicePrivateKey).
-// Only the daemon (holder of the private key) can decrypt the content.
-func (p *Projector) publishConfidentialControlState(ctx context.Context, legacyKind int, id string, deleted bool, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
-	if p == nil || !p.Enabled() {
-		return nil
-	}
+// TODO(C1 follow-up): warm-start re-publication: on daemon startup, scan
+// history for records with the old encryption schema (NIP-44 or O1 AEAD),
+// decrypt, and re-publish under the new OCK scheme. File as a separate issue.
 
-	// Encrypt the content with NIP-44 self-encryption.
-	encrypted, err := p.selfEncryptNIP44(content)
-	if err != nil {
-		return fmt.Errorf("encrypt confidential state: %w", err)
-	}
-
-	// Publish with the encrypted content; outer envelope tags stay plaintext.
-	return p.publishControlState(ctx, legacyKind, id, deleted, tags, encrypted, entityType, entityID)
-}
-
-// selfEncryptNIP44 encrypts plaintext to the service's own pubkey using NIP-44.
-// The conversation key is derived from (servicePubKey, servicePrivateKey),
-// ensuring only the daemon can decrypt it.
-func (p *Projector) selfEncryptNIP44(plaintext string) (string, error) {
+// selfDecryptNIP44Legacy decrypts content that was NIP-44 self-encrypted
+// to the service's own pubkey using the raw private key. Legacy read-only path.
+func (p *Projector) selfDecryptNIP44Legacy(content string) (string, error) {
 	if p.privateKey == "" {
-		return "", fmt.Errorf("no private key configured for NIP-44 self-encryption")
+		return "", fmt.Errorf("no private key configured for legacy NIP-44 self-decryption")
 	}
 
 	secret, err := gonostr.SecretKeyFromHex(p.privateKey)
@@ -55,10 +48,68 @@ func (p *Projector) selfEncryptNIP44(plaintext string) (string, error) {
 		return "", fmt.Errorf("generate conversation key: %w", err)
 	}
 
-	ciphertext, err := nip44.Encrypt(plaintext, conversationKey)
+	plaintext, err := nip44.Decrypt(content, conversationKey)
 	if err != nil {
-		return "", fmt.Errorf("NIP-44 encrypt: %w", err)
+		return "", fmt.Errorf("NIP-44 decrypt: %w", err)
 	}
 
-	return ciphertext, nil
+	return plaintext, nil
+}
+
+// PublishKeyEnvelope publishes a key-envelope record through the shared
+// cp-state signing/outbox pipeline. Implements controlplane.OCKEnvelopePublisher
+// via Go structural typing — no import of controlplane needed.
+func (p *Projector) PublishKeyEnvelope(ctx context.Context, dTag string, content string) error {
+	if p == nil || !p.Enabled() {
+		return fmt.Errorf("projector not enabled for key-envelope publish")
+	}
+	return p.publishControlState(ctx, KindOrgKeyEnvelope, dTag, false, nil, content, "org_key_envelope.projection", nil)
+}
+
+// ProjectorOCKEnvelopeHistory adapts the Projector's history to the
+// controlplane.OCKEnvelopeHistory interface via Go structural typing.
+// Returns []domain.KeyEnvelopeRecord — no import of controlplane needed.
+type ProjectorOCKEnvelopeHistory struct {
+	history ProjectionHistory
+}
+
+// NewProjectorOCKEnvelopeHistory creates an adapter from ProjectionHistory to
+// the OCKEnvelopeHistory interface.
+func NewProjectorOCKEnvelopeHistory(history ProjectionHistory) *ProjectorOCKEnvelopeHistory {
+	return &ProjectorOCKEnvelopeHistory{history: history}
+}
+
+// FindKeyEnvelopes retrieves key-envelope records from history for OCK recovery.
+func (h *ProjectorOCKEnvelopeHistory) FindKeyEnvelopes(ctx context.Context, orgID string) ([]domain.KeyEnvelopeRecord, error) {
+	if h.history == nil {
+		return nil, fmt.Errorf("no projection history for key-envelope recovery")
+	}
+	records, err := h.history.FindByTag(ctx, "t", "org-key-envelope", nil, 10000)
+	if err != nil {
+		return nil, fmt.Errorf("query key-envelope history: %w", err)
+	}
+	var out []domain.KeyEnvelopeRecord
+	for _, rec := range records {
+		dTag := extractDTagFromRecord(rec)
+		out = append(out, domain.KeyEnvelopeRecord{
+			DTag:    dTag,
+			Content: rec.Content,
+		})
+	}
+	return out, nil
+}
+
+// extractDTagFromRecord extracts the d-tag value from a NostrEventRecord's
+// Tags JSON.
+func extractDTagFromRecord(rec repository.NostrEventRecord) string {
+	var tags [][]string
+	if err := json.Unmarshal(rec.Tags, &tags); err != nil {
+		return ""
+	}
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == "d" {
+			return tag[1]
+		}
+	}
+	return ""
 }

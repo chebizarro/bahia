@@ -138,7 +138,7 @@ func NewRelayClient(relays []string, opts ...RelayClientOption) (*RelayClient, e
 	if c.resubscribeBackoff != nil {
 		poolOpts = append(poolOpts, nostradapter.WithResubscribeBackoff(c.resubscribeBackoff))
 	}
-	c.pool = nostradapter.NewRelayPool(relays, newSlogZapLogger(c.logger), poolOpts...)
+	c.pool = nostradapter.NewRelayPool(relays, nostradapter.NewSlogZapLogger(c.logger), poolOpts...)
 	c.relays = c.pool.URLs()
 	return c, nil
 }
@@ -449,6 +449,17 @@ func (c *RelayClient) Close() {
 	}
 }
 
+// WaitForTopologyChange blocks until a relay is connected or removed, or
+// until ctx is cancelled. This satisfies the topologyNotifier interface
+// used by the OpenClaw sidecar to resubscribe after a GaveUp.
+func (c *RelayClient) WaitForTopologyChange(ctx context.Context) error {
+	if c == nil || c.pool == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.pool.WaitForTopologyChange(ctx)
+}
+
 // RelaySubscription is a merged subscription on the client's relays.
 // EndOfStoredEvents closes once every relay has answered the initial REQs
 // with a terminal frame, EOSE or CLOSED, or once the subscription ends.
@@ -476,6 +487,15 @@ func (s *RelaySubscription) StoredEventsOutcome() []RelayStoredEventsOutcome {
 		return nil
 	}
 	return s.merged.StoredOutcomes()
+}
+
+// GaveUp returns the subscription-gave-up error when every relay has
+// permanently refused. It delegates to the underlying merged subscription.
+func (s *RelaySubscription) GaveUp() error {
+	if s == nil || s.merged == nil {
+		return nil
+	}
+	return s.merged.GaveUp()
 }
 
 // StoredEventsIncomplete returns nil when every relay has sent EOSE and

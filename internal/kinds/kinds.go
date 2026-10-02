@@ -367,6 +367,11 @@ const (
 const (
 	SecretRegistry              = 32008
 	NotificationChannelRegistry = 32009
+
+	// Org key-envelope kind (Phase 3 C1: per-org content key distribution).
+	// Key-envelope records wrap the per-org content key (OCK) to individual
+	// org members and the service via NIP-44.
+	OrgKeyEnvelope = 32010
 )
 
 // =============================================================================
