@@ -84,6 +84,10 @@ type RegistryMutationBackend interface {
 }
 
 type EncryptedRouteHandlersConfig struct {
+	// IntentProcessor is the Phase 3 dual-dispatch entry point. When non-nil
+	// and a domain handler is registered (service, environment), that domain's
+	// mutations are routed through ProcessInProcess for shared idempotency (§4.1).
+	IntentProcessor *IntentProcessor
 	Secrets         repository.SecretRepository
 	Encryptor       *secrets.Encryptor
 	Runs            repository.DeploymentRunRepository
@@ -96,11 +100,11 @@ type EncryptedRouteHandlersConfig struct {
 	Registry        RegistryMutationBackend
 	DeploymentUnits readmodel.EnvironmentDeploymentUnitReader
 	RBAC            *auth.RBAC
-	IntentProcessor *IntentProcessor
 	Logger          *zap.Logger
 }
 
 type EncryptedRouteHandlers struct {
+	intentProcessor *IntentProcessor
 	secrets         repository.SecretRepository
 	encryptor       *secrets.Encryptor
 	runs            repository.DeploymentRunRepository
@@ -113,7 +117,6 @@ type EncryptedRouteHandlers struct {
 	registry        RegistryMutationBackend
 	deploymentUnits readmodel.EnvironmentDeploymentUnitReader
 	rbac            *auth.RBAC
-	intentProcessor *IntentProcessor
 	logger          *zap.Logger
 }
 
@@ -126,6 +129,7 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		logger = zap.NewNop()
 	}
 	return &EncryptedRouteHandlers{
+		intentProcessor: cfg.IntentProcessor,
 		secrets:         cfg.Secrets,
 		encryptor:       cfg.Encryptor,
 		runs:            cfg.Runs,
@@ -138,7 +142,6 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		registry:        cfg.Registry,
 		deploymentUnits: cfg.DeploymentUnits,
 		rbac:            cfg.RBAC,
-		intentProcessor: cfg.IntentProcessor,
 		logger:          logger.Named("encrypted-route-handlers"),
 	}
 }
@@ -424,7 +427,19 @@ func (h *EncryptedRouteHandlers) CreateService(ctx context.Context, request Cont
 		}
 		svc.RuntimeConfig = &domain.ServiceRuntimeConfig{Managed: managed}
 	}
-	if err := h.registry.CreateService(ctx, svc); err != nil {
+	// Phase 3 dual dispatch (§4.1): when the service domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.serviceIntentEnabled() {
+		intent := h.serviceIntentFromContextVM(request, "create", svc, effectiveIdempotencyKey(request, payload.IdempotencyKey))
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to create service: %w", err)
+		}
+		// Read back the service to return the stamped entity.
+		created, _ := h.services.GetByID(ctx, svc.ID)
+		if created != nil {
+			svc = created
+		}
+	} else if err := h.registry.CreateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
 	return map[string]any{"status": "created", "service": svc, "service_id": svc.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
@@ -532,7 +547,24 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 			svc.RuntimeConfig.Adopted.Environment[key] = value
 		}
 	}
-	if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
+	// Phase 3 dual dispatch (§4.1): when the service domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.serviceIntentEnabled() {
+		intent := h.serviceIntentFromContextVM(request, "update", svc, effectiveIdempotencyKey(request, payload.IdempotencyKey))
+		if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
+			ts := payload.ExpectedUpdatedAt.Format(time.RFC3339Nano)
+			intent.Content["expected_updated_at"] = ts
+			epoch := payload.ExpectedUpdatedAt.UnixNano()
+			intent.ExpectedUpdatedAt = &epoch
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to update service: %w", err)
+		}
+		updated, _ := h.services.GetByID(ctx, svc.ID)
+		if updated != nil {
+			svc = updated
+		}
+	} else if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
 		if err := h.registry.UpdateServiceWithExpectedRevision(ctx, svc, *payload.ExpectedUpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to update service: %w", err)
 		}
@@ -554,10 +586,63 @@ func (h *EncryptedRouteHandlers) DeleteService(ctx context.Context, request Cont
 	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ID, domain.PermWriteServices); err != nil {
 		return nil, err
 	}
-	if err := h.registry.DeleteService(ctx, payload.ID, payload.Force); err != nil {
+	// Phase 3 dual dispatch (§4.1): when the service domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.serviceIntentEnabled() {
+		intent := h.serviceIntentFromContextVM(request, "delete", &domain.Service{ID: payload.ID}, effectiveIdempotencyKey(request, payload.IdempotencyKey))
+		intent.Content["deleted"] = true
+		intent.Content["force"] = payload.Force
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to delete service: %w", err)
+		}
+	} else if err := h.registry.DeleteService(ctx, payload.ID, payload.Force); err != nil {
 		return nil, fmt.Errorf("failed to delete service: %w", err)
 	}
 	return map[string]any{"status": "deleted", "service_id": payload.ID.String(), "idempotency_key": effectiveIdempotencyKey(request, payload.IdempotencyKey)}, nil
+}
+
+// serviceIntentFromContextVM builds a synthetic Intent for the dual-dispatch
+// path (§4.1). The ContextVM handler has already authorized the request; the
+// intent processor shares the same idempotency store as the relay path.
+func (h *EncryptedRouteHandlers) serviceIntentFromContextVM(request ContextVMRequest, op string, svc *domain.Service, idempotencyKey string) *Intent {
+	content := map[string]interface{}{
+		"id":             svc.ID.String(),
+		"name":           svc.Name,
+		"repo_url":       svc.RepoURL,
+		"artifact_repo":  svc.ArtifactRepo,
+		"default_branch": svc.DefaultBranch,
+		"runtime_type":   string(svc.RuntimeType),
+		"org_id":         svc.OrgID.String(),
+	}
+	if svc.Repository != nil {
+		content["repository"] = svc.Repository
+	}
+
+	intentID := idempotencyKey
+	if intentID == "" {
+		intentID = domain.NewEntityID().String()
+	}
+
+	actor := ""
+	if request.Event != nil {
+		actor = request.Event.PubKey.Hex()
+	}
+
+	return &Intent{
+		Domain:     "service",
+		Op:         op,
+		OrgID:      svc.OrgID,
+		IntentID:   intentID,
+		Coordinate: svc.ID.String(),
+		Content:    content,
+		Actor:      actor,
+	}
+}
+
+// serviceIntentEnabled reports whether the service domain is routed through
+// the intent processor (Phase 3 dual dispatch).
+func (h *EncryptedRouteHandlers) serviceIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("service") != nil
 }
 
 func repositoryRefFromRequest(request *dto.RepositoryRefRequest) *domain.RepositoryRef {

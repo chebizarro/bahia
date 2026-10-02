@@ -335,12 +335,9 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		return
 	}
 	for _, eventType := range []events.EventType{
-		events.EventServiceCreated,
-		events.EventServiceUpdated,
-		events.EventServiceDeleted,
-		// Phase 3 F3: EventEnvironmentCreated/Updated/Deleted subscriptions
-		// removed — environment state is now published by the intent handler
-		// via PublishBeforeCommit (bahia-irsry.11.4).
+		// Phase 3 F2/F3: service and environment Created/Updated/Deleted
+		// subscriptions removed — their state is published by the intent handlers
+		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
 		events.EventDeploymentIntentCreated,
 		events.EventDeploymentIntentApproved,
 		events.EventDeploymentIntentRejected,
@@ -454,14 +451,6 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	services, err := snapshotSource.ListServices(ctx)
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
-	}
-	// F4 guard: migrated domains skip the Postgres→relay re-projection.
-	if !p.isDomainMigrated("service") {
-		for i := range services {
-			if err := p.publishServiceRegistry(ctx, &services[i], false); err != nil {
-				p.logger.Warn("publish service registry projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
-			}
-		}
 	}
 
 	// Phase 3 F3: environment snapshot republish removed — environment state
@@ -607,15 +596,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		} else if id, ok := parseUUID(res.IntentID); ok {
 			p.publishStateForIntent(ctx, id)
 		}
-	case events.EventServiceCreated, events.EventServiceUpdated:
-		p.publishServiceByID(ctx, firstUUID(res.ServiceID, e.EntityID))
-	case events.EventServiceDeleted:
-		if id, ok := parseUUID(firstString(res.ServiceID, e.EntityID)); ok {
-			_ = p.publishServiceRegistry(ctx, &domain.Service{ID: id, UpdatedAt: time.Now().UTC()}, true)
-		}
-	// Phase 3 F3: EventEnvironmentCreated/Updated/Deleted handleEvent cases
-	// removed — environment state is now published by the intent handler
-	// via PublishBeforeCommit (bahia-irsry.11.4).
+	// Phase 3 F2/F3: service and environment handleEvent cases removed — their
+	// state is published by the intent handlers via PublishBeforeCommit
+	// (bahia-irsry.11.3, bahia-irsry.11.4).
 	case events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected, events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
 		if res.Deleted {
 			if err := p.publishStateTombstone(ctx, res); err != nil {

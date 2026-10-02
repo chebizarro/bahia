@@ -844,10 +844,8 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 		t.Fatalf("republish snapshot: %v", err)
 	}
 
-	assertOneSignedKind(t, sink, KindServiceRegistry)
-	// Phase 3 F3: environment snapshot publishing removed from RepublishSnapshot.
-	// Environment state is now published by the intent handler via
-	// PublishBeforeCommit (bahia-irsry.11.4).
+	// Phase 3 F2/F3: service and environment registry records are no longer
+	// published by the projector (the intent handlers own them).
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	if got, want := eventKindInt(&stateEvent), cascadia.CAS_CP_STATE; got != want {
 		t.Fatalf("service state wire kind = %d, want %d", got, want)
@@ -942,18 +940,11 @@ func TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations(t *testi
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 
 	projector.handleEvent(ctx, events.Event{
-		Type:     events.EventServiceCreated,
-		EntityID: serviceID.String(),
-		Data:     events.ResourceData{ServiceID: serviceID.String()},
-	})
-	projector.handleEvent(ctx, events.Event{
 		Type:     events.EventDeploymentRunStatusChanged,
 		EntityID: runID.String(),
 		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
 	})
 
-	assertOneAudit(t, sink, events.EventServiceCreated)
-	assertOneSignedKind(t, sink, KindServiceRegistry)
 	assertOneAudit(t, sink, events.EventDeploymentRunStatusChanged)
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	assertTag(t, stateEvent, "service", serviceID.String())

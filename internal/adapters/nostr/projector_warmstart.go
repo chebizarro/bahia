@@ -163,4 +163,3 @@ func (p *Projector) isDomainMigrated(domain string) bool {
 	}
 	return false
 }
-
