@@ -56,11 +56,9 @@ type ReplayCheckpointPayload struct {
 
 // ReadinessStatusPayload is the JSON content for kind 30360 Bahia readiness status events.
 type ReadinessStatusPayload struct {
-	Phase         string            `json:"phase"`
-	ActiveTier    int               `json:"active_tier"`
-	RequestedTier int               `json:"requested_tier"`
-	Ready         bool              `json:"ready"`
-	Checks        map[string]string `json:"checks"`
+	Phase  string            `json:"phase"`
+	Ready  bool              `json:"ready"`
+	Checks map[string]string `json:"checks"`
 }
 
 // EncodeBahiaIdentity serializes a Bahia identity definition as a kind 31410 replaceable event.

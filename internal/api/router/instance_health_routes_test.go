@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/router"
-	"github.com/openagentsinc/bahia/internal/app"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -37,13 +36,14 @@ func (routeInstanceEnvironmentRepo) GetByID(context.Context, uuid.UUID) (*domain
 	return nil, nil
 }
 
-func TestInstanceHealthCollectionRouteIsMountedAndTier2Gated(t *testing.T) {
+func TestInstanceHealthCollectionRouteIsMountedAndRequireRepoGated(t *testing.T) {
+	registry := newTestRegistryService()
 	deps := router.RouterDeps{
 		InstanceHealth: routeInstanceHealthRepo{},
 		Services:       routeInstanceServiceRepo{},
 		Environments:   routeInstanceEnvironmentRepo{},
 	}
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, deps)
+	h := router.NewWithDeps(registry, zap.NewNop(), config.CORSConfig{}, nil, deps)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance-health", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -51,13 +51,14 @@ func TestInstanceHealthCollectionRouteIsMountedAndTier2Gated(t *testing.T) {
 		t.Fatalf("mounted route status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	policy := app.NewModePolicy(app.ModeFull)
-	policy.SetActiveTier(app.Tier1)
-	deps.ModePolicy = policy
-	h = router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, deps)
+	// Without ServiceRepository, the handler is not created and the route
+	// is not mounted — chi returns 404 (the route does not exist).
+	h = router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+		InstanceHealth: routeInstanceHealthRepo{},
+	})
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("tier-gated route status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when deps incomplete, got status=%d body=%s", w.Code, w.Body.String())
 	}
 }

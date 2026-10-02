@@ -9,15 +9,11 @@ import (
 // filter, at least one relay has delivered EOSE and reconciliation has
 // completed.
 //
-// This is additive to the existing tier model (ModePolicy/bootstrapper): the
-// readiness endpoint can check both. The tier model is deleted in Wave 6 (T1)
-// when all domains have migrated.
-//
 // See design §6.2.
 type ReadinessTracker struct {
 	mu      sync.RWMutex
 	filters map[string]bool // filter-key → ready
-	readyCh chan struct{}    // closed when all filters are ready
+	readyCh chan struct{}   // closed when all filters are ready
 }
 
 // NewReadinessTracker creates a tracker. Register filters with RegisterFilter

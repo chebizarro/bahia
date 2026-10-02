@@ -51,42 +51,11 @@ func TestBootstrapperRunReplaysSnapshotAndLiveCatchupToReady(t *testing.T) {
 		testKindTier0Snapshot: {eose: true},
 		testKindTier1Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "snapshot-1")}, eose: true},
 		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
-	})
-
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
-
-	err := bootstrapper.Run(context.Background())
-
-	require.NoError(t, err)
-	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 1, bootstrapper.ReadyTier())
-	require.Equal(t, 2, cache.count())
-	progress := bootstrapper.Progress()
-	require.Equal(t, BootstrapPhaseReady, progress.Phase)
-	require.Equal(t, 1, progress.RequestedTier)
-	require.Equal(t, 1, progress.ReadyTier)
-	require.Equal(t, 3, progress.GroupsTotal)
-	require.Equal(t, 3, progress.GroupsComplete)
-	require.False(t, progress.StartedAt.IsZero())
-}
-
-func TestBootstrapperTimeoutFallsBackToLowerTier(t *testing.T) {
-	catalog := testBootstrapCatalog()
-	cache := &bootstrapApplyRecorder{}
-	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
-		testKindTier0Snapshot: {eose: true},
-		testKindTier1Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "snapshot-1")}, eose: true},
-		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
-		testKindTier2Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Snapshot, "snapshot-2")}, eose: false},
+		testKindTier2Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Snapshot, "snapshot-2")}, eose: true},
 		testKindTier2Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Live, "live-2")}, eose: true},
 	})
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   2,
 		SnapshotTimeout: 50 * time.Millisecond,
 		CatchupTimeout:  50 * time.Millisecond,
 	})
@@ -95,11 +64,40 @@ func TestBootstrapperTimeoutFallsBackToLowerTier(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 1, bootstrapper.ReadyTier())
+	require.Equal(t, 4, cache.count())
 	progress := bootstrapper.Progress()
 	require.Equal(t, BootstrapPhaseReady, progress.Phase)
 	require.Equal(t, 5, progress.GroupsTotal)
-	require.Equal(t, 4, progress.GroupsComplete)
+	require.Equal(t, 5, progress.GroupsComplete)
+	require.False(t, progress.StartedAt.IsZero())
+}
+
+func TestBootstrapperTimeoutOnRequiredGroupRetriesUntilSuccess(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	cache := &bootstrapApplyRecorder{}
+
+	// All required groups complete including the previously-slow one.
+	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
+		testKindTier0Snapshot: {eose: true},
+		testKindTier1Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "snapshot-1")}, eose: true},
+		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
+		testKindTier2Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Snapshot, "snapshot-2")}, eose: true},
+		testKindTier2Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Live, "live-2")}, eose: true},
+	})
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
+		SnapshotTimeout: 50 * time.Millisecond,
+		CatchupTimeout:  50 * time.Millisecond,
+	})
+
+	err := bootstrapper.Run(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	progress := bootstrapper.Progress()
+	require.Equal(t, BootstrapPhaseReady, progress.Phase)
+	require.Equal(t, 5, progress.GroupsTotal)
+	require.Equal(t, 5, progress.GroupsComplete)
 	require.Equal(t, 4, cache.count())
 }
 
@@ -118,7 +116,6 @@ func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
 	bootstrapper := NewBootstrapper(nil, testBootstrapCatalog(), nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   0,
 		SnapshotTimeout: 10 * time.Millisecond,
 	})
 	_, err := bootstrapper.runGroup(context.Background(), testBootstrapCatalog().Groups[0], gonostr.Filter{}, 10*time.Millisecond)
@@ -136,10 +133,11 @@ func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 		testKindTier0Snapshot: {eose: true},
 		testKindTier1Snapshot: {eose: true},
 		testKindTier1Live:     {eose: true},
+		testKindTier2Snapshot: {eose: true},
+		testKindTier2Live:     {eose: true},
 	})
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
 		SnapshotTimeout: 50 * time.Millisecond,
 		CatchupTimeout:  50 * time.Millisecond,
 	})
@@ -151,11 +149,10 @@ func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 1, bootstrapper.ReadyTier())
 	require.Zero(t, cache.count())
 	progress := bootstrapper.Progress()
 	require.Equal(t, BootstrapPhaseReady, progress.Phase)
-	require.Equal(t, 3, progress.GroupsComplete)
+	require.Equal(t, 5, progress.GroupsComplete)
 }
 
 func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
@@ -190,7 +187,6 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
 		SnapshotTimeout: 50 * time.Millisecond,
 		CatchupTimeout:  50 * time.Millisecond,
 		RetryInterval:   time.Millisecond,
@@ -200,7 +196,6 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 1, bootstrapper.ReadyTier())
 	require.Equal(t, 2, cache.count())
 	attemptsMu.Lock()
 	require.Equal(t, 2, attemptsByKind[testKindTier0Snapshot])
@@ -212,17 +207,26 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 func TestBootstrapperSkipsMalformedEventsAndContinuesGroup(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	cache := &bootstrapApplyRecorder{}
-	badEvent := signedBootstrapEvent(t, testKindTier1Snapshot, "bad")
-	badEvent.Content = `not-json`
+	// Build a properly signed event with unparseable content so
+	// ValidateInboundEvent passes (ID and signature match the actual
+	// content) but the strict decoder fails on the payload.
+	badEvent := &gonostr.Event{
+		Kind:      canonicalKind(testKindTier1Snapshot),
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "bad"}},
+		Content:   `not-json`,
+	}
+	require.NoError(t, signEventWithPrivateKeyHex(badEvent, gonostr.Generate().Hex()))
 	goodEvent := signedBootstrapEvent(t, testKindTier1Snapshot, "good")
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
 		testKindTier0Snapshot: {eose: true},
 		testKindTier1Snapshot: {events: []*gonostr.Event{badEvent, goodEvent}, eose: true},
 		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
+		testKindTier2Snapshot: {eose: true},
+		testKindTier2Live:     {eose: true},
 	})
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   1,
 		SnapshotTimeout: 50 * time.Millisecond,
 		CatchupTimeout:  50 * time.Millisecond,
 	})
@@ -246,11 +250,11 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	catalog := &KindCatalog{
 		Version: "test",
 		Groups: []ReplayGroup{
-			{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
-			{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsControlPlane},
-			{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
-			{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
-			{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+			{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+			{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsControlPlane},
+			{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+			{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+			{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 		},
 		decoders: map[int]DecodeFunc{
 			testKindTier0Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -291,7 +295,6 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	require.NoError(t, err)
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		RequestedTier:       2,
 		SnapshotTimeout:     50 * time.Millisecond,
 		CatchupTimeout:      50 * time.Millisecond,
 		ProjectionAuthors:   []string{servicePubkey},
@@ -301,7 +304,6 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	err = bootstrapper.attemptBootstrap(context.Background())
 
 	require.NoError(t, err)
-	require.Equal(t, 2, bootstrapper.ReadyTier())
 	require.Len(t, captured, 5)
 	require.Equal(t, projectionAuthors, captured[0].Authors)
 	require.Equal(t, controlPlaneAuthors, captured[1].Authors)
@@ -321,7 +323,7 @@ func TestBootstrapperUnknownAuthorScopeIsHardError(t *testing.T) {
 	}
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{RequestedTier: 1})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{})
 	err := bootstrapper.attemptBootstrap(context.Background())
 
 	require.ErrorContains(t, err, `bootstrap group "tier0_snapshot"`)
@@ -343,71 +345,19 @@ func TestBootstrapperScopedGroupWithoutConfiguredAuthorsIsHardError(t *testing.T
 	}
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{RequestedTier: 0})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{})
 	err := bootstrapper.attemptBootstrap(context.Background())
 
 	require.ErrorContains(t, err, "requires projection authors but none are configured")
-	require.Equal(t, -1, bootstrapper.ReadyTier())
-}
-
-func TestBootstrapperProgressReturnsSnapshot(t *testing.T) {
-	bootstrapper := NewBootstrapper(nil, testBootstrapCatalog(), nil, nil, zap.NewNop(), BootstrapConfig{RequestedTier: 2})
-	startedAt := time.Unix(100, 0).UTC()
-	bootstrapper.setProgress(func(progress *BootstrapProgress) {
-		progress.Phase = BootstrapPhaseLiveCatchup
-		progress.RequestedTier = 2
-		progress.ReadyTier = 1
-		progress.GroupsTotal = 5
-		progress.GroupsComplete = 3
-		progress.StartedAt = startedAt
-	})
-
-	progress := bootstrapper.Progress()
-
-	require.Equal(t, BootstrapPhaseLiveCatchup, progress.Phase)
-	require.Equal(t, 2, progress.RequestedTier)
-	require.Equal(t, 1, progress.ReadyTier)
-	require.Equal(t, 5, progress.GroupsTotal)
-	require.Equal(t, 3, progress.GroupsComplete)
-	require.Equal(t, startedAt, progress.StartedAt)
-}
-
-func TestBootstrapperReadyTierComputation(t *testing.T) {
-	bootstrapper := NewBootstrapper(nil, testBootstrapCatalog(), nil, nil, zap.NewNop(), BootstrapConfig{RequestedTier: 2})
-
-	readyTier2 := bootstrapper.computeReadyTier(map[string]bool{
-		"tier0_snapshot": true,
-		"tier1_snapshot": true,
-		"tier1_live":     true,
-		"tier2_snapshot": true,
-		"tier2_live":     true,
-	})
-	require.Equal(t, 2, readyTier2)
-
-	readyTier1 := bootstrapper.computeReadyTier(map[string]bool{
-		"tier0_snapshot": true,
-		"tier1_snapshot": true,
-		"tier1_live":     true,
-		"tier2_snapshot": false,
-		"tier2_live":     true,
-	})
-	require.Equal(t, 1, readyTier1)
-
-	failed := bootstrapper.computeReadyTier(map[string]bool{
-		"tier0_snapshot": true,
-		"tier1_snapshot": false,
-		"tier1_live":     true,
-	})
-	require.Equal(t, 0, failed)
 }
 
 func testBootstrapCatalog() *KindCatalog {
 	groups := []ReplayGroup{
-		{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
-		{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
-		{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
-		{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
-		{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier0_snapshot", Kinds: []int{testKindTier0Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier1_snapshot", Kinds: []int{testKindTier1Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier1_live", Kinds: []int{testKindTier1Live}, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier2_snapshot", Kinds: []int{testKindTier2Snapshot}, Snapshot: true, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "tier2_live", Kinds: []int{testKindTier2Live}, Snapshot: false, Required: true, Authors: ReplayAuthorsAny},
 	}
 	catalog := &KindCatalog{Version: "test", Groups: groups, decoders: make(map[int]DecodeFunc)}
 	for _, group := range groups {

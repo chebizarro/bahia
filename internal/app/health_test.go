@@ -7,26 +7,26 @@ import (
 	"time"
 
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 func TestHealthProviderLivenessAlwaysHealthy(t *testing.T) {
-	provider := NewHealthProvider(NewModePolicy(ModeFull), nil)
+	provider := NewHealthProvider(nil, nil)
 
 	snapshot := provider.Liveness()
 
 	require.Equal(t, SnapshotStatusHealthy, snapshot.Status)
 	require.True(t, snapshot.Ready)
-	require.Equal(t, string(ModeFull), snapshot.Mode)
 }
 
 func TestSignetRecoveryFlipsReadinessHealthyWithoutRestart(t *testing.T) {
 	client, err := signetAdapter.NewClient(signetAdapter.Config{AllowMock: true, ConnectTimeout: 50 * time.Millisecond}, slog.Default())
 	require.NoError(t, err)
 	manager := signetAdapter.NewConnectionManager(client, signetAdapter.ConnectionManagerConfig{Name: "test", HeartbeatInterval: time.Hour})
-	provider := NewHealthProvider(NewModePolicy(ModeFull), nil)
-	registerSignetHealthCheck(provider, manager, Tier1)
+	provider := NewHealthProvider(nil, nil)
+	registerSignetHealthCheck(provider, manager)
 
 	degraded := provider.Readiness()
 	require.Equal(t, SnapshotStatusDegraded, degraded.Status)
@@ -71,7 +71,7 @@ func waitForManagerConnection(t *testing.T, manager *signetAdapter.ConnectionMan
 }
 
 func TestHealthProviderReadinessWithNoChecksPasses(t *testing.T) {
-	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+	provider := NewHealthProvider(nil, NewBackgroundManager(zap.NewNop()))
 
 	snapshot := provider.Readiness()
 
@@ -83,7 +83,7 @@ func TestHealthProviderReadinessWithNoChecksPasses(t *testing.T) {
 }
 
 func TestHealthProviderReadinessIncludesBootstrapBlockingRelays(t *testing.T) {
-	provider := NewHealthProvider(NewModePolicy(ModeFull), nil)
+	provider := NewHealthProvider(nil, nil)
 	provider.SetBootstrapFunc(func() (string, bool) { return "snapshot", false })
 	provider.SetBootstrapDetailsFunc(func() map[string]string {
 		return map[string]string{
@@ -105,9 +105,9 @@ func TestHealthProviderReadinessIncludesBootstrapBlockingRelays(t *testing.T) {
 }
 
 func TestHealthProviderWarningDependencyIsDegradedButReady(t *testing.T) {
-	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
-	provider.RegisterCheck("signet-test", int(Tier1), func() HealthCheck {
-		return HealthCheck{Name: "signet-test", Status: HealthStatusWarn, Message: "disconnected", Tier: int(Tier1)}
+	provider := NewHealthProvider(nil, NewBackgroundManager(zap.NewNop()))
+	provider.RegisterCheck("signet-test", func() HealthCheck {
+		return HealthCheck{Name: "signet-test", Status: HealthStatusWarn, Message: "disconnected"}
 	})
 
 	snapshot := provider.Readiness()
@@ -120,21 +120,17 @@ func TestHealthProviderWarningDependencyIsDegradedButReady(t *testing.T) {
 func TestHealthProviderReadinessWithFailedRequiredRunnerReturnsUnhealthy(t *testing.T) {
 	manager := NewBackgroundManager(zap.NewNop())
 	manager.Register(&testRunner{name: "required-runner"})
-	provider := NewHealthProvider(NewModePolicy(ModeFull), manager)
+	provider := NewHealthProvider(nil, manager)
 
 	snapshot := provider.Readiness()
 
 	require.Equal(t, SnapshotStatusUnhealthy, snapshot.Status)
 	require.False(t, snapshot.Ready)
-	require.Len(t, snapshot.RunnerSummary, 1)
-	require.Equal(t, "required-runner", snapshot.RunnerSummary[0].Name)
-	require.True(t, snapshot.RunnerSummary[0].Required)
-	require.False(t, snapshot.RunnerSummary[0].Running)
 	requireCheckStatus(t, snapshot.Checks, "background_runners", HealthStatusFail)
 }
 
 func TestHealthProviderReadinessWithRelayHealthFunction(t *testing.T) {
-	provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+	provider := NewHealthProvider(nil, NewBackgroundManager(zap.NewNop()))
 	provider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return 3, 2
 	})
@@ -156,23 +152,25 @@ func TestHealthProviderReadinessWithRelayHealthFunction(t *testing.T) {
 	requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusFail)
 }
 
-func TestHealthProviderModeAndTierReflectedInSnapshot(t *testing.T) {
-	policy := NewModePolicy(ModeFull)
-	policy.SetActiveTier(Tier2)
-	provider := NewHealthProvider(policy, NewBackgroundManager(zap.NewNop()))
+func TestHealthProviderReadinessTrackerIntegration(t *testing.T) {
+	tracker := controlplane.NewReadinessTracker()
+	tracker.RegisterFilter("intents")
+	provider := NewHealthProvider(tracker, NewBackgroundManager(zap.NewNop()))
 
 	snapshot := provider.Readiness()
+	require.False(t, snapshot.Ready, "should not be ready while filters are syncing")
+	requireCheckStatus(t, snapshot.Checks, "intent_readiness", HealthStatusFail)
 
-	require.Equal(t, string(ModeFull), snapshot.Mode)
-	require.Equal(t, int(Tier3), snapshot.RequestedTier)
-	require.Equal(t, int(Tier2), snapshot.ActiveTier)
-	require.Equal(t, SnapshotStatusDegraded, snapshot.Status)
-	require.True(t, snapshot.Ready)
+	tracker.MarkFilterReady("intents")
+
+	snapshot = provider.Readiness()
+	require.True(t, snapshot.Ready, "should be ready after all filters synced")
+	requireCheckStatus(t, snapshot.Checks, "intent_readiness", HealthStatusPass)
 }
 
-func TestHealthProviderRelayQuorumUsesModeThresholds(t *testing.T) {
-	t.Run("full mode requires two healthy relays by default", func(t *testing.T) {
-		provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+func TestHealthProviderRelayQuorumUsesConfiguredThreshold(t *testing.T) {
+	t.Run("default requires two healthy relays", func(t *testing.T) {
+		provider := NewHealthProvider(nil, NewBackgroundManager(zap.NewNop()))
 		provider.SetRelayHealthFunc(func() (connected, healthy int) { return 3, 1 })
 
 		snapshot := provider.Readiness()
@@ -183,8 +181,8 @@ func TestHealthProviderRelayQuorumUsesModeThresholds(t *testing.T) {
 		require.Contains(t, check.Message, "min_required=2")
 	})
 
-	t.Run("configured full threshold is honored", func(t *testing.T) {
-		provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+	t.Run("configured threshold is honored", func(t *testing.T) {
+		provider := NewHealthProvider(nil, NewBackgroundManager(zap.NewNop()))
 		provider.SetRelayQuorumConfig(RelayQuorumConfig{FullMinHealthy: 3, DegradedMinHealthy: 1, EmergencyMinHealthy: 1})
 		provider.SetRelayHealthFunc(func() (connected, healthy int) { return 4, 2 })
 
@@ -194,19 +192,6 @@ func TestHealthProviderRelayQuorumUsesModeThresholds(t *testing.T) {
 		require.False(t, snapshot.Ready)
 		check := requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusFail)
 		require.Contains(t, check.Message, "min_required=3")
-	})
-
-	t.Run("degraded and emergency modes use lower defaults", func(t *testing.T) {
-		for _, mode := range []Mode{ModeDegraded, ModeEmergency} {
-			provider := NewHealthProvider(NewModePolicy(mode), NewBackgroundManager(zap.NewNop()))
-			provider.SetRelayHealthFunc(func() (connected, healthy int) { return 1, 1 })
-
-			snapshot := provider.Readiness()
-
-			require.True(t, snapshot.Ready, "mode %s", mode)
-			check := requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusPass)
-			require.Contains(t, check.Message, "min_required=1")
-		}
 	})
 }
 

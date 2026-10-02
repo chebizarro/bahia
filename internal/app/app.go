@@ -88,7 +88,6 @@ type App struct {
 	toolCoordinator           *service.ToolProvisioningCoordinator
 	relayPools                []*nostrAdapter.RelayPool
 	dnsBackendClosers         []io.Closer
-	ModePolicy                *ModePolicy
 	Health                    *HealthProvider
 	RelayFirstRegistry        *service.RelayFirstRegistry
 	SoulFactory               *soulfactory.Reactor
@@ -138,7 +137,6 @@ func New(cfg *config.Config) (*App, error) {
 	zap.ReplaceGlobals(logger)
 
 	ctx := context.Background()
-	policy := NewModePolicy(configuredMode(cfg.Mode))
 	pressureThresholds := workerPressureThresholds(cfg.WorkerPressure)
 
 	// Event publisher and tier0/tier1 continuity stores are available before the
@@ -177,12 +175,12 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Database cache is optional. When unavailable, keep tier0/tier1 relay-first
 	// startup alive and use in-memory event audit/cursor storage.
-	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger, policy)
+	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger)
 
 	// Repositories. When DB is unavailable, PG-backed repositories are nil.
-	// connectOptionalDatabase caps the policy at tier1, and SetActiveTier can
+	// When Postgres is unavailable all DB-backed repositories are nil.
 	// never exceed that cap, so route gating keeps tier2/tier3 routes (and
-	// their nil repos) unreachable. Tier1 uses in-memory stores exclusively.
+	// their nil repos) unreachable. RequireRepo gates return 503 for nil repos.
 	var serviceRepo repository.ServiceRepository
 	var envRepo repository.EnvironmentRepository
 	var buildRepo repository.BuildRepository
@@ -603,33 +601,32 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
-	bgManager.RegisterWithOptions(nostrPub, RunnerTier(Tier1))
-	bgManager.RegisterWithOptions(controlPlanePub, RunnerTier(Tier1))
+	bgManager.RegisterWithOptions(nostrPub)
+	bgManager.RegisterWithOptions(controlPlanePub)
 	if managedInstanceSupervisor != nil {
-		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerTier(Tier2), RunnerRequired(false))
+		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerRequired(false))
 	}
 	if routeCanarySupervisor != nil {
-		bgManager.RegisterWithOptions(routeCanarySupervisor, RunnerTier(Tier2), RunnerRequired(false))
+		bgManager.RegisterWithOptions(routeCanarySupervisor, RunnerRequired(false))
 	}
 	if loomSignetManager != nil {
-		bgManager.RegisterWithOptions(loomSignetManager, RunnerTier(Tier1), RunnerRequired(false))
+		bgManager.RegisterWithOptions(loomSignetManager, RunnerRequired(false))
 	}
 	if securityRepo != nil {
-		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger), RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger))
 	}
 	if contextVMResponseStore != nil {
-		bgManager.RegisterWithOptions(NewContextVMResponseCleanupRunner(contextVMResponseStore, defaultContextVMResponseRetention, time.Hour, logger), RunnerTier(Tier2), RunnerRequired(false))
+		bgManager.RegisterWithOptions(NewContextVMResponseCleanupRunner(contextVMResponseStore, defaultContextVMResponseRetention, time.Hour, logger), RunnerRequired(false))
 	}
 	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
 			bgManager.RegisterWithOptions(
 				workflow.NewStaleRunDetector(staleRunSource, nostrEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger),
-				RunnerTier(Tier2),
 				RunnerRequired(false),
 			)
 		}
 	}
-	healthProvider := NewHealthProvider(policy, bgManager)
+	healthProvider := NewHealthProvider(nil, bgManager)
 	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
 		FullMinHealthy:      cfg.Nostr.RelayQuorum.FullMinHealthy,
 		DegradedMinHealthy:  cfg.Nostr.RelayQuorum.DegradedMinHealthy,
@@ -638,10 +635,10 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
-	registerSignetHealthCheck(healthProvider, loomSignetManager, Tier1)
+	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	if internalRouteBackend != nil {
-		healthProvider.RegisterCheck("internal_routing", int(Tier1), func() HealthCheck {
-			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready", Tier: int(Tier1)}
+		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
+			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}
 			if err := internalRouteBackend.HealthCheck(context.Background()); err != nil {
 				check.Status = HealthStatusFail
 				check.Message = err.Error()
@@ -649,8 +646,8 @@ func New(cfg *config.Config) (*App, error) {
 			return check
 		})
 	}
-	if !dbAvailable && policy.RequestedTier > Tier1 {
-		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerTier(Tier1), RunnerRequired(false))
+	if !dbAvailable {
+		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerRequired(false))
 	}
 
 	var soulFactoryRuntime *soulFactoryRuntime
@@ -666,9 +663,9 @@ func New(cfg *config.Config) (*App, error) {
 	}()
 	if soulFactoryRuntime != nil {
 		telemetryProvider.SetOpenClawSagaExporter(soulFactoryRuntime.sagaMonitor.WritePrometheus)
-		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerTier(Tier2), RunnerRequired(false))
-		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection, Tier2)
-		bgManager.RegisterWithOptions(soulFactoryRuntime.runner, RunnerTier(Tier2))
+		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerRequired(false))
+		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection)
+		bgManager.RegisterWithOptions(soulFactoryRuntime.runner)
 		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
 	}
 
@@ -682,7 +679,7 @@ func New(cfg *config.Config) (*App, error) {
 	if dbAvailable {
 		projectionMetaRepo := newInMemoryProjectionMetaRepo()
 		projectionCache := service.NewRelayProjectionCache(projectionMetaRepo, logger)
-		projectionCache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{
+		projectionCache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{
 			Workers:      workerRepo,
 			Services:     serviceRepo,
 			Environments: envRepo,
@@ -692,7 +689,7 @@ func New(cfg *config.Config) (*App, error) {
 		})
 		bootstrapCache = &bootstrapCacheAdapter{cache: projectionCache}
 		// Tombstones cached projections when their NIP-40 expiration passes.
-		bgManager.RegisterWithOptions(projectionCache, RunnerTier(Tier1), RunnerRequired(false))
+		bgManager.RegisterWithOptions(projectionCache, RunnerRequired(false))
 	}
 
 	// Bahia self-identity publisher: emits 31410/31411/30360 events to relays.
@@ -708,12 +705,8 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
-	// Request no more than the constructed dependencies support: without
-	// Postgres the tier2/tier3 repositories are nil, so the bootstrapper must
-	// neither report nor raise a tier above policy.MaxTier().
 	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, localEventStore, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
-		RequestedTier:       int(policy.MaxTier()),
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: controlPlaneAuthors,
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
@@ -748,6 +741,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
 	intentReadiness := controlplane.NewReadinessTracker()
+	healthProvider.SetReadinessTracker(intentReadiness)
 	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomains)
 	if len(enabledDomains) > 0 {
 		intentReadiness.RegisterFilter("intent-30900")
@@ -768,21 +762,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger,
 	)
 
-	// Phase 3 intent readiness health check (F1, additive to tier model §6.2).
-	if len(enabledDomains) > 0 {
-		healthProvider.RegisterCheck("intent_readiness", int(Tier1), func() HealthCheck {
-			progress := intentReadiness.Progress()
-			status := HealthStatusPass
-			if !progress.Ready {
-				status = HealthStatusWarn
-			}
-			return HealthCheck{
-				Name:   "intent_readiness",
-				Status: status,
-				Tier:   int(Tier1),
-			}
-		})
-	}
+	// Readiness tracked by HealthProvider via ReadinessTracker (§6.2).
 
 	// Phase 3 intent subscriber (F1): runs when intent domains are enabled.
 	// Author-scoped subscription via TrustSet, feeding the processor, marking
@@ -798,7 +778,7 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey,
 			logger,
 		)
-		bgManager.RegisterWithOptions(intentSubscriber, RunnerTier(Tier2), RunnerRequired(false))
+		bgManager.RegisterWithOptions(intentSubscriber, RunnerRequired(false))
 	}
 
 	// Phase 3 intent authors syncer (F1 §7.1): on startup and whenever the
@@ -808,13 +788,13 @@ func New(cfg *config.Config) (*App, error) {
 	if len(enabledDomains) > 0 {
 		intentAuthorsSyncer = buildIntentAuthorsSyncer(ctx, cfg, trustSet, secretRepo, secretEncryptor, logger)
 		if intentAuthorsSyncer != nil {
-			bgManager.RegisterWithOptions(intentAuthorsSyncer, RunnerTier(Tier2), RunnerRequired(false))
-			healthProvider.RegisterCheck("intent_authors_sync", int(Tier2), func() HealthCheck {
+			bgManager.RegisterWithOptions(intentAuthorsSyncer, RunnerRequired(false))
+			healthProvider.RegisterCheck("intent_authors_sync", func() HealthCheck {
 				status := HealthStatusPass
 				if intentAuthorsSyncer.SyncStatus().OutOfSync {
 					status = HealthStatusWarn
 				}
-				return HealthCheck{Name: "intent_authors_sync", Status: status, Tier: int(Tier2)}
+				return HealthCheck{Name: "intent_authors_sync", Status: status}
 			})
 			// Wrap the org member repo so Postgres membership mutations
 			// propagate to the sidecar's intent authors set in real time.
@@ -829,11 +809,10 @@ func New(cfg *config.Config) (*App, error) {
 	// `bahia-migrate nostr` (see docs/user-guide/cli-reference.md).
 	bgManager.RegisterWithOptions(&bootstrapperRunner{
 		bootstrapper:    bootstrapper,
-		policy:          policy,
 		statusProjector: bahiaStatusProjector,
 		catalogVersion:  catalog.Version,
 		logger:          logger,
-	}, RunnerTier(Tier0), RunnerRequired(false))
+	}, RunnerRequired(false))
 
 	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
 		continuityHeartbeatMonitor,
@@ -853,7 +832,7 @@ func New(cfg *config.Config) (*App, error) {
 		continuityFailoverTrigger,
 		logger,
 	)
-	bgManager.RegisterWithOptions(&failoverTriggerRunner{engine: continuityFailoverTrigger}, RunnerTier(Tier1))
+	bgManager.RegisterWithOptions(&failoverTriggerRunner{engine: continuityFailoverTrigger})
 
 	var fipsRelayPool *nostrAdapter.RelayPool
 	if cfg.FIPS.Enabled {
@@ -877,7 +856,7 @@ func New(cfg *config.Config) (*App, error) {
 				)
 			}),
 		)
-		bgManager.RegisterWithOptions(&fipsSubscriberRunner{subscriber: fipsSubscriber}, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(&fipsSubscriberRunner{subscriber: fipsSubscriber})
 		logger.Info("FIPS overlay advert subscriber registered", zap.Strings("relay_urls", cfg.FIPS.RelayURLs), zap.String("app_namespace", cfg.FIPS.AppNamespace))
 	}
 
@@ -899,17 +878,17 @@ func New(cfg *config.Config) (*App, error) {
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, backupRunOptions...)
 	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, backupRestoreOptions...)
 	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
-	bgManager.RegisterWithOptions(backupCoordinator, RunnerTier(Tier3))
-	bgManager.RegisterWithOptions(backupRestoreCoordinator, RunnerTier(Tier3))
-	bgManager.RegisterWithOptions(backupRetentionCoordinator, RunnerTier(Tier3))
+	bgManager.RegisterWithOptions(backupCoordinator)
+	bgManager.RegisterWithOptions(backupRestoreCoordinator)
+	bgManager.RegisterWithOptions(backupRetentionCoordinator)
 
 	backupScheduler := service.NewBackupSchedulerService(backupRegistry, logger,
 		service.WithBackupSchedulerIdentity(servicePubkey),
 	)
 	backupSchedulerRunner := NewBackupSchedulerRunner(backupScheduler, 0, logger)
-	bgManager.RegisterWithOptions(backupSchedulerRunner, RunnerTier(Tier3))
-	healthProvider.RegisterCheck("backup_scheduler", int(Tier3), func() HealthCheck {
-		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered", Tier: int(Tier3)}
+	bgManager.RegisterWithOptions(backupSchedulerRunner)
+	healthProvider.RegisterCheck("backup_scheduler", func() HealthCheck {
+		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered"}
 	})
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
@@ -963,8 +942,8 @@ func New(cfg *config.Config) (*App, error) {
 		llmCoordinator.SetupSubscriptions(publisher)
 		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
 		llmReconciler.SetupSubscriptions(publisher)
-		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
-		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(llmCoordinator)
+		bgManager.RegisterWithOptions(llmReconciler)
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
@@ -1011,7 +990,7 @@ func New(cfg *config.Config) (*App, error) {
 			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
 		}
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
-		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(dnsReconciler)
 
 		// Phase 3 D1: subscribe to NIP-38 agent health events so the daemon
 		// reads agent health and capabilities from events instead of RPC.
@@ -1028,7 +1007,7 @@ func New(cfg *config.Config) (*App, error) {
 					pubkeys: agentPubkeys,
 					reader:  dnsAgentHealthReader,
 					logger:  logger,
-				}, RunnerTier(Tier3))
+				})
 				logger.Info("DNS agent health subscriber registered", zap.Int("agents", len(agentPubkeys)))
 			}
 		}
@@ -1108,7 +1087,7 @@ func New(cfg *config.Config) (*App, error) {
 	// quorum accepted, the control-plane outbox retries the remaining relays
 	// (bahia-irsry.41).
 	var relayFirstRegistry *service.RelayFirstRegistry
-	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
+	if cfg.Nostr.PublishEnabled || cfg.Mode == "" || cfg.Mode == "full" {
 		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
 		relayFirstRegistry = service.NewRelayFirstRegistry(registry, statePublisher, logger)
 		// Phase 3 S2: wire the cp-state publisher for build/artifact/intent/run
@@ -1116,7 +1095,7 @@ func New(cfg *config.Config) (*App, error) {
 		// its mutation methods (bahia-irsry.11.7).
 		registry.SetCPStatePublisher(statePublisher)
 		logger.Info("relay-first write path enabled for core registry mutations",
-			zap.String("mode", string(policy.RequestedMode)))
+			zap.String("mode", "full"))
 	}
 	// Phase 3 F3: register environment intent handler when "environment" is
 	// in intent_domains. Uses the relay-first registry (which publishes the
@@ -1547,7 +1526,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("ML canonical cp-state publisher wired into registry service")
 	}
 	if nostrProjector.Enabled() {
-		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
+		bgManager.RegisterWithOptions(nostrProjector)
 		logger.Info("nostr read-model projector registered")
 	}
 
@@ -1580,12 +1559,12 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	loom.WithVerifiedPlaneCapabilities(virtualization.VerifiedPlanes())(loomClient)
 	if virtualization.Projector != nil {
-		bgManager.RegisterWithOptions(virtualization, RunnerTier(Tier2))
+		bgManager.RegisterWithOptions(virtualization)
 	}
 
 	// Register the reconciler as a background runner (if enabled).
 	if rec != nil {
-		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec}, RunnerTier(Tier2))
+		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec})
 	}
 
 	// Nostr event processor: maps inbound events to domain commands.
@@ -1660,7 +1639,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewPGNIP98ReplayStore(pool))
 		ociHandler = handlers.NewOCIRegistryHandler(ociSvc, nip98Validator, cfg.OCI)
-		bgManager.RegisterWithOptions(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger), RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger))
 		logger.Info("oci registry enabled", zap.String("host", cfg.OCI.PublicHost))
 	}
 
@@ -1752,8 +1731,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		runDispatcher := newHiveCIRunDispatcher(cfg.HiveCI.Policies, dependencyPinner, loomClient, logger)
 		hiveSub.SetRunConsumer(runDispatcher.Dispatch)
-		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
-		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(hiveSub)
+		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger))
 
 		// Seed configured pipeline policies idempotently.
 		for i, pc := range cfg.HiveCI.Policies {
@@ -1838,8 +1817,8 @@ func New(cfg *config.Config) (*App, error) {
 		// delivers their event, and failed_terminal if it abandons it.
 		nostrPub.OnDeliveryAbandoned(securityScanner.HandlePublishAbandoned)
 		nostrPub.OnDelivered(securityScanner.HandlePublishDelivered)
-		bgManager.RegisterWithOptions(securityScanner, RunnerTier(Tier3))
-		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}), RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(securityScanner)
+		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}))
 		logger.Info("security OSV scanner and scheduler registered")
 	}
 
@@ -1927,7 +1906,7 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	// Explicit recovery for stranded stored intents; newly arrived tool requests
 	// enter through ContextVM and are handled by the event-driven transport path.
-	bgManager.RegisterWithOptions(toolCoordinator, RunnerTier(Tier3))
+	bgManager.RegisterWithOptions(toolCoordinator)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 	var mlCommandPublisher mcp.MLCommandPublisher
@@ -1973,7 +1952,7 @@ func New(cfg *config.Config) (*App, error) {
 			if err != nil {
 				return nil, fmt.Errorf("hygiene reconciler: %w", err)
 			}
-			bgManager.RegisterWithOptions(hygieneReconciler, RunnerTier(Tier3), RunnerRequired(false))
+			bgManager.RegisterWithOptions(hygieneReconciler, RunnerRequired(false))
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
@@ -2009,11 +1988,11 @@ func New(cfg *config.Config) (*App, error) {
 		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, controlPlaneRelays, logger)
 		configFabricSigner = operatorSigner
 		if assistantSignetManager != nil {
-			bgManager.RegisterWithOptions(assistantSignetManager, RunnerTier(Tier1), RunnerRequired(false))
-			registerSignetHealthCheck(healthProvider, assistantSignetManager, Tier1)
+			bgManager.RegisterWithOptions(assistantSignetManager, RunnerRequired(false))
+			registerSignetHealthCheck(healthProvider, assistantSignetManager)
 		}
 		if assistantBootstrapRunner != nil {
-			bgManager.RegisterWithOptions(assistantBootstrapRunner, RunnerTier(Tier1), RunnerRequired(false))
+			bgManager.RegisterWithOptions(assistantBootstrapRunner, RunnerRequired(false))
 		}
 		assistantIdentity = identity
 		var assistantDNS service.AssistantDNSRegistry
@@ -2081,10 +2060,10 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, err
 		}
 		assistantOrchestrator = assistantExecution.Orchestrator
-		bgManager.RegisterWithOptions(assistantExecution.Lifecycle, RunnerTier(Tier1), RunnerRequired(false))
-		bgManager.RegisterWithOptions(assistantExecution.Recovery, RunnerTier(Tier3), RunnerRequired(false))
+		bgManager.RegisterWithOptions(assistantExecution.Lifecycle, RunnerRequired(false))
+		bgManager.RegisterWithOptions(assistantExecution.Recovery, RunnerRequired(false))
 		if assistantExecution.Healer != nil {
-			bgManager.RegisterWithOptions(assistantExecution.Healer, RunnerTier(Tier1), RunnerRequired(false))
+			bgManager.RegisterWithOptions(assistantExecution.Healer, RunnerRequired(false))
 		}
 		availableWorkflows := make([]string, 0, len(assistantExecution.AvailableWorkflows))
 		for _, workflow := range assistantExecution.AvailableWorkflows {
@@ -2113,7 +2092,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
 	)
-	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
+	bgManager.RegisterWithOptions(nostrSub)
 
 	// NIP-23 docs publisher: syncs user-guide documentation to the sidecar relay
 	// (or control-plane relays) as long-form content. Uses controlPlanePool so
@@ -2125,7 +2104,7 @@ func New(cfg *config.Config) (*App, error) {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
 		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, controlPlanePub, docsQuerier, logger)
-		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerTier(Tier3), RunnerRequired(false))
+		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerRequired(false))
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
@@ -2158,14 +2137,13 @@ func New(cfg *config.Config) (*App, error) {
 		if err := relaySettingsHydrator.LoadProjection(ctx); err != nil {
 			return nil, fmt.Errorf("loading durable relay settings projection before control-plane activation: %w", err)
 		}
-		healthProvider.RegisterCheck("relay_policy_projection", int(Tier1), func() HealthCheck {
+		healthProvider.RegisterCheck("relay_policy_projection", func() HealthCheck {
 			projection, projected := relaySettingsHydrator.Projection()
 			_, hydrated := relaySettingsHydrator.Snapshot()
 			check := HealthCheck{
 				Name:    "relay_policy_projection",
 				Status:  HealthStatusPass,
 				Message: "no validated relay policy has been observed; Nostr convergence remains asynchronous",
-				Tier:    int(Tier1),
 				Details: map[string]string{"availability": "unavailable"},
 			}
 			if !projected || !hydrated {
@@ -2186,7 +2164,7 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			return check
 		})
-		bgManager.RegisterWithOptions(relaySettingsHydrator, RunnerTier(Tier1))
+		bgManager.RegisterWithOptions(relaySettingsHydrator)
 		logger.Info("durable relay settings projection hydrator registered",
 			zap.Int("eligible_relay_count", len(relayPolicyHydrationPool.URLs())),
 			zap.String("service_pubkey", servicePubkey),
@@ -2308,7 +2286,7 @@ func New(cfg *config.Config) (*App, error) {
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
-		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
+		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger))
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
@@ -2340,14 +2318,14 @@ func New(cfg *config.Config) (*App, error) {
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
 			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate)
-			bgManager.RegisterWithOptions(sbomAsyncRunner, RunnerTier(Tier2))
+			bgManager.RegisterWithOptions(sbomAsyncRunner)
 		}
 		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate)
 		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
 		soulfactory.RegisterSagaContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime), fleetOperatorGate)
 		// ContextVM carries the canonical mutation plane, so it must remain
 		// available in the minimum production control-plane tier.
-		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier1))
+		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport})
 		logger.Info("encrypted request/result event runtime registered",
 			zap.Strings("request_subscription_relays", contextVMRequestRelays),
 			zap.Strings("response_publication_relays", contextVMResponseRelays),
@@ -2430,7 +2408,7 @@ func New(cfg *config.Config) (*App, error) {
 		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
-		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
+		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
@@ -2511,7 +2489,6 @@ func New(cfg *config.Config) (*App, error) {
 			ConfigFabric:              configFabricSvc,
 
 			HealthProvider: healthProvider,
-			ModePolicy:     policy,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -2529,7 +2506,7 @@ func New(cfg *config.Config) (*App, error) {
 	if pool != nil {
 		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
 	}
-	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerTier(Tier1), RunnerRequired(false))
+	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerRequired(false))
 
 	application := &App{
 		Config:                    cfg,
@@ -2549,7 +2526,6 @@ func New(cfg *config.Config) (*App, error) {
 		toolCoordinator:           toolCoordinator,
 		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
 		dnsBackendClosers:         dnsBackendClosers,
-		ModePolicy:                policy,
 		TrustSet:                  trustSet,
 		IntentProcessor:           intentProcessor,
 		IntentReadiness:           intentReadiness,
@@ -2669,32 +2645,15 @@ func configuredSupervisionSpecs(cfg config.SupervisionConfig, logger *zap.Logger
 	return result, nil
 }
 
-func configuredMode(mode string) Mode {
-	switch Mode(strings.ToLower(strings.TrimSpace(mode))) {
-	case ModeDegraded:
-		return ModeDegraded
-	case ModeEmergency:
-		return ModeEmergency
-	default:
-		return ModeFull
-	}
-}
-
-func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger, policy *ModePolicy) (*pgxpool.Pool, bool) {
+func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*pgxpool.Pool, bool) {
 	pool, err := dbConnect(ctx, cfg.DB, logger)
 	if err != nil {
 		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
-		if policy != nil {
-			policy.CapTier(Tier1)
-		}
 		return nil, false
 	}
 	if err := dbMigrate(ctx, pool, logger); err != nil {
 		pool.Close()
 		logger.Warn("postgres cache migration failed; continuing with relay-first reduced tier", zap.Error(err))
-		if policy != nil {
-			policy.CapTier(Tier1)
-		}
 		return nil, false
 	}
 	return pool, true
@@ -2776,7 +2735,6 @@ func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream stri
 
 type bootstrapperRunner struct {
 	bootstrapper    *nostrAdapter.Bootstrapper
-	policy          *ModePolicy
 	statusProjector *service.BahiaStatusProjector
 	catalogVersion  string
 	logger          *zap.Logger
@@ -2796,7 +2754,7 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 			return r.statusProjector.PublishIdentity(publishCtx, service.BahiaIdentityPayload{
 				Version:        "1.0.0",
 				CatalogVersion: r.catalogVersion,
-				Mode:           string(r.policy.RequestedMode),
+				Mode:           "relay-first",
 				StartedAt:      time.Now().Unix(),
 			})
 		})
@@ -2806,9 +2764,6 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 	}
 
 	err := r.bootstrapper.Run(ctx)
-	if r.policy != nil && r.bootstrapper.ReadyTier() >= 0 {
-		r.policy.SetActiveTier(Tier(r.bootstrapper.ReadyTier()))
-	}
 
 	// Publish checkpoint and readiness after bootstrap completes.
 	if r.statusProjector != nil {
@@ -2823,10 +2778,8 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 		}
 		if pubErr := runBootstrapStatusPublication(ctx, bootstrapStatusPublishTimeout, func(publishCtx context.Context) error {
 			return r.statusProjector.PublishReadiness(publishCtx, service.ReadinessStatusPayload{
-				Phase:         string(progress.Phase),
-				ActiveTier:    int(r.policy.ActiveTier()),
-				RequestedTier: int(r.policy.RequestedTier),
-				Ready:         r.bootstrapper.Ready(),
+				Phase: string(progress.Phase),
+				Ready: r.bootstrapper.Ready(),
 			})
 		}); pubErr != nil {
 			err = errors.Join(err, pubErr)
@@ -3257,22 +3210,15 @@ func cleanupJobStatusFromLoom(status *loom.JobStatus) *service.CleanupJobStatus 
 	return &service.CleanupJobStatus{JobID: status.JobID, Status: status.Status, Success: status.Success, ExitCode: status.ExitCode, Duration: status.Duration, WorkerPubkey: status.WorkerPubkey, StdoutURL: status.StdoutURL, StderrURL: status.StderrURL, ChangeToken: status.ChangeToken, Error: status.Error, LogOutput: status.LogOutput}
 }
 
-func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, policy *ModePolicy, fatalErrCh chan<- error) {
+func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, fatalErrCh chan<- error) {
 	if manager == nil {
 		return
-	}
-	if policy == nil {
-		policy = NewModePolicy(ModeFull)
 	}
 
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
 	for _, reg := range manager.runners {
-		if !policy.RunnerEnabled(Tier(reg.tier)) {
-			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier())))
-			continue
-		}
 		manager.wg.Add(1)
 		go func(reg backgroundRunnerRegistration) {
 			runner := reg.runner
@@ -3317,7 +3263,7 @@ func (a *App) RunContext(ctx context.Context) error {
 	runnerErrCh := make(chan error, 1)
 
 	// Start allowed background runners after HTTP is accepting connections.
-	startBackgroundRunners(ctx, a.Background, a.ModePolicy, runnerErrCh)
+	startBackgroundRunners(ctx, a.Background, runnerErrCh)
 
 	select {
 	case err := <-errCh:
@@ -4650,11 +4596,11 @@ func newLoomCanonicalProjectionSigner(cfg *config.Config, relays []string, logge
 	return signetClient, manager, nil
 }
 
-func registerSignetHealthCheck(provider *HealthProvider, manager *signetAdapter.ConnectionManager, tier Tier) {
+func registerSignetHealthCheck(provider *HealthProvider, manager *signetAdapter.ConnectionManager) {
 	if provider == nil || manager == nil {
 		return
 	}
-	provider.RegisterCheck(manager.Name(), int(tier), func() HealthCheck {
+	provider.RegisterCheck(manager.Name(), func() HealthCheck {
 		state := manager.State()
 		status := HealthStatusWarn
 		message := "Signet signer is disconnected; signing-required operations fail with ErrNotConnected"
@@ -4677,7 +4623,7 @@ func registerSignetHealthCheck(provider *HealthProvider, manager *signetAdapter.
 		if !state.LastSuccess.IsZero() {
 			details["last_success"] = state.LastSuccess.Format(time.RFC3339Nano)
 		}
-		return HealthCheck{Name: manager.Name(), Status: status, Message: message, Tier: int(tier), Details: details}
+		return HealthCheck{Name: manager.Name(), Status: status, Message: message, Details: details}
 	})
 }
 

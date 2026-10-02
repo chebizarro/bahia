@@ -118,7 +118,6 @@ const (
 type ReplayGroup struct {
 	Name     string
 	Kinds    []int
-	Tier     int
 	Snapshot bool
 	Required bool
 	// Authors selects the trusted author set the bootstrapper applies to the
@@ -201,7 +200,6 @@ type DecodedProjectionEvent struct {
 	Kind      int
 	DTag      string
 	Group     string
-	Tier      int
 	Timestamp time.Time
 	SourceID  string
 	Family    ProjectionFamily
@@ -485,17 +483,17 @@ type DecodedFIPS struct{}
 
 func NewKindCatalog() *KindCatalog {
 	groups := []ReplayGroup{
-		{Name: "discovery_snapshot", Kinds: []int{KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement, kinds.ContextVMToolsList, kinds.ContextVMResourcesList, kinds.ContextVMResourceTemplatesList, kinds.ContextVMPromptsList, KindBahiaIdentityDefinition, KindBahiaReplayCheckpoint, KindBahiaReadinessStatus}, Tier: 0, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
-		{Name: "state_snapshot", Kinds: []int{KindCASControlState}, Tier: 1, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
-		{Name: "status_live", Kinds: []int{KindNIP38Status}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
-		{Name: "audit_live", Kinds: []int{KindCASAudit}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
-		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
-		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Tier: 3, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
-		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
+		{Name: "discovery_snapshot", Kinds: []int{KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement, kinds.ContextVMToolsList, kinds.ContextVMResourcesList, kinds.ContextVMResourceTemplatesList, kinds.ContextVMPromptsList, KindBahiaIdentityDefinition, KindBahiaReplayCheckpoint, KindBahiaReadinessStatus}, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		{Name: "state_snapshot", Kinds: []int{KindCASControlState}, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		{Name: "status_live", Kinds: []int{KindNIP38Status}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+		{Name: "audit_live", Kinds: []int{KindCASAudit}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+		{Name: "loom_live", Kinds: []int{KindLoomWorkerAdvertisement, KindLoomJobStatusUpdate, KindLoomJobResult, KindLoomJobCancellation}, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
+		{Name: "hive_ci_live", Kinds: []int{KindHiveCIWorkflowRun, KindHiveCIWorkflowResult}, Snapshot: false, Required: false, Authors: ReplayAuthorsAny},
+		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
 		// NIP-09 deletion requests from the trusted control-plane authors,
 		// replayed in full after every other group so they reach the cache
 		// after the events they delete (bahia-irsry.10.1).
-		{Name: "deletion_live", Kinds: []int{int(gonostr.KindDeletion)}, Tier: 1, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
+		{Name: "deletion_live", Kinds: []int{int(gonostr.KindDeletion)}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 	}
 
 	catalog := &KindCatalog{
@@ -513,10 +511,6 @@ func NewKindCatalog() *KindCatalog {
 	// them to the projection cache. No replay group requests them yet.
 	catalog.decoders[int(gonostr.KindDeletion)] = decodeDeletionRequest
 	return catalog
-}
-
-func (c *KindCatalog) GroupsForTier(tier int) []ReplayGroup {
-	return filterReplayGroups(c.Groups, func(group ReplayGroup) bool { return group.Tier <= tier })
 }
 
 func (c *KindCatalog) SnapshotGroups() []ReplayGroup {
@@ -542,12 +536,8 @@ func (c *KindCatalog) AllKinds() []int {
 	return kinds
 }
 
-func (c *KindCatalog) KindsForTier(tier int) []int {
-	return kindsFromGroups(c.GroupsForTier(tier))
-}
-
-func (c *KindCatalog) RequiredGroupsForTier(tier int) []ReplayGroup {
-	return filterReplayGroups(c.Groups, func(group ReplayGroup) bool { return group.Tier <= tier && group.Required })
+func (c *KindCatalog) RequiredGroups() []ReplayGroup {
+	return filterReplayGroups(c.Groups, func(group ReplayGroup) bool { return group.Required })
 }
 
 // Decoder returns the decoder for kind. Every decoded projection carries its
@@ -598,7 +588,7 @@ func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
 		}
 		family := noopProjectionFamily(group.Name)
 		for _, kind := range group.Kinds {
-			c.decoders[kind] = decodeNoopProjection(group.Name, group.Tier, family)
+			c.decoders[kind] = decodeNoopProjection(group.Name, family)
 		}
 	}
 }
@@ -609,7 +599,7 @@ func (c *KindCatalog) registerOptionalProtocolDecoders() {
 	c.decoders[KindLoomJobCancellation] = decodeLoomJobCancellationProjection
 	c.decoders[KindHiveCIWorkflowRun] = decodeHiveCIWorkflowRunProjection
 	c.decoders[KindHiveCIWorkflowResult] = decodeHiveCIWorkflowResultProjection
-	c.decoders[KindFIPSOverlayAdvert] = decodeNoopProjection("fips_snapshot", 3, FamilyFIPS)
+	c.decoders[KindFIPSOverlayAdvert] = decodeNoopProjection("fips_snapshot", FamilyFIPS)
 }
 
 func (c *KindCatalog) registerProjectionDecoders() {
@@ -739,7 +729,6 @@ func decodeLoomJobStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, 
 	}
 	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
-		out.Tier = 3
 		out.Loom = &DecodedLoom{JobStatus: &payload}
 	}), nil
 }
@@ -781,7 +770,6 @@ func decodeLoomJobResultProjection(ev *gonostr.Event) (*DecodedProjectionEvent, 
 	}
 	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
-		out.Tier = 3
 		out.Loom = &DecodedLoom{JobResult: &payload}
 	}), nil
 }
@@ -801,7 +789,6 @@ func decodeLoomJobCancellationProjection(ev *gonostr.Event) (*DecodedProjectionE
 	}
 	return baseDecoded(ev, FamilyLoom, jobID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "loom_live"
-		out.Tier = 3
 		out.Loom = &DecodedLoom{JobCancellation: &payload}
 	}), nil
 }
@@ -860,7 +847,6 @@ func decodeHiveCIWorkflowRunProjection(ev *gonostr.Event) (*DecodedProjectionEve
 	}
 	return baseDecoded(ev, FamilyHiveCI, run.RunEventID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "hive_ci_live"
-		out.Tier = 3
 		out.HiveCI = &DecodedHiveCI{WorkflowRun: &run, QualityGate: gate}
 	}), nil
 }
@@ -944,7 +930,6 @@ func decodeHiveCIWorkflowResultProjection(ev *gonostr.Event) (*DecodedProjection
 	}
 	return baseDecoded(ev, FamilyHiveCI, result.RunEventID, false, func(out *DecodedProjectionEvent) {
 		out.Group = "hive_ci_live"
-		out.Tier = 3
 		out.HiveCI = &DecodedHiveCI{WorkflowResult: &result, QualityGate: gate}
 	}), nil
 }
@@ -1159,7 +1144,7 @@ func decodeNIP38StatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, er
 	if isContinuityHeartbeatStatusEvent(ev) {
 		return decodeHeartbeatProjection(ev)
 	}
-	return decodeNoopProjection("status_live", 1, FamilyControlPlane)(ev)
+	return decodeNoopProjection("status_live", FamilyControlPlane)(ev)
 }
 
 func decodeHeartbeatProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
@@ -1211,7 +1196,7 @@ func decodeDeletionRequest(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 	}, nil
 }
 
-func decodeNoopProjection(group string, tier int, family ProjectionFamily) DecodeFunc {
+func decodeNoopProjection(group string, family ProjectionFamily) DecodeFunc {
 	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		if ev == nil {
 			return nil, fmt.Errorf("projection event is nil")
@@ -1220,7 +1205,6 @@ func decodeNoopProjection(group string, tier int, family ProjectionFamily) Decod
 			Kind:      eventKindInt(ev),
 			DTag:      noopProjectionDTag(ev),
 			Group:     group,
-			Tier:      tier,
 			Timestamp: ev.CreatedAt.Time().UTC(),
 			SourceID:  eventIDHex(ev),
 			Family:    family,
@@ -1281,7 +1265,7 @@ func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, t
 	// Projection ordering follows the signed wire timestamp, not content's
 	// domain clock: relays may discard a higher-ID event from the same second.
 	updatedAt := ev.CreatedAt.Time().UTC()
-	out := &DecodedProjectionEvent{Kind: eventKindInt(ev), DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Tier: 0, Timestamp: updatedAt.UTC(), SourceID: eventIDHex(ev), Family: family, Tombstone: tombstone}
+	out := &DecodedProjectionEvent{Kind: eventKindInt(ev), DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Timestamp: updatedAt.UTC(), SourceID: eventIDHex(ev), Family: family, Tombstone: tombstone}
 	if out.DTag == "" {
 		out.DTag = entityKey
 	}

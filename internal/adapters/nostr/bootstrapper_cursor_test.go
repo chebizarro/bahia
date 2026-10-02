@@ -25,10 +25,9 @@ func TestBootstrapperLiveGroupsKeepPerRelayCursorsInTheLocalStore(t *testing.T) 
 	pool := newBootstrapFakeRelayPool(t, up, refusing)
 	store := openTestLocalStore(t, "")
 	catalog := &KindCatalog{Version: "cursor-test", Groups: []ReplayGroup{
-		{Name: "audit_live", Kinds: []int{KindCASAudit}, Tier: 0, Required: true, Authors: ReplayAuthorsAny},
+		{Name: "audit_live", Kinds: []int{KindCASAudit}, Required: true, Authors: ReplayAuthorsAny},
 	}}
 	bootstrapper := NewBootstrapper(pool, catalog, store, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		RequestedTier:   0,
 		SnapshotTimeout: time.Minute,
 		CatchupTimeout:  time.Minute,
 		Resume:          InboundSyncConfig{ResumeOverlap: time.Minute, RegularLookback: time.Hour},

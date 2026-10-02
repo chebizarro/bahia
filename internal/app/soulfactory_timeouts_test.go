@@ -32,7 +32,7 @@ func TestNewWiresSoulFactoryRuntimeResultTimeout(t *testing.T) {
 			})
 			defer restoreSoulFactoryHooks()
 
-			cfg := startupTestConfig(ModeFull)
+			cfg := startupTestConfig("full")
 			configureValidSoulFactory(t, cfg, signer.pubkey)
 			cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq"}
 			cfg.SoulFactory.RuntimeResultTimeout = tc.configured

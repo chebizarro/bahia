@@ -17,7 +17,7 @@ func TestNewExportsLiveGovernedSagaStore(t *testing.T) {
 	defer stubDBHooks(t, errors.New("database unavailable"), nil)()
 	signer := newFakeSoulFactorySigner(t)
 	defer stubSoulFactoryHooks(t, signer, nil)()
-	cfg := startupTestConfig(ModeFull)
+	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	app, err := New(cfg)
 	require.NoError(t, err)

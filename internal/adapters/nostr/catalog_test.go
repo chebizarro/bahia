@@ -22,19 +22,6 @@ func TestNewKindCatalogContainsExpectedKinds(t *testing.T) {
 	}
 }
 
-func TestGroupsForTierReturnsGroupsAtOrBelowTier(t *testing.T) {
-	catalog := NewKindCatalog()
-	groups := catalog.GroupsForTier(1)
-	got := groupNames(groups)
-	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live", "deletion_live"}
-	assertStringSetEqual(t, got, want)
-	for _, group := range groups {
-		if group.Tier > 1 {
-			t.Fatalf("GroupsForTier(1) returned tier %d group %q", group.Tier, group.Name)
-		}
-	}
-}
-
 func TestSnapshotAndLiveGroupsFilterBySnapshotFlag(t *testing.T) {
 	catalog := NewKindCatalog()
 	for _, group := range catalog.SnapshotGroups() {
@@ -95,32 +82,16 @@ func TestAllKindsHaveImplementedDecoders(t *testing.T) {
 	}
 }
 
-func TestRequiredGroupsForTierFiltersByTierAndRequired(t *testing.T) {
+func TestRequiredGroupsFiltersByRequired(t *testing.T) {
 	catalog := NewKindCatalog()
-	got := groupNames(catalog.RequiredGroupsForTier(2))
-	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live", "deletion_live"}
-	assertStringSetEqual(t, got, want)
-	for _, group := range catalog.RequiredGroupsForTier(2) {
-		if !group.Required {
-			t.Fatalf("RequiredGroupsForTier returned optional group %q", group.Name)
-		}
-		if group.Tier > 2 {
-			t.Fatalf("RequiredGroupsForTier returned tier %d group %q", group.Tier, group.Name)
-		}
+	required := catalog.RequiredGroups()
+	if len(required) == 0 {
+		t.Fatal("RequiredGroups returned empty slice")
 	}
-}
-
-func TestKindsForTierReturnsUniqueTierKinds(t *testing.T) {
-	catalog := NewKindCatalog()
-	tierKinds := catalog.KindsForTier(2)
-	assertKindsInclude(t, tierKinds, []int{KindCASControlState, KindCASAudit, KindNIP38Status, KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement})
-	assertKindsExclude(t, tierKinds, []int{KindServiceRegistry, KindEnvironmentRegistry, KindControlPlaneDeployRequest, KindControlPlaneDeploymentResult, KindMLRecipeRunRequest, KindAssistantPromptRequest, KindFIPSOverlayAdvert})
-	seen := map[int]struct{}{}
-	for _, kind := range tierKinds {
-		if _, ok := seen[kind]; ok {
-			t.Fatalf("KindsForTier returned duplicate kind %d", kind)
+	for _, group := range required {
+		if !group.Required {
+			t.Fatalf("RequiredGroups returned optional group %q", group.Name)
 		}
-		seen[kind] = struct{}{}
 	}
 }
 

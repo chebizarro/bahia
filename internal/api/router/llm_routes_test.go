@@ -19,7 +19,7 @@ import (
 
 func TestLLMOperationalRESTRoutesDisabledByDefault(t *testing.T) {
 	cfg := config.Defaults()
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
 		Config:      cfg,
 		LLMRegistry: &service.LLMRegistryService{},
 	})
@@ -45,7 +45,7 @@ func TestLLMRouteUpdateRESTRemainsMounted(t *testing.T) {
 		routeID: &domain.LLMRoute{ID: routeID, Name: "chat-prod", Description: "old"},
 	}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
 		Config:      config.Defaults(),
 		LLMRegistry: llmRegistry,
 	})
@@ -69,7 +69,7 @@ func TestLLMOperationalRESTRoutesNotMountedEvenWhenCompatibilityFlagEnabled(t *t
 	cfg.LLM.Enabled = true
 	cfg.LLM.AllowOperationalREST = true
 
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
 		Config:      cfg,
 		LLMRegistry: &service.LLMRegistryService{},
 	})

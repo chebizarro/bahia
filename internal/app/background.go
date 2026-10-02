@@ -24,7 +24,6 @@ type RunnerStatus struct {
 	Name      string
 	Running   bool
 	Required  bool
-	Tier      int
 	StartedAt time.Time
 	StoppedAt time.Time
 	LastError error
@@ -275,7 +274,6 @@ func (r *ContextVMResponseCleanupRunner) Run(ctx context.Context) error {
 type backgroundRunnerRegistration struct {
 	runner   BackgroundRunner
 	required bool
-	tier     int
 }
 
 // RunnerOption configures background runner health metadata.
@@ -285,13 +283,6 @@ type RunnerOption func(*RunnerStatus)
 func RunnerRequired(required bool) RunnerOption {
 	return func(status *RunnerStatus) {
 		status.Required = required
-	}
-}
-
-// RunnerTier configures the subsystem tier a runner belongs to.
-func RunnerTier(t Tier) RunnerOption {
-	return func(status *RunnerStatus) {
-		status.Tier = int(t)
 	}
 }
 
@@ -322,12 +313,12 @@ func (m *BackgroundManager) RegisterWithOptions(r BackgroundRunner, opts ...Runn
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	status := RunnerStatus{Name: r.Name(), Required: true, Tier: int(Tier0)}
+	status := RunnerStatus{Name: r.Name(), Required: true}
 	for _, opt := range opts {
 		opt(&status)
 	}
 
-	m.runners = append(m.runners, backgroundRunnerRegistration{runner: r, required: status.Required, tier: status.Tier})
+	m.runners = append(m.runners, backgroundRunnerRegistration{runner: r, required: status.Required})
 	m.statuses[status.Name] = status
 	m.logger.Info("background runner registered", zap.String("name", r.Name()))
 }

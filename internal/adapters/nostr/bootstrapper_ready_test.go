@@ -2,7 +2,6 @@ package nostr
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -17,11 +16,10 @@ import (
 // tests are driven purely by EVENT/EOSE/CLOSED frames through a real
 // RelayPool merged subscription.
 
-func productionCatalogBootstrapper(t *testing.T, pool *RelayPool, requestedTier int, cache BootstrapCacheApplier) *Bootstrapper {
+func productionCatalogBootstrapper(t *testing.T, pool *RelayPool, cache BootstrapCacheApplier) *Bootstrapper {
 	t.Helper()
 	servicePubkey := bootstrapTestPubkey(t, testNostrPrivateKey)
 	return NewBootstrapper(pool, NewKindCatalog(), nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:       requestedTier,
 		SnapshotTimeout:     time.Minute,
 		CatchupTimeout:      time.Minute,
 		ProjectionAuthors:   []string{servicePubkey},
@@ -35,14 +33,14 @@ func TestBootstrapperEmptyFleetBecomesReadyWhenEveryRelaySendsEOSE(t *testing.T)
 	two := &bootstrapFakeRelay{url: "wss://two.example", store: []gonostr.Event{}}
 	pool := newBootstrapFakeRelayPool(t, one, two)
 	cache := &bootstrapSourceRecorder{}
-	bootstrapper := productionCatalogBootstrapper(t, pool, 3, cache)
+	bootstrapper := productionCatalogBootstrapper(t, pool, cache)
 
 	require.NoError(t, bootstrapper.attemptBootstrap(context.Background()))
 
 	require.True(t, bootstrapper.Ready())
-	require.Equal(t, 3, bootstrapper.ReadyTier())
+	require.True(t, bootstrapper.Ready())
 	require.Empty(t, cache.ids())
-	required := len(NewKindCatalog().RequiredGroupsForTier(3))
+	required := len(NewKindCatalog().RequiredGroups())
 	require.Equal(t, required, bootstrapper.Progress().GroupsComplete)
 	require.Len(t, one.recordedFilters(), required, "every required group must be replayed from every relay")
 	require.Len(t, two.recordedFilters(), required, "every required group must be replayed from every relay")
@@ -74,7 +72,7 @@ func TestBootstrapperEmptyFleetWaitsForEveryRelayBeforeReady(t *testing.T) {
 	close(slowSub.sub.EndOfStoredEvents)
 
 	require.NoError(t, <-done)
-	require.Equal(t, 0, bootstrapper.ReadyTier())
+	require.True(t, bootstrapper.Ready())
 	require.True(t, cache.has(late.ID.Hex()))
 }
 
@@ -92,7 +90,7 @@ func TestBootstrapperEmptyFleetWithOneEOSEAndOneDroppedRelayIsReady(t *testing.T
 	close(syncedSub.sub.EndOfStoredEvents)
 
 	require.NoError(t, <-done)
-	require.Equal(t, 0, bootstrapper.ReadyTier())
+	require.True(t, bootstrapper.Ready())
 }
 
 func TestBootstrapperNotReadyWhenNoRelaySendsEOSE(t *testing.T) {
@@ -133,7 +131,7 @@ func TestBootstrapperNotReadyWhenNoRelaySendsEOSE(t *testing.T) {
 			err := <-done
 			require.Error(t, err)
 			require.False(t, bootstrapper.Ready())
-			require.Equal(t, -1, bootstrapper.ReadyTier())
+			require.False(t, bootstrapper.Ready())
 			progress := bootstrapper.Progress()
 			require.Equal(t, BootstrapPhaseFailed, progress.Phase)
 			require.Zero(t, progress.GroupsComplete)
@@ -142,30 +140,9 @@ func TestBootstrapperNotReadyWhenNoRelaySendsEOSE(t *testing.T) {
 	}
 }
 
-func TestBootstrapperTierWithoutRequiredGroupsIsNeverReady(t *testing.T) {
-	// Tier 0 has no required groups, so nothing proves it synced.
-	catalog := testBootstrapCatalog()
-	var groups []ReplayGroup
-	for _, group := range catalog.Groups {
-		if group.Tier != 0 {
-			groups = append(groups, group)
-		}
-	}
-	catalog.Groups = groups
-
-	original := bootstrapSubscribeAllWithEOSE
-	bootstrapSubscribeAllWithEOSE = func(*RelayPool, context.Context, []gonostr.Filter) (*MergedSubscription, error) {
-		return nil, errors.New("no connected relays")
-	}
-	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
-
-	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{RequestedTier: 1})
-	require.Equal(t, -1, bootstrapper.computeReadyTier(map[string]bool{}))
-
-	require.Error(t, bootstrapper.attemptBootstrap(context.Background()))
-	require.False(t, bootstrapper.Ready())
-	require.Equal(t, -1, bootstrapper.ReadyTier())
-
-	empty := NewBootstrapper(nil, &KindCatalog{Version: "empty"}, nil, nil, zap.NewNop(), BootstrapConfig{RequestedTier: 3})
+func TestBootstrapperCatalogWithNoRequiredGroupsIsNeverReady(t *testing.T) {
+	// A catalog with no required groups proves nothing about relays.
+	empty := NewBootstrapper(nil, &KindCatalog{Version: "empty"}, nil, nil, zap.NewNop(), BootstrapConfig{})
 	require.Error(t, empty.attemptBootstrap(context.Background()), "a catalog with no required groups proves nothing about relays")
+	require.False(t, empty.Ready())
 }

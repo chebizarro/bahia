@@ -34,11 +34,9 @@ type ReplayCheckpointPayload struct {
 }
 
 type ReadinessStatusPayload struct {
-	Phase         string            `json:"phase"`
-	ActiveTier    int               `json:"active_tier"`
-	RequestedTier int               `json:"requested_tier"`
-	Ready         bool              `json:"ready"`
-	Checks        map[string]string `json:"checks"`
+	Phase  string            `json:"phase"`
+	Ready  bool              `json:"ready"`
+	Checks map[string]string `json:"checks"`
 }
 
 // NostrEventPublisher signs and publishes Nostr events to relays.

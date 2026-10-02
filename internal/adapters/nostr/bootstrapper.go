@@ -34,8 +34,6 @@ const defaultBootstrapPageLimit = 500
 
 type BootstrapProgress struct {
 	Phase          BootstrapPhase
-	RequestedTier  int
-	ReadyTier      int
 	GroupsTotal    int
 	GroupsComplete int
 	StartedAt      time.Time
@@ -45,7 +43,6 @@ type BootstrapProgress struct {
 }
 
 type BootstrapConfig struct {
-	RequestedTier   int
 	SnapshotTimeout time.Duration
 	CatchupTimeout  time.Duration
 	RetryInterval   time.Duration
@@ -130,12 +127,6 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursors *localstore.
 	if config.PageLimit <= 0 {
 		config.PageLimit = defaultBootstrapPageLimit
 	}
-	if config.RequestedTier < 0 {
-		config.RequestedTier = 0
-	}
-	if config.RequestedTier > 3 {
-		config.RequestedTier = 3
-	}
 	config.Resume = config.Resume.normalized()
 	self := make(map[gonostr.PubKey]struct{}, len(config.SelfAuthors))
 	if converted, err := filterAuthorsFromHex(config.SelfAuthors); err == nil {
@@ -153,9 +144,7 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursors *localstore.
 		logger:  logger.Named("bootstrapper"),
 		config:  config,
 		progress: BootstrapProgress{
-			Phase:         BootstrapPhaseInit,
-			RequestedTier: config.RequestedTier,
-			ReadyTier:     -1,
+			Phase: BootstrapPhaseInit,
 		},
 	}
 }
@@ -204,11 +193,16 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	startedAt := time.Now().UTC()
-	groups := b.requiredGroupsAtOrBelowRequestedTier()
+	groups := b.requiredGroups()
+	if len(groups) == 0 {
+		b.setProgress(func(progress *BootstrapProgress) {
+			progress.Phase = BootstrapPhaseFailed
+			progress.LastError = "catalog has no required groups: cannot verify relay sync before any relay EOSE"
+		})
+		return fmt.Errorf("bootstrap failed: catalog has no required groups")
+	}
 	b.setProgress(func(progress *BootstrapProgress) {
 		progress.Phase = BootstrapPhaseInit
-		progress.RequestedTier = b.config.RequestedTier
-		progress.ReadyTier = -1
 		progress.GroupsTotal = len(groups)
 		progress.GroupsComplete = 0
 		progress.StartedAt = startedAt
@@ -275,24 +269,28 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 		}
 	}
 
-	readyTier := b.computeReadyTier(completed)
-	if readyTier < 0 {
+	// Verify all required groups completed.
+	allRequired := true
+	for _, group := range groups {
+		if !completed[group.Name] {
+			allRequired = false
+			break
+		}
+	}
+	if !allRequired {
 		b.setProgress(func(progress *BootstrapProgress) {
 			progress.Phase = BootstrapPhaseFailed
-			progress.ReadyTier = -1
 		})
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return fmt.Errorf("bootstrap failed: no required tier established")
+		return fmt.Errorf("bootstrap failed: not all required groups synced (%d/%d)", len(completed), len(groups))
 	}
 
 	b.setProgress(func(progress *BootstrapProgress) {
 		progress.Phase = BootstrapPhaseReady
-		progress.ReadyTier = readyTier
 	})
 	b.logger.Info("bootstrap ready",
-		zap.Int("ready_tier", readyTier),
 		zap.Int("groups_synced", len(completed)),
 		zap.Int("events_applied", decodedEvents))
 	return nil
@@ -304,7 +302,6 @@ func (b *Bootstrapper) failAttempt(group string, err error) error {
 	err = fmt.Errorf("bootstrap group %q: %w", group, err)
 	b.setProgress(func(progress *BootstrapProgress) {
 		progress.Phase = BootstrapPhaseFailed
-		progress.ReadyTier = -1
 		progress.CurrentGroup = group
 		progress.LastError = err.Error()
 	})
@@ -323,15 +320,11 @@ func (b *Bootstrapper) Ready() bool {
 	return b.Progress().Phase == BootstrapPhaseReady
 }
 
-func (b *Bootstrapper) ReadyTier() int {
-	return b.Progress().ReadyTier
-}
-
-func (b *Bootstrapper) requiredGroupsAtOrBelowRequestedTier() []ReplayGroup {
+func (b *Bootstrapper) requiredGroups() []ReplayGroup {
 	if b == nil || b.catalog == nil {
 		return nil
 	}
-	return b.catalog.RequiredGroupsForTier(b.config.RequestedTier)
+	return b.catalog.RequiredGroups()
 }
 
 // groupSync is the outcome of replaying one filter of a group.
@@ -647,7 +640,6 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 		return nil
 	}
 	decoded.Group = group.Name
-	decoded.Tier = group.Tier
 	if decoded.SourceID == "" {
 		decoded.SourceID = eventIDHex(event)
 	}
@@ -787,33 +779,6 @@ func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) (g
 	}
 	filter.Authors = converted
 	return filter, nil
-}
-
-// computeReadyTier returns the highest tier at or below the requested tier
-// whose required groups all synced. A tier with no required groups is never
-// ready: with nothing replayed there is no relay EOSE proving anything, and
-// counting it would let an attempt in which every relay failed succeed.
-func (b *Bootstrapper) computeReadyTier(completed map[string]bool) int {
-	if b == nil || b.catalog == nil {
-		return -1
-	}
-	for tier := b.config.RequestedTier; tier >= 0; tier-- {
-		required := b.catalog.RequiredGroupsForTier(tier)
-		if len(required) == 0 {
-			continue
-		}
-		ready := true
-		for _, group := range required {
-			if !completed[group.Name] {
-				ready = false
-				break
-			}
-		}
-		if ready {
-			return tier
-		}
-	}
-	return -1
 }
 
 func (b *Bootstrapper) setPhase(phase BootstrapPhase) {

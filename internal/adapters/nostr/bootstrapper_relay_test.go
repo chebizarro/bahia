@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -241,13 +242,33 @@ func bootstrapTestPubkey(t *testing.T, privateKeyHex string) string {
 	return pubkey
 }
 
-// discoveryOnlyBootstrapper uses the production catalog at tier 0, which
-// replays only the discovery_snapshot group.
+// discoveryOnlyBootstrapper returns a bootstrapper with a single required
+// group (discovery_snapshot) so relay-level EOSE semantics can be tested
+// without multi-group interference.
 func discoveryOnlyBootstrapper(t *testing.T, pool *RelayPool, cache BootstrapCacheApplier) *Bootstrapper {
 	t.Helper()
 	servicePubkey := bootstrapTestPubkey(t, testNostrPrivateKey)
-	return NewBootstrapper(pool, NewKindCatalog(), nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:       0,
+	discoveryKinds := []int{KindBahiaIdentityDefinition, KindBahiaReplayCheckpoint, KindBahiaReadinessStatus}
+	catalog := &KindCatalog{
+		Version: "test-discovery-only",
+		Groups: []ReplayGroup{
+			{Name: "discovery_snapshot", Kinds: discoveryKinds, Snapshot: true, Required: true, Authors: ReplayAuthorsProjection},
+		},
+		decoders: make(map[int]DecodeFunc),
+	}
+	for _, kind := range discoveryKinds {
+		kind := kind
+		catalog.decoders[kind] = func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+			return &DecodedProjectionEvent{
+				Kind:      eventKindInt(ev),
+				DTag:      tagValueLocal(ev.Tags, "d"),
+				Timestamp: ev.CreatedAt.Time().UTC(),
+				SourceID:  eventIDHex(ev),
+				Family:    ProjectionFamily(fmt.Sprintf("test-%d", kind)),
+			}, nil
+		}
+	}
+	return NewBootstrapper(pool, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
 		SnapshotTimeout:     time.Minute,
 		CatchupTimeout:      time.Minute,
 		ProjectionAuthors:   []string{servicePubkey},
@@ -358,7 +379,7 @@ func TestBootstrapperRejectsOutOfScopeAuthorsForEveryRequiredGroup(t *testing.T)
 	strangerPubkey := bootstrapTestPubkey(t, bootstrapTestStrangerKey)
 
 	catalog := NewKindCatalog()
-	groups := catalog.RequiredGroupsForTier(1)
+	groups := catalog.RequiredGroups()
 	require.NotEmpty(t, groups)
 	now := gonostr.Now()
 	var store []gonostr.Event
@@ -378,7 +399,6 @@ func TestBootstrapperRejectsOutOfScopeAuthorsForEveryRequiredGroup(t *testing.T)
 	pool := newBootstrapFakeRelayPool(t, relay)
 	cache := &bootstrapSourceRecorder{}
 	bootstrapper := NewBootstrapper(pool, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		RequestedTier:       1,
 		SnapshotTimeout:     time.Minute,
 		CatchupTimeout:      time.Minute,
 		ProjectionAuthors:   []string{servicePubkey},

@@ -26,7 +26,7 @@ func TestConnectOptionalDatabaseRedactsCredentialRepresentationsFromLogs(t *test
 	t.Cleanup(func() { dbConnect = originalConnect })
 	core, observed := observer.New(zap.WarnLevel)
 
-	pool, available := connectOptionalDatabase(context.Background(), cfg, zap.New(core), nil)
+	pool, available := connectOptionalDatabase(context.Background(), cfg, zap.New(core))
 	if pool != nil || available {
 		t.Fatalf("connectOptionalDatabase() = (%v, %v), want unavailable", pool, available)
 	}
