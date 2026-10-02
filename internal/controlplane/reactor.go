@@ -202,6 +202,7 @@ type Reactor struct {
 	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
 	eventBus                      events.Publisher
 	workerStatePublisher          *WorkerStatePublisher
+	workerReadModelPublisher     *WorkerReadModelPublisher
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -370,6 +371,11 @@ func WithWorkerRepository(repo repository.WorkerRepository) ReactorOption {
 
 func WithWorkerCleanupOrchestrator(orchestrator *service.WorkerCleanupOrchestrator) ReactorOption {
 	return func(r *Reactor) { r.workerCleanupOrchestrator = orchestrator }
+}
+
+// WithWorkerReadModelPublisher enables direct worker read model publication.
+func WithWorkerReadModelPublisher(publisher *WorkerReadModelPublisher) ReactorOption {
+	return func(r *Reactor) { r.workerReadModelPublisher = publisher }
 }
 
 func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOption {

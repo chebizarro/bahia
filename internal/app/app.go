@@ -1131,7 +1131,8 @@ func New(cfg *config.Config) (*App, error) {
 		// are now published by BackupCanonicalPublisher wired to the registry.
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
-		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
+		// Phase 3 W1: WithWorkerReadModelProjectionSource removed — worker read
+		// models are published directly from the mutation site (bahia-irsry.11.14).
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if dnsProjector != nil {
@@ -1386,6 +1387,27 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("LLM route intent handler registered")
 	}
+	// Phase 3 P1: register package intent handler, publishing through the
+	// shared cp-state path (controlStateEnvelope + publishAuthoritative).
+	if enabledDomains["package"] && packageRegistrySvc != nil {
+		packageAuthStore, _ := packageProjection.(repository.PackageAuthorizationStore)
+		var packageWriter controlplane.PackageCPStateWriter
+		if nostrProjector != nil && controlPlanePub != nil {
+			packageWriter = nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		}
+		intentProcessor.RegisterHandler("package", controlplane.NewPackageIntentHandler(
+			controlplane.PackageIntentHandlerConfig{
+				PackageService: packageRegistrySvc,
+				Projection:     packageProjection,
+				Store:          packageAuthStore,
+				Writer:         packageWriter,
+				Status:         intentStatus,
+				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
+				Logger:         logger,
+			},
+		))
+		logger.Info("package intent handler registered")
+	}
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -1425,6 +1447,13 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Warn("publish LLM route state cp-state failed", zap.Error(err))
 			}
 		})
+	}
+	// Phase 3 M1: wire ML cp-state publisher into registry service so state
+	// mutations publish canonical records directly instead of through the projector.
+	if nostrProjector.Enabled() && mlRegistry != nil {
+		mlCanonicalPub := nostrAdapter.NewMLCanonicalPublisher(nostrProjector, logger)
+		mlRegistry.SetMLCPStatePublisher(mlCanonicalPub)
+		logger.Info("ML canonical cp-state publisher wired into registry service")
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -2226,6 +2255,13 @@ func New(cfg *config.Config) (*App, error) {
 			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
+		// Phase 3 W1: wire worker read model publisher for direct publication
+		// from mutation sites (bahia-irsry.11.14).
+		workerReadModelPublisher := controlplane.NewWorkerReadModelPublisher(
+			controlPlanePool, controlPlaneSigner, workerReadModelSvc, logger)
+		reactorOpts = append(reactorOpts,
+			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
+		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
@@ -2243,7 +2279,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
@@ -2871,6 +2907,76 @@ func setupWorkerPressureSubscriptions(
 			}
 		}()
 	})
+}
+
+// setupWorkerReadModelEventSubscriptions wires event-bus subscriptions so that
+// deployment-run and ML-run lifecycle events trigger an immediate worker
+// read-model republish (assignment, drain, eligibility). This replaces the
+// projector's reactive handleEvent cases removed in Phase 3 W1
+// (bahia-irsry.11.14).
+func setupWorkerReadModelEventSubscriptions(
+	pub events.Publisher,
+	workerReadModelPublisher *controlplane.WorkerReadModelPublisher,
+	registry *service.RegistryService,
+	mlRegistry *service.MLRegistryService,
+	logger *zap.Logger,
+) {
+	if pub == nil || workerReadModelPublisher == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	// Deployment run events: look up the run to extract the worker pubkey,
+	// then republish assignment/drain/eligibility for that worker.
+	publishForDeploymentRun := func(ctx context.Context, e events.Event) {
+		runID := e.EntityID
+		if res, ok := e.Data.(events.ResourceData); ok && res.RunID != "" {
+			runID = res.RunID
+		}
+		id, err := uuid.Parse(runID)
+		if err != nil {
+			return
+		}
+		run, err := registry.GetDeploymentRun(ctx, id)
+		if err != nil || run == nil || run.WorkerPubkey == "" {
+			if err != nil {
+				logger.Warn("lookup deployment run for worker read model refresh failed",
+					zap.String("run_id", runID), zap.Error(err))
+			}
+			return
+		}
+		workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+	}
+	pub.Subscribe(events.EventDeploymentRunCreated, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunStatusChanged, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunCompleted, publishForDeploymentRun)
+
+	// ML deployment run events: same pattern, using the ML registry.
+	if mlRegistry != nil {
+		pub.Subscribe(service.EventMLRunChanged, func(ctx context.Context, e events.Event) {
+			runID := e.EntityID
+			if m, ok := e.Data.(map[string]any); ok {
+				if rid, ok := m["run_id"].(string); ok && rid != "" {
+					runID = rid
+				}
+			}
+			id, err := uuid.Parse(runID)
+			if err != nil {
+				return
+			}
+			run, err := mlRegistry.GetMLDeploymentRun(ctx, id)
+			if err != nil || run == nil || run.WorkerPubkey == "" {
+				if err != nil {
+					logger.Warn("lookup ML deployment run for worker read model refresh failed",
+						zap.String("run_id", runID), zap.Error(err))
+				}
+				return
+			}
+			workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+		})
+	}
 }
 
 func executeContinuityFailoverCommand(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, command events.ContinuityCommandRequested, logger *zap.Logger) {

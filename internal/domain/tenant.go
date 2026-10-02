@@ -104,6 +104,7 @@ const (
 	PermWritePolicies      Permission = "policies:write"
 	PermWriteLLMRoutes     Permission = "llm_routes:write"
 	PermManageBackups      Permission = "backups:manage"
+	PermManagePackages     Permission = "packages:manage"
 	PermApproveDeployments Permission = "deployments:approve"
 
 	// Admin permissions
