@@ -17,6 +17,7 @@ import (
 type ReadinessTracker struct {
 	mu      sync.RWMutex
 	filters map[string]bool // filter-key → ready
+	readyCh chan struct{}    // closed when all filters are ready
 }
 
 // NewReadinessTracker creates a tracker. Register filters with RegisterFilter
@@ -24,6 +25,7 @@ type ReadinessTracker struct {
 func NewReadinessTracker() *ReadinessTracker {
 	return &ReadinessTracker{
 		filters: make(map[string]bool),
+		readyCh: make(chan struct{}),
 	}
 }
 
@@ -38,10 +40,24 @@ func (r *ReadinessTracker) RegisterFilter(key string) {
 }
 
 // MarkFilterReady records that a filter's first catch-up is complete.
+// When all registered filters are ready, the ready channel is closed.
 func (r *ReadinessTracker) MarkFilterReady(key string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.filters[key] = true
+	// Check if all filters are ready; if so, close the ready channel.
+	for _, ready := range r.filters {
+		if !ready {
+			return
+		}
+	}
+	// All filters ready — close the channel (idempotent via select).
+	select {
+	case <-r.readyCh:
+		// Already closed.
+	default:
+		close(r.readyCh)
+	}
 }
 
 // IsReady reports whether all registered filters have caught up. Returns true
@@ -56,6 +72,22 @@ func (r *ReadinessTracker) IsReady() bool {
 		}
 	}
 	return true
+}
+
+// Ready returns a channel that is closed when all registered filters have
+// caught up. When no filters are registered the channel is already closed
+// (vacuously ready). Callers should select on this channel and ctx.Done()
+// to wait for readiness without polling.
+func (r *ReadinessTracker) Ready() <-chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	// Vacuously ready when no filters are registered.
+	if len(r.filters) == 0 {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return r.readyCh
 }
 
 // Progress returns the readiness state for health endpoints.

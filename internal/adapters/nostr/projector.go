@@ -209,6 +209,10 @@ type Projector struct {
 	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
 
+	// F4 warm-start: readiness gate and migrated domain list.
+	readiness     ReadinessWaiter
+	intentDomains []string
+
 	// Generalized projection dedupe/coalescing/backoff/metrics state; see
 	// projection_dedupe.go. Initialized lazily so the constructor literal is
 	// untouched.
@@ -395,11 +399,21 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 }
 
 // Run performs startup snapshot repair and then periodically republishes
-// snapshots until the context is cancelled.
+// snapshots until the context is cancelled. Domains listed in intentDomains
+// are warm-started from the daemon's own history (design §5.3) instead of
+// re-projected from Postgres; RepublishSnapshot guards skip their legs.
 func (p *Projector) Run(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
+	// Warm-start migrated domains: wait for subscriber EOSE, hydrate the
+	// fingerprint cache, and re-publish only stale or missing records.
+	p.warmStartMigratedDomains(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	// Legacy snapshot for unmigrated domains. Guards inside skip migrated
+	// domain legs so they are not re-projected from Postgres.
 	if err := p.RepublishSnapshot(ctx); err != nil {
 		p.logger.Warn("startup Nostr projection snapshot failed", zap.Error(err))
 	}
@@ -441,9 +455,12 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
-	for i := range services {
-		if err := p.publishServiceRegistry(ctx, &services[i], false); err != nil {
-			p.logger.Warn("publish service registry projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
+	// F4 guard: migrated domains skip the Postgres→relay re-projection.
+	if !p.isDomainMigrated("service") {
+		for i := range services {
+			if err := p.publishServiceRegistry(ctx, &services[i], false); err != nil {
+				p.logger.Warn("publish service registry projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
+			}
 		}
 	}
 

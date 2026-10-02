@@ -104,6 +104,7 @@ type App struct {
 	IntentReadiness   *controlplane.ReadinessTracker
 	IntentSubscriber  *controlplane.IntentSubscriber
 	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
+
 }
 
 var (
@@ -1049,6 +1050,16 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
+	}
+	// Phase 3 F4: warm-start for intent-migrated domains. When intent domains
+	// are configured, the projector waits for subscriber EOSE then compares
+	// its own history against relay state, re-publishing only stale records.
+	// RepublishSnapshot guards skip migrated domain legs.
+	if len(cfg.Nostr.IntentDomains) > 0 {
+		projectorOpts = append(projectorOpts,
+			nostrAdapter.WithReadinessTracker(intentReadiness),
+			nostrAdapter.WithIntentDomains(cfg.Nostr.IntentDomains),
+		)
 	}
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
@@ -2029,6 +2040,7 @@ func New(cfg *config.Config) (*App, error) {
 		IntentProcessor:           intentProcessor,
 		IntentReadiness:           intentReadiness,
 		IntentSubscriber:          intentSubscriber,
+		IntentAuthorsSyncer:       intentAuthorsSyncer,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),

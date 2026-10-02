@@ -73,6 +73,7 @@
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
 1	internal/adapters/nostr.WithKinds
+1	internal/adapters/nostr.WithProjectorRepairInterval
 1	internal/adapters/qdrant.Client.CollectionExists
 1	internal/adapters/qdrant.Client.DeleteCollection
 1	internal/adapters/qdrant.Client.Search
