@@ -420,6 +420,7 @@ type EncryptedRequestTransport struct {
 	responseHandlers       map[uint64]ContextVMResponseHandler
 	nextResponseID         uint64
 	dedup                  *nostrpool.EventDeduplicator
+	giftWrapIntentIngress  *IntentGiftWrapIngress
 	logger                 *zap.Logger
 }
 
@@ -440,6 +441,14 @@ func WithContextVMResponseStore(store repository.ContextVMResponseStore, ttl tim
 // Postgres (bahia-irsry.10.6). See contextvm_local_run.go.
 func WithContextVMLocalStore(store *localstore.Store) EncryptedRequestTransportOption {
 	return func(transport *EncryptedRequestTransport) { transport.contextVMLocal.store = store }
+}
+
+// SetGiftWrapIntentIngress sets the ingress handler for gift-wrapped 30900
+// intents received through the existing 1059 ContextVM subscription. When set,
+// unwrapped inner events that are kind 30900 with t=bahia-intent are routed to
+// the ingress instead of ContextVM dispatch.
+func (t *EncryptedRequestTransport) SetGiftWrapIntentIngress(ig *IntentGiftWrapIngress) {
+	t.giftWrapIntentIngress = ig
 }
 
 func WithContextVMResultRetry(timeout, initialBackoff, maxBackoff time.Duration) EncryptedRequestTransportOption {
@@ -675,6 +684,18 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 			t.logger.Warn("invalid ContextVM gift wrap provenance", zap.String("event_id", outer.ID.Hex()), zap.String("wrapper_pubkey", outer.PubKey.Hex()), zap.String("inner_pubkey", inner.PubKey.Hex()))
 			return
 		}
+	}
+	// Phase 3 O1: if the unwrapped inner event is a kind 30900 intent
+	// (t=bahia-intent), route it to the gift-wrap intent ingress instead
+	// of ContextVM dispatch. This reuses the existing 1059 subscription.
+	if inner != nil && t.giftWrapIntentIngress != nil && IsIntentEvent(inner) {
+		if err := t.giftWrapIntentIngress.ProcessUnwrappedIntent(ctx, inner); err != nil {
+			t.logger.Warn("gift-wrapped intent processing failed",
+				zap.String("event_id", outer.ID.Hex()),
+				zap.String("inner_id", inner.ID.Hex()),
+				zap.Error(err))
+		}
+		return
 	}
 	if inner == nil || inner.Kind != KindContextVMMessage {
 		t.logger.Debug("ContextVM wrapper did not contain a ContextVM message", zap.String("event_id", outer.ID.Hex()))

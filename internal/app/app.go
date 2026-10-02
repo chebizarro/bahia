@@ -1377,6 +1377,128 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("package intent handler registered")
 	}
+
+	// Phase 3 O1: derive org state encryption key from daemon private key (§1.7).
+	// Follows the assistant transcript key derivation pattern.
+	// When no local private key exists (bunker/remote signer), org state
+	// publishing is impossible — the org domain is disabled and an error is
+	// logged. There is no plaintext fallback in production.
+	var orgStateEncryptor *controlplane.OrgStateEncryptorImpl
+	if cfg.Nostr.PrivateKey != "" {
+		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
+		orgStateEncryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
+			Key: controlplane.OrgStateKey{
+				Ref:     "org-state/service-nostr-key",
+				Version: "v1",
+				Key:     orgKeySum[:],
+			},
+		})
+	} else if enabledDomains["org"] {
+		logger.Error("org domain requires a local private key for state encryption; " +
+			"remote/bunker signers cannot derive the org state key. " +
+			"Disabling org domain to prevent plaintext state publication")
+		delete(enabledDomains, "org")
+	}
+
+	// Phase 3 O1: create encrypted canonical publisher for org state.
+	// Used by both the intent handler and the legacy EncryptedDomainHandlers path.
+	// The encryptor is mandatory in production — OrgCanonicalPublisher is only
+	// created when an encryptor is available or when a projector exists for the
+	// legacy path (which always has a private key).
+	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
+	if nostrProjector != nil && orgStateEncryptor != nil {
+		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, orgStateEncryptor, logger)
+	}
+
+	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
+	// The handler processes org/member/invite intents and publishes canonical
+	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
+	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
+		orgHandler := controlplane.NewOrgIntentHandler(controlplane.OrgIntentHandlerConfig{
+			Orgs:      orgRepo,
+			Members:   orgMemberRepo,
+			Invites:   orgInviteRepo,
+			Publisher: orgCanonicalPub,
+			Status:    intentStatus,
+			Logger:    logger,
+			OnMemberChange: func(orgID uuid.UUID) {
+				// Rebuild relay members for this org from Postgres (interim
+				// until the local store hydration replaces this). The published
+				// encrypted events are the source of truth; the callback fires
+				// after both Postgres and relay publishes complete.
+				members, err := orgMemberRepo.ListByOrg(ctx, orgID)
+				if err != nil {
+					logger.Warn("failed to list org members for TrustSet update",
+						zap.String("org_id", orgID.String()), zap.Error(err))
+					return
+				}
+				roleMap := make(map[string]domain.Role, len(members))
+				for _, m := range members {
+					roleMap[m.Pubkey] = m.Role
+				}
+				trustSet.SetRelayMembers(orgID.String(), roleMap)
+				if intentAuthorsSyncer != nil {
+					intentAuthorsSyncer.Notify()
+				}
+				logger.Debug("TrustSet relay members updated for org",
+					zap.String("org_id", orgID.String()),
+					zap.Int("member_count", len(members)))
+			},
+		})
+		intentProcessor.RegisterHandler("org", orgHandler)
+		logger.Info("org intent handler registered")
+	}
+
+	// Phase 3 O1: gift-wrapped intent ingress for sensitive domains (§1.7).
+	// Shared by O1 (org) and N1 (secret, notification). Plaintext 30900 intents
+	// for these domains are rejected with a bounded status.
+	var giftWrapIngress *controlplane.IntentGiftWrapIngress
+	if controlPlaneSigner != nil {
+		giftWrapIngress = controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
+			Signer:           controlPlaneSigner,
+			Processor:        intentProcessor,
+			SensitiveDomains: []string{"org", "secret", "notification"},
+			Logger:           logger,
+		})
+		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
+		logger.Info("gift-wrap intent ingress registered for sensitive domains")
+	}
+	// Phase 3 O1: relay member event handler for TrustSet hydration from
+	// encrypted membership events (§2.5 item 3). Wired for warm-start and
+	// live member publishes. Even when Postgres is configured, the relay
+	// source has highest precedence in TrustSet resolution.
+	var relayMemberEventHandler *controlplane.RelayMemberEventHandler
+	if orgStateEncryptor != nil {
+		relayMemberEventHandler = controlplane.NewRelayMemberEventHandler(
+			orgStateEncryptor, trustSet, orgMemberRepo, logger,
+		)
+
+		// (ii) Live: after OrgCanonicalPublisher publishes a member record
+		// (both legacy ContextVM and intent paths), feed it through the handler
+		// so TrustSet relay members stay in sync in real time.
+		if orgCanonicalPub != nil {
+			orgCanonicalPub.SetOnMemberPublished(func(ctx context.Context, encryptedContent string) {
+				if err := relayMemberEventHandler.HandleEncryptedMemberEvent(ctx, encryptedContent); err != nil {
+					logger.Debug("relay member event handler: post-publish hydration failed",
+						zap.Error(err))
+				}
+				if intentAuthorsSyncer != nil {
+					intentAuthorsSyncer.Notify()
+				}
+			})
+		}
+
+		// (i) Startup: hydrate TrustSet from the daemon's own published
+		// encrypted membership events in history. This runs before the intent
+		// subscriber's author filter is computed, ensuring relay-sourced members
+		// are included in the authors set from the start.
+		if nostrProjector != nil {
+			relayMemberEventHandler.HydrateTrustSetFromHistory(ctx, projectionHistory)
+		}
+
+		logger.Info("relay member event handler created and wired for TrustSet hydration")
+	}
+
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -2047,9 +2169,18 @@ func New(cfg *config.Config) (*App, error) {
 			Members:               orgMemberRepo,
 			Invites:               orgInviteRepo,
 			RBAC:                  tenantRBAC,
+			IntentProcessor:       intentProcessor,
+			OrgPublisher:          orgCanonicalPub,
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
+		// Phase 3 O1: wire gift-wrap intent ingress to the existing 1059
+		// subscription. When an unwrapped inner event is kind 30900 with
+		// t=bahia-intent, it is routed to the ingress instead of ContextVM.
+		if giftWrapIngress != nil {
+			encryptedRequestTransport.SetGiftWrapIntentIngress(giftWrapIngress)
+			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
+		}
 		registryMutations := controlplane.RegistryMutationBackend(registry)
 		if relayFirstRegistry != nil {
 			registryMutations = relayFirstRegistry

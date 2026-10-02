@@ -424,17 +424,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(writeLimiter))
 
-			// Tenant orgs (write)
-			if tenantH != nil {
-				r.Post("/orgs", tenantH.CreateOrg)
-				r.Put("/orgs/{id}", tenantH.UpdateOrg)
-				r.Delete("/orgs/{id}", tenantH.DeleteOrg)
-				r.Post("/orgs/{id}/members", tenantH.AddMember)
-				r.Put("/orgs/{id}/members/{pubkey}", tenantH.UpdateMemberRole)
-				r.Delete("/orgs/{id}/members/{pubkey}", tenantH.RemoveMember)
-				r.Post("/orgs/{id}/invites", tenantH.CreateInvite)
-				r.Delete("/orgs/{id}/invites/{inviteId}", tenantH.RevokeInvite)
-			}
+			// Tenant orgs (write) — Phase 3 O1 (B-26): REST mutation routes
+			// deleted. Org/member/invite mutations now go through the
+			// encrypted ContextVM path (dual dispatch to intent processor).
+			// Read routes in the Tenant orgs (read) block above are retained.
 
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {

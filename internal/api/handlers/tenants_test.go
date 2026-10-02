@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -129,97 +128,6 @@ func (r *testInviteRepo) ListByPubkey(context.Context, string) ([]domain.OrgInvi
 func (r *testInviteRepo) Delete(context.Context, uuid.UUID) error    { return r.deleteErr }
 func (r *testInviteRepo) DeleteExpired(context.Context) (int, error) { return 0, nil }
 
-func TestCreateOrgBootstrapOwnerAllowlist(t *testing.T) {
-	allowedPubkey := strings.Repeat("a", 64)
-	notAllowedPubkey := strings.Repeat("b", 64)
-
-	tests := []struct {
-		name               string
-		allowlist          []string
-		principal          *auth.Principal
-		wantStatus         int
-		wantCreatesOrg     bool
-		wantAddsMembership bool
-	}{
-		{
-			name:               "empty allowlist preserves behavior",
-			allowlist:          nil,
-			principal:          &auth.Principal{Method: auth.MethodNIP98, PubKey: notAllowedPubkey},
-			wantStatus:         http.StatusCreated,
-			wantCreatesOrg:     true,
-			wantAddsMembership: true,
-		},
-		{
-			name:               "listed principal can create org",
-			allowlist:          []string{allowedPubkey},
-			principal:          &auth.Principal{Method: auth.MethodNIP98, PubKey: allowedPubkey},
-			wantStatus:         http.StatusCreated,
-			wantCreatesOrg:     true,
-			wantAddsMembership: true,
-		},
-		{
-			name:               "unlisted principal gets forbidden",
-			allowlist:          []string{allowedPubkey},
-			principal:          &auth.Principal{Method: auth.MethodNIP98, PubKey: notAllowedPubkey},
-			wantStatus:         http.StatusForbidden,
-			wantCreatesOrg:     false,
-			wantAddsMembership: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			orgs := &testOrgRepo{}
-			members := &testMemberRepo{}
-			h := NewTenantHandler(orgs, members, &testInviteRepo{}, nil, tt.allowlist, zap.NewNop())
-
-			body := strings.NewReader(`{"name":"demo-org","display_name":"Demo"}`)
-			req := httptest.NewRequest(http.MethodPost, "/orgs", body)
-			if tt.principal != nil {
-				req = req.WithContext(auth.ContextWithPrincipal(req.Context(), tt.principal))
-			}
-			w := httptest.NewRecorder()
-
-			h.CreateOrg(w, req)
-
-			if w.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", w.Code, tt.wantStatus)
-			}
-			if got := len(orgs.created) > 0; got != tt.wantCreatesOrg {
-				t.Fatalf("org created = %v, want %v", got, tt.wantCreatesOrg)
-			}
-			if got := len(members.added) > 0; got != tt.wantAddsMembership {
-				t.Fatalf("owner membership added = %v, want %v", got, tt.wantAddsMembership)
-			}
-		})
-	}
-}
-
-func TestCreateOrgBootstrapOwnerAllowlistForbiddenMessage(t *testing.T) {
-	allowedPubkey := strings.Repeat("a", 64)
-	notAllowedPubkey := strings.Repeat("b", 64)
-	h := NewTenantHandler(&testOrgRepo{}, &testMemberRepo{}, &testInviteRepo{}, nil, []string{allowedPubkey}, zap.NewNop())
-
-	req := httptest.NewRequest(http.MethodPost, "/orgs", strings.NewReader(`{"name":"demo-org"}`))
-	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{Method: auth.MethodNIP98, PubKey: notAllowedPubkey}))
-	w := httptest.NewRecorder()
-
-	h.CreateOrg(w, req)
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
-	}
-
-	var resp map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	errText, _ := resp["error"].(string)
-	if !strings.Contains(errText, "bootstrap owner pubkey") {
-		t.Fatalf("error message = %q, want bootstrap owner pubkey message", errText)
-	}
-}
-
 func TestAcceptInviteScopesLookupByOrganization(t *testing.T) {
 	orgID := uuid.New()
 	inviteID := uuid.New()
@@ -266,41 +174,6 @@ func TestAcceptInviteReportsInviteDeletionFailure(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
-	}
-}
-
-func TestTenantHandlerNilRBACFailsClosed(t *testing.T) {
-	pubkey := strings.Repeat("a", 64)
-	orgID := uuid.New()
-
-	// RBAC with nil members — simulates starting without a database.
-	brokenRBAC := auth.NewRBAC(nil)
-
-	h := NewTenantHandler(&testOrgRepo{}, &testMemberRepo{}, &testInviteRepo{}, brokenRBAC, nil, zap.NewNop())
-
-	req := httptest.NewRequest(http.MethodPut, "/orgs/"+orgID.String(),
-		strings.NewReader(`{"display_name":"Updated"}`))
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", orgID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), &auth.Principal{
-		Method: auth.MethodNIP98, PubKey: pubkey,
-	}))
-	w := httptest.NewRecorder()
-
-	// This must not panic. Must return a 5xx fail-closed response.
-	h.UpdateOrg(w, req)
-
-	if w.Code < 500 || w.Code >= 600 {
-		t.Fatalf("status = %d, want 5xx fail-closed, body: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if _, ok := resp["error"]; !ok {
-		t.Fatalf("response missing error key: %v", resp)
 	}
 }
 

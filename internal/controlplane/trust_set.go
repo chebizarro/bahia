@@ -235,3 +235,20 @@ func (ts *TrustSet) FleetOps() []string {
 	defer ts.mu.RUnlock()
 	return append([]string(nil), ts.fleetOps...)
 }
+
+// RelayMembersFor returns a copy of the relay-sourced membership map for an org,
+// or nil if no relay members exist. Used by RelayMemberEventHandler for
+// single-event merging when no Postgres is configured.
+func (ts *TrustSet) RelayMembersFor(orgID string) map[string]domain.Role {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	src, ok := ts.relay[orgID]
+	if !ok || len(src) == 0 {
+		return nil
+	}
+	cp := make(map[string]domain.Role, len(src))
+	for k, v := range src {
+		cp[k] = v
+	}
+	return cp
+}

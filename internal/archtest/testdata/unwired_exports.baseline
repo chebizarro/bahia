@@ -229,7 +229,6 @@
 1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
 1	internal/controlplane.TrustSet.RoleFor
-1	internal/controlplane.TrustSet.SetRelayMembers
 1	internal/controlplane.WithBackupDefinitionRegistry
 1	internal/controlplane.WithBackupRepositoryProbeExecutor
 1	internal/controlplane.WithBackupVerificationExecutor
