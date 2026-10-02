@@ -58,6 +58,14 @@ vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
   getBootstrapSeed: discoveryMock.getBootstrapSeed
 }));
 
+const bootMock = vi.hoisted(() => ({
+  boot: vi.fn().mockResolvedValue(undefined),
+  getEventStore: vi.fn().mockReturnValue(null),
+  shutdown: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../src/lib/nostr/boot.js', () => bootMock);
+
 vi.mock('../../src/lib/nostr/client.js', async () => {
   const actual = await vi.importActual('../../src/lib/nostr/client.js');
   return {
