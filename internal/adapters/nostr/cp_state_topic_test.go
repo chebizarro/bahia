@@ -128,9 +128,6 @@ func TestProjectedControlStateCarriesFamilyTopic(t *testing.T) {
 			return projector.publishEnvironmentRegistry(ctx, &domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}, false)
 		},
 		func() error {
-			return projector.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: uuid.New(), Name: "gate", CreatedAt: now, UpdatedAt: now}, false)
-		},
-		func() error {
 			return projector.publishLLMRouteRegistry(ctx, &domain.LLMRoute{ID: uuid.New(), Name: "chat", CreatedAt: now, UpdatedAt: now}, false)
 		},
 		func() error { return projector.publishState(ctx, &state) },

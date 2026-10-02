@@ -125,7 +125,6 @@ const (
 	KindDeploymentIntentRegistry  = nostrpool.KindDeploymentIntentRegistry  // Replaceable deployment intent entry (d=intent_id)
 	KindDeploymentRunRegistry     = nostrpool.KindDeploymentRunRegistry     // Replaceable deployment run entry (d=run_id)
 	KindBuildRegistry             = nostrpool.KindBuildRegistry             // Replaceable build registry entry (d=build_id)
-	KindPolicyRegistry            = nostrpool.KindPolicyRegistry            // Replaceable policy registry entry (d=policy_id)
 	KindPackageRepositoryRegistry = nostrpool.KindPackageRepositoryRegistry // Replaceable package repository state (d=repository_id)
 	KindPackageArtifactRegistry   = nostrpool.KindPackageArtifactRegistry   // Replaceable package artifact state (d=artifact_id)
 	KindPackagePromotionRegistry  = nostrpool.KindPackagePromotionRegistry  // Replaceable package promotion/publication state (d=publication_id)
@@ -177,6 +176,8 @@ type Reactor struct {
 	toolResponder                 *ToolResponder
 	toolCoordinator               toolApprovalProcessor
 	policyService                 *service.PolicyService
+	intentProcessor               *IntentProcessor
+	policyPublisher               PolicyStatePublisher
 	adoption                      AdoptionOperatorService
 	runtimeLifecycle              RuntimeLifecycleOperatorService
 	packageService                *service.PackageRegistryService
@@ -200,7 +201,6 @@ type Reactor struct {
 	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
 	eventBus                      events.Publisher
 	workerStatePublisher          *WorkerStatePublisher
-	lastPolicyPublishedAt         map[uuid.UUID]nostr.Timestamp
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -323,6 +323,18 @@ func WithToolProvisioningCoordinator(coordinator *service.ToolProvisioningCoordi
 
 func WithPolicyService(policies *service.PolicyService) ReactorOption {
 	return func(r *Reactor) { r.policyService = policies }
+}
+
+// WithIntentProcessor enables Phase 3 dual dispatch for policy mutations.
+func WithIntentProcessor(ip *IntentProcessor) ReactorOption {
+	return func(r *Reactor) { r.intentProcessor = ip }
+}
+
+// WithPolicyStatePublisher sets the policy state publisher for canonical 30900
+// publication via PublishBeforeCommit. Used by both the legacy (non-intent)
+// mutation path and the intent handler path.
+func WithPolicyStatePublisher(pub PolicyStatePublisher) ReactorOption {
+	return func(r *Reactor) { r.policyPublisher = pub }
 }
 
 // WithAdoptionService enables signer-first adoption scan/import request handling.
@@ -2276,53 +2288,7 @@ type ObservationRequest struct {
 	Source              string    `json:"source"`
 }
 
-func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
-	content := map[string]any{"deleted": deleted, "id": policy.ID.String()}
-	if !deleted {
-		content["name"] = policy.Name
-		content["environment_id"] = nil
-		if policy.EnvironmentID != nil {
-			content["environment_id"] = policy.EnvironmentID.String()
-		}
-		content["rules"] = policy.Rules
-		content["rule_count"] = len(policy.Rules)
-		content["enforcement"] = string(policy.Enforcement)
-		content["enabled"] = policy.Enabled
-		content["created_at"] = policy.CreatedAt.Format(time.RFC3339)
-	}
-	content["updated_at"] = policy.UpdatedAt.Format(time.RFC3339)
-	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{{"d", policy.ID.String()}, {"policy", policy.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
-	if !deleted {
-		tags = append(tags, nostr.Tag{"name", policy.Name}, nostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, nostr.Tag{"enforcement", string(policy.Enforcement)})
-		if policy.EnvironmentID != nil {
-			tags = append(tags, nostr.Tag{"environment", policy.EnvironmentID.String()})
-		}
-	}
-	tags = append(tags, nostr.Tag{"domain", "policy"}, nostr.Tag{"schema", "bahia.cp-state.v1"}, nostr.Tag{"legacy_kind", fmt.Sprintf("%d", KindPolicyRegistry)}, nostr.Tag{"t", kinds.CPStateTopicPolicyRegistry})
-	r.mu.Lock()
-	if r.lastPolicyPublishedAt == nil {
-		r.lastPolicyPublishedAt = make(map[uuid.UUID]nostr.Timestamp)
-	}
-	createdAt := nostr.Now()
-	if last := r.lastPolicyPublishedAt[policy.ID]; createdAt <= last {
-		createdAt = last + 1
-	}
-	r.lastPolicyPublishedAt[policy.ID] = createdAt
-	r.mu.Unlock()
-	event := &nostr.Event{Kind: KindCASControlState, CreatedAt: createdAt, Tags: tags, Content: string(contentJSON)}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign policy registry event: %w", err)
-	}
-	published, err := r.publishEvent(ctx, event)
-	if err != nil {
-		return err
-	}
-	if published == 0 {
-		return fmt.Errorf("publish policy registry: no relay accepted the event")
-	}
-	return nil
-}
+
 
 // PublishServiceRegistry publishes canonical CAS service registry state.
 func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Service) error {
