@@ -100,6 +100,13 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		_, err := h.runAction(ctx, event, action, nil)
 		return err
 	}
+	// Abandon bypasses the soul gate: it acts on the stuck operation that
+	// currently holds the soul, so going through the gate would defer it
+	// behind the very operation it intends to release.
+	if action.Action == domain.SoulActionAbandon {
+		return h.handleAbandon(ctx, event, action, agentID)
+	}
+
 	var runErr error
 	now := soulOperation{key: lifecycleOperationKey(action.EventID), run: func(ctx context.Context, hold *soulHold) bool {
 		parked, err := h.runAction(ctx, event, action, hold)
@@ -128,6 +135,90 @@ func (h *LifecycleHandler) deferredAction(event *nostr.Event, action *domain.Sou
 		}
 		return parked
 	}}
+}
+
+// handleAbandon processes an operator abandon action for a soul stuck in
+// awaiting_terminal. It does not go through the soul gate: the stuck operation
+// holds the soul, and the abandon releases it. The sequence is:
+//
+//  1. Authorize the abandon.
+//  2. Look up the soul and confirm it is held.
+//  3. Replace the parked operation's resume with a record-only callback: a
+//     late result is logged and published as progress but NOT applied.
+//  4. Force-release the soul's hold, so deferred work proceeds.
+//  5. Publish the abandoned terminal result.
+//
+// Event contract (kind:1950):
+//
+//	tags: ["soul", "<parameterized coordinate>"], ["action", "abandon"]
+//	      optional: ["reason", "<operator reason>"]
+//	authorization: the signing pubkey must be in Config.AuthorizedPubkeys.
+func (h *LifecycleHandler) handleAbandon(ctx context.Context, event *nostr.Event, action *domain.SoulAction, agentID string) error {
+	logger := h.logger.With("event_id", event.ID, "action", action.Action, "agent_id", agentID)
+
+	soul, err := h.reactor.GetSoul(ctx, action.SoulRef)
+	if err != nil {
+		return fmt.Errorf("abandon: lookup soul: %w", err)
+	}
+	if soul == nil {
+		err := fmt.Errorf("abandon: soul not found: %s", action.SoulRef)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, "")
+		return err
+	}
+	if !h.isAuthorized(event.PubKey.Hex(), soul) {
+		err := fmt.Errorf("unauthorized: %s cannot abandon soul %s", event.PubKey.Hex(), soul.AgentID)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
+		return err
+	}
+
+	held, _ := h.reactor.soulOperations().held(agentID)
+	if !held {
+		err := fmt.Errorf("abandon: soul %s is not held by a stuck operation", soul.AgentID)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
+		return err
+	}
+
+	// Replace the parked continuation with a record-only callback.
+	var abandonedRequest string
+	abandonedRequest = h.reactor.resultWaiters().abandon(agentID, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+		status := "unknown"
+		if late != nil {
+			status = late.Status
+		}
+		logger.Info("late runtime result for abandoned operation recorded (not applied)",
+			"abandoned_request", abandonedRequest, "late_status", status)
+		message := fmt.Sprintf("late runtime result for abandoned operation: status=%s (not applied)", status)
+		_ = h.publishActionProgressTags(ctx, action, "abandoned_late_result", message, soul.AgentID, nostr.Tags{
+			{tagEvent, action.EventID},
+		})
+	})
+	if abandonedRequest == "" {
+		// The soul is held (by soulOperationGate) but there is no parked
+		// waiter in runtimeResultWaiters. This happens when an operation's run
+		// func is still executing (not yet returned). Force-releasing the hold
+		// still frees the soul for later work.
+		logger.Warn("abandon: soul is held but no parked waiter found; force-releasing the hold", "agent_id", agentID)
+	}
+
+	if err := h.publishActionProgress(ctx, action, "processing", "abandoning stuck operation", soul.AgentID); err != nil {
+		logger.Warn("failed to publish abandon progress", "error", err)
+	}
+
+	// Release the soul's hold; deferred work (e.g. a rollback action or a
+	// newer fleet revision) proceeds.
+	h.reactor.soulOperations().forceRelease(ctx, agentID)
+
+	data := map[string]interface{}{
+		"agent_id":          soul.AgentID,
+		"abandoned_request": abandonedRequest,
+		"reason":            action.Reason,
+	}
+	if err := h.publishActionResult(ctx, action, "completed", data, soul.AgentID); err != nil {
+		return fmt.Errorf("abandon: publish result: %w", err)
+	}
+	logger.Info("soul operation abandoned; serialization lock released",
+		"abandoned_request", abandonedRequest)
+	return nil
 }
 
 // runAction executes a parsed lifecycle action. hold is the action's hold on
@@ -1400,7 +1491,8 @@ func isSupportedLifecycleAction(action domain.SoulActionType) bool {
 		domain.SoulActionRedeploy,
 		domain.SoulActionUpdate,
 		domain.SoulActionHotReload,
-		domain.SoulActionRollback:
+		domain.SoulActionRollback,
+		domain.SoulActionAbandon:
 		return true
 	default:
 		return false
