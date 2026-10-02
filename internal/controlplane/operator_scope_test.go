@@ -39,7 +39,7 @@ func authzTestTransportAuthors(t *testing.T) []string {
 func registerOperatorScopeFixtures(t *testing.T, transport *EncryptedRequestTransport, gate *FleetOperatorGate) {
 	t.Helper()
 	untouched := &untouchedOperatorDependencies{}
-	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(untouched), gate)
+	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(untouched), gate, nil)
 	RegisterLoomContextVMHandlers(transport, untouched, nil, gate)
 	RegisterAssistantContextVMHandlers(transport, &service.AssistantOrchestrator{}, gate)
 	RegisterRelaySettingsContextVMHandlers(transport, RelaySettingsHandlerConfig{

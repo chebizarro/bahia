@@ -99,12 +99,11 @@ type App struct {
 	reloadMu                  sync.Mutex
 
 	// Phase 3 intent framework (F1).
-	TrustSet          *controlplane.TrustSet
-	IntentProcessor   *controlplane.IntentProcessor
-	IntentReadiness   *controlplane.ReadinessTracker
-	IntentSubscriber  *controlplane.IntentSubscriber
+	TrustSet            *controlplane.TrustSet
+	IntentProcessor     *controlplane.IntentProcessor
+	IntentReadiness     *controlplane.ReadinessTracker
+	IntentSubscriber    *controlplane.IntentSubscriber
 	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
-
 }
 
 var (
@@ -907,7 +906,8 @@ func New(cfg *config.Config) (*App, error) {
 	backupScheduler := service.NewBackupSchedulerService(backupRegistry, logger,
 		service.WithBackupSchedulerIdentity(servicePubkey),
 	)
-	bgManager.RegisterWithOptions(NewBackupSchedulerRunner(backupScheduler, 0, logger), RunnerTier(Tier3))
+	backupSchedulerRunner := NewBackupSchedulerRunner(backupScheduler, 0, logger)
+	bgManager.RegisterWithOptions(backupSchedulerRunner, RunnerTier(Tier3))
 	healthProvider.RegisterCheck("backup_scheduler", int(Tier3), func() HealthCheck {
 		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered", Tier: int(Tier3)}
 	})
@@ -1024,10 +1024,10 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			if len(agentPubkeys) > 0 {
 				bgManager.RegisterWithOptions(&agentHealthSubscriber{
-					pool:     controlPlanePool,
-					pubkeys:  agentPubkeys,
-					reader:   dnsAgentHealthReader,
-					logger:   logger,
+					pool:    controlPlanePool,
+					pubkeys: agentPubkeys,
+					reader:  dnsAgentHealthReader,
+					logger:  logger,
 				}, RunnerTier(Tier3))
 				logger.Info("DNS agent health subscriber registered", zap.Int("agents", len(agentPubkeys)))
 			}
@@ -1056,10 +1056,12 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		nostrAdapter.WithBackupProjectionSource(backupRegistry),
+		// Phase 3 B1: WithBackupProjectionSource removed. Canonical records
+		// are now published by BackupCanonicalPublisher wired to the registry.
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
-		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
+		// Phase 3 W1: WithWorkerReadModelProjectionSource removed — worker read
+		// models are published directly from the mutation site (bahia-irsry.11.14).
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if dnsProjector != nil {
@@ -1082,6 +1084,7 @@ func New(cfg *config.Config) (*App, error) {
 	// RepublishSnapshot guards skip migrated domain legs.
 	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
 		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
+		"backup", // B1: authority inversion (bahia-irsry.11.11)
 	)
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
@@ -1152,6 +1155,42 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
+	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
+	// a *Projector reference and publishes through the shared signing/outbox
+	// pipeline. The cpStateFamilies table is the single envelope source.
+	backupCanonical := nostrAdapter.NewBackupCanonicalPublisher(nostrProjector, logger)
+	backupCanonical.SetRunVerifier(backupRegistry)
+	backupCanonical.SetRuntimeObservationSource(backupRegistry)
+	backupRegistry.SetCanonicalPublisher(backupCanonical)
+	// Notifier hook: wire Trigger() on coordinators after every registry
+	// mutation so coordinators wake immediately on new/requeued work.
+	backupRegistry.SetNotifyHook(func() {
+		backupCoordinator.Trigger()
+		backupRestoreCoordinator.Trigger()
+		backupRetentionCoordinator.Trigger()
+		backupSchedulerRunner.Trigger()
+	})
+	// Register the intent handler when the backup domain is enabled.
+	if enabledDomains["backup"] && backupRegistry != nil {
+		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
+			controlplane.BackupIntentHandlerConfig{
+				Registry:    backupRegistry,
+				Definitions: backupRegistry,
+				Publisher:   backupCanonical,
+				Executors: controlplane.BackupIntentExecutors{
+					RunExecutor:       backupCoordinator,
+					RestoreExecutor:   backupRestoreCoordinator,
+					RetentionExecutor: backupRetentionCoordinator,
+				},
+				Status: intentStatus,
+				Logger: logger,
+			},
+		))
+		logger.Info("backup intent handler registered")
+	}
+	// --- end B1 wiring ---
 
 	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
 	// each material reconcile so DNS records publish once per mutation instead
@@ -1281,7 +1320,7 @@ func New(cfg *config.Config) (*App, error) {
 			if deleted {
 				deletedStr = "true"
 			}
-				tags := nostr.Tags{
+			tags := nostr.Tags{
 				{"d", route.ID.String()},
 				{"domain", "llm-route"},
 				{"schema", "bahia.cp-state.v1"},
@@ -1289,7 +1328,7 @@ func New(cfg *config.Config) (*App, error) {
 				{"deleted", deletedStr},
 				{"t", kinds.CPStateTopicLLMRoute},
 			}
-				tags = append(tags, recordTags...)
+			tags = append(tags, recordTags...)
 			ev := nostr.Event{
 				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
 				CreatedAt: createdAt,
@@ -1314,6 +1353,27 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("LLM route intent handler registered")
 	}
+	// Phase 3 P1: register package intent handler, publishing through the
+	// shared cp-state path (controlStateEnvelope + publishAuthoritative).
+	if enabledDomains["package"] && packageRegistrySvc != nil {
+		packageAuthStore, _ := packageProjection.(repository.PackageAuthorizationStore)
+		var packageWriter controlplane.PackageCPStateWriter
+		if nostrProjector != nil && controlPlanePub != nil {
+			packageWriter = nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		}
+		intentProcessor.RegisterHandler("package", controlplane.NewPackageIntentHandler(
+			controlplane.PackageIntentHandlerConfig{
+				PackageService: packageRegistrySvc,
+				Projection:     packageProjection,
+				Store:          packageAuthStore,
+				Writer:         packageWriter,
+				Status:         intentStatus,
+				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
+				Logger:         logger,
+			},
+		))
+		logger.Info("package intent handler registered")
+	}
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -1330,7 +1390,7 @@ func New(cfg *config.Config) (*App, error) {
 			llmStatePubMu.Unlock()
 			recordTags, recordContent := controlplane.LLMRouteStateRecord(state)
 			dTag := controlplane.LLMRouteStateDTag(state.RouteID, state.EnvironmentID)
-				tags := nostr.Tags{
+			tags := nostr.Tags{
 				{"d", dTag},
 				{"domain", "llm-state"},
 				{"schema", "bahia.cp-state.v1"},
@@ -1338,7 +1398,7 @@ func New(cfg *config.Config) (*App, error) {
 				{"deleted", "false"},
 				{"t", kinds.CPStateTopicLLMState},
 			}
-				tags = append(tags, recordTags...)
+			tags = append(tags, recordTags...)
 			ev := nostr.Event{
 				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
 				CreatedAt: nostr.Now(),
@@ -1353,6 +1413,13 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Warn("publish LLM route state cp-state failed", zap.Error(err))
 			}
 		})
+	}
+	// Phase 3 M1: wire ML cp-state publisher into registry service so state
+	// mutations publish canonical records directly instead of through the projector.
+	if nostrProjector.Enabled() && mlRegistry != nil {
+		mlCanonicalPub := nostrAdapter.NewMLCanonicalPublisher(nostrProjector, logger)
+		mlRegistry.SetMLCPStatePublisher(mlCanonicalPub)
+		logger.Info("ML canonical cp-state publisher wired into registry service")
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -2060,7 +2127,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
@@ -2154,6 +2221,13 @@ func New(cfg *config.Config) (*App, error) {
 			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
+		// Phase 3 W1: wire worker read model publisher for direct publication
+		// from mutation sites (bahia-irsry.11.14).
+		workerReadModelPublisher := controlplane.NewWorkerReadModelPublisher(
+			controlPlanePool, controlPlaneSigner, workerReadModelSvc, logger)
+		reactorOpts = append(reactorOpts,
+			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
+		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
@@ -2171,7 +2245,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
@@ -2799,6 +2873,76 @@ func setupWorkerPressureSubscriptions(
 			}
 		}()
 	})
+}
+
+// setupWorkerReadModelEventSubscriptions wires event-bus subscriptions so that
+// deployment-run and ML-run lifecycle events trigger an immediate worker
+// read-model republish (assignment, drain, eligibility). This replaces the
+// projector's reactive handleEvent cases removed in Phase 3 W1
+// (bahia-irsry.11.14).
+func setupWorkerReadModelEventSubscriptions(
+	pub events.Publisher,
+	workerReadModelPublisher *controlplane.WorkerReadModelPublisher,
+	registry *service.RegistryService,
+	mlRegistry *service.MLRegistryService,
+	logger *zap.Logger,
+) {
+	if pub == nil || workerReadModelPublisher == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	// Deployment run events: look up the run to extract the worker pubkey,
+	// then republish assignment/drain/eligibility for that worker.
+	publishForDeploymentRun := func(ctx context.Context, e events.Event) {
+		runID := e.EntityID
+		if res, ok := e.Data.(events.ResourceData); ok && res.RunID != "" {
+			runID = res.RunID
+		}
+		id, err := uuid.Parse(runID)
+		if err != nil {
+			return
+		}
+		run, err := registry.GetDeploymentRun(ctx, id)
+		if err != nil || run == nil || run.WorkerPubkey == "" {
+			if err != nil {
+				logger.Warn("lookup deployment run for worker read model refresh failed",
+					zap.String("run_id", runID), zap.Error(err))
+			}
+			return
+		}
+		workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+	}
+	pub.Subscribe(events.EventDeploymentRunCreated, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunStatusChanged, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunCompleted, publishForDeploymentRun)
+
+	// ML deployment run events: same pattern, using the ML registry.
+	if mlRegistry != nil {
+		pub.Subscribe(service.EventMLRunChanged, func(ctx context.Context, e events.Event) {
+			runID := e.EntityID
+			if m, ok := e.Data.(map[string]any); ok {
+				if rid, ok := m["run_id"].(string); ok && rid != "" {
+					runID = rid
+				}
+			}
+			id, err := uuid.Parse(runID)
+			if err != nil {
+				return
+			}
+			run, err := mlRegistry.GetMLDeploymentRun(ctx, id)
+			if err != nil || run == nil || run.WorkerPubkey == "" {
+				if err != nil {
+					logger.Warn("lookup ML deployment run for worker read model refresh failed",
+						zap.String("run_id", runID), zap.Error(err))
+				}
+				return
+			}
+			workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+		})
+	}
 }
 
 func executeContinuityFailoverCommand(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, command events.ContinuityCommandRequested, logger *zap.Logger) {
@@ -3552,7 +3696,6 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 	succeeded = true
 	return zones, resolver, closers, nil
 }
-
 
 // agentHealthSubscriber is a BackgroundRunner that subscribes to NIP-38 kind
 // 30315 health status events from DNS agents, feeding them to the

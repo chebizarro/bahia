@@ -412,6 +412,9 @@ func (m *BackgroundManager) Count() int {
 // BackupScheduleProcessor processes due backup schedules for periodic dispatch.
 type BackupScheduleProcessor interface {
 	ProcessDueSchedules(ctx context.Context) (*service.BackupScheduleProcessResult, error)
+	// NextDueTime returns the earliest next-due schedule time across all
+	// definitions, or nil if no schedules are enabled.
+	NextDueTime(ctx context.Context) (*time.Time, error)
 }
 
 const defaultBackupSchedulerInterval = 5 * time.Minute
@@ -419,6 +422,7 @@ const defaultBackupSchedulerInterval = 5 * time.Minute
 type BackupSchedulerRunner struct {
 	scheduler BackupScheduleProcessor
 	interval  time.Duration
+	triggerCh chan struct{}
 	logger    *zap.Logger
 }
 
@@ -429,11 +433,14 @@ func NewBackupSchedulerRunner(scheduler BackupScheduleProcessor, interval time.D
 	if interval <= 0 {
 		interval = defaultBackupSchedulerInterval
 	}
-	return &BackupSchedulerRunner{scheduler: scheduler, interval: interval, logger: logger}
+	return &BackupSchedulerRunner{scheduler: scheduler, interval: interval, triggerCh: make(chan struct{}, 1), logger: logger}
 }
 
 func (r *BackupSchedulerRunner) Name() string { return "backup-scheduler" }
 
+// Run performs schedule evaluation using a next-due timer. Phase 3 B1 replaces
+// the fixed 5-minute polling ticker with a timer that fires at the earliest
+// next-due schedule time, falling back to the configured interval as a ceiling.
 func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
 	if r.scheduler == nil {
 		return nil
@@ -450,19 +457,26 @@ func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
 			zap.Int("errors", len(result.Errors)),
 		)
 	}
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(r.nextDueInterval(ctx))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-r.triggerCh:
+			// Definition or schedule changed — recompute immediately.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(r.nextDueInterval(ctx))
+		case <-timer.C:
 			result, err := r.scheduler.ProcessDueSchedules(ctx)
 			if err != nil {
 				r.logger.Error("backup scheduler periodic run failed", zap.Error(err))
-				continue
-			}
-			if result.Dispatched > 0 || len(result.Errors) > 0 {
+			} else if result.Dispatched > 0 || len(result.Errors) > 0 {
 				r.logger.Info("backup scheduler periodic run complete",
 					zap.Int("checked", result.Checked),
 					zap.Int("dispatched", result.Dispatched),
@@ -471,6 +485,35 @@ func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
 					zap.Int("errors", len(result.Errors)),
 				)
 			}
+			timer.Reset(r.nextDueInterval(ctx))
 		}
 	}
+}
+
+// nextDueInterval computes how long to wait before the next schedule evaluation.
+// Uses the earliest next-due time from the scheduler; falls back to the
+// configured interval when no schedules are due.
+// Trigger wakes the scheduler runner to recompute the next-due timer. Called
+// when a backup definition or schedule changes so the runner picks up the
+// new schedule immediately.
+func (r *BackupSchedulerRunner) Trigger() {
+	select {
+	case r.triggerCh <- struct{}{}:
+	default:
+	}
+}
+
+func (r *BackupSchedulerRunner) nextDueInterval(ctx context.Context) time.Duration {
+	next, err := r.scheduler.NextDueTime(ctx)
+	if err != nil || next == nil {
+		return r.interval
+	}
+	d := time.Until(*next)
+	if d <= 0 {
+		return time.Second // already due, process immediately
+	}
+	if d > r.interval {
+		return r.interval // ceiling
+	}
+	return d
 }

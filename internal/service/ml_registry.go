@@ -28,8 +28,20 @@ const (
 	EventMLParityChecked     events.EventType = "ml_llm_parity.checked"
 )
 
+// MLCPStatePublisher publishes canonical cp-state records for ML entities.
+// It is implemented by the nostr adapter's MLCanonicalPublisher.
+type MLCPStatePublisher interface {
+	PublishModel(ctx context.Context, model *domain.MLModel) error
+	PublishModelVersion(ctx context.Context, version *domain.MLModelVersion) error
+	PublishEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error
+	PublishEndpointState(ctx context.Context, state *domain.MLInferenceState) error
+	PublishProvenanceGraph(ctx context.Context, artifact *domain.MLArtifactRef) error
+	PublishCapabilityProfile(ctx context.Context, worker *domain.Worker) error
+}
+
 // MLRegistryService owns canonical generic ML registry and lifecycle state.
 type MLRegistryService struct {
+	cpState      MLCPStatePublisher
 	repo         repository.MLRegistryRepository
 	environments repository.EnvironmentRepository
 	publisher    events.Publisher
@@ -56,6 +68,14 @@ func NewMLRegistryService(repo repository.MLRegistryRepository, publisher events
 	return s
 }
 
+// SetMLCPStatePublisher configures the canonical cp-state publisher for ML
+// entities (Phase 3 M1, bahia-irsry.11.12). After each state mutation the
+// service calls the publisher to emit a 30900 record, replacing the
+// projector's reactive handleEvent ML leg.
+func (s *MLRegistryService) SetMLCPStatePublisher(pub MLCPStatePublisher) {
+	s.cpState = pub
+}
+
 func (s *MLRegistryService) CreateOrUpdateModel(ctx context.Context, model *domain.MLModel) error {
 	if err := domain.ValidateMLModel(model); err != nil {
 		return err
@@ -66,6 +86,7 @@ func (s *MLRegistryService) CreateOrUpdateModel(ctx context.Context, model *doma
 		return err
 	}
 	s.publish(ctx, EventMLModelChanged, model.ID.String(), map[string]any{"model_id": model.ID.String(), "slug": model.Slug})
+	s.publishCPStateModel(ctx, model)
 	return nil
 }
 
@@ -102,6 +123,7 @@ func (s *MLRegistryService) CreateOrUpdateModelVersion(ctx context.Context, vers
 		return err
 	}
 	s.publish(ctx, EventMLVersionChanged, version.ID.String(), map[string]any{"model_id": version.ModelID.String(), "model_version_id": version.ID.String(), "version": version.Version})
+	s.publishCPStateModelVersion(ctx, version)
 	return nil
 }
 
@@ -230,6 +252,7 @@ func (s *MLRegistryService) CreateOrUpdateInferenceEndpoint(ctx context.Context,
 		return err
 	}
 	s.publish(ctx, EventMLEndpointChanged, endpoint.ID.String(), map[string]any{"endpoint_id": endpoint.ID.String(), "environment_id": endpoint.EnvironmentID.String()})
+	s.publishCPStateEndpoint(ctx, endpoint)
 	return nil
 }
 
@@ -622,6 +645,42 @@ func computeMLDriftStatus(state *domain.MLInferenceState, obs *domain.MLInferenc
 	return domain.DriftStatusDrifted
 }
 
+func (s *MLRegistryService) publishCPStateModel(ctx context.Context, model *domain.MLModel) {
+	if s.cpState == nil {
+		return
+	}
+	if err := s.cpState.PublishModel(ctx, model); err != nil {
+		s.logger.Warn("publish ML model cp-state failed", zap.String("model_id", model.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *MLRegistryService) publishCPStateModelVersion(ctx context.Context, version *domain.MLModelVersion) {
+	if s.cpState == nil {
+		return
+	}
+	if err := s.cpState.PublishModelVersion(ctx, version); err != nil {
+		s.logger.Warn("publish ML model version cp-state failed", zap.String("model_version_id", version.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *MLRegistryService) publishCPStateEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) {
+	if s.cpState == nil {
+		return
+	}
+	if err := s.cpState.PublishEndpoint(ctx, endpoint); err != nil {
+		s.logger.Warn("publish ML endpoint cp-state failed", zap.String("endpoint_id", endpoint.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *MLRegistryService) publishCPStateEndpointState(ctx context.Context, state *domain.MLInferenceState) {
+	if s.cpState == nil {
+		return
+	}
+	if err := s.cpState.PublishEndpointState(ctx, state); err != nil {
+		s.logger.Warn("publish ML endpoint state cp-state failed", zap.String("endpoint_id", state.EndpointID.String()), zap.Error(err))
+	}
+}
+
 func (s *MLRegistryService) publish(ctx context.Context, typ events.EventType, entityID string, data any) {
 	s.publisher.Publish(ctx, events.Event{Type: typ, EntityID: entityID, Data: data})
 }
@@ -641,6 +700,7 @@ func (s *MLRegistryService) publishStateChanged(ctx context.Context, state *doma
 		data["run_id"] = state.ActiveRunID.String()
 	}
 	s.publish(ctx, EventMLStateChanged, state.EndpointID.String()+":"+state.EnvironmentID.String(), data)
+	s.publishCPStateEndpointState(ctx, state)
 }
 
 // LLMBackfillSource is implemented by LLMRegistryService and test fakes. It avoids

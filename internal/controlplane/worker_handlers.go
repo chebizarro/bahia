@@ -62,6 +62,7 @@ func (r *Reactor) handleWorkerSchedulingRequest(ctx context.Context, event *nost
 	if err := r.publishWorkerState(ctx, worker); err != nil {
 		r.logger.Warn("publish worker state read model failed", "worker", req.WorkerPubKey, "error", err)
 	}
+	r.publishWorkerReadModels(ctx, req.WorkerPubKey)
 	r.publishWorkerResult(ctx, event, req, command, "succeeded", string(targetState), "worker scheduling state updated", worker)
 }
 
@@ -128,6 +129,7 @@ func (r *Reactor) handleWorkerLabelsUpdateRequest(ctx context.Context, event *no
 	if err := r.publishWorkerState(ctx, worker); err != nil {
 		r.logger.Warn("publish worker state read model failed", "worker", req.WorkerPubKey, "error", err)
 	}
+	r.publishWorkerReadModels(ctx, req.WorkerPubKey)
 	r.publishWorkerResult(ctx, event, req, WorkerCommandLabelsUpdate, "succeeded", "labels_updated", "worker labels updated", worker)
 }
 
@@ -801,4 +803,12 @@ func (r *Reactor) publishWorkerState(ctx context.Context, worker *domain.Worker)
 		r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	}
 	return r.workerStatePublisher.Publish(ctx, worker)
+}
+
+// publishWorkerReadModels publishes assignment and drain read models directly
+// from the mutation site. Phase 3 W1: replaces projector event-driven refresh.
+func (r *Reactor) publishWorkerReadModels(ctx context.Context, workerPubKey string) {
+	if r.workerReadModelPublisher != nil {
+		r.workerReadModelPublisher.PublishForWorker(ctx, workerPubKey)
+	}
 }

@@ -779,44 +779,10 @@ func TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRel
 	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
 }
 
-func TestProjectorPublishesMLReadModelSnapshot(t *testing.T) {
-	ctx := context.Background()
-	modelID := uuid.New()
-	versionID := uuid.New()
-	envID := uuid.New()
-	endpointID := uuid.New()
-	artifactID := uuid.New()
-	source := newFakeProjectionSource()
-	source.envs[envID] = domain.Environment{ID: envID, Name: "prod"}
-	source.mlModels[modelID] = domain.MLModel{ID: modelID, Slug: "qwen", Name: "Qwen", Modalities: []string{"text"}, TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}}
-	source.mlVersions[versionID] = domain.MLModelVersion{ID: versionID, ModelID: modelID, Version: "v1", RuntimeRequirements: domain.MLRuntimeRequirements{PreferredRuntimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, RequiredFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}}}
-	source.mlEndpoints[endpointID] = domain.MLInferenceEndpoint{ID: endpointID, Name: "chat", EnvironmentID: envID, TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Protocol: "openai-compatible"}
-	source.mlStates[stateKeyForTest(endpointID, envID)] = domain.MLInferenceState{EndpointID: endpointID, EnvironmentID: envID, DesiredModelVersionID: &versionID, DriftStatus: domain.DriftStatusInSync, GatewayStatus: domain.GatewayRouteStatusSynced, RuntimeKind: domain.MLRuntimeKindVLLM}
-	source.mlArtifacts[artifactID] = domain.MLArtifactRef{ID: artifactID, ModelVersionID: &versionID, Kind: domain.MLArtifactKindModel, Format: domain.MLArtifactFormatSafeTensors, URI: "hf://qwen", SHA256: "abc123"}
-	source.workers["worker-pk"] = domain.Worker{PubKey: "worker-pk", Status: domain.WorkerStatusOnline, MLCapabilities: domain.WorkerMLCapabilities{Runtimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, ArtifactFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}, Tasks: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Accelerators: []string{"gpu_nvidia_cuda"}}}
-
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithMLProjectionSource(source), WithWorkerProjectionSource(source))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
-
-	model := assertOneSignedKind(t, sink, KindMLModelRegistry)
-	assertTag(t, model, "d", "model:qwen")
-	assertTag(t, model, "task", "chat_completions")
-	version := assertOneSignedKind(t, sink, KindMLModelVersionRegistry)
-	assertTag(t, version, "d", "model-version:qwen:v1")
-	assertTag(t, version, "runtime", "vllm")
-	endpoint := assertOneSignedKind(t, sink, KindMLInferenceEndpointRegistry)
-	assertTag(t, endpoint, "d", "endpoint:chat:prod")
-	state := assertOneSignedKind(t, sink, KindMLInferenceEndpointState)
-	assertTag(t, state, "d", "endpoint-state:chat:prod")
-	provenance := assertOneSignedKind(t, sink, KindMLArtifactProvenanceGraph)
-	assertTag(t, provenance, "d", "artifact:abc123")
-	capability := assertOneSignedKind(t, sink, KindMLRuntimeCapabilityProfile)
-	assertTag(t, capability, "d", "worker:worker-pk:ai-capability")
-	assertTag(t, capability, "runtime", "vllm")
-}
+// Phase 3 M1: TestProjectorPublishesMLReadModelSnapshot removed — ML projection
+// (models, versions, endpoints, states, provenance, capabilities) is now
+// published directly from the mutation site via MLCanonicalPublisher.
+// See ml_canonical_publisher_test.go for the replacement tests.
 
 // TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations removed: projector no longer handles
 // build/artifact/intent/run cp-state publication — moved to RegistryService
@@ -1360,11 +1326,17 @@ func stateKeyForTest(serviceID, envID uuid.UUID) string {
 // TestProjectorStateSecretPlaintextNeverProjected removed — state is published
 // by the reconciler; tested via projector_state_helpers_test.go (bahia-irsry.11.6).
 
-func TestRunEventRefreshesWorkerReadModelImmediately(t *testing.T) {
+// Phase 3 W1: TestRunEventRefreshesWorkerReadModelImmediately removed — the
+// projector no longer handles deployment run events for worker read-model
+// refresh. Worker read models are published directly from the mutation site
+// and via event-bus subscriptions wired in app.go (bahia-irsry.11.14).
+// See TestWorkerReadModelPublisher_* in the controlplane package for the
+// replacement coverage.
+func TestProjectorRunEventDoesNotPublishWorkerReadModels(t *testing.T) {
 	ctx := context.Background()
-	workerPubkey := strings.Repeat("cd", 32)
 	runID := uuid.New()
 	intentID := uuid.New()
+	workerPubkey := strings.Repeat("cd", 32)
 
 	source := newFakeProjectionSource()
 	source.runs[runID] = domain.DeploymentRun{
@@ -1374,59 +1346,20 @@ func TestRunEventRefreshesWorkerReadModelImmediately(t *testing.T) {
 		Status:             domain.RunStatusRunning,
 	}
 
-	workerSource := &fakeWorkerReadModelSource{
-		assignment: domain.WorkerAssignmentState{
-			WorkerPubKey:      workerPubkey,
-			ActiveAssignments: []domain.WorkerAssignment{{Type: domain.WorkerAssignmentService, WorkloadID: "svc-1"}},
-		},
-		drain: domain.WorkerDrainStatus{
-			WorkerPubKey:    workerPubkey,
-			SchedulingState: domain.WorkerSchedulingActive,
-		},
-	}
-
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(
-		projectorTestConfig(), source, sink, newMemoryNostrEventRepo(), zap.NewNop(),
-		WithWorkerReadModelProjectionSource(workerSource),
-	)
+	projector := newTestProjector(projectorTestConfig(), source, sink, newMemoryNostrEventRepo(), zap.NewNop())
 
-	// A run status change triggers worker read model refresh immediately.
 	projector.handleEvent(ctx, events.Event{
 		Type:     events.EventDeploymentRunStatusChanged,
 		EntityID: runID.String(),
 		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
 	})
 
-	// Worker assignment and drain records should be published (kind 30900 with
-	// legacy_kind matching the worker families).
-	assignments := sink.byKind(KindWorkerAssignmentState)
-	if len(assignments) != 1 {
-		t.Fatalf("expected 1 worker assignment record, got %d", len(assignments))
-	}
-	if !hasTag(assignments[0].Tags, "worker", workerPubkey) {
-		t.Fatalf("worker assignment record missing worker tag: %v", assignments[0].Tags)
-	}
-	drains := sink.byKind(KindWorkerDrainStatus)
-	if len(drains) != 1 {
-		t.Fatalf("expected 1 worker drain record, got %d", len(drains))
-	}
-
-	// The run's own cp-state must NOT be published by the projector (S2: moved
-	// to RegistryService).
-	runRecords := sink.byKind(KindDeploymentRunRegistry)
-	if len(runRecords) != 0 {
-		t.Fatalf("projector should not publish run cp-state (S2 moved to RegistryService), got %d", len(runRecords))
-	}
-
-	// Unchanged repeat: fingerprint dedup suppresses re-signing.
-	projector.handleEvent(ctx, events.Event{
-		Type:     events.EventDeploymentRunStatusChanged,
-		EntityID: runID.String(),
-		Data:     events.ResourceData{RunID: runID.String(), IntentID: intentID.String()},
-	})
-	assignments2 := sink.byKind(KindWorkerAssignmentState)
-	if len(assignments2) != 1 {
-		t.Fatalf("unchanged repeat should be suppressed: expected 1 worker assignment, got %d", len(assignments2))
+	// The projector must NOT publish any worker read-model records — that
+	// responsibility has moved to WorkerReadModelPublisher (Phase 3 W1).
+	for _, kind := range []int{KindWorkerAssignmentState, KindWorkerDrainStatus} {
+		if got := sink.byKind(kind); len(got) != 0 {
+			t.Fatalf("projector published %d records for kind %d on run event, want 0 (W1 migration)", len(got), kind)
+		}
 	}
 }

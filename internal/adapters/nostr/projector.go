@@ -19,7 +19,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
-	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
@@ -72,31 +71,12 @@ type SBOMProjectionSource interface {
 	ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error)
 }
 
-type WorkerReadModelProjectionSource interface {
-	ListAssignmentStates(ctx context.Context) ([]domain.WorkerAssignmentState, error)
-	GetAssignmentState(ctx context.Context, workerPubKey string) (*domain.WorkerAssignmentState, error)
-	ListDrainStatuses(ctx context.Context) ([]domain.WorkerDrainStatus, error)
-	GetDrainStatus(ctx context.Context, workerPubKey string) (*domain.WorkerDrainStatus, error)
-}
+// Phase 3 W1: WorkerReadModelProjectionSource interface removed — worker
+// assignment/drain read models are published directly from the mutation site
+// via WorkerReadModelPublisher (bahia-irsry.11.14).
 
 type latestObservationSource interface {
 	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
-}
-
-type BackupProjectionSource interface {
-	ListRecipes(ctx context.Context, limit, offset int) ([]domain.BackupRecipe, error)
-	GetRecipe(ctx context.Context, id uuid.UUID) (*domain.BackupRecipe, error)
-	ListPolicies(ctx context.Context, limit, offset int) ([]domain.BackupPolicy, error)
-	GetPolicy(ctx context.Context, id uuid.UUID) (*domain.BackupPolicy, error)
-	ListRepositories(ctx context.Context, limit, offset int) ([]domain.BackupRepository, error)
-	GetRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error)
-	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
-	GetBackupRun(ctx context.Context, id uuid.UUID) (*domain.BackupRun, error)
-	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
-	GetBackupRestore(ctx context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error)
-	ListBackupRetentionRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRetentionRun, error)
-	GetBackupRetentionRun(ctx context.Context, id uuid.UUID) (*domain.BackupRetentionRun, error)
-	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)
 }
 
 // DNSProjectionSource is the authoritative DNS endpoint read model source used by the projector.
@@ -167,31 +147,29 @@ type ProjectionPublisher interface {
 // read models and append-only audit events. It is rebuildable: a startup and
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
-	source                ProjectionSource
-	mlSource              MLProjectionSource
-	workerSource          WorkerProjectionSource
-	workerReadModelSource WorkerReadModelProjectionSource
-	backupSource          BackupProjectionSource
-	dnsSource             DNSProjectionSource
-	dnsZoneSource         DNSZoneProjectionSource
-	dnsBackendSource      DNSBackendProjectionSource
-	dnsPolicySource       DNSPolicyProjectionSource
-	sbomSource            SBOMProjectionSource
-	publisher             ProjectionPublisher
-	history               ProjectionHistory
-	privateKey            string
-	enabled               bool
-	repairInterval        time.Duration
-	backupStaleTimeout    time.Duration
-	logger                *zap.Logger
-	systemConfig          *config.Config
-	mcpTransport          bool
-	dnsPublishMu          sync.Mutex
-	dnsPublished          map[string]dnsPublishedEndpoint
-	dnsPublishedZones     map[string]dnsPublishedZone
-	dnsPublishedBackends  map[string]dnsPublishedBackend
-	dnsPublishedPolicies  map[string]dnsPublishedPolicy
-	dnsCacheHydrated      bool
+	source       ProjectionSource
+	mlSource     MLProjectionSource
+	workerSource WorkerProjectionSource
+	// Phase 3 W1: workerReadModelSource field removed (bahia-irsry.11.14).
+	dnsSource            DNSProjectionSource
+	dnsZoneSource        DNSZoneProjectionSource
+	dnsBackendSource     DNSBackendProjectionSource
+	dnsPolicySource      DNSPolicyProjectionSource
+	sbomSource           SBOMProjectionSource
+	publisher            ProjectionPublisher
+	history              ProjectionHistory
+	privateKey           string
+	enabled              bool
+	repairInterval       time.Duration
+	logger               *zap.Logger
+	systemConfig         *config.Config
+	mcpTransport         bool
+	dnsPublishMu         sync.Mutex
+	dnsPublished         map[string]dnsPublishedEndpoint
+	dnsPublishedZones    map[string]dnsPublishedZone
+	dnsPublishedBackends map[string]dnsPublishedBackend
+	dnsPublishedPolicies map[string]dnsPublishedPolicy
+	dnsCacheHydrated     bool
 
 	// F4 warm-start: readiness gate and migrated domain list.
 	readiness     ReadinessWaiter
@@ -213,15 +191,6 @@ func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
 	return func(p *Projector) { p.repairInterval = interval }
 }
 
-// WithBackupProjectionStaleTimeout overrides the running-run staleness threshold used by backup fleet posture projection.
-func WithBackupProjectionStaleTimeout(timeout time.Duration) ProjectorOption {
-	return func(p *Projector) {
-		if timeout > 0 {
-			p.backupStaleTimeout = timeout
-		}
-	}
-}
-
 func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.mlSource = source }
 }
@@ -230,13 +199,8 @@ func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.workerSource = source }
 }
 
-func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.workerReadModelSource = source }
-}
-
-func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.backupSource = source }
-}
+// Phase 3 W1: WithWorkerReadModelProjectionSource removed (bahia-irsry.11.14).
+// Worker read models are published directly from the mutation site.
 
 func WithDNSProjectionSource(source DNSProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsSource = source }
@@ -283,14 +247,13 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		logger = zap.NewNop()
 	}
 	p := &Projector{
-		source:             source,
-		publisher:          publisher,
-		history:            history,
-		privateKey:         cfg.PrivateKey,
-		enabled:            cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
-		repairInterval:     10 * time.Minute,
-		backupStaleTimeout: 15 * time.Minute,
-		logger:             logger.Named("nostr-projector"),
+		source:         source,
+		publisher:      publisher,
+		history:        history,
+		privateKey:     cfg.PrivateKey,
+		enabled:        cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
+		repairInterval: 10 * time.Minute,
+		logger:         logger.Named("nostr-projector"),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -315,14 +278,9 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		// subscriptions removed — their state is published by the intent handlers
 		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
 		//
-		// Phase 3 S2: build, artifact, deployment intent and deployment run
-		// cp-state subscriptions removed — their cp-state is published directly
-		// from the RegistryService mutation methods (bahia-irsry.11.7).
-		// Run events are kept for worker read-model refresh (assignment/drain
-		// state must update immediately, not on the RepublishSnapshot ticker).
-		events.EventDeploymentRunCreated,
-		events.EventDeploymentRunStatusChanged,
-		events.EventDeploymentRunCompleted,
+		// Phase 3 S2/W1: deployment run event subscriptions removed — their
+		// cp-state is published directly from RegistryService (S2), and worker
+		// read models are published from the run mutation site (W1, bahia-irsry.11.14).
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -346,23 +304,6 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMRouteStateChanged,
 		events.EventLLMRouteDriftDetected,
 		events.EventLLMGatewayRouteSynced,
-		service.EventMLModelChanged,
-		service.EventMLVersionChanged,
-		service.EventMLEndpointChanged,
-		service.EventMLIntentChanged,
-		service.EventMLRunChanged,
-		service.EventMLObservation,
-		service.EventMLStateChanged,
-		service.EventMLArtifactChanged,
-		service.EventMLProvenanceChanged,
-		service.EventMLProvenanceDefected,
-		service.EventBackupRecipeChanged,
-		service.EventBackupPolicyChanged,
-		service.EventBackupRepositoryChanged,
-		service.EventBackupRunChanged,
-		service.EventBackupRestoreChanged,
-		service.EventBackupVerificationChanged,
-		service.EventBackupRetentionChanged,
 		eventDNSZoneSynced,
 		eventDNSRecordChanged,
 		eventDNSDriftDetected,
@@ -452,14 +393,17 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	// Phase 3 L1: LLM route registry and state records are published
 	// directly from the mutation site (intent handler, ContextVM handler,
 	// registry service). RepublishSnapshot LLM block removed.
-	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
-	workerAssignments, workerDrains := p.publishWorkerReadModelSnapshots(ctx)
-	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications, backupRetentions, backupPostures := p.publishBackupSnapshots(ctx)
+	// Phase 3 M1/W1: ML and worker read-model snapshot legs removed — ML state
+	// is published by MLCanonicalPublisher and worker assignment/drain read
+	// models by WorkerReadModelPublisher, both from the mutation site
+	// (bahia-irsry.11.12, bahia-irsry.11.14).
+	// Phase 3 B1: Backup snapshot legs removed. Canonical records are now
+	// published by BackupCanonicalPublisher wired to the registry.
 	// Phase 3 D1: DNS snapshot legs removed. DNS endpoint/zone/backend/policy
 	// records are now published by the DNSCanonicalPublisher wired to the
 	// reconciler, triggered by bus events instead of this 10-minute timer.
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -473,15 +417,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 
 	res := resourceFromEvent(e)
 	switch e.Type {
-	// Phase 3 S2: deployment run events are still handled for worker
-	// read-model refresh (assignment/drain state). The run's own cp-state
-	// is published directly from RegistryService (bahia-irsry.11.7).
-	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
-		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
-			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
-				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
-			}
-		}
+	// Phase 3 W1: deployment run event cases removed — worker assignment/drain
+	// read models are published directly from the run mutation site
+	// (registry.go, ml_registry.go) instead of reactively here (bahia-irsry.11.14).
 
 	// Phase 3 F2/F3: service and environment handleEvent cases removed.
 	// Phase 3 S1: state publication removed — the reconciler publishes state
@@ -490,66 +428,13 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 	case events.EventAdoptionImported:
 		p.publishServiceByID(ctx, res.ServiceID)
 		p.publishEnvironmentByID(ctx, res.EnvironmentID)
-	// Phase 3 L1: LLM handleEvent cases removed — route registry and state
-	// records are published directly from the mutation site (intent handler,
-	// ContextVM handler, registry service) instead of reactively here.
-	case service.EventMLModelChanged:
-		p.publishMLModelByID(ctx, firstString(stringifyMapValue(e.Data, "model_id"), e.EntityID))
-	case service.EventMLVersionChanged:
-		p.publishMLModelVersionByID(ctx, firstString(stringifyMapValue(e.Data, "model_version_id"), e.EntityID))
-	case service.EventMLEndpointChanged:
-		p.publishMLEndpointByID(ctx, firstString(stringifyMapValue(e.Data, "endpoint_id"), e.EntityID))
-	case service.EventMLIntentChanged:
-		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "intent_id"), e.EntityID)); ok {
-			p.publishMLStateForIntent(ctx, id)
-		}
-	case service.EventMLRunChanged:
-		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID)); ok {
-			if p.mlSource != nil {
-				if run, err := p.mlSource.GetMLDeploymentRun(ctx, id); err == nil && run != nil {
-					p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
-				}
-			}
-			p.publishMLStateForRun(ctx, id)
-		} else if id, ok := parseUUID(stringifyMapValue(e.Data, "intent_id")); ok {
-			p.publishMLStateForIntent(ctx, id)
-		}
-	case service.EventMLObservation, service.EventMLStateChanged:
-		if endpointID, ok := parseUUID(stringifyMapValue(e.Data, "endpoint_id")); ok {
-			if envID, ok := parseUUID(stringifyMapValue(e.Data, "environment_id")); ok {
-				p.publishMLStateForIDs(ctx, endpointID, envID)
-			}
-		}
-	case service.EventMLArtifactChanged:
-		p.publishMLProvenanceByArtifactID(ctx, firstString(stringifyMapValue(e.Data, "artifact_id"), e.EntityID))
-	case service.EventMLProvenanceChanged, service.EventMLProvenanceDefected:
-		p.publishMLProvenanceFromEvent(ctx, e)
-	case service.EventBackupRecipeChanged:
-		p.publishBackupRecipeByID(ctx, firstString(stringifyMapValue(e.Data, "recipe_id"), e.EntityID))
-	case service.EventBackupPolicyChanged:
-		p.publishBackupPolicyByID(ctx, firstString(stringifyMapValue(e.Data, "policy_id"), e.EntityID))
-	case service.EventBackupRepositoryChanged:
-		p.publishBackupRepositoryByID(ctx, firstString(stringifyMapValue(e.Data, "repository_id"), e.EntityID))
-	case service.EventBackupRunChanged:
-		p.publishBackupRunByID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupRestoreChanged:
-		p.publishBackupRestoreByID(ctx, firstString(stringifyMapValue(e.Data, "restore_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupVerificationChanged:
-		p.publishBackupVerificationByRunID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupRetentionChanged:
-		p.publishBackupRetentionByID(ctx, firstString(stringifyMapValue(e.Data, "retention_run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
+		// Phase 3 L1: LLM handleEvent cases removed — route registry and state
+		// records are published directly from the mutation site (intent handler,
+		// ContextVM handler, registry service) instead of reactively here.
+		// Phase 3 M1: ML model/version/endpoint/intent/observation/state/artifact/provenance
+		// handleEvent cases removed — ML state is now published directly from
+		// the mutation site via MLCanonicalPublisher. Worker read models
+		// for ML runs are refreshed by WorkerReadModelPublisher (W1).
 	}
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
@@ -595,515 +480,11 @@ func (p *Projector) publishEnvironmentByID(ctx context.Context, raw string) {
 	}
 }
 
-// Phase 3 S1: publishStateForIntent, publishStateForRun, publishStateForResource,
-// and publishStateForIDs removed — state is now published directly by the
-// reconciler via RuntimeStatePublisher (bahia-irsry.11.6).
-
-func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, versionsPublished, endpointsPublished, statesPublished, provenancePublished, capabilitiesPublished int) {
-	if p.mlSource != nil {
-		const pageSize = 500
-		for offset := 0; ; offset += pageSize {
-			models, err := p.mlSource.ListModels(ctx, "", pageSize, offset)
-			if err != nil {
-				p.logger.Warn("list ML models for projection failed", zap.Error(err))
-				break
-			}
-			for i := range models {
-				if err := p.publishMLModelRegistry(ctx, &models[i]); err != nil {
-					p.logger.Warn("publish ML model projection failed", zap.String("model_id", models[i].ID.String()), zap.Error(err))
-				} else {
-					modelsPublished++
-				}
-				versions, err := p.mlSource.ListModelVersions(ctx, models[i].ID, pageSize, 0)
-				if err != nil {
-					p.logger.Warn("list ML model versions for projection failed", zap.String("model_id", models[i].ID.String()), zap.Error(err))
-					continue
-				}
-				for j := range versions {
-					if err := p.publishMLModelVersionRegistry(ctx, &versions[j]); err != nil {
-						p.logger.Warn("publish ML model version projection failed", zap.String("model_version_id", versions[j].ID.String()), zap.Error(err))
-					} else {
-						versionsPublished++
-					}
-					artifacts, err := p.mlSource.ListArtifactRefsByModelVersion(ctx, versions[j].ID)
-					if err != nil {
-						p.logger.Warn("list ML artifacts for projection failed", zap.String("model_version_id", versions[j].ID.String()), zap.Error(err))
-						continue
-					}
-					for k := range artifacts {
-						if err := p.publishMLArtifactProvenanceGraph(ctx, &artifacts[k]); err != nil {
-							p.logger.Warn("publish ML provenance graph failed", zap.String("artifact_id", artifacts[k].ID.String()), zap.Error(err))
-						} else {
-							provenancePublished++
-						}
-					}
-				}
-			}
-			if len(models) < pageSize {
-				break
-			}
-		}
-		for offset := 0; ; offset += pageSize {
-			endpoints, err := p.mlSource.ListInferenceEndpoints(ctx, uuid.Nil, pageSize, offset)
-			if err != nil {
-				p.logger.Warn("list ML endpoints for projection failed", zap.Error(err))
-				break
-			}
-			for i := range endpoints {
-				if err := p.publishMLInferenceEndpointRegistry(ctx, &endpoints[i]); err != nil {
-					p.logger.Warn("publish ML endpoint projection failed", zap.String("endpoint_id", endpoints[i].ID.String()), zap.Error(err))
-				} else {
-					endpointsPublished++
-				}
-			}
-			if len(endpoints) < pageSize {
-				break
-			}
-		}
-		states, err := p.mlSource.ListInferenceStates(ctx)
-		if err != nil {
-			p.logger.Warn("list ML endpoint states for projection failed", zap.Error(err))
-		} else {
-			for i := range states {
-				if err := p.publishMLInferenceEndpointState(ctx, &states[i]); err != nil {
-					p.logger.Warn("publish ML endpoint state projection failed", zap.String("endpoint_id", states[i].EndpointID.String()), zap.String("environment_id", states[i].EnvironmentID.String()), zap.Error(err))
-				} else {
-					statesPublished++
-				}
-			}
-		}
-	}
-	if p.workerSource != nil {
-		workers, err := p.workerSource.List(ctx, "", 1000)
-		if err != nil {
-			p.logger.Warn("list workers for ML capability projection failed", zap.Error(err))
-		} else {
-			for i := range workers {
-				if err := p.publishMLRuntimeCapabilityProfile(ctx, &workers[i]); err != nil {
-					p.logger.Warn("publish ML runtime capability profile failed", zap.String("worker", workers[i].PubKey), zap.Error(err))
-				} else {
-					capabilitiesPublished++
-				}
-			}
-		}
-	}
-	return
-}
-
-func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, restoresPublished, verificationsPublished, retentionsPublished, posturesPublished int) {
-	if p.backupSource == nil {
-		return
-	}
-	const pageSize = 500
-	for offset := 0; ; offset += pageSize {
-		recipes, err := p.backupSource.ListRecipes(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup recipes for projection failed", zap.Error(err))
-			break
-		}
-		for i := range recipes {
-			if err := p.publishBackupRecipeRegistry(ctx, &recipes[i]); err != nil {
-				p.logger.Warn("publish backup recipe projection failed", zap.String("recipe_id", recipes[i].ID.String()), zap.Error(err))
-			} else {
-				recipesPublished++
-			}
-		}
-		if len(recipes) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		policies, err := p.backupSource.ListPolicies(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup policies for projection failed", zap.Error(err))
-			break
-		}
-		for i := range policies {
-			if err := p.publishBackupPolicyRegistry(ctx, &policies[i]); err != nil {
-				p.logger.Warn("publish backup policy projection failed", zap.String("policy_id", policies[i].ID.String()), zap.Error(err))
-			} else {
-				policiesPublished++
-			}
-		}
-		if len(policies) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		repositories, err := p.backupSource.ListRepositories(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup repositories for projection failed", zap.Error(err))
-			break
-		}
-		for i := range repositories {
-			if err := p.publishBackupRepositoryRegistry(ctx, &repositories[i]); err != nil {
-				p.logger.Warn("publish backup repository projection failed", zap.String("repository_id", repositories[i].ID.String()), zap.Error(err))
-			} else {
-				repositoriesPublished++
-			}
-		}
-		if len(repositories) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		runs, err := p.backupSource.ListBackupRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup runs for projection failed", zap.Error(err))
-			break
-		}
-		for i := range runs {
-			if err := p.publishBackupRunState(ctx, &runs[i]); err != nil {
-				p.logger.Warn("publish backup run state projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-			} else {
-				runsPublished++
-			}
-			verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, runs[i].ID)
-			if err != nil {
-				p.logger.Warn("read backup verification for projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-			} else if verification != nil {
-				if err := p.publishBackupVerificationState(ctx, verification); err != nil {
-					p.logger.Warn("publish backup verification state projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-				} else {
-					verificationsPublished++
-				}
-			}
-		}
-		if len(runs) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup restores for projection failed", zap.Error(err))
-			break
-		}
-		for i := range restores {
-			if err := p.publishBackupRestoreState(ctx, &restores[i]); err != nil {
-				p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", restores[i].ID.String()), zap.Error(err))
-			} else {
-				restoresPublished++
-			}
-		}
-		if len(restores) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		retentions, err := p.backupSource.ListBackupRetentionRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup retention runs for projection failed", zap.Error(err))
-			break
-		}
-		for i := range retentions {
-			if err := p.publishBackupRetentionState(ctx, &retentions[i]); err != nil {
-				p.logger.Warn("publish backup retention state projection failed", zap.String("retention_run_id", retentions[i].ID.String()), zap.Error(err))
-			} else {
-				retentionsPublished++
-			}
-		}
-		if len(retentions) < pageSize {
-			break
-		}
-	}
-	if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-		p.logger.Warn("publish backup runtime observation failed", zap.Error(err))
-	} else {
-		posturesPublished++
-	}
-	return
-}
-
-func (p *Projector) publishBackupRecipeByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	recipe, err := p.backupSource.GetRecipe(ctx, id)
-	if err != nil || recipe == nil {
-		if err != nil {
-			p.logger.Warn("read backup recipe for projection failed", zap.String("recipe_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRecipeRegistry(ctx, recipe); err != nil {
-		p.logger.Warn("publish backup recipe projection failed", zap.String("recipe_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupPolicyByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	policy, err := p.backupSource.GetPolicy(ctx, id)
-	if err != nil || policy == nil {
-		if err != nil {
-			p.logger.Warn("read backup policy for projection failed", zap.String("policy_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupPolicyRegistry(ctx, policy); err != nil {
-		p.logger.Warn("publish backup policy projection failed", zap.String("policy_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRepositoryByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	repo, err := p.backupSource.GetRepository(ctx, id)
-	if err != nil || repo == nil {
-		if err != nil {
-			p.logger.Warn("read backup repository for projection failed", zap.String("repository_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRepositoryRegistry(ctx, repo); err != nil {
-		p.logger.Warn("publish backup repository projection failed", zap.String("repository_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRunByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	run, err := p.backupSource.GetBackupRun(ctx, id)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read backup run for projection failed", zap.String("run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRunState(ctx, run); err != nil {
-		p.logger.Warn("publish backup run state projection failed", zap.String("run_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRestoreByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	restore, err := p.backupSource.GetBackupRestore(ctx, id)
-	if err != nil || restore == nil {
-		if err != nil {
-			p.logger.Warn("read backup restore for projection failed", zap.String("restore_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRestoreState(ctx, restore); err != nil {
-		p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRetentionByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	run, err := p.backupSource.GetBackupRetentionRun(ctx, id)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read backup retention run for projection failed", zap.String("retention_run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRetentionState(ctx, run); err != nil {
-		p.logger.Warn("publish backup retention state projection failed", zap.String("retention_run_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupVerificationByRunID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, id)
-	if err != nil || verification == nil {
-		if err != nil {
-			p.logger.Warn("read backup verification for projection failed", zap.String("run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupVerificationState(ctx, verification); err != nil {
-		p.logger.Warn("publish backup verification state projection failed", zap.String("run_id", raw), zap.Error(err))
-	}
-	p.publishBackupRunByID(ctx, raw)
-}
-
-func (p *Projector) publishMLModelByID(ctx context.Context, raw string) {
-	if p.mlSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	model, err := p.mlSource.GetModel(ctx, id)
-	if err != nil || model == nil {
-		if err != nil {
-			p.logger.Warn("read ML model for projection failed", zap.String("model_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishMLModelRegistry(ctx, model); err != nil {
-		p.logger.Warn("publish ML model projection failed", zap.String("model_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishMLModelVersionByID(ctx context.Context, raw string) {
-	if p.mlSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	version, err := p.mlSource.GetModelVersion(ctx, id)
-	if err != nil || version == nil {
-		if err != nil {
-			p.logger.Warn("read ML model version for projection failed", zap.String("model_version_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishMLModelVersionRegistry(ctx, version); err != nil {
-		p.logger.Warn("publish ML model version projection failed", zap.String("model_version_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishMLEndpointByID(ctx context.Context, raw string) {
-	if p.mlSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	endpoint, err := p.mlSource.GetInferenceEndpoint(ctx, id)
-	if err != nil || endpoint == nil {
-		if err != nil {
-			p.logger.Warn("read ML endpoint for projection failed", zap.String("endpoint_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishMLInferenceEndpointRegistry(ctx, endpoint); err != nil {
-		p.logger.Warn("publish ML endpoint projection failed", zap.String("endpoint_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishMLStateForIntent(ctx context.Context, intentID uuid.UUID) {
-	if p.mlSource == nil {
-		return
-	}
-	intent, err := p.mlSource.GetMLDeploymentIntent(ctx, intentID)
-	if err != nil || intent == nil {
-		if err != nil {
-			p.logger.Warn("read ML deployment intent for projection failed", zap.String("intent_id", intentID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishMLStateForIDs(ctx, intent.EndpointID, intent.EnvironmentID)
-}
-
-func (p *Projector) publishMLStateForRun(ctx context.Context, runID uuid.UUID) {
-	if p.mlSource == nil {
-		return
-	}
-	run, err := p.mlSource.GetMLDeploymentRun(ctx, runID)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read ML deployment run for projection failed", zap.String("run_id", runID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishMLStateForIntent(ctx, run.DeploymentIntentID)
-}
-
-func (p *Projector) publishMLStateForIDs(ctx context.Context, endpointID, envID uuid.UUID) {
-	if p.mlSource == nil {
-		return
-	}
-	state, err := p.mlSource.GetInferenceState(ctx, endpointID, envID)
-	if err != nil || state == nil {
-		if err != nil {
-			p.logger.Warn("read ML endpoint state for projection failed", zap.String("endpoint_id", endpointID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishMLInferenceEndpointState(ctx, state); err != nil {
-		p.logger.Warn("publish ML endpoint state projection failed", zap.String("endpoint_id", endpointID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishMLProvenanceByArtifactID(ctx context.Context, raw string) {
-	if p.mlSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	artifact, err := p.mlSource.GetArtifactRef(ctx, id)
-	if err != nil || artifact == nil {
-		if err != nil {
-			p.logger.Warn("read ML artifact for projection failed", zap.String("artifact_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishMLArtifactProvenanceGraph(ctx, artifact); err != nil {
-		p.logger.Warn("publish ML provenance graph failed", zap.String("artifact_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishMLProvenanceFromEvent(ctx context.Context, e events.Event) {
-	switch edge := e.Data.(type) {
-	case *domain.MLProvenanceEdge:
-		p.publishMLProvenanceForEdge(ctx, edge)
-	case domain.MLProvenanceEdge:
-		p.publishMLProvenanceForEdge(ctx, &edge)
-	default:
-		if artifactID := stringifyMapValue(e.Data, "artifact_id"); artifactID != "" {
-			p.publishMLProvenanceByArtifactID(ctx, artifactID)
-		}
-	}
-}
-
-func (p *Projector) publishMLProvenanceForEdge(ctx context.Context, edge *domain.MLProvenanceEdge) {
-	if edge == nil {
-		return
-	}
-	if edge.FromArtifactID != nil {
-		p.publishMLProvenanceByArtifactID(ctx, edge.FromArtifactID.String())
-	}
-	if edge.ToArtifactID != nil {
-		p.publishMLProvenanceByArtifactID(ctx, edge.ToArtifactID.String())
-	}
-}
+// Phase 3 M1: publishMLModelByID, publishMLModelVersionByID,
+// publishMLEndpointByID, publishMLStateForIntent, publishMLStateForRun,
+// publishMLStateForIDs, publishMLProvenanceByArtifactID,
+// publishMLProvenanceFromEvent, publishMLProvenanceForEdge removed.
+// ML state is now published directly from the mutation site via MLCanonicalPublisher.
 
 func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
 	content, _ := json.Marshal(value)
@@ -1957,225 +1338,6 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 	tags, content := environmentRegistryRecord(env, units, deleted)
 	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, content, "environment.projection", &env.ID)
 }
-
-func (p *Projector) publishBackupRecipeRegistry(ctx context.Context, recipe *domain.BackupRecipe) error {
-	if recipe == nil || recipe.Name == "" || recipe.Version == "" {
-		return nil
-	}
-	dTag := "backup-recipe:" + recipe.ID.String()
-	tags := gonostr.Tags{{"recipe", dTag}, {"recipe_id", recipe.ID.String()}, {"repository_id", recipe.RepositoryID.String()}, {"backend", string(recipe.Backend)}, {"target", recipe.TargetRef}, {"version", recipe.Version}}
-	if recipe.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", recipe.PolicyID.String()}, gonostr.Tag{"policy_id", recipe.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRecipeRegistry, dTag, tags, map[string]any{"deleted": false, "id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version, "backend": string(recipe.Backend), "repository_id": recipe.RepositoryID.String(), "policy_id": uuidStringPtr(recipe.PolicyID), "target_ref": recipe.TargetRef, "include": recipe.Include, "exclude": recipe.Exclude, "verification_mode": string(recipe.VerificationMode), "metadata": recipe.Metadata, "created_at": formatTime(recipe.CreatedAt), "updated_at": formatTime(recipe.UpdatedAt)}, "backup.recipe.projection", &recipe.ID)
-}
-
-func (p *Projector) publishBackupPolicyRegistry(ctx context.Context, policy *domain.BackupPolicy) error {
-	if policy == nil || policy.Name == "" {
-		return nil
-	}
-	dTag := "backup-policy:" + policy.ID.String()
-	tags := gonostr.Tags{{"policy", dTag}, {"policy_id", policy.ID.String()}, {"name", policy.Name}, {"require_verification", fmt.Sprintf("%t", policy.RequireVerification)}, {"verification", string(policy.VerificationMode)}}
-	return p.publishReplaceableJSON(ctx, KindBackupPolicyRegistry, dTag, tags, map[string]any{"deleted": false, "id": policy.ID.String(), "name": policy.Name, "require_verification": policy.RequireVerification, "verification_mode": string(policy.VerificationMode), "metadata": policy.Metadata, "created_at": formatTime(policy.CreatedAt), "updated_at": formatTime(policy.UpdatedAt)}, "backup.policy.projection", &policy.ID)
-}
-
-func (p *Projector) publishBackupRepositoryRegistry(ctx context.Context, repo *domain.BackupRepository) error {
-	if repo == nil || repo.Name == "" {
-		return nil
-	}
-	dTag := "backup-repository:" + repo.ID.String()
-	tags := gonostr.Tags{{"repository", dTag}, {"repository_id", repo.ID.String()}, {"name", repo.Name}, {"backend", string(repo.Backend)}}
-	return p.publishReplaceableJSON(ctx, KindBackupRepositoryRegistry, dTag, tags, map[string]any{"deleted": false, "id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend), "repository_uri": repo.RepositoryURI, "credential_profile": repo.CredentialProfile, "metadata": repo.Metadata, "created_at": formatTime(repo.CreatedAt), "updated_at": formatTime(repo.UpdatedAt)}, "backup.repository.projection", &repo.ID)
-}
-
-func (p *Projector) publishBackupRunState(ctx context.Context, run *domain.BackupRun) error {
-	if run == nil {
-		return nil
-	}
-	dTag := "backup-run:" + run.ID.String()
-	restoreEligible := domain.BackupRunRestoreEligible(run)
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "recipe_id": run.RecipeID.String(), "repository_id": run.RepositoryID.String(), "policy_id": uuidStringPtr(run.PolicyID), "requested_by": run.RequestedBy, "request_event_id": run.RequestEventID, "request_kind": run.RequestKind, "request_d_tag": run.RequestDTag, "status": string(run.Status), "backend": string(run.Backend), "target_ref": run.TargetRef, "snapshot_created": run.SnapshotCreated, "snapshot_id": run.SnapshotID, "verification_mode": string(run.VerificationMode), "verification_status": string(run.VerificationStatus), "restore_eligible": restoreEligible, "restore_eligibility": string(run.RestoreEligibility), "restore_eligibility_reason": run.RestoreEligibilityReason, "verification_policy_failure": run.VerificationPolicyFailure, "failure_category": string(run.FailureCategory), "publish_summary": run.PublishSummary, "error": run.Error, "metadata": run.Metadata, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
-	if p.backupSource != nil {
-		if verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, run.ID); err == nil && verification != nil {
-			content["verification_id"] = verification.ID.String()
-			content["verified"] = verification.Verified
-			content["verification_mode"] = string(verification.Mode)
-			content["verification_error"] = verification.Error
-			content["verification"] = map[string]any{"id": verification.ID.String(), "mode": string(verification.Mode), "status": string(verification.Status), "verified": verification.Verified, "evidence": verification.Evidence, "evidence_details": verification.EvidenceDetails, "error": verification.Error}
-		}
-	}
-	tags := gonostr.Tags{{"run", run.ID.String()}, {"recipe_id", run.RecipeID.String()}, {"repository_id", run.RepositoryID.String()}, {"status", string(run.Status)}, {"backend", string(run.Backend)}, {"verification", string(run.VerificationStatus)}, {"restore_eligible", fmt.Sprintf("%t", restoreEligible)}, {"restore_eligibility", string(run.RestoreEligibility)}, {"failure_category", string(run.FailureCategory)}}
-	if run.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRunState, dTag, tags, content, "backup.run_state.projection", &run.ID)
-}
-
-func (p *Projector) publishBackupRestoreState(ctx context.Context, restore *domain.BackupRestoreRun) error {
-	if restore == nil {
-		return nil
-	}
-	dTag := "backup-restore:" + restore.ID.String()
-	pendingApproval := restore.ApprovalStatus == domain.BackupApprovalPending
-	content := map[string]any{"deleted": false, "id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "recipe_id": restore.RecipeID.String(), "repository_id": restore.RepositoryID.String(), "policy_id": uuidStringPtr(restore.PolicyID), "snapshot_id": restore.SnapshotID, "restore_target_ref": restore.RestoreTargetRef, "requested_by": restore.RequestedBy, "request_event_id": restore.RequestEventID, "request_kind": restore.RequestKind, "request_d_tag": restore.RequestDTag, "approval_status": string(restore.ApprovalStatus), "approval_required": restore.ApprovalRequired, "approval_requirement": string(restore.ApprovalRequirement), "pending_approval": pendingApproval, "approval_event_id": restore.ApprovalEventID, "approved_by": restore.ApprovedBy, "approved_at": restore.ApprovedAt, "approval_message": restore.ApprovalMessage, "approval_reason_code": restore.ApprovalReasonCode, "approval_reason": restore.ApprovalReason, "status": string(restore.Status), "backend": string(restore.Backend), "verification_status": string(restore.VerificationStatus), "evidence": restore.Evidence, "publish_summary": restore.PublishSummary, "error": restore.Error, "verification_policy_failure": restore.VerificationPolicyFailure, "failure_category": string(restore.FailureCategory), "metadata": restore.Metadata, "started_at": restore.StartedAt, "finished_at": restore.FinishedAt, "created_at": formatTime(restore.CreatedAt), "updated_at": formatTime(restore.UpdatedAt)}
-	tags := gonostr.Tags{{"restore", restore.ID.String()}, {"restore_id", restore.ID.String()}, {"run", restore.BackupRunID.String()}, {"backup_run_id", restore.BackupRunID.String()}, {"recipe_id", restore.RecipeID.String()}, {"repository_id", restore.RepositoryID.String()}, {"status", string(restore.Status)}, {"approval", string(restore.ApprovalStatus)}, {"approval_required", fmt.Sprintf("%t", restore.ApprovalRequired)}, {"approval_requirement", string(restore.ApprovalRequirement)}, {"pending_approval", fmt.Sprintf("%t", pendingApproval)}, {"verification", string(restore.VerificationStatus)}, {"backend", string(restore.Backend)}, {"failure_category", string(restore.FailureCategory)}}
-	if restore.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", restore.PolicyID.String()}, gonostr.Tag{"policy_id", restore.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRestoreState, dTag, tags, content, "backup.restore_state.projection", &restore.ID)
-}
-
-func (p *Projector) publishBackupVerificationState(ctx context.Context, record *domain.BackupVerificationRecord) error {
-	if record == nil {
-		return nil
-	}
-	dTag := "backup-verification:" + record.BackupRunID.String()
-	tags := gonostr.Tags{{"run", record.BackupRunID.String()}, {"verification_id", record.ID.String()}, {"verification", string(record.Status)}, {"status", string(record.Status)}, {"mode", string(record.Mode)}, {"verified", fmt.Sprintf("%t", record.Verified)}}
-	return p.publishReplaceableJSON(ctx, KindBackupVerificationState, dTag, tags, map[string]any{"deleted": false, "id": record.ID.String(), "backup_run_id": record.BackupRunID.String(), "mode": string(record.Mode), "status": string(record.Status), "verified": record.Verified, "evidence": record.Evidence, "evidence_details": record.EvidenceDetails, "error": record.Error, "publish_summary": record.PublishSummary, "verified_at": record.VerifiedAt, "created_at": formatTime(record.CreatedAt), "updated_at": formatTime(record.UpdatedAt)}, "backup.verification_state.projection", &record.ID)
-}
-
-func (p *Projector) publishBackupRetentionState(ctx context.Context, run *domain.BackupRetentionRun) error {
-	if run == nil {
-		return nil
-	}
-	dTag := "backup-retention:" + run.ID.String()
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "policy_id": uuidStringPtr(run.PolicyID), "requested_by": run.RequestedBy, "request_event_id": run.RequestEventID, "request_kind": run.RequestKind, "request_d_tag": run.RequestDTag, "status": string(run.Status), "backend": string(run.Backend), "dry_run": run.DryRun, "evidence": run.Evidence, "publish_summary": run.PublishSummary, "error": run.Error, "failure_category": string(run.FailureCategory), "metadata": run.Metadata, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
-	tags := gonostr.Tags{{"retention", run.ID.String()}, {"retention_run_id", run.ID.String()}, {"repository_id", run.RepositoryID.String()}, {"status", string(run.Status)}, {"backend", string(run.Backend)}, {"dry_run", fmt.Sprintf("%t", run.DryRun)}, {"failure_category", string(run.FailureCategory)}}
-	if run.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRetentionRegistry, dTag, tags, content, "backup.retention_state.projection", &run.ID)
-}
-
-func (p *Projector) publishBackupRuntimeObservation(ctx context.Context) error {
-	if p.backupSource == nil {
-		return nil
-	}
-	const pageSize = 500
-	now := time.Now().UTC()
-	staleTimeout := p.backupStaleTimeout
-	if staleTimeout <= 0 {
-		staleTimeout = 15 * time.Minute
-	}
-	staleCutoff := now.Add(-staleTimeout)
-	counts := map[string]map[string]int{"runs": {}, "restores": {}, "retention": {}}
-	failureCategories := map[string]map[string]int{"runs": {}, "restores": {}, "retention": {}}
-	backendHealthFailures := make([]map[string]any, 0)
-	pendingApprovals := make([]map[string]any, 0)
-	last := map[string]any{}
-	for offset := 0; ; offset += pageSize {
-		runs, err := p.backupSource.ListBackupRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup runs for runtime observation: %w", err)
-		}
-		for i := range runs {
-			run := runs[i]
-			countBackupStatus(counts["runs"], run.Status, run.UpdatedAt, staleCutoff)
-			countFailureCategory(failureCategories["runs"], run.FailureCategory)
-			if run.Status == domain.RunStatusSucceeded {
-				updateLastBackupOutcome(last, "last_successful_run", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.Status), "repository_id": run.RepositoryID.String(), "recipe_id": run.RecipeID.String(), "snapshot_id": run.SnapshotID, "restore_eligibility": string(run.RestoreEligibility)})
-			}
-			if run.VerificationStatus == domain.BackupVerificationSucceeded {
-				updateLastBackupOutcome(last, "last_verification", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.VerificationStatus), "mode": string(run.VerificationMode), "repository_id": run.RepositoryID.String(), "recipe_id": run.RecipeID.String()})
-			}
-			if run.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "run", "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "error": run.Error, "updated_at": formatTime(run.UpdatedAt)})
-			}
-		}
-		if len(runs) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup restores for runtime observation: %w", err)
-		}
-		for i := range restores {
-			restore := restores[i]
-			countBackupStatus(counts["restores"], restore.Status, restore.UpdatedAt, staleCutoff)
-			if restore.ApprovalStatus == domain.BackupApprovalPending {
-				counts["restores"]["pending_approval"]++
-				if len(pendingApprovals) < 20 {
-					pendingApprovals = append(pendingApprovals, map[string]any{"restore_id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "repository_id": restore.RepositoryID.String(), "requested_by": restore.RequestedBy, "created_at": formatTime(restore.CreatedAt), "approval_requirement": string(restore.ApprovalRequirement)})
-				}
-			}
-			countFailureCategory(failureCategories["restores"], restore.FailureCategory)
-			if backupProjectionTerminalStatus(restore.Status) {
-				updateLastBackupOutcome(last, "last_restore", restore.ID.String(), restore.FinishedAt, restore.CreatedAt, map[string]any{"status": string(restore.Status), "approval_status": string(restore.ApprovalStatus), "repository_id": restore.RepositoryID.String(), "backup_run_id": restore.BackupRunID.String(), "verification_status": string(restore.VerificationStatus), "failure_category": string(restore.FailureCategory)})
-			}
-			if restore.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "restore", "id": restore.ID.String(), "repository_id": restore.RepositoryID.String(), "error": restore.Error, "updated_at": formatTime(restore.UpdatedAt)})
-			}
-		}
-		if len(restores) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		retentions, err := p.backupSource.ListBackupRetentionRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup retention runs for runtime observation: %w", err)
-		}
-		for i := range retentions {
-			run := retentions[i]
-			countBackupStatus(counts["retention"], run.Status, run.UpdatedAt, staleCutoff)
-			countFailureCategory(failureCategories["retention"], run.FailureCategory)
-			if backupProjectionTerminalStatus(run.Status) {
-				updateLastBackupOutcome(last, "last_retention", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.Status), "repository_id": run.RepositoryID.String(), "dry_run": run.DryRun, "failure_category": string(run.FailureCategory)})
-			}
-			if run.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "retention", "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "error": run.Error, "updated_at": formatTime(run.UpdatedAt)})
-			}
-		}
-		if len(retentions) < pageSize {
-			break
-		}
-	}
-	payload := map[string]any{"deleted": false, "scope": "fleet", "generated_at": formatTime(now), "stale_after_seconds": int(staleTimeout.Seconds()), "counts": counts, "last_outcomes": last, "failure_categories": failureCategories, "backend_health_failures": backendHealthFailures, "pending_restore_approvals": pendingApprovals}
-	tags := gonostr.Tags{{"scope", "fleet"}, {"status", "summary"}, {"pending_approval", fmt.Sprintf("%d", counts["restores"]["pending_approval"])}}
-	return p.publishReplaceableJSON(ctx, KindBackupRuntimeObservationState, "backup-runtime:fleet", tags, payload, "backup.runtime_observation.projection", nil)
-}
-
-func countBackupStatus(counts map[string]int, status domain.DeploymentRunStatus, updatedAt time.Time, staleCutoff time.Time) {
-	counts[string(status)]++
-	if status == domain.RunStatusRunning && updatedAt.Before(staleCutoff) {
-		counts["stale"]++
-	}
-}
-
-func countFailureCategory(counts map[string]int, category domain.BackupFailureCategory) {
-	if category != domain.BackupFailureNone {
-		counts[string(category)]++
-	}
-}
-
-func backupProjectionTerminalStatus(status domain.DeploymentRunStatus) bool {
-	switch status {
-	case domain.RunStatusSucceeded, domain.RunStatusFailed, domain.RunStatusCancelled, domain.RunStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-func updateLastBackupOutcome(last map[string]any, key, id string, finishedAt *time.Time, createdAt time.Time, values map[string]any) {
-	candidate := createdAt
-	if finishedAt != nil && !finishedAt.IsZero() {
-		candidate = *finishedAt
-	}
-	if existing, ok := last[key].(map[string]any); ok {
-		if raw, ok := existing["at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339, raw); err == nil && !candidate.After(parsed) {
-				return
-			}
-		}
-	}
-	values["id"] = id
-	values["at"] = formatTime(candidate)
-	last[key] = values
-}
-
 func unitTagValue(id *uuid.UUID) string {
 	if id == nil {
 		return domain.DefaultDeploymentUnitKey
@@ -2190,258 +1352,17 @@ func uuidStringPtr(id *uuid.UUID) string {
 	return id.String()
 }
 
-func (p *Projector) publishMLModelRegistry(ctx context.Context, model *domain.MLModel) error {
-	if model == nil || model.Slug == "" {
-		return nil
-	}
-	dTag := "model:" + model.Slug
-	tags := gonostr.Tags{{"d", dTag}, {"model", dTag}, {"name", model.Name}, {"deleted", "false"}}
-	if model.Family != "" {
-		tags = append(tags, gonostr.Tag{"family", model.Family})
-	}
-	for _, modality := range model.Modalities {
-		tags = append(tags, gonostr.Tag{"modality", modality})
-	}
-	for _, task := range model.TaskKinds {
-		tags = append(tags, gonostr.Tag{"task", string(task)})
-	}
-	for _, capability := range model.Capabilities {
-		tags = append(tags, gonostr.Tag{"capability", capability})
-	}
-	if model.License != "" {
-		tags = append(tags, gonostr.Tag{"license", model.License})
-	}
-	return p.publishReplaceableJSON(ctx, KindMLModelRegistry, dTag, tags[1:], model, "ml_model.projection", &model.ID)
-}
+// Phase 3 M1: publishMLModelRegistry, publishMLModelVersionRegistry,
+// publishMLInferenceEndpointRegistry, publishMLInferenceEndpointState,
+// environmentNameForMLProjection, publishMLArtifactProvenanceGraph,
+// publishMLRuntimeCapabilityProfile removed. ML state is now published
+// directly from the mutation site via MLCanonicalPublisher.
 
-func (p *Projector) publishMLModelVersionRegistry(ctx context.Context, version *domain.MLModelVersion) error {
-	if p.mlSource == nil || version == nil {
-		return nil
-	}
-	model, err := p.mlSource.GetModel(ctx, version.ModelID)
-	if err != nil || model == nil || model.Slug == "" {
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	dTag := fmt.Sprintf("model-version:%s:%s", model.Slug, version.Version)
-	tags := gonostr.Tags{{"model", "model:" + model.Slug}, {"model_id", version.ModelID.String()}, {"model_version", dTag}, {"version", version.Version}}
-	for _, format := range version.RuntimeRequirements.RequiredFormats {
-		tags = append(tags, gonostr.Tag{"format", string(format)})
-	}
-	for _, runtime := range version.RuntimeRequirements.PreferredRuntimes {
-		tags = append(tags, gonostr.Tag{"runtime", string(runtime)})
-	}
-	return p.publishReplaceableJSON(ctx, KindMLModelVersionRegistry, dTag, tags, version, "ml_model_version.projection", &version.ID)
-}
-
-func (p *Projector) publishMLInferenceEndpointRegistry(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
-	if endpoint == nil {
-		return nil
-	}
-	envName, ok, err := p.environmentNameForMLProjection(ctx, endpoint.EnvironmentID)
-	if err != nil || !ok {
-		return err
-	}
-	dTag := fmt.Sprintf("endpoint:%s:%s", endpoint.Name, envName)
-	tags := gonostr.Tags{{"endpoint", dTag}, {"endpoint_id", endpoint.ID.String()}, {"environment", envName}, {"environment_id", endpoint.EnvironmentID.String()}, {"name", endpoint.Name}}
-	for _, task := range endpoint.TaskKinds {
-		tags = append(tags, gonostr.Tag{"task", string(task)})
-	}
-	if endpoint.Protocol != "" {
-		tags = append(tags, gonostr.Tag{"protocol", endpoint.Protocol})
-	}
-	return p.publishReplaceableJSON(ctx, KindMLInferenceEndpointRegistry, dTag, tags, endpoint, "ml_endpoint.projection", &endpoint.ID)
-}
-
-func (p *Projector) publishMLInferenceEndpointState(ctx context.Context, state *domain.MLInferenceState) error {
-	if p.mlSource == nil || state == nil {
-		return nil
-	}
-	endpoint, err := p.mlSource.GetInferenceEndpoint(ctx, state.EndpointID)
-	if err != nil || endpoint == nil {
-		return err
-	}
-	envName, ok, err := p.environmentNameForMLProjection(ctx, state.EnvironmentID)
-	if err != nil || !ok {
-		return err
-	}
-	dTag := fmt.Sprintf("endpoint-state:%s:%s", endpoint.Name, envName)
-	tags := gonostr.Tags{{"endpoint", fmt.Sprintf("endpoint:%s:%s", endpoint.Name, envName)}, {"endpoint_id", state.EndpointID.String()}, {"environment", envName}, {"environment_id", state.EnvironmentID.String()}, {"drift_status", string(state.DriftStatus)}, {"gateway_status", string(state.GatewayStatus)}}
-	if state.DesiredModelVersionID != nil {
-		tags = append(tags, gonostr.Tag{"model_version", state.DesiredModelVersionID.String()})
-	}
-	if state.DesiredIntentID != nil {
-		tags = append(tags, gonostr.Tag{"deployment", state.DesiredIntentID.String()}, gonostr.Tag{"intent", state.DesiredIntentID.String()})
-	}
-	if state.ActiveRunID != nil {
-		tags = append(tags, gonostr.Tag{"run", state.ActiveRunID.String()})
-	}
-	if state.RuntimeKind != "" {
-		tags = append(tags, gonostr.Tag{"runtime", string(state.RuntimeKind)})
-	}
-	return p.publishReplaceableJSON(ctx, KindMLInferenceEndpointState, dTag, tags, state, "ml_endpoint_state.projection", &state.EndpointID)
-}
-
-func (p *Projector) environmentNameForMLProjection(ctx context.Context, envID uuid.UUID) (string, bool, error) {
-	if p.source == nil || envID == uuid.Nil {
-		return "", false, nil
-	}
-	env, err := p.source.GetEnvironment(ctx, envID)
-	if err != nil || env == nil || env.Name == "" {
-		return "", false, err
-	}
-	return env.Name, true, nil
-}
-
-func (p *Projector) publishMLArtifactProvenanceGraph(ctx context.Context, artifact *domain.MLArtifactRef) error {
-	if p.mlSource == nil || artifact == nil {
-		return nil
-	}
-	edges, err := p.mlSource.ListProvenanceEdgesByArtifact(ctx, artifact.ID)
-	if err != nil {
-		return err
-	}
-	digest := artifact.SHA256
-	if digest == "" {
-		digest = artifact.ID.String()
-	}
-	dTag := "artifact:" + digest
-	content := map[string]any{"artifact": artifact, "edges": edges}
-	tags := gonostr.Tags{{"artifact", artifact.ID.String()}}
-	if artifact.SHA256 != "" {
-		tags = append(tags, gonostr.Tag{"sha256", artifact.SHA256})
-	}
-	if artifact.ModelVersionID != nil {
-		tags = append(tags, gonostr.Tag{"model_version", artifact.ModelVersionID.String()})
-	}
-	if artifact.Format != "" {
-		tags = append(tags, gonostr.Tag{"format", string(artifact.Format)})
-	}
-	return p.publishReplaceableJSON(ctx, KindMLArtifactProvenanceGraph, dTag, tags, content, "ml_artifact_provenance.projection", &artifact.ID)
-}
-
-func (p *Projector) publishMLRuntimeCapabilityProfile(ctx context.Context, worker *domain.Worker) error {
-	if worker == nil || worker.PubKey == "" {
-		return nil
-	}
-	dTag := fmt.Sprintf("worker:%s:ai-capability", worker.PubKey)
-	tags := gonostr.Tags{{"worker", worker.PubKey}, {"role", "worker"}, {"status", string(worker.Status)}}
-	for _, runtime := range worker.MLCapabilities.Runtimes {
-		tags = append(tags, gonostr.Tag{"runtime", string(runtime)})
-	}
-	for _, format := range worker.MLCapabilities.ArtifactFormats {
-		tags = append(tags, gonostr.Tag{"artifact_format", string(format)})
-	}
-	for _, task := range worker.MLCapabilities.Tasks {
-		tags = append(tags, gonostr.Tag{"task", string(task)})
-	}
-	for _, accelerator := range worker.MLCapabilities.Accelerators {
-		tags = append(tags, gonostr.Tag{"accelerator", accelerator})
-	}
-	for _, toolchain := range worker.MLCapabilities.Toolchains {
-		tags = append(tags, gonostr.Tag{"toolchain", toolchain})
-	}
-	if worker.Resources != nil && worker.Resources.MemoryGB > 0 {
-		tags = append(tags, gonostr.Tag{"ram_gb", fmt.Sprintf("%d", worker.Resources.MemoryGB)})
-	}
-	for _, accelerator := range worker.Accelerators {
-		if accelerator.Model != "" {
-			tags = append(tags, gonostr.Tag{"gpu", accelerator.Model})
-		}
-		if accelerator.MemoryGB > 0 {
-			tags = append(tags, gonostr.Tag{"vram_gb", fmt.Sprintf("%d", accelerator.MemoryGB)})
-		}
-		if accelerator.Driver != "" {
-			tags = append(tags, gonostr.Tag{"driver", accelerator.Driver})
-		}
-	}
-	return p.publishReplaceableJSON(ctx, KindMLRuntimeCapabilityProfile, dTag, tags, worker, "ml_runtime_capability.projection", nil)
-}
-
-func (p *Projector) publishWorkerAssignmentState(ctx context.Context, state *domain.WorkerAssignmentState) error {
-	if state == nil || state.WorkerPubKey == "" {
-		return nil
-	}
-	tags := gonostr.Tags{{"worker", state.WorkerPubKey}, {"assignment_count", fmt.Sprintf("%d", len(state.ActiveAssignments))}}
-	for _, assignment := range state.ActiveAssignments {
-		if assignment.Type != "" {
-			tags = append(tags, gonostr.Tag{"assignment_type", string(assignment.Type)})
-		}
-		if assignment.WorkloadID != "" {
-			tags = append(tags, gonostr.Tag{"workload", assignment.WorkloadID})
-		}
-		if assignment.Status != "" {
-			tags = append(tags, gonostr.Tag{"status", assignment.Status})
-		}
-		if assignment.Pinned {
-			tags = append(tags, gonostr.Tag{"pinned", "true"})
-		}
-	}
-	return p.publishReplaceableJSON(ctx, KindWorkerAssignmentState, state.WorkerPubKey, tags, state, "worker_assignment_state.projection", nil)
-}
-
-func (p *Projector) publishWorkerDrainStatus(ctx context.Context, status *domain.WorkerDrainStatus) error {
-	if status == nil || status.WorkerPubKey == "" {
-		return nil
-	}
-	tags := gonostr.Tags{{"worker", status.WorkerPubKey}, {"scheduling_state", string(status.SchedulingState)}, {"safe_to_enter_maintenance", fmt.Sprintf("%t", status.SafeToEnterMaintenance)}, {"safe_to_disable", fmt.Sprintf("%t", status.SafeToDisable)}, {"remaining", fmt.Sprintf("%d", len(status.RemainingAssignments))}, {"pinned_blockers", fmt.Sprintf("%d", len(status.PinnedBlockers))}}
-	return p.publishReplaceableJSON(ctx, KindWorkerDrainStatus, status.WorkerPubKey, tags, status, "worker_drain_status.projection", nil)
-}
-
-func (p *Projector) publishWorkerReadModelsForWorker(ctx context.Context, workerPubKey string) {
-	if p.workerReadModelSource == nil || strings.TrimSpace(workerPubKey) == "" {
-		return
-	}
-	assignment, err := p.workerReadModelSource.GetAssignmentState(ctx, workerPubKey)
-	if err != nil {
-		p.logger.Warn("read worker assignment state for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
-	} else if assignment != nil {
-		if err := p.publishWorkerAssignmentState(ctx, assignment); err != nil {
-			p.logger.Warn("publish worker assignment state failed", zap.String("worker", workerPubKey), zap.Error(err))
-		}
-	}
-	drain, err := p.workerReadModelSource.GetDrainStatus(ctx, workerPubKey)
-	if err != nil {
-		p.logger.Warn("read worker drain status for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
-	} else if drain != nil {
-		if err := p.publishWorkerDrainStatus(ctx, drain); err != nil {
-			p.logger.Warn("publish worker drain status failed", zap.String("worker", workerPubKey), zap.Error(err))
-		}
-	}
-}
-
-func (p *Projector) publishWorkerReadModelSnapshots(ctx context.Context) (assignmentsPublished, drainsPublished int) {
-	if p.workerReadModelSource == nil {
-		return
-	}
-	assignments, err := p.workerReadModelSource.ListAssignmentStates(ctx)
-	if err != nil {
-		p.logger.Warn("list worker assignment states for projection failed", zap.Error(err))
-	} else {
-		for i := range assignments {
-			if err := p.publishWorkerAssignmentState(ctx, &assignments[i]); err != nil {
-				p.logger.Warn("publish worker assignment state failed", zap.String("worker", assignments[i].WorkerPubKey), zap.Error(err))
-			} else {
-				assignmentsPublished++
-			}
-		}
-	}
-	drains, err := p.workerReadModelSource.ListDrainStatuses(ctx)
-	if err != nil {
-		p.logger.Warn("list worker drain statuses for projection failed", zap.Error(err))
-	} else {
-		for i := range drains {
-			if err := p.publishWorkerDrainStatus(ctx, &drains[i]); err != nil {
-				p.logger.Warn("publish worker drain status failed", zap.String("worker", drains[i].WorkerPubKey), zap.Error(err))
-			} else {
-				drainsPublished++
-			}
-		}
-	}
-	return
-}
+// Phase 3 W1: publishWorkerAssignmentState, publishWorkerDrainStatus,
+// publishWorkerReadModelsForWorker, and publishWorkerReadModelSnapshots
+// removed — worker assignment/drain read models are published directly from
+// the mutation site (worker_handlers.go, registry.go, ml_registry.go) via
+// WorkerReadModelPublisher (bahia-irsry.11.14).
 
 // Phase 3 S1: publishState removed — the shared record builder
 // RuntimeStateRecord in control_state_contract.go replaces it, and the

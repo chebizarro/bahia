@@ -22,19 +22,20 @@ const packageApprovePlanMethod = "package/approve-plan"
 const packageApprovalMaxAge = 10 * time.Minute
 
 type packageContextVMHandlers struct {
-	r     *Reactor
-	gate  *FleetOperatorGate
-	store repository.PackageAuthorizationStore
+	r               *Reactor
+	gate            *FleetOperatorGate
+	store           repository.PackageAuthorizationStore
+	intentProcessor *IntentProcessor
 }
 
 // RegisterPackageContextVMHandlers executes package mutations rather than
 // republishing commands. Only the transport sends JSON-RPC terminal responses.
-func (r *Reactor) RegisterPackageContextVMHandlers(transport *EncryptedRequestTransport, gate *FleetOperatorGate) {
+func (r *Reactor) RegisterPackageContextVMHandlers(transport *EncryptedRequestTransport, gate *FleetOperatorGate, intentProcessor *IntentProcessor) {
 	if r == nil || transport == nil {
 		return
 	}
 	store, _ := r.packageProjection.(repository.PackageAuthorizationStore)
-	h := packageContextVMHandlers{r: r, gate: gate, store: store}
+	h := packageContextVMHandlers{r: r, gate: gate, store: store, intentProcessor: intentProcessor}
 	for method, handler := range map[string]func(context.Context, *packagePlan) (map[string]any, error){
 		"package/publish":             r.handlePackagePublishIntent,
 		ContextVMMethodPackagePromote: r.handlePackagePromotionRequest,
@@ -213,6 +214,13 @@ func (h packageContextVMHandlers) run(handler func(context.Context, *packagePlan
 		if err := h.configured(); err != nil {
 			return nil, err
 		}
+
+		// Phase 3 dual dispatch: route through the intent processor when the
+		// package domain is enabled. Falls through to the legacy path otherwise.
+		if h.packageIntentEnabled() {
+			return h.runViaDualDispatch(ctx, request)
+		}
+
 		if request.ProgressToken == "" {
 			return nil, fmt.Errorf("idempotency_key or _meta.progressToken is required")
 		}
@@ -306,4 +314,60 @@ func (h packageContextVMHandlers) finish(ctx context.Context, request ContextVMR
 		return nil, operationErr
 	}
 	return result, nil
+}
+
+// packageIntentEnabled reports whether the package domain is routed through
+// the intent processor (Phase 3 dual dispatch).
+func (h packageContextVMHandlers) packageIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("package") != nil
+}
+
+// packageDualDispatch routes a package mutation through the intent processor.
+func (h packageContextVMHandlers) packageDualDispatch(ctx context.Context, request ContextVMRequest, op string, coordinate string, content map[string]interface{}) error {
+	intent := &Intent{
+		Domain:     "package",
+		Op:         op,
+		IntentID:   effectiveIdempotencyKey(request, coordinate),
+		Coordinate: coordinate,
+		Content:    content,
+		Actor:      request.Event.PubKey.Hex(),
+	}
+	return h.intentProcessor.ProcessInProcess(ctx, intent)
+}
+
+// contextVMMethodToIntentOp maps ContextVM method names to intent operation names.
+var contextVMMethodToPackageIntentOp = map[string]string{
+	"package/publish":             "publish",
+	ContextVMMethodPackagePromote: "promote",
+	"package/yank":                "yank",
+	"package/drift-detect":        "drift-detect",
+}
+
+// runViaDualDispatch routes a ContextVM package mutation through the intent
+// processor. It parses the raw params into the intent content and delegates
+// to the PackageIntentHandler via ProcessInProcess.
+func (h packageContextVMHandlers) runViaDualDispatch(ctx context.Context, request ContextVMRequest) (any, error) {
+	op, ok := contextVMMethodToPackageIntentOp[request.RPC.Method]
+	if !ok {
+		return nil, fmt.Errorf("unsupported package method for dual dispatch: %s", request.RPC.Method)
+	}
+
+	// Parse the raw params as the intent content.
+	var content map[string]interface{}
+	if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+		return nil, fmt.Errorf("parse package intent content: %w", err)
+	}
+
+	// Use repository_id or repository_name as coordinate fallback.
+	coordinate := ""
+	if v, ok := content["repository_id"].(string); ok && v != "" {
+		coordinate = v
+	} else if v, ok := content["repository_name"].(string); ok && v != "" {
+		coordinate = v
+	}
+
+	if err := h.packageDualDispatch(ctx, request, op, coordinate, content); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "success", "operation": op}, nil
 }

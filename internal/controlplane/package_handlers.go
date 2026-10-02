@@ -44,7 +44,43 @@ func (r *Reactor) recoverPackageIntents(ctx context.Context) {
 	}
 }
 
+// packageIntentEnabled reports whether the package domain is routed through
+// the intent processor (Phase 3 dual dispatch).
+func (r *Reactor) packageIntentEnabled() bool {
+	return r.intentProcessor != nil && r.intentProcessor.Handler("package") != nil
+}
+
 func (r *Reactor) handlePackageRepositoryApply(ctx context.Context, event *nostr.Event) {
+	// Phase 3 dual dispatch: route through the intent processor when the
+	// package domain is enabled. This gives repository-apply a real consumer
+	// (previously wired to a legacy kind with no production subscription).
+	if r.packageIntentEnabled() {
+		var cmd PackageRepositoryApplyCommand
+		if !r.decodePackageRequest(ctx, event, &cmd) {
+			return
+		}
+		content := map[string]interface{}{}
+		if raw, err := json.Marshal(cmd); err == nil {
+			_ = json.Unmarshal(raw, &content)
+		}
+		coordinate := cmd.Name
+		if cmd.RepositoryID != uuid.Nil {
+			coordinate = cmd.RepositoryID.String()
+		}
+		intent := &Intent{
+			Domain:     "package",
+			Op:         "repository-apply",
+			IntentID:   event.ID.Hex(),
+			Coordinate: coordinate,
+			Content:    content,
+			Actor:      event.PubKey.Hex(),
+		}
+		if err := r.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			r.publishPackageError(ctx, event, domain.PackageOperationRepositoryApply, "intent_error", err.Error())
+		}
+		return
+	}
+
 	var cmd PackageRepositoryApplyCommand
 	if !r.decodePackageRequest(ctx, event, &cmd) {
 		return
@@ -74,6 +110,34 @@ func (r *Reactor) handlePackageRepositoryApply(ctx context.Context, event *nostr
 }
 
 func (r *Reactor) handlePackageRepositoryDelete(ctx context.Context, event *nostr.Event) {
+	// Phase 3 dual dispatch for repository delete.
+	if r.packageIntentEnabled() {
+		var cmd PackageRepositoryDeleteCommand
+		if !r.decodePackageRequest(ctx, event, &cmd) {
+			return
+		}
+		content := map[string]interface{}{}
+		if raw, err := json.Marshal(cmd); err == nil {
+			_ = json.Unmarshal(raw, &content)
+		}
+		coordinate := cmd.RepositoryName
+		if cmd.RepositoryID != uuid.Nil {
+			coordinate = cmd.RepositoryID.String()
+		}
+		intent := &Intent{
+			Domain:     "package",
+			Op:         "repository-delete",
+			IntentID:   event.ID.Hex(),
+			Coordinate: coordinate,
+			Content:    content,
+			Actor:      event.PubKey.Hex(),
+		}
+		if err := r.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			r.publishPackageError(ctx, event, domain.PackageOperationRepositoryDelete, "intent_error", err.Error())
+		}
+		return
+	}
+
 	var cmd PackageRepositoryDeleteCommand
 	if !r.decodePackageRequest(ctx, event, &cmd) {
 		return

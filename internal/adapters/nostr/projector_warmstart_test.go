@@ -9,6 +9,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -211,28 +212,71 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot verifies that a domain
-// family still on the legacy RepublishSnapshot path (ML) is published by the
-// legacy snapshot when it is NOT listed in intent_domains. Services and
-// environments are migrated; ML models are not yet.
-func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
+// fakeSBOMSource implements SBOMProjectionSource for warm-start tests.
+type fakeSBOMSource struct {
+	manifests []domain.SBOMManifest
+}
+
+func (s *fakeSBOMSource) ListPublishedManifests(_ context.Context, _ int) ([]domain.SBOMManifest, error) {
+	return s.manifests, nil
+}
+
+// countByKind counts captured events whose wire kind matches one of the given kinds.
+func countByKind(events []gonostr.Event, kinds ...int) int {
+	kindSet := make(map[int]bool, len(kinds))
+	for _, k := range kinds {
+		kindSet[k] = true
+	}
+	count := 0
+	for _, ev := range events {
+		if kindSet[int(ev.Kind)] {
+			count++
+		}
+	}
+	return count
+}
+
+// TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot verifies that SBOM, the
+// only domain family remaining on the legacy RepublishSnapshot path after
+// Wave 4, is still published by the snapshot while migrated domains (service,
+// environment) are skipped.
+//
+// Phase 3 M1: Retargeted from ML (now migrated to direct publish via
+// MLCanonicalPublisher) to SBOM references (kind 30078) and availability
+// lists (kind 30004). SBOM is the last legacy leg after Wave 4.
+func TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
-	modelID := uuid.New()
-	source := newFakeProjectionSource()
-	source.mlModels[modelID] = domain.MLModel{
-		ID:   modelID,
-		Slug: "test-model",
-		Name: "Test Model",
+	manifestID := uuid.New()
+	sbomSource := &fakeSBOMSource{
+		manifests: []domain.SBOMManifest{{
+			ID: manifestID,
+			Subject: domain.SBOMSubject{
+				Type:        domain.SBOMSubjectArtifact,
+				ID:          uuid.New().String(),
+				DisplayName: "test-artifact",
+				Digest:      "sha256:a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+			},
+			Format:        domain.SBOMFormatSPDX,
+			StorageType:   domain.SBOMStorageBlossom,
+			StorageURI:    "blossom://test/sbom.spdx.json",
+			MediaType:     "application/spdx+json",
+			PayloadSHA256: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+			Generator:     domain.SBOMGenerator{ID: "syft", Version: "1.0"},
+			ReferenceDTag: "sbom:test:" + manifestID.String()[:8],
+			PublishState:  domain.SBOMPublishPublished,
+			CreatedAt:     time.Now().UTC().Add(-time.Hour),
+		}},
 	}
 
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
-	// Service and environment are migrated; ML is NOT.
+	source := newFakeProjectionSource()
+	// Service and environment are migrated; SBOM is NOT.
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithMLProjectionSource(source),
+		WithSBOMProjectionSource(sbomSource),
 		WithIntentDomains([]string{"service", "environment"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
@@ -244,10 +288,10 @@ func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// ML is NOT migrated → still published via RepublishSnapshot.
-	mlCount := countByDomain(sink.events, "ml")
-	if mlCount == 0 {
-		t.Errorf("unmigrated domain: expected ML model publishes from legacy snapshot, got 0")
+	// SBOM is NOT migrated → still published via RepublishSnapshot.
+	sbomCount := countByKind(sink.events, sbom.KindSBOMReference, sbom.KindSBOMAvailabilityList)
+	if sbomCount == 0 {
+		t.Errorf("unmigrated domain: expected SBOM publishes from legacy snapshot, got 0")
 	}
 	// Migrated domains should NOT be republished (no history seeded).
 	if n := countByDomain(sink.events, "service"); n != 0 {

@@ -22,7 +22,7 @@ func TestBackupContextVMAuthorizedRequesterCarriesAuditableDelegation(t *testing
 	rbac := backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, rbac, NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, rbac, NewFleetOperatorGate([]string{requesterPubkey}), nil)
 
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id":       tenantID.String(),
@@ -160,7 +160,7 @@ func TestBackupContextVMRequesterAuthorityFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey, otherPubkey, servicePubkey}, zap.NewNop())
-			RegisterBackupAliasContextVMHandlers(transport, tc.rbac, NewFleetOperatorGate([]string{requesterPubkey, otherPubkey, servicePubkey}))
+			RegisterBackupAliasContextVMHandlers(transport, tc.rbac, NewFleetOperatorGate([]string{requesterPubkey, otherPubkey, servicePubkey}), nil)
 			request := backupAuthorityRequest(t, tc.requestKey, ContextVMMethodBackupRun, tc.params)
 
 			transport.HandleEvent(context.Background(), request)
@@ -181,7 +181,7 @@ func TestBackupContextVMReplayDoesNotRepublishDelegatedCommand(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 
 	params := map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "backup-authority-replay",
@@ -215,7 +215,7 @@ func TestBackupContextVMAmbiguousTenantRequiresExplicitBinding(t *testing.T) {
 	}}
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(members), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, auth.NewRBAC(members), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"recipe_id": uuid.NewString(), "idempotency_key": "ambiguous-tenant",
@@ -236,7 +236,7 @@ func TestBackupRequestAuthorityRejectsTamperedSignedDelegation(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "tamper",
 	}))
@@ -269,7 +269,7 @@ func TestBackupRequestAuthorityRejectsDuplicateTags(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "duplicate-tag",
 	}))
@@ -293,7 +293,7 @@ func TestDelegatedBackupCommandUsesRequesterForDurableAttribution(t *testing.T) 
 	registry, recipe := newBackupRequestRegistryFixture()
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 	request := backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": recipe.ID.String(), "idempotency_key": "durable-attribution",
 	})
@@ -333,7 +333,7 @@ func TestDelegatedBackupCommandRejectsUnexpectedIssuer(t *testing.T) {
 	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenantID, requesterPubkey, domain.RoleAdmin), NewFleetOperatorGate([]string{requesterPubkey}), nil)
 	transport.HandleEvent(context.Background(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenantID.String(), "recipe_id": uuid.NewString(), "idempotency_key": "issuer-mismatch",
 	}))
@@ -447,7 +447,7 @@ func delegatedBackupCommand(t *testing.T) nostr.Event {
 	requester := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), authzTestTransportAuthors(t), zap.NewNop())
-	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenant, requester, domain.RoleAdmin), NewFleetOperatorGate([]string{requester}))
+	RegisterBackupAliasContextVMHandlers(transport, backupAuthorityTestRBAC(tenant, requester, domain.RoleAdmin), NewFleetOperatorGate([]string{requester}), nil)
 	transport.HandleEvent(t.Context(), backupAuthorityRequest(t, testRequesterKey, ContextVMMethodBackupRun, map[string]any{
 		"tenant_id": tenant.String(), "recipe_id": uuid.NewString(),
 		"requester_pubkey":  testNostrPubKeyHexFromPrivateKey(t, testOtherKey),

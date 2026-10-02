@@ -518,6 +518,152 @@ func (r *RelayFirstStatePublisher) PublishDeploymentRunRegistry(ctx context.Cont
 	return r.publishAuthoritativeProjection(ctx, KindDeploymentRunRegistry, run.ID, deleted, tags, content, "deployment_run.projection")
 }
 
+// Package registry records ----------------------------------------------------
+//
+// Phase 3 P1: package repository, artifact and promotion families publish
+// canonical cp-state directly from the intent handler, through the shared
+// record builder and the outbox, exactly one event per material change.
+
+// packageRepositoryRegistryRecord returns the family tags and JSON content of
+// a package repository's registry record.
+func packageRepositoryRegistryRecord(repo *domain.PackageRepository, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": repo.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"repository", repo.ID.String()},
+		{"name", repo.Name},
+		{"backend_ref", repo.BackendRef},
+		{"format", string(repo.Format)},
+		{"status", string(repo.Status)},
+	}
+	content := map[string]any{
+		"deleted":                  false,
+		"id":                       repo.ID.String(),
+		"name":                     repo.Name,
+		"backend_ref":              repo.BackendRef,
+		"backend_type":             string(repo.BackendType),
+		"format":                   string(repo.Format),
+		"status":                   string(repo.Status),
+		"public_url":               repo.PublicURL,
+		"external_repository_name": repo.ExternalRepositoryName,
+		"created_at":               formatTime(repo.CreatedAt),
+		"updated_at":               formatTime(repo.UpdatedAt),
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// packageArtifactRegistryRecord returns the family tags and JSON content of a
+// package artifact's registry record.
+func packageArtifactRegistryRecord(artifact *domain.PackageArtifact, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": artifact.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"artifact", artifact.ID.String()},
+		{"repository", artifact.RepositoryID.String()},
+		{"repository_name", artifact.RepositoryName},
+		{"package", artifact.PackageName},
+		{"version", artifact.Version},
+		{"filename", artifact.Filename},
+		{"sha256", artifact.SHA256},
+		{"status", string(artifact.Status)},
+	}
+	content := map[string]any{
+		"deleted":         false,
+		"id":              artifact.ID.String(),
+		"repository_id":   artifact.RepositoryID.String(),
+		"repository_name": artifact.RepositoryName,
+		"namespace":       artifact.Namespace,
+		"package_name":    artifact.PackageName,
+		"version":         artifact.Version,
+		"filename":        artifact.Filename,
+		"sha256":          artifact.SHA256,
+		"size_bytes":      artifact.SizeBytes,
+		"content_type":    artifact.ContentType,
+		"status":          string(artifact.Status),
+		"metadata":        artifact.Metadata,
+		"created_at":      formatTime(artifact.CreatedAt),
+		"updated_at":      formatTime(artifact.UpdatedAt),
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// packagePromotionRegistryRecord returns the family tags and JSON content of a
+// package promotion/publication's registry record.
+func packagePromotionRegistryRecord(publication *domain.PackagePublication, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": publication.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"promotion", publication.ID.String()},
+		{"repository", publication.RepositoryID.String()},
+		{"artifact", publication.ArtifactID.String()},
+		{"status", string(publication.Status)},
+		{"policy_decision", string(publication.PolicyDecision)},
+	}
+	if publication.TargetRepositoryID != nil {
+		tags = append(tags, gonostr.Tag{"target_repository", publication.TargetRepositoryID.String()})
+	}
+	content := map[string]any{
+		"deleted":         false,
+		"id":              publication.ID.String(),
+		"repository_id":   publication.RepositoryID.String(),
+		"artifact_id":     publication.ArtifactID.String(),
+		"status":          string(publication.Status),
+		"policy_decision": string(publication.PolicyDecision),
+		"policy_ref":      publication.PolicyRef,
+		"approved_by":     publication.ApprovedBy,
+		"metadata":        publication.Metadata,
+		"created_at":      formatTime(publication.CreatedAt),
+		"updated_at":      formatTime(publication.UpdatedAt),
+	}
+	if publication.TargetRepositoryID != nil {
+		content["target_repository_id"] = publication.TargetRepositoryID.String()
+	}
+	if publication.PublishedAt != nil {
+		content["published_at"] = formatTime(*publication.PublishedAt)
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// PublishPackageRepositoryRegistry publishes a package repository's cp-state record.
+// Phase 3 P1: canonical state published directly from the intent handler.
+func (r *RelayFirstStatePublisher) PublishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository, deleted bool) error {
+	if repo == nil {
+		return fmt.Errorf("package repository is nil")
+	}
+	tags, content := packageRepositoryRegistryRecord(repo, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindPackageRepositoryRegistry, repo.ID, deleted, tags, content, "package_repository.projection")
+}
+
+// PublishPackageArtifactRegistry publishes a package artifact's cp-state record.
+func (r *RelayFirstStatePublisher) PublishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact, deleted bool) error {
+	if artifact == nil {
+		return fmt.Errorf("package artifact is nil")
+	}
+	tags, content := packageArtifactRegistryRecord(artifact, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindPackageArtifactRegistry, artifact.ID, deleted, tags, content, "package_artifact.projection")
+}
+
+// PublishPackagePromotionRegistry publishes a package promotion's cp-state record.
+func (r *RelayFirstStatePublisher) PublishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication, deleted bool) error {
+	if publication == nil {
+		return fmt.Errorf("package publication is nil")
+	}
+	tags, content := packagePromotionRegistryRecord(publication, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindPackagePromotionRegistry, publication.ID, deleted, tags, content, "package_promotion.projection")
+}
+
 // publishAuthoritativeProjection delivers a cp-state record through the
 // projector's authoritative path (fingerprint-deduped, outbox-queued, no
 // backoff gating). Used for domains that publish directly from the mutation
