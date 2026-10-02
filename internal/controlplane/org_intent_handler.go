@@ -50,7 +50,6 @@ type OrgIntentHandler struct {
 
 	// onMemberChange is called after member add/remove/role-change.
 	onMemberChange OrgMemberChangeCallback
-
 }
 
 // DecryptMemberContent decrypts an encrypted membership event content string

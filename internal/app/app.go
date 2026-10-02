@@ -1435,7 +1435,6 @@ func New(cfg *config.Config) (*App, error) {
 					zap.String("org_id", orgID.String()),
 					zap.Int("member_count", len(members)))
 			},
-
 		})
 		intentProcessor.RegisterHandler("org", orgHandler)
 		logger.Info("org intent handler registered")
