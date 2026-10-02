@@ -2,7 +2,6 @@
 # Pre-existing violations only: entries may shrink, never grow.
 # Regenerate with: make arch-baseline
 # Format: <count>\t<key>
-1	internal/reconcile/dns_reconciler.go time.NewTicker
 1	internal/reconcile/execution_plane.go time.NewTicker
 1	internal/reconcile/hygiene_reconciler.go time.NewTicker
 1	internal/reconcile/llm_reconciler.go time.NewTicker

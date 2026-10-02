@@ -25,6 +25,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	dnsagent "github.com/openagentsinc/bahia/internal/dnsagent/agent"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/strutil"
 	pkgclient "github.com/openagentsinc/bahia/pkg/client"
 	"go.uber.org/zap"
@@ -107,6 +109,72 @@ func run(args []string) error {
 	}
 	service.RegisterHandlers(transport)
 	pool.Connect(ctx)
+
+	// Phase 3 D1: zone sync subscriber — subscribe to zone-sync events from
+	// the daemon's pubkey and apply them locally. Runs alongside the existing
+	// ContextVM transport until the subscription path is proven (C-34).
+	zoneSyncEvents := make(chan nostr.Event, 64)
+	zoneSyncSub := &nostradapter.StoreBackedSubscriber{
+		Pool:           pool,
+		Store:          store,
+		Logger:         logger,
+		ReconcileKinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+	}
+	go func() {
+		authorPubKey, pkErr := nostrutil.PubKeyFromHex(cfg.AuthorizedPubkey)
+		if pkErr != nil {
+			logger.Error("invalid daemon pubkey for zone sync", zap.Error(pkErr))
+			return
+		}
+		filter := nostr.Filter{
+			Authors: []nostr.PubKey{authorPubKey},
+			Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+			Tags:    nostr.TagMap{"t": []string{"dns-zone-sync"}},
+		}
+		sub, err := zoneSyncSub.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+		if err != nil {
+			logger.Error("zone sync subscription failed", zap.Error(err))
+			return
+		}
+		for ev := range sub.Events {
+			if ev == nil {
+				continue
+			}
+			select {
+			case zoneSyncEvents <- *ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	zoneSubscriber := dnsagent.NewZoneSubscriber(service, cfg.AuthorizedPubkey, zoneSyncEvents, logger)
+	go func() {
+		if err := zoneSubscriber.Run(ctx); err != nil {
+			logger.Error("zone subscriber stopped", zap.Error(err))
+		}
+	}()
+
+	// Phase 3 D1: health status publisher — publish NIP-38 kind 30315 events
+	// with NIP-40 expiry so the daemon can read agent health from events
+	// instead of ContextVM Health() RPC.
+	agentSigner, signerErr := controlplane.NewPrivateKeySigner(normalizedKey)
+	if signerErr == nil {
+		healthPub := dnsagent.NewHealthPublisher(dnsagent.HealthPublisherConfig{
+			Agent:    service,
+			Signer:   agentSigner,
+			Publish:  func(pubCtx context.Context, ev nostr.Event) error { _, err := pool.Publish(pubCtx, ev); return err },
+			Interval: 30 * time.Second,
+			Logger:   logger,
+		})
+		go func() {
+			if err := healthPub.Run(ctx); err != nil {
+				logger.Error("health publisher stopped", zap.Error(err))
+			}
+		}()
+		logger.Info("DNS agent health publisher started")
+	} else {
+		logger.Warn("could not create signer for health publisher", zap.Error(signerErr))
+	}
 
 	healthServer, healthErr := startHealthServer(ctx, cfg.HealthAddr, service, stop)
 	if healthServer != nil {

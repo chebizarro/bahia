@@ -60,19 +60,20 @@ type DNSRecordOverrideSource interface {
 
 // DNSReconciler compares projected DNS records with backend snapshots and syncs drift.
 type DNSReconciler struct {
-	projector         *DNSProjector
-	zones             []domain.DNSZone
-	resolver          DNSBackendResolver
-	interval          time.Duration
-	logger            *zap.Logger
-	publisher         events.Publisher
-	zoneSource        DNSZoneSource
-	overrideSource    DNSRecordOverrideSource
-	triggerCh         chan struct{}
-	debounce          time.Duration
-	runMu             sync.Mutex
-	authoritySyncs    map[string]dnsAuthoritySyncState
-	emptySyncRefusals map[string]domain.DNSZone
+	projector          *DNSProjector
+	zones              []domain.DNSZone
+	resolver           DNSBackendResolver
+	interval           time.Duration
+	logger             *zap.Logger
+	publisher          events.Publisher
+	canonicalPublisher DNSCanonicalPublisher
+	zoneSource         DNSZoneSource
+	overrideSource     DNSRecordOverrideSource
+	triggerCh          chan struct{}
+	debounce           time.Duration
+	runMu              sync.Mutex
+	authoritySyncs     map[string]dnsAuthoritySyncState
+	emptySyncRefusals  map[string]domain.DNSZone
 }
 
 func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver DNSBackendResolver, interval time.Duration, logger *zap.Logger, publisher ...events.Publisher) *DNSReconciler {
@@ -100,6 +101,14 @@ func (r *DNSReconciler) SetPersistenceSources(zones DNSZoneSource, overrides DNS
 	r.overrideSource = overrides
 }
 
+// SetCanonicalPublisher sets the publisher that writes canonical DNS state
+// records (endpoint/zone/backend/policy) through the shared builder and outbox
+// after each reconcile. When set, the projector's DNS legs are no longer
+// needed (Phase 3 D1).
+func (r *DNSReconciler) SetCanonicalPublisher(pub DNSCanonicalPublisher) {
+	r.canonicalPublisher = pub
+}
+
 // SetupSubscriptions reacts to authoritative service convergence events instead
 // of waiting for the periodic safety reconcile.
 func (r *DNSReconciler) SetupSubscriptions(publisher events.Publisher) {
@@ -119,20 +128,25 @@ func (r *DNSReconciler) TriggerReconcile() {
 	}
 }
 
+// Run blocks until ctx is cancelled, reconciling DNS on each event trigger.
+// The ticker was removed in Phase 3 D1 (B-23): reconciliation is driven
+// entirely by bus events (deployment-run-completed, state-changed,
+// runtime-observation) and explicit TriggerReconcile calls.
 func (r *DNSReconciler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
+	// Initial reconcile on startup.
+	if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
+		r.logger.Warn("DNS reconcile failed", zap.Error(err))
+	}
 	for {
-		if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
-			r.logger.Warn("DNS reconcile failed", zap.Error(err))
-		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
 		case <-r.triggerCh:
 			if !r.waitForDebounce(ctx) {
 				return nil
+			}
+			if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
+				r.logger.Warn("DNS reconcile failed", zap.Error(err))
 			}
 		}
 	}
@@ -256,6 +270,13 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 			r.logger.Warn("DNS backend sync zone failed", zap.String("zone", zone.Name), zap.Error(err))
 			continue
 		}
+		// Phase 3 D1: publish zone sync event so agents subscribe to zone
+		// records instead of relying solely on ContextVM pushes (C-34).
+		if r.canonicalPublisher != nil {
+			if err := r.canonicalPublisher.PublishZoneSync(ctx, zone, desired); err != nil {
+				r.logger.Warn("publish zone sync event failed", zap.String("zone", zone.Name), zap.Error(err))
+			}
+		}
 		if authorityOnlyDrift {
 			r.authoritySyncs[zoneKey] = dnsAuthoritySyncState{zone: zoneDefinition, awaitingVerification: true}
 		}
@@ -266,6 +287,25 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 		r.logger.Info("DNS zone synced", zap.String("zone", zone.Name), zap.Int("desired_records", len(desired)), zap.Int("actual_records", len(actual)), zap.Int("added_records", len(diff.added)), zap.Int("deleted_records", len(diff.deleted)), zap.Int("updated_records", len(diff.updated)))
 	}
 	r.logger.Info("DNS reconcile completed", zap.Int("changed_zones", changed), zap.Int("unchanged_zones", unchanged))
+
+	// Publish canonical DNS endpoint state after reconciliation so consumers
+	// (FIPS bridge, web, DNS agent) receive updated records. This replaces
+	// the projector's publishDNSEndpointSnapshot leg (B-17 fix).
+	if r.canonicalPublisher != nil {
+		endpoints, err := r.projector.ListDNSEndpoints(ctx)
+		if err != nil {
+			r.logger.Warn("list DNS endpoints for canonical publish failed", zap.Error(err))
+		} else {
+			published, tombstoned, err := r.canonicalPublisher.PublishEndpoints(ctx, endpoints)
+			if err != nil {
+				r.logger.Warn("publish canonical DNS endpoints failed", zap.Error(err))
+			} else if published > 0 || tombstoned > 0 {
+				r.logger.Info("canonical DNS endpoints published",
+					zap.Int("published", published),
+					zap.Int("tombstoned", tombstoned))
+			}
+		}
+	}
 	return nil
 }
 

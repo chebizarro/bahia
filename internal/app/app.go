@@ -968,6 +968,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var dnsProjector *reconcile.DNSProjector
+	var dnsReconciler *reconcile.DNSReconciler
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
 	var dnsOperator controlplane.DNSControlPlaneOperator
@@ -994,7 +995,7 @@ func New(cfg *config.Config) (*App, error) {
 		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
 			dnsProjector.SetPolicySource(policySource)
 		}
-		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		dnsReconciler = reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		dnsReconciler.SetPublisher(publisher)
 		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
 		dnsReconciler.SetupSubscriptions(publisher)
@@ -1127,6 +1128,18 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
+	// each material reconcile so DNS records publish once per mutation instead
+	// of O(fleet) per projector tick (B-17).
+	if dnsReconciler != nil {
+		dnsCanonicalPub := nostrAdapter.NewDNSCanonicalPublisher(nostrProjector, logger)
+		if err := dnsCanonicalPub.HydrateFromStore(ctx); err != nil {
+			logger.Warn("DNS canonical publisher hydration failed", zap.Error(err))
+		}
+		dnsReconciler.SetCanonicalPublisher(dnsCanonicalPub)
+		logger.Info("DNS canonical publisher wired to reconciler (Phase 3 D1)")
+	}
 
 	// Phase 3 F2: register service domain intent handler.
 	// Uses the relay-first registry when available (canonical 30900 published
