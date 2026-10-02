@@ -541,16 +541,16 @@ func packageRepositoryRegistryRecord(repo *domain.PackageRepository, deleted boo
 	}
 	content := map[string]any{
 		"deleted":                  false,
-		"id":                      repo.ID.String(),
-		"name":                    repo.Name,
-		"backend_ref":             repo.BackendRef,
-		"backend_type":            string(repo.BackendType),
-		"format":                  string(repo.Format),
-		"status":                  string(repo.Status),
-		"public_url":              repo.PublicURL,
+		"id":                       repo.ID.String(),
+		"name":                     repo.Name,
+		"backend_ref":              repo.BackendRef,
+		"backend_type":             string(repo.BackendType),
+		"format":                   string(repo.Format),
+		"status":                   string(repo.Status),
+		"public_url":               repo.PublicURL,
 		"external_repository_name": repo.ExternalRepositoryName,
-		"created_at":              formatTime(repo.CreatedAt),
-		"updated_at":              formatTime(repo.UpdatedAt),
+		"created_at":               formatTime(repo.CreatedAt),
+		"updated_at":               formatTime(repo.UpdatedAt),
 	}
 	contentJSON, _ := json.Marshal(content)
 	return tags, string(contentJSON)
@@ -663,7 +663,6 @@ func (r *RelayFirstStatePublisher) PublishPackagePromotionRegistry(ctx context.C
 	tags, content := packagePromotionRegistryRecord(publication, deleted)
 	return r.publishAuthoritativeProjection(ctx, KindPackagePromotionRegistry, publication.ID, deleted, tags, content, "package_promotion.projection")
 }
-
 
 // publishAuthoritativeProjection delivers a cp-state record through the
 // projector's authoritative path (fingerprint-deduped, outbox-queued, no

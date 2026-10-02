@@ -26,6 +26,7 @@ var ErrMLProvenanceFailedClosed = errors.New("ML provenance validation failed cl
 
 // MLProvenanceService owns artifact references, provenance edges, and fail-closed digest validation.
 type MLProvenanceService struct {
+	cpState   MLCPStatePublisher
 	repo      repository.MLRegistryRepository
 	publisher events.Publisher
 	logger    *zap.Logger
@@ -41,6 +42,12 @@ func NewMLProvenanceService(repo repository.MLRegistryRepository, publisher even
 	return &MLProvenanceService{repo: repo, publisher: publisher, logger: logger}
 }
 
+// SetMLCPStatePublisher configures the canonical cp-state publisher for ML
+// provenance entities (Phase 3 M1).
+func (s *MLProvenanceService) SetMLCPStatePublisher(pub MLCPStatePublisher) {
+	s.cpState = pub
+}
+
 func (s *MLProvenanceService) RegisterArtifactRef(ctx context.Context, artifact *domain.MLArtifactRef) error {
 	if err := domain.ValidateMLArtifactRef(artifact); err != nil {
 		return err
@@ -53,6 +60,7 @@ func (s *MLProvenanceService) RegisterArtifactRef(ctx context.Context, artifact 
 		return err
 	}
 	s.publish(ctx, EventMLArtifactChanged, artifact.ID.String(), map[string]any{"artifact_id": artifact.ID.String(), "uri": artifact.URI, "sha256": artifact.SHA256})
+	s.publishCPStateProvenanceGraph(ctx, artifact)
 	return nil
 }
 
@@ -74,6 +82,7 @@ func (s *MLProvenanceService) RecordProvenanceEdge(ctx context.Context, edge *do
 		typ = EventMLProvenanceDefected
 	}
 	s.publish(ctx, typ, edge.ID.String(), edge)
+	s.publishCPStateProvenanceForEdge(ctx, edge)
 	return nil
 }
 
@@ -184,4 +193,29 @@ func normalizeSHA256(digest string) string {
 
 func (s *MLProvenanceService) publish(ctx context.Context, typ events.EventType, entityID string, data any) {
 	s.publisher.Publish(ctx, events.Event{Type: typ, EntityID: entityID, Data: data})
+}
+
+func (s *MLProvenanceService) publishCPStateProvenanceGraph(ctx context.Context, artifact *domain.MLArtifactRef) {
+	if s.cpState == nil || artifact == nil {
+		return
+	}
+	if err := s.cpState.PublishProvenanceGraph(ctx, artifact); err != nil {
+		s.logger.Warn("publish ML provenance graph cp-state failed", zap.String("artifact_id", artifact.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *MLProvenanceService) publishCPStateProvenanceForEdge(ctx context.Context, edge *domain.MLProvenanceEdge) {
+	if s.cpState == nil || edge == nil {
+		return
+	}
+	if edge.FromArtifactID != nil {
+		if artifact, err := s.repo.GetArtifactRef(ctx, *edge.FromArtifactID); err == nil && artifact != nil {
+			s.publishCPStateProvenanceGraph(ctx, artifact)
+		}
+	}
+	if edge.ToArtifactID != nil {
+		if artifact, err := s.repo.GetArtifactRef(ctx, *edge.ToArtifactID); err == nil && artifact != nil {
+			s.publishCPStateProvenanceGraph(ctx, artifact)
+		}
+	}
 }
