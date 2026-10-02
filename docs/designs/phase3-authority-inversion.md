@@ -112,9 +112,72 @@ Secrets, org membership, and notifications are sensitive. Their intents use **NI
 
 The inner event is a `30900` intent signed by the operator, NIP-44-encrypted to the service pubkey. The daemon unwraps it using its existing `EncryptedRequestTransport.unwrapContextVMEvent` logic (already handles `1059` and `21059`).
 
-For secret _values_, the content is NIP-44-encrypted to the service pubkey within the inner event's content field (double encryption: gift-wrap protects the intent metadata, NIP-44 within content protects the secret value at rest on the daemon's local store).
+#### 1.7.1 Unified confidential cp-state crypto (Phase 3 C1)
 
-The daemon's published state for secrets is also encrypted: a `30900` record whose content is NIP-44-encrypted to the org's member pubkeys (so the web can decrypt and display in Phase 4). This uses the existing pattern from `internal/service/assistant_transcript_store.go` (symmetric-key AEAD with key-reference tags). In Phase 4, the web derives its own role by decrypting the membership events it can read (those gift-wrapped to its pubkey) and checking the role field.
+All confidential cp-state records (org, member, invite, secret metadata, notification channel config) use a **single shared encryption scheme** based on per-org content keys (OCKs). This replaces the previous O1 (sha256-derived key AEAD) and N1 (NIP-44 self-encryption) schemes.
+
+**Per-org content key (OCK):**
+- Random 32-byte symmetric key with a version number per org.
+- Used with XChaCha20-Poly1305 AEAD (same primitive as the assistant transcript store).
+- AEAD associated data binds the ciphertext to the record's coordinate identity: `{schema, key_org, key_ref, key_version, legacy_kind, d, t}`. This prevents ciphertext replay across coordinates.
+- All NIP-44 operations go through the `gonostr.Keyer` signer interface, not raw key derivation. Bunker signers that support NIP-44 encrypt/decrypt work out of the box.
+
+**Key distribution (key-envelope records, kind 32010):**
+- The OCK is wrapped (NIP-44 encrypted) to each current org member and to the service pubkey.
+- Each wrapped copy is published as an addressable cp-state record through the shared `controlStateEnvelope`/`cpStateFamilies` pipeline with `legacy_kind=32010`, `t=org-key-envelope`.
+- D-tag coordinate: `org-key:<orgID>:v<version>:<random-16-byte-hex-handle>`. The recipient pubkey never appears in plaintext tags, d-tags, or content. Recipients find their envelope by trying to decrypt all envelopes for their org+version (O(N) where N = org member count, typically small).
+- On daemon restart, the OCK is recovered from the service-wrapped envelope in history.
+
+**Key rotation:**
+- Triggered on member removal or role downgrade.
+- New OCK version created, wrapped to remaining members only.
+- Old versions remain readable for historical records (acceptable; noted in design).
+- New publishes use the current version.
+
+**Service-only fields (service_inner):**
+- Secret values and notification channel credentials (webhook URLs, signing secrets, API keys) must NOT be readable by org members.
+- These are NIP-44-encrypted to the service pubkey and embedded as `service_inner` inside the AEAD-encrypted envelope.
+- Org members can decrypt the AEAD layer (channel metadata, secret ref metadata) but cannot decrypt the `service_inner` NIP-44 ciphertext.
+- Secret value reveal remains through ContextVM with permission checks.
+
+**Envelope format (`bahia.confidential.aead.v1`):**
+```json
+{
+  "schema": "bahia.confidential.aead.v1",
+  "algorithm": "xchacha20-poly1305",
+  "key_org": "<org-id>",
+  "key_ref": "ock:<org-id>",
+  "key_version": "v1",
+  "nonce": "<base64-24-bytes>",
+  "ciphertext": "<base64-aead-ciphertext>",
+  "associated_data": {
+    "schema": "bahia.confidential.aead.v1",
+    "key_org": "<org-id>",
+    "key_ref": "ock:<org-id>",
+    "key_version": "v1",
+    "legacy_kind": "32005",
+    "d": "<d-tag>",
+    "t": "<topic>"
+  },
+  "service_inner": "<nip44-ciphertext-to-service-pubkey>"
+}
+```
+
+**Migration:**
+- Dual-read: new-format records are tried first, then legacy O1 format.
+- Legacy O1 `org_state_crypto.go` encryptor retained for read-only fallback.
+- Legacy N1 `selfDecryptNIP44Legacy` retained for read-only fallback.
+- New publishes always use the unified confidential path. No plaintext fallback.
+
+**Implementation files:**
+- `internal/controlplane/org_content_key.go` — OCK types, AEAD encrypt/decrypt, AD binding
+- `internal/controlplane/org_content_key_manager.go` — OCK lifecycle (create, distribute, rotate, recover)
+- `internal/controlplane/confidential_encryptor.go` — Bridge between OCKManager and publisher interfaces
+- `internal/domain/key_envelope_record.go` — Shared type for history records
+- `internal/adapters/nostr/confidential_state.go` — Legacy read paths, key-envelope publishing/history
+- `internal/adapters/nostr/org_canonical_publisher.go` — Org/member/invite publisher using ConfidentialStateEncryptor
+- `internal/adapters/nostr/secret_canonical_publisher.go` — Secret ref publisher using ConfidentialStateEncryptor
+- `internal/adapters/nostr/notification_canonical_publisher.go` — Channel publisher with service_inner for credentials
 
 ---
 

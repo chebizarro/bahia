@@ -44,6 +44,7 @@ var goCPStateTopics = map[string]string{
 	"BACKUP_RUNTIME_OBSERVATION": CPStateTopicBackupRuntimeObservation,
 	"SECRET_REGISTRY":            CPStateTopicSecretRegistry,
 	"NOTIFICATION_CHANNEL":       CPStateTopicNotificationChannelRegistry,
+	"ORG_KEY_ENVELOPE":           CPStateTopicOrgKeyEnvelope,
 }
 
 func readGeneratedKindsJS(t *testing.T) string {

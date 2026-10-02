@@ -1109,7 +1109,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	}
 	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
 	trustSet := NewTrustSet(nil, zap.NewNop())
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 	ctx := context.Background()
 
 	orgID := uuid.New().String()
@@ -1119,7 +1119,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": false,
 	})
 	addEncrypted, _ := encryptor.EncryptOrgState(ctx, addContent, "test-d", "test-t")
-	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted); err != nil {
+	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("add member failed: %v", err)
 	}
 
@@ -1134,7 +1134,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": true,
 	})
 	removeEncrypted, _ := encryptor.EncryptOrgState(ctx, removeContent, "test-d", "test-t")
-	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted); err != nil {
+	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("remove member failed: %v", err)
 	}
 
@@ -1175,7 +1175,7 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 
 	// Create empty TrustSet (no Postgres, no relay members yet).
 	trustSet := NewTrustSet(nil, zap.NewNop())
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 
 	// Hydrate from history.
 	handler.HydrateTrustSetFromHistory(ctx, history)
@@ -1207,7 +1207,7 @@ func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	}
 	encryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: key})
 	trustSet := NewTrustSet(nil, zap.NewNop()) // No Postgres
-	handler := NewRelayMemberEventHandler(encryptor, trustSet, nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(nil, encryptor, trustSet, nil, zap.NewNop())
 	ctx := context.Background()
 
 	orgID := uuid.New()
@@ -1220,7 +1220,7 @@ func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
 
 	// This is what the OrgCanonicalPublisher.SetOnMemberPublished callback does.
-	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted); err != nil {
+	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted, 0, "", ""); err != nil {
 		t.Fatalf("HandleEncryptedMemberEvent failed: %v", err)
 	}
 
