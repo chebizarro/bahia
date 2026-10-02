@@ -3,17 +3,18 @@ package nostr
 import (
 	"context"
 	"sort"
-	"time"
 
 	"go.uber.org/zap"
 )
 
-// ReadinessWaiter reports whether a set of required preconditions are met.
-// In production, *controlplane.ReadinessTracker satisfies this interface.
-// The Projector uses it to wait for the intent subscriber's first EOSE
-// before comparing local state against relay-held state for migrated domains.
+// ReadinessWaiter gates the warm-start on the intent subscriber's first
+// EOSE catch-up. In production, *controlplane.ReadinessTracker satisfies
+// this interface. The channel-based Ready() method avoids polling: the
+// warm-start selects on Ready() and ctx.Done().
 type ReadinessWaiter interface {
-	IsReady() bool
+	// Ready returns a channel that is closed when all preconditions are met.
+	// If no preconditions exist the channel is already closed.
+	Ready() <-chan struct{}
 }
 
 // WithReadinessTracker configures the projector to wait for the given waiter
@@ -30,18 +31,18 @@ func WithIntentDomains(domains []string) ProjectorOption {
 	return func(p *Projector) { p.intentDomains = domains }
 }
 
-// warmStartReadinessTimeout bounds how long the projector waits for the
-// intent subscriber's first catch-up before proceeding without it.
-const warmStartReadinessTimeout = 30 * time.Second
-
 // warmStartMigratedDomains replaces the startup RepublishSnapshot call for
 // domains listed in intentDomains. It:
-//  1. Waits for the intent subscriber's first catch-up (EOSE + NIP-77).
+//  1. Waits for the intent subscriber's first catch-up (EOSE + NIP-77) via
+//     the ReadinessWaiter channel — no polling, no timeout-as-completion.
 //  2. Hydrates the fingerprint cache from the daemon's own published history
 //     so that unchanged coordinates are recognised and not re-signed.
 //  3. Compares history records against the cache: any record present in history
 //     but absent from the cache (e.g. an abandoned outbox publish) is
 //     re-published. Records already in the cache are skipped.
+//
+// If ctx is cancelled before readiness, warm-start is skipped entirely and
+// a warning is logged — it never proceeds on a guess.
 //
 // For unmigrated domains, the caller runs the legacy RepublishSnapshot which
 // has per-domain guards that skip migrated legs.
@@ -51,11 +52,14 @@ func (p *Projector) warmStartMigratedDomains(ctx context.Context) {
 	if p.readiness == nil || len(p.intentDomains) == 0 {
 		return
 	}
-	if !p.waitForReadiness(ctx) {
-		if ctx.Err() != nil {
-			return
-		}
-		p.logger.Warn("warm-start: readiness timeout, proceeding with cache hydration only")
+
+	// Wait for readiness or context cancellation — event-driven, no polling.
+	select {
+	case <-p.readiness.Ready():
+		p.logger.Info("warm-start: intent subscriber caught up")
+	case <-ctx.Done():
+		p.logger.Warn("warm-start: context cancelled before readiness, skipping")
+		return
 	}
 
 	// Hydrate the fingerprint cache for the canonical state wire kind (30900).
@@ -149,32 +153,6 @@ func (p *Projector) warmStartDomain(ctx context.Context, domain string, wireKind
 	return published
 }
 
-// waitForReadiness polls the ReadinessWaiter until it reports ready, the
-// context is cancelled, or the timeout expires. Returns true when ready.
-func (p *Projector) waitForReadiness(ctx context.Context) bool {
-	if p.readiness.IsReady() {
-		return true
-	}
-	p.logger.Info("warm-start: waiting for intent subscriber catch-up")
-
-	deadline := time.After(warmStartReadinessTimeout)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-deadline:
-			return false
-		case <-ticker.C:
-			if p.readiness.IsReady() {
-				p.logger.Info("warm-start: intent subscriber caught up")
-				return true
-			}
-		}
-	}
-}
-
 // isDomainMigrated reports whether a domain is listed in intentDomains and
 // should be excluded from the legacy RepublishSnapshot path.
 func (p *Projector) isDomainMigrated(domain string) bool {
@@ -184,4 +162,20 @@ func (p *Projector) isDomainMigrated(domain string) bool {
 		}
 	}
 	return false
+}
+
+// WarmStartConfigured reports whether the projector has been configured for
+// warm-start (both a readiness waiter and intent domains). Used by app-level
+// tests to verify wiring.
+func (p *Projector) WarmStartConfigured() bool {
+	return p != nil && p.readiness != nil && len(p.intentDomains) > 0
+}
+
+// IntentDomainsMigrated returns the list of domain families configured for
+// warm-start. Used by app-level tests to verify wiring.
+func (p *Projector) IntentDomainsMigrated() []string {
+	if p == nil {
+		return nil
+	}
+	return p.intentDomains
 }

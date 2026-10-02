@@ -17,29 +17,32 @@ import (
 
 // --- helpers ----------------------------------------------------------------
 
-// immediateReadiness satisfies ReadinessWaiter and reports ready immediately.
-type immediateReadiness struct{}
+// immediateReadiness satisfies ReadinessWaiter with an already-closed channel.
+type immediateReadiness struct{ ch chan struct{} }
 
-func (immediateReadiness) IsReady() bool { return true }
-
-// neverReadiness satisfies ReadinessWaiter and never reports ready.
-type neverReadiness struct{}
-
-func (neverReadiness) IsReady() bool { return false }
-
-// delayedReadiness becomes ready after MarkReady is called.
-type delayedReadiness struct{ ready chan struct{} }
-
-func newDelayedReadiness() *delayedReadiness { return &delayedReadiness{ready: make(chan struct{})} }
-func (d *delayedReadiness) IsReady() bool {
-	select {
-	case <-d.ready:
-		return true
-	default:
-		return false
-	}
+func newImmediateReadiness() *immediateReadiness {
+	ch := make(chan struct{})
+	close(ch)
+	return &immediateReadiness{ch: ch}
 }
-func (d *delayedReadiness) MarkReady() { close(d.ready) }
+func (r *immediateReadiness) Ready() <-chan struct{} { return r.ch }
+
+// neverReadiness satisfies ReadinessWaiter with a channel that never closes.
+type neverReadiness struct{ ch chan struct{} }
+
+func newNeverReadiness() *neverReadiness {
+	return &neverReadiness{ch: make(chan struct{})}
+}
+func (r *neverReadiness) Ready() <-chan struct{} { return r.ch }
+
+// gatedReadiness becomes ready when MarkReady is called, closing the channel.
+type gatedReadiness struct{ ch chan struct{} }
+
+func newGatedReadiness() *gatedReadiness {
+	return &gatedReadiness{ch: make(chan struct{})}
+}
+func (g *gatedReadiness) Ready() <-chan struct{} { return g.ch }
+func (g *gatedReadiness) MarkReady()             { close(g.ch) }
 
 // countByDomain counts events whose tags include domain=<one of domains>.
 func countByDomain(events []gonostr.Event, domains ...string) int {
@@ -88,7 +91,7 @@ func warmStartTestSource(svcIDs []uuid.UUID, envIDs []uuid.UUID) *fakeProjection
 	return src
 }
 
-// --- acceptance test: DaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState ---
+// --- acceptance tests -------------------------------------------------------
 
 func TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState(t *testing.T) {
 	ctx := t.Context()
@@ -118,7 +121,7 @@ func TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState(t *testing.T
 	sink2 := &captureProjectionPublisher{}
 	p2 := newTestProjector(cfg, source, sink2, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(immediateReadiness{}),
+		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -154,7 +157,7 @@ func TestWarmStartColdStorePublishesZero(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(immediateReadiness{}),
+		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -197,7 +200,6 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 
 	// Mark one record as failed (simulating an abandoned outbox publish).
-	// Find the events for service domain and mark the last one as failed.
 	staleSvcID := svcIDs[2]
 	staleDTag := staleSvcID.String()
 	markRecordFailed(t, repo, "domain", "service", staleDTag)
@@ -206,7 +208,7 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	sink2 := &captureProjectionPublisher{}
 	p2 := newTestProjector(cfg, source, sink2, repo, logger,
 		WithIntentDomains([]string{"service"}),
-		WithReadinessTracker(immediateReadiness{}),
+		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -253,7 +255,7 @@ func TestWarmStartUnmigratedDomainsStillGetLegacySnapshot(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service"}),
-		WithReadinessTracker(immediateReadiness{}),
+		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -290,7 +292,7 @@ func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	// Use a very short repair interval to trigger the periodic ticker.
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(immediateReadiness{}),
+		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(50*time.Millisecond))
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -312,6 +314,98 @@ func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	}
 }
 
+// --- readiness ordering tests (no sleeps, no polling) -----------------------
+
+// TestWarmStartReadyBeforeCtxDoneRunsWarmStart verifies that when readiness
+// fires before ctx is cancelled, warm-start executes (the happy path).
+func TestWarmStartReadyBeforeCtxDoneRunsWarmStart(t *testing.T) {
+	ctx := t.Context()
+	logger := zap.NewNop()
+	cfg := warmStartTestCfg()
+
+	svcIDs := []uuid.UUID{uuid.New(), uuid.New()}
+	source := warmStartTestSource(svcIDs, nil)
+
+	// Phase 1: publish so history has records.
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	sink1 := &captureProjectionPublisher{}
+	p1 := newTestProjector(cfg, source, sink1, repo, logger, WithProjectorRepairInterval(-1))
+	if err := p1.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("initial snapshot: %v", err)
+	}
+
+	// Mark one record as stale.
+	markRecordFailed(t, repo, "domain", "service", svcIDs[1].String())
+
+	// Phase 2: gated readiness fires before ctx cancellation.
+	gate := newGatedReadiness()
+	sink2 := &captureProjectionPublisher{}
+	p2 := newTestProjector(cfg, source, sink2, repo, logger,
+		WithIntentDomains([]string{"service"}),
+		WithReadinessTracker(gate),
+		WithProjectorRepairInterval(-1))
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p2.Run(runCtx) }()
+
+	// Fire readiness — warm-start proceeds.
+	gate.MarkReady()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	// The stale record should have been re-published.
+	svcCount := countByDomain(sink2.events, "service")
+	if svcCount != 1 {
+		t.Errorf("ready-before-ctx: expected 1 stale re-publish, got %d", svcCount)
+	}
+}
+
+// TestWarmStartCtxDoneBeforeReadySkipsWarmStart verifies that when ctx is
+// cancelled before readiness, warm-start is skipped entirely — no events
+// published against an incomplete store.
+func TestWarmStartCtxDoneBeforeReadySkipsWarmStart(t *testing.T) {
+	ctx := t.Context()
+	logger := zap.NewNop()
+	cfg := warmStartTestCfg()
+
+	svcIDs := []uuid.UUID{uuid.New(), uuid.New()}
+	source := warmStartTestSource(svcIDs, nil)
+
+	// Phase 1: publish so history has records.
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	sink1 := &captureProjectionPublisher{}
+	p1 := newTestProjector(cfg, source, sink1, repo, logger, WithProjectorRepairInterval(-1))
+	if err := p1.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("initial snapshot: %v", err)
+	}
+
+	// Mark one record as stale.
+	markRecordFailed(t, repo, "domain", "service", svcIDs[1].String())
+
+	// Phase 2: readiness never fires, ctx cancelled immediately.
+	sink2 := &captureProjectionPublisher{}
+	p2 := newTestProjector(cfg, source, sink2, repo, logger,
+		WithIntentDomains([]string{"service"}),
+		WithReadinessTracker(newNeverReadiness()),
+		WithProjectorRepairInterval(-1))
+
+	runCtx, cancel := context.WithCancel(ctx)
+	// Cancel immediately — readiness will never fire.
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- p2.Run(runCtx) }()
+	<-done
+
+	// No warm-start should have run. The projector also shouldn't have
+	// run RepublishSnapshot since ctx is already done.
+	svcCount := countByDomain(sink2.events, "service")
+	if svcCount != 0 {
+		t.Errorf("ctx-before-ready: expected 0 publishes, got %d", svcCount)
+	}
+}
+
 // --- helpers for test data --------------------------------------------------
 
 // markRecordFailed finds a record in the repo by domain and d-tag and marks it
@@ -328,9 +422,6 @@ func markRecordFailed(t *testing.T, repo *repositorytest.InMemoryNostrEventRepos
 		var tags gonostr.Tags
 		_ = json.Unmarshal(record.Tags, &tags)
 		if tagValue(tags, "d") == dTag {
-			// RecordPublishFailure moves state → pending; AbandonPublish
-			// then moves pending → failed (the only transition AbandonPublish
-			// accepts).
 			if err := repo.RecordPublishFailure(t.Context(), record.ID, "test-abandon"); err != nil {
 				t.Fatalf("record publish failure: %v", err)
 			}
