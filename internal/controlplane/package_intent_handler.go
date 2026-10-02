@@ -31,26 +31,20 @@ type PackageIntentHandler struct {
 	packageService *service.PackageRegistryService
 	projection     repository.PackageControlPlaneRepository
 	store          repository.PackageAuthorizationStore
-	publish        PackageStatePublishFunc
+	writer         PackageCPStateWriter
 	status         *IntentStatusPublisher
 	gate           *FleetOperatorGate
 	logger         *zap.Logger
 }
 
-// PackageStatePublishFunc signs and publishes a canonical kind-30900 cp-state
-// record for a package mutation. It is called by the intent handler after
-// each successful mutation.
-type PackageStatePublishFunc func(ctx context.Context, event PackageStateEvent) error
-
-// PackageStateEvent carries the data for one canonical package cp-state record.
-type PackageStateEvent struct {
-	DTag    string
-	Domain  string
-	Entity  string
-	Schema  string
-	Topic   string
-	Content any
-	Tags    map[string]string // additional tags beyond the envelope
+// PackageCPStateWriter publishes canonical cp-state records for package
+// mutations through the shared envelope and outbox (controlStateEnvelope,
+// fingerprint dedup, monotonic created_at). Implemented by
+// nostr.RelayFirstStatePublisher.
+type PackageCPStateWriter interface {
+	PublishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository, deleted bool) error
+	PublishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact, deleted bool) error
+	PublishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication, deleted bool) error
 }
 
 // PackageIntentHandlerConfig configures the package intent handler.
@@ -58,7 +52,7 @@ type PackageIntentHandlerConfig struct {
 	PackageService *service.PackageRegistryService
 	Projection     repository.PackageControlPlaneRepository
 	Store          repository.PackageAuthorizationStore
-	Publish        PackageStatePublishFunc
+	Writer         PackageCPStateWriter
 	Status         *IntentStatusPublisher
 	Gate           *FleetOperatorGate
 	Logger         *zap.Logger
@@ -74,7 +68,7 @@ func NewPackageIntentHandler(cfg PackageIntentHandlerConfig) *PackageIntentHandl
 		packageService: cfg.PackageService,
 		projection:     cfg.Projection,
 		store:          cfg.Store,
-		publish:        cfg.Publish,
+		writer:         cfg.Writer,
 		status:         cfg.Status,
 		gate:           cfg.Gate,
 		logger:         logger.Named("package-intent"),
@@ -486,74 +480,26 @@ func (h *PackageIntentHandler) checkApproval(ctx context.Context, intent *Intent
 
 // publishPackageRepositoryRegistry publishes a canonical cp-state record for a repository.
 func (h *PackageIntentHandler) publishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository) error {
-	if h.publish == nil {
+	if h.writer == nil {
 		return nil
 	}
-	return h.publish(ctx, PackageStateEvent{
-		DTag:   "package:repository:" + repo.ID.String(),
-		Domain: "package",
-		Entity: "repository",
-		Schema: "bahia.state.package-repository.v1",
-		Topic:  "package-repository",
-		Tags: map[string]string{
-			"repository": repo.ID.String(),
-			"name":       repo.Name,
-			"backend_ref": repo.BackendRef,
-			"format":     string(repo.Format),
-			"status":     string(repo.Status),
-			"deleted":    fmt.Sprintf("%t", repo.Deleted),
-		},
-		Content: repo,
-	})
+	return h.writer.PublishPackageRepositoryRegistry(ctx, repo, repo.Deleted)
 }
 
 // publishPackageArtifactRegistry publishes a canonical cp-state record for an artifact.
 func (h *PackageIntentHandler) publishPackageArtifactRegistry(ctx context.Context, artifact *domain.PackageArtifact) error {
-	if h.publish == nil {
+	if h.writer == nil {
 		return nil
 	}
-	d := fmt.Sprintf("%s:%s:%s:%s:%s", artifact.RepositoryID, artifact.Namespace, artifact.PackageName, artifact.Version, artifact.Filename)
-	return h.publish(ctx, PackageStateEvent{
-		DTag:   "package:artifact:" + d,
-		Domain: "package",
-		Entity: "artifact",
-		Schema: "bahia.state.package-artifact.v1",
-		Topic:  "package-artifact",
-		Tags: map[string]string{
-			"artifact":        artifact.ID.String(),
-			"repository":      artifact.RepositoryID.String(),
-			"repository_name": artifact.RepositoryName,
-			"package":         artifact.PackageName,
-			"version":         artifact.Version,
-			"filename":        artifact.Filename,
-			"sha256":          artifact.SHA256,
-			"status":          string(artifact.Status),
-			"deleted":         fmt.Sprintf("%t", artifact.Deleted),
-		},
-		Content: artifact,
-	})
+	return h.writer.PublishPackageArtifactRegistry(ctx, artifact, artifact.Deleted)
 }
 
 // publishPackagePromotionRegistry publishes a canonical cp-state record for a publication.
 func (h *PackageIntentHandler) publishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication) error {
-	if h.publish == nil {
+	if h.writer == nil {
 		return nil
 	}
-	return h.publish(ctx, PackageStateEvent{
-		DTag:   "package:promotion:" + publication.ID.String(),
-		Domain: "package",
-		Entity: "promotion",
-		Schema: "bahia.state.package-promotion.v1",
-		Topic:  "package-promotion",
-		Tags: map[string]string{
-			"promotion":       publication.ID.String(),
-			"repository":      publication.RepositoryID.String(),
-			"artifact":        publication.ArtifactID.String(),
-			"status":          string(publication.Status),
-			"policy_decision": string(publication.PolicyDecision),
-		},
-		Content: publication,
-	})
+	return h.writer.PublishPackagePromotionRegistry(ctx, publication, false)
 }
 
 // packageRepoFromIntentContent parses a package repository from intent content.

@@ -67,35 +67,42 @@ func (s *pkgIntentStore) ConsumePackageApproval(_ context.Context, id uuid.UUID,
 	return a.Approver, nil
 }
 
-// pkgIntentPublishCapture records publish calls for assertions.
+// pkgIntentPublishCapture implements PackageCPStateWriter for test assertions.
 type pkgIntentPublishCapture struct {
-	mu     sync.Mutex
-	events []PackageStateEvent
+	mu          sync.Mutex
+	repos       []*domain.PackageRepository
+	artifacts   []*domain.PackageArtifact
+	promotions  []*domain.PackagePublication
 }
 
-func (p *pkgIntentPublishCapture) publish(_ context.Context, ev PackageStateEvent) error {
+func (p *pkgIntentPublishCapture) PublishPackageRepositoryRegistry(_ context.Context, repo *domain.PackageRepository, _ bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.events = append(p.events, ev)
+	cp := *repo
+	p.repos = append(p.repos, &cp)
+	return nil
+}
+
+func (p *pkgIntentPublishCapture) PublishPackageArtifactRegistry(_ context.Context, artifact *domain.PackageArtifact, _ bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cp := *artifact
+	p.artifacts = append(p.artifacts, &cp)
+	return nil
+}
+
+func (p *pkgIntentPublishCapture) PublishPackagePromotionRegistry(_ context.Context, publication *domain.PackagePublication, _ bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cp := *publication
+	p.promotions = append(p.promotions, &cp)
 	return nil
 }
 
 func (p *pkgIntentPublishCapture) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.events)
-}
-
-func (p *pkgIntentPublishCapture) eventsFor(entity string) []PackageStateEvent {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var out []PackageStateEvent
-	for _, ev := range p.events {
-		if ev.Entity == entity {
-			out = append(out, ev)
-		}
-	}
-	return out
+	return len(p.repos) + len(p.artifacts) + len(p.promotions)
 }
 
 // pkgIntentFixture provides the test context for package intent handler tests.
@@ -139,7 +146,7 @@ func newPkgIntentFixture(t *testing.T) *pkgIntentFixture {
 		PackageService: pkgSvc,
 		Projection:     store,
 		Store:          store,
-		Publish:        capture.publish,
+		Writer:         capture,
 		Gate:           gate,
 		Logger:         logger,
 	})
@@ -262,12 +269,12 @@ func TestPackageIntentHandler_RepositoryApplyViaIntent(t *testing.T) {
 	}
 
 	// Verify publish was called for the repository.
-	repoEvents := f.capture.eventsFor("repository")
+	repoEvents := f.capture.repos
 	if len(repoEvents) == 0 {
 		t.Fatal("no repository publish events recorded")
 	}
-	if repoEvents[0].DTag != "package:repository:"+repo.ID.String() {
-		t.Errorf("unexpected DTag %q", repoEvents[0].DTag)
+	if repoEvents[0].ID != repo.ID {
+		t.Errorf("unexpected repo ID %s, want %s", repoEvents[0].ID, repo.ID)
 	}
 }
 
@@ -553,9 +560,9 @@ func TestPackageIntentHandler_PublishArtifactThenYank(t *testing.T) {
 		t.Fatalf("yank failed: %v", err)
 	}
 
-	// Verify artifact publish event with yanked status.
-	artifactEvents := f.capture.eventsFor("artifact")
-	if len(artifactEvents) < 2 { // at least initial publish + yank
+	// Verify artifact publish events (at least initial publish + yank).
+	artifactEvents := f.capture.artifacts
+	if len(artifactEvents) < 2 {
 		t.Fatalf("expected at least 2 artifact publish events, got %d", len(artifactEvents))
 	}
 }
@@ -579,29 +586,25 @@ func TestPackageIntentHandler_ProjectorNoLongerPublishesPackages(t *testing.T) {
 	f := newPkgIntentFixture(t)
 
 	repo := f.seedRepo(t, "direct-publish")
-	repoEvents := f.capture.eventsFor("repository")
+	repoEvents := f.capture.repos
 	if len(repoEvents) == 0 {
 		t.Fatal("expected intent handler to publish directly")
 	}
-	if repoEvents[0].Domain != "package" || repoEvents[0].Entity != "repository" {
-		t.Errorf("unexpected event domain/entity: %s/%s", repoEvents[0].Domain, repoEvents[0].Entity)
+	if repoEvents[0].ID != repo.ID {
+		t.Errorf("unexpected repo ID: %s, want %s", repoEvents[0].ID, repo.ID)
 	}
-	if repoEvents[0].DTag != "package:repository:"+repo.ID.String() {
-		t.Errorf("unexpected d-tag: %s", repoEvents[0].DTag)
-	}
-	// The publish call uses Topic which matches the cp-state topic convention.
-	if repoEvents[0].Topic != "package-repository" {
-		t.Errorf("unexpected topic: %s", repoEvents[0].Topic)
+	if repoEvents[0].Name != "direct-publish" {
+		t.Errorf("unexpected repo name: %s", repoEvents[0].Name)
 	}
 
 	// Seed and verify artifact direct publish.
 	_, _, _ = f.seedArtifact(t, repo)
-	artifactEvents := f.capture.eventsFor("artifact")
+	artifactEvents := f.capture.artifacts
 	if len(artifactEvents) == 0 {
 		t.Fatal("expected artifact to be published directly")
 	}
-	if artifactEvents[0].Topic != "package-artifact" {
-		t.Errorf("unexpected artifact topic: %s", artifactEvents[0].Topic)
+	if artifactEvents[0].PackageName != "demo" {
+		t.Errorf("unexpected artifact package name: %s", artifactEvents[0].PackageName)
 	}
 }
 
@@ -623,7 +626,7 @@ func TestPackageIntentHandler_RestartWarmStartDoesNotRepublish(t *testing.T) {
 		PackageService: f.svc,
 		Projection:     f.store,
 		Store:          f.store,
-		Publish:        capture2.publish,
+		Writer:         capture2,
 		Gate:           gate,
 		Logger:         f.logger,
 	})
