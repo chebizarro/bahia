@@ -53,9 +53,11 @@
 1	internal/adapters/nostr.KindCatalog.SnapshotGroups
 1	internal/adapters/nostr.KindSystemDiscovery
 1	internal/adapters/nostr.NewProcessor
+1	internal/adapters/nostr.Projector.IntentDomainsMigrated
 1	internal/adapters/nostr.Projector.ProjectionMetrics
 1	internal/adapters/nostr.Projector.PublishAgentRuntimeRelease
 1	internal/adapters/nostr.Projector.PublishAgentServiceReleaseBinding
+1	internal/adapters/nostr.Projector.WarmStartConfigured
 1	internal/adapters/nostr.PublishResult.IsAuthRequired
 1	internal/adapters/nostr.PublishResult.IsBlocked
 1	internal/adapters/nostr.Publisher.Pool
@@ -72,10 +74,8 @@
 1	internal/adapters/nostr.RelayPool.ReconfigureRelayURLs
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
-1	internal/adapters/nostr.WithIntentDomains
 1	internal/adapters/nostr.WithKinds
 1	internal/adapters/nostr.WithProjectorRepairInterval
-1	internal/adapters/nostr.WithReadinessTracker
 1	internal/adapters/qdrant.Client.CollectionExists
 1	internal/adapters/qdrant.Client.DeleteCollection
 1	internal/adapters/qdrant.Client.Search
@@ -164,9 +164,6 @@
 1	internal/controlplane.EncryptedRequestTransport.HandleEvent
 1	internal/controlplane.EncryptedResponder.DecryptRequestContent
 1	internal/controlplane.EncryptedResponder.PublishEncryptedResult
-1	internal/controlplane.IntentProcessor.ProcessInProcess
-1	internal/controlplane.IntentProcessor.RegisterHandler
-1	internal/controlplane.IntentStatusPublisher.PublishConflict
 1	internal/controlplane.KindActionResult
 1	internal/controlplane.KindActionStatus
 1	internal/controlplane.KindAdoptionImportRequest
@@ -232,6 +229,7 @@
 1	internal/controlplane.KindWorkerUndrainRequest
 1	internal/controlplane.KindWorkloadPinRequest
 1	internal/controlplane.MaintenanceCommandPublisher.PublishPurge
+1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
 1	internal/controlplane.TrustSet.RoleFor
 1	internal/controlplane.TrustSet.SetRelayMembers

@@ -845,7 +845,9 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	}
 
 	assertOneSignedKind(t, sink, KindServiceRegistry)
-	assertOneSignedKind(t, sink, KindEnvironmentRegistry)
+	// Phase 3 F3: environment snapshot publishing removed from RepublishSnapshot.
+	// Environment state is now published by the intent handler via
+	// PublishBeforeCommit (bahia-irsry.11.4).
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	if got, want := eventKindInt(&stateEvent), cascadia.CAS_CP_STATE; got != want {
 		t.Fatalf("service state wire kind = %d, want %d", got, want)

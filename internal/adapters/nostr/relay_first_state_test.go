@@ -189,7 +189,19 @@ func TestRelayFirstEnvironmentRecordMatchesProjectionAndIsSignedOnce(t *testing.
 	}
 	relayFirst := h.relayFirst.events[0]
 
-	want := projectAlone(t, h.source, events.EventEnvironmentUpdated, KindEnvironmentRegistry, stored.ID)
+	// Phase 3 F3: environment handleEvent case removed. Use direct
+	// publishEnvironmentRegistry for the reference projection.
+	refSink := &captureProjectionPublisher{}
+	refProj := newRelayFirstTestProjector(h.source, refSink)
+	env, _ := h.source.GetEnvironment(ctx, stored.ID)
+	if err := refProj.publishEnvironmentRegistry(ctx, env, false); err != nil {
+		t.Fatalf("reference publishEnvironmentRegistry: %v", err)
+	}
+	refRecords := refSink.byKind(KindEnvironmentRegistry)
+	if len(refRecords) != 1 {
+		t.Fatalf("reference projection of %s published %d records, want 1", stored.ID, len(refRecords))
+	}
+	want := refRecords[0]
 	assertSameRecord(t, relayFirst, want)
 	assertCPStateEnvelope(t, relayFirst, KindEnvironmentRegistry, stored.ID.String(), false, kinds.CPStateTopicEnvironmentRegistry)
 	var content map[string]any

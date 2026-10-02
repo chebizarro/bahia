@@ -93,16 +93,21 @@ func warmStartTestSource(svcIDs []uuid.UUID, envIDs []uuid.UUID) *fakeProjection
 
 // --- acceptance tests -------------------------------------------------------
 
+// TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState exercises
+// the full warm-start flow: Phase 1 publishes services via RepublishSnapshot,
+// Phase 2 "restarts" with the same history and intent domains, and should
+// publish zero service events because the cache matches history.
+//
+// Note: after F3, environments are no longer published via RepublishSnapshot.
 func TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
 	svcIDs := []uuid.UUID{uuid.New(), uuid.New()}
-	envIDs := []uuid.UUID{uuid.New()}
-	source := warmStartTestSource(svcIDs, envIDs)
+	source := warmStartTestSource(svcIDs, nil)
 
-	// Phase 1: initial run publishes canonical state to the relay.
+	// Phase 1: initial run publishes canonical service state to the relay.
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink1 := &captureProjectionPublisher{}
 	p1 := newTestProjector(cfg, source, sink1, repo, logger,
@@ -111,35 +116,28 @@ func TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState(t *testing.T
 		t.Fatalf("initial snapshot: %v", err)
 	}
 	initialSvc := countByDomain(sink1.events, "service")
-	initialEnv := countByDomain(sink1.events, "environment")
-	if initialSvc == 0 || initialEnv == 0 {
-		t.Fatalf("initial run published no service/environment events: svc=%d env=%d",
-			initialSvc, initialEnv)
+	if initialSvc == 0 {
+		t.Fatalf("initial run published no service events: svc=%d", initialSvc)
 	}
 
 	// Phase 2: "restart" — new projector, same history (repo), fresh sink.
 	sink2 := &captureProjectionPublisher{}
 	p2 := newTestProjector(cfg, source, sink2, repo, logger,
-		WithIntentDomains([]string{"service", "environment"}),
+		WithIntentDomains([]string{"service"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- p2.Run(runCtx) }()
-	// Give it a moment to complete startup.
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
 
-	// Assert: zero publishes for migrated domains.
+	// Assert: zero publishes for the migrated service domain.
 	svcCount := countByDomain(sink2.events, "service")
-	envCount := countByDomain(sink2.events, "environment")
 	if svcCount != 0 {
 		t.Errorf("expected 0 service publishes after restart, got %d", svcCount)
-	}
-	if envCount != 0 {
-		t.Errorf("expected 0 environment publishes after restart, got %d", envCount)
 	}
 }
 
@@ -149,14 +147,13 @@ func TestWarmStartColdStorePublishesZero(t *testing.T) {
 	cfg := warmStartTestCfg()
 
 	svcIDs := []uuid.UUID{uuid.New()}
-	envIDs := []uuid.UUID{uuid.New()}
-	source := warmStartTestSource(svcIDs, envIDs)
+	source := warmStartTestSource(svcIDs, nil)
 
 	// Cold store: empty repo, no history of prior publishes.
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithIntentDomains([]string{"service", "environment"}),
+		WithIntentDomains([]string{"service"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
@@ -169,12 +166,8 @@ func TestWarmStartColdStorePublishesZero(t *testing.T) {
 
 	// Assert: zero publishes for migrated domains despite Postgres having data.
 	svcCount := countByDomain(sink.events, "service")
-	envCount := countByDomain(sink.events, "environment")
 	if svcCount != 0 {
 		t.Errorf("cold store: expected 0 service publishes, got %d", svcCount)
-	}
-	if envCount != 0 {
-		t.Errorf("cold store: expected 0 environment publishes, got %d", envCount)
 	}
 }
 
@@ -241,20 +234,24 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-func TestWarmStartUnmigratedDomainsStillGetLegacySnapshot(t *testing.T) {
+// TestWarmStartUnmigratedServiceStillGetsLegacySnapshot verifies that when
+// only environment (already removed by F3) is in intent_domains but service
+// is NOT, services are still published via the legacy RepublishSnapshot path.
+// This matters while F2 hasn't landed yet — services still rely on the
+// Postgres→relay re-projection.
+func TestWarmStartUnmigratedServiceStillGetsLegacySnapshot(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
 	svcIDs := []uuid.UUID{uuid.New()}
-	envIDs := []uuid.UUID{uuid.New()}
-	source := warmStartTestSource(svcIDs, envIDs)
+	source := warmStartTestSource(svcIDs, nil)
 
-	// Only "service" is migrated; "environment" is not.
+	// Service is NOT in intent_domains → RepublishSnapshot still publishes it.
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithIntentDomains([]string{"service"}),
+		WithIntentDomains([]string{"environment"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
@@ -265,16 +262,10 @@ func TestWarmStartUnmigratedDomainsStillGetLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// Service domain is migrated → 0 publishes from RepublishSnapshot.
+	// Service domain is NOT migrated → still published via RepublishSnapshot.
 	svcCount := countByDomain(sink.events, "service")
-	if svcCount != 0 {
-		t.Errorf("migrated domain: expected 0 service publishes, got %d", svcCount)
-	}
-
-	// Environment domain is NOT migrated → still published via RepublishSnapshot.
-	envCount := countByDomain(sink.events, "environment")
-	if envCount == 0 {
-		t.Errorf("unmigrated domain: expected environment publishes from legacy snapshot, got 0")
+	if svcCount == 0 {
+		t.Errorf("unmigrated domain: expected service publishes from legacy snapshot, got 0")
 	}
 }
 
@@ -284,14 +275,13 @@ func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	cfg := warmStartTestCfg()
 
 	svcIDs := []uuid.UUID{uuid.New()}
-	envIDs := []uuid.UUID{uuid.New()}
-	source := warmStartTestSource(svcIDs, envIDs)
+	source := warmStartTestSource(svcIDs, nil)
 
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
 	// Use a very short repair interval to trigger the periodic ticker.
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithIntentDomains([]string{"service", "environment"}),
+		WithIntentDomains([]string{"service"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(50*time.Millisecond))
 
@@ -303,14 +293,11 @@ func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	cancel()
 	<-done
 
-	// Assert: zero publishes for migrated domains from both startup and periodic repair.
+	// Assert: zero publishes for migrated service domain from both startup
+	// and periodic repair.
 	svcCount := countByDomain(sink.events, "service")
-	envCount := countByDomain(sink.events, "environment")
 	if svcCount != 0 {
 		t.Errorf("periodic repair: expected 0 service publishes, got %d", svcCount)
-	}
-	if envCount != 0 {
-		t.Errorf("periodic repair: expected 0 environment publishes, got %d", envCount)
 	}
 }
 
