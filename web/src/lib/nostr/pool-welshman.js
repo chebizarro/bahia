@@ -13,7 +13,12 @@
  * @module lib/nostr/pool-welshman
  */
 
-import { Pool, request as welshmanRequest, publish as welshmanPublish, PublishStatus } from '@welshman/net';
+import {
+  Pool,
+  request as welshmanRequest,
+  publish as welshmanPublish,
+  PublishStatus,
+} from '@welshman/net';
 
 // ---------------------------------------------------------------------------
 // Subscription ref-counting
@@ -26,7 +31,6 @@ import { Pool, request as welshmanRequest, publish as welshmanPublish, PublishSt
  * @property {import('./store-interface.js').Filter[]} filters - Filters
  * @property {number} refCount - Number of active consumers
  * @property {AbortController} controller - Abort controller for the subscription
- * @property {((event: import('./store-interface.js').NostrEvent, url: string) => void) | null} onEvent
  * @property {((url: string) => void) | null} onEose
  */
 
@@ -36,20 +40,31 @@ let subIdCounter = 0;
  * Create the shared Bahia pool and its management API.
  *
  * @param {object} options
- * @param {import('./store.js').createBahiaEventStore extends (...args: any) => infer R ? R : never} options.store
+ * @param {import('./store-interface.js').BahiaEventStore & { ingest: (e: any) => boolean, getCursor: (r: string, f: string) => number | null, setCursor: (r: string, f: string, s: number) => void }} options.store
  *   The BahiaEventStore to ingest events into.
- * @param {((event: import('@welshman/util').StampedEvent) => Promise<import('@welshman/util').SignedEvent>) | null} [options.sign]
+ * @param {((event: any) => Promise<any>) | null} [options.sign]
  *   Signer function for NIP-42 AUTH.  May be set later via `setSign()`.
+ * @param {import('@welshman/net').AdapterContext} [options.context]
+ *   Optional adapter context override (e.g. for injecting MockAdapter in tests).
  * @returns {BahiaPool}
  */
-export function createBahiaPool({ store, sign = null }) {
+export function createBahiaPool({ store, sign = null, context: contextOverride }) {
   const pool = new Pool();
 
   /** @type {Map<string, ManagedSubscription>} */
-  const subscriptions = new Map();
+  const subs = new Map();
 
-  /** @type {((event: import('@welshman/util').StampedEvent) => Promise<import('@welshman/util').SignedEvent>) | null} */
+  /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
+
+  /**
+   * Build the adapter context for welshman request/publish calls.
+   * @returns {import('@welshman/net').AdapterContext}
+   */
+  function getContext() {
+    if (contextOverride) return { pool, ...contextOverride };
+    return { pool };
+  }
 
   // Wire NIP-42 AUTH handling: when a socket requests auth, sign and respond
   pool.subscribe((socket) => {
@@ -74,9 +89,9 @@ export function createBahiaPool({ store, sign = null }) {
   /**
    * Create a ref-counted subscription.
    *
-   * Multiple consumers can subscribe to the same (relays, filters) pair;
-   * the underlying REQ is only sent once and closed when refCount drops
-   * to zero.
+   * Each call returns an independent handle with its own unsubscribe.
+   * The underlying welshman request is aborted only when the last
+   * handle unsubscribes.
    *
    * @param {object} opts
    * @param {string[]} opts.relays
@@ -96,11 +111,10 @@ export function createBahiaPool({ store, sign = null }) {
       filters,
       refCount: 1,
       controller,
-      onEvent: null,
       onEose: onEose || null,
     };
 
-    subscriptions.set(id, sub);
+    subs.set(id, sub);
 
     // Apply cursor: if filterKey is set and we have a stored cursor,
     // inject `since` into filters
@@ -121,7 +135,7 @@ export function createBahiaPool({ store, sign = null }) {
       filters: appliedFilters,
       signal: controller.signal,
       autoClose: false,
-      context: { pool },
+      context: getContext(),
       onEvent: (event, url) => {
         // Ingest into the store (signature verification happens there)
         const accepted = store.ingest(event);
@@ -154,12 +168,34 @@ export function createBahiaPool({ store, sign = null }) {
     return {
       id,
       unsubscribe() {
-        const s = subscriptions.get(id);
+        const s = subs.get(id);
         if (!s) return;
         s.refCount--;
         if (s.refCount <= 0) {
           s.controller.abort();
-          subscriptions.delete(id);
+          subs.delete(id);
+        }
+      },
+    };
+  }
+
+  /**
+   * Add a reference to an existing subscription (ref-counting).
+   * Returns a new unsubscribe handle that decrements the refCount.
+   *
+   * @param {string} id - The subscription id to add a reference to
+   * @returns {{ unsubscribe: () => void } | null} null if subscription not found
+   */
+  function addRef(id) {
+    const sub = subs.get(id);
+    if (!sub) return null;
+    sub.refCount++;
+    return {
+      unsubscribe() {
+        sub.refCount--;
+        if (sub.refCount <= 0) {
+          sub.controller.abort();
+          subs.delete(id);
         }
       },
     };
@@ -172,14 +208,14 @@ export function createBahiaPool({ store, sign = null }) {
    * @param {import('./store-interface.js').NostrEvent} opts.event
    * @param {string[]} opts.relays
    * @param {number} [opts.timeout] - Per-relay timeout in ms (default 10s)
-   * @returns {Promise<import('@welshman/net').PublishResultsByRelay>}
+   * @returns {Promise<Record<string, import('@welshman/net').PublishResult>>}
    */
   async function publishEvent({ event, relays, timeout = 10000 }) {
     const results = await welshmanPublish({
       event,
       relays,
       timeout,
-      context: { pool },
+      context: getContext(),
     });
     return results;
   }
@@ -192,23 +228,41 @@ export function createBahiaPool({ store, sign = null }) {
   }
 
   /**
+   * Get the number of active subscriptions.
+   */
+  function getSubscriptionCount() {
+    return subs.size;
+  }
+
+  /**
+   * Get the subscription record by id (for testing).
+   * @param {string} id
+   * @returns {ManagedSubscription | undefined}
+   */
+  function getSubscription(id) {
+    return subs.get(id);
+  }
+
+  /**
    * Clean up all subscriptions and the pool.
    */
   function destroy() {
-    for (const [, sub] of subscriptions) {
+    for (const [, sub] of subs) {
       sub.controller.abort();
     }
-    subscriptions.clear();
+    subs.clear();
     pool.clear();
   }
 
   return {
     subscribe,
+    addRef,
     publishEvent,
     setSign,
     getPool,
+    getSubscriptionCount,
+    getSubscription,
     destroy,
-    /** Expose PublishStatus for consumers */
     PublishStatus,
   };
 }

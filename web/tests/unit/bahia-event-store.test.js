@@ -406,3 +406,158 @@ describe('BahiaEventStore', () => {
     expect(results[0].content).toBe('{"name":"new"}');
   });
 });
+
+// ---------------------------------------------------------------------------
+// requestPersistentStorage tests
+// ---------------------------------------------------------------------------
+
+import { requestPersistentStorage } from '../../src/lib/nostr/store-interface.js';
+
+describe('requestPersistentStorage', () => {
+  it('returns true when navigator.storage.persist() grants permission', async () => {
+    const origNavigator = globalThis.navigator;
+    globalThis.navigator = {
+      storage: { persist: async () => true },
+    };
+
+    const result = await requestPersistentStorage();
+    expect(result).toBe(true);
+
+    globalThis.navigator = origNavigator;
+  });
+
+  it('returns false when navigator.storage.persist() denies permission', async () => {
+    const origNavigator = globalThis.navigator;
+    globalThis.navigator = {
+      storage: { persist: async () => false },
+    };
+
+    const result = await requestPersistentStorage();
+    expect(result).toBe(false);
+
+    globalThis.navigator = origNavigator;
+  });
+
+  it('returns false when navigator.storage is unavailable', async () => {
+    const origNavigator = globalThis.navigator;
+    globalThis.navigator = {};
+
+    const result = await requestPersistentStorage();
+    expect(result).toBe(false);
+
+    globalThis.navigator = origNavigator;
+  });
+
+  it('returns false when navigator is undefined (SSR)', async () => {
+    const origNavigator = globalThis.navigator;
+    delete globalThis.navigator;
+
+    const result = await requestPersistentStorage();
+    expect(result).toBe(false);
+
+    globalThis.navigator = origNavigator;
+  });
+
+  it('returns false and logs when persist() throws', async () => {
+    const origNavigator = globalThis.navigator;
+    globalThis.navigator = {
+      storage: { persist: async () => { throw new Error('denied'); } },
+    };
+
+    const result = await requestPersistentStorage();
+    expect(result).toBe(false);
+
+    globalThis.navigator = origNavigator;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NIP-01 tiebreak: confirm welshman Repository can't override our guard
+// ---------------------------------------------------------------------------
+
+import { Repository } from '@welshman/net';
+
+describe('NIP-01 tiebreak protection', () => {
+  it('ingestion rejects higher-id event even though welshman Repository would accept it', async () => {
+    const prefix = uniquePrefix(alice.pk);
+    const store2 = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await store2.open();
+
+    const ts = 1700000000;
+    const e1 = signedEvent(alice.sk, {
+      kind: 30900,
+      content: '{"v":"first"}',
+      tags: [['d', 'svc:tiebreak-guard']],
+      created_at: ts,
+    });
+    const e2 = signedEvent(alice.sk, {
+      kind: 30900,
+      content: '{"v":"second"}',
+      tags: [['d', 'svc:tiebreak-guard']],
+      created_at: ts,
+    });
+
+    // Determine which has the lower id
+    const [lower, higher] = e1.id < e2.id ? [e1, e2] : [e2, e1];
+
+    // Ingest the lower-id event first
+    expect(store2.ingest(lower)).toBe(true);
+
+    // Now try to ingest the higher-id event with same created_at
+    // Our tiebreak guard should reject it
+    expect(store2.ingest(higher)).toBe(false);
+
+    // The repository should still hold only the lower-id event
+    const results = store2.query({ kinds: [30900], '#d': ['svc:tiebreak-guard'] });
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe(lower.id);
+
+    // Verify that welshman Repository alone WOULD have accepted it
+    // (proving our guard is necessary)
+    const rawRepo = new Repository();
+    rawRepo.publish(lower);
+    const accepted = rawRepo.publish(higher);
+    // welshman accepts same-timestamp events (last-write-wins), so
+    // the higher-id event would have been accepted
+    expect(accepted).toBe(true);
+    // And the repository now holds the higher-id event (wrong per NIP-01)
+    const rawResults = rawRepo.query([{ kinds: [30900], '#d': ['svc:tiebreak-guard'] }]);
+    expect(rawResults[0].id).toBe(higher.id);
+
+    await store2.close();
+  });
+
+  it('ingestion allows lower-id event to replace higher-id at same timestamp', async () => {
+    const prefix = uniquePrefix(alice.pk);
+    const store2 = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await store2.open();
+
+    const ts = 1700000000;
+    const e1 = signedEvent(alice.sk, {
+      kind: 30900,
+      content: '{"v":"first"}',
+      tags: [['d', 'svc:tiebreak-replace']],
+      created_at: ts,
+    });
+    const e2 = signedEvent(alice.sk, {
+      kind: 30900,
+      content: '{"v":"second"}',
+      tags: [['d', 'svc:tiebreak-replace']],
+      created_at: ts,
+    });
+
+    const [lower, higher] = e1.id < e2.id ? [e1, e2] : [e2, e1];
+
+    // Ingest the higher-id event first
+    expect(store2.ingest(higher)).toBe(true);
+
+    // Now ingest the lower-id event — should replace the higher-id one
+    expect(store2.ingest(lower)).toBe(true);
+
+    const results = store2.query({ kinds: [30900], '#d': ['svc:tiebreak-replace'] });
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe(lower.id);
+
+    await store2.close();
+  });
+});
