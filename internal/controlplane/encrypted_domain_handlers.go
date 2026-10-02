@@ -41,6 +41,8 @@ type EncryptedDomainHandlers struct {
 	members               repository.OrgMemberRepository
 	invites               repository.OrgInviteRepository
 	rbac                  *auth.RBAC
+	intentProcessor       *IntentProcessor
+	orgPublisher          OrgCanonicalPublisher
 	bootstrapOwnerPubkeys map[string]struct{}
 	logger                *zap.Logger
 }
@@ -51,6 +53,8 @@ type EncryptedDomainHandlersConfig struct {
 	Members               repository.OrgMemberRepository
 	Invites               repository.OrgInviteRepository
 	RBAC                  *auth.RBAC
+	IntentProcessor       *IntentProcessor
+	OrgPublisher          OrgCanonicalPublisher
 	BootstrapOwnerPubkeys []string
 	Logger                *zap.Logger
 }
@@ -73,6 +77,8 @@ func NewEncryptedDomainHandlers(cfg EncryptedDomainHandlersConfig) *EncryptedDom
 		members:               cfg.Members,
 		invites:               cfg.Invites,
 		rbac:                  cfg.RBAC,
+		intentProcessor:       cfg.IntentProcessor,
+		orgPublisher:          cfg.OrgPublisher,
 		bootstrapOwnerPubkeys: allowlist,
 		logger:                logger.Named("encrypted-domain-handlers"),
 	}
@@ -234,13 +240,37 @@ func (h *EncryptedDomainHandlers) CreateOrg(ctx context.Context, request Encrypt
 		displayName = name
 	}
 	org := &domain.Organization{ID: uuid.New(), Name: name, DisplayName: displayName, OwnerPubkey: principal.PubKey}
-	if err := h.orgs.Create(ctx, org); err != nil {
-		h.logger.Error("failed to create org from encrypted request", zap.Error(err))
-		return nil, fmt.Errorf("failed to create organization")
-	}
-	member := &domain.OrgMember{OrgID: org.ID, Pubkey: principal.PubKey, Role: domain.RoleOwner}
-	if err := h.members.Add(ctx, member); err != nil {
-		h.logger.Error("failed to add encrypted request org creator as owner", zap.Error(err))
+	// Phase 3 dual dispatch (§4.1): when the org domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.orgIntentEnabled() {
+		intent := h.orgIntentFromContextVM(request, "create", "bahia.intent.org.v1", org.ID.String(), org.ID,
+			map[string]interface{}{"id": org.ID.String(), "name": name, "display_name": displayName},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to create organization: %w", err)
+		}
+		created, _ := h.orgs.GetByID(ctx, org.ID)
+		if created != nil {
+			org = created
+		}
+	} else {
+		if err := h.orgs.Create(ctx, org); err != nil {
+			h.logger.Error("failed to create org from encrypted request", zap.Error(err))
+			return nil, fmt.Errorf("failed to create organization")
+		}
+		member := &domain.OrgMember{OrgID: org.ID, Pubkey: principal.PubKey, Role: domain.RoleOwner}
+		if err := h.members.Add(ctx, member); err != nil {
+			h.logger.Error("failed to add encrypted request org creator as owner", zap.Error(err))
+		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishOrg(ctx, org, false); pubErr != nil {
+				h.logger.Warn("legacy org create publish failed", zap.Error(pubErr))
+			}
+			if pubErr := h.orgPublisher.PublishMember(ctx, member, false); pubErr != nil {
+				h.logger.Warn("legacy member create publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return org, nil
 }
@@ -262,11 +292,20 @@ func (h *EncryptedDomainHandlers) DeleteOrg(ctx context.Context, request Encrypt
 	if err := h.rbac.CheckOrgAccess(ctx, requestPrincipal(request), orgID, domain.RoleOwner); err != nil {
 		return nil, err
 	}
-	if err := h.orgs.Delete(ctx, orgID); err != nil {
-		if err == repository.ErrNotFound {
-			return nil, fmt.Errorf("organization not found")
+	if h.orgIntentEnabled() {
+		intent := h.orgIntentFromContextVM(request, "delete", "bahia.intent.org.v1", orgID.String(), orgID,
+			map[string]interface{}{"id": orgID.String(), "deleted": true},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to delete organization: %w", err)
 		}
-		return nil, fmt.Errorf("failed to delete organization: %w", err)
+	} else {
+		if err := h.orgs.Delete(ctx, orgID); err != nil {
+			if err == repository.ErrNotFound {
+				return nil, fmt.Errorf("organization not found")
+			}
+			return nil, fmt.Errorf("failed to delete organization: %w", err)
+		}
 	}
 	return map[string]string{"message": "organization deleted"}, nil
 }
@@ -379,8 +418,33 @@ func (h *EncryptedDomainHandlers) CreateInvite(ctx context.Context, request Encr
 		expiresIn = 72
 	}
 	invite := &domain.OrgInvite{OrgID: orgID, Pubkey: pubkey, Role: role, InvitedBy: principal.PubKey, ExpiresAt: time.Now().Add(time.Duration(expiresIn) * time.Hour)}
-	if err := h.invites.Create(ctx, invite); err != nil {
-		return nil, fmt.Errorf("failed to create invite: %w", err)
+	if h.orgIntentEnabled() {
+		inviteID := domain.NewEntityID()
+		intent := h.orgIntentFromContextVM(request, "create", "bahia.intent.org-invite.v1",
+			inviteID.String(), orgID,
+			map[string]interface{}{
+				"id": inviteID.String(), "org_id": orgID.String(),
+				"pubkey": pubkey, "role": string(role),
+				"expires_in": float64(expiresIn),
+			},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to create invite: %w", err)
+		}
+		created, _ := h.invites.GetByID(ctx, orgID, inviteID)
+		if created != nil {
+			invite = created
+		}
+	} else {
+		if err := h.invites.Create(ctx, invite); err != nil {
+			return nil, fmt.Errorf("failed to create invite: %w", err)
+		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishInvite(ctx, invite, false); pubErr != nil {
+				h.logger.Warn("legacy invite create publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return invite, nil
 }
@@ -407,11 +471,28 @@ func (h *EncryptedDomainHandlers) RevokeInvite(ctx context.Context, request Encr
 	if err := h.rbac.CheckOrgAccess(ctx, requestPrincipal(request), orgID, domain.RoleAdmin); err != nil {
 		return nil, err
 	}
-	if err := h.invites.Delete(ctx, inviteID); err != nil {
-		if err == repository.ErrNotFound {
-			return nil, fmt.Errorf("invite not found")
+	if h.orgIntentEnabled() {
+		intent := h.orgIntentFromContextVM(request, "delete", "bahia.intent.org-invite.v1",
+			inviteID.String(), orgID,
+			map[string]interface{}{"id": inviteID.String(), "org_id": orgID.String(), "deleted": true},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to revoke invite: %w", err)
 		}
-		return nil, fmt.Errorf("failed to revoke invite: %w", err)
+	} else {
+		invite, _ := h.invites.GetByID(ctx, orgID, inviteID)
+		if err := h.invites.Delete(ctx, inviteID); err != nil {
+			if err == repository.ErrNotFound {
+				return nil, fmt.Errorf("invite not found")
+			}
+			return nil, fmt.Errorf("failed to revoke invite: %w", err)
+		}
+		// Legacy path: publish encrypted tombstone (review rule 5).
+		if h.orgPublisher != nil && invite != nil {
+			if pubErr := h.orgPublisher.PublishInvite(ctx, invite, true); pubErr != nil {
+				h.logger.Warn("legacy invite revoke publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return map[string]string{"message": "invite revoked"}, nil
 }
@@ -457,8 +538,27 @@ func (h *EncryptedDomainHandlers) UpdateMemberRole(ctx context.Context, request 
 	if targetMember.Role == domain.RoleOwner && !authz.IsOwner() {
 		return nil, fmt.Errorf("only owners can demote other owners")
 	}
-	if err := h.members.UpdateRole(ctx, orgID, targetPubkey, payload.Role); err != nil {
-		return nil, fmt.Errorf("failed to update role: %w", err)
+	if h.orgIntentEnabled() {
+		intent := h.orgIntentFromContextVM(request, "update", "bahia.intent.org-member.v1",
+			"org:member:"+orgID.String()+":"+targetPubkey, orgID,
+			map[string]interface{}{"org_id": orgID.String(), "pubkey": targetPubkey, "role": string(payload.Role)},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to update role: %w", err)
+		}
+	} else {
+		if err := h.members.UpdateRole(ctx, orgID, targetPubkey, payload.Role); err != nil {
+			return nil, fmt.Errorf("failed to update role: %w", err)
+		}
+		// Legacy path: publish encrypted canonical record (review rule 5).
+		if h.orgPublisher != nil {
+			updated, _ := h.members.GetMember(ctx, orgID, targetPubkey)
+			if updated != nil {
+				if pubErr := h.orgPublisher.PublishMember(ctx, updated, false); pubErr != nil {
+					h.logger.Warn("legacy member role update publish failed", zap.Error(pubErr))
+				}
+			}
+		}
 	}
 	return map[string]string{"message": "role updated"}, nil
 }
@@ -507,8 +607,24 @@ func (h *EncryptedDomainHandlers) RemoveMember(ctx context.Context, request Encr
 			return nil, fmt.Errorf("cannot remove last owner")
 		}
 	}
-	if err := h.members.Remove(ctx, orgID, targetPubkey); err != nil {
-		return nil, fmt.Errorf("failed to remove member: %w", err)
+	if h.orgIntentEnabled() {
+		intent := h.orgIntentFromContextVM(request, "delete", "bahia.intent.org-member.v1",
+			"org:member:"+orgID.String()+":"+targetPubkey, orgID,
+			map[string]interface{}{"org_id": orgID.String(), "pubkey": targetPubkey, "deleted": true},
+			domain.NewEntityID().String())
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to remove member: %w", err)
+		}
+	} else {
+		if err := h.members.Remove(ctx, orgID, targetPubkey); err != nil {
+			return nil, fmt.Errorf("failed to remove member: %w", err)
+		}
+		// Legacy path: publish encrypted tombstone (review rule 5).
+		if h.orgPublisher != nil {
+			if pubErr := h.orgPublisher.PublishMember(ctx, targetMember, true); pubErr != nil {
+				h.logger.Warn("legacy member remove publish failed", zap.Error(pubErr))
+			}
+		}
 	}
 	return map[string]string{"message": "member removed"}, nil
 }
@@ -530,6 +646,34 @@ func (h *EncryptedDomainHandlers) lookupOrg(ctx context.Context, idOrName string
 		return nil, fmt.Errorf("organization not found")
 	}
 	return org, err
+}
+
+// orgIntentEnabled reports whether the org domain is routed through the intent
+// processor (Phase 3 dual dispatch).
+func (h *EncryptedDomainHandlers) orgIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("org") != nil
+}
+
+// orgIntentFromContextVM builds a synthetic Intent for the dual-dispatch path.
+func (h *EncryptedDomainHandlers) orgIntentFromContextVM(request EncryptedRequest, op, schema, coordinate string, orgID uuid.UUID, content map[string]interface{}, idempotencyKey string) *Intent {
+	intentID := idempotencyKey
+	if intentID == "" {
+		intentID = domain.NewEntityID().String()
+	}
+	actor := ""
+	if request.Event != nil {
+		actor = request.Event.PubKey.Hex()
+	}
+	return &Intent{
+		Domain:     "org",
+		Op:         op,
+		Schema:     schema,
+		OrgID:      orgID,
+		IntentID:   intentID,
+		Coordinate: coordinate,
+		Content:    content,
+		Actor:      actor,
+	}
 }
 
 func (h *EncryptedDomainHandlers) requireOrgDeps() error {

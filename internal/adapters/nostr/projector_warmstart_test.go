@@ -9,9 +9,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
@@ -124,8 +122,7 @@ func TestDaemonRestartPublishesZeroEventsWhenRelaysHoldCurrentState(t *testing.T
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(newImmediateReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -151,8 +148,7 @@ func TestWarmStartColdStorePublishesZero(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(newImmediateReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -186,8 +182,7 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(newImmediateReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -212,74 +207,34 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// fakeSBOMSource implements SBOMProjectionSource for warm-start tests.
-type fakeSBOMSource struct {
-	manifests []domain.SBOMManifest
-}
-
-func (s *fakeSBOMSource) ListPublishedManifests(_ context.Context, _ int) ([]domain.SBOMManifest, error) {
-	return s.manifests, nil
-}
-
-// countByKind counts captured events whose wire kind matches one of the given kinds.
-func countByKind(events []gonostr.Event, kinds ...int) int {
-	kindSet := make(map[int]bool, len(kinds))
-	for _, k := range kinds {
-		kindSet[k] = true
-	}
-	count := 0
-	for _, ev := range events {
-		if kindSet[int(ev.Kind)] {
-			count++
-		}
-	}
-	return count
-}
+// Phase 3 X1: fakeSBOMSource removed — SBOM is no longer projected here.
 
 // TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot verifies that SBOM, the
-// only domain family remaining on the legacy RepublishSnapshot path after
-// Wave 4, is still published by the snapshot while migrated domains (service,
-// environment) are skipped.
-//
-// Phase 3 M1: Retargeted from ML (now migrated to direct publish via
-// MLCanonicalPublisher) to SBOM references (kind 30078) and availability
-// lists (kind 30004). SBOM is the last legacy leg after Wave 4.
-func TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot(t *testing.T) {
+// TestWarmStartAllDomainsRepublishStaleOnly verifies that warm-start covers
+// all cp-state domains (Phase 3 X1) and only re-publishes stale records.
+func TestWarmStartAllDomainsRepublishStaleOnly(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
-	manifestID := uuid.New()
-	sbomSource := &fakeSBOMSource{
-		manifests: []domain.SBOMManifest{{
-			ID: manifestID,
-			Subject: domain.SBOMSubject{
-				Type:        domain.SBOMSubjectArtifact,
-				ID:          uuid.New().String(),
-				DisplayName: "test-artifact",
-				Digest:      "sha256:a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
-			},
-			Format:        domain.SBOMFormatSPDX,
-			StorageType:   domain.SBOMStorageBlossom,
-			StorageURI:    "blossom://test/sbom.spdx.json",
-			MediaType:     "application/spdx+json",
-			PayloadSHA256: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-			Generator:     domain.SBOMGenerator{ID: "syft", Version: "1.0"},
-			ReferenceDTag: "sbom:test:" + manifestID.String()[:8],
-			PublishState:  domain.SBOMPublishPublished,
-			CreatedAt:     time.Now().UTC().Add(-time.Hour),
-		}},
+	allDomains := CPStateDomains()
+	if len(allDomains) == 0 {
+		t.Fatal("CPStateDomains() returned empty")
 	}
 
+	// Seed one service record and one environment record as stale.
+	svcIDs := []uuid.UUID{uuid.New()}
+	envIDs := []uuid.UUID{uuid.New()}
 	repo := repositorytest.NewInMemoryNostrEventRepository()
-	sink := &captureProjectionPublisher{}
+	seedControlStateRecords(t, repo, KindServiceRegistry, svcIDs)
+	seedControlStateRecords(t, repo, KindEnvironmentRegistry, envIDs)
+	markRecordFailed(t, repo, "domain", "service", svcIDs[0].String())
+
 	source := newFakeProjectionSource()
-	// Service and environment are migrated; SBOM is NOT.
+	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithSBOMProjectionSource(sbomSource),
-		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1))
+		WithIntentDomains(allDomains),
+		WithReadinessTracker(newImmediateReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -288,18 +243,20 @@ func TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// SBOM is NOT migrated → still published via RepublishSnapshot.
-	sbomCount := countByKind(sink.events, sbom.KindSBOMReference, sbom.KindSBOMAvailabilityList)
-	if sbomCount == 0 {
-		t.Errorf("unmigrated domain: expected SBOM publishes from legacy snapshot, got 0")
+	// Only the stale service record should be re-published.
+	if n := countByDomain(sink.events, "service"); n != 1 {
+		t.Errorf("stale service domain: expected 1 re-publish, got %d", n)
 	}
-	// Migrated domains should NOT be republished (no history seeded).
-	if n := countByDomain(sink.events, "service"); n != 0 {
-		t.Errorf("migrated domain: expected 0 service publishes, got %d", n)
+	// The environment record is current (not stale), so 0 re-publishes.
+	if n := countByDomain(sink.events, "environment"); n != 0 {
+		t.Errorf("current environment domain: expected 0 re-publishes, got %d", n)
 	}
 }
 
-func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
+// TestProjectorRunHasNoTicker verifies that the projector's Run method
+// has no periodic ticker: it waits for context cancellation after warm-start
+// and startup publish, with no snapshot repair loop (Phase 3 X1).
+func TestProjectorRunHasNoTicker(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
@@ -312,18 +269,20 @@ func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(50*time.Millisecond))
+		WithReadinessTracker(newImmediateReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- p.Run(runCtx) }()
-	time.Sleep(200 * time.Millisecond)
+	// Wait well beyond any hypothetical ticker interval.
+	time.Sleep(250 * time.Millisecond)
 	cancel()
 	<-done
 
+	// No periodic repair: only the warm-start pass publishes, and current
+	// records are not re-published.
 	if n := countByDomain(sink.events, "service"); n != 0 {
-		t.Errorf("periodic repair: expected 0 service publishes, got %d", n)
+		t.Errorf("expected 0 service publishes (no ticker), got %d", n)
 	}
 }
 
@@ -346,8 +305,7 @@ func TestWarmStartReadyBeforeCtxDoneRunsWarmStart(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service"}),
-		WithReadinessTracker(gate),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(gate))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -377,8 +335,7 @@ func TestWarmStartCtxDoneBeforeReadySkipsWarmStart(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service"}),
-		WithReadinessTracker(newNeverReadiness()),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(newNeverReadiness()))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	cancel() // Cancel immediately.

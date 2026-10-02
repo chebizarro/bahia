@@ -114,6 +114,10 @@ const (
 	CPStateTopicBackupVerification       = "backup-verification"
 	CPStateTopicBackupRestore            = "backup-restore"
 	CPStateTopicBackupRuntimeObservation = "backup-runtime"
+
+	// Secret and notification channel state topics (Phase 3 N1).
+	CPStateTopicSecretRegistry              = "secret-registry"
+	CPStateTopicNotificationChannelRegistry = "notification-channel"
 )
 
 // CPAudit* describe the projector's append-only audit facts: regular kind
@@ -127,4 +131,11 @@ const (
 	// CPAuditTagFact is the deterministic source-fact id: republishing the same
 	// fact reuses it, so publishers and consumers can drop the duplicate.
 	CPAuditTagFact = "fact"
+)
+
+// Org cp-state topics (Phase 3 Wave 5 O1).
+const (
+	CPStateTopicOrgRegistry       = "org-registry"
+	CPStateTopicOrgMemberRegistry = "org-member"
+	CPStateTopicOrgInviteRegistry = "org-invite"
 )

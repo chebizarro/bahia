@@ -846,7 +846,7 @@ func TestContextVMTransport_PublishesHandlerFailure(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"create-1","method":"notifications.channels.create","params":{"name":"Ops Webhook"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterContextVMHandler(EncryptedOperationNotificationChannelsCreate, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler("notifications.channels.create", func(context.Context, ContextVMRequest) (any, error) {
 		return nil, fmt.Errorf("failed to create notification channel")
 	})
 

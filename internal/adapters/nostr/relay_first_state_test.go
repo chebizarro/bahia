@@ -53,7 +53,7 @@ func newRelayFirstHarness(t *testing.T, stampRevision bool) *relayFirstHarness {
 	return h
 }
 
-// republishRegistrySnapshot runs RepublishSnapshot's service and environment
+// republishRegistrySnapshot runs the service and environment
 // loop (the rest of the snapshot reads repositories this cache does not have).
 func (h *relayFirstHarness) republishRegistrySnapshot(t *testing.T) {
 	t.Helper()

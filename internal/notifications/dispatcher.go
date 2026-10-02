@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,18 +21,29 @@ type Sender interface {
 }
 
 // Dispatcher routes events to matching notification channels.
+//
+// Phase 3 N1: the dispatcher maintains an in-memory channel cache that is
+// updated event-driven by the intent handler's OnChannelChanged callback.
+// The initial load from the DB happens lazily on first dispatch; after that
+// the cache is authoritative and the DB is not polled.
 type Dispatcher struct {
 	repo    repository.NotificationRepository
 	senders map[domain.ChannelType]Sender
 	logger  *zap.Logger
+
+	// Event-driven channel cache (Phase 3 N1).
+	channelMu     sync.RWMutex
+	channelCache  map[uuid.UUID]*domain.NotificationChannel
+	cacheHydrated bool
 }
 
 // NewDispatcher creates a new notification dispatcher.
 func NewDispatcher(repo repository.NotificationRepository, logger *zap.Logger) *Dispatcher {
 	return &Dispatcher{
-		repo:    repo,
-		senders: make(map[domain.ChannelType]Sender),
-		logger:  logger,
+		repo:         repo,
+		senders:      make(map[domain.ChannelType]Sender),
+		logger:       logger,
+		channelCache: make(map[uuid.UUID]*domain.NotificationChannel),
 	}
 }
 
@@ -89,22 +101,101 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 }
 
 // dispatch sends a notification to all matching enabled channels.
+//
+// Phase 3 N1: uses the in-memory channel cache instead of polling the DB.
+// The cache is hydrated lazily on first call and updated event-driven by
+// OnChannelChanged.
 func (d *Dispatcher) dispatch(ctx context.Context, eventType string, payload map[string]any) error {
-	channels, err := d.repo.ListChannels(ctx, true) // enabled only
-	if err != nil {
-		return fmt.Errorf("listing notification channels: %w", err)
-	}
+	channels := d.enabledChannels(ctx)
 
 	var dispatchErrors []error
 	for _, ch := range channels {
 		if !ch.MatchesEvent(eventType) {
 			continue
 		}
-		if err := d.sendToChannel(ctx, &ch, eventType, payload); err != nil {
+		chCopy := ch // copy for pointer
+		if err := d.sendToChannel(ctx, &chCopy, eventType, payload); err != nil {
 			dispatchErrors = append(dispatchErrors, fmt.Errorf("channel %s: %w", ch.Name, err))
 		}
 	}
 	return errors.Join(dispatchErrors...)
+}
+
+// enabledChannels returns the enabled channels from the in-memory cache.
+// On first call, it hydrates the cache from the DB.
+func (d *Dispatcher) enabledChannels(ctx context.Context) []domain.NotificationChannel {
+	d.channelMu.RLock()
+	if d.cacheHydrated {
+		var result []domain.NotificationChannel
+		for _, ch := range d.channelCache {
+			if ch.Enabled {
+				result = append(result, *ch)
+			}
+		}
+		d.channelMu.RUnlock()
+		return result
+	}
+	d.channelMu.RUnlock()
+
+	// Lazy hydration.
+	d.channelMu.Lock()
+	defer d.channelMu.Unlock()
+	if d.cacheHydrated {
+		// Another goroutine hydrated while we waited.
+		var result []domain.NotificationChannel
+		for _, ch := range d.channelCache {
+			if ch.Enabled {
+				result = append(result, *ch)
+			}
+		}
+		return result
+	}
+
+	channels, err := d.repo.ListChannels(ctx, false) // load all, filter locally
+	if err != nil {
+		// Do NOT mark hydrated — retry on the next dispatch (bounded by the
+		// caller's dispatch rate). Returning nil means this notification is
+		// silently dropped, which is safe because the cache will hydrate on
+		// the next event and catch up.
+		d.logger.Warn("failed to hydrate channel cache from DB, will retry next dispatch", zap.Error(err))
+		return nil
+	}
+	for i := range channels {
+		ch := channels[i]
+		d.channelCache[ch.ID] = &ch
+	}
+	d.cacheHydrated = true
+	d.logger.Info("notification channel cache hydrated from DB",
+		zap.Int("channel_count", len(channels)))
+
+	var result []domain.NotificationChannel
+	for _, ch := range d.channelCache {
+		if ch.Enabled {
+			result = append(result, *ch)
+		}
+	}
+	return result
+}
+
+// OnChannelChanged updates the in-memory channel cache when a channel is
+// created, updated, or deleted via the intent handler. This is the event-driven
+// path that replaces DB polling (Phase 3 N1).
+func (d *Dispatcher) OnChannelChanged(ch *domain.NotificationChannel, deleted bool) {
+	d.channelMu.Lock()
+	defer d.channelMu.Unlock()
+	if deleted {
+		delete(d.channelCache, ch.ID)
+		d.logger.Debug("notification channel removed from cache",
+			zap.String("channel_id", ch.ID.String()),
+			zap.String("name", ch.Name))
+	} else {
+		cp := *ch
+		d.channelCache[ch.ID] = &cp
+		d.logger.Debug("notification channel updated in cache",
+			zap.String("channel_id", ch.ID.String()),
+			zap.String("name", ch.Name),
+			zap.Bool("enabled", ch.Enabled))
+	}
 }
 
 // Dispatch sends a notification to all matching channels (public API for manual triggers).

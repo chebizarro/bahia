@@ -79,6 +79,18 @@ type projectionKey struct {
 	d          string
 }
 
+// pendingRetryArgs stores the arguments for a publish suppressed by the shared
+// backoff window. When the backoff timer fires, pending retries are flushed.
+// The map is keyed by projectionKey so only the latest state per coordinate
+// is retained (bounded memory).
+type pendingRetryArgs struct {
+	kind       int
+	tags       gonostr.Tags
+	content    string
+	entityType string
+	entityID   *uuid.UUID
+}
+
 // ProjectionFamilyMetrics are per-family publish counters. They are exposed
 // for telemetry and tests; the umbrella restart gate reads the same numbers.
 // Queued counts publishes the outbox kept below the publish quorum (still
@@ -111,11 +123,13 @@ type projectionState struct {
 	// from before a restart), so a republished source fact is not signed twice.
 	auditFacts auditFactSet
 
-	backoffMu    sync.Mutex
-	retryAfter   time.Time
-	retryDelay   time.Duration
-	now          func() time.Time
-	jitterSource *rand.Rand
+	backoffMu      sync.Mutex
+	retryAfter     time.Time
+	retryDelay     time.Duration
+	retryTimer     *time.Timer
+	pendingRetries map[projectionKey]pendingRetryArgs
+	now            func() time.Time
+	jitterSource   *rand.Rand
 }
 
 // A wire kind has one load in flight. Waiters cannot observe it as hydrated
@@ -438,7 +452,11 @@ func (p *Projector) noteProjectionRejection() {
 			jitter = time.Duration(s.jitterSource.Int63n(2*span+1) - span)
 		}
 	}
-	s.retryAfter = p.projectionNow().Add(s.retryDelay + jitter)
+	delay := s.retryDelay + jitter
+	s.retryAfter = p.projectionNow().Add(delay)
+	// Schedule event-driven retry at the backoff window end (Phase 3 X1).
+	// This replaces the 10-minute periodic RepublishSnapshot ticker.
+	p.scheduleBackoffRetry(delay)
 }
 
 func (p *Projector) resetProjectionBackoff() {
@@ -447,6 +465,66 @@ func (p *Projector) resetProjectionBackoff() {
 	defer s.backoffMu.Unlock()
 	s.retryAfter = time.Time{}
 	s.retryDelay = 0
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+		s.retryTimer = nil
+	}
+}
+
+// savePendingRetry stores the publish arguments for a coordinate suppressed
+// by the shared backoff window. The map is keyed by projectionKey so only the
+// latest state per coordinate is retained (bounded memory, Phase 3 X1).
+func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) {
+	s := p.projection()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingRetries == nil {
+		s.pendingRetries = map[projectionKey]pendingRetryArgs{}
+	}
+	s.pendingRetries[key] = pendingRetryArgs{
+		kind:       kind,
+		tags:       tags,
+		content:    content,
+		entityType: entityType,
+		entityID:   entityID,
+	}
+}
+
+// scheduleBackoffRetry sets a one-shot timer that flushes pending retries
+// when the backoff window closes. It replaces the 10-minute periodic ticker
+// with an event-driven mechanism: the timer fires exactly when the backoff
+// expires, not on a fixed schedule (Phase 3 X1). Must be called with
+// backoffMu held.
+func (p *Projector) scheduleBackoffRetry(delay time.Duration) {
+	s := p.projection()
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+	}
+	s.retryTimer = time.AfterFunc(delay, func() {
+		p.flushPendingRetries()
+	})
+}
+
+// flushPendingRetries drains the pending-retry map and attempts each
+// suppressed publish. If a publish fails (relay still unavailable),
+// noteProjectionRejection re-opens the backoff window and schedules a
+// new retry timer; the remaining pending items are re-saved by
+// publishSigned's backoff check.
+func (p *Projector) flushPendingRetries() {
+	s := p.projection()
+	s.mu.Lock()
+	pending := s.pendingRetries
+	s.pendingRetries = nil
+	s.mu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	ctx := context.Background()
+	for _, args := range pending {
+		_ = p.publishSigned(ctx, args.kind, args.tags, args.content, args.entityType, args.entityID)
+	}
 }
 
 // publishSigned is the single choke point for every projection the Projector
@@ -490,6 +568,9 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	s.count(family, func(m *ProjectionFamilyMetrics) { m.Attempted++ })
 	if p.projectionBackoffActive() {
 		s.count(family, func(m *ProjectionFamilyMetrics) { m.Backoff++ })
+		if dedupable {
+			p.savePendingRetry(key, kind, tags, content, entityType, entityID)
+		}
 		return ErrProjectorBackoff
 	}
 

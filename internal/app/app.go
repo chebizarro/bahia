@@ -1074,18 +1074,12 @@ func New(cfg *config.Config) (*App, error) {
 	if dnsPolicyRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSPolicyProjectionSource(dnsPolicyRepositoryProjectionSource{repo: dnsPolicyRepo}))
 	}
-	if sbomManifestRepo != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
-	}
-	// Phase 3 F4: warm-start for migrated domains. Intent-migrated domains
-	// wait for subscriber EOSE; authoritative domains (build, artifact,
-	// deployment) publish directly from mutation sites and are always
-	// included in warm-start so stale records are re-published on restart.
-	// RepublishSnapshot guards skip migrated domain legs.
-	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
-		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
-		"backup", // B1: authority inversion (bahia-irsry.11.11)
-	)
+	// Phase 3 X1: WithSBOMProjectionSource removed. SBOM events are published
+	// from the SBOM orchestrator's mutation site (bahia-irsry.11.17).
+	// Phase 3 X1: warm-start covers ALL cp-state domains. Every domain's
+	// canonical records are now published from mutation sites; warm-start
+	// re-publishes only stale or missing records on restart.
+	warmStartDomains := nostrAdapter.CPStateDomains()
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
 		// immediately satisfy a sentinel so warm-start proceeds.
@@ -1155,6 +1149,15 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// --- Phase 3 X1: Adoption canonical publisher ---
+	// Publishes service-registry and environment-registry cp-state records
+	// directly from the adoption import site instead of reactively through
+	// the projector's EventAdoptionImported handler (bahia-irsry.11.17).
+	if adoptionSvc != nil {
+		adoptionCanonical := nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, logger)
+		adoptionSvc.SetAdoptionCanonicalPublisher(adoptionCanonical)
+	}
 
 	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
 	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
@@ -1374,6 +1377,128 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("package intent handler registered")
 	}
+
+	// Phase 3 O1: derive org state encryption key from daemon private key (§1.7).
+	// Follows the assistant transcript key derivation pattern.
+	// When no local private key exists (bunker/remote signer), org state
+	// publishing is impossible — the org domain is disabled and an error is
+	// logged. There is no plaintext fallback in production.
+	var orgStateEncryptor *controlplane.OrgStateEncryptorImpl
+	if cfg.Nostr.PrivateKey != "" {
+		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
+		orgStateEncryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
+			Key: controlplane.OrgStateKey{
+				Ref:     "org-state/service-nostr-key",
+				Version: "v1",
+				Key:     orgKeySum[:],
+			},
+		})
+	} else if enabledDomains["org"] {
+		logger.Error("org domain requires a local private key for state encryption; " +
+			"remote/bunker signers cannot derive the org state key. " +
+			"Disabling org domain to prevent plaintext state publication")
+		delete(enabledDomains, "org")
+	}
+
+	// Phase 3 O1: create encrypted canonical publisher for org state.
+	// Used by both the intent handler and the legacy EncryptedDomainHandlers path.
+	// The encryptor is mandatory in production — OrgCanonicalPublisher is only
+	// created when an encryptor is available or when a projector exists for the
+	// legacy path (which always has a private key).
+	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
+	if nostrProjector != nil && orgStateEncryptor != nil {
+		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, orgStateEncryptor, logger)
+	}
+
+	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
+	// The handler processes org/member/invite intents and publishes canonical
+	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
+	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
+		orgHandler := controlplane.NewOrgIntentHandler(controlplane.OrgIntentHandlerConfig{
+			Orgs:      orgRepo,
+			Members:   orgMemberRepo,
+			Invites:   orgInviteRepo,
+			Publisher: orgCanonicalPub,
+			Status:    intentStatus,
+			Logger:    logger,
+			OnMemberChange: func(orgID uuid.UUID) {
+				// Rebuild relay members for this org from Postgres (interim
+				// until the local store hydration replaces this). The published
+				// encrypted events are the source of truth; the callback fires
+				// after both Postgres and relay publishes complete.
+				members, err := orgMemberRepo.ListByOrg(ctx, orgID)
+				if err != nil {
+					logger.Warn("failed to list org members for TrustSet update",
+						zap.String("org_id", orgID.String()), zap.Error(err))
+					return
+				}
+				roleMap := make(map[string]domain.Role, len(members))
+				for _, m := range members {
+					roleMap[m.Pubkey] = m.Role
+				}
+				trustSet.SetRelayMembers(orgID.String(), roleMap)
+				if intentAuthorsSyncer != nil {
+					intentAuthorsSyncer.Notify()
+				}
+				logger.Debug("TrustSet relay members updated for org",
+					zap.String("org_id", orgID.String()),
+					zap.Int("member_count", len(members)))
+			},
+		})
+		intentProcessor.RegisterHandler("org", orgHandler)
+		logger.Info("org intent handler registered")
+	}
+
+	// Phase 3 O1: gift-wrapped intent ingress for sensitive domains (§1.7).
+	// Shared by O1 (org) and N1 (secret, notification). Plaintext 30900 intents
+	// for these domains are rejected with a bounded status.
+	var giftWrapIngress *controlplane.IntentGiftWrapIngress
+	if controlPlaneSigner != nil {
+		giftWrapIngress = controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
+			Signer:           controlPlaneSigner,
+			Processor:        intentProcessor,
+			SensitiveDomains: []string{"org", "secret", "notification"},
+			Logger:           logger,
+		})
+		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
+		logger.Info("gift-wrap intent ingress registered for sensitive domains")
+	}
+	// Phase 3 O1: relay member event handler for TrustSet hydration from
+	// encrypted membership events (§2.5 item 3). Wired for warm-start and
+	// live member publishes. Even when Postgres is configured, the relay
+	// source has highest precedence in TrustSet resolution.
+	var relayMemberEventHandler *controlplane.RelayMemberEventHandler
+	if orgStateEncryptor != nil {
+		relayMemberEventHandler = controlplane.NewRelayMemberEventHandler(
+			orgStateEncryptor, trustSet, orgMemberRepo, logger,
+		)
+
+		// (ii) Live: after OrgCanonicalPublisher publishes a member record
+		// (both legacy ContextVM and intent paths), feed it through the handler
+		// so TrustSet relay members stay in sync in real time.
+		if orgCanonicalPub != nil {
+			orgCanonicalPub.SetOnMemberPublished(func(ctx context.Context, encryptedContent string) {
+				if err := relayMemberEventHandler.HandleEncryptedMemberEvent(ctx, encryptedContent); err != nil {
+					logger.Debug("relay member event handler: post-publish hydration failed",
+						zap.Error(err))
+				}
+				if intentAuthorsSyncer != nil {
+					intentAuthorsSyncer.Notify()
+				}
+			})
+		}
+
+		// (i) Startup: hydrate TrustSet from the daemon's own published
+		// encrypted membership events in history. This runs before the intent
+		// subscriber's author filter is computed, ensuring relay-sourced members
+		// are included in the authors set from the start.
+		if nostrProjector != nil {
+			relayMemberEventHandler.HydrateTrustSetFromHistory(ctx, projectionHistory)
+		}
+
+		logger.Info("relay member event handler created and wired for TrustSet hydration")
+	}
+
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -1736,6 +1861,50 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
+	// --- Phase 3 N1: Secret and notification intent handlers ---
+	// Sensitive domains whose intents arrive as NIP-59 gift wraps (kind 1059)
+	// through the shared gift-wrapped intent ingress (O1; SensitiveDomains
+	// includes "secret" and "notification").
+	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
+	// holds a *Projector reference and publishes through the shared signing/outbox
+	// pipeline. Secret values are NEVER included in published events.
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, logger)
+
+	// Register the secret intent handler when the secret domain is enabled.
+	if enabledDomains["secret"] && secretRepo != nil {
+		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(
+			controlplane.SecretIntentHandlerConfig{
+				Registry:  secretRepo,
+				Encryptor: secretEncryptor,
+				Publisher: secretCanonical,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("secret intent handler registered")
+	}
+
+	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
+	// secrets, credentials) from published content.
+	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, logger)
+
+	// Register the notification intent handler when the notification domain is
+	// enabled. The dispatcher's OnChannelChanged method is the event-driven
+	// notifier that replaces DB polling (Phase 3 N1).
+	if enabledDomains["notification"] && notifRepo != nil {
+		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
+			controlplane.NotificationIntentHandlerConfig{
+				Registry:  notifRepo,
+				Publisher: notifCanonical,
+				Notifier:  notifDispatcher,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("notification intent handler registered")
+	}
+	// --- end N1 wiring ---
+
 	// Tool provisioning orchestration.
 	var toolCoordinator *service.ToolProvisioningCoordinator
 	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
@@ -2044,9 +2213,18 @@ func New(cfg *config.Config) (*App, error) {
 			Members:               orgMemberRepo,
 			Invites:               orgInviteRepo,
 			RBAC:                  tenantRBAC,
+			IntentProcessor:       intentProcessor,
+			OrgPublisher:          orgCanonicalPub,
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
+		// Phase 3 O1: wire gift-wrap intent ingress to the existing 1059
+		// subscription. When an unwrapped inner event is kind 30900 with
+		// t=bahia-intent, it is routed to the ingress instead of ContextVM.
+		if giftWrapIngress != nil {
+			encryptedRequestTransport.SetGiftWrapIntentIngress(giftWrapIngress)
+			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
+		}
 		registryMutations := controlplane.RegistryMutationBackend(registry)
 		if relayFirstRegistry != nil {
 			registryMutations = relayFirstRegistry
@@ -2055,6 +2233,10 @@ func New(cfg *config.Config) (*App, error) {
 			IntentProcessor: intentProcessor,
 			Secrets:         secretRepo,
 			Encryptor:       secretEncryptor,
+			SecretPublisher: secretCanonical,
+			NotifRepo:       notifRepo,
+			NotifPublisher:  notifCanonical,
+			NotifNotifier:   notifDispatcher,
 			Runs:            runRepo,
 			RunLogs:         runLogService,
 			Artifacts:       artifactRepo,

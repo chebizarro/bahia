@@ -3,7 +3,6 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,13 +15,10 @@ import (
 )
 
 const (
-	EncryptedOperationNotificationChannelsList   = "notifications.channels.list"
-	EncryptedOperationNotificationChannelsGet    = "notifications.channels.get"
-	EncryptedOperationNotificationChannelsCreate = "notifications.channels.create"
-	EncryptedOperationNotificationChannelsUpdate = "notifications.channels.update"
-	EncryptedOperationNotificationChannelsDelete = "notifications.channels.delete"
-	EncryptedOperationNotificationChannelsTest   = "notifications.channels.test"
-	EncryptedOperationNotificationLogsList       = "notifications.logs.list"
+	EncryptedOperationNotificationChannelsList = "notifications.channels.list"
+	EncryptedOperationNotificationChannelsGet  = "notifications.channels.get"
+	EncryptedOperationNotificationChannelsTest = "notifications.channels.test"
+	EncryptedOperationNotificationLogsList     = "notifications.logs.list"
 )
 
 type notificationEncryptedHandler struct {
@@ -68,13 +64,11 @@ func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport,
 		dispatcher: dispatcher,
 		authorizer: encryptedTenantAuthorizer{rbac: rbac},
 	}
-	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/list")
-	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/get")
-	h.register(transport, EncryptedOperationNotificationChannelsCreate, h.createChannel, "notifications/new", "notifications/create")
-	h.register(transport, EncryptedOperationNotificationChannelsUpdate, h.updateChannel, "notifications/update")
-	h.register(transport, EncryptedOperationNotificationChannelsDelete, h.deleteChannel, "notifications/delete")
-	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel, "notifications/test")
-	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs, "notifications/logs")
+	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/channels-list")
+	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/channels-get")
+	// Phase 3 N1: create/update/delete registrations deleted — mutations go through intent publishing.
+	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel, "notifications/channels-test")
+	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs, "notifications/logs-list")
 }
 
 func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler, contextVMAliases ...string) {
@@ -149,113 +143,11 @@ func (h *notificationEncryptedHandler) getChannel(ctx context.Context, request E
 	return map[string]any{"channel": sanitizeNotificationChannel(*ch)}, nil
 }
 
-func (h *notificationEncryptedHandler) createChannel(ctx context.Context, request EncryptedRequest) (any, error) {
-	var payload notificationChannelPayload
-	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(payload.Name) == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-	channelType, err := parseNotificationChannelType(payload.ChannelType)
-	if err != nil {
-		return nil, err
-	}
-	enabled := true
-	if payload.Enabled != nil {
-		enabled = *payload.Enabled
-	}
-	orgID, err := h.resolveCreateOrg(ctx, request, payload.OrgID)
-	if err != nil {
-		return nil, err
-	}
-	ch := &domain.NotificationChannel{
-		ID:          uuid.New(),
-		OrgID:       orgID,
-		Name:        strings.TrimSpace(payload.Name),
-		ChannelType: channelType,
-		Config:      cloneMap(payload.Config),
-		EventFilter: cloneMap(payload.EventFilter),
-		Enabled:     enabled,
-	}
-	if err := h.repo.CreateChannel(ctx, ch); err != nil {
-		return nil, fmt.Errorf("failed to create notification channel")
-	}
-	return map[string]any{"channel": sanitizeNotificationChannel(*ch)}, nil
-}
+// createChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
-func (h *notificationEncryptedHandler) updateChannel(ctx context.Context, request EncryptedRequest) (any, error) {
-	var payload notificationChannelPayload
-	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
-		return nil, err
-	}
-	id, err := parseNotificationChannelID(payload.ID)
-	if err != nil {
-		return nil, err
-	}
-	existing, err := h.authorizedChannel(ctx, request, id, domain.PermManageSettings)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(payload.Name) != "" {
-		existing.Name = strings.TrimSpace(payload.Name)
-	}
-	if strings.TrimSpace(payload.ChannelType) != "" {
-		channelType, err := parseNotificationChannelType(payload.ChannelType)
-		if err != nil {
-			return nil, err
-		}
-		existing.ChannelType = channelType
-	}
-	if payload.Config != nil {
-		nextConfig := cloneMap(payload.Config)
-		// Webhook signing secrets are write-only in browser responses. If an
-		// update omits the secret, keep the stored value instead of clearing it.
-		if existing.ChannelType == domain.ChannelTypeWebhook {
-			if _, ok := nextConfig["secret"]; !ok {
-				if secret, ok := existing.Config["secret"]; ok {
-					nextConfig["secret"] = secret
-				}
-			}
-		}
-		existing.Config = nextConfig
-	}
-	if payload.EventFilter != nil {
-		existing.EventFilter = cloneMap(payload.EventFilter)
-	}
-	if payload.Enabled != nil {
-		existing.Enabled = *payload.Enabled
-	}
-	if err := h.repo.UpdateChannelForOrg(ctx, existing, existing.OrgID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("notification channel not found")
-		}
-		return nil, fmt.Errorf("failed to update notification channel")
-	}
-	return map[string]any{"channel": sanitizeNotificationChannel(*existing)}, nil
-}
+// updateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
-func (h *notificationEncryptedHandler) deleteChannel(ctx context.Context, request EncryptedRequest) (any, error) {
-	var payload notificationChannelPayload
-	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
-		return nil, err
-	}
-	id, err := parseNotificationChannelID(payload.ID)
-	if err != nil {
-		return nil, err
-	}
-	existing, err := h.authorizedChannel(ctx, request, id, domain.PermManageSettings)
-	if err != nil {
-		return nil, err
-	}
-	if err := h.repo.DeleteChannelForOrg(ctx, id, existing.OrgID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("notification channel not found")
-		}
-		return nil, fmt.Errorf("failed to delete notification channel")
-	}
-	return map[string]any{"status": "deleted", "id": id.String()}, nil
-}
+// deleteChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
 func (h *notificationEncryptedHandler) testChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationChannelPayload
@@ -353,31 +245,7 @@ func (h *notificationEncryptedHandler) requesterOrgIDs(ctx context.Context, requ
 	return orgIDs, nil
 }
 
-func (h *notificationEncryptedHandler) resolveCreateOrg(ctx context.Context, request EncryptedRequest, requested string) (uuid.UUID, error) {
-	orgIDs, err := h.requesterOrgIDs(ctx, request)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	var orgID uuid.UUID
-	if strings.TrimSpace(requested) == "" {
-		if len(orgIDs) != 1 {
-			return uuid.Nil, fmt.Errorf("org_id is required when requester belongs to multiple organizations")
-		}
-		orgID = orgIDs[0]
-	} else {
-		orgID, err = parseNotificationOrgID(requested)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if !containsNotificationOrgID(orgIDs, orgID) {
-			return uuid.Nil, &auth.AccessDeniedError{Reason: "not a member of this organization", OrgID: orgID}
-		}
-	}
-	if err := h.authorizer.authorizeOrg(ctx, request.Event, orgID, domain.PermManageSettings); err != nil {
-		return uuid.Nil, err
-	}
-	return orgID, nil
-}
+// resolveCreateOrg: deleted in Phase 3 N1 (only used by deleted createChannel).
 
 func (h *notificationEncryptedHandler) authorizedChannel(ctx context.Context, request EncryptedRequest, id uuid.UUID, permission domain.Permission) (*domain.NotificationChannel, error) {
 	existing, err := h.repo.GetChannelByID(ctx, id)
@@ -438,16 +306,7 @@ func parseNotificationOrgID(value string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func parseNotificationChannelType(value string) (domain.ChannelType, error) {
-	switch domain.ChannelType(strings.TrimSpace(value)) {
-	case domain.ChannelTypeWebhook:
-		return domain.ChannelTypeWebhook, nil
-	case domain.ChannelTypeNostrDM:
-		return domain.ChannelTypeNostrDM, nil
-	default:
-		return "", fmt.Errorf("channel_type must be 'webhook' or 'nostr_dm'")
-	}
-}
+// parseNotificationChannelType: deleted in Phase 3 N1 (only used by deleted handlers).
 
 func sanitizeNotificationChannels(channels []domain.NotificationChannel) []domain.NotificationChannel {
 	out := make([]domain.NotificationChannel, 0, len(channels))

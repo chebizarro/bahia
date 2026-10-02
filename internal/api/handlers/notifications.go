@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -35,13 +34,7 @@ func NewNotificationHandler(repo repository.NotificationRepository, dispatcher *
 	return &NotificationHandler{repo: repo, dispatcher: dispatcher}
 }
 
-type createChannelRequest struct {
-	Name        string         `json:"name"`
-	ChannelType string         `json:"channel_type"`
-	Config      map[string]any `json:"config"`
-	EventFilter map[string]any `json:"event_filter,omitempty"`
-	Enabled     *bool          `json:"enabled,omitempty"`
-}
+// createChannelRequest: deleted in Phase 3 N1 (no longer needed).
 
 func (h *NotificationHandler) tenantRepo(w http.ResponseWriter) (tenantNotificationRepository, bool) {
 	repo, ok := h.repo.(tenantNotificationRepository)
@@ -103,149 +96,11 @@ func (h *NotificationHandler) GetChannel(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, ch)
 }
 
-// CreateChannel handles POST /notifications/channels.
-func (h *NotificationHandler) CreateChannel(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	var req createChannelRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
+// CreateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	ct := domain.ChannelType(req.ChannelType)
-	if ct != domain.ChannelTypeWebhook && ct != domain.ChannelTypeNostrDM {
-		writeError(w, http.StatusBadRequest, "channel_type must be 'webhook' or 'nostr_dm'")
-		return
-	}
+// UpdateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-
-	ch := &domain.NotificationChannel{
-		ID:          uuid.New(),
-		OrgID:       authzOrgID(r),
-		Name:        req.Name,
-		ChannelType: ct,
-		Config:      req.Config,
-		EventFilter: req.EventFilter,
-		Enabled:     enabled,
-	}
-
-	if err := h.repo.CreateChannel(r.Context(), ch); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create channel")
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, ch)
-}
-
-// UpdateChannel handles PUT /notifications/channels/{id}.
-func (h *NotificationHandler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid channel ID")
-		return
-	}
-
-	orgID := authzOrgID(r)
-	var existing *domain.NotificationChannel
-	var tenantRepo tenantNotificationRepository
-	if orgID == uuid.Nil {
-		existing, err = h.repo.GetChannelByID(r.Context(), id)
-	} else if repo, ok := h.tenantRepo(w); ok {
-		tenantRepo = repo
-		existing, err = repo.GetChannelByIDForOrg(r.Context(), id, orgID)
-	} else {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get channel")
-		return
-	}
-	if existing == nil {
-		writeError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-
-	var req createChannelRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Name != "" {
-		existing.Name = req.Name
-	}
-	if req.ChannelType != "" {
-		existing.ChannelType = domain.ChannelType(req.ChannelType)
-	}
-	if req.Config != nil {
-		existing.Config = req.Config
-	}
-	if req.EventFilter != nil {
-		existing.EventFilter = req.EventFilter
-	}
-	if req.Enabled != nil {
-		existing.Enabled = *req.Enabled
-	}
-
-	if tenantRepo != nil {
-		err = tenantRepo.UpdateChannelForOrg(r.Context(), existing, orgID)
-	} else {
-		err = h.repo.UpdateChannel(r.Context(), existing)
-	}
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "channel not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to update channel")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, existing)
-}
-
-// DeleteChannel handles DELETE /notifications/channels/{id}.
-func (h *NotificationHandler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid channel ID")
-		return
-	}
-
-	if orgID := authzOrgID(r); orgID == uuid.Nil {
-		err = h.repo.DeleteChannel(r.Context(), id)
-	} else if repo, ok := h.tenantRepo(w); ok {
-		err = repo.DeleteChannelForOrg(r.Context(), id, orgID)
-	} else {
-		return
-	}
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "channel not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to delete channel")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-}
+// DeleteChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
 // TestChannel handles POST /notifications/channels/{id}/test.
 func (h *NotificationHandler) TestChannel(w http.ResponseWriter, r *http.Request) {
