@@ -132,8 +132,8 @@ export function authPresentation(authState = {}, authenticated = false) {
       mode: 'authenticated',
       pubkey: authState.pubkey || '',
       truncatedPubkey: truncatePubkey(authState.pubkey || ''),
-      backendAuthenticated: Boolean(authState.backendAuthenticated),
-      showWarning: Boolean(!authState.backendAuthenticated && authState.error),
+      
+      showWarning: Boolean(authState.error),
       warning: authState.error || '',
       profile,
       displayLabel: profile?.displayName || profile?.name || truncatePubkey(authState.pubkey || ''),

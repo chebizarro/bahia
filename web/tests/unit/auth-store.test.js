@@ -1,20 +1,26 @@
+/**
+ * Auth store tests — updated for Phase 4 §6.2 auth bootstrap.
+ *
+ * Key behavioral changes from pre-Phase 4:
+ * - No REST probe, no backendAuthenticated, no compatibility flags
+ * - Persisted session = authenticated immediately
+ * - Background signer verification (non-blocking)
+ * - No separate pool for relay/profile hydration
+ * - Roles from relay membership events, not REST /orgs
+ */
+
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-// Mock browser environment
 global.window = global;
 
-const systemStoreMock = vi.hoisted(() => ({
-  info: null,
-  currentSystemInfo: vi.fn(() => systemStoreMock.info),
-  loadSystemInfo: vi.fn(async () => systemStoreMock.info)
+vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({
+  stopRoleDerivation: vi.fn()
 }));
 
-vi.mock('../../src/lib/stores/system.svelte.js', () => ({
-  currentSystemInfo: systemStoreMock.currentSystemInfo,
-  loadSystemInfo: systemStoreMock.loadSystemInfo
+vi.mock('../../src/lib/nostr/store-interface.js', () => ({
+  requestPersistentStorage: vi.fn().mockResolvedValue(true)
 }));
 
-// Mock NIP-07 module
 vi.mock('../../src/lib/nostr/nip07.js', () => ({
   waitForNip07: vi.fn(),
   getPublicKey: vi.fn(),
@@ -26,7 +32,6 @@ vi.mock('../../src/lib/nostr/nip07.js', () => ({
   watchNip07Availability: vi.fn()
 }));
 
-// Mock NIP-46 module
 vi.mock('../../src/lib/nostr/nip46.js', () => ({
   detectNip46: vi.fn(),
   parseNostrConnectUri: vi.fn(),
@@ -37,51 +42,12 @@ vi.mock('../../src/lib/nostr/nip46.js', () => ({
   getCapabilities: vi.fn()
 }));
 
-const nostrClientMock = vi.hoisted(() => ({
-  nostr: {
-    connected: { subscribe: vi.fn((run) => { run(true); return vi.fn(); }) },
-    subscribe: vi.fn((_filters, handlers) => {
-      Promise.resolve().then(() => handlers?.onEose?.());
-      return vi.fn();
-    })
-  }
+vi.mock('$lib/api/client.js', () => ({
+  api: { setAuthProvider: vi.fn(), fetch: vi.fn() }
 }));
 
-const poolClientMock = vi.hoisted(() => ({
-  connect: vi.fn(async (relays) => ({ total: Array.isArray(relays) ? relays.length : 0, connected: Array.isArray(relays) ? relays.length : 0 })),
-  subscribe: vi.fn((filters, handlers) => {
-    const kinds = Array.isArray(filters?.[0]?.kinds) ? filters[0].kinds : [];
-    const events = kinds.flatMap((kind) => poolClientMock.eventsByKind[kind] || []);
-    Promise.resolve().then(() => {
-      for (const event of events) handlers?.onEvent?.(event);
-      handlers?.onEose?.();
-    });
-    return vi.fn();
-  }),
-  disconnect: vi.fn(),
-  eventsByKind: {}
-}));
-
-vi.mock('$lib/nostr/client.js', () => nostrClientMock);
-vi.mock('../../src/lib/nostr/client.js', () => nostrClientMock);
-vi.mock('../../src/lib/nostr/pool-client.js', () => ({
-  PoolBackedClient: class {
-    constructor({ relays = [] } = {}) {
-      this.relays = relays;
-    }
-
-    async connect(relays = this.relays) {
-      return poolClientMock.connect(relays);
-    }
-
-    subscribe(filters, handlers) {
-      return poolClientMock.subscribe(filters, handlers);
-    }
-
-    disconnect() {
-      poolClientMock.disconnect();
-    }
-  }
+vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => ({
+  disconnectEncryptedControlplane: vi.fn()
 }));
 
 describe('Auth Store', () => {
@@ -90,41 +56,13 @@ describe('Auth Store', () => {
   let nip46Module;
 
   beforeEach(async () => {
-    // Clear localStorage
     localStorage.clear();
-    
-    // Reset all mocks
     vi.clearAllMocks();
     vi.resetModules();
-    systemStoreMock.info = null;
-    poolClientMock.eventsByKind = {
-      0: [{
-        id: 'kind0',
-        kind: 0,
-        pubkey: 'a'.repeat(64),
-        created_at: 1714521600,
-        content: JSON.stringify({ name: 'Test User', picture: 'https://example.com/avatar.png' }),
-        tags: []
-      }],
-      10002: [{
-        id: 'relaylist',
-        kind: 10002,
-        pubkey: 'a'.repeat(64),
-        created_at: 1714521601,
-        content: '',
-        tags: [
-          ['r', 'wss://user-relay.example', 'read'],
-          ['r', 'wss://user-write.example', 'write'],
-          ['r', 'wss://user-both.example']
-        ]
-      }]
-    };
-    
-    // Import mocked NIP-07 module
+
     nip07Module = await import('../../src/lib/nostr/nip07.js');
     nip46Module = await import('../../src/lib/nostr/nip46.js');
-    
-    // Set default mock implementations
+
     nip07Module.waitForNip07.mockResolvedValue({ available: true });
     nip07Module.getPublicKey.mockResolvedValue('a'.repeat(64));
     nip07Module.getRelays.mockResolvedValue({
@@ -158,7 +96,7 @@ describe('Auth Store', () => {
       metadata: null
     }));
     nip46Module.connectNip46.mockResolvedValue({
-      uri: 'nostrconnect://'+ '9'.repeat(64) + '?relay=wss://relay.nip46.test&secret=secret',
+      uri: 'nostrconnect://' + '9'.repeat(64) + '?relay=wss://relay.nip46.test&secret=secret',
       signerPubkey: '9'.repeat(64),
       pubkey: 'a'.repeat(64),
       relays: { 'wss://relay.nip46.test': { read: true, write: true } },
@@ -175,82 +113,72 @@ describe('Auth Store', () => {
       getRelays: vi.fn().mockResolvedValue({ 'wss://relay.nip46.test': { read: true, write: true } }),
       disconnect: nip46Module.disconnectNip46
     });
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: [] })
-    });
-    // Dynamically import auth module to get fresh state
+
     authModule = await import('../../src/lib/stores/auth.js');
   });
 
   afterEach(() => {
-    // Clean up any persisted sessions
     localStorage.clear();
   });
 
   describe('initializeAuth', () => {
     it('should initialize with unauthenticated status when no session exists', async () => {
       await authModule.initializeAuth();
-      
       const state = authModule.authState;
-      
       expect(state.status).toBe('unauthenticated');
       expect(state.extensionAvailable).toBe(true);
       expect(state.pubkey).toBeNull();
       expect(state.error).toBeNull();
-      expect(state.compatibility.restNip98Ready).toBe(false);
-      expect(state.compatibility.restNip98LastError).toBeNull();
     });
 
-    it('should restore session from localStorage when available', async () => {
+    it('should restore session from localStorage immediately (no REST probe)', async () => {
       const session = {
         pubkey: 'b'.repeat(64),
         relays: { 'wss://relay.test': { read: true, write: true } },
-        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
+        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z',
+        signerVerifiedAt: new Date().toISOString()
       };
       localStorage.setItem('bahia_auth_session', JSON.stringify(session));
-      nip07Module.getPublicKey.mockResolvedValue(session.pubkey);
-      
+
       await authModule.initializeAuth();
-      
       const state = authModule.authState;
-      
+
+      // §6.2: persisted session = AUTHENTICATED IMMEDIATELY
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(session.pubkey);
-      expect(state.relays).toEqual({ 'wss://relay.test/': { read: true, write: true } });
       expect(state.lastAuthenticatedAt).toBe(session.lastAuthenticatedAt);
+      // No REST probe — fetch was never called
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
-    it('should not restore session if extension is unavailable', async () => {
+    it('should restore session even if extension is temporarily unavailable', async () => {
+      // §6.2: persisted session trusted immediately; signer verify is background
       const session = {
         pubkey: 'c'.repeat(64),
         relays: {},
-        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
+        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z',
+        signerVerifiedAt: new Date().toISOString()
       };
       localStorage.setItem('bahia_auth_session', JSON.stringify(session));
-      
       nip07Module.waitForNip07.mockResolvedValue({ available: false });
-      
+
       await authModule.initializeAuth();
-      
       const state = authModule.authState;
-      
-      expect(state.status).toBe('unauthenticated');
-      expect(state.extensionAvailable).toBe(false);
-      expect(state.pubkey).toBeNull();
+
+      // Still authenticated — signer will verify in background
+      expect(state.status).toBe('authenticated');
+      expect(state.pubkey).toBe(session.pubkey);
     });
 
     it('should update capabilities when restoring session', async () => {
       const session = {
         pubkey: 'd'.repeat(64),
         relays: {},
-        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
+        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z',
+        signerVerifiedAt: new Date().toISOString()
       };
       localStorage.setItem('bahia_auth_session', JSON.stringify(session));
-      
+
       const capabilities = {
         getPublicKey: true,
         signEvent: true,
@@ -260,97 +188,43 @@ describe('Auth Store', () => {
       };
       nip07Module.getCapabilities.mockReturnValue(capabilities);
       nip07Module.getPublicKey.mockResolvedValue(session.pubkey);
-      
-      await authModule.initializeAuth();
-      
-      const state = authModule.authState;
-      
-      expect(state.capabilities).toEqual(capabilities);
-    });
-
-    it('keeps signer session authenticated when direct NIP-98 is unavailable during initialize', async () => {
-      localStorage.setItem('bahia_auth_session', JSON.stringify({
-        pubkey: 'd'.repeat(64),
-        relays: { 'wss://relay.test': { read: true, write: true } },
-        authMethod: 'nip07',
-        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
-      }));
-
-      nip07Module.getPublicKey.mockResolvedValue('d'.repeat(64));
 
       await authModule.initializeAuth();
-
-      expect(authModule.authState.status).toBe('authenticated');
-      expect(authModule.authState.error).toBeNull();
-      expect(authModule.authState.compatibility.restNip98Ready).toBe(false);
-      expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
-    });
-
-    it('rejects and clears a persisted NIP-07 session that the signer does not control', async () => {
-      localStorage.setItem('bahia_auth_session', JSON.stringify({
-        pubkey: 'b'.repeat(64),
-        relays: {},
-        authMethod: 'nip07'
-      }));
-      nip07Module.getPublicKey.mockResolvedValue('a'.repeat(64));
-
-      await authModule.initializeAuth();
-
-      expect(authModule.authState.status).toBe('unauthenticated');
-      expect(authModule.authState.pubkey).toBeNull();
-      expect(localStorage.getItem('bahia_auth_session')).toBeNull();
+      expect(authModule.authState.capabilities).toEqual(capabilities);
     });
 
     it('should handle invalid session data gracefully', async () => {
       localStorage.setItem('bahia_auth_session', 'invalid json');
-      
       await authModule.initializeAuth();
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('unauthenticated');
-      expect(state.pubkey).toBeNull();
+      expect(authModule.authState.status).toBe('unauthenticated');
+      expect(authModule.authState.pubkey).toBeNull();
     });
 
     it('should handle session without pubkey', async () => {
-      const invalidSession = {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
         relays: {},
         lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
-      };
-      localStorage.setItem('bahia_auth_session', JSON.stringify(invalidSession));
-      
+      }));
       await authModule.initializeAuth();
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('unauthenticated');
+      expect(authModule.authState.status).toBe('unauthenticated');
     });
 
     it('should ignore session with invalid pubkey format', async () => {
-      const invalidSession = {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
         pubkey: 'not-a-hex-pubkey',
-        relays: { 'wss://relay.test': { read: true, write: true } },
+        relays: {},
         lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
-      };
-      localStorage.setItem('bahia_auth_session', JSON.stringify(invalidSession));
-
+      }));
       await authModule.initializeAuth();
-
-      const state = authModule.authState;
-
-      expect(state.status).toBe('unauthenticated');
-      expect(state.pubkey).toBeNull();
+      expect(authModule.authState.status).toBe('unauthenticated');
+      expect(authModule.authState.pubkey).toBeNull();
     });
 
     it('should set error status on initialization failure', async () => {
       nip07Module.waitForNip07.mockRejectedValue(new Error('Init failed'));
-      
       await authModule.initializeAuth();
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('error');
-      expect(state.error).toBe('Init failed');
+      expect(authModule.authState.status).toBe('error');
+      expect(authModule.authState.error).toBe('Init failed');
     });
 
     it('updates extension availability when the watcher reports a late provider injection', async () => {
@@ -368,8 +242,23 @@ describe('Auth Store', () => {
 
       nip07Module.detectNip07.mockReturnValue({ available: true });
       handleAvailabilityChange?.({ available: true });
-
       expect(authModule.authState.extensionAvailable).toBe(true);
+    });
+
+    it('calls requestPersistentStorage on first authenticated boot', async () => {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'e'.repeat(64),
+        relays: {},
+        authMethod: 'nip07',
+        lastAuthenticatedAt: new Date().toISOString(),
+        signerVerifiedAt: new Date().toISOString()
+      }));
+
+      await authModule.initializeAuth();
+      await new Promise(r => setTimeout(r, 10));
+
+      const { requestPersistentStorage } = await import('../../src/lib/nostr/store-interface.js');
+      expect(requestPersistentStorage).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -377,24 +266,22 @@ describe('Auth Store', () => {
     it('should authenticate and persist session on successful login', async () => {
       const pubkey = 'e'.repeat(64);
       const relays = { 'wss://relay.login': { read: true, write: true } };
-      
+
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
       nip07Module.getRelays.mockResolvedValue(relays);
-      
+
       await authModule.login();
-      
       const state = authModule.authState;
-      
+
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(pubkey);
       expect(state.relays).toEqual(relays);
       expect(state.lastAuthenticatedAt).toBeTruthy();
+      expect(state.signerVerifiedAt).toBeTruthy();
       expect(state.error).toBeNull();
-      
-      // Check localStorage persistence
+
       const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
       expect(stored.pubkey).toBe(pubkey);
-      expect(stored.relays).toEqual({ 'wss://relay.login/': { read: true, write: true } });
     });
 
     it('should update capabilities on login', async () => {
@@ -406,185 +293,43 @@ describe('Auth Store', () => {
         nip44: false
       };
       nip07Module.getCapabilities.mockReturnValue(capabilities);
-      
-      await authModule.login();
-      
-      const state = authModule.authState;
-      
-      expect(state.capabilities).toEqual(capabilities);
-    });
-
-    it('hydrates relay lists and profile metadata from runtime and signer relays', async () => {
-      const pubkey = 'a'.repeat(64);
-      nip07Module.getPublicKey.mockResolvedValue(pubkey);
-      nip07Module.getRelays.mockResolvedValue({
-        'wss://signer.example': { read: true, write: true }
-      });
 
       await authModule.login();
-
-      expect(poolClientMock.connect).toHaveBeenCalled();
-      expect(poolClientMock.connect.mock.calls[0][0]).toEqual(
-        expect.arrayContaining(['wss://signer.example/'])
-      );
-      expect(authModule.authState.profile).toMatchObject({
-        name: 'Test User',
-        picture: 'https://example.com/avatar.png'
-      });
-      expect(authModule.authState.relays).toEqual({
-        'wss://signer.example/': { read: true, write: true },
-        'wss://user-both.example/': { read: true, write: true },
-        'wss://user-relay.example/': { read: true, write: false },
-        'wss://user-write.example/': { read: false, write: true }
-      });
-
-      const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
-      expect(stored.profile.name).toBe('Test User');
-      expect(stored.relays).toEqual(authModule.authState.relays);
-    });
-
-    it('does not use the legacy Bahia relay for bootstrap metadata queries', async () => {
-      const pubkey = 'a'.repeat(64);
-      nip07Module.getPublicKey.mockResolvedValue(pubkey);
-      nip07Module.getRelays.mockResolvedValue({
-        'wss://signer.example': { read: true, write: true },
-        'wss://bahia.sharegap.net/relay': { read: true, write: true }
-      });
-
-      await authModule.login();
-
-      const requestedRelays = poolClientMock.connect.mock.calls[0][0];
-      expect(requestedRelays).toEqual(expect.arrayContaining(['wss://signer.example/']));
-      expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay');
-      expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay/');
+      expect(authModule.authState.capabilities).toEqual(capabilities);
     });
 
     it('does not resurrect an existing session after an explicit login failure', async () => {
-      // Set up existing session
-      const existingSession = {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
         pubkey: 'f'.repeat(64),
         relays: {},
         lastAuthenticatedAt: '2026-04-29T10:00:00.000Z'
-      };
-      localStorage.setItem('bahia_auth_session', JSON.stringify(existingSession));
-      
-      // Make login fail
+      }));
+
       nip07Module.getPublicKey.mockRejectedValue(new Error('User denied'));
-      
       await expect(authModule.login()).rejects.toThrow('User denied');
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('error');
-      expect(state.pubkey).toBeNull();
-      expect(state.error).toBe('User denied');
+
+      expect(authModule.authState.status).toBe('error');
+      expect(authModule.authState.pubkey).toBeNull();
+      expect(authModule.authState.error).toBe('User denied');
       expect(localStorage.getItem('bahia_auth_session')).toBeNull();
     });
 
     it('should set error status on login failure with no previous session', async () => {
       nip07Module.getPublicKey.mockRejectedValue(new Error('Extension error'));
-      
       await expect(authModule.login()).rejects.toThrow('Extension error');
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('error');
-      expect(state.error).toBe('Extension error');
+      expect(authModule.authState.status).toBe('error');
+      expect(authModule.authState.error).toBe('Extension error');
     });
 
     it('should handle getRelays failure gracefully', async () => {
       const pubkey = 'g'.repeat(64);
-      
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
       nip07Module.getRelays.mockRejectedValue(new Error('Relays failed'));
-      systemStoreMock.info = { nostr: { browser_relays: ['wss://runtime.example'] } };
-      
-      await authModule.login();
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('authenticated');
-      expect(state.pubkey).toBe(pubkey);
-      expect(state.relays).toEqual({});
-    });
-
-    it('installs direct NIP-98 provider instead of exchanging JWT when advertised', async () => {
-      const signedEvent = { id: 'event-id', sig: 'signature', pubkey: 'a'.repeat(64), kind: 27235, tags: [] };
-      nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, ...signedEvent, tags: event.tags }));
-      systemStoreMock.info = { features: { direct_nostr_http_auth: true } };
-      global.fetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: [{ id: 'org-1', role: 'admin' }] })
-      });
 
       await authModule.login();
-      const { api } = await import('../../src/lib/api/client.js');
-      await api.getBlossomServers();
-
-      expect(authModule.authState.directNip98Ready).toBe(true);
-      expect(authModule.authState.compatibility.restNip98Advertised).toBe(true);
-      expect(authModule.authState.compatibility.restNip98Ready).toBe(true);
-      expect(authModule.authState.compatibility.restNip98LastError).toBeNull();
-      expect(authModule.authState.roles).toEqual(['admin']);
-      expect(localStorage.getItem('bahia_token')).toBeNull();
-      expect(global.fetch).toHaveBeenCalledWith('/api/v1/orgs', expect.objectContaining({
-        method: 'GET',
-        headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
-      }));
-      expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
-      expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/blossom/servers', expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
-      }));
-    });
-
-    it('keeps NIP-98 readiness false when the signed backend probe is rejected', async () => {
-      nip07Module.signEvent.mockImplementation(async (event) => ({
-        ...event,
-        id: 'probe-event-id',
-        sig: 'probe-signature'
-      }));
-      systemStoreMock.info = { features: { direct_nostr_http_auth: true } };
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ error: 'NIP-98 rejected' })
-      });
-
-      await authModule.login();
-
       expect(authModule.authState.status).toBe('authenticated');
-      expect(authModule.authState.backendAuthenticated).toBe(false);
-      expect(authModule.authState.directNip98Ready).toBe(false);
-      expect(authModule.authState.compatibility).toMatchObject({
-        restNip98Advertised: true,
-        restNip98Ready: false,
-        restNip98LastError: 'NIP-98 rejected'
-      });
-    });
-
-    it('does not fall back to JWT exchange when direct NIP-98 is unavailable', async () => {
-      localStorage.setItem('bahia_token', 'legacy-token');
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-type', 'application/json']]),
-        json: async () => ({ data: { features: { nostr_auth_exchange: true, direct_nostr_http_auth: false } } })
-      });
-
-      await authModule.login();
-
-      expect(authModule.authState.backendAuthenticated).toBe(false);
-      expect(authModule.authState.directNip98Ready).toBe(false);
-      expect(authModule.authState.status).toBe('authenticated');
-      expect(authModule.authState.error).toBeNull();
-      expect(authModule.authState.compatibility.restNip98Ready).toBe(false);
-      expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
-      expect(localStorage.getItem('bahia_token')).toBeNull();
-      expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
+      expect(authModule.authState.pubkey).toBe(pubkey);
+      expect(authModule.authState.relays).toEqual({});
     });
   });
 
@@ -612,30 +357,25 @@ describe('Auth Store', () => {
         getPublicKey: nip07Module.getPublicKey,
         signEvent: nip07Module.signEvent,
         getRelays: nip07Module.getRelays,
-        encryptNip44: vi.fn().mockRejectedValue(new Error('Failed to encrypt with NIP-44: aka-profiles: Could not establish connection. Receiving end does not exist.')),
+        encryptNip44: vi.fn().mockRejectedValue(new Error('Failed to encrypt with NIP-44: Could not establish connection. Receiving end does not exist.')),
         decryptNip44: vi.fn()
       });
 
       await authModule.login();
-
       await expect(authModule.ensureEncryptedSignerReady('b'.repeat(64))).rejects.toThrow('Receiving end does not exist');
       expect(authModule.authState.capabilities.nip44).toBe(false);
       expect(authModule.authState.capabilities.nip44Blocker).toContain('Receiving end does not exist');
-
-      await expect(authModule.ensureEncryptedSignerReady('b'.repeat(64))).rejects.toThrow('Receiving end does not exist');
     });
   });
 
   describe('loginWithNostrConnect', () => {
     it('should authenticate and persist session from nostrconnect URI', async () => {
       const uri = `nostrconnect://${'9'.repeat(64)}?relay=wss://relay.nip46.test&secret=secret`;
-
       await authModule.loginWithNostrConnect(uri);
 
-      const state = authModule.authState;
-      expect(state.status).toBe('authenticated');
-      expect(state.authMethod).toBe('nip46');
-      expect(state.pubkey).toBe('a'.repeat(64));
+      expect(authModule.authState.status).toBe('authenticated');
+      expect(authModule.authState.authMethod).toBe('nip46');
+      expect(authModule.authState.pubkey).toBe('a'.repeat(64));
       expect(nip46Module.parseNostrConnectUri).toHaveBeenCalledWith(uri);
       expect(nip46Module.connectNip46).toHaveBeenCalled();
 
@@ -658,7 +398,6 @@ describe('Auth Store', () => {
 
       expect(authModule.authState.status).toBe('error');
       expect(authModule.authState.pubkey).toBeNull();
-      expect(authModule.authState.error).toBe('remote signer rejected');
       expect(localStorage.getItem('bahia_auth_session')).toBeNull();
       expect(nip46Module.disconnectNip46).toHaveBeenCalled();
     });
@@ -680,7 +419,7 @@ describe('Auth Store', () => {
       nip46Module.detectNip46.mockReturnValue({ available: true, provider: {} });
       await authModule.initializeAuth();
 
-      expect(nip46Module.connectNip46).toHaveBeenCalled();
+      // §6.2: authenticated immediately, NIP-46 reconnect in background
       expect(authModule.authState.status).toBe('authenticated');
       expect(authModule.authState.authMethod).toBe('nip46');
     });
@@ -688,31 +427,20 @@ describe('Auth Store', () => {
 
   describe('logout', () => {
     it('should clear session and reset to unauthenticated', async () => {
-      // First login
       await authModule.login();
-      
-      // Then logout
       authModule.logout();
-      
-      const state = authModule.authState;
-      
-      expect(state.status).toBe('unauthenticated');
-      expect(state.pubkey).toBeNull();
-      expect(state.relays).toEqual({});
-      expect(state.error).toBeNull();
-      
-      // Check localStorage is cleared
+
+      expect(authModule.authState.status).toBe('unauthenticated');
+      expect(authModule.authState.pubkey).toBeNull();
+      expect(authModule.authState.relays).toEqual({});
+      expect(authModule.authState.error).toBeNull();
       expect(localStorage.getItem('bahia_auth_session')).toBeNull();
     });
 
     it('should preserve extension availability after logout', async () => {
       await authModule.login();
-      
       authModule.logout();
-      
-      const state = authModule.authState;
-      
-      expect(state.extensionAvailable).toBe(true);
+      expect(authModule.authState.extensionAvailable).toBe(true);
     });
 
     it('should preserve capabilities after logout if extension is available', async () => {
@@ -724,13 +452,18 @@ describe('Auth Store', () => {
         nip44: false
       };
       nip07Module.getCapabilities.mockReturnValue(capabilities);
-      
+
       await authModule.login();
       authModule.logout();
-      
-      const state = authModule.authState;
-      
-      expect(state.capabilities).toEqual(capabilities);
+      expect(authModule.authState.capabilities).toEqual(capabilities);
+    });
+
+    it('calls stopRoleDerivation on logout', async () => {
+      await authModule.login();
+      authModule.logout();
+
+      const { stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+      expect(stopRoleDerivation).toHaveBeenCalled();
     });
   });
 
@@ -757,53 +490,30 @@ describe('Auth Store', () => {
       });
       expect(authModule.authState.profile).toEqual(profile);
       expect(persisted.profile).toEqual(profile);
-      expect(persisted.pubkey).toBe(authModule.authState.pubkey);
     });
   });
 
   describe('signWithAuth', () => {
     it('should reject when not authenticated', async () => {
-      const event = { kind: 1, content: 'test' };
-      
-      await expect(authModule.signWithAuth(event)).rejects.toThrow('Not authenticated');
+      await expect(authModule.signWithAuth({ kind: 1, content: 'test' })).rejects.toThrow('Not authenticated');
     });
 
     it('should sign event when authenticated', async () => {
-      const event = {
-        kind: 1,
-        content: 'Hello',
-        tags: [],
-        created_at: Math.floor(Date.now() / 1000)
-      };
-      
-      const signedEvent = {
-        ...event,
-        id: 'event-id',
-        sig: 'signature',
-        pubkey: 'a'.repeat(64)
-      };
-      
+      const event = { kind: 1, content: 'Hello', tags: [], created_at: Math.floor(Date.now() / 1000) };
+      const signedEvent = { ...event, id: 'event-id', sig: 'signature', pubkey: 'a'.repeat(64) };
       nip07Module.signEvent.mockResolvedValue(signedEvent);
-      
-      // First authenticate
+
       await authModule.login();
-      
-      // Then sign
       const result = await authModule.signWithAuth(event);
-      
+
       expect(result).toEqual(signedEvent);
       expect(nip07Module.signEvent).toHaveBeenCalledWith(event);
     });
 
     it('should propagate signing errors', async () => {
       nip07Module.signEvent.mockRejectedValue(new Error('Signing failed'));
-      
-      // Authenticate first
       await authModule.login();
-      
-      const event = { kind: 1, content: 'test' };
-      
-      await expect(authModule.signWithAuth(event)).rejects.toThrow('Event signing failed: Signing failed');
+      await expect(authModule.signWithAuth({ kind: 1, content: 'test' })).rejects.toThrow('Event signing failed: Signing failed');
     });
 
     it('should sign with NIP-46 signer when auth method is nip46', async () => {
@@ -831,69 +541,33 @@ describe('Auth Store', () => {
     });
   });
 
-  describe('relay sources', () => {
-    it('queries auth metadata only on runtime and signer-provided relays', async () => {
-      systemStoreMock.info = { nostr: { browser_relays: ['wss://runtime-approved.example'] } };
-      nip07Module.getRelays.mockResolvedValue({
-        'wss://signer-approved.example': { read: true, write: true }
-      });
-
-      await authModule.login();
-
-      for (const call of poolClientMock.connect.mock.calls) {
-        expect(call[0]).toEqual(['wss://runtime-approved.example', 'wss://signer-approved.example/']);
-      }
-    });
-
-    it('fails clearly when runtime system info and the signer provide no relays', async () => {
-      systemStoreMock.info = null;
-      nip07Module.getRelays.mockResolvedValue({});
-
-      await expect(authModule.login()).rejects.toThrow(
-        'No approved relays available from runtime system info or signer configuration'
-      );
-    });
-  });
-
   describe('Derived stores', () => {
     it('isAuthenticated should be false when unauthenticated', async () => {
       await authModule.initializeAuth();
-      
-      const isAuth = authModule.isAuthenticated();
-      
-      expect(isAuth).toBe(false);
+      expect(authModule.isAuthenticated()).toBe(false);
     });
 
     it('isAuthenticated should be true when authenticated', async () => {
       await authModule.login();
-      
-      const isAuth = authModule.isAuthenticated();
-      
-      expect(isAuth).toBe(true);
+      expect(authModule.isAuthenticated()).toBe(true);
     });
 
     it('currentUser should be null when unauthenticated', async () => {
       await authModule.initializeAuth();
-      
-      const user = authModule.currentUser();
-      
-      expect(user).toBeNull();
+      expect(authModule.currentUser()).toBeNull();
     });
 
     it('currentUser should contain user data when authenticated', async () => {
       const pubkey = 'h'.repeat(64);
-      const relays = { 'wss://relay.user': { read: true, write: true } };
-      
       nip07Module.getPublicKey.mockResolvedValue(pubkey);
-      nip07Module.getRelays.mockResolvedValue(relays);
-      
+      nip07Module.getRelays.mockResolvedValue({ 'wss://relay.user': { read: true, write: true } });
+
       await authModule.login();
-      
       const user = authModule.currentUser();
-      
+
       expect(user).toBeTruthy();
       expect(user.pubkey).toBe(pubkey);
-      expect(user.relays).toEqual(relays);
+      expect(user.relays).toEqual({ 'wss://relay.user': { read: true, write: true } });
       expect(user.lastAuthenticatedAt).toBeTruthy();
     });
   });

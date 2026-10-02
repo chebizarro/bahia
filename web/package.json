@@ -39,6 +39,7 @@
   },
   "type": "module",
   "dependencies": {
+    "@noble/ciphers": "2.1.1",
     "@nostr-git/core": "1.2.0",
     "@welshman/lib": "^0.12.3",
     "@welshman/net": "^0.12.3",

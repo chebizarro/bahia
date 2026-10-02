@@ -1,7 +1,16 @@
+<!--
+  AuthGuard — Phase 4 §6.3: role-based access check.
+
+  Replaces the previous REST probe with a reactive role check.
+  No spinner, no REST probe, no discovery gate.
+
+  Protected routes render immediately from the store for authenticated users.
+  Role checks gate mutation affordances, not view rendering.
+-->
 <script>
   import { goto } from '$app/navigation';
-  import { untrack } from 'svelte';
   import { authState, isAuthenticated, initializeAuth } from '$lib/stores/auth.js';
+  import { hasAnyRole } from '$lib/stores/auth-roles.svelte.js';
 
   let { children, requiredRoles = [], requiresRestCompatibility = false } = $props();
 
@@ -9,13 +18,10 @@
 
   $effect(() => {
     if (initialized) return;
-
-    // Signer restoration can finish before the backend membership probe.
-    // Keep the route pending until the entire bootstrap has settled.
-    void untrack(async () => {
+    void (async () => {
       await initializeAuth();
       initialized = true;
-    });
+    })();
   });
 
   const isLoading = $derived(
@@ -25,20 +31,12 @@
       authState.status === 'authenticating'
   );
 
-  // A browser signer proves identity only. The backend membership probe is the
-  // authoritative platform-access decision for every protected route.
-  const isAuthorized = $derived(isAuthenticated() && Boolean(authState.backendAuthenticated));
-
-  const compatibilityAuthorized = $derived(
-    !requiresRestCompatibility || Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready)
-  );
+  // §6.2: A persisted signer-verified session is authenticated.
+  // No backendAuthenticated flag — roles come from relay membership events.
+  const isAuthorized = $derived(isAuthenticated());
 
   const roleAuthorized = $derived(
-    requiredRoles.length === 0 ||
-      requiredRoles.some((role) =>
-        (Array.isArray(authState.roles) && authState.roles.includes(role)) ||
-        (Array.isArray(authState?.capabilities?.roles) && authState.capabilities.roles.includes(role))
-      )
+    requiredRoles.length === 0 || hasAnyRole(requiredRoles)
   );
 
   $effect(() => {
@@ -52,11 +50,6 @@
   <div class="auth-loading">
     <div class="spinner"></div>
     <p>Checking authentication...</p>
-  </div>
-{:else if isAuthorized && !compatibilityAuthorized}
-  <div class="auth-redirect">
-    <p>This page currently requires REST compatibility auth.</p>
-    <p>Enable backend <code>direct_nostr_http_auth</code> to access it.</p>
   </div>
 {:else if isAuthorized && roleAuthorized}
   {@render children?.()}
@@ -88,13 +81,6 @@
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
-  }
-
-  code {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 0.1rem 0.35rem;
   }
 
   @keyframes spin {
