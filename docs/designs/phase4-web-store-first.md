@@ -18,7 +18,7 @@ Phase 4 replaces the web app's REST/ContextVM-centred data layer with a Nostr-na
 2. **Instant render from cache.** Opening a tab renders whatever the store already holds; EOSE is a "synced" badge.
 3. **No backend gate.** A persisted signer-verified session is authenticated immediately. Roles come from relay membership events, not a REST `/orgs` probe.
 4. **Durable signed intents.** Mutations are locally signed kind 30900 (or NIP-59 gift-wrapped) intent events, inserted into the store as "pending" and published through an outbox with per-relay OK tracking.
-5. **ContextVM stays only for:** assistant prompts, secret reveal, log fetch.
+5. **ContextVM stays only for:** assistant prompts, secret reveal, log fetch (plus interim reads for domains whose state the daemon does not yet publish as relay events).
 6. **Delete the legacy layer.** indexeddb-cache.js, controlplane bootstrap/connection/events sync, AuthGuard REST probe, retained-domain-subscription, extra pools, ad-hoc storage caches, lib/api/client.js.
 
 This closes the dual-path window opened by Phase 3 §4.1 so that bahia-irsry.11.19 (delete ContextVM CRUD handlers) can proceed.
@@ -42,11 +42,26 @@ This closes the dual-path window opened by Phase 3 §4.1 so that bahia-irsry.11.
 | **Derived views** | Repository queries with reactive Svelte bindings | `EventStore` with RxJS `query()` | Must build collection derivation |
 | **Maturity / maintenance** | Active (Coracle powers it); Svelte 5 runes support | Active (hzrd149 maintains); used by nostrudel | N/A |
 
-### 1.2 Decision: welshman
+### 1.2 Decision: welshman, behind a library-agnostic store interface
 
-**Decision: use `@welshman/net`, `@welshman/store`, `@welshman/signer`, and `@welshman/util`.**
+**Decision: use `@welshman/net`, `@welshman/store`, `@welshman/signer`, and `@welshman/util`, with a library-agnostic `BahiaEventStore` interface so the implementation can be swapped.**
 
-Rationale:
+W1-S1 begins with a **timeboxed spike** (≤ 2 days) to validate welshman + Svelte 5 runes interop. If the spike fails (welshman's Svelte 4 `writable`/`derived` stores do not compose cleanly with Svelte 5 `$state`/`$derived` runes), the fallback is **applesauce-core `EventStore` + `nostr-idb`** behind the same `BahiaEventStore` interface. The store API in §2 and derived-view API in §8 are defined against this interface, not against welshman internals.
+
+```typescript
+// lib/nostr/store-interface.ts — the contract both candidates implement
+export interface BahiaEventStore {
+  ingest(event: NostrEvent): boolean;        // returns true if accepted
+  query(filter: Filter): NostrEvent[];       // synchronous snapshot
+  subscribe(filter: Filter, cb: (event: NostrEvent) => void): () => void;
+  getCursor(relay: string, filterHash: string): number | null;
+  setCursor(relay: string, filterHash: string, since: number): void;
+  deleteTombstoned(kind5: NostrEvent): void; // NIP-09
+  sweepExpired(): void;                      // NIP-40
+}
+```
+
+Rationale for welshman as first choice:
 1. **Svelte-native.** welshman is built for Svelte and exposes reactive stores directly. applesauce's RxJS layer requires a non-trivial Svelte adapter (subscribe→derived→unsubscribe lifecycle for every view), which is an ongoing maintenance burden.
 2. **One package replaces six concerns.** Pool management, subscription dedup/ref-counting, cursor persistence, IndexedDB storage, AUTH handling, and derived views are all integrated. We currently have ~1,600 lines of hand-rolled pool/subscription/cache code that welshman replaces.
 3. **NIP-77 negentropy.** `@welshman/net` supports client-side negentropy sync out of the box, which is critical for the per-filter cursor model (A-5). applesauce-relay also supports this, but the Svelte integration cost tips the balance.
@@ -77,9 +92,11 @@ Database name: bahia-events-<service_pubkey_prefix_8>
 
 The 8-character hex prefix is sufficient to avoid collisions between deployments while keeping the name human-readable. The service pubkey comes from `app.html`'s `__PUBLIC_BAHIA_SERVICE_PUBKEYS__[0]`.
 
+On first authenticated boot, the store calls `navigator.storage.persist()` to request durable storage. This is a best-effort API — if the browser denies it (e.g. mobile Safari under storage pressure), the store operates normally but may be evicted by the browser. The store logs whether persistence was granted.
+
 ### 2.2 Object stores
 
-welshman's `@welshman/store` provides the core event store. We configure it with:
+The `BahiaEventStore` interface (§1.2) is backed by welshman's `@welshman/store` (or applesauce + nostr-idb if the spike falls back). The implementation provides:
 
 | Object store | Key | Indexes | Purpose |
 |-------------|-----|---------|---------|
@@ -187,18 +204,19 @@ The inner event is the same `30900` intent as §3.1, signed by the operator, NIP
     │
     ▼
 [Insert into local store as "pending"]
-  → Derived view shows entity with pending badge
+  → Derived view shows entity with pending badge + age
     │
     ▼
-[Publish to relay pool with per-relay OK tracking]
-  → On OK accepted=true from ≥1 relay: mark "published"
-  → On all OK rejected: mark "failed", show error
+[Publish to relay pool via outbox (§3.5)]
+  → Per-relay OK tracking, event-driven retry on reconnect
+  → On OK accepted=true from ≥ quorum relays: mark "published"
+  → On all relays permanently rejected: mark "failed", show reason
     │
     ▼
 [Subscribe to 30315 intent-status from service pubkey]
   → d = "intent-status:<my-pubkey>:<entity-coordinate>"
     │
-    ├─ status=accepted → Remove pending badge, canonical 30900 arrives
+    ├─ status=accepted → Remove pending badge
     ├─ status=conflict → Show conflict UI, prompt re-read + re-submit
     ├─ status=rejected → Show rejection reason
     └─ status=superseded → Remove pending badge, another intent won
@@ -208,29 +226,53 @@ The inner event is the same `30900` intent as §3.1, signed by the operator, NIP
 
 The client does not "apply" intents to local state. Instead:
 
-1. The pending intent is a **UI-only overlay**: the derived store shows it alongside canonical state with a visual badge.
+1. The pending intent is a **UI-only overlay**: the derived store shows it alongside canonical state with a visual badge (including age: "pending 5 s", "pending 2 min", etc.).
 2. When the daemon publishes the canonical `30900` under the service pubkey, the store ingests it normally.
-3. The client matches the canonical event's `intent_id` tag (or `e` tag referencing the intent event) against its pending-intent store and removes the pending overlay.
-4. If no `30315` status event arrives within 60 seconds, the client re-publishes the intent (outbox retry).
+3. The client clears the pending overlay when **either** of these arrives:
+   - A `30315` intent-status event whose `intent_id` tag matches the pending intent's `intent_id` (status = `accepted`, `rejected`, `conflict`, or `superseded`).
+   - A canonical `30900` for the same `(kind, service-pubkey, d)` coordinate with a `created_at` ≥ the intent's `created_at`.
+4. **No timeout-based retry or failure.** A pending intent stays pending (with its age badge) indefinitely until a `30315` status or a newer canonical `30900` arrives. The daemon may be offline, catching up, or processing a queue — none of these are client-side failures.
 
-### 3.5 Retries and JSON-RPC -32011 handling
+**Note:** Phase 3's canonical `30900` state events do not carry an `intent_id` tag or an `e` tag referencing the intent. The `30315` intent-status event (which carries `intent_id` in tags and content, and optionally an `e` tag with the intent event id) is the primary correlation mechanism. Coordinate-based matching is the fallback.
 
-**Outbox retry for intents:**
-- Intents in the `pending_intents` store with no relay `OK accepted=true` after 10 seconds are retried up to 3 times with exponential backoff (10s, 30s, 90s).
-- After 3 failures, the intent is marked "failed" and the user is notified.
+### 3.5 Outbox retry and ContextVM error handling
 
-**JSON-RPC -32011 for ContextVM calls that remain:**
-Per bahia-irsry.48 item 2, all remaining ContextVM mutations (assistant, secret reveal, log fetch) send a `progressToken`. If the daemon returns JSON-RPC error `-32011` (progress cancelled / request superseded), the client:
-1. Retries once with a new `progressToken`.
-2. On second failure, surfaces the error.
+**Outbox retry for intents (relay-level, event-driven):**
 
-ContextVM reads that remain are: assistant prompt/response, secret value reveal, deployment run log streaming. All others become relay subscriptions.
+The outbox retries relay delivery, not intent processing. It is driven by per-relay `OK` responses and relay reconnection, never by a timer:
+
+- On publish, the outbox tracks `OK` status per relay.
+- A relay that returns `OK accepted=true` is done. The outbox targets a **quorum** of ≥ 1 relay (the deploy-seed set is small; one accepted relay is sufficient for the daemon to see it).
+- A relay that returns `OK accepted=false` with a reason is recorded. If the reason is `auth-required:`, the outbox waits for the pool's AUTH handshake and retries once. If the reason is `blocked:`, `restricted:`, or `invalid:`, the outbox marks that relay as permanently failed for this event (no retry).
+- A relay that has not responded (socket dropped before `OK`) is retried on reconnect with exponential backoff (the pool manages reconnection). The intent event is re-sent on the next successful connection.
+- Retrying stops once ≥ quorum relays have accepted.
+- An intent that every relay permanently rejected (`OK false` with `blocked:`/`restricted:` from all relays) is marked "failed" with the relay's reason. This is the **only** path to "failed".
+
+**There is no timeout-based retry or failure.** A signed addressable event accepted by relays does not need re-publishing. The daemon may be offline; the intent is durable on the relay and will be picked up when the daemon reconnects and replays from its cursor.
+
+**ContextVM `-32011` handling for remaining calls (assistant, secret reveal, log fetch):**
+
+`-32011` is `ContextVMDuplicateRequestErrorCode` (`internal/controlplane/contextvm_local_run.go:89`): it means "this request was already accepted by the request ledger, but its response cannot be replayed" — either the request had no idempotency key, or its execution was interrupted (crash/restart).
+
+**Decision: every remaining ContextVM call carries an idempotency key minted once per user action. On `-32011`, the client retries with the SAME key so the ledger replays the stored response.**
+
+| Error code | Meaning | Client action |
+|-----------|---------|---------------|
+| `-32011` | Duplicate/interrupted request; response not replayable | Retry with the **same** idempotency key (`_meta.progressToken`). A new key would defeat the ledger and re-execute the action |
+| `-32600` | Invalid request (malformed, missing fields) | Fix and retry — do not reuse the key |
+| `-32603` | Internal error | Retry with the same key (transient); after 2 failures, surface the error |
+
+The idempotency key is a UUIDv7 minted once per user action (e.g., one "Send" click in the assistant). It is passed as `_meta.progressToken` in the ContextVM request. If the user explicitly retries the same action, the UI reuses the same key. A new user action (new message, new reveal request) mints a new key.
+
+ContextVM calls that remain are: assistant prompt/response, secret value reveal, deployment run log streaming, plus interim reads listed in §4. All others become relay subscriptions or signed intents.
 
 ---
 
 ## 4. What Stays ContextVM
 
-**Decision: only three interaction patterns remain on ContextVM (kind 25910 / 1059 gift wrap).**
+**Decision: only three interaction patterns remain on ContextVM permanently (kind 25910 / 1059 gift wrap), plus interim reads for domains the daemon does not yet publish as relay events.**
+
+### 4.1 Permanent ContextVM patterns
 
 | Pattern | Why it stays | Transport |
 |---------|-------------|-----------|
@@ -238,7 +280,19 @@ ContextVM reads that remain are: assistant prompt/response, secret value reveal,
 | **Secret value reveal** | The value itself must never touch relay storage even encrypted; the daemon decrypts on demand and returns the plaintext via an ephemeral response | NIP-59 gift wrap request + ephemeral gift wrap response |
 | **Deployment run log streaming** | Long-running, append-only output that doesn't fit addressable events; streamed via ContextVM progress notifications | NIP-59 gift wrap with progressToken |
 
-Everything else — service/environment/policy/DNS/backup/ML/LLM/package/worker/SBOM CRUD, org membership, notification channel config, security findings reads, payment history reads, relay settings — becomes relay subscriptions (reads) and signed intents (writes).
+### 4.2 Interim ContextVM reads (behind the store interface)
+
+The following views depend on state the daemon does not yet publish as relay events. Until the daemon publishes them (a prerequisite for W4 transport deletion), they read via ContextVM behind the `BahiaEventStore` interface so the consuming views are already store-first:
+
+| View | Current transport | Daemon publish prerequisite |
+|------|-------------------|-----------------------------|
+| **Payment history** (`stores/payments.svelte.js`) | ContextVM `payments.history` | Daemon publishes payment records as `30900` with `t=payment-record` |
+| **Security findings** (`stores/security.svelte.js`) | ContextVM `findingsList` | Daemon publishes findings as `30900` with `t=security-finding` |
+| **Security schedules** (`stores/security.svelte.js`) | ContextVM `schedulesList` | Daemon publishes schedules as `30900` with `t=security-schedule` |
+
+**Prerequisite gate for W4:** the ContextVM encrypted transport files (`encrypted-controlplane.js`, `encrypted-controlplane-transport.js`) cannot be fully deleted until the daemon publishes relay events for all three views above. W4-S1 deletes the CRUD methods and pool machinery but retains the read-only encrypted transport for these interim reads and the three permanent patterns.
+
+Everything else — service/environment/policy/DNS/backup/ML/LLM/package/worker/SBOM CRUD, org membership, notification channel config, relay settings — becomes relay subscriptions (reads) and signed intents (writes).
 
 ---
 
@@ -253,7 +307,7 @@ Org membership is modeled as encrypted kind `30900` events gift-wrapped (kind `1
 
 ### 5.2 C1 requirement: per-org content key with member wrapping (bahia-irsry.11.20)
 
-The C1 slice (in progress) is designing a unified confidential cp-state scheme:
+C1 (bahia-irsry.11.20, in progress) is implementing a unified confidential cp-state scheme:
 - A **per-org symmetric content key** (XChaCha20-Poly1305 or NIP-44 symmetric) encrypts the cp-state content.
 - The content key is **wrapped (NIP-44 encrypted) to each org member's pubkey** and published as a key-reference tag or a separate key-distribution event.
 - Secret _values_ and channel credentials remain **service-only** (never wrapped to members).
@@ -282,6 +336,8 @@ The web derives roles and reads confidential state through this sequence:
 ```
 
 ### 5.4 Requirements C1 must meet for Phase 4
+
+These requirements are to be verified against C1's merged scheme in W3-S2:
 
 | # | Requirement | Why |
 |---|-------------|-----|
@@ -393,6 +449,7 @@ No spinner. No redirect. Unauthenticated users see relay-public data. Authentica
 │ 2. Open IndexedDB event store                       │
 │    → Namespace: bahia-events-<service_pubkey[:8]>   │
 │    → Sweep NIP-40 expired events                    │
+│    → Request navigator.storage.persist() if authed  │
 ├─────────────────────────────────────────────────────┤
 │ 3. Render from store IMMEDIATELY                    │  ← No network needed
 │    → All routes derive views from store queries     │
@@ -405,7 +462,7 @@ No spinner. No redirect. Unauthenticated users see relay-public data. Authentica
 │    → Start background membership subscription       │
 ├─────────────────────────────────────────────────────┤
 │ 5. Connect to relay pool                            │  ← Network starts
-│    → Single welshman pool for all subscriptions     │
+│    → Single pool for all subscriptions              │
 │    → Per-interest, ref-counted subscriptions:       │
 │       a. Read-model: { kinds: [30900, ...],         │
 │          authors: [servicePubkey], since: cursor }   │
@@ -438,7 +495,7 @@ No spinner. No redirect. Unauthenticated users see relay-public data. Authentica
 
 ### 8.1 Pattern
 
-Each domain collection becomes a **derived query over the event store**, replacing the current per-collection `Map` + `replaceSnapshotArray` pattern:
+Each domain collection becomes a **derived query over the `BahiaEventStore` interface** (§1.2), replacing the current per-collection `Map` + `replaceSnapshotArray` pattern:
 
 ```javascript
 // stores/collections/services.svelte.js (after Phase 4)
@@ -456,7 +513,7 @@ export const services = $derived(
 
 ### 8.2 Domain routing by topic tag
 
-The current `events.svelte.js` routes events by parsing content and checking schemas. Phase 4 routes by the `t` (topic) tag on `30900` events, which is indexed by welshman's store:
+The current `events.svelte.js` routes events by parsing content and checking schemas. Phase 4 routes by the `t` (topic) tag on `30900` events, which is indexed by the store:
 
 | Topic tag | Domain | View |
 |-----------|--------|------|
@@ -614,29 +671,29 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 
 | File / code path | Finding | Replaced by |
 |-----------------|---------|-------------|
-| `stores/collections/indexeddb-cache.js` | A-3 | welshman IndexedDB event store |
+| `stores/collections/indexeddb-cache.js` | A-3 | `BahiaEventStore` IndexedDB store |
 | `stores/collections/index.svelte.js` snapshot/persist half | A-3, A-7 | Derived store queries |
 | `stores/controlplane/bootstrap.svelte.js` | A-4, A-19 | Boot sequence §7 |
-| `stores/controlplane/connection.svelte.js` | A-4 | welshman pool connection state |
+| `stores/controlplane/connection.svelte.js` | A-4 | Pool connection state |
 | `stores/controlplane/events.svelte.js` | A-7, A-22 | Single ingestion path §2.4 |
 | `stores/controlplane/index.js` | — | Deleted with the directory |
 | `components/AuthGuard.svelte` REST probe path | A-1, A-2 | Role-gated UI §6.3 |
 | `auth.svelte.js` `configureBackendAuth`, `compatibilityPatch`, `hydrateAuthMetadata` one-shots | A-1, A-2 | Background auth §6.2 |
 | `auth/capabilities.js` `supportsDirectNip98Auth` | A-1 | Deleted (no REST auth) |
 | `nostr/retained-domain-subscription.js` | A-9 | Store-backed subscriptions |
-| `nostr/pool-client.js` (`PoolBackedClient`) | A-13 | welshman pool |
-| `nostr/pool-subscriptions.js` | A-13 | welshman subscriptions |
-| `nostr/pool-publish.js` | A-13 | welshman publish + outbox |
-| `nostr/pool-utils.js` (most) | A-13 | welshman utilities |
-| `nostr/pool.js` | A-13 | welshman pool |
-| `nostr/encrypted-controlplane.js` (CRUD methods) | A-8, A-10 | Signed intents |
-| `nostr/encrypted-controlplane-transport.js` (CRUD) | A-11 | Signed intents |
+| `nostr/pool-client.js` (`PoolBackedClient`) | A-13 | Pool (welshman or applesauce) |
+| `nostr/pool-subscriptions.js` | A-13 | Pool subscriptions |
+| `nostr/pool-publish.js` | A-13 | Pool publish + outbox |
+| `nostr/pool-utils.js` (most) | A-13 | Pool utilities |
+| `nostr/pool.js` | A-13 | Pool |
+| `nostr/encrypted-controlplane.js` (CRUD methods) | A-8, A-10 | Signed intents (read-only transport retained for §4.2 interim reads) |
+| `nostr/encrypted-controlplane-transport.js` (CRUD) | A-11 | Signed intents (read-only transport retained for §4.2 interim reads) |
 | `nostr/encrypted-controlplane-constants.js` (CRUD kinds) | A-11 | Keep only assistant/secret/log kinds |
 | `stores/public-controlplane.svelte.js` (`publishCommand` and per-domain command methods) | A-10 | Signed intents per §3 |
 | `stores/orgs.svelte.js` (RPC reads) | A-8 | Store query + membership events |
-| `stores/payments.svelte.js` (RPC reads) | A-8 | Store query (daemon publishes payment state) |
+| `stores/payments.svelte.js` (RPC reads) | A-8 | Interim ContextVM read (§4.2) until daemon publishes payment events |
 | `stores/notifications.svelte.js` (RPC reads) | A-8 | Store query (daemon publishes notification config) |
-| `stores/security.svelte.js` (RPC reads) | A-8 | Store query (daemon publishes findings) |
+| `stores/security.svelte.js` (RPC reads) | A-8 | Interim ContextVM read (§4.2) until daemon publishes findings events |
 | `stores/artifact-signatures.svelte.js` (RPC reads) | A-8 | Store query |
 | `nostr/relay-settings-controlplane.js` (RPC reads) | A-8 | Store query |
 | `nostr/dns-controlplane.js` (RPC reads) | A-8 | Store query |
@@ -654,7 +711,7 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 
 | Slice | Goal | Done-when | Key files (ownership) | Parallel-safe with | Deletes |
 |-------|------|-----------|----------------------|--------------------|---------|
-| **W1-S1: Event store + welshman pool** | Single welshman pool, IndexedDB event store with namespace, cursor table, NIP-09/NIP-40 handling, single ingestion path | Store persists events across page reloads. Cursor persists per (relay, filter). NIP-09 kind-5 events remove tombstoned ids. NIP-40 sweep runs on open | `lib/nostr/store.js` (new), `lib/nostr/pool-welshman.js` (new), `lib/nostr/ingestion.js` (new) | W1-S2, W1-S3 | Nothing yet (parallel layer) |
+| **W1-S1: Event store + pool** | `BahiaEventStore` interface + welshman spike (≤ 2 days; fallback: applesauce + nostr-idb). Single pool, IndexedDB event store with namespace, cursor table, NIP-09/NIP-40 handling, single ingestion path. `navigator.storage.persist()` on first authenticated boot | Store persists events across page reloads. Cursor persists per (relay, filter). NIP-09 kind-5 events remove tombstoned ids. NIP-40 sweep runs on open. Spike outcome documented: welshman or fallback chosen | `lib/nostr/store-interface.ts` (new), `lib/nostr/store.js` (new), `lib/nostr/pool-welshman.js` or `pool-applesauce.js` (new), `lib/nostr/ingestion.js` (new) | W1-S2, W1-S3 | Nothing yet (parallel layer) |
 | **W1-S2: Store-first boot** | Boot sequence §7: render from store immediately, connect pool in background, EOSE as badge not gate, batch apply per frame | Opening a tab with a seeded store shows services immediately without network. "Syncing…" indicator appears until first EOSE. No `setAllLoading(true)` | `routes/+layout.svelte` (boot init), `lib/nostr/boot.js` (new), `lib/stores/sync-status.svelte.js` (new) | W1-S1 (needs store), W1-S3 | `stores/controlplane/bootstrap.svelte.js`, `stores/controlplane/connection.svelte.js`, `stores/controlplane/events.svelte.js`, `stores/controlplane/index.js`, `stores/collections/indexeddb-cache.js`, `stores/index.svelte.js` `loadX()` aliases, `{#if loading…}` blocks in all route pages |
 | **W1-S3: Auth without REST** | Auth bootstrap §6.2: persisted session = authenticated, background signer verify, no REST probe, no discovery gate, AuthGuard replaced by role check | Protected routes render without daemon online. Signer restoration is non-blocking. No `backendAuthenticated` flag | `lib/stores/auth.svelte.js` (rewrite auth bootstrap), `lib/stores/auth-roles.svelte.js` (new: membership-derived roles), `components/AuthGuard.svelte` (replace with role check) | W1-S1 (needs store for membership events), W1-S2 | `auth.svelte.js`: `configureBackendAuth`, `compatibilityPatch`, `hydrateAuthMetadata`, `authMetadataClient` creation. `auth/capabilities.js`: `supportsDirectNip98Auth`. `AuthGuard.svelte`: REST probe logic. `stores/system.svelte.js`: discovery as auth gate |
 
@@ -664,21 +721,21 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 |-------|------|-----------|----------------------|--------------------|---------|
 | **W2-S1: Core domain views** | Services, environments, states, policies, packages as derived store queries. Topic-tag routing §8.2 | All core domain list/detail pages render from the event store. No `refreshCollections()` on each event. O(1) ingestion per event | `lib/stores/collections/services.svelte.js` (rewrite), `environments.svelte.js` (rewrite), `deployments.svelte.js` (rewrite), domain-specific query modules | W2-S2, W2-S3 | `stores/collections/index.svelte.js` rebuild/persist machinery, per-collection `applyXEvent` functions, `replaceSnapshotArray`, `refreshCollections`, `schedulePersistCachedCollections` |
 | **W2-S2: Worker + ops views** | Workers, Loom jobs, operations as store queries. Worker adverts from open-author subscription (with bounded LRU) | Worker list renders from store. Job timeline renders from store. No duplicate subscriptions | `lib/stores/collections/workers.svelte.js` (rewrite), `operations.svelte.js` (rewrite) | W2-S1, W2-S3 | Per-worker `subscribeOnRelays` calls, unbounded `seenEvents` Sets |
-| **W2-S3: Activity + backup + ML + SBOM views** | Activity feed, backup state, ML endpoints, SBOM as store queries | All remaining domain views render from store | `lib/stores/collections/activity.svelte.js` (rewrite), `backup.svelte.js` (rewrite), `ml.svelte.js` (rewrite), `sbom.svelte.js` (rewrite) | W2-S1, W2-S2 | Remaining per-domain `applyXEvent` paths |
+| **W2-S3: Activity + backup + ML + SBOM views** | Activity feed, backup state, ML endpoints, SBOM as store queries. Payments and security findings remain interim ContextVM reads behind the store interface (§4.2) | All remaining domain views render from store or from ContextVM behind the store interface | `lib/stores/collections/activity.svelte.js` (rewrite), `backup.svelte.js` (rewrite), `ml.svelte.js` (rewrite), `sbom.svelte.js` (rewrite) | W2-S1, W2-S2 | Remaining per-domain `applyXEvent` paths |
 
 ### Wave 3: Intent signing — write path migration
 
 | Slice | Goal | Done-when | Key files (ownership) | Parallel-safe with | Deletes |
 |-------|------|-----------|----------------------|--------------------|---------|
-| **W3-S1: Plaintext intent signing** | Service/environment/policy/package CRUD via signed 30900 intents. Pending intent store. Outbox with OK tracking. Status reconciliation via 30315 | Creating a service signs an intent, publishes it, shows "pending", and resolves when 30315 accepted arrives. Conflict handling works. Retry works | `lib/nostr/intent-signer.js` (new), `lib/nostr/outbox.js` (new), `lib/stores/pending-intents.svelte.js` (new), route-level form submission handlers | W3-S2 | `stores/public-controlplane.svelte.js` command methods for: service/*, environment/*, policy/*, package/*. `nostr/encrypted-controlplane.js` CRUD request paths |
-| **W3-S2: Encrypted intent signing** | Org membership, secret config, notification channel CRUD via NIP-59 gift-wrapped intents. Signer capability check for NIP-44 | Org invite signs a gift-wrapped intent. Secret config (not value) signs a gift-wrapped intent. NIP-44 capability check disables actions when unsupported | `lib/nostr/intent-giftwrap.js` (new), route handlers for orgs/secrets/notifications | W3-S1 | `stores/orgs.svelte.js` RPC reads/mutations. `stores/notifications.svelte.js` RPC reads/mutations. `stores/service-secrets.svelte.js` RPC mutations (value reveal stays ContextVM) |
-| **W3-S3: DNS/LLM/backup/ML/worker intent signing** | Remaining domain CRUD via signed intents | All mutation domains sign intents. No ContextVM CRUD remains except assistant/secret-reveal/log-fetch | `nostr/dns-controlplane.js` (rewrite mutations), route handlers for DNS/LLM/backup/ML/workers | W3-S1, W3-S2 | `nostr/dns-controlplane.js` RPC mutations. `nostr/relay-settings-controlplane.js` RPC reads. `stores/security.svelte.js` RPC reads. `stores/payments.svelte.js` RPC reads. `stores/artifact-signatures.svelte.js` RPC reads. `stores/deployment-run-logs.svelte.js` (log fetch stays ContextVM) |
+| **W3-S1: Plaintext intent signing** | Service/environment/policy/package CRUD via signed 30900 intents. Pending intent store. Outbox with per-relay OK tracking (event-driven, no timeout). Status reconciliation via 30315 | Creating a service signs an intent, publishes it, shows "pending" with age badge, and resolves when 30315 accepted or newer canonical 30900 arrives. Conflict handling works. Outbox retry is relay-level on reconnect only | `lib/nostr/intent-signer.js` (new), `lib/nostr/outbox.js` (new), `lib/stores/pending-intents.svelte.js` (new), route-level form submission handlers | W3-S2 | `stores/public-controlplane.svelte.js` command methods for: service/*, environment/*, policy/*, package/*. `nostr/encrypted-controlplane.js` CRUD request paths |
+| **W3-S2: Encrypted intent signing** | Org membership, secret config, notification channel CRUD via NIP-59 gift-wrapped intents. Signer capability check for NIP-44. Verify C1-R1 through C1-R5 against C1's merged scheme | Org invite signs a gift-wrapped intent. Secret config (not value) signs a gift-wrapped intent. NIP-44 capability check disables actions when unsupported | `lib/nostr/intent-giftwrap.js` (new), route handlers for orgs/secrets/notifications | W3-S1 | `stores/orgs.svelte.js` RPC reads/mutations. `stores/notifications.svelte.js` RPC reads/mutations. `stores/service-secrets.svelte.js` RPC mutations (value reveal stays ContextVM) |
+| **W3-S3: DNS/LLM/backup/ML/worker intent signing** | Remaining domain CRUD via signed intents. ContextVM idempotency key for remaining calls (§3.5) | All mutation domains sign intents. No ContextVM CRUD remains except assistant/secret-reveal/log-fetch + interim reads (§4.2) | `nostr/dns-controlplane.js` (rewrite mutations), route handlers for DNS/LLM/backup/ML/workers | W3-S1, W3-S2 | `nostr/dns-controlplane.js` RPC mutations. `nostr/relay-settings-controlplane.js` RPC reads. `stores/artifact-signatures.svelte.js` RPC reads. `stores/deployment-run-logs.svelte.js` (log fetch stays ContextVM) |
 
 ### Wave 4: Cleanup — deletions, pool consolidation, test migration
 
 | Slice | Goal | Done-when | Key files (ownership) | Parallel-safe with | Deletes |
 |-------|------|-----------|----------------------|--------------------|---------|
-| **W4-S1: Pool consolidation + cleanup** | Delete all extra pools, legacy subscription code, retained-domain-subscription, ad-hoc caches, REST client | Only one welshman pool exists. No `PoolBackedClient`. No `SimplePool` import outside welshman. No `lib/api/client.js`. No ad-hoc localStorage event caches | Sweep across all `lib/nostr/*.js` and `lib/stores/*.js` | W4-S2 | `nostr/pool.js`, `nostr/pool-client.js`, `nostr/pool-subscriptions.js`, `nostr/pool-publish.js`, most of `nostr/pool-utils.js`, `nostr/retained-domain-subscription.js`, `nostr/connection-guard.js`, `lib/api/client.js`, `stores/discovery.svelte.js` localStorage cache, `stores/assistant.svelte.js` localStorage transcript cache, `docs/nostr.js` localStorage cache, `nostr/subscriptions.js` relay override |
+| **W4-S1: Pool consolidation + cleanup** | Delete all extra pools, legacy subscription code, retained-domain-subscription, ad-hoc caches, REST client. Retain read-only encrypted transport for §4.2 interim reads and permanent ContextVM patterns | Only one pool exists. No `PoolBackedClient`. No `SimplePool` import outside the pool module. No `lib/api/client.js`. No ad-hoc localStorage event caches. **Prerequisite:** daemon must publish payment/security events as relay state before the encrypted transport can be fully deleted | Sweep across all `lib/nostr/*.js` and `lib/stores/*.js` | W4-S2 | `nostr/pool.js`, `nostr/pool-client.js`, `nostr/pool-subscriptions.js`, `nostr/pool-publish.js`, most of `nostr/pool-utils.js`, `nostr/retained-domain-subscription.js`, `nostr/connection-guard.js`, `lib/api/client.js`, `stores/discovery.svelte.js` localStorage cache, `stores/assistant.svelte.js` localStorage transcript cache, `docs/nostr.js` localStorage cache, `nostr/subscriptions.js` relay override |
 | **W4-S2: E2E test migration** | Delete `__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS`. All tests use real signatures via test signer. Intent lifecycle tests. Membership fixture tests | All 196 Playwright tests pass with real signatures. No signature bypass in production code. New tests cover: store-first boot, intent CRUD, pending→confirmed lifecycle, encrypted intent, role derivation | `tests/e2e/test-signer.js` (new), `tests/e2e/intent-helpers.js` (new), `tests/e2e/membership-fixtures.js` (new), harness updates, fixture updates | W4-S1 | `pool-subscriptions.js:45` bypass, `validation.js:28` bypass, `helpers.js` mock relay trust setup |
 
 ---
@@ -699,16 +756,17 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 7. Kind 5 deletion from the service pubkey removes the entity from the view.
 
 **Wave 3:**
-8. Submit a service create form. A signed `30900` intent appears on the relay. The UI shows "pending". The daemon publishes a canonical `30900` + `30315 status=accepted`. The UI transitions to confirmed.
+8. Submit a service create form. A signed `30900` intent appears on the relay. The UI shows "pending" with an age badge. The daemon publishes a `30315 status=accepted`. The UI transitions to confirmed. A newer canonical `30900` for the same coordinate also clears the pending badge (coordinate-based fallback).
 9. Submit an environment update with stale `expected_updated_at`. The daemon publishes `30315 status=conflict`. The UI shows a conflict indicator.
 10. Submit a secret config update. A NIP-59 gift-wrapped event appears on the relay. The daemon processes it.
 11. With a signer that lacks NIP-44: the "Create Secret" button is disabled with an explanatory tooltip.
+12. Disconnect all relays. Submit a service create form. The pending intent stays pending with an age badge. Reconnect. The outbox re-sends on reconnect. No timeout flips it to failed.
 
 **Wave 4:**
-12. All 196+ Playwright tests pass with no `__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS` global.
-13. `grep -r 'BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS' web/src/` returns nothing.
-14. `grep -r 'SimplePool\|PoolBackedClient' web/src/lib/` returns nothing (only in welshman internals).
-15. `grep -r 'lib/api/client' web/src/` returns nothing.
+13. All 196+ Playwright tests pass with no `__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS` global.
+14. `grep -r 'BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS' web/src/` returns nothing.
+15. `grep -r 'SimplePool\|PoolBackedClient' web/src/lib/` returns nothing (only in pool module internals).
+16. `grep -r 'lib/api/client' web/src/` returns nothing.
 
 ---
 
@@ -716,7 +774,7 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 
 | # | Question | Decision | Rationale |
 |---|----------|----------|-----------|
-| 1 | Library choice | **welshman** (`@welshman/net` + `@welshman/store` + `@welshman/signer` + `@welshman/util`) | Svelte-native, replaces pool + subscriptions + cursor + store + AUTH + dedup in one package (§1.2) |
+| 1 | Library choice | **welshman** (`@welshman/net` + `@welshman/store` + `@welshman/signer` + `@welshman/util`), behind a library-agnostic `BahiaEventStore` interface. Fallback: applesauce + nostr-idb if the Svelte 5 spike fails | The interface decouples all consumers from the implementation. Spike validates welshman + runes interop before committing (§1.2) |
 | 2 | Store namespace | **`bahia-events-<service_pubkey[:8]>`** per deployment | Avoids cross-deployment collisions, scoped to the fleet identity (§2.1) |
 | 3 | TTL policy | **No TTL.** LRU by size for regular events; addressable/replaceable never evicted | TTL was the direct cause of cold starts (A-3). Size-based eviction preserves current state (§2.3) |
 | 4 | Intent signing | **Always sign intents for all domains.** Fall back to ContextVM only on relay rejection | Decouples web deployment from daemon domain enablement. Dual-dispatch handles the gap (§9.2) |
@@ -724,28 +782,36 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 | 6 | Render gate | **None.** Render from store immediately. EOSE = "synced" badge | Eliminates A-4, A-19, A-20. Empty store = empty list, not a spinner (§7) |
 | 7 | Signature bypass | **Delete `__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS`.** Tests use real signatures from test keyring | Eliminates C-25 security concern. Test signer injection replaces the bypass (§10.2) |
 | 8 | Content key persistence | **Never persisted.** Content keys for confidential state live in memory only | Loss = re-derive on next login. Avoids IndexedDB as a key store attack surface (§5.4, C1-R5) |
-| 9 | ContextVM retention | **Assistant, secret reveal, log fetch only.** All other reads and mutations are relay/intent | Closes the dual-path window. ContextVM is interactive RPC, not CRUD (§4) |
-| 10 | Pending intent timeout | **60 seconds** before retry; **3 retries** with exponential backoff (10s, 30s, 90s) | Balances responsiveness against relay/daemon latency (§3.5) |
+| 9 | ContextVM retention | **Assistant, secret reveal, log fetch permanently.** Interim reads for payments/security until daemon publishes them as relay events (§4.2). All other reads and mutations are relay/intent | Closes the dual-path window. ContextVM is interactive RPC, not CRUD (§4) |
+| 10 | Pending intent lifecycle | **No timeout-based retry or failure.** Pending intents stay pending (with age badge) until a `30315` status or newer canonical `30900` arrives. Outbox retries relay delivery only (per-relay, event-driven on reconnect, quorum ≥ 1). Only path to "failed" is all relays permanently rejecting (`OK false` with `blocked:`/`restricted:`) | A signed addressable event on relays is durable; the daemon picks it up from its cursor. Timeout-as-completion is the anti-pattern this design eliminates (§3.4, §3.5) |
+| 11 | ContextVM idempotency | **Every remaining ContextVM call carries an idempotency key** (`_meta.progressToken`, UUIDv7, minted once per user action). On `-32011`, retry with the **same** key so the request ledger replays the stored response. A new key would defeat the ledger | Aligns with Phase 5 §3.4. `-32011` is `ContextVMDuplicateRequestErrorCode`, not a generic timeout (§3.5) |
+| 12 | C1 key-wrapping scheme | **NIP-44 per-member wrapping with key-reference tags; secret values and channel credentials service-only.** C1 (bahia-irsry.11.20) is implementing exactly this. §5.4 requirements are verified against C1's merged scheme in W3-S2 | Confirmed by C1 issue description and in-progress implementation |
+| 13 | NIP-65 outbox routing | **Out of scope for Phase 4.** The web publishes intents only to the deploy-seed / standard Bahia relays | NIP-65 relay-list routing adds complexity without clear benefit for a fleet dashboard where all participants share the same relay set |
+| 14 | IndexedDB persistent storage | **Yes.** Call `navigator.storage.persist()` on first authenticated boot, with graceful degradation (log whether granted; operate normally if denied) | Prevents mobile browsers from evicting the event store under storage pressure (§2.1) |
 
 ---
 
-## 15. Open Questions
+## 15. Resolved Questions
 
-| # | Question | Impact | Needs decision from |
-|---|----------|--------|-------------------|
-| Q1 | **welshman Svelte 5 runes compatibility.** welshman was built for Svelte 4 stores (`writable`/`derived`). Bahia uses Svelte 5 runes (`$state`, `$derived`). Does welshman's `@welshman/store` work with runes, or do we need an adapter layer? | Wave 1 scope: if an adapter is needed, it's a day of work but must be designed up front | Engineering (spike task) |
-| Q2 | **C1 key-wrapping scheme finalization.** The design assumes NIP-44 per-member wrapping with key-reference tags (§5.4). If C1 chooses a different scheme (e.g., NIP-04, shared secret derivation), the decrypt path changes | Wave 1 W1-S3 and Wave 3 W3-S2 | C1 slice (bahia-irsry.11.20) |
-| Q3 | **Payment and security state events.** Phase 3 does not explicitly define when the daemon publishes payment history and security findings as relay events. Until it does, the web cannot subscribe to them — these views remain blank or need an interim ContextVM read | Wave 2 W2-S3, Wave 3 W3-S3 | Phase 3 slice plan (new domain slices or daemon publish tasks) |
-| Q4 | **NIP-65 outbox routing.** Should the web use NIP-65 (kind 10002) relay lists for outbox-model publishing (write to the user's write-relays, read from their read-relays)? Today the web publishes only to the deploy-seed relays | Affects intent publishing reliability but adds complexity | User/architect |
-| Q5 | **IndexedDB quota on mobile Safari.** Safari limits IndexedDB to ~1 GB but may evict under storage pressure. Should the store request persistent storage (`navigator.storage.persist()`)? | Affects mobile reliability; low priority for fleet dashboard | User/architect |
+All questions from the initial draft are now decided. This section records the resolution for traceability.
+
+| # | Original question | Resolution | Binding decision # |
+|---|-------------------|------------|--------------------|
+| Q1 | welshman Svelte 5 runes compatibility | W1-S1 begins with a timeboxed spike (≤ 2 days). If it fails, fall back to applesauce + nostr-idb behind the same `BahiaEventStore` interface. The store API is library-agnostic | §14 #1 |
+| Q2 | C1 key-wrapping scheme finalization | C1 is implementing per-org NIP-44 key wrapping with key-reference tags. §5.4 requirements are verified against C1's merged scheme in W3-S2 | §14 #12 |
+| Q3 | Payment and security state events | Payments and security findings keep interim ContextVM reads behind the store interface (§4.2). The daemon must publish them as relay events before W4 can delete the encrypted transport | §14 #9 |
+| Q4 | NIP-65 outbox routing | Out of scope for Phase 4. Deploy-seed relays only | §14 #13 |
+| Q5 | IndexedDB quota on mobile Safari | Call `navigator.storage.persist()` on first authenticated boot with graceful degradation | §14 #14 |
 
 ---
 
 ## 16. Risks
 
-- **welshman API stability.** welshman is actively developed for Coracle and may have breaking changes. Mitigation: pin exact versions; the adapter layer (if needed for Svelte 5) provides an abstraction boundary.
-- **C1 key scheme not finalized.** If C1's key-wrapping scheme changes materially, the web decrypt path (§5.3) must be redesigned. Mitigation: the decrypt path is isolated in `auth-roles.svelte.js` and `intent-giftwrap.js`; the rest of the architecture is unaffected.
+- **welshman Svelte 5 interop.** welshman was built for Svelte 4 stores. The spike may reveal incompatibilities with Svelte 5 runes. Mitigation: the `BahiaEventStore` interface (§1.2) decouples all consumers; the applesauce + nostr-idb fallback is ready as an alternative behind the same interface.
+- **welshman API stability.** welshman is actively developed for Coracle and may have breaking changes. Mitigation: pin exact versions; the `BahiaEventStore` interface provides an abstraction boundary.
+- **C1 key scheme not finalized.** If C1's key-wrapping scheme changes materially, the web decrypt path (§5.3) must be redesigned. Mitigation: the decrypt path is isolated in `auth-roles.svelte.js` and `intent-giftwrap.js`; the rest of the architecture is unaffected. §5.4 requirements are verified in W3-S2.
 - **Daemon domain enablement lag.** If Phase 3 domain slices are slower than Phase 4 web slices, some web domains will fall back to ContextVM (§9.2). This is by design — the fallback is transparent and the cut-over is per-domain.
+- **Interim ContextVM reads for payments/security.** Until the daemon publishes payment and security state as relay events, these views depend on ContextVM. The W4 transport deletion is gated on this prerequisite (§4.2).
 - **Test relay startup time.** The `bahia-test-relay` takes ~2 seconds to start. With all 196 tests needing a real relay, the test suite may slow down. Mitigation: share one relay process per test file (Playwright's `globalSetup`), not per test.
 - **Bundle size.** Adding welshman (+~17 KB gzipped after deleting the current pool layer) may push the initial bundle over performance budgets. Mitigation: welshman packages support tree-shaking; unused modules (e.g., `@welshman/app` which is Coracle-specific) are not imported.
 
@@ -758,5 +824,6 @@ Phase 4 deletes these files and code paths, replacing each with the store-first 
 | bahia-irsry.11 (Phase 3) | **Depends on.** Phase 3 provides the daemon intent pipeline, TrustSet, and membership events that Phase 4 consumes |
 | bahia-irsry.11.20 (C1 crypto) | **Depends on.** C1 provides the key-wrapping scheme for confidential state decrypt (§5.4) |
 | bahia-irsry.11.19 (R1: delete ContextVM CRUD) | **Blocks.** Phase 4 must close the dual-path window before ContextVM CRUD handlers can be deleted |
-| bahia-irsry.13 (Phase 5: CLI/pkg/client/MCP) | **Parallel.** Phase 5 is the CLI equivalent of Phase 4. They share the daemon's intent pipeline but have no web-side dependency |
+| bahia-irsry.13 (Phase 5: CLI/pkg/client/MCP) | **Parallel.** Phase 5 is the CLI equivalent of Phase 4. They share the daemon's intent pipeline but have no web-side dependency. §3.5 ContextVM error handling aligns with Phase 5 §3.4 |
 | bahia-irsry.14 (audit coverage gaps) | **Informs.** Phase 4 deletions close many of the web-tier audit findings; the coverage-gap audit may find new ones |
+| bahia-irsry.48 (ContextVM progressToken) | **Consumes.** Phase 4 relies on bahia-irsry.48 item 2 for the ContextVM idempotency key pattern (§3.5, §14 #11) |
