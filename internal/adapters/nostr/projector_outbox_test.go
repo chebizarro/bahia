@@ -138,7 +138,7 @@ func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 
 	serviceID, envID := uuid.New(), uuid.New()
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
-	require.NoError(t, projector.publishState(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
 
 	rows := outboxRows(t, repo, KindCASControlState)
 	require.Len(t, rows, 1)
@@ -183,8 +183,8 @@ func TestProjectorTreatsIncompletePublishAsQueued(t *testing.T) {
 	projector, _ := newOutboxProjector(t, repo, script, newFakeProjectionSource())
 
 	state := dedupeTestState(uuid.New(), uuid.New(), time.Now().UTC())
-	require.NoError(t, projector.publishState(ctx, &state))
-	require.NoError(t, projector.publishState(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
 
 	m := projector.ProjectionMetrics()["service/state"]
 	require.Equal(t, int64(1), m.Queued)
@@ -229,7 +229,11 @@ func TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures(t *testing.T)
 	env := domain.Environment{ID: uuid.New(), Name: "prod"}
 	source.services[svc.ID] = svc
 	source.envs[env.ID] = env
-	source.states[stateKeyForTest(svc.ID, env.ID)] = dedupeTestState(svc.ID, env.ID, time.Now().UTC())
+	// Phase 3 S1: state is no longer published by RepublishSnapshot (it is
+	// published by the reconciler's observation path). Add a build so the
+	// snapshot produces at least one outbox row via the build/artifact path.
+	buildID := uuid.New()
+	source.builds[buildID] = domain.Build{ID: buildID, ServiceID: svc.ID, Status: domain.BuildStatusSucceeded, GitSHA: "abc123"}
 	sbomSource := WithSBOMProjectionSource(staticSBOMProjectionSource{manifests: []domain.SBOMManifest{testSBOMManifest()}})
 
 	projector, _ := newOutboxProjector(t, repo, script, source, sbomSource)
@@ -262,7 +266,7 @@ func TestProjectorRepublishesAbandonedProjection(t *testing.T) {
 	projector.projection().now = func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }
 
 	state := dedupeTestState(uuid.New(), uuid.New(), time.Now().UTC())
-	err := projector.publishState(ctx, &state)
+	err := projector.publishStateForTest(ctx, &state)
 	require.ErrorIs(t, err, ErrPublishAbandoned, "an abandoned publish is not reported as queued")
 	rows := outboxRows(t, repo, KindCASControlState)
 	require.Len(t, rows, 1)
@@ -276,14 +280,14 @@ func TestProjectorRepublishesAbandonedProjection(t *testing.T) {
 	delete(script.reject, cpRelayB)
 	projector.projection().now = func() time.Time { return time.Unix(1_800_000_000, 0).UTC().Add(projectionBackoffMax * 2) }
 	callsBefore := script.totalCalls()
-	require.NoError(t, projector.publishState(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
 	require.Equal(t, callsBefore+2, script.totalCalls(), "content re-sent to both relays")
 	requireLatestPublished(t, repo)
 	rowsAfterRepair := len(outboxRows(t, repo, KindCASControlState))
 
 	// A restarted projector hydrates the delivered row and dedupes.
 	restarted, _ := newOutboxProjector(t, repo, script, newFakeProjectionSource())
-	require.NoError(t, restarted.publishState(ctx, &state))
+	require.NoError(t, restarted.publishStateForTest(ctx, &state))
 	require.Len(t, outboxRows(t, repo, KindCASControlState), rowsAfterRepair)
 	require.Equal(t, callsBefore+2, script.totalCalls())
 }
@@ -313,8 +317,8 @@ func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 	projector, publisher := newOutboxProjector(t, repo, script, newFakeProjectionSource())
 
 	state := dedupeTestState(uuid.New(), uuid.New(), time.Now().UTC())
-	require.NoError(t, projector.publishState(ctx, &state), "queued")
-	require.NoError(t, projector.publishState(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state), "queued")
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
 	require.Equal(t, 2, script.totalCalls(), "still deduped while queued")
 
 	// The runner's next round meets permanent rejections and abandons it.
@@ -332,7 +336,7 @@ func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 	delete(script.reject, cpRelayA)
 	delete(script.reject, cpRelayB)
 	callsBefore := script.totalCalls()
-	require.NoError(t, projector.publishState(ctx, &state))
+	require.NoError(t, projector.publishStateForTest(ctx, &state))
 	require.Equal(t, callsBefore+2, script.totalCalls(), "abandoned content is published again")
 	requireLatestPublished(t, repo)
 }
@@ -354,7 +358,7 @@ func TestProjectorHydrationSkipsFailedOutboxRows(t *testing.T) {
 	script.reject[cpRelayB] = "blocked: nope"
 	first, _ := newOutboxProjector(t, repo, script, newFakeProjectionSource())
 	state := dedupeTestState(uuid.New(), uuid.New(), time.Now().UTC())
-	require.ErrorIs(t, first.publishState(ctx, &state), ErrPublishAbandoned)
+	require.ErrorIs(t, first.publishStateForTest(ctx, &state), ErrPublishAbandoned)
 	rows := outboxRows(t, repo, KindCASControlState)
 	require.Len(t, rows, 1)
 	require.Equal(t, repository.NostrPublishStateFailed, rows[0].PublishState)
@@ -363,7 +367,7 @@ func TestProjectorHydrationSkipsFailedOutboxRows(t *testing.T) {
 	delete(script.reject, cpRelayB)
 	callsBefore := script.totalCalls()
 	restarted, _ := newOutboxProjector(t, repo, script, newFakeProjectionSource())
-	require.NoError(t, restarted.publishState(ctx, &state))
+	require.NoError(t, restarted.publishStateForTest(ctx, &state))
 	require.Equal(t, callsBefore+2, script.totalCalls(), "failed row did not suppress the publish")
 	requireLatestPublished(t, repo)
 }

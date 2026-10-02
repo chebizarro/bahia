@@ -62,7 +62,7 @@ func TestProjectorHydratesDedupeFromTheLocalStoreAcrossRestart(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
 	first := startLocalHistoryDaemon(t, dir, script)
-	require.NoError(t, first.projector.publishState(ctx, &state))
+	require.NoError(t, first.projector.publishStateForTest(ctx, &state))
 	require.Equal(t, 2, script.totalCalls(), "published to both control-plane relays")
 	published := script.sent(cpRelayA)[0]
 	// Another author's newer event on the same coordinate (inbound from a
@@ -78,7 +78,7 @@ func TestProjectorHydratesDedupeFromTheLocalStoreAcrossRestart(t *testing.T) {
 	first.close()
 
 	restarted := startLocalHistoryDaemon(t, dir, script)
-	require.NoError(t, restarted.projector.publishState(ctx, &state))
+	require.NoError(t, restarted.projector.publishStateForTest(ctx, &state))
 	require.Equal(t, 2, script.totalCalls(), "unchanged state is not re-signed after a restart")
 	require.Equal(t, int64(1), restarted.projector.ProjectionMetrics()["service/state"].Deduped)
 	require.Equal(t, published, script.sent(cpRelayA)[0])
@@ -96,7 +96,7 @@ func TestProjectorRepublishesContentWhoseDeliveryWasAbandoned(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
 	first := startLocalHistoryDaemon(t, dir, script)
-	require.ErrorIs(t, first.projector.publishState(ctx, &state), ErrPublishAbandoned)
+	require.ErrorIs(t, first.projector.publishStateForTest(ctx, &state), ErrPublishAbandoned)
 	var held int
 	for range first.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}}) {
 		held++
@@ -109,6 +109,6 @@ func TestProjectorRepublishesContentWhoseDeliveryWasAbandoned(t *testing.T) {
 	script.mu.Unlock()
 	calls := script.totalCalls()
 	restarted := startLocalHistoryDaemon(t, dir, script)
-	require.NoError(t, restarted.projector.publishState(ctx, &state))
+	require.NoError(t, restarted.projector.publishStateForTest(ctx, &state))
 	require.Equal(t, calls+2, script.totalCalls(), "the abandoned content is signed and published again")
 }

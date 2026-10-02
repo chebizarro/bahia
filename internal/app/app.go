@@ -1103,6 +1103,16 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("environment intent handler registered")
 	}
 
+	// Phase 3 S1: wire the reconciler's direct state publisher and tombstone
+	// handler so runtime state is published to relays without the projector.
+	if rec != nil && relayFirstRegistry != nil {
+		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		rec.SetRuntimeStatePublisher(statePublisher)
+		tombstoneHandler := reconcile.NewStateTombstoneHandler(statePublisher, logger)
+		tombstoneHandler.SetupSubscriptions(publisher)
+		logger.Info("runtime state direct publisher and tombstone handler wired (Phase 3 S1)")
+	}
+
 	nostrProjector.SetupSubscriptions(publisher)
 
 	// Phase 3 F2: register service domain intent handler.
