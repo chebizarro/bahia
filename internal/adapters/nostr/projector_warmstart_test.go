@@ -211,28 +211,37 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot verifies that a domain
-// family still on the legacy RepublishSnapshot path (ML) is published by the
-// legacy snapshot when it is NOT listed in intent_domains. Services and
-// environments are migrated; ML models are not yet.
-func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
+// TestWarmStartUnmigratedWorkerStillGetsLegacySnapshot verifies that a domain
+// family still on the legacy RepublishSnapshot path (worker) is published by
+// the legacy snapshot when it is NOT listed in intent_domains. Services and
+// environments are migrated; worker read models are not yet.
+//
+// Phase 3 M1: Moved from ML (now migrated to direct publish via
+// MLCanonicalPublisher) to worker read models. After Wave 4 completes,
+// only SBOM remains on the legacy snapshot path.
+func TestWarmStartUnmigratedWorkerStillGetsLegacySnapshot(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
-	modelID := uuid.New()
-	source := newFakeProjectionSource()
-	source.mlModels[modelID] = domain.MLModel{
-		ID:   modelID,
-		Slug: "test-model",
-		Name: "Test Model",
+	workerPubKey := "npub1test" + uuid.New().String()[:8]
+	workerSource := &fakeWorkerReadModelSource{
+		assignment: domain.WorkerAssignmentState{
+			WorkerPubKey:      workerPubKey,
+			ActiveAssignments: []domain.WorkerAssignment{{Type: domain.WorkerAssignmentService, WorkloadID: "svc-1"}},
+		},
+		drain: domain.WorkerDrainStatus{
+			WorkerPubKey:    workerPubKey,
+			SchedulingState: domain.WorkerSchedulingActive,
+		},
 	}
 
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
-	// Service and environment are migrated; ML is NOT.
+	source := newFakeProjectionSource()
+	// Service and environment are migrated; worker is NOT.
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithMLProjectionSource(source),
+		WithWorkerReadModelProjectionSource(workerSource),
 		WithIntentDomains([]string{"service", "environment"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
@@ -244,16 +253,17 @@ func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// ML is NOT migrated → still published via RepublishSnapshot.
-	mlCount := countByDomain(sink.events, "ml")
-	if mlCount == 0 {
-		t.Errorf("unmigrated domain: expected ML model publishes from legacy snapshot, got 0")
+	// Worker is NOT migrated → still published via RepublishSnapshot.
+	workerCount := countByDomain(sink.events, "worker")
+	if workerCount == 0 {
+		t.Errorf("unmigrated domain: expected worker publishes from legacy snapshot, got 0")
 	}
 	// Migrated domains should NOT be republished (no history seeded).
 	if n := countByDomain(sink.events, "service"); n != 0 {
 		t.Errorf("migrated domain: expected 0 service publishes, got %d", n)
 	}
 }
+
 
 func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	ctx := t.Context()

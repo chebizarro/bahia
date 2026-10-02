@@ -1354,6 +1354,13 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		})
 	}
+	// Phase 3 M1: wire ML cp-state publisher into registry service so state
+	// mutations publish canonical records directly instead of through the projector.
+	if nostrProjector.Enabled() && mlRegistry != nil {
+		mlCanonicalPub := nostrAdapter.NewMLCanonicalPublisher(nostrProjector, logger)
+		mlRegistry.SetMLCPStatePublisher(mlCanonicalPub)
+		logger.Info("ML canonical cp-state publisher wired into registry service")
+	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
