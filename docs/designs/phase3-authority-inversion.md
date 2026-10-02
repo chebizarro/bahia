@@ -125,8 +125,15 @@ All confidential cp-state records (org, member, invite, secret metadata, notific
 **Key distribution (key-envelope records, kind 32010):**
 - The OCK is wrapped (NIP-44 encrypted) to each current org member and to the service pubkey.
 - Each wrapped copy is published as an addressable cp-state record through the shared `controlStateEnvelope`/`cpStateFamilies` pipeline with `legacy_kind=32010`, `t=org-key-envelope`.
-- D-tag coordinate: `org-key:<orgID>:v<version>:<random-16-byte-hex-handle>`. The recipient pubkey never appears in plaintext tags, d-tags, or content. Recipients find their envelope by trying to decrypt all envelopes for their org+version (O(N) where N = org member count, typically small).
+- D-tag coordinate: `org-key:<orgID>:v<version>:<random-16-byte-hex-handle>`. The recipient pubkey never appears in plaintext tags, d-tags, or content.
 - On daemon restart, the OCK is recovered from the service-wrapped envelope in history.
+
+**Member discovery (envelope lookup):**
+- Members find their envelope by trial-decrypting all envelopes for their org+version. Cost is O(N) where N is the org member count.
+- Current deployments have < 100 members per org, so this is acceptable.
+- Handles are random 16-byte values; no correlation between handle and recipient identity.
+- A deterministic HMAC(conversation_key, org|version) handle would reduce discovery to O(1) lookup. However, the NIP-44 conversation key is not accessible through the bunker signer interface (`Keyer.Encrypt`/`Decrypt` are opaque). Phase 4 web clients hold their own key material and could use deterministic handles.
+- Future: when bunker signers support conversation key derivation or a `DeriveHandle(pubkey, context)` method, switch to HMAC-based deterministic handles.
 
 **Key rotation:**
 - Triggered on member removal or role downgrade.
@@ -163,16 +170,25 @@ All confidential cp-state records (org, member, invite, secret metadata, notific
 }
 ```
 
+**Fleet-scoped resources:**
+- Notification channels with no org (`OrgID == uuid.Nil`) are fleet-scoped.
+- Fleet-scoped channels use a synthetic "fleet" org key scope. Org-visible metadata is minimal; the full config is in service_inner.
+- Fleet ops manage these channels through the daemon API, not relay discovery.
+
 **Migration:**
 - Dual-read: new-format records are tried first, then legacy O1 format.
-- Legacy O1 `org_state_crypto.go` encryptor retained for read-only fallback.
-- Legacy N1 `selfDecryptNIP44Legacy` retained for read-only fallback.
+- Legacy O1 `org_state_crypto.go` `OrgStateEncryptorImpl.DecryptOrgState` retained for read-only fallback. The `EncryptOrgState` method is deprecated (kept for migration tests); no production code path calls it.
+- Legacy N1 `selfDecryptNIP44Legacy` retained for read-only fallback. N1 secret/notification records are audit copies (database is source of truth); no relay read-back path decodes them.
 - New publishes always use the unified confidential path. No plaintext fallback.
+- `OrgStateEncryptor` interface renamed to `LegacyOrgStateDecryptor` (decrypt-only).
+- TODO: warm-start re-publication of legacy records under the OCK scheme on daemon startup.
 
 **Implementation files:**
 - `internal/controlplane/org_content_key.go` — OCK types, AEAD encrypt/decrypt, AD binding
 - `internal/controlplane/org_content_key_manager.go` — OCK lifecycle (create, distribute, rotate, recover)
 - `internal/controlplane/confidential_encryptor.go` — Bridge between OCKManager and publisher interfaces
+- `internal/controlplane/ock_member_source.go` — TrustSet relay-first/Postgres-fallback member source
+- `internal/controlplane/org_resolvers.go` — Secret → service → org and channel → org resolution
 - `internal/domain/key_envelope_record.go` — Shared type for history records
 - `internal/adapters/nostr/confidential_state.go` — Legacy read paths, key-envelope publishing/history
 - `internal/adapters/nostr/org_canonical_publisher.go` — Org/member/invite publisher using ConfidentialStateEncryptor

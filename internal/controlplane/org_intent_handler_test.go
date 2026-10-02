@@ -820,7 +820,7 @@ func TestDecryptMemberContent_RoundTrip(t *testing.T) {
 	}
 	contentJSON, _ := json.Marshal(content)
 
-	encrypted, err := encryptor.EncryptOrgState(context.Background(), contentJSON, "test-d", "test-topic")
+	encrypted, err := encryptOrgState(context.Background(), key, contentJSON, "test-d", "test-topic")
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
@@ -1118,7 +1118,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	addContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": false,
 	})
-	addEncrypted, _ := encryptor.EncryptOrgState(ctx, addContent, "test-d", "test-t")
+	addEncrypted, _ := encryptOrgState(ctx, key, addContent, "test-d", "test-t")
 	if err := handler.HandleEncryptedMemberEvent(ctx, addEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("add member failed: %v", err)
 	}
@@ -1133,7 +1133,7 @@ func TestHandleEncryptedMemberEvent_TombstoneRemoval(t *testing.T) {
 	removeContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID, "pubkey": "member1", "role": "admin", "deleted": true,
 	})
-	removeEncrypted, _ := encryptor.EncryptOrgState(ctx, removeContent, "test-d", "test-t")
+	removeEncrypted, _ := encryptOrgState(ctx, key, removeContent, "test-d", "test-t")
 	if err := handler.HandleEncryptedMemberEvent(ctx, removeEncrypted, 0, "", ""); err != nil {
 		t.Fatalf("remove member failed: %v", err)
 	}
@@ -1164,7 +1164,7 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgIDStr, "pubkey": "org-owner", "role": "owner", "deleted": false,
 	})
-	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+	encrypted, _ := encryptOrgState(ctx, key, memberContent, "test-d", "org-member")
 
 	// Build a mock history with one member record.
 	history := &mockMemberHistory{
@@ -1217,7 +1217,7 @@ func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": orgID.String(), "pubkey": "legacy-member", "role": "admin", "deleted": false,
 	})
-	encrypted, _ := encryptor.EncryptOrgState(ctx, memberContent, "test-d", "org-member")
+	encrypted, _ := encryptOrgState(ctx, key, memberContent, "test-d", "org-member")
 
 	// This is what the OrgCanonicalPublisher.SetOnMemberPublished callback does.
 	if err := handler.HandleEncryptedMemberEvent(ctx, encrypted, 0, "", ""); err != nil {

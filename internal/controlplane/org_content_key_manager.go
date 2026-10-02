@@ -316,7 +316,19 @@ func (m *OCKManager) wrapAndPublish(ctx context.Context, key OrgContentKey, reci
 		return fmt.Errorf("NIP-44 encrypt OCK wrap: %w", err)
 	}
 
-	// Generate a random handle for the d-tag so the recipient pubkey is opaque.
+	// Generate a random handle for the d-tag so the recipient pubkey is
+	// opaque. Recipients trial-decrypt all envelopes for their org+version.
+	//
+	// Member discovery cost: O(members) trial decrypts per org. Acceptable
+	// for current deployment sizes (< 100 members/org). A deterministic
+	// HMAC(conversation_key, org|version) handle would reduce this to O(1)
+	// lookup, but the NIP-44 conversation key is not accessible through the
+	// bunker signer interface (Keyer.Encrypt/Decrypt are black-box). Phase 4
+	// web clients that hold their own key material can compute conversation
+	// keys directly and would benefit from deterministic handles.
+	//
+	// Future: when bunker signers support conversation key derivation or a
+	// DeriveHandle(pubkey, context) method, switch to HMAC-based handles.
 	handle := make([]byte, 16)
 	if _, err := rand.Read(handle); err != nil {
 		return fmt.Errorf("generate recipient handle: %w", err)

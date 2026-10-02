@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -616,7 +615,7 @@ func TestOldFormatMigrationDualRead(t *testing.T) {
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": "test-org-migrate", "pubkey": "member-pk", "role": "admin", "deleted": false,
 	})
-	legacyEncrypted, err := legacyEncryptor.EncryptOrgState(ctx, memberContent, "org:member:test-migrate:member-pk", "org-member")
+	legacyEncrypted, err := encryptOrgState(ctx, legacyKey, memberContent, "org:member:test-migrate:member-pk", "org-member")
 	if err != nil {
 		t.Fatalf("legacy encrypt: %v", err)
 	}
@@ -650,5 +649,333 @@ func TestOldFormatMigrationDualRead(t *testing.T) {
 	}
 }
 
-// Prevent unused import warnings.
-var _ = strconv.Itoa
+// --- Test 10: Production path — adding member produces decrypt-ready envelope ---
+
+func TestProductionPathAddMemberDecrypt(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+	memberBPubkey := pubkeyFromHex(t, memberBKeyHex)
+
+	// Wire the production path: OCKManager → ConfidentialEncryptor → encrypt → member decrypt.
+	// This mirrors app.go wiring with TrustSetMemberSource providing the member set.
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+	publisher := &fakeOCKPublisher{}
+
+	// Simulate TrustSet member source returning both members.
+	trustSet := NewTrustSet(nil, nil)
+	trustSet.SetRelayMembers("test-org-prod", map[string]domain.Role{
+		memberAPubkey: domain.RoleAdmin,
+		memberBPubkey: domain.RoleViewer,
+	})
+	memberSource := NewTrustSetMemberSource(trustSet, nil)
+
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     publisher,
+		History:       &fakeOCKHistory{},
+		Members:       memberSource,
+		Logger:        nil,
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	// Encrypt a member record (the production path through OrgCanonicalPublisher).
+	orgID := "test-org-prod"
+	memberContent, _ := json.Marshal(map[string]interface{}{
+		"org_id": orgID, "pubkey": memberAPubkey, "role": "admin", "deleted": false,
+	})
+	legacyKind := 32006
+	dTag := "org:member:" + orgID + ":" + memberAPubkey
+	topic := "org-member"
+
+	encrypted, err := encryptor.EncryptConfidential(ctx, orgID, memberContent, legacyKind, dTag, topic, nil)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	// Verify: member A can find their envelope and decrypt.
+	memberASigner := newTestKeySigner(t, memberAKeyHex)
+	memberAOCK := findMemberEnvelope(t, ctx, publisher.envelopes, memberASigner, servicePubkey, memberAPubkey)
+	if memberAOCK.Version == 0 {
+		t.Fatal("member A should find their key envelope")
+	}
+
+	decrypted, err := DecryptConfidentialContent(memberAOCK, encrypted, ConfidentialRecordContext{
+		LegacyKind: legacyKind, DTag: dTag, Topic: topic,
+	})
+	if err != nil {
+		t.Fatalf("member A decrypt: %v", err)
+	}
+	if string(decrypted) != string(memberContent) {
+		t.Fatalf("plaintext mismatch: got %q", decrypted)
+	}
+
+	// Verify: member B (viewer) also got an envelope and can decrypt the same record.
+	memberBSigner := newTestKeySigner(t, memberBKeyHex)
+	memberBOCK := findMemberEnvelope(t, ctx, publisher.envelopes, memberBSigner, servicePubkey, memberBPubkey)
+	if memberBOCK.Version == 0 {
+		t.Fatal("member B should find their key envelope")
+	}
+
+	decryptedB, err := DecryptConfidentialContent(memberBOCK, encrypted, ConfidentialRecordContext{
+		LegacyKind: legacyKind, DTag: dTag, Topic: topic,
+	})
+	if err != nil {
+		t.Fatalf("member B decrypt: %v", err)
+	}
+	if string(decryptedB) != string(memberContent) {
+		t.Fatalf("member B plaintext mismatch: got %q", decryptedB)
+	}
+}
+
+// --- Test 11: Production path — secret metadata visible, value hidden ---
+
+func TestProductionPathSecretMetadataVsValue(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+	publisher := &fakeOCKPublisher{}
+
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     publisher,
+		History:       &fakeOCKHistory{},
+		Members:       &fakeOCKMemberSource{pubkeys: []string{memberAPubkey}},
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	orgID := "test-org-secret"
+	// Org-visible: secret ref metadata (no value).
+	metadata := []byte(`{"id":"secret-1","name":"DB_PASSWORD","service_id":"svc-1"}`)
+	// Service-only: the actual secret value.
+	secretValue := []byte(`{"value":"s3cr3t-p@ssw0rd!"}`)
+	legacyKind := 32008
+	dTag := "secret-1"
+	topic := "secret"
+
+	encrypted, err := encryptor.EncryptConfidential(ctx, orgID, metadata, legacyKind, dTag, topic, secretValue)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	// Member CAN decrypt the org-visible metadata.
+	memberASigner := newTestKeySigner(t, memberAKeyHex)
+	memberAOCK := findMemberEnvelope(t, ctx, publisher.envelopes, memberASigner, servicePubkey, memberAPubkey)
+
+	decryptedMeta, err := DecryptConfidentialContent(memberAOCK, encrypted, ConfidentialRecordContext{
+		LegacyKind: legacyKind, DTag: dTag, Topic: topic,
+	})
+	if err != nil {
+		t.Fatalf("member decrypt metadata: %v", err)
+	}
+	if string(decryptedMeta) != string(metadata) {
+		t.Fatalf("metadata mismatch: got %q", decryptedMeta)
+	}
+
+	// Member CANNOT decrypt the service_inner (secret value).
+	var envelope ConfidentialEnvelope
+	if err := json.Unmarshal([]byte(encrypted), &envelope); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if envelope.ServiceInner == "" {
+		t.Fatal("service_inner should be present")
+	}
+	senderPK, _ := gonostr.PubKeyFromHex(servicePubkey)
+	_, err = memberASigner.Decrypt(ctx, envelope.ServiceInner, senderPK)
+	if err == nil {
+		t.Fatal("member should NOT decrypt service_inner (secret value)")
+	}
+
+	// Service CAN decrypt the service_inner.
+	decryptedValue, err := encryptor.DecryptServiceInner(ctx, encrypted)
+	if err != nil {
+		t.Fatalf("service decrypt service_inner: %v", err)
+	}
+	if string(decryptedValue) != string(secretValue) {
+		t.Fatalf("secret value mismatch: got %q", decryptedValue)
+	}
+
+	// Verify no plaintext secret value in the encrypted output.
+	if strings.Contains(encrypted, "s3cr3t-p@ssw0rd!") {
+		t.Fatal("plaintext secret value leaked into encrypted content")
+	}
+}
+
+// --- Test 12: Production path — remove member triggers rotation, excluded ---
+
+func TestProductionPathRemoveMemberRotation(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+	memberBPubkey := pubkeyFromHex(t, memberBKeyHex)
+
+	signer := newTestKeySigner(t, serviceKeyHex)
+	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
+
+	// Phase 1: both members are present.
+	trustSet := NewTrustSet(nil, nil)
+	trustSet.SetRelayMembers("test-org-rotation", map[string]domain.Role{
+		memberAPubkey: domain.RoleAdmin,
+		memberBPubkey: domain.RoleAdmin,
+	})
+	memberSource := NewTrustSetMemberSource(trustSet, nil)
+
+	pub1 := &fakeOCKPublisher{}
+	manager := NewOCKManager(OCKManagerConfig{
+		Signer:        signer,
+		ServicePubkey: servicePubkey,
+		Publisher:     pub1,
+		History:       &fakeOCKHistory{},
+		Members:       memberSource,
+	})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+
+	orgID := "test-org-rotation"
+	recordCtx := ConfidentialRecordContext{LegacyKind: 32005, DTag: "org:" + orgID, Topic: "org"}
+
+	// Encrypt a record before rotation.
+	preRotation, err := encryptor.EncryptConfidential(ctx, orgID, []byte(`{"state":"before"}`), recordCtx.LegacyKind, recordCtx.DTag, recordCtx.Topic, nil)
+	if err != nil {
+		t.Fatalf("pre-rotation encrypt: %v", err)
+	}
+
+	// Both members have v1 envelopes.
+	memberBSigner := newTestKeySigner(t, memberBKeyHex)
+	memberBv1 := findMemberEnvelope(t, ctx, pub1.envelopes, memberBSigner, servicePubkey, memberBPubkey)
+	if memberBv1.Version == 0 {
+		t.Fatal("member B should have v1 key")
+	}
+
+	// Verify B can decrypt pre-rotation.
+	_, err = DecryptConfidentialContent(memberBv1, preRotation, recordCtx)
+	if err != nil {
+		t.Fatalf("member B should decrypt pre-rotation: %v", err)
+	}
+
+	// Phase 2: remove member B — update TrustSet and rotate.
+	trustSet.SetRelayMembers(orgID, map[string]domain.Role{
+		memberAPubkey: domain.RoleAdmin,
+	})
+
+	// Simulate OrgIntentHandler.triggerKeyRotation → ConfidentialEncryptor.RotateKey.
+	// In production, the callback receives the org UUID and calls RotateKey with
+	// orgID.String(). Here we call RotateKey directly with the orgID string.
+	if err := encryptor.RotateKey(ctx, orgID); err != nil {
+		t.Fatalf("rotation failed: %v", err)
+	}
+
+	// Encrypt after rotation — uses v2 key.
+	postRotation, err := encryptor.EncryptConfidential(ctx, orgID, []byte(`{"state":"after"}`), recordCtx.LegacyKind, recordCtx.DTag, recordCtx.Topic, nil)
+	if err != nil {
+		t.Fatalf("post-rotation encrypt: %v", err)
+	}
+
+	// Verify B cannot find a v2 envelope.
+	memberBv2 := findMemberEnvelopeForVersion(t, ctx, pub1.envelopes, memberBSigner, servicePubkey, memberBPubkey, 2)
+	if memberBv2.Version != 0 {
+		t.Fatal("member B should NOT have a v2 key envelope")
+	}
+
+	// Verify B cannot decrypt post-rotation record with v1 key.
+	_, err = DecryptConfidentialContent(memberBv1, postRotation, recordCtx)
+	if err == nil {
+		t.Fatal("member B should NOT decrypt post-rotation record with v1 key")
+	}
+
+	// Verify A CAN still decrypt (A was in the rotation set).
+	memberASigner := newTestKeySigner(t, memberAKeyHex)
+	memberAv2 := findMemberEnvelopeForVersion(t, ctx, pub1.envelopes, memberASigner, servicePubkey, memberAPubkey, 2)
+	if memberAv2.Version == 0 {
+		t.Fatal("member A should have v2 key")
+	}
+	decryptedPost, err := DecryptConfidentialContent(memberAv2, postRotation, recordCtx)
+	if err != nil {
+		t.Fatalf("member A post-rotation decrypt: %v", err)
+	}
+	if string(decryptedPost) != `{"state":"after"}` {
+		t.Fatalf("wrong post-rotation plaintext: %q", decryptedPost)
+	}
+}
+
+// --- Test 13: TrustSetMemberSource relay-first, Postgres-fallback ---
+
+func TestTrustSetMemberSourceRelayFirst(t *testing.T) {
+	ctx := context.Background()
+	memberAPubkey := pubkeyFromHex(t, memberAKeyHex)
+	memberBPubkey := pubkeyFromHex(t, memberBKeyHex)
+
+	trustSet := NewTrustSet(nil, nil)
+
+	// No relay members, no Postgres → empty set.
+	source := NewTrustSetMemberSource(trustSet, nil)
+	pubkeys, err := source.OrgMemberPubkeys(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pubkeys) != 0 {
+		t.Fatalf("expected empty, got %d", len(pubkeys))
+	}
+
+	// Add relay members → returns them.
+	trustSet.SetRelayMembers("test-org", map[string]domain.Role{
+		memberAPubkey: domain.RoleAdmin,
+		memberBPubkey: domain.RoleViewer,
+	})
+	pubkeys, err = source.OrgMemberPubkeys(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pubkeys) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(pubkeys))
+	}
+
+	// Verify both members are present.
+	found := make(map[string]bool)
+	for _, pk := range pubkeys {
+		found[pk] = true
+	}
+	if !found[memberAPubkey] || !found[memberBPubkey] {
+		t.Fatalf("missing expected members: %v", pubkeys)
+	}
+}
+
+// --- Helper: find a member's OCK envelope from published set ---
+
+func findMemberEnvelope(t *testing.T, ctx context.Context, envelopes []struct{ DTag, Content string }, memberSigner gonostr.Keyer, servicePubkey, memberPubkey string) OrgContentKey {
+	t.Helper()
+	senderPK, _ := gonostr.PubKeyFromHex(servicePubkey)
+	for _, env := range envelopes {
+		pt, err := memberSigner.Decrypt(ctx, env.Content, senderPK)
+		if err != nil {
+			continue
+		}
+		key, rpk, err := UnmarshalOCKWrap([]byte(pt))
+		if err != nil || rpk != memberPubkey {
+			continue
+		}
+		return key
+	}
+	return OrgContentKey{}
+}
+
+func findMemberEnvelopeForVersion(t *testing.T, ctx context.Context, envelopes []struct{ DTag, Content string }, memberSigner gonostr.Keyer, servicePubkey, memberPubkey string, version int) OrgContentKey {
+	t.Helper()
+	senderPK, _ := gonostr.PubKeyFromHex(servicePubkey)
+	for _, env := range envelopes {
+		pt, err := memberSigner.Decrypt(ctx, env.Content, senderPK)
+		if err != nil {
+			continue
+		}
+		key, rpk, err := UnmarshalOCKWrap([]byte(pt))
+		if err != nil || rpk != memberPubkey {
+			continue
+		}
+		if key.Version == version {
+			return key
+		}
+	}
+	return OrgContentKey{}
+}

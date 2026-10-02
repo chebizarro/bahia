@@ -13,7 +13,7 @@ import (
 
 // ConfidentialStateEncryptor encrypts and decrypts confidential cp-state
 // records using a per-org content key (OCK). Phase 3 C1 replacement for
-// OrgStateEncryptor. Org members can decrypt the AEAD layer; service-only
+// LegacyOrgStateDecryptor. Org members can decrypt the AEAD layer; service-only
 // fields require an additional NIP-44 decrypt to the service pubkey.
 //
 // The legacyKind, dTag, and topic parameters bind the AEAD associated data
@@ -26,11 +26,11 @@ type ConfidentialStateEncryptor interface {
 	RotateKey(ctx context.Context, orgID string) error
 }
 
-// OrgStateEncryptor is the legacy encryption interface. Retained during
-// migration so the dual-read path in RelayMemberEventHandler can attempt
-// old-format decryption.
-type OrgStateEncryptor interface {
-	EncryptOrgState(ctx context.Context, plaintext []byte, dTag, topic string) (string, error)
+// LegacyOrgStateDecryptor is the read-only legacy decryption interface.
+// Retained during migration so RelayMemberEventHandler can attempt
+// old-format O1 decryption. No encrypt path — all new writes use
+// ConfidentialStateEncryptor.
+type LegacyOrgStateDecryptor interface {
 	DecryptOrgState(content string) ([]byte, error)
 }
 

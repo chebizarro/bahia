@@ -1379,12 +1379,13 @@ func New(cfg *config.Config) (*App, error) {
 	var confidentialEncryptor *controlplane.ConfidentialEncryptor
 	if controlPlaneSigner != nil && servicePubkey != "" {
 		ockHistory := nostrAdapter.NewProjectorOCKEnvelopeHistory(projectionHistory)
+		ockMemberSource := controlplane.NewTrustSetMemberSource(trustSet, orgMemberRepo)
 		ockManager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{
 			Signer:        controlPlaneSigner,
 			ServicePubkey: servicePubkey,
 			Publisher:     nostrProjector, // implements OCKEnvelopePublisher via structural typing
 			History:       ockHistory,     // implements OCKEnvelopeHistory via structural typing
-			Members:       nil,            // TODO: wire OCKMemberSource from orgMemberRepo
+			Members:       ockMemberSource,
 			Logger:        logger,
 		})
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
@@ -1433,6 +1434,18 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Debug("TrustSet relay members updated for org",
 					zap.String("org_id", orgID.String()),
 					zap.Int("member_count", len(members)))
+			},
+			OnKeyRotation: func(ctx context.Context, orgID uuid.UUID) {
+				if confidentialEncryptor == nil {
+					return
+				}
+				if err := confidentialEncryptor.RotateKey(ctx, orgID.String()); err != nil {
+					logger.Warn("OCK rotation failed after membership change",
+						zap.String("org_id", orgID.String()), zap.Error(err))
+				} else {
+					logger.Info("OCK rotated after membership change",
+						zap.String("org_id", orgID.String()))
+				}
 			},
 		})
 		intentProcessor.RegisterHandler("org", orgHandler)
@@ -1860,7 +1873,8 @@ func New(cfg *config.Config) (*App, error) {
 	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
 	// holds a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. Secret values are NEVER included in published events.
-	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, nil, logger) // TODO: wire SecretOrgResolver
+	secretOrgResolver := controlplane.NewServiceBackedSecretOrgResolver(serviceRepo, secretRepo)
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretOrgResolver, logger)
 
 	// Register the secret intent handler when the secret domain is enabled.
 	if enabledDomains["secret"] && secretRepo != nil {
@@ -1878,7 +1892,8 @@ func New(cfg *config.Config) (*App, error) {
 
 	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
 	// secrets, credentials) from published content.
-	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, confidentialEncryptor, nil, logger) // TODO: wire NotificationOrgResolver
+	notifOrgResolver := controlplane.NewRepoBackedNotificationOrgResolver(notifRepo)
+	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, confidentialEncryptor, notifOrgResolver, logger)
 
 	// Register the notification intent handler when the notification domain is
 	// enabled. The dispatcher's OnChannelChanged method is the event-driven

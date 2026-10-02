@@ -46,13 +46,23 @@ func NewNotificationCanonicalPublisher(projector *Projector, encryptor Confident
 }
 
 // PublishChannel publishes a canonical notification channel config record.
-// The channel metadata is in the org-visible AEAD layer; the full config
-// (including webhook URLs and secrets) is in the service_inner NIP-44 layer.
+// For org-scoped channels: metadata is in the org-visible AEAD layer; full
+// config (including webhook URLs and secrets) is in the service_inner NIP-44
+// layer.
+// For fleet-scoped channels (OrgID is nil): the entire content is encrypted
+// service-only (NIP-44 to service pubkey) since there is no member set to
+// distribute an OCK to. Fleet-scoped channels are managed through the daemon
+// API, not relay discovery.
 func (p *NotificationCanonicalPublisher) PublishChannel(ctx context.Context, ch *domain.NotificationChannel) error {
 	if p.projector == nil || !p.projector.Enabled() || ch == nil {
 		return nil
 	}
 	dTag := NotificationChannelDTag(ch.ID)
+
+	// Fleet-scoped channel (no org): encrypt everything service-only.
+	if ch.OrgID == uuid.Nil {
+		return p.publishFleetScopedChannel(ctx, ch, dTag)
+	}
 
 	// Org-visible: sanitized metadata (no secrets/webhook URLs).
 	tags, orgVisibleContent := NotificationChannelRegistryRecord(ch, false, false)
@@ -61,6 +71,49 @@ func (p *NotificationCanonicalPublisher) PublishChannel(ctx context.Context, ch 
 	_, serviceContent := NotificationChannelRegistryRecord(ch, false, true)
 
 	return p.publishConfidentialWithServiceInner(ctx, KindNotificationChannelRegistry, dTag, false, tags, orgVisibleContent, []byte(serviceContent), "notification_channel.projection", &ch.ID, ch.OrgID.String())
+}
+
+// publishFleetScopedChannel publishes a fleet-scoped notification channel
+// with the entire content as service_inner (NIP-44 to service pubkey).
+// No org-visible AEAD layer since there is no org member set. The
+// org-visible portion is a minimal non-sensitive envelope.
+func (p *NotificationCanonicalPublisher) publishFleetScopedChannel(ctx context.Context, ch *domain.NotificationChannel, dTag string) error {
+	if p.encryptor == nil {
+		return fmt.Errorf("confidential encryptor not configured; refusing plaintext publish of fleet channel")
+	}
+
+	topic := ""
+	if fam, ok := cpStateFamilies[KindNotificationChannelRegistry]; ok {
+		topic = fam.topic
+	}
+
+	// Org-visible: minimal non-sensitive metadata only.
+	orgVisible := map[string]any{
+		"id":           ch.ID.String(),
+		"name":         ch.Name,
+		"channel_type": string(ch.ChannelType),
+		"enabled":      ch.Enabled,
+		"fleet_scoped": true,
+	}
+	orgVisibleJSON, _ := json.Marshal(orgVisible)
+
+	// Service-only: full config (reconstructed from confidential record).
+	_, serviceContent := NotificationChannelRegistryRecord(ch, false, true)
+
+	// Use a synthetic fleet org key scope. The EncryptConfidential call will
+	// create/use an OCK for the "fleet" scope. The service_inner remains
+	// service-only via NIP-44.
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, "fleet", orgVisibleJSON, KindNotificationChannelRegistry, dTag, topic, []byte(serviceContent))
+	if err != nil {
+		return fmt.Errorf("encrypt fleet notification channel: %w", err)
+	}
+
+	tags := gonostr.Tags{
+		{"channel_type", string(ch.ChannelType)},
+		{"name", ch.Name},
+	}
+
+	return p.projector.publishControlState(ctx, KindNotificationChannelRegistry, dTag, false, tags, encrypted, "notification_channel.projection", &ch.ID)
 }
 
 // PublishChannelDeleted publishes a tombstone for a deleted channel.

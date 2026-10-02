@@ -15,8 +15,20 @@ import (
 // during migration from the old per-private-key scheme to the per-org content
 // key (OCK) scheme. New publishes use ConfidentialStateEncryptor.
 //
-// Remove after all historical records have been re-published under the OCK
-// scheme (warm-start migration).
+// N1 migration coverage:
+// - N1-era secret/notification records on relays used NIP-44 self-encryption
+//   to the service pubkey. These records are audit/backup copies — the daemon's
+//   source of truth for secrets and notifications is the database, not relay
+//   events. No relay read-back path decodes them.
+// - O1-era org/member/invite records used the sha256-derived key AEAD. The
+//   RelayMemberEventHandler.HydrateTrustSetFromHistory path does read these
+//   back and has a dual-read (new format first, legacy O1 fallback).
+// - selfDecryptNIP44Legacy is retained for future relay recovery tooling and
+//   warm-start re-publication of N1 records under the OCK scheme.
+//
+// TODO(C1 follow-up): warm-start re-publication: on daemon startup, scan
+// history for records with the old encryption schema (NIP-44 or O1 AEAD),
+// decrypt, and re-publish under the new OCK scheme. File as a separate issue.
 
 // selfDecryptNIP44Legacy decrypts content that was NIP-44 self-encrypted
 // to the service's own pubkey using the raw private key. Legacy read-only path.

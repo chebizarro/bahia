@@ -8,7 +8,7 @@ import (
 )
 
 // ConfidentialEncryptor encrypts and decrypts confidential cp-state records
-// using a per-org content key (OCK). It replaces the previous OrgStateEncryptor
+// using a per-org content key (OCK). It replaces the previous LegacyOrgStateDecryptor
 // and NIP-44 self-encryption paths with a single scheme where:
 //   - Org-visible content is AEAD-encrypted under the OCK (any member can decrypt)
 //   - Service-only fields use an additional NIP-44 inner layer to the service pubkey
