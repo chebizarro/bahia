@@ -721,6 +721,17 @@ type NostrConfig struct {
 	RelayQuorum         RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar             RelaySidecarConfig `koanf:"sidecar"`
 
+	// IntentDomains lists domain families for which the daemon subscribes to
+	// kind-30900 operator intents and processes them through the intent
+	// pipeline. No domain is enabled until its handler is registered (F2/F3).
+	// Safe default: empty (no intent processing).
+	IntentDomains []string `koanf:"intent_domains" yaml:"intent_domains" secret:"false"`
+
+	// BootstrapOwners maps org UUIDs to the hex pubkey of their bootstrap
+	// owner. Used only when no relay membership events (O1) or Postgres
+	// org_members exist for an org. See design §2.2.
+	BootstrapOwners map[string]string `koanf:"bootstrap_owners" yaml:"bootstrap_owners" secret:"false"`
+
 	// LocalStore is the daemon's local event store and inbound cursors.
 	LocalStore NostrLocalStoreConfig `koanf:"local_store" yaml:"local_store"`
 }

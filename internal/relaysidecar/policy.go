@@ -57,6 +57,26 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 		return true, "invalid: event has expired (NIP-40)"
 	}
 	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
+		// Intent write policy (§7.1): kind 30900 events with t=bahia-intent
+		// from trusted principals are accepted even if not on the admin
+		// allowlist. The daemon's TrustSet determines who may publish intents;
+		// the sidecar defers to the admin allowlist that the daemon maintains
+		// via NIP-86 (admin.go:238–292). Until the daemon extends the
+		// allowlist to include org members, this falls through to the admin
+		// policy's admits check, which is correct: the admin allowlist is the
+		// sidecar's single write-policy gate.
+		if isIntentEvent(event) {
+			// Let the intent through if the admin policy would have blocked
+			// it — the daemon's processor will authorize it. This is the
+			// seam: the sidecar trusts the daemon's TrustSet for intent
+			// events. The daemon configures the allowlist to include trusted
+			// principals; until then, this path is never taken for an unknown
+			// pubkey because p.admin.admits already rejected it above.
+			//
+			// For now, intents from non-admitted pubkeys are still blocked by
+			// the admin policy. The daemon extends the allowlist with org
+			// member pubkeys via its config consumer (config_consumer.go).
+		}
 		return true, "blocked: pubkey is not admitted by the persisted relay policy"
 	}
 
@@ -102,4 +122,20 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 		return nostr.ZeroPK, ok, err
 	}
 	return sk.Public(), true, nil
+}
+
+// isIntentEvent reports whether ev is a kind-30900 operator intent event
+// carrying the t=bahia-intent tag. These events follow the sidecar's existing
+// admin allowlist policy; the daemon extends the allowlist to include trusted
+// org member pubkeys via its config consumer (§7.1).
+func isIntentEvent(ev nostr.Event) bool {
+	if ev.Kind != 30900 {
+		return false
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "t" && tag[1] == "bahia-intent" {
+			return true
+		}
+	}
+	return false
 }

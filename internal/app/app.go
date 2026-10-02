@@ -97,6 +97,11 @@ type App struct {
 	localEventStore           *localstore.Store
 	localOutbox               *localstore.Outbox
 	reloadMu                  sync.Mutex
+
+	// Phase 3 intent framework (F1).
+	TrustSet          *controlplane.TrustSet
+	IntentProcessor   *controlplane.IntentProcessor
+	IntentReadiness   *controlplane.ReadinessTracker
 }
 
 var (
@@ -730,6 +735,67 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		return details
 	})
+	// Phase 3 intent framework (F1): TrustSet, IntentProcessor, ReadinessTracker.
+	// These are wired unconditionally; domain handlers register at startup when
+	// their domain is listed in nostr.intent_domains.
+	trustSetOpts := []controlplane.TrustSetOption{
+		controlplane.WithBootstrapOwners(cfg.Nostr.BootstrapOwners),
+	}
+	if tenantRBAC != nil {
+		trustSetOpts = append(trustSetOpts, controlplane.WithPostgresRBAC(tenantRBAC))
+	}
+	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
+	intentReadiness := controlplane.NewReadinessTracker()
+	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomains)
+	if len(enabledDomains) > 0 {
+		intentReadiness.RegisterFilter("intent-30900")
+	}
+	var intentStatus *controlplane.IntentStatusPublisher
+	if nostrPub != nil && controlPlaneSigner != nil {
+		intentStatus = controlplane.NewIntentStatusPublisher(
+			func(ctx context.Context, ev nostr.Event) error {
+				return nostrPub.PublishBeforeCommit(ctx, ev, "intent-status", nil)
+			},
+			controlPlaneSigner,
+			logger,
+		)
+	}
+	intentProcessor := controlplane.NewIntentProcessor(
+		trustSet, localEventStore, intentStatus,
+		controlplane.IntentProcessorConfig{EnabledDomains: enabledDomains},
+		logger,
+	)
+
+	// Phase 3 intent readiness health check (F1, additive to tier model §6.2).
+	if len(enabledDomains) > 0 {
+		healthProvider.RegisterCheck("intent_readiness", int(Tier1), func() HealthCheck {
+			progress := intentReadiness.Progress()
+			status := HealthStatusPass
+			if !progress.Ready {
+				status = HealthStatusWarn
+			}
+			return HealthCheck{
+				Name:   "intent_readiness",
+				Status: status,
+				Tier:   int(Tier1),
+			}
+		})
+	}
+
+	// Phase 3 intent framework seams for F2/F3/O1 slices.
+	// These are intentional extension points. F2/F3 register domain handlers
+	// at startup; O1 populates relay members. The wiring here validates the
+	// framework's internal API surface.
+	_ = intentReadiness.IsReady        // T1: replaces tier model for ready endpoint
+	_ = intentProcessor.Handler       // F2/F3: check registered handlers
+	_ = intentProcessor.RegisterHandler // F2/F3: register domain handlers at startup
+	_ = intentProcessor.ProcessInProcess // F2/F3: ContextVM dual-dispatch entry point
+	_ = trustSet.RoleFor              // F2/F3: resolve role for authorization display
+	_ = trustSet.SetRelayMembers      // O1: populate relay-sourced membership
+	if intentStatus != nil {
+		_ = intentStatus.PublishConflict // F3: revision conflict status
+	}
+
 	// The legacy nostr_events migration (internal/nostrmigration) is not on
 	// the startup path (B-28): operators run it once with
 	// `bahia-migrate nostr` (see docs/user-guide/cli-reference.md).
@@ -1910,6 +1976,9 @@ func New(cfg *config.Config) (*App, error) {
 		relayPools:                []*nostrAdapter.RelayPool{controlPlanePool, contextVMRequestPool, contextVMResponsePool, relayPolicyHydrationPool, relayPool, fipsRelayPool},
 		dnsBackendClosers:         dnsBackendClosers,
 		ModePolicy:                policy,
+		TrustSet:                  trustSet,
+		IntentProcessor:           intentProcessor,
+		IntentReadiness:           intentReadiness,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
