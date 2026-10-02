@@ -98,7 +98,7 @@ Result: PASS on 2026-06-14.
 Mapped Epic 3 coverage:
 
 - `SECURITY-T-008` / scanner lifecycle: PASS for SBOM target hash verification, PURL dedupe, OSV batch call, finding persistence, status/summary/finding/audit publication, latest target update, and unsupported-coordinate accounting in `internal/service/security_scanner_test.go`.
-- `SECURITY-T-009` / failure states: PASS for payload SHA-256 mismatch causing failed terminal state before any OSV query, relay rejection retaining `failed_retryable` publication state, and cancellation producing a cancelled terminal state in `internal/service/security_scanner_test.go`.
+- `SECURITY-T-009` / failure states: PASS for payload SHA-256 mismatch causing failed terminal state before any OSV query, relay rejection producing a terminal failed publication state (failed_retryable was retired by migration 000072; the outbox owns retries), and cancellation producing a cancelled terminal state in `internal/service/security_scanner_test.go`.
 - `SECURITY-T-010` / ingestion lifecycle: PASS for EOSE processing plus CLOSED/AUTH handling without polling in `internal/service/security_scanner_test.go`.
 - `SECURITY-T-011` / ContextVM ack-vs-observable semantics: PASS for `security/scan` acknowledgement-only response, invalid target rejection, read-surface validation, and schedules read-only behavior in `internal/controlplane/security_handlers_test.go`.
 

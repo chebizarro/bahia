@@ -423,6 +423,13 @@ func (s *OpenClawSidecar) HandleControllerPolicyIntent(ctx context.Context, even
 	return nil
 }
 
+// topologyNotifier is an optional interface implemented by transports backed
+// by a relay pool. It allows the sidecar to wait for relay topology changes
+// (connect/remove) before resubscribing after a GaveUp error.
+type topologyNotifier interface {
+	WaitForTopologyChange(ctx context.Context) error
+}
+
 func (s *OpenClawSidecar) Run(ctx context.Context) error {
 	s.resetReadiness()
 	defer s.clearSubscriptionReadiness()
@@ -459,6 +466,18 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			},
 		},
 	}
+	for {
+		if err := s.subscribeAndConsume(ctx, filters); err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		// GaveUp was handled and topology changed; resubscribe
+	}
+}
+
+func (s *OpenClawSidecar) subscribeAndConsume(ctx context.Context, filters []nostr.Filter) error {
 	sub, err := s.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		s.setReadinessError(err)
@@ -492,6 +511,17 @@ func (s *OpenClawSidecar) Run(ctx context.Context) error {
 			s.markSubscriptionEOSE()
 		case event, ok := <-sub.Events:
 			if !ok {
+				if gaveUp := sub.GaveUp(); gaveUp != nil {
+					s.logger.Error("OpenClaw SoulFactory sidecar subscription gave up â waiting for topology change", "error", gaveUp)
+					s.setReadinessError(gaveUp)
+					if tn, ok := s.transport.(topologyNotifier); ok {
+						if err := tn.WaitForTopologyChange(ctx); err != nil {
+							return err
+						}
+						return nil // outer loop will resubscribe
+					}
+					return fmt.Errorf("OpenClaw SoulFactory sidecar subscription gave up: %w", gaveUp)
+				}
 				err := fmt.Errorf("OpenClaw SoulFactory sidecar subscription closed")
 				s.setReadinessError(err)
 				return err

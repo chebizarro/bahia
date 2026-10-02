@@ -91,7 +91,7 @@ func (p *ProcessSync) Run(ctx context.Context, filters []nostr.Filter) error {
 		logger = zap.NewNop()
 	}
 	config := p.Config
-	if config == (InboundSyncConfig{}) {
+	if config.IsZero() {
 		config = DefaultInboundSyncConfig()
 	}
 	ready := &processReady{caughtUp: p.CaughtUp}

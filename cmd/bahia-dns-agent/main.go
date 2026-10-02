@@ -131,20 +131,33 @@ func run(args []string) error {
 			Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 			Tags:    nostr.TagMap{"t": []string{"dns-zone-sync"}},
 		}
-		sub, err := zoneSyncSub.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
-		if err != nil {
-			logger.Error("zone sync subscription failed", zap.Error(err))
-			return
-		}
-		for ev := range sub.Events {
-			if ev == nil {
-				continue
-			}
-			select {
-			case zoneSyncEvents <- *ev:
-			case <-ctx.Done():
+		for {
+			sub, err := zoneSyncSub.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				logger.Error("zone sync subscription failed", zap.Error(err))
 				return
 			}
+			for ev := range sub.Events {
+				if ev == nil {
+					continue
+				}
+				select {
+				case zoneSyncEvents <- *ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if gaveUp := sub.GaveUp(); gaveUp != nil {
+				logger.Error("zone sync subscription gave up â waiting for topology change", zap.Error(gaveUp))
+				if err := pool.WaitForTopologyChange(ctx); err != nil {
+					return
+				}
+				continue
+			}
+			return // events channel closed normally
 		}
 	}()
 	zoneSubscriber := dnsagent.NewZoneSubscriber(service, cfg.AuthorizedPubkey, zoneSyncEvents, logger)

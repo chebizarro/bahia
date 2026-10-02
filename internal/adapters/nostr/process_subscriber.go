@@ -40,6 +40,12 @@ func (s *StoreBackedSubscriber) AuthenticateRelay(ctx context.Context, relayURL 
 	return s.Pool.AuthenticateRelay(ctx, relayURL)
 }
 
+// WaitForTopologyChange blocks until a relay is connected or removed, or
+// until ctx is cancelled. It delegates to the underlying pool.
+func (s *StoreBackedSubscriber) WaitForTopologyChange(ctx context.Context) error {
+	return s.Pool.WaitForTopologyChange(ctx)
+}
+
 // SubscribeAllWithEOSE starts a ProcessSync for filters. RelayEOSE fires each
 // time a relay catches up, EndOfStoredEvents closes once (see
 // ProcessSync.CaughtUp), and Events closes when the sync stops. CLOSED frames
