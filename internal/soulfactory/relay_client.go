@@ -138,7 +138,7 @@ func NewRelayClient(relays []string, opts ...RelayClientOption) (*RelayClient, e
 	if c.resubscribeBackoff != nil {
 		poolOpts = append(poolOpts, nostradapter.WithResubscribeBackoff(c.resubscribeBackoff))
 	}
-	c.pool = nostradapter.NewRelayPool(relays, newSlogZapLogger(c.logger), poolOpts...)
+	c.pool = nostradapter.NewRelayPool(relays, nostradapter.NewSlogZapLogger(c.logger), poolOpts...)
 	c.relays = c.pool.URLs()
 	return c, nil
 }

@@ -168,6 +168,13 @@ type OpenClawSidecar struct {
 	capabilityPublished bool
 	subscriptionEOSE    bool
 	lastReadinessError  string
+
+	// inFlight tracks idempotency keys whose Execute is still running.
+	// A re-drive (restart rebuild) with the same idempotency key while the
+	// original is still executing waits for the in-flight result instead of
+	// executing a second time. See the runtime-contract comment below.
+	inFlightMu sync.Mutex
+	inFlight   map[string]chan struct{}
 }
 
 type OpenClawSidecarReadiness struct {
@@ -638,6 +645,47 @@ func (s *OpenClawSidecar) HandleControlEvent(ctx context.Context, event *nostr.E
 		}
 		return s.publishOutcome(ctx, event, *request.Envelope, cached.Outcome)
 	}
+	// Runtime idempotency-key contract (bahia-irsry.57):
+	//
+	// The sidecar stores a completed result keyed by IdempotencyKey, so a
+	// re-drive with the same key after the original completed replays the
+	// cached result. But a re-drive that arrives while the original is still
+	// executing would find no cached entry and start a second execution: the
+	// store is post-execution only. This matters for restart re-drives where
+	// the SoulFactory restarts while the runtime keeps running.
+	//
+	// Guard: track in-flight keys. When a second request with the same key
+	// arrives while the first is executing, wait for the first to finish and
+	// then return the cached result.
+	idemKey := request.Envelope.IdempotencyKey
+	s.inFlightMu.Lock()
+	if s.inFlight == nil {
+		s.inFlight = make(map[string]chan struct{})
+	}
+	if wait, running := s.inFlight[idemKey]; running {
+		s.inFlightMu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		// The original finished; return its cached result.
+		if cached, ok := s.store.Get(idemKey); ok {
+			return s.publishOutcome(ctx, event, *request.Envelope, cached.Outcome)
+		}
+		// Original finished without a cached result (shouldn't happen). Fall
+		// through to execute.
+		s.inFlightMu.Lock()
+	}
+	done := make(chan struct{})
+	s.inFlight[idemKey] = done
+	s.inFlightMu.Unlock()
+	defer func() {
+		close(done)
+		s.inFlightMu.Lock()
+		delete(s.inFlight, idemKey)
+		s.inFlightMu.Unlock()
+	}()
 	invocation := OpenClawControlInvocation{
 		Event:    event,
 		Envelope: *request.Envelope,

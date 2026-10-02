@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"fiatjaf.com/nostr"
@@ -124,6 +125,13 @@ type parkedOperation struct {
 	// with nothing left to release it.
 	holdsSoul bool
 	resume    func(context.Context, *RuntimeControlResultEnvelope)
+	// actionEventID is the originating lifecycle action (kind:1950) or fleet
+	// revision (kind:31953) event ID, used by abandon to publish a terminal
+	// result that the restart rebuild recognizes as finished.
+	actionEventID string
+	// requestKind is the Nostr kind of the originating request
+	// (domain.KindSoulAction or domain.KindSoulFleetConfig).
+	requestKind int
 }
 
 type parkedRuntimeResult struct {
@@ -302,4 +310,52 @@ func lateRollbackProgress(step string, late *RuntimeControlResultEnvelope) (stat
 		return "failed", fmt.Sprintf("%s: %s failed after its outcome was reported unknown: %v", actionStatusRollbackResolved, step, failure)
 	}
 	return "completed", fmt.Sprintf("%s: %s completed after its outcome was reported unknown", actionStatusRollbackResolved, step)
+}
+
+// abandonedEntry describes the parked operation that was abandoned.
+type abandonedEntry struct {
+	// runtimeRequestID is the kind:38384 runtime control request event ID.
+	runtimeRequestID string
+	// actionEventID is the originating lifecycle action or fleet revision event
+	// ID, used to publish a terminal result that the restart rebuild recognizes.
+	actionEventID string
+	// requestKind is the Nostr kind of the originating request.
+	requestKind int
+}
+
+// abandon removes the soul-holding parked entry for agentID (the entry whose
+// shardKey matches and holdsSoul is true) and installs a record-only
+// replacement that logs the late result without applying it. It returns the
+// abandoned entry's details, or nil when nothing was parked.
+func (w *runtimeResultWaiters) abandon(agentID string, recordOnly func(context.Context, *RuntimeControlResultEnvelope)) *abandonedEntry {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for id, entry := range w.parked {
+		if entry.op.holdsSoul && abandonShardKeyMatch(entry.op.shardKey, agentID) {
+			info := &abandonedEntry{
+				runtimeRequestID: id,
+				actionEventID:    entry.op.actionEventID,
+				requestKind:      entry.op.requestKind,
+			}
+			// Replace with a record-only handler that does not hold the soul.
+			w.parked[id] = &parkedRuntimeResult{
+				pending: entry.pending,
+				op: parkedOperation{
+					shardKey:  agentID,
+					holdsSoul: false,
+					resume:    recordOnly,
+				},
+				seq: entry.seq,
+			}
+			return info
+		}
+	}
+	return nil
+}
+
+// abandonShardKeyMatch reports whether shardKey identifies agentID. Lifecycle
+// entries use the full soul ref (e.g. "31951:<pubkey>:scout"), fleet entries
+// use the bare agent ID.
+func abandonShardKeyMatch(shardKey, agentID string) bool {
+	return shardKey == agentID || strings.HasSuffix(shardKey, ":"+agentID)
 }
