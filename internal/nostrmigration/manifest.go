@@ -310,6 +310,7 @@ var constantJustifications = map[string]KindJustification{
 	"OrgInviteRegistry":              omitted("OrgInviteRegistry", kinds.OrgInviteRegistry, "cp-state-family", "canonical cp-state output for org invite registry; not a legacy migration input"),
 	"SecretRegistry":                 omitted("SecretRegistry", kinds.SecretRegistry, "canonical-target", "canonical cp-state secret registry output; Phase 3 N1 produces secrets as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
 	"NotificationChannelRegistry":    omitted("NotificationChannelRegistry", kinds.NotificationChannelRegistry, "canonical-target", "canonical cp-state notification channel registry output; Phase 3 N1 produces channels as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
+	"OrgKeyEnvelope":                 omitted("OrgKeyEnvelope", kinds.OrgKeyEnvelope, "cp-state-family", "canonical cp-state output for per-org content key envelopes (Phase 3 C1); NIP-44-encrypted OCK wraps distributed to org members via the shared signing/outbox pipeline"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

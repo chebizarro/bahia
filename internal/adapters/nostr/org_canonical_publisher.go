@@ -11,39 +11,53 @@ import (
 	"go.uber.org/zap"
 )
 
-// OrgStateEncryptor encrypts and decrypts org state content. Implemented in
-// the controlplane package by encryptOrgState/decryptOrgState using a
-// service-held symmetric key (§1.7, assistant_transcript_store pattern).
-type OrgStateEncryptor interface {
-	EncryptOrgState(ctx context.Context, plaintext []byte, dTag, topic string) (string, error)
+// ConfidentialStateEncryptor encrypts and decrypts confidential cp-state
+// records using a per-org content key (OCK). Phase 3 C1 replacement for
+// LegacyOrgStateDecryptor. Org members can decrypt the AEAD layer; service-only
+// fields require an additional NIP-44 decrypt to the service pubkey.
+//
+// The legacyKind, dTag, and topic parameters bind the AEAD associated data
+// to the record's coordinate identity, preventing ciphertext replay across
+// coordinates.
+type ConfidentialStateEncryptor interface {
+	EncryptConfidential(ctx context.Context, orgID string, plaintext []byte, legacyKind int, dTag, topic string, serviceOnlyPlaintext []byte) (string, error)
+	DecryptConfidential(ctx context.Context, content string, legacyKind int, dTag, topic string) ([]byte, error)
+	DecryptServiceInner(ctx context.Context, content string) ([]byte, error)
+	RotateKey(ctx context.Context, orgID string) error
+	WrapKeyForMember(ctx context.Context, orgID string, pubkey string) error
+}
+
+// LegacyOrgStateDecryptor is the read-only legacy decryption interface.
+// Retained during migration so RelayMemberEventHandler can attempt
+// old-format O1 decryption. No encrypt path — all new writes use
+// ConfidentialStateEncryptor.
+type LegacyOrgStateDecryptor interface {
 	DecryptOrgState(content string) ([]byte, error)
 }
 
 // MemberPublishedCallback is called after a member canonical record is
-// published. The encrypted content string is the published event content.
-// Used by the relay trust source to hydrate TrustSet from published events.
-type MemberPublishedCallback func(ctx context.Context, encryptedContent string)
+// published. Parameters are the encrypted content and the record's coordinate
+// identity (legacyKind, dTag, topic) for AD verification during decryption.
+type MemberPublishedCallback func(ctx context.Context, encryptedContent string, legacyKind int, dTag, topic string)
 
 // OrgCanonicalPublisher publishes canonical cp-state for org, member and invite
 // entities through the shared Projector signing/outbox pipeline. Content is
-// encrypted with a service-held symmetric key so org composition and roles are
-// not exposed in plaintext on relays (§1.7).
+// encrypted with a per-org content key (OCK) so org members can decrypt it
+// (Phase 3 C1, design §1.7).
 //
 // The outer envelope (d, domain, schema, legacy_kind, deleted, t) from
 // controlStateEnvelope is preserved so coordinates and tombstones still work.
 // No p tags are emitted (member pubkeys are confidential).
-//
-// Phase 3 Wave 5 O1.
 type OrgCanonicalPublisher struct {
 	projector         *Projector
-	encryptor         OrgStateEncryptor
+	encryptor         ConfidentialStateEncryptor
 	onMemberPublished MemberPublishedCallback
 	logger            *zap.Logger
 }
 
 // NewOrgCanonicalPublisher creates a publisher backed by the given projector.
 // encryptor is required; publishes fail closed without it.
-func NewOrgCanonicalPublisher(projector *Projector, encryptor OrgStateEncryptor, logger *zap.Logger) *OrgCanonicalPublisher {
+func NewOrgCanonicalPublisher(projector *Projector, encryptor ConfidentialStateEncryptor, logger *zap.Logger) *OrgCanonicalPublisher {
 	return &OrgCanonicalPublisher{
 		projector: projector,
 		encryptor: encryptor,
@@ -70,12 +84,20 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 		putRecordTime(content, "created_at", org.CreatedAt)
 		putRecordTime(content, "updated_at", org.UpdatedAt)
 	}
-	_, err := p.publishEncryptedReturning(ctx, KindOrgRegistry, org.ID.String(), deleted, nil, content, "org.projection", &org.ID)
+	_, err := p.publishEncrypted(ctx, KindOrgRegistry, org.ID.String(), deleted, nil, content, "org.projection", &org.ID, org.ID.String())
 	return err
 }
 
-// PublishMember publishes a canonical org member record.
-func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool) error {
+// PublishMember publishes a canonical org member record. After publishing, it
+// drives the OCK key lifecycle:
+//   - Deleted member → RotateKey so the removed member cannot decrypt future records.
+//   - Added/updated member → WrapKeyForMember so they can read existing records.
+//   - Role downgrade (prevRole provided and higher than current) → RotateKey.
+//
+// prevRole is optional; pass the old role when known (role-change paths in
+// OrgIntentHandler and EncryptedDomainHandlers) so the publisher can detect
+// downgrades. When omitted, no downgrade check is performed.
+func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error {
 	dTag := orgMemberDTag(member.OrgID, member.Pubkey)
 	content := map[string]any{
 		"deleted": deleted,
@@ -90,11 +112,53 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 	}
 	// No p tags — member pubkeys are confidential (§1.7).
 	entityID := uuid.NewSHA1(member.OrgID, []byte(member.Pubkey))
-	encryptedContent, err := p.publishEncryptedReturning(ctx, KindOrgMemberRegistry, dTag, deleted, nil, content, "org_member.projection", &entityID)
-	if err == nil && p.onMemberPublished != nil && encryptedContent != "" {
-		p.onMemberPublished(ctx, encryptedContent)
+	legacyKind := KindOrgMemberRegistry
+	topic := ""
+	if fam, ok := cpStateFamilies[legacyKind]; ok {
+		topic = fam.topic
 	}
-	return err
+	encryptedContent, err := p.publishEncrypted(ctx, legacyKind, dTag, deleted, nil, content, "org_member.projection", &entityID, member.OrgID.String())
+	if err == nil && p.onMemberPublished != nil && encryptedContent != "" {
+		p.onMemberPublished(ctx, encryptedContent, legacyKind, dTag, topic)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Key lifecycle (Phase 3 C1). Errors are logged but do not fail the
+	// publish — the member record is already committed.
+	orgID := member.OrgID.String()
+	if deleted {
+		// (a) Member removed → rotate so they can't decrypt future records.
+		if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
+			p.logger.Warn("OCK rotation after member removal failed",
+				zap.String("org_id", orgID), zap.Error(rotErr))
+		} else {
+			p.logger.Info("OCK rotated after member removal",
+				zap.String("org_id", orgID))
+		}
+	} else {
+		// (b) Member added or updated → wrap current OCK so they can read.
+		if wrapErr := p.encryptor.WrapKeyForMember(ctx, orgID, member.Pubkey); wrapErr != nil {
+			p.logger.Warn("OCK wrap for new member failed",
+				zap.String("org_id", orgID), zap.Error(wrapErr))
+		}
+		// (a) Role downgrade → rotate (re-key even though the member still
+		// gets the new key; semantically correct for future role-filtered
+		// wrapping and provides an audit boundary).
+		if len(prevRole) > 0 && prevRole[0] != "" {
+			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
+				if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
+					p.logger.Warn("OCK rotation after role downgrade failed",
+						zap.String("org_id", orgID), zap.Error(rotErr))
+				} else {
+					p.logger.Info("OCK rotated after role downgrade",
+						zap.String("org_id", orgID))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // PublishInvite publishes a canonical org invite record.
@@ -112,13 +176,13 @@ func (p *OrgCanonicalPublisher) PublishInvite(ctx context.Context, invite *domai
 		putRecordTime(content, "created_at", invite.CreatedAt)
 	}
 	// No p tags — invitee pubkeys are confidential (§1.7).
-	_, err := p.publishEncryptedReturning(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID)
+	_, err := p.publishEncrypted(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID, invite.OrgID.String())
 	return err
 }
 
-// publishEncryptedReturning marshals content, encrypts it with the encryptor,
-// publishes through publishControlState, and returns the encrypted content.
-func (p *OrgCanonicalPublisher) publishEncryptedReturning(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content map[string]any, entityType string, entityID *uuid.UUID) (string, error) {
+// publishEncrypted marshals content, encrypts it with the confidential
+// encryptor, publishes through publishControlState, and returns the encrypted content.
+func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content map[string]any, entityType string, entityID *uuid.UUID, orgID string) (string, error) {
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		return "", fmt.Errorf("marshal org state content: %w", err)
@@ -133,9 +197,9 @@ func (p *OrgCanonicalPublisher) publishEncryptedReturning(ctx context.Context, l
 	// Org state is confidential (design §1.7): never publish without an
 	// encryptor, so there is no plaintext path to a relay.
 	if p.encryptor == nil {
-		return "", fmt.Errorf("org state encryptor not configured; refusing plaintext publish")
+		return "", fmt.Errorf("confidential encryptor not configured; refusing plaintext publish")
 	}
-	publishContent, err := p.encryptor.EncryptOrgState(ctx, contentJSON, dTag, topic)
+	publishContent, err := p.encryptor.EncryptConfidential(ctx, orgID, contentJSON, legacyKind, dTag, topic, nil)
 	if err != nil {
 		return "", fmt.Errorf("encrypt org state: %w", err)
 	}

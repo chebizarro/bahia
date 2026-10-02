@@ -214,6 +214,7 @@ export const ORG_MEMBER_REGISTRY = 32006;
 export const ORG_INVITE_REGISTRY = 32007;
 export const SECRET_REGISTRY = 32008;
 export const NOTIFICATION_CHANNEL_REGISTRY = 32009;
+export const ORG_KEY_ENVELOPE = 32010;
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
@@ -449,6 +450,7 @@ export const CP_STATE_TOPICS = Object.freeze({
   BACKUP_RUNTIME_OBSERVATION: 'backup-runtime',
   SECRET_REGISTRY: 'secret-registry',
   NOTIFICATION_CHANNEL: 'notification-channel',
+  ORG_KEY_ENVELOPE: 'org-key-envelope',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The

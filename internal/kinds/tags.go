@@ -138,4 +138,5 @@ const (
 	CPStateTopicOrgRegistry       = "org-registry"
 	CPStateTopicOrgMemberRegistry = "org-member"
 	CPStateTopicOrgInviteRegistry = "org-invite"
+	CPStateTopicOrgKeyEnvelope    = "org-key-envelope"
 )
