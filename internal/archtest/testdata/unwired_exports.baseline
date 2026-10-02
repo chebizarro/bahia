@@ -161,6 +161,9 @@
 1	internal/controlplane.EncryptedRequestTransport.HandleEvent
 1	internal/controlplane.EncryptedResponder.DecryptRequestContent
 1	internal/controlplane.EncryptedResponder.PublishEncryptedResult
+1	internal/controlplane.IntentProcessor.ProcessInProcess
+1	internal/controlplane.IntentProcessor.RegisterHandler
+1	internal/controlplane.IntentStatusPublisher.PublishConflict
 1	internal/controlplane.KindActionResult
 1	internal/controlplane.KindActionStatus
 1	internal/controlplane.KindAdoptionImportRequest
@@ -226,7 +229,10 @@
 1	internal/controlplane.KindWorkerUndrainRequest
 1	internal/controlplane.KindWorkloadPinRequest
 1	internal/controlplane.MaintenanceCommandPublisher.PublishPurge
+1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
+1	internal/controlplane.TrustSet.RoleFor
+1	internal/controlplane.TrustSet.SetRelayMembers
 1	internal/controlplane.WithBackupDefinitionRegistry
 1	internal/controlplane.WithBackupRepositoryProbeExecutor
 1	internal/controlplane.WithBackupVerificationExecutor
@@ -281,6 +287,7 @@
 1	internal/reconcile.WithRemediationIntentHistory
 1	internal/reconcile.WithStartingTimeout
 1	internal/relaysidecar.Server.Relay
+1	internal/relaysidecar.Server.SetIntentAuthors
 1	internal/repository.BackupCheckpointExecuting
 1	internal/repository.PgOCIRepository.CreateUpload
 1	internal/repository.PgOCIRepository.DeleteUpload

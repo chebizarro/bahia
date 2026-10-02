@@ -102,6 +102,7 @@ type App struct {
 	TrustSet          *controlplane.TrustSet
 	IntentProcessor   *controlplane.IntentProcessor
 	IntentReadiness   *controlplane.ReadinessTracker
+	IntentSubscriber  *controlplane.IntentSubscriber
 }
 
 var (
@@ -782,18 +783,21 @@ func New(cfg *config.Config) (*App, error) {
 		})
 	}
 
-	// Phase 3 intent framework seams for F2/F3/O1 slices.
-	// These are intentional extension points. F2/F3 register domain handlers
-	// at startup; O1 populates relay members. The wiring here validates the
-	// framework's internal API surface.
-	_ = intentReadiness.IsReady        // T1: replaces tier model for ready endpoint
-	_ = intentProcessor.Handler       // F2/F3: check registered handlers
-	_ = intentProcessor.RegisterHandler // F2/F3: register domain handlers at startup
-	_ = intentProcessor.ProcessInProcess // F2/F3: ContextVM dual-dispatch entry point
-	_ = trustSet.RoleFor              // F2/F3: resolve role for authorization display
-	_ = trustSet.SetRelayMembers      // O1: populate relay-sourced membership
-	if intentStatus != nil {
-		_ = intentStatus.PublishConflict // F3: revision conflict status
+	// Phase 3 intent subscriber (F1): runs when intent domains are enabled.
+	// Author-scoped subscription via TrustSet, feeding the processor, marking
+	// readiness after first catch-up.
+	var intentSubscriber *controlplane.IntentSubscriber
+	if len(enabledDomains) > 0 {
+		intentSubscriber = controlplane.NewIntentSubscriber(
+			controlPlanePool,
+			localEventStore,
+			trustSet,
+			intentProcessor,
+			intentReadiness,
+			servicePubkey,
+			logger,
+		)
+		bgManager.RegisterWithOptions(intentSubscriber, RunnerTier(Tier2), RunnerRequired(false))
 	}
 
 	// The legacy nostr_events migration (internal/nostrmigration) is not on
@@ -1979,6 +1983,7 @@ func New(cfg *config.Config) (*App, error) {
 		TrustSet:                  trustSet,
 		IntentProcessor:           intentProcessor,
 		IntentReadiness:           intentReadiness,
+		IntentSubscriber:          intentSubscriber,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
