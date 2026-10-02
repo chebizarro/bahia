@@ -195,7 +195,6 @@ func isAuditedEvent(t events.EventType) bool {
 		events.EventDeploymentIntentCreated, events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected,
 		events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted,
 		events.EventDriftDetected, events.EventRuntimeObservation,
-		events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop,

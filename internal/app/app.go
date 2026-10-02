@@ -104,6 +104,7 @@ type App struct {
 	IntentReadiness   *controlplane.ReadinessTracker
 	IntentSubscriber  *controlplane.IntentSubscriber
 	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
+
 }
 
 var (
@@ -1050,6 +1051,16 @@ func New(cfg *config.Config) (*App, error) {
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
 	}
+	// Phase 3 F4: warm-start for intent-migrated domains. When intent domains
+	// are configured, the projector waits for subscriber EOSE then compares
+	// its own history against relay state, re-publishing only stale records.
+	// RepublishSnapshot guards skip migrated domain legs.
+	if len(cfg.Nostr.IntentDomains) > 0 {
+		projectorOpts = append(projectorOpts,
+			nostrAdapter.WithReadinessTracker(intentReadiness),
+			nostrAdapter.WithIntentDomains(cfg.Nostr.IntentDomains),
+		)
+	}
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
@@ -1073,7 +1084,45 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", string(policy.RequestedMode)))
 	}
+	// Phase 3 F3: register environment intent handler when "environment" is
+	// in intent_domains. Uses the relay-first registry (which publishes the
+	// canonical 30900 via PublishBeforeCommit) or falls back to the plain
+	// registry when relay-first is not configured.
+	if enabledDomains["environment"] {
+		var envRegistry service.EnvironmentIntentRegistry
+		if relayFirstRegistry != nil {
+			envRegistry = relayFirstRegistry
+		} else {
+			envRegistry = registry
+		}
+		envHandler := controlplane.NewEnvironmentIntentHandler(
+			envRegistry,
+			nil, // statePublisher: the relay-first registry handles publishing
+			logger,
+		)
+		intentProcessor.RegisterHandler("environment", envHandler)
+		logger.Info("environment intent handler registered")
+	}
+
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// Phase 3 F2: register service domain intent handler.
+	// Uses the relay-first registry when available (canonical 30900 published
+	// before DB write), falling back to the plain registry.
+	{
+		var serviceMutationBackend controlplane.RegistryMutationBackend = registry
+		if relayFirstRegistry != nil {
+			serviceMutationBackend = relayFirstRegistry
+		}
+		intentProcessor.RegisterHandler("service", controlplane.NewServiceIntentHandler(
+			controlplane.ServiceIntentHandlerConfig{
+				Registry: serviceMutationBackend,
+				Reader:   serviceRepo,
+				Status:   intentStatus,
+				Logger:   logger,
+			},
+		))
+	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
@@ -1705,6 +1754,7 @@ func New(cfg *config.Config) (*App, error) {
 			registryMutations = relayFirstRegistry
 		}
 		controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
+			IntentProcessor: intentProcessor,
 			Secrets:         secretRepo,
 			Encryptor:       secretEncryptor,
 			Runs:            runRepo,
@@ -2008,6 +2058,7 @@ func New(cfg *config.Config) (*App, error) {
 		IntentProcessor:           intentProcessor,
 		IntentReadiness:           intentReadiness,
 		IntentSubscriber:          intentSubscriber,
+		IntentAuthorsSyncer:       intentAuthorsSyncer,
 		Health:                    healthProvider,
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),

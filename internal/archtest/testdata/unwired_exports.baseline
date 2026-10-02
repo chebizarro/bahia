@@ -73,6 +73,7 @@
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
 1	internal/adapters/nostr.WithKinds
+1	internal/adapters/nostr.WithProjectorRepairInterval
 1	internal/adapters/qdrant.Client.CollectionExists
 1	internal/adapters/qdrant.Client.DeleteCollection
 1	internal/adapters/qdrant.Client.Search
@@ -161,9 +162,6 @@
 1	internal/controlplane.EncryptedRequestTransport.HandleEvent
 1	internal/controlplane.EncryptedResponder.DecryptRequestContent
 1	internal/controlplane.EncryptedResponder.PublishEncryptedResult
-1	internal/controlplane.IntentProcessor.ProcessInProcess
-1	internal/controlplane.IntentProcessor.RegisterHandler
-1	internal/controlplane.IntentStatusPublisher.PublishConflict
 1	internal/controlplane.KindActionResult
 1	internal/controlplane.KindActionStatus
 1	internal/controlplane.KindAdoptionImportRequest

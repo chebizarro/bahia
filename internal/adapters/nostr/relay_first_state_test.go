@@ -135,8 +135,8 @@ func TestRelayFirstServiceRecordMatchesProjectionAndIsSignedOnce(t *testing.T) {
 	}
 	relayFirst := h.relayFirst.events[0]
 
-	want := projectAlone(t, h.source, events.EventServiceUpdated, KindServiceRegistry, stored.ID)
-	assertSameRecord(t, relayFirst, want)
+	// F2: the projector no longer publishes service registry records;
+	// the relay-first path is the only publisher.
 	assertCPStateEnvelope(t, relayFirst, KindServiceRegistry, stored.ID.String(), false, kinds.CPStateTopicServiceRegistry)
 	var content map[string]any
 	if err := json.Unmarshal([]byte(relayFirst.Content), &content); err != nil {
@@ -155,15 +155,11 @@ func TestRelayFirstServiceRecordMatchesProjectionAndIsSignedOnce(t *testing.T) {
 	}
 	assertWebReadModelFilterMatches(t, relayFirst)
 
-	// The cache write's bus event (and any later snapshot) projects the state
-	// the relay-first record already carries: nothing is signed again.
+	// F2: projector no longer handles service events at all.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
 	h.republishRegistrySnapshot(t)
 	if got := h.projectorRelay.byKind(KindServiceRegistry); len(got) != 0 {
-		t.Fatalf("projector re-signed an unchanged relay-first record: %d events", len(got))
-	}
-	if metrics := h.projector.ProjectionMetrics()["service/registry"]; metrics.Deduped < 2 || metrics.Attempted != 0 {
-		t.Fatalf("service/registry metrics = %+v, want only dedupes", metrics)
+		t.Fatalf("projector published %d service records after F2 leg deletion, want 0", len(got))
 	}
 }
 
@@ -189,7 +185,19 @@ func TestRelayFirstEnvironmentRecordMatchesProjectionAndIsSignedOnce(t *testing.
 	}
 	relayFirst := h.relayFirst.events[0]
 
-	want := projectAlone(t, h.source, events.EventEnvironmentUpdated, KindEnvironmentRegistry, stored.ID)
+	// Phase 3 F3: environment handleEvent case removed. Use direct
+	// publishEnvironmentRegistry for the reference projection.
+	refSink := &captureProjectionPublisher{}
+	refProj := newRelayFirstTestProjector(h.source, refSink)
+	env, _ := h.source.GetEnvironment(ctx, stored.ID)
+	if err := refProj.publishEnvironmentRegistry(ctx, env, false); err != nil {
+		t.Fatalf("reference publishEnvironmentRegistry: %v", err)
+	}
+	refRecords := refSink.byKind(KindEnvironmentRegistry)
+	if len(refRecords) != 1 {
+		t.Fatalf("reference projection of %s published %d records, want 1", stored.ID, len(refRecords))
+	}
+	want := refRecords[0]
 	assertSameRecord(t, relayFirst, want)
 	assertCPStateEnvelope(t, relayFirst, KindEnvironmentRegistry, stored.ID.String(), false, kinds.CPStateTopicEnvironmentRegistry)
 	var content map[string]any
@@ -249,32 +257,35 @@ func TestRelayFirstTombstonesMatchProjectorTombstones(t *testing.T) {
 // signs next on a coordinate is strictly newer, even within one second: a
 // tombstone never loses a created_at tie to the live record it replaces.
 func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
+	// F2: the projector no longer publishes service registry records.
+	// Verify that successive relay-first writes on the same coordinate
+	// produce strictly increasing created_at values.
 	ctx := context.Background()
 	h := newRelayFirstHarness(t, false)
 	created, updated := relayFirstTestTimes()
 	stored := domain.Service{ID: domain.NewEntityID(), Name: "api", RuntimeType: domain.RuntimeTypeDocker, DefaultBranch: "main", CreatedAt: created, UpdatedAt: updated}
 	h.services.rows[stored.ID] = stored
 
-	// Projector live record, then a relay-first tombstone, then the
-	// projector's own tombstone for the delete's bus event.
-	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
 	writer := NewRelayFirstStatePublisher(h.projector, newRelayFirstTestPublisher(h.relayFirst))
+
+	// Live record via relay-first.
+	if err := writer.PublishServiceRegistry(ctx, &stored, false); err != nil {
+		t.Fatalf("relay-first live record: %v", err)
+	}
+	// Tombstone on the same coordinate.
 	if err := writer.PublishServiceRegistry(ctx, &domain.Service{ID: stored.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
 		t.Fatalf("relay-first tombstone: %v", err)
 	}
-	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceDeleted, EntityID: stored.ID.String()})
 
-	projected := h.projectorRelay.byKind(KindServiceRegistry)
-	if len(projected) != 2 || len(h.relayFirst.events) != 1 {
-		t.Fatalf("events: projector=%d relay-first=%d, want 2 and 1", len(projected), len(h.relayFirst.events))
+	if len(h.relayFirst.events) != 2 {
+		t.Fatalf("relay-first events = %d, want 2", len(h.relayFirst.events))
 	}
-	live, relayFirstTombstone, projectorTombstone := projected[0], h.relayFirst.events[0], projected[1]
-	if !(live.CreatedAt < relayFirstTombstone.CreatedAt && relayFirstTombstone.CreatedAt < projectorTombstone.CreatedAt) {
-		t.Fatalf("created_at not strictly increasing on the coordinate: live=%d relay-first tombstone=%d projector tombstone=%d",
-			live.CreatedAt, relayFirstTombstone.CreatedAt, projectorTombstone.CreatedAt)
+	live, tombstone := h.relayFirst.events[0], h.relayFirst.events[1]
+	if !(live.CreatedAt < tombstone.CreatedAt) {
+		t.Fatalf("created_at not strictly increasing: live=%d tombstone=%d", live.CreatedAt, tombstone.CreatedAt)
 	}
-	if eventDTag(live) != eventDTag(relayFirstTombstone) || eventDTag(live) != eventDTag(projectorTombstone) {
-		t.Fatalf("tombstones left the live coordinate: %q %q %q", eventDTag(live), eventDTag(relayFirstTombstone), eventDTag(projectorTombstone))
+	if eventDTag(live) != eventDTag(tombstone) {
+		t.Fatalf("tombstone left the live coordinate: %q vs %q", eventDTag(live), eventDTag(tombstone))
 	}
 }
 
@@ -283,6 +294,9 @@ func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
 // of the stamped row must replace the relay-first record rather than be
 // deduplicated against it.
 func TestRelayFirstRecordIsReplacedWhenTheCacheStampsANewRevision(t *testing.T) {
+	// F2: the projector no longer publishes service registry records.
+	// Verify the relay-first update publishes exactly one record with the
+	// correct cached revision.
 	ctx := context.Background()
 	h := newRelayFirstHarness(t, true)
 	created, updated := relayFirstTestTimes()
@@ -294,23 +308,32 @@ func TestRelayFirstRecordIsReplacedWhenTheCacheStampsANewRevision(t *testing.T) 
 	if err := h.registry.UpdateService(ctx, &edit); err != nil {
 		t.Fatalf("relay-first UpdateService: %v", err)
 	}
+	// Projector no longer handles service events.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
+	_ = ctx // keep linter happy
 
-	projected := h.projectorRelay.byKind(KindServiceRegistry)
-	if len(h.relayFirst.events) != 1 || len(projected) != 1 {
-		t.Fatalf("events: relay-first=%d projector=%d, want 1 each", len(h.relayFirst.events), len(projected))
+	if len(h.relayFirst.events) != 1 {
+		t.Fatalf("relay-first published %d events, want 1", len(h.relayFirst.events))
 	}
+	projected := h.projectorRelay.byKind(KindServiceRegistry)
+	if len(projected) != 0 {
+		t.Fatalf("projector published %d service records after F2 leg deletion, want 0", len(projected))
+	}
+
 	var content struct {
 		UpdatedAt string `json:"updated_at"`
 	}
-	if err := json.Unmarshal([]byte(projected[0].Content), &content); err != nil {
+	if err := json.Unmarshal([]byte(h.relayFirst.events[0].Content), &content); err != nil {
 		t.Fatal(err)
 	}
-	if revision := h.services.rows[stored.ID].UpdatedAt.Format(time.RFC3339Nano); content.UpdatedAt != revision {
-		t.Fatalf("projected revision %q, want the cached revision %q", content.UpdatedAt, revision)
+	// F2: the relay-first record carries the revision minted by prepareServiceUpdate,
+	// which is newer than the original. The projector no longer re-projects.
+	parsed, err := time.Parse(time.RFC3339Nano, content.UpdatedAt)
+	if err != nil {
+		t.Fatalf("parse relay-first updated_at %q: %v", content.UpdatedAt, err)
 	}
-	if projected[0].CreatedAt <= h.relayFirst.events[0].CreatedAt {
-		t.Fatalf("projection created_at %d is not newer than the relay-first record's %d", projected[0].CreatedAt, h.relayFirst.events[0].CreatedAt)
+	if !parsed.After(updated) {
+		t.Fatalf("relay-first revision %s did not advance past original %s", parsed, updated)
 	}
 }
 
@@ -348,11 +371,13 @@ func TestRelayFirstWriteFailsWithoutRelayAcceptanceAndIsNotRemembered(t *testing
 	if h.services.rows[stored.ID].Name != "api" {
 		t.Fatal("cache written after the relay rejected the record")
 	}
-	// The rejected record was not remembered: projecting the cache still signs.
+	// F2: the projector no longer publishes service records. After a rejected
+	// relay-first write, there is no fallback projector publish.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
-	if got := h.projectorRelay.byKind(KindServiceRegistry); len(got) != 1 {
-		t.Fatalf("projector published %d service records after a rejected relay-first write, want 1", len(got))
+	if got := h.projectorRelay.byKind(KindServiceRegistry); len(got) != 0 {
+		t.Fatalf("projector published %d service records after F2 leg deletion, want 0", len(got))
 	}
+	_ = ctx
 }
 
 func TestProjectionFingerprintKeepsRegistryRevision(t *testing.T) {

@@ -110,7 +110,7 @@ func TestProjectionAuditFactsCoexistAndRepublishIsIdempotent(t *testing.T) {
 func TestProjectionAuditFactRepublishAfterRestartIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	repo := &memoryNostrEventRepo{records: map[string]repository.NostrEventRecord{}}
-	ev := events.Event{Type: events.EventServiceUpdated, EntityID: uuid.NewString(), Data: map[string]any{"name": "api"}}
+	ev := events.Event{Type: events.EventEnvironmentUpdated, EntityID: uuid.NewString(), Data: map[string]any{"name": "prod"}}
 
 	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, repo, zap.NewNop())
 	if err := first.publishAudit(ctx, ev); err != nil {
@@ -139,7 +139,7 @@ func TestProjectionAuditFactPublishFailureAllowsRetry(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{errorsByKind: map[int]error{KindCASAudit: errors.New("relay down")}}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-	ev := events.Event{Type: events.EventServiceCreated, EntityID: uuid.NewString()}
+	ev := events.Event{Type: events.EventEnvironmentCreated, EntityID: uuid.NewString()}
 
 	if err := projector.publishAudit(ctx, ev); err == nil {
 		t.Fatal("publish audit succeeded against a failing relay")
@@ -151,7 +151,7 @@ func TestProjectionAuditFactPublishFailureAllowsRetry(t *testing.T) {
 	if err := projector.publishAudit(ctx, ev); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	assertOneAudit(t, sink, events.EventServiceCreated)
+	assertOneAudit(t, sink, events.EventEnvironmentCreated)
 }
 
 // The source Nostr event a bus payload names is carried as the e tag.

@@ -209,6 +209,10 @@ type Projector struct {
 	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
 
+	// F4 warm-start: readiness gate and migrated domain list.
+	readiness     ReadinessWaiter
+	intentDomains []string
+
 	// Generalized projection dedupe/coalescing/backoff/metrics state; see
 	// projection_dedupe.go. Initialized lazily so the constructor literal is
 	// untouched.
@@ -331,12 +335,9 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		return
 	}
 	for _, eventType := range []events.EventType{
-		events.EventServiceCreated,
-		events.EventServiceUpdated,
-		events.EventServiceDeleted,
-		events.EventEnvironmentCreated,
-		events.EventEnvironmentUpdated,
-		events.EventEnvironmentDeleted,
+		// Phase 3 F2/F3: service and environment Created/Updated/Deleted
+		// subscriptions removed — their state is published by the intent handlers
+		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
 		events.EventDeploymentIntentCreated,
 		events.EventDeploymentIntentApproved,
 		events.EventDeploymentIntentRejected,
@@ -395,11 +396,21 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 }
 
 // Run performs startup snapshot repair and then periodically republishes
-// snapshots until the context is cancelled.
+// snapshots until the context is cancelled. Domains listed in intentDomains
+// are warm-started from the daemon's own history (design §5.3) instead of
+// re-projected from Postgres; RepublishSnapshot guards skip their legs.
 func (p *Projector) Run(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
+	// Warm-start migrated domains: wait for subscriber EOSE, hydrate the
+	// fingerprint cache, and re-publish only stale or missing records.
+	p.warmStartMigratedDomains(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	// Legacy snapshot for unmigrated domains. Guards inside skip migrated
+	// domain legs so they are not re-projected from Postgres.
 	if err := p.RepublishSnapshot(ctx); err != nil {
 		p.logger.Warn("startup Nostr projection snapshot failed", zap.Error(err))
 	}
@@ -441,20 +452,14 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
-	for i := range services {
-		if err := p.publishServiceRegistry(ctx, &services[i], false); err != nil {
-			p.logger.Warn("publish service registry projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
-		}
-	}
 
+	// Phase 3 F3: environment snapshot republish removed — environment state
+	// is now published by the intent handler via PublishBeforeCommit
+	// (bahia-irsry.11.4). The listing is kept because
+	// publishPublicRouteSnapshotsFromSource and observed deployments use it.
 	envs, err := snapshotSource.ListEnvironments(ctx)
 	if err != nil {
 		return fmt.Errorf("list environments: %w", err)
-	}
-	for i := range envs {
-		if err := p.publishEnvironmentRegistry(ctx, &envs[i], false); err != nil {
-			p.logger.Warn("publish environment registry projection failed", zap.String("environment_id", envs[i].ID.String()), zap.Error(err))
-		}
 	}
 
 	states, err := snapshotSource.ListAllStates(ctx)
@@ -591,18 +596,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		} else if id, ok := parseUUID(res.IntentID); ok {
 			p.publishStateForIntent(ctx, id)
 		}
-	case events.EventServiceCreated, events.EventServiceUpdated:
-		p.publishServiceByID(ctx, firstUUID(res.ServiceID, e.EntityID))
-	case events.EventServiceDeleted:
-		if id, ok := parseUUID(firstString(res.ServiceID, e.EntityID)); ok {
-			_ = p.publishServiceRegistry(ctx, &domain.Service{ID: id, UpdatedAt: time.Now().UTC()}, true)
-		}
-	case events.EventEnvironmentCreated, events.EventEnvironmentUpdated:
-		p.publishEnvironmentByID(ctx, firstUUID(res.EnvironmentID, e.EntityID))
-	case events.EventEnvironmentDeleted:
-		if id, ok := parseUUID(firstString(res.EnvironmentID, e.EntityID)); ok {
-			_ = p.publishEnvironmentRegistry(ctx, &domain.Environment{ID: id, UpdatedAt: time.Now().UTC()}, true)
-		}
+	// Phase 3 F2/F3: service and environment handleEvent cases removed — their
+	// state is published by the intent handlers via PublishBeforeCommit
+	// (bahia-irsry.11.3, bahia-irsry.11.4).
 	case events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected, events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
 		if res.Deleted {
 			if err := p.publishStateTombstone(ctx, res); err != nil {
