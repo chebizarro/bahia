@@ -331,9 +331,6 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		return
 	}
 	for _, eventType := range []events.EventType{
-		events.EventServiceCreated,
-		events.EventServiceUpdated,
-		events.EventServiceDeleted,
 		events.EventEnvironmentCreated,
 		events.EventEnvironmentUpdated,
 		events.EventEnvironmentDeleted,
@@ -440,11 +437,6 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	services, err := snapshotSource.ListServices(ctx)
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
-	}
-	for i := range services {
-		if err := p.publishServiceRegistry(ctx, &services[i], false); err != nil {
-			p.logger.Warn("publish service registry projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
-		}
 	}
 
 	envs, err := snapshotSource.ListEnvironments(ctx)
@@ -590,12 +582,6 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 			p.publishStateForRun(ctx, id)
 		} else if id, ok := parseUUID(res.IntentID); ok {
 			p.publishStateForIntent(ctx, id)
-		}
-	case events.EventServiceCreated, events.EventServiceUpdated:
-		p.publishServiceByID(ctx, firstUUID(res.ServiceID, e.EntityID))
-	case events.EventServiceDeleted:
-		if id, ok := parseUUID(firstString(res.ServiceID, e.EntityID)); ok {
-			_ = p.publishServiceRegistry(ctx, &domain.Service{ID: id, UpdatedAt: time.Now().UTC()}, true)
 		}
 	case events.EventEnvironmentCreated, events.EventEnvironmentUpdated:
 		p.publishEnvironmentByID(ctx, firstUUID(res.EnvironmentID, e.EntityID))

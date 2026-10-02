@@ -161,9 +161,6 @@
 1	internal/controlplane.EncryptedRequestTransport.HandleEvent
 1	internal/controlplane.EncryptedResponder.DecryptRequestContent
 1	internal/controlplane.EncryptedResponder.PublishEncryptedResult
-1	internal/controlplane.IntentProcessor.ProcessInProcess
-1	internal/controlplane.IntentProcessor.RegisterHandler
-1	internal/controlplane.IntentStatusPublisher.PublishConflict
 1	internal/controlplane.KindActionResult
 1	internal/controlplane.KindActionStatus
 1	internal/controlplane.KindAdoptionImportRequest

@@ -1074,6 +1074,24 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("mode", string(policy.RequestedMode)))
 	}
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// Phase 3 F2: register service domain intent handler.
+	// Uses the relay-first registry when available (canonical 30900 published
+	// before DB write), falling back to the plain registry.
+	{
+		var serviceMutationBackend controlplane.RegistryMutationBackend = registry
+		if relayFirstRegistry != nil {
+			serviceMutationBackend = relayFirstRegistry
+		}
+		intentProcessor.RegisterHandler("service", controlplane.NewServiceIntentHandler(
+			controlplane.ServiceIntentHandlerConfig{
+				Registry: serviceMutationBackend,
+				Reader:   serviceRepo,
+				Status:   intentStatus,
+				Logger:   logger,
+			},
+		))
+	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
@@ -1705,6 +1723,7 @@ func New(cfg *config.Config) (*App, error) {
 			registryMutations = relayFirstRegistry
 		}
 		controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
+			IntentProcessor: intentProcessor,
 			Secrets:         secretRepo,
 			Encryptor:       secretEncryptor,
 			Runs:            runRepo,
