@@ -11,6 +11,21 @@ importers:
       '@nostr-git/core':
         specifier: 1.2.0
         version: 1.2.0(typescript@5.9.3)
+      '@welshman/lib':
+        specifier: ^0.12.3
+        version: 0.12.3
+      '@welshman/net':
+        specifier: ^0.12.3
+        version: 0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0)
+      '@welshman/signer':
+        specifier: ^0.12.3
+        version: 0.12.3(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(@welshman/net@0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0))(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(nostr-tools@2.25.2(typescript@5.9.3))
+      '@welshman/store':
+        specifier: ^0.12.3
+        version: 0.12.3(@welshman/lib@0.12.3)(@welshman/net@0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0))(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(svelte@5.57.0)
+      '@welshman/util':
+        specifier: ^0.12.3
+        version: 0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3))
       isomorphic-dompurify:
         specifier: ^4.2.0
         version: 4.2.0(@noble/hashes@2.0.1)
@@ -486,6 +501,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@scure/base@1.2.6':
+    resolution: {integrity: sha512-g/nm5FgUa//MCj1gV09zTJTaM6KBAHqLN907YVQqf7zC49+DcO4B1so4ZX07Ef10Twr6nuqYEH9GEggFXA4Fmg==}
+
   '@scure/base@2.0.0':
     resolution: {integrity: sha512-3E1kpuZginKkek01ovG8krQ0Z44E3DHPjc5S2rjJw9lZn3KSQOs8S7wqikF/AH7iRanHypj85uGyxk0XAyC37w==}
 
@@ -562,11 +580,17 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/events@3.0.3':
+    resolution: {integrity: sha512-trOc4AAUThEz9hapPtSd7wf5tiQKvTtu5b371UxXdTuqzIh0ArcRspRP0i0Viu+LXstIQ1z96t1nsPxT9ol01g==}
+
   '@types/node@26.6.1':
     resolution: {integrity: sha512-VqGJBMCtdhqkBUCcBLvywI0NJ+KLuVzgNnlBUNFOQjqVxzo2lxLUNg1DSey8+u2u6ktswSAxg+s68QLzWHNOuA==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@vitest/coverage-v8@4.1.5':
     resolution: {integrity: sha512-38C0/Ddb7HcRG0Z4/DUem8x57d2p9jYgp18mkaYswEOQBGsI1CG4f/hjm0ZCeaJfWhSZ4k7jgs29V1Zom7Ki9A==}
@@ -605,6 +629,41 @@ packages:
 
   '@vitest/utils@4.1.5':
     resolution: {integrity: sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug==}
+
+  '@welshman/lib@0.12.3':
+    resolution: {integrity: sha512-ktrljhXdp5ZcpjBSDrI+nGFZY3net5R6BxWioAsP0dXWTEz8/31DriZ2GEbeST30pHxL/y+gVIrry2dfeN1vtg==}
+    engines: {node: '>=12.0.0'}
+
+  '@welshman/net@0.12.3':
+    resolution: {integrity: sha512-kK46V87k76xFjkX07yKTCd0FCvafzoAtSLnMq91G6SrkBW2qISKEqDHDqJ6SbuRrCwOA0oArGt+G5G7LYhEHsA==}
+    peerDependencies:
+      '@welshman/lib': 0.12.3
+      '@welshman/util': 0.12.3
+
+  '@welshman/signer@0.12.3':
+    resolution: {integrity: sha512-KosbR5Z45wVkwk5OIwrf8zBXCjuqXORndOThaklzkyZDYNZ8L2NthYOwxt4JmGupR/zjEp/lxPevuuFZig3mnQ==}
+    peerDependencies:
+      '@noble/hashes': ~2.0.1
+      '@welshman/lib': 0.12.3
+      '@welshman/net': 0.12.3
+      '@welshman/util': 0.12.3
+      nostr-tools: ^2.22.0
+
+  '@welshman/store@0.12.3':
+    resolution: {integrity: sha512-FFIN2CDrOELIe+YOE8p9MBZSa04mQTI2bF69et7MRjh9CXBhGjQnB/24m3LzDa+Gb13ulcgGUAsqgcVIbv1WCw==}
+    peerDependencies:
+      '@welshman/lib': 0.12.3
+      '@welshman/net': 0.12.3
+      '@welshman/util': 0.12.3
+      svelte: ^4.0.0 || ^5.0.0
+
+  '@welshman/util@0.12.3':
+    resolution: {integrity: sha512-wdiva2TJjeW/Gw4hB0RAf3gs/4AyWEab8pLvilgHz/dPFO2PX3xexNhgxcJZ+8IFcJjaIIKtJA6c24uHqLnuGg==}
+    peerDependencies:
+      '@noble/curves': ~2.0.1
+      '@noble/hashes': ~2.0.1
+      '@welshman/lib': 0.12.3
+      nostr-tools: ^2.22.0
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -954,6 +1013,11 @@ packages:
   isomorphic-textencoder@1.0.1:
     resolution: {integrity: sha512-676hESgHullDdHDsj469hr+7t3i/neBKU9J7q1T4RHaWwLAsaQnywC0D1dIUId0YZ+JtVrShzuBk1soo0+GVcQ==}
 
+  isomorphic-ws@5.0.0:
+    resolution: {integrity: sha512-muId7Zzn9ywDsyXgTIafTry2sV3nySZeUDe6YedVd1Hvuuep5AsIlqK+XefWpYTyJG5e503F2xIuT2lcU6rCSw==}
+    peerDependencies:
+      ws: '*'
+
   istanbul-lib-coverage@3.2.2:
     resolution: {integrity: sha512-O8dpsF+r0WV/8MNRKfnmrtCWhuKjxrq2w+jpzBL5UZKTi2LeVWnWOmWRxFlesJONmc+wLAGvKQZEOanko0LFTg==}
     engines: {node: '>=8'}
@@ -965,6 +1029,9 @@ packages:
   istanbul-reports@3.2.0:
     resolution: {integrity: sha512-HGYWWS/ehqTV3xN10i23tkPkpH46MLCIMFNCaaKNavAXTF1RkqxawEPtnjnGZ6XKSInBKkiOA5BKS+aZiY3AvA==}
     engines: {node: '>=8'}
+
+  js-base64@3.9.4:
+    resolution: {integrity: sha512-PtOMXpEGuP0RRiRXsjzHzl44dMHxSu2CPvAhinupR1tBa88me+1DPqsobl7eupn5UukjLkln1ZnAOAOXOrYG0Q==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -1445,6 +1512,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   xml-name-validator@5.0.0:
     resolution: {integrity: sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg==}
     engines: {node: '>=18'}
@@ -1758,6 +1837,8 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.2':
     optional: true
 
+  '@scure/base@1.2.6': {}
+
   '@scure/base@2.0.0': {}
 
   '@scure/bip32@2.0.1':
@@ -1845,12 +1926,18 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/events@3.0.3': {}
+
   '@types/node@26.6.1':
     dependencies:
       undici-types: 8.9.0
 
   '@types/trusted-types@2.0.7':
     optional: true
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 26.6.1
 
   '@vitest/coverage-v8@4.1.5(vitest@4.1.5)':
     dependencies:
@@ -1906,6 +1993,46 @@ snapshots:
       '@vitest/pretty-format': 4.1.5
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@welshman/lib@0.12.3':
+    dependencies:
+      '@scure/base': 1.2.6
+      '@types/events': 3.0.3
+      events: 3.3.0
+
+  '@welshman/net@0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0)':
+    dependencies:
+      '@welshman/lib': 0.12.3
+      '@welshman/util': 0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3))
+      events: 3.3.0
+      isomorphic-ws: 5.0.0(ws@8.22.0)
+    transitivePeerDependencies:
+      - ws
+
+  '@welshman/signer@0.12.3(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(@welshman/net@0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0))(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(nostr-tools@2.25.2(typescript@5.9.3))':
+    dependencies:
+      '@noble/hashes': 2.0.1
+      '@welshman/lib': 0.12.3
+      '@welshman/net': 0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0)
+      '@welshman/util': 0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3))
+      nostr-tools: 2.25.2(typescript@5.9.3)
+
+  '@welshman/store@0.12.3(@welshman/lib@0.12.3)(@welshman/net@0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0))(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(svelte@5.57.0)':
+    dependencies:
+      '@welshman/lib': 0.12.3
+      '@welshman/net': 0.12.3(@welshman/lib@0.12.3)(@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3)))(ws@8.22.0)
+      '@welshman/util': 0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3))
+      svelte: 5.57.0
+
+  '@welshman/util@0.12.3(@noble/curves@2.0.1)(@noble/hashes@2.0.1)(@welshman/lib@0.12.3)(nostr-tools@2.25.2(typescript@5.9.3))':
+    dependencies:
+      '@noble/curves': 2.0.1
+      '@noble/hashes': 2.0.1
+      '@types/ws': 8.18.2
+      '@welshman/lib': 0.12.3
+      js-base64: 3.9.4
+      nostr-tools: 2.25.2(typescript@5.9.3)
+      nostr-wasm: 0.1.0
 
   abort-controller@3.0.0:
     dependencies:
@@ -2242,6 +2369,10 @@ snapshots:
     dependencies:
       fast-text-encoding: 1.0.6
 
+  isomorphic-ws@5.0.0(ws@8.22.0):
+    dependencies:
+      ws: 8.22.0
+
   istanbul-lib-coverage@3.2.2: {}
 
   istanbul-lib-report@3.0.1:
@@ -2254,6 +2385,8 @@ snapshots:
     dependencies:
       html-escaper: 2.0.2
       istanbul-lib-report: 3.0.1
+
+  js-base64@3.9.4: {}
 
   js-tokens@10.0.0: {}
 
@@ -2715,6 +2848,8 @@ snapshots:
       strip-ansi: 6.0.1
 
   wrappy@1.0.2: {}
+
+  ws@8.22.0: {}
 
   xml-name-validator@5.0.0: {}
 

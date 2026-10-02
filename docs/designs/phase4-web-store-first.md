@@ -78,6 +78,25 @@ Rationale for welshman as first choice:
 - `nip19` — bech32 encoding for display.
 - `SimplePool` is no longer used directly; welshman's pool replaces it.
 
+### 1.4 Spike Outcome (W1-S1)
+
+**Result: welshman confirmed.** The timeboxed spike (W1-S1, 2026-10-02) validated welshman v0.12.3 + Svelte 5 runes:
+
+| Criterion | Finding |
+|-----------|---------|
+| **Svelte 5 runes interop** | ✅ `@welshman/store` declares `peerDependencies: { "svelte": "^4.0.0 \|\| ^5.0.0" }`. It uses `readable`/`writable` from `svelte/store`, which Svelte 5 supports with full backwards compatibility. `$derived()` can wrap `$store_value` to bridge runes and stores. No incompatibility found. |
+| **Repository** | ✅ In-memory event store with NIP-01 replaceable/addressable, NIP-09 deletion tracking, NIP-40 expiry, efficient indexed queries. One gap: tiebreak on equal `created_at` is last-write-wins; our ingestion layer enforces NIP-01 lowest-id-wins. |
+| **IndexedDB persistence** | ⚠️ welshman's `Repository` is purely in-memory. The `@welshman/store` `synced` module provides only localStorage persistence. **Resolution:** we added our own IndexedDB persistence layer (store.js) that serializes events/cursors on ingest and hydrates on open. This is clean and works well. |
+| **NIP-77 negentropy** | ✅ `@welshman/net` exports a `negentropy` module. Not wired in W1-S1 (no relay to test against), but the import is available. |
+| **NIP-42 AUTH** | ✅ `AuthState` class handles AUTH handshake per-socket. Wired in `pool-welshman.js` with a settable signer function. |
+| **NIP-46 remote signer** | ✅ `@welshman/signer` provides `BunkerSigner` with relay transport. Compatible with existing nip46 session code. |
+| **Bundle impact** | ✅ Client JS: -4 bytes (unchanged — new modules not yet imported by routes). Server output: +124 KB (welshman packages in SSR chunks). Net: negligible until W1-S2 wires the boot sequence. |
+| **Install size** | 12 new transitive packages (welshman + @noble/curves + @scure/base, etc.). Most overlap with existing nostr-tools deps. |
+
+**Decision: proceed with welshman.** The applesauce fallback is not needed.
+
+
+
 ---
 
 ## 2. Store Schema and Namespace
@@ -827,3 +846,4 @@ All questions from the initial draft are now decided. This section records the r
 | bahia-irsry.13 (Phase 5: CLI/pkg/client/MCP) | **Parallel.** Phase 5 is the CLI equivalent of Phase 4. They share the daemon's intent pipeline but have no web-side dependency. §3.5 ContextVM error handling aligns with Phase 5 §3.4 |
 | bahia-irsry.14 (audit coverage gaps) | **Informs.** Phase 4 deletions close many of the web-tier audit findings; the coverage-gap audit may find new ones |
 | bahia-irsry.48 (ContextVM progressToken) | **Consumes.** Phase 4 relies on bahia-irsry.48 item 2 for the ContextVM idempotency key pattern (§3.5, §14 #11) |
+
