@@ -338,12 +338,10 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		// Phase 3 F2/F3: service and environment Created/Updated/Deleted
 		// subscriptions removed — their state is published by the intent handlers
 		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
-		events.EventDeploymentIntentCreated,
-		events.EventDeploymentIntentApproved,
-		events.EventDeploymentIntentRejected,
-		events.EventDeploymentRunCreated,
-		events.EventDeploymentRunStatusChanged,
-		events.EventDeploymentRunCompleted,
+		//
+		// Phase 3 S2: build, artifact, deployment intent and deployment run
+		// subscriptions removed — their cp-state is published directly from
+		// the RegistryService mutation methods (bahia-irsry.11.7).
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -455,8 +453,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 
 	// Phase 3 F3: environment snapshot republish removed — environment state
 	// is now published by the intent handler via PublishBeforeCommit
-	// (bahia-irsry.11.4). The listing is kept because
-	// publishPublicRouteSnapshotsFromSource and observed deployments use it.
+	// (bahia-irsry.11.4). The listing is kept for observed deployments.
 	envs, err := snapshotSource.ListEnvironments(ctx)
 	if err != nil {
 		return fmt.Errorf("list environments: %w", err)
@@ -475,7 +472,9 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
-	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshotsFromSource(ctx, snapshotSource, services, envs)
+	// Phase 3 S2: build/artifact/intent/run snapshot republish removed —
+	// their cp-state is published directly from RegistryService mutation
+	// methods (bahia-irsry.11.7).
 	policiesPublished := p.publishPolicySnapshots(ctx)
 	llmRoutes := 0
 	llmStates := 0
@@ -551,7 +550,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -565,37 +564,10 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 
 	res := resourceFromEvent(e)
 	switch e.Type {
-	case events.EventBuildRegistered, events.EventBuildStatusChanged:
-		if id, ok := parseUUID(e.EntityID); ok {
-			if build, err := p.source.GetBuild(ctx, id); err == nil && build != nil {
-				_ = p.publishBuildRegistry(ctx, build, false)
-			}
-		}
-	case events.EventArtifactRegistered:
-		if id, ok := parseUUID(e.EntityID); ok {
-			if artifact, err := p.source.GetArtifact(ctx, id); err == nil && artifact != nil {
-				_ = p.publishArtifactRegistry(ctx, artifact, false)
-			}
-		}
-	case events.EventDeploymentIntentCreated, events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected:
-		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
-			if intent, err := p.source.GetDeploymentIntent(ctx, id); err == nil && intent != nil {
-				_ = p.publishDeploymentIntentRegistry(ctx, intent, false)
-			}
-		}
-		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
-			p.publishStateForIntent(ctx, id)
-		}
-	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
-		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
-			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
-				_ = p.publishDeploymentRunRegistry(ctx, run, false)
-				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
-			}
-			p.publishStateForRun(ctx, id)
-		} else if id, ok := parseUUID(res.IntentID); ok {
-			p.publishStateForIntent(ctx, id)
-		}
+	// Phase 3 S2: build, artifact, deployment intent and deployment run
+	// handleEvent cases removed — their cp-state is published directly from
+	// the RegistryService mutation methods (bahia-irsry.11.7).
+	//
 	// Phase 3 F2/F3: service and environment handleEvent cases removed — their
 	// state is published by the intent handlers via PublishBeforeCommit
 	// (bahia-irsry.11.3, bahia-irsry.11.4).
@@ -866,78 +838,6 @@ func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uu
 	}
 }
 
-func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, snapshotSource ProjectionSource, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
-	const pageSize = 1000
-	buildsPublished, artifactsPublished, intentsPublished, runsPublished := 0, 0, 0, 0
-	for i := range services {
-		for offset := 0; ; offset += pageSize {
-			builds, err := snapshotSource.ListBuilds(ctx, services[i].ID, pageSize, offset)
-			if err != nil {
-				p.logger.Warn("list builds for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
-				break
-			}
-			for j := range builds {
-				if err := p.publishBuildRegistry(ctx, &builds[j], false); err != nil {
-					p.logger.Warn("publish build projection failed", zap.String("build_id", builds[j].ID.String()), zap.Error(err))
-				} else {
-					buildsPublished++
-				}
-			}
-			if len(builds) < pageSize {
-				break
-			}
-		}
-		for offset := 0; ; offset += pageSize {
-			artifacts, err := snapshotSource.ListArtifacts(ctx, services[i].ID, pageSize, offset)
-			if err != nil {
-				p.logger.Warn("list artifacts for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
-				break
-			}
-			for j := range artifacts {
-				if err := p.publishArtifactRegistry(ctx, &artifacts[j], false); err != nil {
-					p.logger.Warn("publish artifact projection failed", zap.String("artifact_id", artifacts[j].ID.String()), zap.Error(err))
-				} else {
-					artifactsPublished++
-				}
-			}
-			if len(artifacts) < pageSize {
-				break
-			}
-		}
-		for j := range envs {
-			for offset := 0; ; offset += pageSize {
-				intents, err := snapshotSource.ListDeploymentIntents(ctx, services[i].ID, envs[j].ID, pageSize, offset)
-				if err != nil {
-					p.logger.Warn("list deployment intents for projection failed", zap.String("service_id", services[i].ID.String()), zap.String("environment_id", envs[j].ID.String()), zap.Error(err))
-					break
-				}
-				for k := range intents {
-					if err := p.publishDeploymentIntentRegistry(ctx, &intents[k], false); err != nil {
-						p.logger.Warn("publish deployment intent projection failed", zap.String("intent_id", intents[k].ID.String()), zap.Error(err))
-					} else {
-						intentsPublished++
-					}
-					runs, err := snapshotSource.ListDeploymentRuns(ctx, intents[k].ID)
-					if err != nil {
-						p.logger.Warn("list deployment runs for projection failed", zap.String("intent_id", intents[k].ID.String()), zap.Error(err))
-						continue
-					}
-					for l := range runs {
-						if err := p.publishDeploymentRunRegistry(ctx, &runs[l], false); err != nil {
-							p.logger.Warn("publish deployment run projection failed", zap.String("run_id", runs[l].ID.String()), zap.Error(err))
-						} else {
-							runsPublished++
-						}
-					}
-				}
-				if len(intents) < pageSize {
-					break
-				}
-			}
-		}
-	}
-	return buildsPublished, artifactsPublished, intentsPublished, runsPublished
-}
 
 func (p *Projector) publishPolicySnapshots(ctx context.Context) int {
 	if p.policySource == nil {
@@ -2717,89 +2617,11 @@ func normalizeProjectionRelays(values []string) []string {
 	return out
 }
 
-func (p *Projector) publishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error {
-	if deleted {
-		return nil
-	}
-	return p.publishReplaceableJSON(ctx, KindBuildRegistry, build.ID.String(), gonostr.Tags{{"service", build.ServiceID.String()}, {"build", build.ID.String()}, {"status", string(build.Status)}}, map[string]any{"deleted": false, "id": build.ID.String(), "service_id": build.ServiceID.String(), "git_sha": build.GitSHA, "git_ref": build.GitRef, "ci_system": build.CISystem, "ci_run_id": build.CIRunID, "loom_job_id": build.LoomJobID, "status": string(build.Status), "source_event_id": build.SourceEventID, "started_at": build.StartedAt, "finished_at": build.FinishedAt, "metadata": build.Metadata, "created_at": formatTime(build.CreatedAt)}, "build.projection", &build.ID)
-}
-
-func (p *Projector) publishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error {
-	if deleted {
-		return nil
-	}
-	return p.publishReplaceableJSON(ctx, KindArtifactRegistry, artifact.ID.String(), gonostr.Tags{{"service", artifact.ServiceID.String()}, {"artifact", artifact.ID.String()}, {"build", artifact.BuildID.String()}}, map[string]any{"deleted": false, "id": artifact.ID.String(), "build_id": artifact.BuildID.String(), "service_id": artifact.ServiceID.String(), "image_repo": artifact.ImageRepo, "image_tag": artifact.ImageTag, "image_digest": artifact.ImageDigest, "manifest_media_type": artifact.ManifestMediaType, "size_bytes": artifact.SizeBytes, "sbom_url": artifact.SBOMURL, "signature_ref": artifact.SignatureRef, "scan_status": string(artifact.ScanStatus), "metadata": artifact.Metadata, "created_at": formatTime(artifact.CreatedAt)}, "artifact.projection", &artifact.ID)
-}
-
-func (p *Projector) publishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error {
-	if deleted {
-		return nil
-	}
-	tags := gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}, {"unit", unitTagValue(intent.DeploymentUnitID)}}
-	content := map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "deployment_unit_id": uuidStringPtr(intent.DeploymentUnitID), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}
-	if intent.SupersedesIntentID != nil {
-		content["supersedes_intent_id"] = intent.SupersedesIntentID.String()
-	}
-	if intent.Metadata != nil {
-		for _, key := range []string{"artifact_digest", "deployment_target", "policy"} {
-			if value, ok := intent.Metadata[key]; ok {
-				content[key] = value
-			}
-		}
-	}
-	// Desired-state metadata (additive — old decoders ignore unknown fields).
-	if intent.DesiredHash != "" {
-		content["desired_hash"] = intent.DesiredHash
-		tags = append(tags, gonostr.Tag{"desired_hash", intent.DesiredHash})
-	}
-	if intent.DesiredState != nil {
-		if renderer := desiredStateRenderer(intent.DesiredState); renderer != "" {
-			content["renderer"] = renderer
-		}
-		if target := desiredStateTarget(intent.DesiredState); target != "" {
-			content["target"] = target
-		}
-	}
-	return p.publishReplaceableJSON(ctx, KindDeploymentIntentRegistry, intent.ID.String(), tags, content, "deployment_intent.projection", &intent.ID)
-}
-
-func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error {
-	if deleted {
-		return nil
-	}
-	tags := gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}, {"unit", unitTagValue(run.DeploymentUnitID)}}
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "deployment_unit_id": uuidStringPtr(run.DeploymentUnitID), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
-	// Apply metadata enrichment (additive — old decoders ignore unknown fields).
-	if run.ApplyMetadata != nil {
-		if renderer, ok := run.ApplyMetadata["renderer"].(string); ok && renderer != "" {
-			content["renderer"] = renderer
-			tags = append(tags, gonostr.Tag{"renderer", renderer})
-		}
-		if desiredHash, ok := run.ApplyMetadata["desired_hash"].(string); ok && desiredHash != "" {
-			content["desired_hash"] = desiredHash
-		}
-		if revisionHash, ok := run.ApplyMetadata["revision_hash"].(string); ok && revisionHash != "" {
-			content["revision_hash"] = revisionHash
-		}
-		if target, ok := run.ApplyMetadata["target"].(string); ok && target != "" {
-			content["target"] = target
-		}
-		if applySummary, ok := run.ApplyMetadata["apply_summary"].(string); ok && applySummary != "" {
-			content["apply_summary"] = applySummary
-		}
-		if obsID, ok := run.ApplyMetadata["observation_id"].(string); ok && obsID != "" {
-			content["observation_id"] = obsID
-		}
-		// Only explicitly non-secret operator fields are promoted. The full
-		// ApplyMetadata map is intentionally never projected.
-		for _, key := range []string{"phase", "phase_sequence", "phases", "failure", "health_status", "deployment_unit_key", "endpoint_ref", "artifact_digest"} {
-			if value, ok := run.ApplyMetadata[key]; ok {
-				content[key] = value
-			}
-		}
-	}
-	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), tags, content, "deployment_run.projection", &run.ID)
-}
+// Phase 3 S2: publishBuildRegistry, publishArtifactRegistry,
+// publishDeploymentIntentRegistry and publishDeploymentRunRegistry removed —
+// their canonical state is published directly from RegistryService mutation
+// methods via the shared record builders in control_state_contract.go
+// (bahia-irsry.11.7).
 
 func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
 	content := map[string]any{"deleted": deleted, "id": policy.ID.String(), "updated_at": formatTime(policy.UpdatedAt)}

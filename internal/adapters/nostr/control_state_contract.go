@@ -282,3 +282,251 @@ func (r *RelayFirstStatePublisher) publish(ctx context.Context, legacyKind int, 
 	wireKind, baseTags := controlStateEnvelope(legacyKind, id.String(), deleted)
 	return r.projector.publishSignedRelayFirst(ctx, wireKind, append(baseTags, tags...), content, entityType, &id, r.publisher)
 }
+
+// Build, artifact, deployment intent and deployment run registry records -----
+//
+// Phase 3 S2: these families publish their canonical cp-state directly from
+// the code that mutates them (RegistryService), through the shared record
+// builder and the outbox, exactly one event per material change. The
+// functions below are the single record builders both the projector's (now
+// deleted) handleEvent path and the authoritative publisher use.
+
+// buildRegistryRecord returns the family tags and JSON content of a build's
+// registry record.
+func buildRegistryRecord(build *domain.Build, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": build.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"service", build.ServiceID.String()},
+		{"build", build.ID.String()},
+		{"status", string(build.Status)},
+	}
+	content := map[string]any{
+		"deleted":         false,
+		"id":              build.ID.String(),
+		"service_id":      build.ServiceID.String(),
+		"git_sha":         build.GitSHA,
+		"git_ref":         build.GitRef,
+		"ci_system":       build.CISystem,
+		"ci_run_id":       build.CIRunID,
+		"loom_job_id":     build.LoomJobID,
+		"status":          string(build.Status),
+		"source_event_id": build.SourceEventID,
+		"started_at":      build.StartedAt,
+		"finished_at":     build.FinishedAt,
+		"metadata":        build.Metadata,
+		"created_at":      formatTime(build.CreatedAt),
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// artifactRegistryRecord returns the family tags and JSON content of an
+// artifact's registry record.
+func artifactRegistryRecord(artifact *domain.Artifact, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": artifact.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"service", artifact.ServiceID.String()},
+		{"artifact", artifact.ID.String()},
+		{"build", artifact.BuildID.String()},
+	}
+	content := map[string]any{
+		"deleted":             false,
+		"id":                  artifact.ID.String(),
+		"build_id":            artifact.BuildID.String(),
+		"service_id":          artifact.ServiceID.String(),
+		"image_repo":          artifact.ImageRepo,
+		"image_tag":           artifact.ImageTag,
+		"image_digest":        artifact.ImageDigest,
+		"manifest_media_type": artifact.ManifestMediaType,
+		"size_bytes":          artifact.SizeBytes,
+		"sbom_url":            artifact.SBOMURL,
+		"signature_ref":       artifact.SignatureRef,
+		"scan_status":         string(artifact.ScanStatus),
+		"metadata":            artifact.Metadata,
+		"created_at":          formatTime(artifact.CreatedAt),
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// deploymentIntentRegistryRecord returns the family tags and JSON content of
+// a deployment intent's registry record.
+func deploymentIntentRegistryRecord(intent *domain.DeploymentIntent, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": intent.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"service", intent.ServiceID.String()},
+		{"environment", intent.EnvironmentID.String()},
+		{"artifact", intent.ArtifactID.String()},
+		{"intent", intent.ID.String()},
+		{"status", string(intent.Status)},
+		{"approval", string(intent.ApprovalStatus)},
+		{"unit", unitTagValue(intent.DeploymentUnitID)},
+	}
+	content := map[string]any{
+		"deleted":            false,
+		"id":                 intent.ID.String(),
+		"service_id":         intent.ServiceID.String(),
+		"environment_id":     intent.EnvironmentID.String(),
+		"deployment_unit_id": uuidStringPtr(intent.DeploymentUnitID),
+		"artifact_id":        intent.ArtifactID.String(),
+		"requested_by":       intent.RequestedBy,
+		"source_kind":        string(intent.SourceKind),
+		"approval_status":    string(intent.ApprovalStatus),
+		"status":             string(intent.Status),
+		"deployment_status":  string(intent.Status),
+		"approval_metadata":  intent.ApprovalMetadata,
+		"metadata":           intent.Metadata,
+		"created_at":         formatTime(intent.CreatedAt),
+		"approved_at":        intent.ApprovedAt,
+		"updated_at":         formatTime(intent.UpdatedAt),
+	}
+	if intent.SupersedesIntentID != nil {
+		content["supersedes_intent_id"] = intent.SupersedesIntentID.String()
+	}
+	if intent.Metadata != nil {
+		for _, key := range []string{"artifact_digest", "deployment_target", "policy"} {
+			if value, ok := intent.Metadata[key]; ok {
+				content[key] = value
+			}
+		}
+	}
+	if intent.DesiredHash != "" {
+		content["desired_hash"] = intent.DesiredHash
+		tags = append(tags, gonostr.Tag{"desired_hash", intent.DesiredHash})
+	}
+	if intent.DesiredState != nil {
+		if renderer := desiredStateRenderer(intent.DesiredState); renderer != "" {
+			content["renderer"] = renderer
+		}
+		if target := desiredStateTarget(intent.DesiredState); target != "" {
+			content["target"] = target
+		}
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// deploymentRunRegistryRecord returns the family tags and JSON content of a
+// deployment run's registry record.
+func deploymentRunRegistryRecord(run *domain.DeploymentRun, deleted bool) (gonostr.Tags, string) {
+	if deleted {
+		content := map[string]any{"deleted": true, "id": run.ID.String()}
+		contentJSON, _ := json.Marshal(content)
+		return gonostr.Tags{}, string(contentJSON)
+	}
+	tags := gonostr.Tags{
+		{"intent", run.DeploymentIntentID.String()},
+		{"run", run.ID.String()},
+		{"status", string(run.Status)},
+		{"unit", unitTagValue(run.DeploymentUnitID)},
+	}
+	content := map[string]any{
+		"deleted":                false,
+		"id":                     run.ID.String(),
+		"deployment_intent_id":   run.DeploymentIntentID.String(),
+		"deployment_unit_id":     uuidStringPtr(run.DeploymentUnitID),
+		"loom_job_id":            run.LoomJobID,
+		"worker_pubkey":          run.WorkerPubkey,
+		"worker_name":            run.WorkerName,
+		"status":                 string(run.Status),
+		"exit_code":              run.ExitCode,
+		"stdout_ref":             run.StdoutRef,
+		"stderr_ref":             run.StderrRef,
+		"started_at":             run.StartedAt,
+		"finished_at":            run.FinishedAt,
+		"metadata":               run.Metadata,
+		"created_at":             formatTime(run.CreatedAt),
+		"updated_at":             formatTime(run.UpdatedAt),
+	}
+	if run.ApplyMetadata != nil {
+		if renderer, ok := run.ApplyMetadata["renderer"].(string); ok && renderer != "" {
+			content["renderer"] = renderer
+			tags = append(tags, gonostr.Tag{"renderer", renderer})
+		}
+		if desiredHash, ok := run.ApplyMetadata["desired_hash"].(string); ok && desiredHash != "" {
+			content["desired_hash"] = desiredHash
+		}
+		if revisionHash, ok := run.ApplyMetadata["revision_hash"].(string); ok && revisionHash != "" {
+			content["revision_hash"] = revisionHash
+		}
+		if target, ok := run.ApplyMetadata["target"].(string); ok && target != "" {
+			content["target"] = target
+		}
+		if applySummary, ok := run.ApplyMetadata["apply_summary"].(string); ok && applySummary != "" {
+			content["apply_summary"] = applySummary
+		}
+		if obsID, ok := run.ApplyMetadata["observation_id"].(string); ok && obsID != "" {
+			content["observation_id"] = obsID
+		}
+		for _, key := range []string{"phase", "phase_sequence", "phases", "failure", "health_status", "deployment_unit_key", "endpoint_ref", "artifact_digest"} {
+			if value, ok := run.ApplyMetadata[key]; ok {
+				content[key] = value
+			}
+		}
+	}
+	contentJSON, _ := json.Marshal(content)
+	return tags, string(contentJSON)
+}
+
+// PublishBuildRegistry publishes a build's registry record (or its tombstone).
+// Phase 3 S2: canonical state published directly from the mutation site.
+func (r *RelayFirstStatePublisher) PublishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error {
+	if build == nil {
+		return fmt.Errorf("build is nil")
+	}
+	tags, content := buildRegistryRecord(build, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindBuildRegistry, build.ID, deleted, tags, content, "build.projection")
+}
+
+// PublishArtifactRegistry publishes an artifact's registry record.
+func (r *RelayFirstStatePublisher) PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error {
+	if artifact == nil {
+		return fmt.Errorf("artifact is nil")
+	}
+	tags, content := artifactRegistryRecord(artifact, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindArtifactRegistry, artifact.ID, deleted, tags, content, "artifact.projection")
+}
+
+// PublishDeploymentIntentRegistry publishes a deployment intent's registry
+// record.
+func (r *RelayFirstStatePublisher) PublishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error {
+	if intent == nil {
+		return fmt.Errorf("deployment intent is nil")
+	}
+	tags, content := deploymentIntentRegistryRecord(intent, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindDeploymentIntentRegistry, intent.ID, deleted, tags, content, "deployment_intent.projection")
+}
+
+// PublishDeploymentRunRegistry publishes a deployment run's registry record.
+func (r *RelayFirstStatePublisher) PublishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error {
+	if run == nil {
+		return fmt.Errorf("deployment run is nil")
+	}
+	tags, content := deploymentRunRegistryRecord(run, deleted)
+	return r.publishAuthoritativeProjection(ctx, KindDeploymentRunRegistry, run.ID, deleted, tags, content, "deployment_run.projection")
+}
+
+// publishAuthoritativeProjection delivers a cp-state record through the
+// projector's authoritative path (fingerprint-deduped, outbox-queued, no
+// backoff gating). Used for domains that publish directly from the mutation
+// site after the database write has committed (Phase 3 S2), as opposed to
+// publish (which uses the relay-first PublishBeforeCommit path).
+func (r *RelayFirstStatePublisher) publishAuthoritativeProjection(ctx context.Context, legacyKind int, id uuid.UUID, deleted bool, tags gonostr.Tags, content, entityType string) error {
+	if r == nil || r.projector == nil {
+		return fmt.Errorf("relay-first state publisher is not configured")
+	}
+	wireKind, baseTags := controlStateEnvelope(legacyKind, id.String(), deleted)
+	return r.projector.publishAuthoritative(ctx, wireKind, append(baseTags, tags...), content, entityType, &id)
+}

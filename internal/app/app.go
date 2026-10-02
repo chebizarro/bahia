@@ -1051,16 +1051,24 @@ func New(cfg *config.Config) (*App, error) {
 	if sbomManifestRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
 	}
-	// Phase 3 F4: warm-start for intent-migrated domains. When intent domains
-	// are configured, the projector waits for subscriber EOSE then compares
-	// its own history against relay state, re-publishing only stale records.
+	// Phase 3 F4: warm-start for migrated domains. Intent-migrated domains
+	// wait for subscriber EOSE; authoritative domains (build, artifact,
+	// deployment) publish directly from mutation sites and are always
+	// included in warm-start so stale records are re-published on restart.
 	// RepublishSnapshot guards skip migrated domain legs.
-	if len(cfg.Nostr.IntentDomains) > 0 {
-		projectorOpts = append(projectorOpts,
-			nostrAdapter.WithReadinessTracker(intentReadiness),
-			nostrAdapter.WithIntentDomains(cfg.Nostr.IntentDomains),
-		)
+	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
+		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
+	)
+	if len(enabledDomains) == 0 {
+		// No intent subscriber → readiness has no filters. Register and
+		// immediately satisfy a sentinel so warm-start proceeds.
+		intentReadiness.RegisterFilter("authoritative-warmstart")
+		intentReadiness.MarkFilterReady("authoritative-warmstart")
 	}
+	projectorOpts = append(projectorOpts,
+		nostrAdapter.WithReadinessTracker(intentReadiness),
+		nostrAdapter.WithIntentDomains(warmStartDomains),
+	)
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
@@ -1080,7 +1088,12 @@ func New(cfg *config.Config) (*App, error) {
 	// (bahia-irsry.41).
 	var relayFirstRegistry *service.RelayFirstRegistry
 	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
-		relayFirstRegistry = service.NewRelayFirstRegistry(registry, nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub), logger)
+		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		relayFirstRegistry = service.NewRelayFirstRegistry(registry, statePublisher, logger)
+		// Phase 3 S2: wire the cp-state publisher for build/artifact/intent/run
+		// families so RegistryService publishes canonical state directly from
+		// its mutation methods (bahia-irsry.11.7).
+		registry.SetCPStatePublisher(statePublisher)
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", string(policy.RequestedMode)))
 	}

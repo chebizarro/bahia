@@ -57,7 +57,19 @@ type RegistryService struct {
 	allowManualArtifactRegistration bool
 	allowLiveArtifactImport         bool
 	publisher                       events.Publisher
+	cpState                         BuildDeployStatePublisher
 	logger                          *zap.Logger
+}
+
+// BuildDeployStatePublisher publishes the canonical cp-state record for
+// build/artifact/deployment-intent/deployment-run entities. Phase 3 S2:
+// the mutation site publishes directly, fingerprint-deduped, through the
+// outbox. internal/adapters/nostr.RelayFirstStatePublisher implements this.
+type BuildDeployStatePublisher interface {
+	PublishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error
+	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error
+	PublishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error
+	PublishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error
 }
 
 // RegistryOption configures optional registry capabilities.
@@ -90,6 +102,14 @@ type DeploymentApprovalPolicy interface {
 func WithDeploymentApprovalPolicy(policy DeploymentApprovalPolicy) RegistryOption {
 	return func(s *RegistryService) {
 		s.approvalPolicy = policy
+	}
+}
+
+// WithCPStatePublisher configures the canonical cp-state publisher for
+// build/artifact/deployment-intent/deployment-run records (Phase 3 S2).
+func WithCPStatePublisher(pub BuildDeployStatePublisher) RegistryOption {
+	return func(s *RegistryService) {
+		s.cpState = pub
 	}
 }
 
@@ -151,6 +171,14 @@ func NewRegistryService(
 		}
 	}
 	return registry
+}
+
+// SetCPStatePublisher configures the canonical cp-state publisher for
+// build/artifact/deployment-intent/deployment-run records after construction.
+// This is needed because the publisher depends on the Projector, which is
+// created after RegistryService (Phase 3 S2, bahia-irsry.11.7).
+func (s *RegistryService) SetCPStatePublisher(pub BuildDeployStatePublisher) {
+	s.cpState = pub
 }
 
 // --- Service CRUD ---
@@ -884,6 +912,7 @@ func (s *RegistryService) RegisterBuild(ctx context.Context, b *domain.Build) er
 		EntityID: b.ID.String(),
 		Data:     b,
 	})
+	s.publishBuildCPState(ctx, b)
 
 	s.logger.Info("build registered",
 		zap.String("build_id", b.ID.String()),
@@ -913,6 +942,11 @@ func (s *RegistryService) UpdateBuildStatus(ctx context.Context, id uuid.UUID, s
 		EntityID: id.String(),
 		Data:     map[string]string{"status": string(status)},
 	})
+	if s.cpState != nil {
+		if build, err := s.builds.GetByID(ctx, id); err == nil && build != nil {
+			s.publishBuildCPState(ctx, build)
+		}
+	}
 	return nil
 }
 
@@ -1282,6 +1316,49 @@ func (s *RegistryService) publishArtifactRegistered(ctx context.Context, artifac
 		EntityID: artifact.ID.String(),
 		Data:     artifact,
 	})
+	s.publishArtifactCPState(ctx, artifact)
+}
+
+// --- Phase 3 S2: canonical cp-state publishing ---
+
+func (s *RegistryService) publishBuildCPState(ctx context.Context, build *domain.Build) {
+	if s.cpState == nil || build == nil {
+		return
+	}
+	if err := s.cpState.PublishBuildRegistry(ctx, build, false); err != nil {
+		s.logger.Warn("publish build cp-state failed",
+			zap.String("build_id", build.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *RegistryService) publishArtifactCPState(ctx context.Context, artifact *domain.Artifact) {
+	if s.cpState == nil || artifact == nil {
+		return
+	}
+	if err := s.cpState.PublishArtifactRegistry(ctx, artifact, false); err != nil {
+		s.logger.Warn("publish artifact cp-state failed",
+			zap.String("artifact_id", artifact.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *RegistryService) publishDeploymentIntentCPState(ctx context.Context, intent *domain.DeploymentIntent) {
+	if s.cpState == nil || intent == nil {
+		return
+	}
+	if err := s.cpState.PublishDeploymentIntentRegistry(ctx, intent, false); err != nil {
+		s.logger.Warn("publish deployment intent cp-state failed",
+			zap.String("intent_id", intent.ID.String()), zap.Error(err))
+	}
+}
+
+func (s *RegistryService) publishDeploymentRunCPState(ctx context.Context, run *domain.DeploymentRun) {
+	if s.cpState == nil || run == nil {
+		return
+	}
+	if err := s.cpState.PublishDeploymentRunRegistry(ctx, run, false); err != nil {
+		s.logger.Warn("publish deployment run cp-state failed",
+			zap.String("run_id", run.ID.String()), zap.Error(err))
+	}
 }
 
 func supportedOCIManifestMediaType(mediaType string) bool {
@@ -1385,6 +1462,7 @@ func (s *RegistryService) CreateDeploymentIntentWithAudit(
 			},
 		})
 	}
+	s.publishDeploymentIntentCPState(ctx, intent)
 	return nil
 }
 
@@ -1670,6 +1748,7 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 			},
 		})
 	}
+	s.publishDeploymentIntentCPState(ctx, di)
 
 	s.logger.Info("deployment intent created",
 		zap.String("intent_id", di.ID.String()),
@@ -1850,6 +1929,7 @@ func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.U
 		EntityID: id.String(),
 		Data:     events.ResourceData{ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(), ArtifactID: di.ArtifactID.String(), IntentID: id.String()},
 	})
+	s.publishDeploymentIntentCPState(ctx, &authorized)
 	return nil
 }
 
@@ -1883,6 +1963,10 @@ func (s *RegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UU
 		EntityID: id.String(),
 		Data:     events.ResourceData{ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(), ArtifactID: di.ArtifactID.String(), IntentID: id.String()},
 	})
+	// Re-read for cp-state: rejection changes approval_status and status.
+	if updated, err := s.intents.GetByID(ctx, id); err == nil && updated != nil {
+		s.publishDeploymentIntentCPState(ctx, updated)
+	}
 	return nil
 }
 
@@ -2008,6 +2092,11 @@ func (s *RegistryService) CreateDeploymentRun(ctx context.Context, dr *domain.De
 		EntityID: dr.ID.String(),
 		Data:     events.ResourceData{IntentID: dr.DeploymentIntentID.String(), RunID: dr.ID.String()},
 	})
+	s.publishDeploymentRunCPState(ctx, dr)
+	// The run creation transitions the parent intent to deploying.
+	if intent, err := s.intents.GetByID(ctx, dr.DeploymentIntentID); err == nil && intent != nil {
+		s.publishDeploymentIntentCPState(ctx, intent)
+	}
 	return nil
 }
 
@@ -2041,6 +2130,7 @@ func (s *RegistryService) UpdateDeploymentRunApplyMetadata(ctx context.Context, 
 		EntityID: id.String(),
 		Data:     events.ResourceData{IntentID: run.DeploymentIntentID.String(), RunID: id.String()},
 	})
+	s.publishDeploymentRunCPState(ctx, run)
 	return nil
 }
 
@@ -2206,6 +2296,13 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 		EntityID: id.String(),
 		Data:     events.ResourceData{IntentID: dr.DeploymentIntentID.String(), RunID: id.String()},
 	})
+	// Publish canonical cp-state for both the run and the parent intent.
+	if completedRun, err := s.runs.GetByID(ctx, id); err == nil && completedRun != nil {
+		s.publishDeploymentRunCPState(ctx, completedRun)
+	}
+	if updatedIntent, err := s.intents.GetByID(ctx, dr.DeploymentIntentID); err == nil && updatedIntent != nil {
+		s.publishDeploymentIntentCPState(ctx, updatedIntent)
+	}
 	return nil
 }
 

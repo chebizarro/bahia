@@ -228,6 +228,10 @@ type relayFirstPublication struct {
 	service     *domain.Service
 	environment *domain.Environment
 	units       []domain.DeploymentUnit
+	build       *domain.Build
+	artifact    *domain.Artifact
+	intent      *domain.DeploymentIntent
+	run         *domain.DeploymentRun
 	deleted     bool
 }
 
@@ -237,6 +241,18 @@ func (p relayFirstPublication) id() uuid.UUID {
 	}
 	if p.environment != nil {
 		return p.environment.ID
+	}
+	if p.build != nil {
+		return p.build.ID
+	}
+	if p.artifact != nil {
+		return p.artifact.ID
+	}
+	if p.intent != nil {
+		return p.intent.ID
+	}
+	if p.run != nil {
+		return p.run.ID
 	}
 	return uuid.Nil
 }
@@ -269,6 +285,26 @@ func (p *relayFirstCapturePublisher) PublishServiceRegistry(_ context.Context, s
 func (p *relayFirstCapturePublisher) PublishEnvironmentRegistry(_ context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error {
 	snapshot := *env
 	return p.record(relayFirstPublication{environment: &snapshot, units: append([]domain.DeploymentUnit(nil), units...), deleted: deleted})
+}
+
+func (p *relayFirstCapturePublisher) PublishBuildRegistry(_ context.Context, build *domain.Build, deleted bool) error {
+	snapshot := *build
+	return p.record(relayFirstPublication{build: &snapshot, deleted: deleted})
+}
+
+func (p *relayFirstCapturePublisher) PublishArtifactRegistry(_ context.Context, artifact *domain.Artifact, deleted bool) error {
+	snapshot := *artifact
+	return p.record(relayFirstPublication{artifact: &snapshot, deleted: deleted})
+}
+
+func (p *relayFirstCapturePublisher) PublishDeploymentIntentRegistry(_ context.Context, intent *domain.DeploymentIntent, deleted bool) error {
+	snapshot := *intent
+	return p.record(relayFirstPublication{intent: &snapshot, deleted: deleted})
+}
+
+func (p *relayFirstCapturePublisher) PublishDeploymentRunRegistry(_ context.Context, run *domain.DeploymentRun, deleted bool) error {
+	snapshot := *run
+	return p.record(relayFirstPublication{run: &snapshot, deleted: deleted})
 }
 
 type relayFirstServiceRepo struct {

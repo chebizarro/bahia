@@ -668,3 +668,195 @@ func TestRelayFirstQuorumNotMetQueuesNothingAndSkipsTheCacheWrite(t *testing.T) 
 	require.Equal(t, localstore.OutboxCounts{}, counts, "the rejected record was queued")
 	require.Empty(t, h.delivered)
 }
+
+// Phase 3 S2 (bahia-irsry.11.7): build, artifact, deployment intent and
+// deployment run families publish canonical cp-state through the authoritative
+// projection path, not through the projector's event handler.
+
+func TestAuthoritativeBuildRegistryProducesOneRecord(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	build := &domain.Build{
+		ID:        domain.NewEntityID(),
+		ServiceID: uuid.New(),
+		GitSHA:    "abc123",
+		GitRef:    "refs/heads/main",
+		Status:    domain.BuildStatusSucceeded,
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writer.PublishBuildRegistry(ctx, build, false))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1, "exactly one canonical 30900 per build mutation")
+	assertCPStateEnvelope(t, records[0], KindBuildRegistry, build.ID.String(), false, kinds.CPStateTopicBuildRegistry)
+
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(records[0].Content), &content))
+	require.Equal(t, build.ID.String(), content["id"])
+	require.Equal(t, build.ServiceID.String(), content["service_id"])
+	require.Equal(t, "abc123", content["git_sha"])
+	require.Equal(t, string(domain.BuildStatusSucceeded), content["status"])
+}
+
+func TestAuthoritativeArtifactRegistryProducesOneRecord(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	artifact := &domain.Artifact{
+		ID:          domain.NewEntityID(),
+		BuildID:     uuid.New(),
+		ServiceID:   uuid.New(),
+		ImageRepo:   "ghcr.io/openagents/worker",
+		ImageTag:    "v1.2.3",
+		ImageDigest: "sha256:deadbeef",
+		CreatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, writer.PublishArtifactRegistry(ctx, artifact, false))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1, "exactly one canonical 30900 per artifact mutation")
+	assertCPStateEnvelope(t, records[0], KindArtifactRegistry, artifact.ID.String(), false, kinds.CPStateTopicArtifactRegistry)
+
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(records[0].Content), &content))
+	require.Equal(t, artifact.ID.String(), content["id"])
+	require.Equal(t, "ghcr.io/openagents/worker", content["image_repo"])
+	require.Equal(t, "sha256:deadbeef", content["image_digest"])
+}
+
+func TestAuthoritativeDeploymentIntentRegistryCarriesDesiredHash(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	intent := &domain.DeploymentIntent{
+		ID:            domain.NewEntityID(),
+		ServiceID:     uuid.New(),
+		EnvironmentID: uuid.New(),
+		ArtifactID:    uuid.New(),
+		Status:        domain.IntentStatusDeploying,
+		DesiredHash:   "sha256:intent-hash",
+		DesiredState: &domain.DesiredServiceSpec{
+			StableServiceKey: "api-prod",
+			DockerExtension:  &domain.DockerExtension{},
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writer.PublishDeploymentIntentRegistry(ctx, intent, false))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1, "exactly one canonical 30900 per intent mutation")
+	assertCPStateEnvelope(t, records[0], KindDeploymentIntentRegistry, intent.ID.String(), false, kinds.CPStateTopicDeploymentIntent)
+
+	ev := records[0]
+	require.True(t, hasTag(ev.Tags, "desired_hash", "sha256:intent-hash"), "desired_hash tag present")
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &content))
+	require.Equal(t, "sha256:intent-hash", content["desired_hash"])
+	require.Equal(t, "docker", content["renderer"])
+	require.Equal(t, "api-prod", content["target"])
+}
+
+func TestAuthoritativeDeploymentRunRegistryCarriesApplyMetadata(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	obsID := uuid.New()
+	run := &domain.DeploymentRun{
+		ID:                 domain.NewEntityID(),
+		DeploymentIntentID: uuid.New(),
+		Status:             domain.RunStatusSucceeded,
+		ApplyMetadata: map[string]any{
+			"renderer":       "compose",
+			"desired_hash":   "sha256:run-hash",
+			"revision_hash":  "sha256:rev-hash",
+			"target":         "api-prod",
+			"apply_summary":  "recreated 1 service",
+			"observation_id": obsID.String(),
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writer.PublishDeploymentRunRegistry(ctx, run, false))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1, "exactly one canonical 30900 per run mutation")
+	assertCPStateEnvelope(t, records[0], KindDeploymentRunRegistry, run.ID.String(), false, kinds.CPStateTopicDeploymentRun)
+
+	ev := records[0]
+	require.True(t, hasTag(ev.Tags, "renderer", "compose"), "renderer tag from apply_metadata")
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &content))
+	require.Equal(t, "compose", content["renderer"])
+	require.Equal(t, "sha256:run-hash", content["desired_hash"])
+	require.Equal(t, "sha256:rev-hash", content["revision_hash"])
+	require.Equal(t, "api-prod", content["target"])
+	require.Equal(t, "recreated 1 service", content["apply_summary"])
+	require.Equal(t, obsID.String(), content["observation_id"])
+}
+
+func TestAuthoritativeRunRegistryOmitsApplyMetadataWhenNil(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	run := &domain.DeploymentRun{
+		ID:                 domain.NewEntityID(),
+		DeploymentIntentID: uuid.New(),
+		Status:             domain.RunStatusSucceeded,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+	require.NoError(t, writer.PublishDeploymentRunRegistry(ctx, run, false))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1)
+	ev := records[0]
+	require.False(t, hasTag(ev.Tags, "renderer", ""), "no renderer tag when apply_metadata is nil")
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &content))
+	_, hasRenderer := content["renderer"]
+	require.False(t, hasRenderer, "content should not have renderer when apply_metadata is nil")
+}
+
+func TestAuthoritativeFingerprintDedupSuppressesUnchangedRepeats(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	build := &domain.Build{
+		ID:        domain.NewEntityID(),
+		ServiceID: uuid.New(),
+		GitSHA:    "abc123",
+		Status:    domain.BuildStatusSucceeded,
+		CreatedAt: time.Now().UTC(),
+	}
+	// First publish: 1 record.
+	require.NoError(t, writer.PublishBuildRegistry(ctx, build, false))
+	require.Len(t, sink.byKind(KindCASControlState), 1)
+
+	// Same entity, same state: fingerprint dedup suppresses.
+	require.NoError(t, writer.PublishBuildRegistry(ctx, build, false))
+	require.Len(t, sink.byKind(KindCASControlState), 1, "unchanged repeat should be suppressed by fingerprint dedup")
+
+	// Mutate status: new record.
+	build.Status = domain.BuildStatusFailed
+	require.NoError(t, writer.PublishBuildRegistry(ctx, build, false))
+	require.Len(t, sink.byKind(KindCASControlState), 2, "changed state should produce a new record")
+}
+
+func TestAuthoritativeTombstonesProduceDeletedRecord(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	writer := NewRelayFirstStatePublisher(newRelayFirstTestProjector(nil, sink), newRelayFirstTestPublisher(sink))
+
+	build := &domain.Build{ID: domain.NewEntityID(), ServiceID: uuid.New(), CreatedAt: time.Now().UTC()}
+	require.NoError(t, writer.PublishBuildRegistry(ctx, build, true))
+	records := sink.byKind(KindCASControlState)
+	require.Len(t, records, 1)
+	assertCPStateEnvelope(t, records[0], KindBuildRegistry, build.ID.String(), true, kinds.CPStateTopicBuildRegistry)
+
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(records[0].Content), &content))
+	require.Equal(t, true, content["deleted"])
+}
