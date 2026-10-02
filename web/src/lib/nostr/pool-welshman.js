@@ -37,6 +37,15 @@ import {
 let subIdCounter = 0;
 
 /**
+ * Adapter factory signature: given a relay URL and a net context,
+ * return an adapter for that relay.  Production uses the welshman
+ * default (WebSocket-backed `SocketAdapter`); alternative environments
+ * (unit tests, service workers) can inject a custom factory.
+ *
+ * @typedef {(url: string, context: import('@welshman/net').AdapterContext) => import('@welshman/net').AbstractAdapter} AdapterFactory
+ */
+
+/**
  * Create the shared Bahia pool and its management API.
  *
  * @param {object} options
@@ -44,11 +53,15 @@ let subIdCounter = 0;
  *   The BahiaEventStore to ingest events into.
  * @param {((event: any) => Promise<any>) | null} [options.sign]
  *   Signer function for NIP-42 AUTH.  May be set later via `setSign()`.
- * @param {import('@welshman/net').AdapterContext} [options.context]
- *   Optional adapter context override (e.g. for injecting MockAdapter in tests).
+ * @param {AdapterFactory} [options.getAdapter]
+ *   Custom adapter factory for dependency injection.  When omitted,
+ *   welshman's built-in adapter resolution is used (real WebSocket
+ *   connections via the pool).  Pass a factory that returns a
+ *   `MockAdapter` for unit tests, or a custom adapter for service
+ *   workers or other non-browser environments.
  * @returns {BahiaPool}
  */
-export function createBahiaPool({ store, sign = null, context: contextOverride }) {
+export function createBahiaPool({ store, sign = null, getAdapter }) {
   const pool = new Pool();
 
   /** @type {Map<string, ManagedSubscription>} */
@@ -61,9 +74,10 @@ export function createBahiaPool({ store, sign = null, context: contextOverride }
    * Build the adapter context for welshman request/publish calls.
    * @returns {import('@welshman/net').AdapterContext}
    */
-  function getContext() {
-    if (contextOverride) return { pool, ...contextOverride };
-    return { pool };
+  function buildContext() {
+    const ctx = { pool };
+    if (getAdapter) ctx.getAdapter = getAdapter;
+    return ctx;
   }
 
   // Wire NIP-42 AUTH handling: when a socket requests auth, sign and respond
@@ -135,7 +149,7 @@ export function createBahiaPool({ store, sign = null, context: contextOverride }
       filters: appliedFilters,
       signal: controller.signal,
       autoClose: false,
-      context: getContext(),
+      context: buildContext(),
       onEvent: (event, url) => {
         // Ingest into the store (signature verification happens there)
         const accepted = store.ingest(event);
@@ -180,11 +194,16 @@ export function createBahiaPool({ store, sign = null, context: contextOverride }
   }
 
   /**
-   * Add a reference to an existing subscription (ref-counting).
-   * Returns a new unsubscribe handle that decrements the refCount.
+   * Add a reference to an existing subscription.
    *
-   * @param {string} id - The subscription id to add a reference to
-   * @returns {{ unsubscribe: () => void } | null} null if subscription not found
+   * W1-S2's boot sequence uses this so that multiple views (services,
+   * environments, workers, etc.) can share a single underlying REQ for
+   * the read-model subscription without duplicating relay traffic.
+   * Each view holds its own unsubscribe handle; the REQ is only
+   * closed when the last handle unsubscribes.
+   *
+   * @param {string} id - The subscription id to add a reference to.
+   * @returns {{ unsubscribe: () => void } | null} null if not found.
    */
   function addRef(id) {
     const sub = subs.get(id);
@@ -215,32 +234,19 @@ export function createBahiaPool({ store, sign = null, context: contextOverride }
       event,
       relays,
       timeout,
-      context: getContext(),
+      context: buildContext(),
     });
     return results;
   }
 
   /**
-   * Get the underlying welshman Pool (for advanced use / testing).
+   * Get the underlying welshman Pool.
+   *
+   * Used by W1-S2 boot to check connection state and by W3 outbox
+   * for reconnect-driven retry.
    */
   function getPool() {
     return pool;
-  }
-
-  /**
-   * Get the number of active subscriptions.
-   */
-  function getSubscriptionCount() {
-    return subs.size;
-  }
-
-  /**
-   * Get the subscription record by id (for testing).
-   * @param {string} id
-   * @returns {ManagedSubscription | undefined}
-   */
-  function getSubscription(id) {
-    return subs.get(id);
   }
 
   /**
@@ -260,8 +266,6 @@ export function createBahiaPool({ store, sign = null, context: contextOverride }
     publishEvent,
     setSign,
     getPool,
-    getSubscriptionCount,
-    getSubscription,
     destroy,
     PublishStatus,
   };

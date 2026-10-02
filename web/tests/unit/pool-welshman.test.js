@@ -4,6 +4,11 @@
  * Uses welshman's MockAdapter to simulate relay behaviour without a
  * real WebSocket.
  *
+ * Tests assert on observable behaviour only:
+ * - Sent REQ/CLOSE messages (via MockAdapter's send callback)
+ * - Store cursor values (via store.getCursor)
+ * - No internal state accessors are used
+ *
  * Covers:
  * - Ref-counted REQs (two consumers share one REQ; last unsub closes it)
  * - since=cursor on (re)subscribe
@@ -48,6 +53,10 @@ const RELAY_URL = 'wss://test-relay.example';
 /**
  * Create a MockAdapter-backed pool + store for testing.
  *
+ * The `getAdapter` option is proper dependency injection — the same
+ * parameter a service-worker or alternative runtime would use in
+ * production to provide a non-WebSocket adapter.
+ *
  * Returns { pool, store, adapter, sentMessages }.
  * `sentMessages` is an array of all ClientMessages sent to the adapter.
  * `adapter.receive(message)` simulates a relay sending a message back.
@@ -64,13 +73,11 @@ async function createTestPool() {
 
   const pool = createBahiaPool({
     store,
-    context: {
-      getAdapter: (url) => {
-        mockAdapter = new MockAdapter(url, (msg) => {
-          sentMessages.push(msg);
-        });
-        return mockAdapter;
-      },
+    getAdapter: (url) => {
+      mockAdapter = new MockAdapter(url, (msg) => {
+        sentMessages.push(msg);
+      });
+      return mockAdapter;
     },
   });
 
@@ -105,42 +112,56 @@ describe('pool-welshman', () => {
   // ── Ref-counted REQs ──────────────────────────────────────────────
 
   describe('ref-counted subscriptions', () => {
-    it('creates a subscription that can be unsubscribed', async () => {
+    it('creates a subscription and sends a REQ; unsubscribe sends CLOSE', async () => {
       const handle = ctx.pool.subscribe({
         relays: [RELAY_URL],
         filters: [{ kinds: [1] }],
       });
 
       expect(handle.id).toBeTruthy();
-      expect(ctx.pool.getSubscriptionCount()).toBe(1);
+
+      // Wait for the async request to fire
+      await new Promise(r => setTimeout(r, 20));
+
+      // Should have sent exactly one REQ
+      const reqs = ctx.sentMessages.filter(m => m[0] === 'REQ');
+      expect(reqs).toHaveLength(1);
 
       handle.unsubscribe();
-      expect(ctx.pool.getSubscriptionCount()).toBe(0);
+
+      // After unsubscribe, a CLOSE should have been sent
+      await new Promise(r => setTimeout(r, 20));
+      const closes = ctx.sentMessages.filter(m => m[0] === 'CLOSE');
+      expect(closes).toHaveLength(1);
     });
 
-    it('two refs keep the subscription alive; last unsub closes it', () => {
+    it('two refs keep the subscription alive; last unsub closes it', async () => {
       const handle1 = ctx.pool.subscribe({
         relays: [RELAY_URL],
         filters: [{ kinds: [30900] }],
       });
 
+      await new Promise(r => setTimeout(r, 20));
+
+      // One REQ sent
+      const reqsBefore = ctx.sentMessages.filter(m => m[0] === 'REQ');
+      expect(reqsBefore).toHaveLength(1);
+
       // Add a second reference to the same subscription
       const handle2 = ctx.pool.addRef(handle1.id);
       expect(handle2).not.toBeNull();
 
-      const sub = ctx.pool.getSubscription(handle1.id);
-      expect(sub.refCount).toBe(2);
-
-      // First unsub decrements but keeps alive
+      // First unsub should NOT close (no CLOSE message)
       handle1.unsubscribe();
-      const subAfter1 = ctx.pool.getSubscription(handle1.id);
-      expect(subAfter1).toBeDefined();
-      expect(subAfter1.refCount).toBe(1);
+      await new Promise(r => setTimeout(r, 20));
+      const closesAfterFirst = ctx.sentMessages.filter(m => m[0] === 'CLOSE');
+      expect(closesAfterFirst).toHaveLength(0);
 
-      // Second unsub actually closes it
+      // Second unsub SHOULD close (CLOSE message sent)
       handle2.unsubscribe();
-      expect(ctx.pool.getSubscription(handle1.id)).toBeUndefined();
-      expect(ctx.pool.getSubscriptionCount()).toBe(0);
+      await new Promise(r => setTimeout(r, 20));
+      const closesAfterSecond = ctx.sentMessages.filter(m => m[0] === 'CLOSE');
+      expect(closesAfterSecond).toHaveLength(1);
     });
 
     it('addRef returns null for non-existent subscription', () => {
