@@ -8,6 +8,9 @@
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
+  import { boot, shutdown } from '$lib/nostr/boot.js';
+  import { initServiceStoreBinding, teardownServiceStoreBinding } from '$lib/stores/collections/services.svelte.js';
+  import { initEnvironmentStoreBinding, teardownEnvironmentStoreBinding } from '$lib/stores/collections/environments.svelte.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -45,8 +48,20 @@
   $effect(() => {
     let active = true;
 
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
       if (!active) return;
+
+      // Phase 4 W1-S2: Open the event store first so derived stores
+      // render from persisted data immediately (before network).
+      try {
+        await boot();
+        initServiceStoreBinding();
+        initEnvironmentStoreBinding();
+      } catch (err) {
+        console.warn('[layout] boot() failed:', err);
+      }
+
+      // Then proceed with the legacy bootstrap (connects relays, subscribes).
       loadAll();
 
       initializeAuth().catch((error) => {
@@ -60,6 +75,8 @@
 
     return () => {
       active = false;
+      teardownServiceStoreBinding();
+      teardownEnvironmentStoreBinding();
       unsubscribeFromEvents();
       disconnectAssistant();
     };

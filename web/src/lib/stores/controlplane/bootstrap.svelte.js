@@ -1,10 +1,32 @@
+/**
+ * Controlplane bootstrap — Phase 4 W1-S2 rewrite.
+ *
+ * Delegates store and pool creation to boot.js, which opens the
+ * BahiaEventStore so views can render from persisted data immediately.
+ * Then runs the read-model subscription and EOSE tracking through the
+ * pool, feeding events to the existing event routing in events.svelte.js.
+ *
+ * Design reference: phase4-web-store-first.md §7, §12 W1-S2.
+ */
+
 import { browser } from '$app/environment';
 import { nostr } from '../../nostr/client.js';
+import { boot, getEventStore, shutdown } from '../../nostr/boot.js';
 import { getBootstrapSeed } from '../discovery.svelte.js';
 import { loadSystemInfo } from '../system.svelte.js';
 import { clearLoadingForPopulatedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, hydrateCachedControlplane, readModelFilters, resetEventRouting } from './events.svelte.js';
 import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
+import {
+  markConnecting,
+  markSyncing,
+  markRelayEose,
+  markEventIngested,
+  markError,
+  markDisconnected,
+  resetSyncStatus,
+  syncStatus,
+} from '../sync-status.svelte.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 
 let bootstrapPromise = null;
@@ -32,6 +54,7 @@ function subscribeToConnectionState() {
     if (lastConnected && !connected && ['syncing', 'live'].includes(controlplaneConnection.status)) {
       if (!controlplaneConnection.bootstrapComplete) bootstrapSubscriptionGeneration += 1;
       controlplaneConnection.status = 'disconnected';
+      markDisconnected();
     }
     if (!lastConnected && connected && controlplaneConnection.ready) {
       controlplaneConnection.reconnects += 1;
@@ -44,11 +67,10 @@ function subscribeToConnectionState() {
 
 function completeBootstrapIfCurrent(generation) {
   if (generation !== bootstrapSubscriptionGeneration) return;
-  // Flush any batched streamed events so collections are current when the
-  // status flips to live.
   refreshCollections();
   markBootstrapComplete();
   setAllLoading(false);
+  syncStatus.phase = 'live';
 }
 
 function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}) {
@@ -73,9 +95,10 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
   bootstrapExpectedRelays = [...expectedRelays];
   const generation = ++bootstrapSubscriptionGeneration;
   const pendingEoseRelays = new Set(expectedRelays.map(toWebSocketUrl));
-  const markRelayEose = (relay) => {
+  const markRelayEoseFn = (relay) => {
     if (generation !== bootstrapSubscriptionGeneration) return;
     pendingEoseRelays.delete(toWebSocketUrl(relay));
+    markRelayEose();
     if (pendingEoseRelays.size === 0) {
       completeBootstrapIfCurrent(generation);
       settleEose(resolveEose, true);
@@ -83,8 +106,15 @@ function startStreamingSubscription(expectedRelays, { waitForEose = false } = {}
   };
 
   liveUnsubscribe = nostr.subscribeWithRecovery(readModelFilters(), {
-    onEvent: (event) => applyControlplaneEvent(event, { deferRefresh: true }),
-    onEose: (relay) => markRelayEose(relay),
+    onEvent: (event) => {
+      // Ingest into BahiaEventStore (for store-first derived views)
+      const store = getEventStore();
+      if (store) store.ingest(event);
+      markEventIngested();
+      // Route to legacy per-domain applicators (for unmigrated collections)
+      applyControlplaneEvent(event, { deferRefresh: true });
+    },
+    onEose: (relay) => markRelayEoseFn(relay),
     onHealth: (health) => Object.assign(controlplaneConnection, health),
     onClosed: (reason, relay, meta = {}) => {
       const message = reason || `subscription closed by ${relay}`;
@@ -115,6 +145,7 @@ export function resetControlplaneStore() {
   resetEventRouting();
   resetCollections();
   resetConnectionState();
+  resetSyncStatus();
 }
 
 export async function bootstrapControlplane({ force = false } = {}) {
@@ -131,17 +162,25 @@ export async function bootstrapControlplane({ force = false } = {}) {
     controlplaneConnection.lastError = null;
     setAllLoading(true);
 
-    // Resolve the trusted service pubkey first so cached canonical events pass
+    // Step 1: Open BahiaEventStore via boot.js so derived stores can render
+    // from persisted data immediately, before any network connection.
+    try {
+      await boot();
+    } catch (err) {
+      console.warn('[bootstrap] boot() failed:', err);
+    }
+
+    // Resolve the trusted service pubkey so cached canonical events pass
     // the same author filter as live relay events.
     const seed = getBootstrapSeed();
     const relays = Array.from(new Set((seed?.relay_urls || []).map(toWebSocketUrl).filter(Boolean)));
     controlplaneConnection.relays = relays;
     controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
 
-    // Render cached state immediately. Hydration replays cached events into
-    // the backing Maps, so relay events merge into it; loading flags stay set
-    // only for collections that are still empty. EOSE only moves the
-    // connection status from syncing to live.
+    // Step 2: Render cached state immediately. Hydration replays cached
+    // events into the backing Maps. Loading flags stay set only for
+    // collections that are still empty. EOSE only moves the connection
+    // status from syncing to live — it never gates rendering.
     const hydratedFromCache = await hydrateCachedControlplane();
     if (hydratedFromCache) {
       controlplaneConnection.lastEventAt = controlplaneConnection.lastEventAt || new Date().toISOString();
@@ -152,7 +191,9 @@ export async function bootstrapControlplane({ force = false } = {}) {
       if (relays.length === 0) throw new Error('No browser Nostr relays configured by deployment bootstrap');
       if (!controlplaneConnection.servicePubkey) throw new Error('No trusted Bahia service pubkey configured by deployment bootstrap');
 
+      // Step 3: Connect pool and subscribe
       controlplaneConnection.status = 'connecting';
+      markConnecting(relays);
       subscribeToConnectionState();
       nostr.setRelays(relays, false);
       const summary = await nostr.connect(relays, { force: true });
@@ -164,10 +205,11 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.ready = true;
       controlplaneConnection.bootstrapComplete = false;
       controlplaneConnection.status = 'syncing';
+      markSyncing();
+
       await startStreamingSubscription(connectedRelays, { waitForEose: true });
       schedulePersistCachedCollections();
-      // Optional discovery metadata may arrive now or later. It must never
-      // gate socket connection or relay-backed read models.
+
       void loadSystemInfo({ force }).catch((error) => {
         console.warn('Optional Bahia discovery metadata unavailable:', error?.message || error);
       });
@@ -175,6 +217,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
     } catch (err) {
       markBootstrapFailedAt();
       setBootstrapError(err?.message || String(err));
+      markError(err?.message || String(err));
       return { ok: false, reason: controlplaneConnection.lastError };
     } finally {
       setAllLoading(false);
