@@ -12,7 +12,6 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -64,11 +63,6 @@ type MLProjectionSource interface {
 
 type WorkerProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
-}
-
-// SBOMProjectionSource provides published SBOM manifests for projector snapshot republishing.
-type SBOMProjectionSource interface {
-	ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error)
 }
 
 // Phase 3 W1: WorkerReadModelProjectionSource interface removed — worker
@@ -155,12 +149,10 @@ type Projector struct {
 	dnsZoneSource        DNSZoneProjectionSource
 	dnsBackendSource     DNSBackendProjectionSource
 	dnsPolicySource      DNSPolicyProjectionSource
-	sbomSource           SBOMProjectionSource
 	publisher            ProjectionPublisher
 	history              ProjectionHistory
 	privateKey           string
 	enabled              bool
-	repairInterval       time.Duration
 	logger               *zap.Logger
 	systemConfig         *config.Config
 	mcpTransport         bool
@@ -184,12 +176,6 @@ type Projector struct {
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
-
-// WithProjectorRepairInterval overrides the periodic snapshot repair interval.
-// Use <=0 in tests to disable periodic repair after the startup snapshot.
-func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
-	return func(p *Projector) { p.repairInterval = interval }
-}
 
 func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.mlSource = source }
@@ -218,10 +204,6 @@ func WithDNSPolicyProjectionSource(source DNSPolicyProjectionSource) ProjectorOp
 	return func(p *Projector) { p.dnsPolicySource = source }
 }
 
-func WithSBOMProjectionSource(source SBOMProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.sbomSource = source }
-}
-
 func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
 	return func(p *Projector) {
 		p.systemConfig = cfg
@@ -247,13 +229,12 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		logger = zap.NewNop()
 	}
 	p := &Projector{
-		source:         source,
-		publisher:      publisher,
-		history:        history,
-		privateKey:     cfg.PrivateKey,
-		enabled:        cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
-		repairInterval: 10 * time.Minute,
-		logger:         logger.Named("nostr-projector"),
+		source:     source,
+		publisher:  publisher,
+		history:    history,
+		privateKey: cfg.PrivateKey,
+		enabled:    cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
+		logger:     logger.Named("nostr-projector"),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -317,94 +298,42 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 	}
 }
 
-// Run performs startup snapshot repair and then periodically republishes
-// snapshots until the context is cancelled. Domains listed in intentDomains
-// are warm-started from the daemon's own history (design §5.3) instead of
-// re-projected from Postgres; RepublishSnapshot guards skip their legs.
+// Run performs warm-start comparison for all domains, publishes system
+// configuration records if missing from relays, and then waits for context
+// cancellation. No periodic snapshot or ticker: every canonical record is
+// published once by the code that mutates it (Phase 3 X1).
 func (p *Projector) Run(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
-	// Warm-start migrated domains: wait for subscriber EOSE, hydrate the
-	// fingerprint cache, and re-publish only stale or missing records.
+	// Warm-start: wait for subscriber EOSE, hydrate the fingerprint cache,
+	// and re-publish only stale or missing records across all domains.
 	p.warmStartMigratedDomains(ctx)
 	if ctx.Err() != nil {
 		return nil
 	}
-	// Legacy snapshot for unmigrated domains. Guards inside skip migrated
-	// domain legs so they are not re-projected from Postgres.
-	if err := p.RepublishSnapshot(ctx); err != nil {
-		p.logger.Warn("startup Nostr projection snapshot failed", zap.Error(err))
-	}
-	if p.repairInterval <= 0 {
-		<-ctx.Done()
-		return nil
-	}
-	ticker := time.NewTicker(p.repairInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := p.RepublishSnapshot(ctx); err != nil {
-				p.logger.Warn("periodic Nostr projection repair failed", zap.Error(err))
-			}
-		}
-	}
+	// Publish system config records (DM relay lists, system discovery) if the
+	// relay copy is missing or stale. The dedupe pipeline skips unchanged
+	// records, so this is a no-op when relays hold current state.
+	p.publishSystemConfigOnStartup(ctx)
+
+	<-ctx.Done()
+	return nil
 }
 
-// RepublishSnapshot republishes all replaceable read models from canonical
-// state. It is safe to run repeatedly; latest replaceable events win by d-tag.
-func (p *Projector) RepublishSnapshot(ctx context.Context) error {
-	if !p.Enabled() {
-		return nil
+// publishSystemConfigOnStartup publishes system-configuration-derived records
+// (DM relay lists, system discovery) once at startup. The fingerprint-dedupe
+// pipeline skips records that already match the relay-held state.
+func (p *Projector) publishSystemConfigOnStartup(ctx context.Context) {
+	if p.systemConfig == nil {
+		return
 	}
 	if err := p.publishConfiguredDMRelayListsFromSystemConfig(ctx); err != nil {
-		p.logger.Warn("publish DM relay-list projection failed", zap.Error(err))
-		return fmt.Errorf("publish DM relay-list projection: %w", err)
+		p.logger.Warn("startup DM relay-list publish failed", zap.Error(err))
 	}
 	if err := p.publishSystemDiscovery(ctx); err != nil {
-		p.logger.Warn("publish system discovery projection failed", zap.Error(err))
-		return fmt.Errorf("publish system discovery projection: %w", err)
+		p.logger.Warn("startup system discovery publish failed", zap.Error(err))
 	}
-
-	snapshotSource := p.source
-	services, err := snapshotSource.ListServices(ctx)
-	if err != nil {
-		return fmt.Errorf("list services: %w", err)
-	}
-
-	// Phase 3 F3: environment snapshot republish removed — environment state
-	// is now published by the intent handler via PublishBeforeCommit
-	// (bahia-irsry.11.4). The listing is kept for observed deployments.
-	envs, err := snapshotSource.ListEnvironments(ctx)
-	if err != nil {
-		return fmt.Errorf("list environments: %w", err)
-	}
-
-	// Phase 3 S1: state snapshot republish removed — runtime state is now
-	// published directly by the reconciler (bahia-irsry.11.6).
-	// Phase 3 S2: build/artifact/intent/run snapshot republish removed —
-	// their cp-state is published directly from RegistryService mutation
-	// methods (bahia-irsry.11.7).
-	// Phase 3 S3: policy state is published directly by PolicyIntentHandler.
-	policiesPublished := 0
-	// Phase 3 L1: LLM route registry and state records are published
-	// directly from the mutation site (intent handler, ContextVM handler,
-	// registry service). RepublishSnapshot LLM block removed.
-	// Phase 3 M1/W1: ML and worker read-model snapshot legs removed — ML state
-	// is published by MLCanonicalPublisher and worker assignment/drain read
-	// models by WorkerReadModelPublisher, both from the mutation site
-	// (bahia-irsry.11.12, bahia-irsry.11.14).
-	// Phase 3 B1: Backup snapshot legs removed. Canonical records are now
-	// published by BackupCanonicalPublisher wired to the registry.
-	// Phase 3 D1: DNS snapshot legs removed. DNS endpoint/zone/backend/policy
-	// records are now published by the DNSCanonicalPublisher wired to the
-	// reconciler, triggered by bus events instead of this 10-minute timer.
-	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
-	return nil
 }
 
 func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
@@ -415,27 +344,11 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.logger.Warn("publish Nostr audit event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 	}
 
-	res := resourceFromEvent(e)
-	switch e.Type {
-	// Phase 3 W1: deployment run event cases removed — worker assignment/drain
-	// read models are published directly from the run mutation site
-	// (registry.go, ml_registry.go) instead of reactively here (bahia-irsry.11.14).
-
-	// Phase 3 F2/F3: service and environment handleEvent cases removed.
-	// Phase 3 S1: state publication removed — the reconciler publishes state
-	// directly via RuntimeStatePublisher; tombstones are published by
-	// StateTombstoneHandler (bahia-irsry.11.6).
-	case events.EventAdoptionImported:
-		p.publishServiceByID(ctx, res.ServiceID)
-		p.publishEnvironmentByID(ctx, res.EnvironmentID)
-		// Phase 3 L1: LLM handleEvent cases removed — route registry and state
-		// records are published directly from the mutation site (intent handler,
-		// ContextVM handler, registry service) instead of reactively here.
-		// Phase 3 M1: ML model/version/endpoint/intent/observation/state/artifact/provenance
-		// handleEvent cases removed — ML state is now published directly from
-		// the mutation site via MLCanonicalPublisher. Worker read models
-		// for ML runs are refreshed by WorkerReadModelPublisher (W1).
-	}
+	// Phase 3 X1: all reactive handleEvent cases removed. Service/environment
+	// registry records are published directly from the mutation site (intent
+	// handlers, adoption canonical publisher). The remaining projector bus
+	// handler serves the append-only audit log and observed-deployments
+	// refresh only.
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
 			p.logger.Warn("publish observed deployments discovery after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
@@ -446,39 +359,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 	// DNS endpoints on every bus event.
 }
 
-func (p *Projector) publishServiceByID(ctx context.Context, raw string) {
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	svc, err := p.source.GetService(ctx, id)
-	if err != nil || svc == nil {
-		if err != nil {
-			p.logger.Warn("read service for projection failed", zap.String("service_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishServiceRegistry(ctx, svc, false); err != nil {
-		p.logger.Warn("publish service registry projection failed", zap.String("service_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishEnvironmentByID(ctx context.Context, raw string) {
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	env, err := p.source.GetEnvironment(ctx, id)
-	if err != nil || env == nil {
-		if err != nil {
-			p.logger.Warn("read environment for projection failed", zap.String("environment_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishEnvironmentRegistry(ctx, env, false); err != nil {
-		p.logger.Warn("publish environment registry projection failed", zap.String("environment_id", raw), zap.Error(err))
-	}
-}
+// Phase 3 X1: publishServiceByID and publishEnvironmentByID removed.
+// Adoption-imported service/environment records are now published directly
+// by the AdoptionCanonicalPublisher wired to the adoption service.
 
 // Phase 3 M1: publishMLModelByID, publishMLModelVersionByID,
 // publishMLEndpointByID, publishMLStateForIntent, publishMLStateForRun,
@@ -587,6 +470,22 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
 }
 
+// CPStateDomains returns all unique cp-state domain names from the
+// cpStateFamilies table. The warm-start uses this to iterate all domains
+// without hard-coding the list in app.go (Phase 3 X1).
+func CPStateDomains() []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, f := range cpStateFamilies {
+		if _, ok := seen[f.domain]; !ok {
+			seen[f.domain] = struct{}{}
+			out = append(out, f.domain)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func canonicalStateDomain(kind int) (domainName string, entity string) {
 	family := cpStateFamilies[kind]
 	return family.domain, family.entity
@@ -604,169 +503,10 @@ func canonicalStateDTag(legacyKind int, id string) string {
 	return id
 }
 
-// publishSBOMSnapshots rebuilds canonical SBOM Nostr events (30078 references and
-// 30004 availability lists) from published manifests in the persistent repository.
-// This ensures SBOM events survive relay sidecar restarts.
-func (p *Projector) publishSBOMSnapshots(ctx context.Context) (int, int) {
-	if !p.Enabled() || p.sbomSource == nil {
-		return 0, 0
-	}
-	manifests, err := p.sbomSource.ListPublishedManifests(ctx, 1000)
-	if err != nil {
-		p.logger.Warn("list published SBOM manifests for projection failed", zap.Error(err))
-		return 0, 0
-	}
-	if len(manifests) == 0 {
-		return 0, 0
-	}
-
-	pubkey, err := publicKeyHexFromPrivateKeyHex(p.privateKey)
-	if err != nil {
-		p.logger.Warn("derive SBOM projection pubkey failed", zap.Error(err))
-		return 0, 0
-	}
-	attestationSigner, err := sbom.NewNostrDSSESigner(p.privateKey)
-	if err != nil {
-		p.logger.Warn("configure SBOM projection attestation signer failed", zap.Error(err))
-		return 0, 0
-	}
-
-	// Publish 30078 reference events and collect entries grouped by subject for availability lists.
-	type subjectKey struct {
-		Type   domain.SBOMSubjectType
-		ID     string
-		Digest string
-	}
-	type subjectGroup struct {
-		subject domain.SBOMSubject
-		entries []domain.SBOMIndexEntry
-	}
-	groups := map[subjectKey]*subjectGroup{}
-	refsPublished := 0
-
-	for i := range manifests {
-		m := &manifests[i]
-		// Parse subject digest into algo:hash for the attestation.
-		digestParts := strings.SplitN(m.Subject.Digest, ":", 2)
-		if len(digestParts) != 2 || digestParts[1] == "" {
-			p.logger.Warn("skip SBOM manifest with invalid subject digest",
-				zap.String("manifest_id", m.ID.String()),
-				zap.String("digest", m.Subject.Digest))
-			continue
-		}
-		digestAlgo, digestHash := digestParts[0], digestParts[1]
-
-		att := &domain.SBOMAttestation{
-			Type: "https://in-toto.io/Statement/v1",
-			Subject: []domain.AttestationSubject{{
-				Name:   m.Subject.DisplayName,
-				Digest: map[string]string{digestAlgo: digestHash},
-			}},
-			PredicateType: predicateTypeForSBOMFormat(m.Format),
-			Predicate: domain.SBOMPredicate{
-				Format: m.Format,
-				Location: domain.SBOMLocation{
-					Type:      m.StorageType,
-					URI:       m.StorageURI,
-					MediaType: m.MediaType,
-				},
-				Digest:    map[string]string{"sha256": m.PayloadSHA256},
-				Generator: m.Generator,
-				Timestamp: m.CreatedAt,
-				NTIA:      m.NTIA,
-			},
-		}
-
-		if err := sbom.SignAttestation(ctx, att, attestationSigner); err != nil {
-			p.logger.Warn("sign SBOM reference attestation for projection failed",
-				zap.String("manifest_id", m.ID.String()), zap.Error(err))
-			continue
-		}
-		createdAt := m.CreatedAt
-		ev, _, err := sbom.BuildSBOMReferenceEvent(sbom.BuildSBOMReferenceEventInput{
-			Subject:     m.Subject,
-			Attestation: att,
-			CreatedAt:   &createdAt,
-		})
-		if err != nil {
-			p.logger.Warn("build SBOM reference event for projection failed",
-				zap.String("manifest_id", m.ID.String()), zap.Error(err))
-			continue
-		}
-
-		// Through the dedupe gate: an unchanged reference is neither re-signed
-		// nor re-queued on every repair pass.
-		if err := p.publishSigned(ctx, int(ev.Kind), ev.Tags, ev.Content, "sbom_reference.projection", &m.ID); err != nil {
-			p.logger.Warn("publish SBOM reference event failed",
-				zap.String("manifest_id", m.ID.String()), zap.Error(err))
-			continue
-		}
-		refsPublished++
-
-		// Collect entry for the availability list.
-		sk := subjectKey{Type: m.Subject.Type, ID: m.Subject.ID, Digest: m.Subject.Digest}
-		g, ok := groups[sk]
-		if !ok {
-			g = &subjectGroup{subject: m.Subject}
-			groups[sk] = g
-		}
-		g.entries = append(g.entries, domain.SBOMIndexEntry{
-			SubjectDigest: m.Subject.Digest,
-			AttestationID: fmt.Sprintf("%d:%s:%s", sbom.KindSBOMReference, pubkey, m.ReferenceDTag),
-			ReferenceDTag: m.ReferenceDTag,
-			Format:        m.Format,
-			LocationURI:   m.StorageURI,
-			StorageType:   m.StorageType,
-			PayloadSHA256: m.PayloadSHA256,
-			GeneratorID:   m.Generator.ID,
-			Timestamp:     m.CreatedAt,
-		})
-	}
-
-	// Publish 30004 availability lists, one per subject.
-	availPublished := 0
-	for _, g := range groups {
-		// The list's updatedAt is its newest entry, not the repair time, so
-		// an unchanged list has identical content and is deduped.
-		var updatedAt *time.Time
-		for i := range g.entries {
-			if ts := g.entries[i].Timestamp; !ts.IsZero() && (updatedAt == nil || ts.After(*updatedAt)) {
-				updatedAt = &ts
-			}
-		}
-		ev, _, err := sbom.BuildSBOMAvailabilityListEvent(sbom.BuildSBOMAvailabilityListEventInput{
-			Subject:         g.subject,
-			Entries:         g.entries,
-			PublisherPubkey: pubkey,
-			CreatedAt:       updatedAt,
-		})
-		if err != nil {
-			p.logger.Warn("build SBOM availability list for projection failed",
-				zap.String("subject_id", g.subject.ID), zap.Error(err))
-			continue
-		}
-		if err := p.publishSigned(ctx, int(ev.Kind), ev.Tags, ev.Content, "sbom_availability.projection", nil); err != nil {
-			p.logger.Warn("publish SBOM availability list failed",
-				zap.String("subject_id", g.subject.ID), zap.Error(err))
-			continue
-		}
-		availPublished++
-	}
-
-	return refsPublished, availPublished
-}
-
-// predicateTypeForSBOMFormat returns the in-toto predicate type for an SBOM format.
-func predicateTypeForSBOMFormat(format domain.SBOMFormat) domain.SBOMAttestationType {
-	switch format {
-	case domain.SBOMFormatSPDX:
-		return domain.AttestationTypeSPDX
-	case domain.SBOMFormatCycloneDX:
-		return domain.AttestationTypeCycloneDX
-	default:
-		return domain.SBOMAttestationType("https://sbom.dev/" + string(format))
-	}
-}
+// Phase 3 X1: publishSBOMSnapshots and predicateTypeForSBOMFormat removed.
+// SBOM reference events (30078) and availability lists (30004) are published
+// from the SBOM orchestrator's mutation site via Publisher.PublishSignedEventWithResults.
+// The projector never re-derives SBOM state from the persistent repository.
 
 func dnsZoneDTag(name string) string {
 	return "zone:" + strings.TrimSpace(name)

@@ -147,10 +147,10 @@ func TestProjectionUnchangedDNSEndpointEmitsNoNewEvent(t *testing.T) {
 	}
 }
 
-// TestProjectionStartupRepairAndSystemDiscoveryDoNotRepeat covers the periodic
-// snapshot repair path: a second full repair with nothing changed emits no
-// discovery or read-model events.
-func TestProjectionStartupRepairAndSystemDiscoveryDoNotRepeat(t *testing.T) {
+// TestSystemConfigStartupPublishDoesNotRepeat covers the startup publish path:
+// a second call with nothing changed emits no discovery or DM relay-list
+// events (Phase 3 X1: replaces the old RepublishSnapshot dedupe test).
+func TestSystemConfigStartupPublishDoesNotRepeat(t *testing.T) {
 	ctx := context.Background()
 	withProjectorVersionVars(t, "0.1.0", "abcdef1234567890", "")
 	cfg := config.Defaults()
@@ -164,23 +164,19 @@ func TestProjectionStartupRepairAndSystemDiscoveryDoNotRepeat(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
 
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("first repair: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 	sink.mu.Lock()
 	first := len(sink.events)
 	sink.mu.Unlock()
 	if first == 0 {
-		t.Fatal("first repair published nothing")
+		t.Fatal("first startup publish published nothing")
 	}
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("second repair: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 	sink.mu.Lock()
 	second := len(sink.events)
 	sink.mu.Unlock()
 	if second != first {
-		t.Fatalf("unchanged repair re-signed %d events (had %d, now %d)", second-first, first, second)
+		t.Fatalf("unchanged startup re-signed %d events (had %d, now %d)", second-first, first, second)
 	}
 }
 
@@ -530,5 +526,72 @@ func TestProjectionFingerprintIsStableAndStripsVolatileKeys(t *testing.T) {
 	c := projectionFingerprint(1, tags, `{"z":1,"a":3}`)
 	if a == c {
 		t.Fatal("fingerprint must change on a real content change")
+	}
+}
+
+// TestBackoffRetryTimerFlushesPendingRecords proves that when a publish is
+// suppressed by the shared backoff window, the record is saved and flushed
+// when the backoff timer fires (Phase 3 X1 event-driven retry).
+func TestBackoffRetryTimerFlushesPendingRecords(t *testing.T) {
+	ctx := context.Background()
+	serviceID, envID := uuid.New(), uuid.New()
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	s := projector.projection()
+	s.now = func() time.Time { return clock }
+	s.jitterSource = nil
+
+	// First publish succeeds to prime the cache.
+	state := dedupeTestState(serviceID, envID, clock)
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	wire := eventKindInt(&sink.events[0])
+	sink.mu.Unlock()
+
+	// Reject the next publish to open backoff.
+	sink.errorsByKind = map[int]error{wire: errors.New("rate-limited")}
+	state.DriftStatus = domain.DriftStatusDrifted
+	if err := projector.publishStateForTest(ctx, &state); err == nil {
+		t.Fatal("expected rejection error")
+	}
+
+	// Now relay is healthy but backoff is open. A publish of new state
+	// should be suppressed and saved as pending.
+	sink.errorsByKind = nil
+	state.DriftStatus = domain.DriftStatusDeploying
+	err := projector.publishStateForTest(ctx, &state)
+	if !errors.Is(err, ErrProjectorBackoff) {
+		t.Fatalf("error = %v, want ErrProjectorBackoff", err)
+	}
+
+	// Verify pending retry was saved.
+	s.mu.Lock()
+	pendingCount := len(s.pendingRetries)
+	s.mu.Unlock()
+	if pendingCount == 0 {
+		t.Fatal("expected pending retry to be saved during backoff")
+	}
+
+	// Advance past the backoff window and flush manually (simulates timer).
+	clock = clock.Add(projectionBackoffMax + time.Second)
+	projector.flushPendingRetries()
+
+	// The pending record should now be published.
+	s.mu.Lock()
+	afterPending := len(s.pendingRetries)
+	s.mu.Unlock()
+	if afterPending != 0 {
+		t.Fatalf("pending retries after flush = %d, want 0", afterPending)
+	}
+
+	// Count: initial + retry = 2 (the rejected publish is not captured by the sink).
+	sink.mu.Lock()
+	total := len(sink.events)
+	sink.mu.Unlock()
+	if total != 2 {
+		t.Fatalf("total events = %d, want 2 (initial + retry)", total)
 	}
 }

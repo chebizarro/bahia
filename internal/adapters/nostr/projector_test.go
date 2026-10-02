@@ -470,9 +470,7 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	wantPubkey := assertProjectorTestPubkey(t)
 	assertNoPublishedKind(t, sink, KindSystemDiscovery)
@@ -560,9 +558,7 @@ func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, source, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	var payload map[string]any
@@ -610,9 +606,7 @@ func TestProjectorSystemDiscoveryDoesNotInferDMRelayListFromPublicRelaySets(t *t
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	assertOneRelaySet(t, sink, "bahia-browser-v1")
 	assertOneRelaySet(t, sink, "bahia-contextvm-v1")
@@ -640,9 +634,7 @@ func TestProjectorPublishesExplicitNotificationDMRelayListOnly(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	dm := assertOneSignedKind(t, sink, kinds.NIP51DMRelayList)
 	assertEventPubkey(t, dm, assertProjectorTestPubkey(t))
@@ -673,9 +665,7 @@ func TestProjectorPublishesExplicitDMRelayListWithoutBrowserDiscovery(t *testing
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	dm := assertOneSignedKind(t, sink, kinds.NIP51DMRelayList)
 	assertTag(t, dm, "relay", "wss://dm.example")
@@ -697,9 +687,9 @@ func TestProjectorSystemDiscoveryFailsWhenSidecarBrowserRelaysAbsent(t *testing.
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	err := projector.RepublishSnapshot(ctx)
+	err := projector.publishSystemDiscovery(ctx)
 	if err == nil || !strings.Contains(err.Error(), "nostr.browser_relays") {
-		t.Fatalf("republish snapshot error = %v, want missing browser relay policy failure", err)
+		t.Fatalf("system discovery error = %v, want missing browser relay policy failure", err)
 	}
 	assertNoPublishedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertNoPublishedKind(t, sink, kinds.RelaySetDiscovery)
@@ -720,9 +710,9 @@ func TestProjectorSystemDiscoverySurfacesRelaySetPublishFailure(t *testing.T) {
 	rejected := errors.New("failed to publish to any relay: wss://contextvm.example rejected event: auth-required: restricted write")
 	sink := &captureProjectionPublisher{errorsByRelayD: map[string]error{"bahia-contextvm-v1": rejected}}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	err := projector.RepublishSnapshot(ctx)
+	err := projector.publishSystemDiscovery(ctx)
 	if err == nil || !strings.Contains(err.Error(), rejected.Error()) {
-		t.Fatalf("republish snapshot error = %v, want relay publish rejection surfaced", err)
+		t.Fatalf("system discovery error = %v, want relay publish rejection surfaced", err)
 	}
 	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertOneRelaySet(t, sink, "bahia-browser-v1")
@@ -744,9 +734,9 @@ func TestProjectorSystemDiscoveryFailsWhenRelaySetHasNoAcceptedRelays(t *testing
 
 	sink := &captureProjectionPublisher{zeroAcceptedRelayD: map[string]bool{"bahia-browser-v1": true}}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	err := projector.RepublishSnapshot(ctx)
+	err := projector.publishSystemDiscovery(ctx)
 	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 30002") {
-		t.Fatalf("republish snapshot error = %v, want no accepted relay failure", err)
+		t.Fatalf("system discovery error = %v, want no accepted relay failure", err)
 	}
 	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertNoRelaySet(t, sink, "bahia-browser-v1")
@@ -768,9 +758,9 @@ func TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRel
 
 	sink := &captureProjectionPublisher{zeroAcceptedKind: map[int]bool{kinds.NIP65RelayList: true}}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-	err := projector.RepublishSnapshot(ctx)
+	err := projector.publishSystemDiscovery(ctx)
 	if err == nil || !strings.Contains(err.Error(), "no relays accepted event kind 10002") {
-		t.Fatalf("republish snapshot error = %v, want no accepted NIP-65 failure", err)
+		t.Fatalf("system discovery error = %v, want no accepted NIP-65 failure", err)
 	}
 	assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	assertOneRelaySet(t, sink, "bahia-browser-v1")
@@ -899,9 +889,7 @@ func TestProjectorSystemDiscoveryAdvertisesAssistantWorkflows(t *testing.T) {
 			cfg.Assistant.Agentic.Enabled = tc.agentic
 			sink := &captureProjectionPublisher{}
 			projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
-			if err := projector.RepublishSnapshot(context.Background()); err != nil {
-				t.Fatalf("republish snapshot: %v", err)
-			}
+			projector.publishSystemConfigOnStartup(context.Background())
 			discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
@@ -929,9 +917,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}), WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
+	projector.publishSystemConfigOnStartup(ctx)
 
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
 	var payload map[string]any

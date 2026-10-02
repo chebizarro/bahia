@@ -118,7 +118,7 @@ func TestRelayFirstRevisionTokenSurvivesPostgresRoundTrip(t *testing.T) {
 
 // assertSignedOnceInSharedDB is assertSignedOnce for a database other test
 // packages share: the snapshot step republishes only this test's entities
-// (the per-entity publish RepublishSnapshot's registry loop runs), because
+// (the per-entity publish the registry loop runs), because
 // listing every row would read other packages' fixtures.
 func assertSignedOnceInSharedDB(t *testing.T, h *relayFirstHarness, eventType events.EventType, legacyKind int, id uuid.UUID, writes int) {
 	t.Helper()

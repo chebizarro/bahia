@@ -1074,18 +1074,12 @@ func New(cfg *config.Config) (*App, error) {
 	if dnsPolicyRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSPolicyProjectionSource(dnsPolicyRepositoryProjectionSource{repo: dnsPolicyRepo}))
 	}
-	if sbomManifestRepo != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithSBOMProjectionSource(sbomManifestRepo))
-	}
-	// Phase 3 F4: warm-start for migrated domains. Intent-migrated domains
-	// wait for subscriber EOSE; authoritative domains (build, artifact,
-	// deployment) publish directly from mutation sites and are always
-	// included in warm-start so stale records are re-published on restart.
-	// RepublishSnapshot guards skip migrated domain legs.
-	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
-		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
-		"backup", // B1: authority inversion (bahia-irsry.11.11)
-	)
+	// Phase 3 X1: WithSBOMProjectionSource removed. SBOM events are published
+	// from the SBOM orchestrator's mutation site (bahia-irsry.11.17).
+	// Phase 3 X1: warm-start covers ALL cp-state domains. Every domain's
+	// canonical records are now published from mutation sites; warm-start
+	// re-publishes only stale or missing records on restart.
+	warmStartDomains := nostrAdapter.CPStateDomains()
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
 		// immediately satisfy a sentinel so warm-start proceeds.
@@ -1155,6 +1149,15 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// --- Phase 3 X1: Adoption canonical publisher ---
+	// Publishes service-registry and environment-registry cp-state records
+	// directly from the adoption import site instead of reactively through
+	// the projector's EventAdoptionImported handler (bahia-irsry.11.17).
+	if adoptionSvc != nil {
+		adoptionCanonical := nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, logger)
+		adoptionSvc.SetAdoptionCanonicalPublisher(adoptionCanonical)
+	}
 
 	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
 	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds

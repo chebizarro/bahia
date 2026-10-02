@@ -28,6 +28,16 @@ const (
 	adoptionStatusFailed  = "failed"
 )
 
+// AdoptionCanonicalPublisher publishes canonical 30900 cp-state records for
+// services and environments created by adoption imports. When set on the
+// AdoptionService, each successful import publishes the service-registry and
+// environment-registry records directly from the mutation site instead of
+// reactively through the projector bus handler (Phase 3 X1).
+type AdoptionCanonicalPublisher interface {
+	PublishServiceRegistry(ctx context.Context, svc *domain.Service) error
+	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error
+}
+
 // AdoptionService scans Docker hosts and imports existing containers into Bahia models.
 type AdoptionService struct {
 	registry          *RegistryService
@@ -47,6 +57,7 @@ type AdoptionService struct {
 
 	secretEncryptor      *secretsAdapter.Encryptor
 	runtimeCfg           config.RuntimeConfig
+	adoptionPublisher    AdoptionCanonicalPublisher
 	allowRawDockerHosts  bool
 	allowComposeTakeover bool
 }
@@ -60,6 +71,21 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 		s.runtimeCfg = runtimeCfg
 		s.allowRawDockerHosts = allowRawDockerHosts
 	}
+}
+
+// WithAdoptionCanonicalPublisher sets the canonical cp-state publisher for
+// adopted services and environments as a constructor option.
+func WithAdoptionCanonicalPublisher(p AdoptionCanonicalPublisher) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.adoptionPublisher = p
+	}
+}
+
+// SetAdoptionCanonicalPublisher sets the canonical cp-state publisher after
+// construction. This is used when the publisher depends on the projector
+// which is created after the adoption service (Phase 3 X1).
+func (s *AdoptionService) SetAdoptionCanonicalPublisher(p AdoptionCanonicalPublisher) {
+	s.adoptionPublisher = p
 }
 
 // WithAdoptionComposeTakeoverPolicy controls whether Compose-origin containers
@@ -448,6 +474,8 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 
 	var committedResult AdoptionImportResult
 	var importEvent events.Event
+	var committedSvc *domain.Service
+	var committedEnv *domain.Environment
 	persist := func(repos repository.TxRepos) error {
 		stagedResult := result
 		repos = s.completeTxRepos(repos)
@@ -517,6 +545,8 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 		}
 		stagedResult.Status = status
 		committedResult = stagedResult
+		committedSvc = svc
+		committedEnv = env
 		importEvent = events.Event{
 			Type:     adoptionImportedEvent,
 			EntityID: svc.ID.String(),
@@ -557,6 +587,18 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 	}
 	if importEvent.Type != "" {
 		s.publisher.Publish(ctx, importEvent)
+	}
+	// Phase 3 X1: publish canonical cp-state records from the mutation site
+	// instead of reactively through the projector bus handler.
+	if s.adoptionPublisher != nil && committedSvc != nil {
+		if err := s.adoptionPublisher.PublishServiceRegistry(ctx, committedSvc); err != nil {
+			s.logger.Warn("publish adopted service registry record failed", zap.String("service_id", committedSvc.ID.String()), zap.Error(err))
+		}
+	}
+	if s.adoptionPublisher != nil && committedEnv != nil {
+		if err := s.adoptionPublisher.PublishEnvironmentRegistry(ctx, committedEnv); err != nil {
+			s.logger.Warn("publish adopted environment registry record failed", zap.String("environment_id", committedEnv.ID.String()), zap.Error(err))
+		}
 	}
 	s.logAdoptionImportResult(target, result, "success")
 	return result

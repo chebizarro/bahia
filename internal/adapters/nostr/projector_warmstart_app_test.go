@@ -88,8 +88,7 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(readiness),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(readiness))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -113,8 +112,7 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 	sink2 := &captureProjectionPublisher{}
 	p2 := newTestProjector(cfg, source, sink2, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(readiness2),
-		WithProjectorRepairInterval(-1))
+		WithReadinessTracker(readiness2))
 
 	runCtx2, cancel2 := context.WithCancel(ctx)
 	done2 := make(chan error, 1)

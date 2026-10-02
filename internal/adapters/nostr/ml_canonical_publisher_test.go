@@ -178,7 +178,6 @@ func TestProjectorNoLongerPublishesMLFromEvents(t *testing.T) {
 	p := newTestProjector(projectorTestConfig(), source, sink, repo, zap.NewNop(),
 		WithMLProjectionSource(source),
 		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1),
 		WithIntentDomains([]string{"service"}))
 
 	// Fire ML model changed event — projector should NOT publish ML state.
@@ -212,10 +211,9 @@ func TestProjectorSnapshotNoLongerPublishesML(t *testing.T) {
 	p := newTestProjector(projectorTestConfig(), source, sink, repo, zap.NewNop(),
 		WithMLProjectionSource(source),
 		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1),
 		WithIntentDomains([]string{"service"}))
 
-	// Run the projector briefly to trigger RepublishSnapshot.
+	// Run the projector briefly to trigger system config startup publish.
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- p.Run(runCtx) }()
@@ -223,7 +221,7 @@ func TestProjectorSnapshotNoLongerPublishesML(t *testing.T) {
 	cancel()
 	<-done
 
-	// RepublishSnapshot should NOT publish ML kinds.
+	// The projector startup should NOT publish ML kinds.
 	for _, kind := range []int{
 		KindMLModelRegistry,
 		KindMLModelVersionRegistry,
@@ -234,7 +232,7 @@ func TestProjectorSnapshotNoLongerPublishesML(t *testing.T) {
 	} {
 		records := sink.byKind(kind)
 		if len(records) != 0 {
-			t.Errorf("expected 0 events for legacy kind %d from RepublishSnapshot, got %d", kind, len(records))
+			t.Errorf("expected 0 events for legacy kind %d from projector startup, got %d", kind, len(records))
 		}
 	}
 }
