@@ -441,6 +441,50 @@ func (s *BackupSchedulerService) ready() error {
 	return nil
 }
 
+// NextDueTime returns the earliest next-due schedule time across all enabled
+// definitions, or nil if no schedules are active. Used by BackupSchedulerRunner
+// to compute the next timer interval instead of polling on a fixed ticker.
+func (s *BackupSchedulerService) NextDueTime(ctx context.Context) (*time.Time, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	now := s.clock().UTC()
+	var earliest *time.Time
+	for offset := 0; ; offset += s.pageSize {
+		definitions, err := s.registry.repo.ListBackupDefinitions(ctx, s.pageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(definitions) == 0 {
+			break
+		}
+		for i := range definitions {
+			def := &definitions[i]
+			if !def.ScheduleEnabled || strings.TrimSpace(def.ScheduleExpression) == "" {
+				continue
+			}
+			state, err := s.stateForDefinition(ctx, def.ID)
+			if err != nil {
+				continue
+			}
+			if state.Paused() || state.Disabled() {
+				continue
+			}
+			next, err := s.nextEffectiveRunAfterState(def, state, now)
+			if err != nil || next == nil {
+				continue
+			}
+			if earliest == nil || next.Before(*earliest) {
+				earliest = next
+			}
+		}
+		if len(definitions) < s.pageSize {
+			break
+		}
+	}
+	return earliest, nil
+}
+
 type backupScheduleDue struct {
 	scheduledAt time.Time
 	effectiveAt time.Time

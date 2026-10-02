@@ -37,6 +37,7 @@ type BackupControlPlaneRepository interface {
 	CreateBackupRunIfAbsent(ctx context.Context, run *domain.BackupRun) (*domain.BackupRun, bool, error)
 	ClaimNextQueuedBackupRun(ctx context.Context) (*domain.BackupRun, error)
 	RequeueStaleBackupRuns(ctx context.Context, olderThan time.Duration) (int, error)
+	NextStaleBackupRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
 
 	UpsertBackupRestore(ctx context.Context, restore *domain.BackupRestoreRun) error
@@ -45,6 +46,7 @@ type BackupControlPlaneRepository interface {
 	CreateBackupRestoreIfAbsent(ctx context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error)
 	ClaimNextQueuedBackupRestore(ctx context.Context) (*domain.BackupRestoreRun, error)
 	RequeueStaleBackupRestores(ctx context.Context, olderThan time.Duration) (int, error)
+	NextStaleBackupRestoreDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
 
 	UpsertBackupRetentionRun(ctx context.Context, run *domain.BackupRetentionRun) error
@@ -53,6 +55,7 @@ type BackupControlPlaneRepository interface {
 	CreateBackupRetentionRunIfAbsent(ctx context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error)
 	ClaimNextQueuedBackupRetentionRun(ctx context.Context) (*domain.BackupRetentionRun, error)
 	RequeueStaleBackupRetentionRuns(ctx context.Context, olderThan time.Duration) (int, error)
+	NextStaleBackupRetentionRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 	ListBackupRetentionRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRetentionRun, error)
 
 	UpsertBackupVerification(ctx context.Context, record *domain.BackupVerificationRecord) error

@@ -41,11 +41,12 @@ const (
 // RegisterBackupAliasContextVMHandlers registers encrypted ContextVM method
 // aliases used by the web UI while preserving the canonical backup action
 // strings consumed by the backup control-plane handlers.
-func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, rbac *auth.RBAC, gate *FleetOperatorGate) {
+func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, rbac *auth.RBAC, gate *FleetOperatorGate, intentProcessor *IntentProcessor) {
 	if transport == nil || transport.responder == nil {
 		return
 	}
 	h := backupContextVMHandlers{
+		intentProcessor: intentProcessor,
 		publisher:     transport.responder.publisher,
 		signer:        transport.responder.signer,
 		servicePubkey: normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
@@ -64,11 +65,33 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, 
 }
 
 type backupContextVMHandlers struct {
+	intentProcessor *IntentProcessor
 	publisher     NostrEventPublisher
 	signer        nostr.Signer
 	servicePubkey string
 	authorizer    encryptedTenantAuthorizer
 }
+
+// backupIntentEnabled reports whether the backup domain is routed through
+// the intent processor (Phase 3 dual dispatch).
+func (h backupContextVMHandlers) backupIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("backup") != nil
+}
+
+// backupDualDispatch routes a backup mutation through the intent processor
+// for dual dispatch when the backup domain is enabled.
+func (h backupContextVMHandlers) backupDualDispatch(ctx context.Context, request ContextVMRequest, op string, entityID string, content map[string]any) error {
+	intent := &Intent{
+		Domain:     "backup",
+		Op:         op,
+		IntentID:   effectiveIdempotencyKey(request, entityID),
+		Coordinate: entityID,
+		Content:    content,
+		Actor:      request.Event.PubKey.Hex(),
+	}
+	return h.intentProcessor.ProcessInProcess(ctx, intent)
+}
+
 
 type backupDelegationRecord struct {
 	Version          string `json:"version"`
@@ -131,6 +154,15 @@ func (h backupContextVMHandlers) repositoryRegister(ctx context.Context, request
 	if err != nil {
 		return nil, err
 	}
+	// Phase 3 dual dispatch: route through intent processor when backup domain is enabled.
+	if h.backupIntentEnabled() {
+		entityID := backupStringParam(params, "id", "repository_id")
+		if err := h.backupDualDispatch(ctx, request, "repository-register", entityID, params); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "success", "action": backupActionRepositoryRegister, "repository_id": entityID, "repository": backupStringParam(params, "name", "repository")}, nil
+	}
+	// Legacy path: publish command event to relay for reactor consumption.
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRepositoryRegister,
 		statusKind: KindBackupRunStatus,
@@ -160,6 +192,15 @@ func (h backupContextVMHandlers) policyApply(ctx context.Context, request Contex
 	if err != nil {
 		return nil, err
 	}
+	// Phase 3 dual dispatch.
+	if h.backupIntentEnabled() {
+		entityID := backupStringParam(params, "id", "policy_id")
+		if err := h.backupDualDispatch(ctx, request, "policy-apply", entityID, params); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "success", "action": backupActionPolicyApply, "policy_id": entityID, "policy": backupStringParam(params, "name", "policy")}, nil
+	}
+	// Legacy path.
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupPolicyApply,
 		statusKind: KindBackupRunStatus,
@@ -192,6 +233,15 @@ func (h backupContextVMHandlers) recipeApply(ctx context.Context, request Contex
 	if recipe == "" {
 		recipe = backupRecipeCoordLocal(backupStringParam(params, "name", "recipe_name"), backupStringParam(params, "version", "recipe_version"))
 	}
+	// Phase 3 dual dispatch.
+	if h.backupIntentEnabled() {
+		entityID := backupStringParam(params, "id", "recipe_id")
+		if err := h.backupDualDispatch(ctx, request, "recipe-apply", entityID, params); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "success", "action": backupActionRecipeApply, "recipe_id": entityID, "recipe": recipe}, nil
+	}
+	// Legacy path.
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRecipeApply,
 		statusKind: KindBackupRunStatus,
@@ -226,6 +276,15 @@ func (h backupContextVMHandlers) definitionApply(ctx context.Context, request Co
 	if err != nil {
 		return nil, err
 	}
+	// Phase 3 dual dispatch.
+	if h.backupIntentEnabled() {
+		entityID := backupStringParam(params, "id", "definition_id")
+		if err := h.backupDualDispatch(ctx, request, "definition-apply", entityID, params); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "success", "action": backupActionDefinitionApply, "definition_id": entityID, "definition": backupStringParam(params, "name", "definition")}, nil
+	}
+	// Legacy path.
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupDefinitionApply,
 		statusKind: KindBackupRunStatus,
@@ -259,6 +318,15 @@ func (h backupContextVMHandlers) run(ctx context.Context, request ContextVMReque
 	if err != nil {
 		return nil, err
 	}
+	// Phase 3 dual dispatch.
+	if h.backupIntentEnabled() {
+		entityID := backupStringParam(params, "idempotency_key")
+		if err := h.backupDualDispatch(ctx, request, "run", entityID, params); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "success", "action": backupActionRun, "recipe_id": backupStringParam(params, "recipe_id")}, nil
+	}
+	// Legacy path.
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRunRequest,
 		statusKind: KindBackupRunStatus,

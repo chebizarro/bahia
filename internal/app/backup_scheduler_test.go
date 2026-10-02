@@ -21,6 +21,10 @@ func (m *mockScheduler) ProcessDueSchedules(ctx context.Context) (*service.Backu
 	return m.processFunc(ctx)
 }
 
+func (m *mockScheduler) NextDueTime(_ context.Context) (*time.Time, error) {
+	return nil, nil
+}
+
 func TestBackupSchedulerRunnerName(t *testing.T) {
 	r := NewBackupSchedulerRunner(nil, 0, nil)
 	if got := r.Name(); got != "backup-scheduler" {

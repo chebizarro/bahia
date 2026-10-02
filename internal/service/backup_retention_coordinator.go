@@ -37,6 +37,8 @@ type BackupRetentionCoordinator struct {
 	logger          *zap.Logger
 	config          BackupRetentionCoordinatorConfig
 
+	triggerCh chan struct{}
+
 	runGroup singleflight.Group
 	locksMu  sync.Mutex
 	runLocks map[uuid.UUID]*sync.Mutex
@@ -46,6 +48,7 @@ type BackupRetentionCoordinator struct {
 type BackupRetentionQueueRepository interface {
 	ClaimNextQueuedBackupRetentionRun(ctx context.Context) (*domain.BackupRetentionRun, error)
 	RequeueStaleBackupRetentionRuns(ctx context.Context, olderThan time.Duration) (int, error)
+	NextStaleBackupRetentionRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 }
 
 type BackupRetentionCoordinatorOption func(*BackupRetentionCoordinator)
@@ -85,7 +88,8 @@ func NewBackupRetentionCoordinator(registry *BackupRegistryService, backendResol
 			StaleRunTimeout:      15 * time.Minute,
 			HealthCheckBeforeRun: true,
 		},
-		runLocks: make(map[uuid.UUID]*sync.Mutex),
+		runLocks:  make(map[uuid.UUID]*sync.Mutex),
+		triggerCh: make(chan struct{}, 1),
 	}
 	if registry != nil && registry.repo != nil {
 		if queue, ok := registry.repo.(BackupRetentionQueueRepository); ok {
@@ -100,22 +104,76 @@ func NewBackupRetentionCoordinator(registry *BackupRegistryService, backendResol
 
 func (c *BackupRetentionCoordinator) Name() string { return "backup-retention-recovery" }
 
-// Run performs durable retention worker recovery. It does not poll for Nostr messages.
+// Run performs durable retention worker recovery. Event-driven: wakes on the
+// trigger channel or when the stale-recovery timer fires. Phase 3 B1 replaces
+// the fixed 30s polling ticker.
 func (c *BackupRetentionCoordinator) Run(ctx context.Context) error {
 	if c == nil || c.registry == nil || c.queue == nil {
 		return nil
 	}
 	c.runRecoveryOnce(ctx)
-	ticker := time.NewTicker(c.config.RecoveryPollInterval)
-	defer ticker.Stop()
+	//nostr:allow-poll stale-lease recovery timer fires at computed stale-lease deadline
+	timer := time.NewTimer(c.nextStaleInterval(ctx))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-c.triggerCh:
 			c.runRecoveryOnce(ctx)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(c.nextStaleInterval(ctx))
+		case <-timer.C:
+			c.runRecoveryOnce(ctx)
+			timer.Reset(c.nextStaleInterval(ctx))
 		}
 	}
+}
+
+// Trigger wakes the coordinator to process new work without waiting for the
+// stale-recovery timer. Called by the registry notifier hook.
+func (c *BackupRetentionCoordinator) Trigger() {
+	select {
+	case c.triggerCh <- struct{}{}:
+	default:
+	}
+}
+
+// nextStaleInterval computes how long to wait before the next stale-lease
+// recovery check. New and requeued work wakes the coordinator through
+// Trigger() (registry notify hook), so the timer is only a backstop for
+// leases that stop heartbeating: it fires at the earliest running lease's
+// stale deadline, or after StaleRunTimeout when nothing is in flight. A
+// deadline lookup error retries after RecoveryPollInterval.
+func (c *BackupRetentionCoordinator) nextStaleInterval(ctx context.Context) time.Duration {
+	ceiling := c.config.StaleRunTimeout
+	if ceiling <= 0 {
+		ceiling = c.config.RecoveryPollInterval
+	}
+	if c.queue == nil {
+		return ceiling
+	}
+	deadline, err := c.queue.NextStaleBackupRetentionRunDeadline(ctx, c.config.StaleRunTimeout)
+	if err != nil {
+		c.logger.Warn("backup stale-lease deadline lookup failed", zap.Error(err))
+		return c.config.RecoveryPollInterval
+	}
+	if deadline == nil {
+		return ceiling
+	}
+	d := time.Until(*deadline)
+	if d <= 0 {
+		return time.Second // already stale, recover promptly
+	}
+	if d > ceiling {
+		return ceiling
+	}
+	return d
 }
 
 func (c *BackupRetentionCoordinator) runRecoveryOnce(ctx context.Context) {

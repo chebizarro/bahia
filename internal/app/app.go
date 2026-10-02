@@ -99,12 +99,11 @@ type App struct {
 	reloadMu                  sync.Mutex
 
 	// Phase 3 intent framework (F1).
-	TrustSet          *controlplane.TrustSet
-	IntentProcessor   *controlplane.IntentProcessor
-	IntentReadiness   *controlplane.ReadinessTracker
-	IntentSubscriber  *controlplane.IntentSubscriber
+	TrustSet            *controlplane.TrustSet
+	IntentProcessor     *controlplane.IntentProcessor
+	IntentReadiness     *controlplane.ReadinessTracker
+	IntentSubscriber    *controlplane.IntentSubscriber
 	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
-
 }
 
 var (
@@ -907,7 +906,8 @@ func New(cfg *config.Config) (*App, error) {
 	backupScheduler := service.NewBackupSchedulerService(backupRegistry, logger,
 		service.WithBackupSchedulerIdentity(servicePubkey),
 	)
-	bgManager.RegisterWithOptions(NewBackupSchedulerRunner(backupScheduler, 0, logger), RunnerTier(Tier3))
+	backupSchedulerRunner := NewBackupSchedulerRunner(backupScheduler, 0, logger)
+	bgManager.RegisterWithOptions(backupSchedulerRunner, RunnerTier(Tier3))
 	healthProvider.RegisterCheck("backup_scheduler", int(Tier3), func() HealthCheck {
 		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered", Tier: int(Tier3)}
 	})
@@ -1024,10 +1024,10 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			if len(agentPubkeys) > 0 {
 				bgManager.RegisterWithOptions(&agentHealthSubscriber{
-					pool:     controlPlanePool,
-					pubkeys:  agentPubkeys,
-					reader:   dnsAgentHealthReader,
-					logger:   logger,
+					pool:    controlPlanePool,
+					pubkeys: agentPubkeys,
+					reader:  dnsAgentHealthReader,
+					logger:  logger,
 				}, RunnerTier(Tier3))
 				logger.Info("DNS agent health subscriber registered", zap.Int("agents", len(agentPubkeys)))
 			}
@@ -1056,7 +1056,8 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		nostrAdapter.WithBackupProjectionSource(backupRegistry),
+		// Phase 3 B1: WithBackupProjectionSource removed. Canonical records
+		// are now published by BackupCanonicalPublisher wired to the registry.
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		// Phase 3 W1: WithWorkerReadModelProjectionSource removed — worker read
@@ -1083,6 +1084,7 @@ func New(cfg *config.Config) (*App, error) {
 	// RepublishSnapshot guards skip migrated domain legs.
 	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
 		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
+		"backup", // B1: authority inversion (bahia-irsry.11.11)
 	)
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
@@ -1153,6 +1155,42 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
+
+	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
+	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
+	// a *Projector reference and publishes through the shared signing/outbox
+	// pipeline. The cpStateFamilies table is the single envelope source.
+	backupCanonical := nostrAdapter.NewBackupCanonicalPublisher(nostrProjector, logger)
+	backupCanonical.SetRunVerifier(backupRegistry)
+	backupCanonical.SetRuntimeObservationSource(backupRegistry)
+	backupRegistry.SetCanonicalPublisher(backupCanonical)
+	// Notifier hook: wire Trigger() on coordinators after every registry
+	// mutation so coordinators wake immediately on new/requeued work.
+	backupRegistry.SetNotifyHook(func() {
+		backupCoordinator.Trigger()
+		backupRestoreCoordinator.Trigger()
+		backupRetentionCoordinator.Trigger()
+		backupSchedulerRunner.Trigger()
+	})
+	// Register the intent handler when the backup domain is enabled.
+	if enabledDomains["backup"] && backupRegistry != nil {
+		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
+			controlplane.BackupIntentHandlerConfig{
+				Registry:    backupRegistry,
+				Definitions: backupRegistry,
+				Publisher:   backupCanonical,
+				Executors: controlplane.BackupIntentExecutors{
+					RunExecutor:       backupCoordinator,
+					RestoreExecutor:   backupRestoreCoordinator,
+					RetentionExecutor: backupRetentionCoordinator,
+				},
+				Status: intentStatus,
+				Logger: logger,
+			},
+		))
+		logger.Info("backup intent handler registered")
+	}
+	// --- end B1 wiring ---
 
 	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
 	// each material reconcile so DNS records publish once per mutation instead
@@ -1282,7 +1320,7 @@ func New(cfg *config.Config) (*App, error) {
 			if deleted {
 				deletedStr = "true"
 			}
-				tags := nostr.Tags{
+			tags := nostr.Tags{
 				{"d", route.ID.String()},
 				{"domain", "llm-route"},
 				{"schema", "bahia.cp-state.v1"},
@@ -1290,7 +1328,7 @@ func New(cfg *config.Config) (*App, error) {
 				{"deleted", deletedStr},
 				{"t", kinds.CPStateTopicLLMRoute},
 			}
-				tags = append(tags, recordTags...)
+			tags = append(tags, recordTags...)
 			ev := nostr.Event{
 				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
 				CreatedAt: createdAt,
@@ -1352,7 +1390,7 @@ func New(cfg *config.Config) (*App, error) {
 			llmStatePubMu.Unlock()
 			recordTags, recordContent := controlplane.LLMRouteStateRecord(state)
 			dTag := controlplane.LLMRouteStateDTag(state.RouteID, state.EnvironmentID)
-				tags := nostr.Tags{
+			tags := nostr.Tags{
 				{"d", dTag},
 				{"domain", "llm-state"},
 				{"schema", "bahia.cp-state.v1"},
@@ -1360,7 +1398,7 @@ func New(cfg *config.Config) (*App, error) {
 				{"deleted", "false"},
 				{"t", kinds.CPStateTopicLLMState},
 			}
-				tags = append(tags, recordTags...)
+			tags = append(tags, recordTags...)
 			ev := nostr.Event{
 				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
 				CreatedAt: nostr.Now(),
@@ -2089,7 +2127,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
@@ -3658,7 +3696,6 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 	succeeded = true
 	return zones, resolver, closers, nil
 }
-
 
 // agentHealthSubscriber is a BackgroundRunner that subscribes to NIP-38 kind
 // 30315 health status events from DNS agents, feeding them to the

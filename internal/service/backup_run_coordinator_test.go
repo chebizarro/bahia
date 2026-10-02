@@ -455,6 +455,10 @@ func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRun(_ context.
 	cp := *run
 	return &cp, nil
 }
+func (r *memoryBackupControlPlaneRepository) NextStaleBackupRunDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
 func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRuns(context.Context, time.Duration) (int, error) {
 	return 0, nil
 }
@@ -529,6 +533,10 @@ func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRestore(_ cont
 	cp := *restore
 	return &cp, nil
 }
+func (r *memoryBackupControlPlaneRepository) NextStaleBackupRestoreDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
 func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRestores(_ context.Context, olderThan time.Duration) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -639,6 +647,10 @@ func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRetentionRun(_
 	cp := *run
 	return &cp, nil
 }
+func (r *memoryBackupControlPlaneRepository) NextStaleBackupRetentionRunDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
 func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRetentionRuns(_ context.Context, olderThan time.Duration) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

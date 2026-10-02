@@ -452,6 +452,18 @@ func (r *fakeBackupRepo) GetBackupVerificationByRunID(_ context.Context, runID u
 	return r.verifications[id], nil
 }
 
+func (r *fakeBackupRepo) NextStaleBackupRunDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
+func (r *fakeBackupRepo) NextStaleBackupRestoreDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
+func (r *fakeBackupRepo) NextStaleBackupRetentionRunDeadline(_ context.Context, _ time.Duration) (*time.Time, error) {
+	return nil, nil
+}
+
 func coordinate(pubkey string, kind int, dTag string) string {
 	return fmt.Sprintf("%s:%d:%s", pubkey, kind, dTag)
 }

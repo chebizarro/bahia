@@ -447,6 +447,18 @@ func (r *PgBackupControlPlaneRepository) RequeueStaleBackupRuns(ctx context.Cont
 	return int(cmd.RowsAffected()), nil
 }
 
+// NextStaleBackupRunDeadline returns when the oldest running backup run will
+// become stale, or nil if no runs are in progress.
+func (r *PgBackupControlPlaneRepository) NextStaleBackupRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error) {
+	var oldest *time.Time
+	err := r.pool.QueryRow(ctx, `SELECT MIN(updated_at) FROM backup_runs WHERE status = 'running'`).Scan(&oldest)
+	if err != nil || oldest == nil {
+		return nil, err
+	}
+	deadline := oldest.Add(staleTimeout)
+	return &deadline, nil
+}
+
 func (r *PgBackupControlPlaneRepository) ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error) {
 	limit, offset = backupLimitOffset(limit, offset)
 	query := `SELECT ` + backupRunColumns + ` FROM backup_runs ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2`
@@ -608,6 +620,18 @@ func (r *PgBackupControlPlaneRepository) RequeueStaleBackupRestores(ctx context.
 	return int(cmd.RowsAffected()), nil
 }
 
+// NextStaleBackupRestoreDeadline returns when the oldest running restore will
+// become stale, or nil if none are in progress.
+func (r *PgBackupControlPlaneRepository) NextStaleBackupRestoreDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error) {
+	var oldest *time.Time
+	err := r.pool.QueryRow(ctx, `SELECT MIN(updated_at) FROM backup_restore_runs WHERE status = 'running'`).Scan(&oldest)
+	if err != nil || oldest == nil {
+		return nil, err
+	}
+	deadline := oldest.Add(staleTimeout)
+	return &deadline, nil
+}
+
 func (r *PgBackupControlPlaneRepository) ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error) {
 	limit, offset = backupLimitOffset(limit, offset)
 	query := `SELECT ` + backupRestoreColumns + ` FROM backup_restores ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2`
@@ -747,6 +771,18 @@ func (r *PgBackupControlPlaneRepository) RequeueStaleBackupRetentionRuns(ctx con
 		return 0, fmt.Errorf("requeueing stale backup retention runs: %w", err)
 	}
 	return int(cmd.RowsAffected()), nil
+}
+
+// NextStaleBackupRetentionRunDeadline returns when the oldest running retention
+// run will become stale, or nil if none are in progress.
+func (r *PgBackupControlPlaneRepository) NextStaleBackupRetentionRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error) {
+	var oldest *time.Time
+	err := r.pool.QueryRow(ctx, `SELECT MIN(updated_at) FROM backup_retention_runs WHERE status = 'running'`).Scan(&oldest)
+	if err != nil || oldest == nil {
+		return nil, err
+	}
+	deadline := oldest.Add(staleTimeout)
+	return &deadline, nil
 }
 
 func (r *PgBackupControlPlaneRepository) ListBackupRetentionRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRetentionRun, error) {
