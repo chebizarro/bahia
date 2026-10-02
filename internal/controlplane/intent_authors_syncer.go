@@ -12,12 +12,15 @@ import (
 
 // IntentAuthorsSyncer keeps Bahia sidecar relays informed of which pubkeys may
 // write intent events (kind 30900 + t=bahia-intent). On startup and whenever
-// the TrustSet's principal set changes, the syncer pushes the current set to
-// each configured sidecar target via the NIP-86 setintentauthors method.
+// the TrustSet's principal set changes or Postgres membership mutates, the
+// syncer pushes the current set to each configured sidecar target via the
+// NIP-86 setintentauthors method.
 //
 // The push is idempotent: if the set has not changed since the last successful
-// push to a target, it is skipped. On failure, retries use exponential backoff
-// (1s → 2s → 4s → … capped at 30s) until the context is cancelled.
+// push to a target, it is skipped. On failure, retries use capped exponential
+// backoff (1s → 2s → 4s → … capped at 60s) indefinitely until the context is
+// cancelled. Warn-level logs and the SyncStatus() health detail expose stale
+// state.
 //
 // Only Bahia-owned sidecar targets receive the push. The syncer never pushes to
 // third-party relays.
@@ -33,11 +36,18 @@ type IntentAuthorsSyncer struct {
 
 	mu       sync.Mutex
 	lastPush map[string]string // targetRef → sorted pubkeys fingerprint
+	outOfSync bool              // true when at least one target failed
+
+	// pgPubkeys tracks pubkeys discovered through Postgres org membership
+	// mutations. These are merged with TrustSet.AuthorPubkeys() when pushing
+	// to sidecars, closing the gap that Postgres members are not enumerable
+	// through the TrustSet alone.
+	pgMu      sync.RWMutex
+	pgPubkeys map[string]bool
 }
 
 // IntentAuthorsAdmin is the narrow interface the syncer needs from the NIP-86
-// relay administration client. Both SetIntentAuthors (convenience) and the raw
-// Call method are available; the syncer uses SetIntentAuthors.
+// relay administration client.
 type IntentAuthorsAdmin interface {
 	SetIntentAuthors(ctx context.Context, targetRef string, pubkeys []string) error
 }
@@ -60,6 +70,7 @@ func NewIntentAuthorsSyncer(cfg IntentAuthorsSyncerConfig) *IntentAuthorsSyncer 
 		logger:     cfg.Logger.Named("intent-authors-syncer"),
 		notifyCh:   make(chan struct{}, 1),
 		lastPush:   make(map[string]string),
+		pgPubkeys:  make(map[string]bool),
 	}
 }
 
@@ -73,6 +84,47 @@ func (s *IntentAuthorsSyncer) Notify() {
 	case s.notifyCh <- struct{}{}:
 	default:
 	}
+}
+
+// TrackPubkey adds a pubkey discovered through a Postgres org membership
+// mutation and triggers a re-sync.
+func (s *IntentAuthorsSyncer) TrackPubkey(pubkey string) {
+	if pubkey == "" {
+		return
+	}
+	s.pgMu.Lock()
+	s.pgPubkeys[strings.ToLower(pubkey)] = true
+	s.pgMu.Unlock()
+	s.Notify()
+}
+
+// UntrackPubkey removes a pubkey after a Postgres org membership removal and
+// triggers a re-sync.
+func (s *IntentAuthorsSyncer) UntrackPubkey(pubkey string) {
+	if pubkey == "" {
+		return
+	}
+	s.pgMu.Lock()
+	delete(s.pgPubkeys, strings.ToLower(pubkey))
+	s.pgMu.Unlock()
+	s.Notify()
+}
+
+// SyncStatus returns a health detail snapshot. OutOfSync is true when at least
+// one target has not received the latest push.
+func (s *IntentAuthorsSyncer) SyncStatus() IntentAuthorsSyncStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return IntentAuthorsSyncStatus{
+		OutOfSync:  s.outOfSync,
+		TargetRefs: append([]string(nil), s.targetRefs...),
+	}
+}
+
+// IntentAuthorsSyncStatus is exposed via the health provider.
+type IntentAuthorsSyncStatus struct {
+	OutOfSync  bool
+	TargetRefs []string
 }
 
 // Run performs the initial push, then blocks listening for change notifications
@@ -91,9 +143,20 @@ func (s *IntentAuthorsSyncer) Run(ctx context.Context) error {
 
 func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 	pubkeys := s.trustSet.AuthorPubkeys()
+
+	// Merge in Postgres-sourced pubkeys.
+	s.pgMu.RLock()
+	for pk := range s.pgPubkeys {
+		pubkeys = append(pubkeys, pk)
+	}
+	s.pgMu.RUnlock()
+
+	// Deduplicate and sort.
 	sort.Strings(pubkeys)
+	pubkeys = compactStrings(pubkeys)
 	fingerprint := strings.Join(pubkeys, ",")
 
+	anyFailed := false
 	for _, ref := range s.targetRefs {
 		if ctx.Err() != nil {
 			return
@@ -111,6 +174,7 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 				zap.String("target", ref),
 				zap.Error(err),
 			)
+			anyFailed = true
 			continue
 		}
 
@@ -123,14 +187,17 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 			zap.Int("pubkey_count", len(pubkeys)),
 		)
 	}
+
+	s.mu.Lock()
+	s.outOfSync = anyFailed
+	s.mu.Unlock()
 }
 
 func (s *IntentAuthorsSyncer) pushWithRetry(ctx context.Context, targetRef string, pubkeys []string) error {
-	const maxBackoff = 30 * time.Second
+	const maxBackoff = 60 * time.Second
 	backoff := 1 * time.Second
-	var lastErr error
 
-	for attempt := 0; attempt < 10; attempt++ {
+	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -138,17 +205,24 @@ func (s *IntentAuthorsSyncer) pushWithRetry(ctx context.Context, targetRef strin
 		if err == nil {
 			return nil
 		}
-		lastErr = err
-		s.logger.Warn("setintentauthors attempt failed, will retry",
+		s.logger.Warn("setintentauthors attempt failed, retrying",
 			zap.String("target", targetRef),
-			zap.Int("attempt", attempt+1),
 			zap.Duration("backoff", backoff),
 			zap.Error(err),
 		)
 
+		s.mu.Lock()
+		s.outOfSync = true
+		s.mu.Unlock()
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-s.notifyCh:
+			// A new notification arrived while retrying. We're already in a push
+			// for this target, so absorb the notification and continue retrying.
+			// The next push() call (from Run's select loop) will pick up any new
+			// fingerprint changes.
 		case <-time.After(backoff):
 		}
 
@@ -157,5 +231,19 @@ func (s *IntentAuthorsSyncer) pushWithRetry(ctx context.Context, targetRef strin
 			backoff = maxBackoff
 		}
 	}
-	return lastErr
+}
+
+// compactStrings removes adjacent duplicates from a sorted slice.
+func compactStrings(s []string) []string {
+	if len(s) < 2 {
+		return s
+	}
+	j := 0
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[j] {
+			j++
+			s[j] = s[i]
+		}
+	}
+	return s[:j+1]
 }

@@ -809,6 +809,18 @@ func New(cfg *config.Config) (*App, error) {
 		intentAuthorsSyncer = buildIntentAuthorsSyncer(ctx, cfg, trustSet, secretRepo, secretEncryptor, logger)
 		if intentAuthorsSyncer != nil {
 			bgManager.RegisterWithOptions(intentAuthorsSyncer, RunnerTier(Tier2), RunnerRequired(false))
+			healthProvider.RegisterCheck("intent_authors_sync", int(Tier2), func() HealthCheck {
+				status := HealthStatusPass
+				if intentAuthorsSyncer.SyncStatus().OutOfSync {
+					status = HealthStatusWarn
+				}
+				return HealthCheck{Name: "intent_authors_sync", Status: status, Tier: int(Tier2)}
+			})
+			// Wrap the org member repo so Postgres membership mutations
+			// propagate to the sidecar's intent authors set in real time.
+			if orgMemberRepo != nil {
+				orgMemberRepo = controlplane.NewNotifyingOrgMemberRepository(orgMemberRepo, intentAuthorsSyncer)
+			}
 		}
 	}
 
