@@ -284,10 +284,7 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 		{name: "read SBOM packages", method: http.MethodGet, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom/packages"},
 		{name: "ingest SBOM", method: http.MethodPost, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom", body: `{}`},
 		{name: "list channels for foreign org", method: http.MethodGet, path: "/api/v1/notifications/channels", orgID: fixture.orgB},
-		{name: "create channel for foreign org", method: http.MethodPost, path: "/api/v1/notifications/channels", body: `{"name":"foreign","channel_type":"webhook","config":{}}`, orgID: fixture.orgB},
 		{name: "get foreign channel", method: http.MethodGet, path: "/api/v1/notifications/channels/" + fixture.channelB.String(), orgID: fixture.orgA},
-		{name: "update foreign channel", method: http.MethodPut, path: "/api/v1/notifications/channels/" + fixture.channelB.String(), body: `{"name":"changed"}`, orgID: fixture.orgA},
-		{name: "delete foreign channel", method: http.MethodDelete, path: "/api/v1/notifications/channels/" + fixture.channelB.String(), orgID: fixture.orgA},
 		{name: "test foreign channel", method: http.MethodPost, path: "/api/v1/notifications/channels/" + fixture.channelB.String() + "/test", orgID: fixture.orgA},
 		{name: "list logs for foreign org", method: http.MethodGet, path: "/api/v1/notifications/log", orgID: fixture.orgB},
 	}

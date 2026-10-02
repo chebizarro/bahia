@@ -469,9 +469,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindBackupRestoreState:            {"backup", "restore", kinds.CPStateTopicBackupRestore},
 	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
 	// Org cp-state families (Phase 3 Wave 5 O1).
-	KindOrgRegistry:       {"org", "registry", kinds.CPStateTopicOrgRegistry},
-	KindOrgMemberRegistry: {"org", "member", kinds.CPStateTopicOrgMemberRegistry},
-	KindOrgInviteRegistry: {"org", "invite", kinds.CPStateTopicOrgInviteRegistry},
+	KindOrgRegistry:                 {"org", "registry", kinds.CPStateTopicOrgRegistry},
+	KindOrgMemberRegistry:           {"org", "member", kinds.CPStateTopicOrgMemberRegistry},
+	KindOrgInviteRegistry:           {"org", "invite", kinds.CPStateTopicOrgInviteRegistry},
+	KindSecretRegistry:              {"secret", "registry", kinds.CPStateTopicSecretRegistry},
+	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

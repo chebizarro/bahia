@@ -1861,6 +1861,51 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
+	// --- Phase 3 N1: Secret and notification intent handlers ---
+	// Sensitive domains whose intents arrive as NIP-59 gift wraps (kind 1059)
+	// through the shared gift-wrapped intent ingress built by O1. The
+	// orchestrator will connect these to O1's ingress at integration.
+	// N1 sensitive domains: "secret", "notification"
+	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
+	// holds a *Projector reference and publishes through the shared signing/outbox
+	// pipeline. Secret values are NEVER included in published events.
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, logger)
+
+	// Register the secret intent handler when the secret domain is enabled.
+	if enabledDomains["secret"] && secretRepo != nil {
+		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(
+			controlplane.SecretIntentHandlerConfig{
+				Registry:  secretRepo,
+				Encryptor: secretEncryptor,
+				Publisher: secretCanonical,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("secret intent handler registered")
+	}
+
+	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
+	// secrets, credentials) from published content.
+	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, logger)
+
+	// Register the notification intent handler when the notification domain is
+	// enabled. The dispatcher's OnChannelChanged method is the event-driven
+	// notifier that replaces DB polling (Phase 3 N1).
+	if enabledDomains["notification"] && notifRepo != nil {
+		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
+			controlplane.NotificationIntentHandlerConfig{
+				Registry:  notifRepo,
+				Publisher: notifCanonical,
+				Notifier:  notifDispatcher,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("notification intent handler registered")
+	}
+	// --- end N1 wiring ---
+
 	// Tool provisioning orchestration.
 	var toolCoordinator *service.ToolProvisioningCoordinator
 	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
@@ -2189,6 +2234,10 @@ func New(cfg *config.Config) (*App, error) {
 			IntentProcessor: intentProcessor,
 			Secrets:         secretRepo,
 			Encryptor:       secretEncryptor,
+			SecretPublisher: secretCanonical,
+			NotifRepo:       notifRepo,
+			NotifPublisher:  notifCanonical,
+			NotifNotifier:   notifDispatcher,
 			Runs:            runRepo,
 			RunLogs:         runLogService,
 			Artifacts:       artifactRepo,

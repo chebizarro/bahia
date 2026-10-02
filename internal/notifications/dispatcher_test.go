@@ -676,3 +676,103 @@ func dispatchTestNotification(t *testing.T, d *Dispatcher, ctx context.Context, 
 		t.Fatalf("dispatch notification: %v", err)
 	}
 }
+
+// TestDispatcher_HydrationFailureRetries verifies that a failed cache
+// hydration does NOT mark the cache as hydrated, so the next dispatch
+// retries the DB load instead of operating with an empty cache forever.
+func TestDispatcher_HydrationFailureRetries(t *testing.T) {
+	repo := &mockNotificationRepo{listChannelsErr: fmt.Errorf("db down")}
+	sender := &mockSender{}
+	d := NewDispatcher(repo, zap.NewNop())
+	d.RegisterSender(domain.ChannelTypeWebhook, sender)
+
+	// First dispatch: hydration fails, silently dropped.
+	err := d.Dispatch(context.Background(), "test.event", map[string]any{"msg": "first"})
+	if err != nil {
+		t.Fatalf("expected no error on hydration failure dispatch, got: %v", err)
+	}
+	// Sender should not have been called.
+	sender.mu.Lock()
+	firstSent := len(sender.sent)
+	sender.mu.Unlock()
+	if firstSent != 0 {
+		t.Fatalf("expected 0 sent on hydration failure, got %d", firstSent)
+	}
+
+	// Fix the DB, add a channel.
+	repo.mu.Lock()
+	repo.listChannelsErr = nil
+	repo.channels = append(repo.channels, domain.NotificationChannel{
+		ID:          uuid.New(),
+		Name:        "test-hook",
+		ChannelType: domain.ChannelTypeWebhook,
+		Enabled:     true,
+		EventFilter: map[string]any{"event_types": []any{"test.event"}},
+	})
+	repo.mu.Unlock()
+
+	// Second dispatch: should retry hydration, succeed, and deliver.
+	err = d.Dispatch(context.Background(), "test.event", map[string]any{"msg": "second"})
+	if err != nil {
+		t.Fatalf("expected no error on retry dispatch, got: %v", err)
+	}
+	sender.mu.Lock()
+	secondSent := len(sender.sent)
+	sender.mu.Unlock()
+	if secondSent != 1 {
+		t.Fatalf("expected 1 sent after retry hydration, got %d", secondSent)
+	}
+}
+
+// TestDispatcher_OnChannelChangedUpdatesCache verifies that OnChannelChanged
+// (called from any mutation path) updates the in-memory cache so subsequent
+// dispatches see the change.
+func TestDispatcher_OnChannelChangedUpdatesCache(t *testing.T) {
+	repo := &mockNotificationRepo{}
+	sender := &mockSender{}
+	d := NewDispatcher(repo, zap.NewNop())
+	d.RegisterSender(domain.ChannelTypeWebhook, sender)
+
+	// Add a channel via OnChannelChanged (simulating legacy or intent path).
+	chID := uuid.New()
+	ch := &domain.NotificationChannel{
+		ID:          chID,
+		Name:        "added-via-notifier",
+		ChannelType: domain.ChannelTypeWebhook,
+		Enabled:     true,
+		EventFilter: map[string]any{"event_types": []any{"deploy.completed"}},
+	}
+	d.OnChannelChanged(ch, false)
+
+	// Force cache as hydrated so dispatch doesn't go to DB.
+	d.channelMu.Lock()
+	d.cacheHydrated = true
+	d.channelMu.Unlock()
+
+	// Dispatch should find the channel from cache.
+	err := d.Dispatch(context.Background(), "deploy.completed", map[string]any{"msg": "notify"})
+	if err != nil {
+		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+	sender.mu.Lock()
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if sentCount != 1 {
+		t.Fatalf("expected 1 sent, got %d", sentCount)
+	}
+
+	// Delete via OnChannelChanged.
+	d.OnChannelChanged(ch, true)
+
+	// Dispatch again — channel gone from cache, nothing sent.
+	err = d.Dispatch(context.Background(), "deploy.completed", map[string]any{"msg": "notify2"})
+	if err != nil {
+		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+	sender.mu.Lock()
+	sentCount2 := len(sender.sent)
+	sender.mu.Unlock()
+	if sentCount2 != 1 {
+		t.Fatalf("expected still 1 sent after delete, got %d", sentCount2)
+	}
+}
