@@ -453,4 +453,3 @@ func TestSecretIntentHandler_PermissionIsWriteSecrets(t *testing.T) {
 		t.Errorf("expected PermWriteSecrets for delete, got %v", perm2)
 	}
 }
-
