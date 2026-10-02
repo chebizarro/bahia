@@ -26,9 +26,9 @@ type UsageLedgerQuery interface {
 }
 
 type BudgetPolicyService struct {
-	policies  BudgetPolicyRepository
-	ledger    UsageLedgerQuery
-	clock     func() time.Time
+	policies BudgetPolicyRepository
+	ledger   UsageLedgerQuery
+	clock    func() time.Time
 }
 
 func NewBudgetPolicyService(policies BudgetPolicyRepository, ledger UsageLedgerQuery) *BudgetPolicyService {

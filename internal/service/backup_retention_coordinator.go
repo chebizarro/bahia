@@ -145,21 +145,35 @@ func (c *BackupRetentionCoordinator) Trigger() {
 }
 
 // nextStaleInterval computes how long to wait before the next stale-lease
-// recovery check using the genuine stale-lease deadline.
+// recovery check. New and requeued work wakes the coordinator through
+// Trigger() (registry notify hook), so the timer is only a backstop for
+// leases that stop heartbeating: it fires at the earliest running lease's
+// stale deadline, or after StaleRunTimeout when nothing is in flight. A
+// deadline lookup error retries after RecoveryPollInterval.
 func (c *BackupRetentionCoordinator) nextStaleInterval(ctx context.Context) time.Duration {
-	if c.queue != nil {
-		deadline, err := c.queue.NextStaleBackupRetentionRunDeadline(ctx, c.config.StaleRunTimeout)
-		if err == nil && deadline != nil {
-			d := time.Until(*deadline)
-			if d <= 0 {
-				return time.Second
-			}
-			if d < c.config.RecoveryPollInterval {
-				return d
-			}
-		}
+	ceiling := c.config.StaleRunTimeout
+	if ceiling <= 0 {
+		ceiling = c.config.RecoveryPollInterval
 	}
-	return c.config.RecoveryPollInterval
+	if c.queue == nil {
+		return ceiling
+	}
+	deadline, err := c.queue.NextStaleBackupRetentionRunDeadline(ctx, c.config.StaleRunTimeout)
+	if err != nil {
+		c.logger.Warn("backup stale-lease deadline lookup failed", zap.Error(err))
+		return c.config.RecoveryPollInterval
+	}
+	if deadline == nil {
+		return ceiling
+	}
+	d := time.Until(*deadline)
+	if d <= 0 {
+		return time.Second // already stale, recover promptly
+	}
+	if d > ceiling {
+		return ceiling
+	}
+	return d
 }
 
 func (c *BackupRetentionCoordinator) runRecoveryOnce(ctx context.Context) {

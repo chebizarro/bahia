@@ -108,7 +108,6 @@ func (s *MLRegistryService) ListModels(ctx context.Context, task domain.MLTaskKi
 	return s.repo.ListModels(ctx, task, limit, offset)
 }
 
-
 func (s *MLRegistryService) CreateOrUpdateModelVersion(ctx context.Context, version *domain.MLModelVersion) error {
 	if err := domain.ValidateMLModelVersion(version); err != nil {
 		return err
