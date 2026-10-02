@@ -19,7 +19,7 @@ func TestRelayProjectionCacheDecodesLegacyAndClientMintedServiceCoordinates(t *t
 	ctx := context.Background()
 	repo := &entityIDServiceRepo{services: map[uuid.UUID]domain.Service{}}
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Services: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Services: repo})
 
 	legacy := uuid.MustParse("3f2504e0-4f89-41d3-9a0c-0305e82c3301")
 	client := domain.NewEntityID()

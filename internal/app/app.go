@@ -679,7 +679,7 @@ func New(cfg *config.Config) (*App, error) {
 	if dbAvailable {
 		projectionMetaRepo := newInMemoryProjectionMetaRepo()
 		projectionCache := service.NewRelayProjectionCache(projectionMetaRepo, logger)
-		projectionCache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{
+		projectionCache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{
 			Workers:      workerRepo,
 			Services:     serviceRepo,
 			Environments: envRepo,

@@ -95,7 +95,7 @@ type ProjectionCacheRepositories struct {
 	Policies     repository.DeploymentPolicyRepository
 }
 
-func (c *RelayProjectionCache) RegisterTier1Tier2Appliers(repos ProjectionCacheRepositories) {
+func (c *RelayProjectionCache) RegisterProjectionAppliers(repos ProjectionCacheRepositories) {
 	if repos.Workers != nil {
 		c.RegisterApplier("worker", workerApplier(repos.Workers))
 		c.RegisterApplier("continuity", continuityApplier(repos.Workers))

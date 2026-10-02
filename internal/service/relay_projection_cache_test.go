@@ -161,7 +161,7 @@ func TestRelayProjectionCacheApplyNoRegisteredApplierStoresMetaOnly(t *testing.T
 func TestRelayProjectionCacheStandbyDefinitionProjectsArtifactRefs(t *testing.T) {
 	workerRepo := newStandbyProjectionWorkerRepo(&domain.Worker{PubKey: "worker-a", Status: domain.WorkerStatusOnline})
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: workerRepo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: workerRepo})
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 
 	requireApply(t, cache, standbyProjectionEvent("standby-node:worker-a:svc-hot", now, "evt-hot", nostr.StandbyNodeDefinition{
@@ -197,7 +197,7 @@ func TestRelayProjectionCacheStandbyDefinitionProjectsArtifactRefs(t *testing.T)
 func TestRelayProjectionCacheStandbyDefinitionColdWithoutArtifactProjectsEmptyRef(t *testing.T) {
 	workerRepo := newStandbyProjectionWorkerRepo(&domain.Worker{PubKey: "worker-a", Status: domain.WorkerStatusOnline})
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: workerRepo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: workerRepo})
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 
 	requireApply(t, cache, standbyProjectionEvent("standby-node:worker-a:svc-cold", now, "evt-cold", nostr.StandbyNodeDefinition{

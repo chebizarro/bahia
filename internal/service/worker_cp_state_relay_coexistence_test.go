@@ -169,7 +169,7 @@ func TestWorkerCPStateFamiliesCoexistOnRelay(t *testing.T) {
 	meta := newRelayProjectionMetaMemoryRepo()
 	repo := newStandbyProjectionWorkerRepo()
 	cache := service.NewRelayProjectionCache(meta, zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: repo})
 	for _, ev := range relay.retained() {
 		requireApply(t, cache, decodeWorkerCPState(t, ev))
 	}

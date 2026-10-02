@@ -106,7 +106,7 @@ func TestWorkerCPStateLiveRecordReplaysLosslesslyIntoWorkerRepository(t *testing
 	}
 	repo := newStandbyProjectionWorkerRepo()
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: repo})
 	requireApply(t, cache, decoded)
 
 	got := repo.workers[worker.PubKey]
@@ -124,7 +124,7 @@ func TestWorkerCPStateTombstoneMarksWorkerOffline(t *testing.T) {
 
 	repo := newStandbyProjectionWorkerRepo()
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: repo})
 	requireApply(t, cache, decodeWorkerCPState(t, live))
 
 	decoded := decodeWorkerCPState(t, dead)
@@ -148,7 +148,7 @@ func TestWorkerCPStateStaleRecordDoesNotOverwriteNewer(t *testing.T) {
 
 	repo := newStandbyProjectionWorkerRepo()
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: repo})
 	requireApply(t, cache, decodeWorkerCPState(t, newer))
 	requireApply(t, cache, decodeWorkerCPState(t, older))
 	if got := repo.workers[worker.PubKey]; got == nil || got.Name != "renamed-worker" {
@@ -179,7 +179,7 @@ func TestWorkerCPStateReplayOlderThanLocalRowIsSkipped(t *testing.T) {
 	local.LastAdvertisementAt = worker.LastAdvertisementAt.Add(time.Minute)
 	repo := staleWriteWorkerRepo{newStandbyProjectionWorkerRepo(&local)}
 	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
-	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: repo})
+	cache.RegisterProjectionAppliers(service.ProjectionCacheRepositories{Workers: repo})
 
 	requireApply(t, cache, decodeWorkerCPState(t, live))
 	if got := repo.workers[worker.PubKey]; got.Name != "local-newer" {
