@@ -178,6 +178,7 @@ type Reactor struct {
 	policyService                 *service.PolicyService
 	intentProcessor               *IntentProcessor
 	policyPublisher               PolicyStatePublisher
+	llmPublisher                  LLMRouteStatePublisher
 	adoption                      AdoptionOperatorService
 	runtimeLifecycle              RuntimeLifecycleOperatorService
 	packageService                *service.PackageRegistryService
@@ -335,6 +336,14 @@ func WithIntentProcessor(ip *IntentProcessor) ReactorOption {
 // mutation path and the intent handler path.
 func WithPolicyStatePublisher(pub PolicyStatePublisher) ReactorOption {
 	return func(r *Reactor) { r.policyPublisher = pub }
+}
+
+// WithLLMRouteStatePublisher sets the LLM route state publisher for canonical
+// 30900 publication via PublishBeforeCommit. Used by the legacy (non-intent)
+// mutation path; the intent handler path publishes through the
+// LLMRouteIntentHandler's own publisher.
+func WithLLMRouteStatePublisher(pub LLMRouteStatePublisher) ReactorOption {
+	return func(r *Reactor) { r.llmPublisher = pub }
 }
 
 // WithAdoptionService enables signer-first adoption scan/import request handling.
@@ -1122,6 +1131,15 @@ func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) 
 		r.logPublishError(r.publishLLMError(ctx, event, "create_error", err.Error()))
 		return
 	}
+	// Phase 3 L1: publish canonical 30900 route registry record on the legacy
+	// Nostr kind path. The intent handler and ContextVM handler publish on their
+	// respective paths; this ensures the legacy path also produces exactly one
+	// canonical record per mutation (review rule 3).
+	if r.llmPublisher != nil {
+		if err := r.llmPublisher(ctx, route, false); err != nil {
+			logger.Error("LLM route created but registry publication failed", "error", err)
+		}
+	}
 	logger.Info("LLM route created", "route_id", route.ID.String(), "name", route.Name)
 	r.logPublishError(r.publishLLMRouteCreateResult(ctx, event, route))
 }
@@ -1163,6 +1181,14 @@ func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Eve
 		logger.Error("failed to register LLM release", "error", err)
 		r.logPublishError(r.publishLLMError(ctx, event, "register_error", err.Error()))
 		return
+	}
+	// Phase 3 L1: publish updated route registry 30900 after release registration.
+	if r.llmPublisher != nil {
+		if route, err := r.llmRegistry.GetRoute(ctx, routeID); err == nil && route != nil {
+			if pubErr := r.llmPublisher(ctx, route, false); pubErr != nil {
+				logger.Error("LLM release registered but registry publication failed", "error", pubErr)
+			}
+		}
 	}
 	logger.Info("LLM release registered", "route_id", routeID.String(), "release_id", release.ID.String())
 	r.logPublishError(r.publishLLMReleaseRegisterResult(ctx, event, release))

@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
 // LLMRouteReconciler observes LLM backend/gateway state and repairs gateway drift.
+// It is event-driven: it subscribes to LLM route state and observation events
+// via the bus publisher, calling ReconcileOnce on each relevant event instead of
+// polling on a ticker (Phase 3 L1, bahia-irsry.11.10).
 type LLMRouteReconciler struct {
 	registry          *service.LLMRegistryService
 	environments      repository.EnvironmentRepository
@@ -22,8 +25,8 @@ type LLMRouteReconciler struct {
 	gateway           llmadapter.GatewayRouteManager
 	secrets           llmadapter.SecretResolver
 	defaultGatewayRef string
-	interval          time.Duration
 	logger            *zap.Logger
+	eventCh           chan struct{}
 }
 
 type LLMRouteReconcilerOption func(*LLMRouteReconciler)
@@ -32,14 +35,19 @@ func WithLLMRouteSecretResolver(resolver llmadapter.SecretResolver) LLMRouteReco
 	return func(r *LLMRouteReconciler) { r.secrets = resolver }
 }
 
-func NewLLMRouteReconciler(registry *service.LLMRegistryService, envs repository.EnvironmentRepository, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, interval time.Duration, logger *zap.Logger, opts ...LLMRouteReconcilerOption) *LLMRouteReconciler {
-	if interval <= 0 {
-		interval = time.Minute
-	}
+func NewLLMRouteReconciler(registry *service.LLMRegistryService, envs repository.EnvironmentRepository, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, logger *zap.Logger, opts ...LLMRouteReconcilerOption) *LLMRouteReconciler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	r := &LLMRouteReconciler{registry: registry, environments: envs, provisioners: provisioners, gateway: gateway, defaultGatewayRef: defaultGatewayRef, interval: interval, logger: logger}
+	r := &LLMRouteReconciler{
+		registry:          registry,
+		environments:      envs,
+		provisioners:      provisioners,
+		gateway:           gateway,
+		defaultGatewayRef: defaultGatewayRef,
+		logger:            logger,
+		eventCh:           make(chan struct{}, 1),
+	}
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -48,17 +56,44 @@ func NewLLMRouteReconciler(registry *service.LLMRegistryService, envs repository
 
 func (r *LLMRouteReconciler) Name() string { return "llm-route-reconciler" }
 
+// SetupSubscriptions subscribes to LLM state events via the bus publisher so
+// the reconciler is triggered on each relevant mutation rather than polling.
+func (r *LLMRouteReconciler) SetupSubscriptions(pub events.Publisher) {
+	if pub == nil {
+		return
+	}
+	for _, et := range []events.EventType{
+		events.EventLLMRouteStateChanged,
+		events.EventLLMRouteObservation,
+		events.EventLLMRouteDriftDetected,
+		events.EventLLMGatewayRouteSynced,
+	} {
+		pub.Subscribe(et, func(_ context.Context, _ events.Event) {
+			// Non-blocking signal: if channel already has a pending signal,
+			// we coalesce and don't block the publisher.
+			select {
+			case r.eventCh <- struct{}{}:
+			default:
+			}
+		})
+	}
+}
+
+// Run listens for state-change events and reconciles on each trigger.
+// It performs one initial reconciliation at startup, then reacts to events.
 func (r *LLMRouteReconciler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
+	// Initial reconciliation on startup.
+	if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
+		r.logger.Warn("LLM route reconcile failed", zap.Error(err))
+	}
 	for {
-		if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
-			r.logger.Warn("LLM route reconcile failed", zap.Error(err))
-		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-r.eventCh:
+			if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
+				r.logger.Warn("LLM route reconcile failed", zap.Error(err))
+			}
 		}
 	}
 }

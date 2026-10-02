@@ -5,7 +5,6 @@
 1	internal/reconcile/dns_reconciler.go time.NewTicker
 1	internal/reconcile/execution_plane.go time.NewTicker
 1	internal/reconcile/hygiene_reconciler.go time.NewTicker
-1	internal/reconcile/llm_reconciler.go time.NewTicker
 1	internal/reconcile/reconciler.go time.NewTicker
 2	internal/service/backup_restore_coordinator.go time.NewTicker
 2	internal/service/backup_retention_coordinator.go time.NewTicker

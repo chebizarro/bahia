@@ -961,7 +961,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
 		llmCoordinator.SetupSubscriptions(publisher)
-		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
+		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
+		llmReconciler.SetupSubscriptions(publisher)
 		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
@@ -1033,9 +1034,6 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
-	}
-	if llmRegistry != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
 	}
 	if dnsProjector != nil {
 		projectorOpts = append(projectorOpts,
@@ -1210,6 +1208,107 @@ func New(cfg *config.Config) (*App, error) {
 			},
 		))
 		logger.Info("policy intent handler registered")
+	}
+
+	// Phase 3 L1: LLMRouteStatePublisher for canonical 30900 via PublishBeforeCommit.
+	// Created unconditionally so both the legacy (non-intent) ContextVM path and
+	// the intent handler path use the same sign-and-publish closure.
+	var llmRoutePublisher controlplane.LLMRouteStatePublisher
+	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+		var llmPubMu sync.Mutex
+		llmFingerprints := make(map[string]struct{})
+		llmLastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
+		llmRoutePublisher = func(ctx context.Context, route *domain.LLMRoute, deleted bool) error {
+			fp := fmt.Sprintf("%s:%t:%d", route.ID, deleted, route.UpdatedAt.UnixNano())
+			llmPubMu.Lock()
+			if _, dup := llmFingerprints[fp]; dup {
+				llmPubMu.Unlock()
+				return nil
+			}
+			llmFingerprints[fp] = struct{}{}
+			createdAt := nostr.Now()
+			if last := llmLastPublishedAt[route.ID]; createdAt <= last {
+				createdAt = last + 1
+			}
+			llmLastPublishedAt[route.ID] = createdAt
+			llmPubMu.Unlock()
+			recordTags, recordContent := controlplane.LLMRouteRegistryRecord(route, deleted)
+			deletedStr := "false"
+			if deleted {
+				deletedStr = "true"
+			}
+				tags := nostr.Tags{
+				{"d", route.ID.String()},
+				{"domain", "llm-route"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindLLMRouteRegistry)},
+				{"deleted", deletedStr},
+				{"t", kinds.CPStateTopicLLMRoute},
+			}
+				tags = append(tags, recordTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: createdAt,
+				Tags:      tags,
+				Content:   recordContent,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				return fmt.Errorf("sign LLM route state event: %w", err)
+			}
+			return nostrPub.PublishBeforeCommit(ctx, ev, "llm_route", &route.ID)
+		}
+	}
+	// Register the intent handler when the llm domain is enabled.
+	if enabledDomains["llm"] && llmRegistry != nil {
+		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
+			controlplane.LLMRouteIntentHandlerConfig{
+				Routes:  llmRegistry,
+				Publish: llmRoutePublisher,
+				Status:  intentStatus,
+				Logger:  logger,
+			},
+		))
+		logger.Info("LLM route intent handler registered")
+	}
+	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
+	// so state mutations publish 30900 records directly instead of through the projector.
+	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+		var llmStatePubMu sync.Mutex
+		llmStateFingerprints := make(map[string]struct{})
+		llmRegistry.SetLLMCPStatePublisher(func(ctx context.Context, state *domain.LLMRouteState) {
+			fp := fmt.Sprintf("%s:%s:%d", state.RouteID, state.EnvironmentID, state.UpdatedAt.UnixNano())
+			llmStatePubMu.Lock()
+			if _, dup := llmStateFingerprints[fp]; dup {
+				llmStatePubMu.Unlock()
+				return
+			}
+			llmStateFingerprints[fp] = struct{}{}
+			llmStatePubMu.Unlock()
+			recordTags, recordContent := controlplane.LLMRouteStateRecord(state)
+			dTag := controlplane.LLMRouteStateDTag(state.RouteID, state.EnvironmentID)
+				tags := nostr.Tags{
+				{"d", dTag},
+				{"domain", "llm-state"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindLLMRouteState)},
+				{"deleted", "false"},
+				{"t", kinds.CPStateTopicLLMState},
+			}
+				tags = append(tags, recordTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: nostr.Now(),
+				Tags:      tags,
+				Content:   recordContent,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				logger.Warn("sign LLM route state event failed", zap.Error(err))
+				return
+			}
+			if err := nostrPub.PublishBeforeCommit(ctx, ev, "llm_route_state", nil); err != nil {
+				logger.Warn("publish LLM route state cp-state failed", zap.Error(err))
+			}
+		})
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -2004,9 +2103,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 			controlplane.WithMLRegistry(mlRegistry),
 		}, nostrEventRepo)
-		if llmRegistry != nil {
-			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
-		}
 		if assistantOrchestrator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
@@ -2015,6 +2111,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
+		if llmRegistry != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
+		}
 		if policyRepo != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithPolicyService(policySvc))
 			reactorOpts = append(reactorOpts, controlplane.WithIntentProcessor(intentProcessor))
@@ -2022,10 +2121,15 @@ func New(cfg *config.Config) (*App, error) {
 				reactorOpts = append(reactorOpts, controlplane.WithPolicyStatePublisher(policyPublisher))
 			}
 		}
+		// Phase 3 L1: wire LLM route publisher and ContextVM handlers.
+		if llmRoutePublisher != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithLLMRouteStatePublisher(llmRoutePublisher))
+		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}

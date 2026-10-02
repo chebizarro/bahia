@@ -163,7 +163,7 @@ func auditStateCoordinate(e events.Event, res events.ResourceData) string {
 		routeID, routeOK := parseUUID(res.RouteID)
 		envID, envOK := parseUUID(res.EnvironmentID)
 		if routeOK && envOK {
-			return llmRouteStateDTag(routeID, envID)
+			return fmt.Sprintf("%s:%s", routeID, envID)
 		}
 	}
 	return strings.TrimSpace(e.EntityID)
