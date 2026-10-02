@@ -152,14 +152,3 @@ func (p *Projector) warmStartDomain(ctx context.Context, domain string, wireKind
 		zap.Int("published", published))
 	return published
 }
-
-// isDomainMigrated reports whether a domain is listed in intentDomains and
-// should be excluded from the legacy RepublishSnapshot path.
-func (p *Projector) isDomainMigrated(domain string) bool {
-	for _, d := range p.intentDomains {
-		if d == domain {
-			return true
-		}
-	}
-	return false
-}

@@ -14,6 +14,9 @@ package nostr
 // import (controlplane → adapters/nostr), but ReadinessTracker satisfies
 // ReadinessWaiter, so the contract is identical.
 //
+// Records are seeded by writing signed kind-30900 events directly into the
+// history repository, mirroring the intent handler's PublishBeforeCommit path.
+//
 // Assertions:
 //   - Zero projector publishes for migrated domains when relay holds current state
 //   - Exactly one re-publish for a deliberately stale (abandoned) record
@@ -69,34 +72,28 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 	cfg := warmStartTestCfg()
 
 	svcIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
-	source := warmStartTestSource(svcIDs, nil)
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 
-	// Phase 1: initial publish seeds the daemon's local history.
-	sink1 := &captureProjectionPublisher{}
-	p1 := newTestProjector(cfg, source, sink1, repo, logger,
-		WithProjectorRepairInterval(-1))
-	if err := p1.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("initial snapshot: %v", err)
-	}
-	if n := countByDomain(sink1.events, "service"); n != 3 {
-		t.Fatalf("expected 3 initial service publishes, got %d", n)
-	}
+	// Seed: write signed kind-30900 service records directly into history.
+	// This mirrors the production path where intent handlers write via
+	// PublishBeforeCommit, which signs and records into the local store.
+	seedControlStateRecords(t, repo, KindServiceRegistry, svcIDs)
 
-	// Phase 2: "restart" — same history, fresh projector.
+	// "Restart" — same history, fresh projector.
 	// Mirror the production wiring: register the filter, then mark ready
 	// after the projector starts (simulating subscriber EOSE).
 	readiness := newTrackerReadiness("intent-30900")
 
-	sink2 := &captureProjectionPublisher{}
-	p2 := newTestProjector(cfg, source, sink2, repo, logger,
+	source := newFakeProjectionSource()
+	sink := &captureProjectionPublisher{}
+	p := newTestProjector(cfg, source, sink, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
 		WithReadinessTracker(readiness),
 		WithProjectorRepairInterval(-1))
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- p2.Run(runCtx) }()
+	go func() { done <- p.Run(runCtx) }()
 
 	// Simulate subscriber catch-up (EOSE).
 	readiness.MarkFilterReady("intent-30900")
@@ -105,31 +102,31 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 	<-done
 
 	// Assert: zero publishes — relay holds current state.
-	if n := countByDomain(sink2.events, "service"); n != 0 {
+	if n := countByDomain(sink.events, "service"); n != 0 {
 		t.Errorf("zero-publish restart: expected 0 service publishes, got %d", n)
 	}
 
-	// Phase 3: introduce a stale record and restart.
+	// Phase 2: introduce a stale record and restart.
 	markRecordFailed(t, repo, "domain", "service", svcIDs[2].String())
 
-	readiness3 := newTrackerReadiness("intent-30900")
-	sink3 := &captureProjectionPublisher{}
-	p3 := newTestProjector(cfg, source, sink3, repo, logger,
+	readiness2 := newTrackerReadiness("intent-30900")
+	sink2 := &captureProjectionPublisher{}
+	p2 := newTestProjector(cfg, source, sink2, repo, logger,
 		WithIntentDomains([]string{"service", "environment"}),
-		WithReadinessTracker(readiness3),
+		WithReadinessTracker(readiness2),
 		WithProjectorRepairInterval(-1))
 
-	runCtx3, cancel3 := context.WithCancel(ctx)
-	done3 := make(chan error, 1)
-	go func() { done3 <- p3.Run(runCtx3) }()
+	runCtx2, cancel2 := context.WithCancel(ctx)
+	done2 := make(chan error, 1)
+	go func() { done2 <- p2.Run(runCtx2) }()
 
-	readiness3.MarkFilterReady("intent-30900")
+	readiness2.MarkFilterReady("intent-30900")
 	time.Sleep(100 * time.Millisecond)
-	cancel3()
-	<-done3
+	cancel2()
+	<-done2
 
 	// Assert: exactly 1 re-publish for the stale record.
-	if n := countByDomain(sink3.events, "service"); n != 1 {
+	if n := countByDomain(sink2.events, "service"); n != 1 {
 		t.Errorf("stale re-publish: expected 1, got %d", n)
 	}
 }
