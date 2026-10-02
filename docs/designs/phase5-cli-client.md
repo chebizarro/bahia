@@ -175,6 +175,19 @@ The CLI's mutation commands go through `operator_nostr.go` → `pkg/client.Opera
    └─ superseded → exit 1, print "a newer intent won"
 ```
 
+**Error and exit-code table:**
+
+| Context | Code | Meaning | Client action |
+|---------|------|---------|---------------|
+| CLI exit | `0` | Intent accepted, canonical state confirmed | — |
+| CLI exit | `1` | Intent rejected, conflict, or superseded | Read error message; for conflict, re-read entity and retry |
+| CLI exit | `2` | Intent published to relay but no `30315` status within `--result-timeout` | Intent may still be processing; check with `bahia outbox list` or re-run |
+| CLI exit | `3` | No relay accepted the event (all OK=false) | Check relay connectivity and sidecar write policy |
+| ContextVM JSON-RPC | `-32011` | Request already accepted; response cannot be replayed (no idempotency key, or execution interrupted) | Retry with the same idempotency key to get the stored response, or use a new key to re-execute |
+| ContextVM JSON-RPC | `-32600` | Invalid request (malformed, missing required fields) | Fix request and retry |
+| MCP tool result | `{"status":"pending"}` | Intent published but `30315` status not received within timeout | Poll via `get_intent_status` tool with the returned `intent_id`, or retry |
+
+
 ### 2.3 Key/signer model
 
 The CLI already supports both local nsec and NIP-46 bunker signers (`cliNIP46Signer` in `operator_nostr.go`). Phase 5 reuses this infrastructure without changes to the key management code. The signer interface `nostr.Signer` (with `Encrypt`/`Decrypt` on the `cliEncryptedCapableSigner` extension) covers all Phase 5 signing needs.
@@ -226,22 +239,30 @@ type Server struct {
 
 An out-of-process MCP server (e.g. a standalone `bahia-mcp` binary) would use `pkg/client.NostrClient` for reads and `pkg/client.IntentPublisher` for writes — the same code paths as the CLI. This design does not implement the standalone binary but ensures the code paths are factored for reuse.
 
-### 3.4 JSON-RPC -32011 handling and progressToken (bahia-irsry.48 item 2)
+### 3.4 ContextVM -32011 handling, idempotency keys, and progressToken (bahia-irsry.48 item 2)
 
-**Decision: remaining ContextVM mutations that stay (assistant, secret-reveal, log-fetch) use `-32011` for "intent published, awaiting processing" and report `progressToken` on tool calls that may take time.**
+**`-32011` is an existing code.** `ContextVMDuplicateRequestErrorCode` (`internal/controlplane/contextvm_local_run.go:89`) means "this request was already accepted but its response cannot be replayed" — either the request had no idempotency key, or its execution never completed (crash/restart). It is a ContextVM request-ledger concept and must not be reused for intent-status timeout.
 
-For MCP tools that route through the intent processor (i.e. the new Phase 5 write path), the tool handler:
-1. Calls `intentProc.ProcessInProcess(ctx, intent)`.
-2. If processing is synchronous (intent applied in-process), returns the result immediately.
-3. If the intent was published to relays and the handler must wait for a status event, it:
+**Decision: every remaining ContextVM call from CLI and MCP must carry an idempotency key (`_meta.progressToken` or explicit `idempotency_key`). Intent-status timeout is not a JSON-RPC error.**
+
+#### Remaining ContextVM calls (assistant, secret-reveal, log-fetch)
+
+These stay as `25910` request/response. Each call **must** include an idempotency key so that:
+- If the daemon crashes mid-processing, a retry with the same key replays the stored response instead of returning `-32011`.
+- The CLI and MCP must handle `-32011` by prompting: "request was interrupted; retry with the same idempotency key, or use a new key to re-execute."
+
+The CLI generates a UUIDv7 idempotency key per command invocation and passes it as `_meta.progressToken` in the ContextVM request. If the user retries the same logical operation, the CLI can accept an `--idempotency-key` flag to reuse the prior key.
+
+The MCP server passes the MCP-layer `progressToken` (when present) as the ContextVM `_meta.progressToken`. If no `progressToken` is provided by the MCP client, the server mints a UUIDv7. This ensures every ContextVM call is keyed.
+
+#### Intent-based MCP write tools (new Phase 5 path)
+
+For MCP tools that route through `IntentProcessor.ProcessInProcess`:
+1. Processing is synchronous (in-process) — returns the result immediately.
+2. If the tool must wait for a relay-published intent's `30315` status (out-of-process path, §3.3), it:
    - Sends `notifications/progress` with the `progressToken` from the MCP request, reporting "intent published, awaiting daemon processing."
    - Waits for the `30315` intent-status event (same subscription as §2.2 step 5).
-   - On timeout, returns JSON-RPC error `-32011` with `message: "intent published but processing status not received within timeout"` and `data: {intent_id, event_id}` for client-side retry or inspection.
-
-For the retained ContextVM mutations (assistant chat, secret value reveal, log fetch):
-- These remain as `25910` request/response.
-- They already use `progressToken` for long-running operations (e.g. assistant streaming).
-- No change needed.
+   - On timeout, returns a **successful result** with `{"status": "pending", "intent_id": "<uuidv7>", "event_id": "<hex>"}`. The MCP client can poll via `get_intent_status` or retry. This is not an error — the intent was accepted by the relay.
 
 ### 3.5 Which tools stay ContextVM
 
@@ -475,7 +496,7 @@ A new MCP read tool `outbox_status` exposes the daemon's outbox counts and faile
 |-------|------|-----------|-----------|--------------------|---------| 
 | **R3: Workers + builds + artifacts reads** | `bahia workers list/get`, build/artifact reads use `NostrClient` | Workers/builds/artifacts CLI reads from Nostr. REST calls removed | `cmd/cli/main.go`, `cmd/cli/builds.go`, `cmd/cli/artifacts.go` | R4, P1 | `apiClient.ListWorkers`, `apiClient.GetWorker`, build/artifact REST read calls |
 | **R4: Orgs + secrets + notifications reads** | `bahia orgs list/get/members`, `bahia secrets list` use `NostrClient` with encrypted domain unwrapping | Encrypted domain reads work from local store. Secret value reveal stays ContextVM | `cmd/cli/main.go` (org/secret commands) | R3, P1 | `apiClient.ListOrgs`, `apiClient.GetOrg`, `apiClient.ListOrgMembers`, `apiClient.ListSecrets` REST calls |
-| **P1: MCP reads from local store** | MCP read tools (`handleListServices`, `handleGetService`, etc.) read from `store.QueryEvents` instead of `s.registry.*` | MCP read tools return identical results from local store vs Postgres. Test: MCP `list_services` returns same data from Nostr store as from Postgres repo. -32011 error returned when intent status times out | `internal/mcp/server.go` (read tool handlers), `internal/mcp/nostr_reads.go` (new, shared 30900→MCP result decoder) | R3, R4 | `s.registry.GetService`, `s.registry.ListEnvironments`, etc. repository calls in MCP read tools |
+| **P1: MCP reads from local store** | MCP read tools (`handleListServices`, `handleGetService`, etc.) read from `store.QueryEvents` instead of `s.registry.*` | MCP read tools return identical results from local store vs Postgres. Test: MCP `list_services` returns same data from Nostr store as from Postgres repo | `internal/mcp/server.go` (read tool handlers), `internal/mcp/nostr_reads.go` (new, shared 30900→MCP result decoder) | R3, R4 | `s.registry.GetService`, `s.registry.ListEnvironments`, etc. repository calls in MCP read tools |
 
 ### Wave 5: MCP writes + remaining mutations + REST cleanup
 
