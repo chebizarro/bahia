@@ -25,13 +25,13 @@ func WithReadinessTracker(r ReadinessWaiter) ProjectorOption {
 
 // WithIntentDomains sets the domain families migrated to the intent pipeline.
 // Migrated domains are warm-started from the daemon's own history instead of
-// re-projected from Postgres via RepublishSnapshot. The domain strings must
+// warm-started from the daemon's own history. The domain strings must
 // match the cpStateFamilies domain names (e.g. "service", "environment").
 func WithIntentDomains(domains []string) ProjectorOption {
 	return func(p *Projector) { p.intentDomains = domains }
 }
 
-// warmStartMigratedDomains replaces the startup RepublishSnapshot call for
+// warmStartMigratedDomains runs warm-start comparison for
 // domains listed in intentDomains. It:
 //  1. Waits for the intent subscriber's first catch-up (EOSE + NIP-77) via
 //     the ReadinessWaiter channel — no polling, no timeout-as-completion.
@@ -44,8 +44,8 @@ func WithIntentDomains(domains []string) ProjectorOption {
 // If ctx is cancelled before readiness, warm-start is skipped entirely and
 // a warning is logged — it never proceeds on a guess.
 //
-// For unmigrated domains, the caller runs the legacy RepublishSnapshot which
-// has per-domain guards that skip migrated legs.
+// Phase 3 X1: all domains are now included in intentDomains, so
+// every family is warm-started and no legacy snapshot path remains.
 //
 // See design §5.3.
 func (p *Projector) warmStartMigratedDomains(ctx context.Context) {

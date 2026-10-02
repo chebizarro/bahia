@@ -73,13 +73,13 @@ func TestProjectionAuditFactsCoexistAndRepublishIsIdempotent(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 	serviceID, envID := uuid.New(), uuid.New()
-	drift := func(reason string) events.Event {
-		return events.Event{Type: events.EventDriftDetected, EntityID: serviceID.String(), Data: map[string]string{
+	deploy := func(reason string) events.Event {
+		return events.Event{Type: events.EventRuntimeDeploy, EntityID: serviceID.String(), Data: map[string]string{
 			"service_id": serviceID.String(), "environment_id": envID.String(), "reason": reason,
 		}}
 	}
 
-	first, second := drift("image digest changed"), drift("replica count changed")
+	first, second := deploy("image digest changed"), deploy("replica count changed")
 	for _, ev := range []events.Event{first, second, first} {
 		if err := projector.publishAudit(ctx, ev); err != nil {
 			t.Fatalf("publish audit: %v", err)
@@ -88,13 +88,13 @@ func TestProjectionAuditFactsCoexistAndRepublishIsIdempotent(t *testing.T) {
 
 	facts := auditEvents(sink)
 	if len(facts) != 2 {
-		t.Fatalf("audit facts = %d, want 2 (two distinct drifts, republish deduped)", len(facts))
+		t.Fatalf("audit facts = %d, want 2 (two distinct deploys, republish deduped)", len(facts))
 	}
 	coordinate := serviceStateDTag(serviceID, envID)
 	for _, fact := range facts {
 		assertCanonicalAuditFact(t, fact)
 		assertTag(t, fact, kinds.CPAuditTagState, coordinate)
-		assertTag(t, fact, "type", string(events.EventDriftDetected))
+		assertTag(t, fact, "type", string(events.EventRuntimeDeploy))
 		assertTag(t, fact, "service", serviceID.String())
 	}
 	if tagValue(facts[0].Tags, kinds.CPAuditTagFact) == tagValue(facts[1].Tags, kinds.CPAuditTagFact) {
@@ -175,15 +175,102 @@ func TestProjectionAuditFactAbandonedDeliveryAllowsRepublish(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-	ev := events.Event{Type: events.EventDeploymentRunStatusChanged, EntityID: uuid.NewString()}
+	ev := events.Event{Type: events.EventDeploymentRunCompleted, EntityID: uuid.NewString()}
 	if err := projector.publishAudit(ctx, ev); err != nil {
 		t.Fatal(err)
 	}
-	projector.ForgetAbandonedProjection(assertOneAudit(t, sink, events.EventDeploymentRunStatusChanged))
+	projector.ForgetAbandonedProjection(assertOneAudit(t, sink, events.EventDeploymentRunCompleted))
 	if err := projector.publishAudit(ctx, ev); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(auditEvents(sink)); got != 2 {
 		t.Fatalf("audit facts after abandonment and republish = %d, want 2", got)
 	}
+}
+
+// TestObservationBurstProducesZeroAuditAndDeployProducesOne verifies B-16:
+// high-frequency observation/sync/state-changed/drift events produce zero
+// 4903 audit facts, while an operator-meaningful discrete mutation (runtime
+// deploy) produces exactly one.
+func TestObservationBurstProducesZeroAuditAndDeployProducesOne(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	serviceID, envID := uuid.New(), uuid.New()
+
+	observationEvent := func(et events.EventType) events.Event {
+		return events.Event{Type: et, EntityID: serviceID.String(), Data: map[string]string{
+			"service_id": serviceID.String(), "environment_id": envID.String(),
+		}}
+	}
+
+	// A burst of N observation/sync/drift events should produce ZERO audit facts.
+	burstTypes := []events.EventType{
+		events.EventRuntimeObservation,
+		events.EventRuntimeObservation,
+		events.EventRuntimeObservation,
+		events.EventEnvironmentServiceStateChanged,
+		events.EventEnvironmentServiceStateChanged,
+		events.EventDriftDetected,
+		events.EventDriftDetected,
+	}
+	for _, et := range burstTypes {
+		if err := projector.publishAudit(ctx, observationEvent(et)); err != nil {
+			t.Fatalf("publish audit for %s: %v", et, err)
+		}
+	}
+	if got := len(auditEvents(sink)); got != 0 {
+		t.Fatalf("audit facts after observation burst = %d, want 0 (B-16: observations are not audited)", got)
+	}
+
+	// LLM observation/sync/drift events also produce zero audit facts.
+	llmBurstTypes := []events.EventType{
+		events.EventLLMRouteObservation,
+		events.EventLLMRouteStateChanged,
+		events.EventLLMRouteDriftDetected,
+		events.EventLLMGatewayRouteSynced,
+		events.EventLLMDeploymentRunStatusChanged,
+	}
+	for _, et := range llmBurstTypes {
+		if err := projector.publishAudit(ctx, observationEvent(et)); err != nil {
+			t.Fatalf("publish audit for %s: %v", et, err)
+		}
+	}
+	if got := len(auditEvents(sink)); got != 0 {
+		t.Fatalf("audit facts after LLM observation burst = %d, want 0 (B-16)", got)
+	}
+
+	// DNS sync events also produce zero audit facts.
+	dnsBurstTypes := []events.EventType{
+		eventDNSZoneSynced,
+		eventDNSRecordChanged,
+		eventDNSDriftDetected,
+	}
+	for _, et := range dnsBurstTypes {
+		if err := projector.publishAudit(ctx, observationEvent(et)); err != nil {
+			t.Fatalf("publish audit for %s: %v", et, err)
+		}
+	}
+	if got := len(auditEvents(sink)); got != 0 {
+		t.Fatalf("audit facts after DNS sync burst = %d, want 0 (B-16)", got)
+	}
+
+	// A runtime deploy (operator-meaningful mutation) produces exactly one.
+	deploy := events.Event{
+		Type:     events.EventRuntimeDeploy,
+		EntityID: serviceID.String(),
+		Data: map[string]string{
+			"service_id": serviceID.String(), "environment_id": envID.String(),
+			"artifact_id": uuid.New().String(),
+		},
+	}
+	if err := projector.publishAudit(ctx, deploy); err != nil {
+		t.Fatalf("publish audit for deploy: %v", err)
+	}
+	facts := auditEvents(sink)
+	if len(facts) != 1 {
+		t.Fatalf("audit facts after deploy = %d, want 1", len(facts))
+	}
+	assertCanonicalAuditFact(t, facts[0])
+	assertTag(t, facts[0], "type", string(events.EventRuntimeDeploy))
 }

@@ -3,14 +3,12 @@ package nostr
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
@@ -196,61 +194,12 @@ func TestProjectorTreatsIncompletePublishAsQueued(t *testing.T) {
 	require.Equal(t, 2, script.totalCalls(), "one delivery round, one EVENT per relay")
 }
 
-type staticSBOMProjectionSource struct{ manifests []domain.SBOMManifest }
-
-func (s staticSBOMProjectionSource) ListPublishedManifests(context.Context, int) ([]domain.SBOMManifest, error) {
-	return s.manifests, nil
-}
-
-func testSBOMManifest() domain.SBOMManifest {
-	payload := strings.Repeat("ab", 32)
-	return domain.SBOMManifest{
-		ID:            uuid.New(),
-		Subject:       domain.SBOMSubject{Type: domain.SBOMSubjectArtifact, ID: "artifact-1", DisplayName: "demo", Digest: "sha256:" + strings.Repeat("cd", 32)},
-		Format:        domain.SBOMFormatSPDX,
-		StorageType:   domain.SBOMStorageBlossom,
-		StorageURI:    "https://blossom.example/" + payload,
-		PayloadSHA256: payload,
-		Generator:     domain.SBOMGenerator{ID: "syft", Version: "1.0.0"},
-		ReferenceDTag: "sbom:ref:artifact-1:spdx:" + payload,
-		CreatedAt:     time.Unix(1_790_000_000, 0).UTC(),
-	}
-}
-
-// The periodic repair republishes the whole snapshot. With unchanged content it
-// must add no outbox rows and sign nothing, including the SBOM legs and across
-// a restart that hydrates from the outbox.
-func TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures(t *testing.T) {
-	ctx := context.Background()
-	repo := repositorytest.NewInMemoryNostrEventRepository()
-	script := newRelayScript()
-	source := newFakeProjectionSource()
-	svc := domain.Service{ID: uuid.New(), Name: "api"}
-	env := domain.Environment{ID: uuid.New(), Name: "prod"}
-	source.services[svc.ID] = svc
-	source.envs[env.ID] = env
-	// Phase 3 S1: state is no longer published by RepublishSnapshot.
-	// Phase 3 S2: builds/artifacts/intents/runs are also removed. The SBOM
-	// legs remain and produce at least one outbox row.
-	sbomSource := WithSBOMProjectionSource(staticSBOMProjectionSource{manifests: []domain.SBOMManifest{testSBOMManifest()}})
-
-	projector, _ := newOutboxProjector(t, repo, script, source, sbomSource)
-	require.NoError(t, projector.RepublishSnapshot(ctx))
-	rowsAfterFirst := outboxRowCount(t, repo)
-	callsAfterFirst := script.totalCalls()
-	require.NotZero(t, rowsAfterFirst)
-	require.Len(t, outboxRows(t, repo, 30078), 1, "SBOM reference projected")
-	require.Len(t, outboxRows(t, repo, 30004), 1, "SBOM availability list projected")
-
-	require.NoError(t, projector.RepublishSnapshot(ctx))
-	require.Equal(t, rowsAfterFirst, outboxRowCount(t, repo), "repair of unchanged content added outbox rows")
-	require.Equal(t, callsAfterFirst, script.totalCalls(), "repair of unchanged content signed and sent events")
-
-	restarted, _ := newOutboxProjector(t, repo, script, source, sbomSource)
-	require.NoError(t, restarted.RepublishSnapshot(ctx))
-	require.Equal(t, rowsAfterFirst, outboxRowCount(t, repo), "restart repair of unchanged content added outbox rows")
-	require.Equal(t, callsAfterFirst, script.totalCalls(), "restart repair of unchanged content signed and sent events")
-}
+// Phase 3 X1: staticSBOMProjectionSource, testSBOMManifest, and
+// TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures removed.
+// SBOM events are published from the orchestrator's mutation site; the
+// projector no longer has SBOM projection legs. The system config startup
+// publish dedupe is tested in TestSystemConfigStartupPublishDoesNotRepeat
+// (control_state_dedupe_test.go).
 
 // An event the outbox abandons (the quorum became unreachable) must not stay
 // in the dedupe cache, or repair would never republish that content.
@@ -344,7 +293,7 @@ func outboxRowCount(t *testing.T, repo *repositorytest.InMemoryNostrEventReposit
 	// Count all outbox-published kinds: cp-state (30900), audit, and SBOM
 	// reference (30078) + availability list (30004). After Phase 3 slices
 	// moved all cp-state families to mutation-site publication, SBOM events
-	// are the only outbox rows RepublishSnapshot still produces.
+	// Phase 3 X1: RepublishSnapshot removed. System config records are
 	rows, err := repo.ListByKinds(context.Background(), []int{KindCASControlState, KindCASAudit, 30078, 30004}, 10000)
 	require.NoError(t, err)
 	return len(rows)
