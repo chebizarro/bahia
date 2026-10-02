@@ -209,6 +209,8 @@ export const BACKUP_RUN_STATE = 31996;
 export const BACKUP_VERIFICATION_STATE = 31997;
 export const BACKUP_RESTORE_STATE = 31998;
 export const BACKUP_RUNTIME_OBSERVATION_STATE = 31999;
+export const SECRET_REGISTRY = 32005;
+export const NOTIFICATION_CHANNEL_REGISTRY = 32006;
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
@@ -441,7 +443,9 @@ export const CP_STATE_TOPICS = Object.freeze({
   BACKUP_RUN: 'backup-run',
   BACKUP_VERIFICATION: 'backup-verification',
   BACKUP_RESTORE: 'backup-restore',
-  BACKUP_RUNTIME_OBSERVATION: 'backup-runtime'
+  BACKUP_RUNTIME_OBSERVATION: 'backup-runtime',
+  SECRET_REGISTRY: 'secret-registry',
+  NOTIFICATION_CHANNEL: 'notification-channel',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The

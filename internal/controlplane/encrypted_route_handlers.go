@@ -47,6 +47,14 @@ const (
 	ContextVMMethodArtifactRegister        = "artifact/register"
 	ContextVMMethodArtifactImportObserved  = "artifact/import-observed"
 
+	// Phase 3 N1: notification channel mutation operations routed through
+	// the intent processor (dual dispatch). The legacy B-27 handlers in
+	// notification_encrypted_handlers.go are deleted; these ContextVM methods
+	// are the sole remaining path for web-originated channel mutations.
+	ContextVMMethodNotificationChannelCreate = "notification/create"
+	ContextVMMethodNotificationChannelUpdate = "notification/update"
+	ContextVMMethodNotificationChannelDelete = "notification/delete"
+
 	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
 
@@ -166,6 +174,9 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	transport.RegisterContextVMHandler(ContextVMMethodEnvironmentDelete, h.DeleteEnvironment)
 	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegister, h.RegisterArtifact)
 	transport.RegisterContextVMHandler(ContextVMMethodArtifactImportObserved, h.ImportObservedArtifact)
+	transport.RegisterContextVMHandler(ContextVMMethodNotificationChannelCreate, h.CreateNotificationChannel)
+	transport.RegisterContextVMHandler(ContextVMMethodNotificationChannelUpdate, h.UpdateNotificationChannel)
+	transport.RegisterContextVMHandler(ContextVMMethodNotificationChannelDelete, h.DeleteNotificationChannel)
 }
 
 // ImportObservedArtifact records an already-running, observation-verified image
@@ -643,6 +654,28 @@ func (h *EncryptedRouteHandlers) serviceIntentFromContextVM(request ContextVMReq
 // the intent processor (Phase 3 dual dispatch).
 func (h *EncryptedRouteHandlers) serviceIntentEnabled() bool {
 	return h.intentProcessor != nil && h.intentProcessor.Handler("service") != nil
+}
+
+// secretIntentEnabled reports whether the secret domain is routed through
+// the intent processor (Phase 3 N1 dual dispatch).
+func (h *EncryptedRouteHandlers) secretIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("secret") != nil
+}
+
+// notificationIntentEnabled reports whether the notification domain is routed through
+// the intent processor (Phase 3 N1 dual dispatch).
+func (h *EncryptedRouteHandlers) notificationIntentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("notification") != nil
+}
+
+// resolveSecretOrgID resolves the org_id for a secret from its parent service.
+func (h *EncryptedRouteHandlers) resolveSecretOrgID(ctx context.Context, serviceID uuid.UUID) uuid.UUID {
+	if h.services != nil {
+		if svc, err := h.services.GetByID(ctx, serviceID); err == nil && svc != nil {
+			return svc.OrgID
+		}
+	}
+	return uuid.Nil
 }
 
 func repositoryRefFromRequest(request *dto.RepositoryRefRequest) *domain.RepositoryRef {
@@ -1185,6 +1218,7 @@ type encryptedSecretPayload struct {
 	Name             string `json:"name,omitempty"`
 	Value            string `json:"value,omitempty"`
 	EnvironmentID    string `json:"environment_id,omitempty"`
+	EncryptedValue   string `json:"encrypted_value,omitempty"`
 	EncryptionMethod string `json:"encryption_method,omitempty"`
 }
 
@@ -1240,16 +1274,22 @@ func (h *EncryptedRouteHandlers) CreateSecret(ctx context.Context, request Encry
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if payload.Value == "" {
-		return nil, fmt.Errorf("value is required")
+	if payload.Value == "" && payload.EncryptedValue == "" {
+		return nil, fmt.Errorf("value is required (either value or encrypted_value)")
 	}
 	method, err := parseSecretEncryptionMethod(payload.EncryptionMethod, domain.EncryptionNIP44)
 	if err != nil {
 		return nil, err
 	}
-	encrypted, err := h.encryptor.Encrypt(payload.Value, method)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt secret")
+	var encrypted []byte
+	if payload.EncryptedValue != "" {
+		// Client-side NIP-44 encryption: use pre-encrypted value as-is.
+		encrypted = []byte(payload.EncryptedValue)
+	} else {
+		encrypted, err = h.encryptor.Encrypt(payload.Value, method)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt secret")
+		}
 	}
 	now := time.Now().UTC()
 	secret := &domain.ServiceSecret{
@@ -1270,7 +1310,31 @@ func (h *EncryptedRouteHandlers) CreateSecret(ctx context.Context, request Encry
 		}
 		secret.EnvironmentID = &envID
 	}
-	if err := h.secrets.Create(ctx, secret); err != nil {
+	// Phase 3 N1 dual dispatch (§4.1): when the secret domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.secretIntentEnabled() {
+		content := BuildSecretIntentContent(serviceID, secret.ID, name, payload.Value, secret.EnvironmentID, method)
+		if payload.EncryptedValue != "" {
+			content["encrypted_value"] = payload.EncryptedValue
+			delete(content, "value") // Don't pass plaintext when client pre-encrypted.
+		}
+		intent := &Intent{
+			Domain:     "secret",
+			Op:         "create",
+			OrgID:      h.resolveSecretOrgID(ctx, serviceID),
+			IntentID:   uuid.New().String(),
+			Coordinate: secret.ID.String(),
+			Content:    content,
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to create secret: %w", err)
+		}
+		// Read back to return stamped entity.
+		if created, _ := h.secrets.GetByID(ctx, secret.ID); created != nil {
+			secret = created
+		}
+	} else if err := h.secrets.Create(ctx, secret); err != nil {
 		return nil, fmt.Errorf("failed to create secret")
 	}
 	return map[string]any{"secret": secret.ToRef(), "status": "created"}, nil
@@ -1292,8 +1356,8 @@ func (h *EncryptedRouteHandlers) UpdateSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	if payload.Value == "" {
-		return nil, fmt.Errorf("value is required")
+	if payload.Value == "" && payload.EncryptedValue == "" {
+		return nil, fmt.Errorf("value is required (either value or encrypted_value)")
 	}
 	if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermWriteSecrets); err != nil {
 		return nil, err
@@ -1306,15 +1370,42 @@ func (h *EncryptedRouteHandlers) UpdateSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	encrypted, err := h.encryptor.Encrypt(payload.Value, method)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt secret")
+	var encrypted []byte
+	if payload.EncryptedValue != "" {
+		encrypted = []byte(payload.EncryptedValue)
+	} else {
+		encrypted, err = h.encryptor.Encrypt(payload.Value, method)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt secret")
+		}
 	}
-	secret.EncryptedValue = encrypted
-	secret.EncryptionMethod = method
-	secret.UpdatedAt = time.Now().UTC()
-	if err := h.secrets.Update(ctx, secret); err != nil {
-		return nil, fmt.Errorf("failed to update secret: %w", err)
+	// Phase 3 N1 dual dispatch (§4.1): when the secret domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.secretIntentEnabled() {
+		content := BuildSecretIntentContent(serviceID, secretID, secret.Name, payload.Value, secret.EnvironmentID, method)
+		if payload.EncryptedValue != "" {
+			content["encrypted_value"] = payload.EncryptedValue
+			delete(content, "value") // Don't pass plaintext when client pre-encrypted.
+		}
+		intent := &Intent{
+			Domain:     "secret",
+			Op:         "update",
+			OrgID:      h.resolveSecretOrgID(ctx, serviceID),
+			IntentID:   uuid.New().String(),
+			Coordinate: secretID.String(),
+			Content:    content,
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to update secret: %w", err)
+		}
+	} else {
+		secret.EncryptedValue = encrypted
+		secret.EncryptionMethod = method
+		secret.UpdatedAt = time.Now().UTC()
+		if err := h.secrets.Update(ctx, secret); err != nil {
+			return nil, fmt.Errorf("failed to update secret: %w", err)
+		}
 	}
 	if updated, _ := h.secrets.GetByID(ctx, secretID); updated != nil {
 		secret = updated
@@ -1344,7 +1435,22 @@ func (h *EncryptedRouteHandlers) DeleteSecret(ctx context.Context, request Encry
 	if _, err := h.secretForService(ctx, serviceID, secretID); err != nil {
 		return nil, err
 	}
-	if err := h.secrets.Delete(ctx, secretID); err != nil {
+	// Phase 3 N1 dual dispatch (§4.1): when the secret domain is enabled,
+	// route through ProcessInProcess for shared idempotency with relay intents.
+	if h.secretIntentEnabled() {
+		intent := &Intent{
+			Domain:     "secret",
+			Op:         "delete",
+			OrgID:      h.resolveSecretOrgID(ctx, serviceID),
+			IntentID:   uuid.New().String(),
+			Coordinate: secretID.String(),
+			Content:    map[string]interface{}{"id": secretID.String()},
+			Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+		}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, fmt.Errorf("failed to delete secret: %w", err)
+		}
+	} else if err := h.secrets.Delete(ctx, secretID); err != nil {
 		return nil, fmt.Errorf("failed to delete secret")
 	}
 	return map[string]string{"status": "deleted", "secret_id": secretID.String()}, nil
@@ -1641,4 +1747,137 @@ func (h *EncryptedRouteHandlers) VerifyArtifactSignatures(ctx context.Context, r
 		"errors":      counts[domain.SignatureStatusError],
 		"signatures":  sigs,
 	}, nil
+}
+
+// --- Phase 3 N1 notification channel dual-dispatch handlers ---
+//
+// These ContextVM handlers translate web-originated notification channel
+// mutations into in-process intents and delegate to ProcessInProcess.
+// The old B-27 handlers in notification_encrypted_handlers.go are deleted;
+// these are the sole remaining path for web-originated channel mutations
+// until O1 gift-wrap ingress is live.
+
+// CreateNotificationChannel handles notification/create ContextVM requests
+// by dual-dispatching through the intent processor.
+func (h *EncryptedRouteHandlers) CreateNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
+	if !h.notificationIntentEnabled() {
+		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
+	}
+	var payload notificationChannelPayload
+	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		return nil, fmt.Errorf("channel name is required")
+	}
+	if strings.TrimSpace(payload.ChannelType) == "" {
+		return nil, fmt.Errorf("channel_type is required")
+	}
+
+	ch := buildNotificationChannelFromPayload(payload)
+	if ch.ID == uuid.Nil {
+		ch.ID = domain.NewEntityID()
+	}
+
+	content := BuildNotificationIntentContent(ch)
+	intent := &Intent{
+		Domain:     "notification",
+		Op:         "create",
+		OrgID:      ch.OrgID,
+		IntentID:   uuid.New().String(),
+		Coordinate: ch.ID.String(),
+		Content:    content,
+		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	}
+	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+		return nil, fmt.Errorf("failed to create notification channel: %w", err)
+	}
+	return map[string]any{"channel": content, "status": "created"}, nil
+}
+
+// UpdateNotificationChannel handles notification/update ContextVM requests
+// by dual-dispatching through the intent processor.
+func (h *EncryptedRouteHandlers) UpdateNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
+	if !h.notificationIntentEnabled() {
+		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
+	}
+	var payload notificationChannelPayload
+	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
+	}
+	channelID, err := uuid.Parse(strings.TrimSpace(payload.ID))
+	if err != nil || channelID == uuid.Nil {
+		return nil, fmt.Errorf("channel id is required for update")
+	}
+
+	ch := buildNotificationChannelFromPayload(payload)
+	ch.ID = channelID
+
+	content := BuildNotificationIntentContent(ch)
+	intent := &Intent{
+		Domain:     "notification",
+		Op:         "update",
+		OrgID:      ch.OrgID,
+		IntentID:   uuid.New().String(),
+		Coordinate: channelID.String(),
+		Content:    content,
+		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	}
+	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+		return nil, fmt.Errorf("failed to update notification channel: %w", err)
+	}
+	return map[string]any{"channel": content, "status": "updated"}, nil
+}
+
+// DeleteNotificationChannel handles notification/delete ContextVM requests
+// by dual-dispatching through the intent processor.
+func (h *EncryptedRouteHandlers) DeleteNotificationChannel(ctx context.Context, request ContextVMRequest) (any, error) {
+	if !h.notificationIntentEnabled() {
+		return nil, fmt.Errorf("notification channel management requires intent processing to be enabled")
+	}
+	var payload notificationChannelPayload
+	if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
+		return nil, fmt.Errorf("invalid notification channel payload: %w", err)
+	}
+	channelID, err := uuid.Parse(strings.TrimSpace(payload.ID))
+	if err != nil || channelID == uuid.Nil {
+		return nil, fmt.Errorf("channel id is required for delete")
+	}
+
+	content := map[string]interface{}{"id": channelID.String()}
+	intent := &Intent{
+		Domain:     "notification",
+		Op:         "delete",
+		OrgID:      uuid.Nil, // resolved from channel by handler
+		IntentID:   uuid.New().String(),
+		Coordinate: channelID.String(),
+		Content:    content,
+		Actor:      normalizeEncryptedPubkey(request.Event.PubKey.Hex()),
+	}
+	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+		return nil, fmt.Errorf("failed to delete notification channel: %w", err)
+	}
+	return map[string]any{"status": "deleted", "channel_id": channelID.String()}, nil
+}
+
+// buildNotificationChannelFromPayload converts a ContextVM payload into a
+// domain.NotificationChannel for intent content building.
+func buildNotificationChannelFromPayload(payload notificationChannelPayload) *domain.NotificationChannel {
+	ch := &domain.NotificationChannel{
+		Name:        strings.TrimSpace(payload.Name),
+		ChannelType: domain.ChannelType(strings.TrimSpace(payload.ChannelType)),
+		Config:      payload.Config,
+		EventFilter: payload.EventFilter,
+		Enabled:     true,
+	}
+	if payload.Enabled != nil {
+		ch.Enabled = *payload.Enabled
+	}
+	if id, err := uuid.Parse(strings.TrimSpace(payload.ID)); err == nil {
+		ch.ID = id
+	}
+	if orgID, err := uuid.Parse(strings.TrimSpace(payload.OrgID)); err == nil {
+		ch.OrgID = orgID
+	}
+	return ch
 }

@@ -305,6 +305,8 @@ var constantJustifications = map[string]KindJustification{
 	"LegacyWorkerAssignmentState":    omitted("LegacyWorkerAssignmentState", kinds.LegacyWorkerAssignmentState, "conflicting-alias", "shares 31991 with BackupDefinitionRegistry; ResolveDisposition maps worker assignment events to worker state"),
 	"LegacyWorkerDrainStatus":        omitted("LegacyWorkerDrainStatus", kinds.LegacyWorkerDrainStatus, "conflicting-alias", "shares 31992 with BackupPolicyRegistry; ResolveDisposition maps worker drain events to worker state"),
 	"LegacyWorkerEligibilityPreview": omitted("LegacyWorkerEligibilityPreview", kinds.LegacyWorkerEligibilityPreview, "conflicting-alias", "shares 31993 with BackupRepositoryRegistry; ResolveDisposition maps worker eligibility events to worker state"),
+	"SecretRegistry":                 omitted("SecretRegistry", kinds.SecretRegistry, "canonical-target", "canonical cp-state secret registry output; Phase 3 N1 produces secrets as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
+	"NotificationChannelRegistry":    omitted("NotificationChannelRegistry", kinds.NotificationChannelRegistry, "canonical-target", "canonical cp-state notification channel registry output; Phase 3 N1 produces channels as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

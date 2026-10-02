@@ -114,6 +114,10 @@ const (
 	CPStateTopicBackupVerification       = "backup-verification"
 	CPStateTopicBackupRestore            = "backup-restore"
 	CPStateTopicBackupRuntimeObservation = "backup-runtime"
+
+	// Secret and notification channel state topics (Phase 3 N1).
+	CPStateTopicSecretRegistry              = "secret-registry"
+	CPStateTopicNotificationChannelRegistry = "notification-channel"
 )
 
 // CPAudit* describe the projector's append-only audit facts: regular kind

@@ -585,6 +585,8 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindBackupVerificationState:       {"backup", "verification", kinds.CPStateTopicBackupVerification},
 	KindBackupRestoreState:            {"backup", "restore", kinds.CPStateTopicBackupRestore},
 	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
+	KindSecretRegistry:              {"secret", "registry", kinds.CPStateTopicSecretRegistry},
+	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
 }
 
 func canonicalStateDomain(kind int) (domainName string, entity string) {

@@ -1084,7 +1084,9 @@ func New(cfg *config.Config) (*App, error) {
 	// RepublishSnapshot guards skip migrated domain legs.
 	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
 		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
-		"backup", // B1: authority inversion (bahia-irsry.11.11)
+		"backup",       // B1: authority inversion (bahia-irsry.11.11)
+		"secret",       // N1: secrets authority inversion (bahia-irsry.11.16)
+		"notification", // N1: notifications authority inversion (bahia-irsry.11.16)
 	)
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
@@ -1735,6 +1737,51 @@ func New(cfg *config.Config) (*App, error) {
 			notifications.NewNostrDMSender(relayPool, cfg.Nostr.PrivateKey, logger))
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
+
+	// --- Phase 3 N1: Secret and notification intent handlers ---
+	// Sensitive domains whose intents arrive as NIP-59 gift wraps (kind 1059)
+	// through the shared gift-wrapped intent ingress built by O1. The
+	// orchestrator will connect these to O1's ingress at integration.
+	// N1 sensitive domains: "secret", "notification"
+	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
+	// holds a *Projector reference and publishes through the shared signing/outbox
+	// pipeline. Secret values are NEVER included in published events.
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, logger)
+
+	// Register the secret intent handler when the secret domain is enabled.
+	if enabledDomains["secret"] && secretRepo != nil {
+		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(
+			controlplane.SecretIntentHandlerConfig{
+				Registry:  secretRepo,
+				Encryptor: secretEncryptor,
+				Publisher: secretCanonical,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("secret intent handler registered")
+	}
+
+	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
+	// secrets, credentials) from published content.
+	notifCanonical := nostrAdapter.NewNotificationCanonicalPublisher(nostrProjector, logger)
+
+	// Register the notification intent handler when the notification domain is
+	// enabled. The dispatcher's OnChannelChanged method is the event-driven
+	// notifier that replaces DB polling (Phase 3 N1).
+	if enabledDomains["notification"] && notifRepo != nil {
+		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
+			controlplane.NotificationIntentHandlerConfig{
+				Registry:  notifRepo,
+				Publisher: notifCanonical,
+				Notifier:  notifDispatcher,
+				Status:    intentStatus,
+				Logger:    logger,
+			},
+		))
+		logger.Info("notification intent handler registered")
+	}
+	// --- end N1 wiring ---
 
 	// Tool provisioning orchestration.
 	var toolCoordinator *service.ToolProvisioningCoordinator

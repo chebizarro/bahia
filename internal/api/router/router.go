@@ -493,22 +493,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Deprecated policy REST mutations are intentionally not mounted.
 			// Signer-first Nostr policy command kinds retired-kind-retired-kind are the supported replacement.
 
-			// Secrets (write)
-			if deps.Secrets != nil && deps.Encryptor != nil {
-				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				secretRBAC := coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true, domain.PermWriteSecrets)
-				r.With(secretRBAC).Post("/services/{id}/secrets", secretH.Create)
-				r.With(secretRBAC).Put("/services/{id}/secrets/{secretId}", secretH.Update)
-				r.With(secretRBAC).Delete("/services/{id}/secrets/{secretId}", secretH.Delete)
-			}
+			// Secrets (write): deleted in Phase 3 N1.
+			// Secret create/update/delete now go through intent publishing (30900).
 
-			// Notifications (write)
+			// Notifications (write): Create/Update/Delete deleted in Phase 3 N1.
+			// Notification channel mutations now go through intent publishing (30900).
+			// TestChannel remains as a non-mutating diagnostic endpoint.
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
 				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true, domain.PermManageSettings)
-				r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Post("/notifications/channels", notifH.CreateChannel)
-				r.With(tier2Gate, notificationRBAC).Put("/notifications/channels/{id}", notifH.UpdateChannel)
-				r.With(tier2Gate, notificationRBAC).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
 				r.With(tier2Gate, notificationRBAC).Post("/notifications/channels/{id}/test", notifH.TestChannel)
 			}
 
