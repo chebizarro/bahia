@@ -10,10 +10,9 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
-	
+
 	"go.uber.org/zap"
 )
-
 
 // DNSCanonicalPublisher publishes authoritative DNS state records through the
 // shared builder and outbox. It replaces the projector's DNS snapshot legs
@@ -216,7 +215,6 @@ func (p *DNSCanonicalPublisher) PublishPolicy(ctx context.Context, policy domain
 	}
 	return p.projector.publishReplaceableJSON(ctx, KindDNSPolicyState, dnsPolicyDTag(policy.ID), tags, content, "dns_policy.projection", &policy.ID)
 }
-
 
 // HydrateFromStore loads previously-published DNS endpoint coordinates from
 // the event store so tombstoning works correctly after a daemon restart.

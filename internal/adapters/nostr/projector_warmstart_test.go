@@ -10,7 +10,6 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"go.uber.org/zap"
@@ -211,44 +210,10 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot verifies that a domain
-// family with a legacy RepublishSnapshot leg (llm) is still published by
-// the legacy path when it is NOT listed in intent_domains. Services,
-// environments, and policies are migrated; LLM routes are not yet.
-func TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot(t *testing.T) {
-	ctx := t.Context()
-	logger := zap.NewNop()
-	cfg := warmStartTestCfg()
-
-	routeID := uuid.New()
-	source := newFakeProjectionSource()
-	source.llmRoutes[routeID] = domain.LLMRoute{
-		ID:   routeID,
-		Name: "test-llm-route",
-	}
-
-	repo := repositorytest.NewInMemoryNostrEventRepository()
-	sink := &captureProjectionPublisher{}
-	// Service, environment, and policy are migrated; LLM is NOT.
-	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithLLMProjectionSource(source),
-		WithIntentDomains([]string{"service", "environment", "policy"}),
-		WithReadinessTracker(newImmediateReadiness()),
-		WithProjectorRepairInterval(-1))
-
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- p.Run(runCtx) }()
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	<-done
-
-	// LLM is NOT migrated → still published via RepublishSnapshot.
-	llmCount := countByDomain(sink.events, "llm")
-	if llmCount == 0 {
-		t.Errorf("unmigrated domain: expected LLM route publishes from legacy snapshot, got 0")
-	}
-}
+// Phase 3 L1: TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot removed —
+// LLM projection legs were removed from the projector. LLM 30900 records are
+// now published by the intent handler, ContextVM handler, and registry service
+// directly, so the projector no longer has an LLM-unmigrated domain to test.
 
 func TestWarmStartPeriodicRepairSkipsMigratedDomains(t *testing.T) {
 	ctx := t.Context()

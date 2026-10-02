@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
 )
@@ -193,12 +193,13 @@ func TestLLMRouteStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	relay := newReplaceableRelay()
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
-	state := domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync, UpdatedAt: time.Now().UTC()}
-	if err := projector.publishLLMRouteState(ctx, &state); err != nil {
+	// Phase 3 L1: LLM publish methods moved out of projector; use publishControlState directly.
+	dTag := fmt.Sprintf("%s:%s", routeID, envID)
+	if err := projector.publishControlState(ctx, KindLLMRouteState, dTag, false, nil, `{"route_id":"`+routeID.String()+`"}`, "llm_route_state", nil); err != nil {
 		t.Fatalf("publish LLM route state: %v", err)
 	}
 	live := onlyLive(t, relay, KindLLMRouteState)
-	if err := projector.publishLLMRouteStateTombstone(ctx, events.ResourceData{RouteID: routeID.String(), EnvironmentID: envID.String(), Deleted: true}); err != nil {
+	if err := projector.publishControlState(ctx, KindLLMRouteState, dTag, true, nil, `{"deleted":true}`, "llm_route_state", nil); err != nil {
 		t.Fatalf("publish LLM route state tombstone: %v", err)
 	}
 	assertRelayTombstoned(t, relay, live)

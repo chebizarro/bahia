@@ -822,58 +822,22 @@ func TestProjectorPublishesMLReadModelSnapshot(t *testing.T) {
 // build/artifact/intent/run cp-state publication — moved to RegistryService
 // (bahia-irsry.11.7, Phase 3 S2).
 
-func TestProjectorRepublishesLLMRouteAndState(t *testing.T) {
+// Phase 3 L1: TestProjectorRepublishesLLMRouteAndState removed —
+// LLM projection is now handled outside the projector.
+
+func TestProjectorPublishesLLMAuditFromRunEvent(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UTC()
-	routeID := uuid.New()
-	envID := uuid.New()
-	releaseID := uuid.New()
-	intentID := uuid.New()
-	runID := uuid.New()
-
-	source := newFakeProjectionSource()
-	source.llmRoutes[routeID] = domain.LLMRoute{ID: routeID, Name: "chat", GatewayConfig: &domain.LLMGatewayRouteConfig{PublicModel: "chat-public"}, CreatedAt: now, UpdatedAt: now}
-	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusInSync, GatewayStatus: domain.GatewayRouteStatusSynced, BackendKind: domain.LLMBackendKindVLLM, BackendHealth: domain.HealthStatusHealthy, UpdatedAt: now}
-
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-
-	routeEvent := assertOneSignedKind(t, sink, KindLLMRouteRegistry)
-	assertTag(t, routeEvent, "route", routeID.String())
-	assertTag(t, routeEvent, "model", "chat-public")
-	stateEvent := assertOneSignedKind(t, sink, KindLLMRouteState)
-	assertTag(t, stateEvent, "route", routeID.String())
-	assertTag(t, stateEvent, "environment", envID.String())
-	assertTag(t, stateEvent, "release", releaseID.String())
-	assertTag(t, stateEvent, "intent", intentID.String())
-	assertTag(t, stateEvent, "run", runID.String())
-	assertTag(t, stateEvent, "gateway_status", string(domain.GatewayRouteStatusSynced))
-}
-
-func TestProjectorPublishesLLMAuditAndStateFromRunEvent(t *testing.T) {
-	ctx := context.Background()
-	routeID := uuid.New()
-	envID := uuid.New()
-	releaseID := uuid.New()
-	intentID := uuid.New()
 	runID := uuid.New()
 	source := newFakeProjectionSource()
-	source.llmIntents[intentID] = domain.LLMDeploymentIntent{ID: intentID, RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID}
-	source.llmRuns[runID] = domain.LLMDeploymentRun{ID: runID, DeploymentIntentID: intentID, Status: domain.RunStatusRunning}
-	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusDeploying, GatewayStatus: domain.GatewayRouteStatusPending, UpdatedAt: time.Now().UTC()}
 
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunStatusChanged, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
+	// Phase 3 L1: projector still publishes audit events for LLM, but no longer
+	// publishes LLM state (that is now done by the LLM registry service directly).
 	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunStatusChanged)
 	assertTag(t, audit, "run", runID.String())
-	stateEvent := assertOneSignedKind(t, sink, KindLLMRouteState)
-	assertTag(t, stateEvent, "route", routeID.String())
-	assertTag(t, stateEvent, "environment", envID.String())
 }
 
 func projectorTestConfig() config.NostrConfig {

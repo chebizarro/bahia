@@ -26,6 +26,7 @@ type LLMRegistryService struct {
 	observations repository.LLMRouteObservationRepository
 	state        repository.LLMRouteStateRepository
 	ml           *MLRegistryService
+	cpState      func(ctx context.Context, state *domain.LLMRouteState)
 	publisher    events.Publisher
 	logger       *zap.Logger
 }
@@ -62,6 +63,14 @@ func NewMLBackedLLMRegistryService(ml *MLRegistryService, environments repositor
 func (s *LLMRegistryService) WithMLRegistry(ml *MLRegistryService) *LLMRegistryService {
 	s.ml = ml
 	return s
+}
+
+// SetLLMCPStatePublisher configures the canonical cp-state publisher for LLM
+// route state records (Phase 3 L1, bahia-irsry.11.10). After each state
+// mutation the service calls this function to publish a 30900 record, replacing
+// the projector's reactive handleEvent LLM state leg.
+func (s *LLMRegistryService) SetLLMCPStatePublisher(fn func(ctx context.Context, state *domain.LLMRouteState)) {
+	s.cpState = fn
 }
 
 func (s *LLMRegistryService) mlBacked() bool {
@@ -983,6 +992,11 @@ func (s *LLMRegistryService) publishStateChanged(ctx context.Context, state *dom
 		data.RunID = state.ActiveRunID.String()
 	}
 	s.publish(ctx, events.EventLLMRouteStateChanged, state.RouteID.String()+":"+state.EnvironmentID.String(), data)
+	// Phase 3 L1: publish canonical 30900 route state record directly from the
+	// mutation site, replacing the projector's reactive handleEvent leg.
+	if s.cpState != nil {
+		s.cpState(ctx, state)
+	}
 }
 
 func defaultRouteGatewayConfig(route *domain.LLMRoute) {

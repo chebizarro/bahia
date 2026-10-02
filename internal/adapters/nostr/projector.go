@@ -44,16 +44,7 @@ type ProjectionSource interface {
 	ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error)
 }
 
-// LLMProjectionSource is the authoritative LLM state reader used by the projector.
 // service.LLMRegistryService satisfies this interface.
-type LLMProjectionSource interface {
-	ListLLMRoutes(ctx context.Context, limit, offset int) ([]domain.LLMRoute, error)
-	GetLLMRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error)
-	ListAllLLMRouteStates(ctx context.Context) ([]domain.LLMRouteState, error)
-	GetLLMRouteState(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteState, error)
-	GetLLMDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error)
-	GetLLMDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error)
-}
 
 type MLProjectionSource interface {
 	ListModels(ctx context.Context, task domain.MLTaskKind, limit, offset int) ([]domain.MLModel, error)
@@ -177,7 +168,6 @@ type ProjectionPublisher interface {
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
 	source                ProjectionSource
-	llmSource             LLMProjectionSource
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
 	workerReadModelSource WorkerReadModelProjectionSource
@@ -232,10 +222,6 @@ func WithBackupProjectionStaleTimeout(timeout time.Duration) ProjectorOption {
 	}
 }
 
-func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.llmSource = source }
-}
-
 func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.mlSource = source }
 }
@@ -247,7 +233,6 @@ func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.workerReadModelSource = source }
 }
-
 
 func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.backupSource = source }
@@ -464,36 +449,9 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	// methods (bahia-irsry.11.7).
 	// Phase 3 S3: policy state is published directly by PolicyIntentHandler.
 	policiesPublished := 0
-	llmRoutes := 0
-	llmStates := 0
-	if p.llmSource != nil {
-		const pageSize = 500
-		for offset := 0; ; offset += pageSize {
-			routes, err := p.llmSource.ListLLMRoutes(ctx, pageSize, offset)
-			if err != nil {
-				return fmt.Errorf("list LLM routes: %w", err)
-			}
-			llmRoutes += len(routes)
-			for i := range routes {
-				if err := p.publishLLMRouteRegistry(ctx, &routes[i], false); err != nil {
-					p.logger.Warn("publish LLM route registry projection failed", zap.String("route_id", routes[i].ID.String()), zap.Error(err))
-				}
-			}
-			if len(routes) < pageSize {
-				break
-			}
-		}
-		states, err := p.llmSource.ListAllLLMRouteStates(ctx)
-		if err != nil {
-			return fmt.Errorf("list LLM route states: %w", err)
-		}
-		llmStates = len(states)
-		for i := range states {
-			if err := p.publishLLMRouteState(ctx, &states[i]); err != nil {
-				p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", states[i].RouteID.String()), zap.String("environment_id", states[i].EnvironmentID.String()), zap.Error(err))
-			}
-		}
-	}
+	// Phase 3 L1: LLM route registry and state records are published
+	// directly from the mutation site (intent handler, ContextVM handler,
+	// registry service). RepublishSnapshot LLM block removed.
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
 	workerAssignments, workerDrains := p.publishWorkerReadModelSnapshots(ctx)
 	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications, backupRetentions, backupPostures := p.publishBackupSnapshots(ctx)
@@ -501,7 +459,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	// records are now published by the DNSCanonicalPublisher wired to the
 	// reconciler, triggered by bus events instead of this 10-minute timer.
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -532,28 +490,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 	case events.EventAdoptionImported:
 		p.publishServiceByID(ctx, res.ServiceID)
 		p.publishEnvironmentByID(ctx, res.EnvironmentID)
-	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated:
-		p.publishLLMRouteByID(ctx, firstString(res.RouteID, e.EntityID))
-	case events.EventLLMReleaseRegistered:
-		p.publishLLMRouteByID(ctx, res.RouteID)
-	case events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected:
-		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
-			p.publishLLMStateForIntent(ctx, id)
-		}
-	case events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted:
-		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
-			p.publishLLMStateForRun(ctx, id)
-		} else if id, ok := parseUUID(res.IntentID); ok {
-			p.publishLLMStateForIntent(ctx, id)
-		}
-	case events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected, events.EventLLMGatewayRouteSynced:
-		if res.Deleted {
-			if err := p.publishLLMRouteStateTombstone(ctx, res); err != nil {
-				p.logger.Warn("publish LLM route state tombstone failed", zap.String("route_id", res.RouteID), zap.String("environment_id", res.EnvironmentID), zap.Error(err))
-			}
-		} else {
-			p.publishLLMStateForResource(ctx, res)
-		}
+	// Phase 3 L1: LLM handleEvent cases removed — route registry and state
+	// records are published directly from the mutation site (intent handler,
+	// ContextVM handler, registry service) instead of reactively here.
 	case service.EventMLModelChanged:
 		p.publishMLModelByID(ctx, firstString(stringifyMapValue(e.Data, "model_id"), e.EntityID))
 	case service.EventMLVersionChanged:
@@ -659,81 +598,6 @@ func (p *Projector) publishEnvironmentByID(ctx context.Context, raw string) {
 // Phase 3 S1: publishStateForIntent, publishStateForRun, publishStateForResource,
 // and publishStateForIDs removed — state is now published directly by the
 // reconciler via RuntimeStatePublisher (bahia-irsry.11.6).
-
-func (p *Projector) publishLLMRouteByID(ctx context.Context, raw string) {
-	if p.llmSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	route, err := p.llmSource.GetLLMRoute(ctx, id)
-	if err != nil || route == nil {
-		if err != nil {
-			p.logger.Warn("read LLM route for projection failed", zap.String("route_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishLLMRouteRegistry(ctx, route, false); err != nil {
-		p.logger.Warn("publish LLM route registry projection failed", zap.String("route_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishLLMStateForIntent(ctx context.Context, intentID uuid.UUID) {
-	if p.llmSource == nil {
-		return
-	}
-	intent, err := p.llmSource.GetLLMDeploymentIntent(ctx, intentID)
-	if err != nil || intent == nil {
-		if err != nil {
-			p.logger.Warn("read LLM deployment intent for projection failed", zap.String("intent_id", intentID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishLLMStateForIDs(ctx, intent.RouteID, intent.EnvironmentID)
-}
-
-func (p *Projector) publishLLMStateForRun(ctx context.Context, runID uuid.UUID) {
-	if p.llmSource == nil {
-		return
-	}
-	run, err := p.llmSource.GetLLMDeploymentRun(ctx, runID)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read LLM deployment run for projection failed", zap.String("run_id", runID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishLLMStateForIntent(ctx, run.DeploymentIntentID)
-}
-
-func (p *Projector) publishLLMStateForResource(ctx context.Context, res events.ResourceData) {
-	routeID, routeOK := parseUUID(res.RouteID)
-	envID, envOK := parseUUID(res.EnvironmentID)
-	if !routeOK || !envOK {
-		return
-	}
-	p.publishLLMStateForIDs(ctx, routeID, envID)
-}
-
-func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uuid.UUID) {
-	if p.llmSource == nil {
-		return
-	}
-	state, err := p.llmSource.GetLLMRouteState(ctx, routeID, envID)
-	if err != nil || state == nil {
-		if err != nil {
-			p.logger.Warn("read LLM route state for projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishLLMRouteState(ctx, state); err != nil {
-		p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
-	}
-}
-
-
 
 func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, versionsPublished, endpointsPublished, statesPublished, provenancePublished, capabilitiesPublished int) {
 	if p.mlSource != nil {
@@ -1359,26 +1223,6 @@ func canonicalStateDTag(legacyKind int, id string) string {
 	return id
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // publishSBOMSnapshots rebuilds canonical SBOM Nostr events (30078 references and
 // 30004 availability lists) from published manifests in the persistent repository.
 // This ensures SBOM events survive relay sidecar restarts.
@@ -1543,10 +1387,6 @@ func predicateTypeForSBOMFormat(format domain.SBOMFormat) domain.SBOMAttestation
 	}
 }
 
-
-
-
-
 func dnsZoneDTag(name string) string {
 	return "zone:" + strings.TrimSpace(name)
 }
@@ -1562,8 +1402,6 @@ func dnsPolicyDTag(id uuid.UUID) string {
 // dnsStateLegacyKinds are the DNS read-model families the projector derives
 // (and therefore must tombstone) itself.
 var dnsStateLegacyKinds = []int{KindDNSEndpointState, KindDNSZoneState, KindDNSBackendState, KindDNSPolicyState}
-
-
 
 // dnsRetainedRecord is the newest retained event on one live coordinate.
 type dnsRetainedRecord struct {
@@ -1687,8 +1525,6 @@ func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
 	}
 	return tags
 }
-
-
 
 type observedDeploymentDiscovery struct {
 	ServiceID           string `json:"service_id"`
@@ -2607,95 +2443,6 @@ func (p *Projector) publishWorkerReadModelSnapshots(ctx context.Context) (assign
 	return
 }
 
-func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.LLMRoute, deleted bool) error {
-	content := map[string]any{
-		"deleted": deleted,
-		"id":      route.ID.String(),
-	}
-	if !deleted {
-		content["name"] = route.Name
-		content["description"] = route.Description
-		content["gateway_config"] = route.GatewayConfig
-		content["default_placement_policy"] = route.DefaultPlacementPolicy
-		content["default_promotion_gate"] = route.DefaultPromotionGate
-		content["metadata"] = route.Metadata
-		content["created_at"] = formatTime(route.CreatedAt)
-		content["updated_at"] = formatTime(route.UpdatedAt)
-	} else {
-		content["updated_at"] = formatTime(route.UpdatedAt)
-	}
-	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{{"route", route.ID.String()}}
-	if !deleted {
-		tags = append(tags, gonostr.Tag{"name", route.Name})
-		if route.GatewayConfig != nil && route.GatewayConfig.PublicModel != "" {
-			tags = append(tags, gonostr.Tag{"model", route.GatewayConfig.PublicModel})
-		}
-	}
-	return p.publishControlState(ctx, KindLLMRouteRegistry, route.ID.String(), deleted, tags, string(contentJSON), "llm_route.projection", &route.ID)
-}
-
-func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMRouteState) error {
-	content := map[string]any{
-		"deleted":          false,
-		"route_id":         state.RouteID.String(),
-		"environment_id":   state.EnvironmentID.String(),
-		"drift_status":     string(state.DriftStatus),
-		"gateway_status":   string(state.GatewayStatus),
-		"backend_kind":     string(state.BackendKind),
-		"backend_endpoint": state.BackendEndpoint,
-		"backend_health":   string(state.BackendHealth),
-		"gateway_target":   state.GatewayTarget,
-		"updated_at":       formatTime(state.UpdatedAt),
-	}
-	if state.DesiredReleaseID != nil {
-		content["desired_release_id"] = state.DesiredReleaseID.String()
-	}
-	if state.DesiredIntentID != nil {
-		content["desired_intent_id"] = state.DesiredIntentID.String()
-	}
-	if state.ActiveRunID != nil {
-		content["active_run_id"] = state.ActiveRunID.String()
-	}
-	if state.CurrentObservationID != nil {
-		content["current_observation_id"] = state.CurrentObservationID.String()
-	}
-	if state.LastReconciledAt != nil {
-		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
-	}
-	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{
-		{"route", state.RouteID.String()},
-		{"environment", state.EnvironmentID.String()},
-		{"drift_status", string(state.DriftStatus)},
-		{"gateway_status", string(state.GatewayStatus)},
-	}
-	if state.DesiredReleaseID != nil {
-		tags = append(tags, gonostr.Tag{"release", state.DesiredReleaseID.String()})
-	}
-	if state.DesiredIntentID != nil {
-		tags = append(tags, gonostr.Tag{"intent", state.DesiredIntentID.String()})
-	}
-	if state.ActiveRunID != nil {
-		tags = append(tags, gonostr.Tag{"run", state.ActiveRunID.String()})
-	}
-	if state.BackendKind != "" {
-		tags = append(tags, gonostr.Tag{"backend", string(state.BackendKind)})
-	}
-	return p.publishControlState(ctx, KindLLMRouteState, llmRouteStateDTag(state.RouteID, state.EnvironmentID), false, tags, string(contentJSON), "llm_route_state.projection", &state.RouteID)
-}
-
-func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res events.ResourceData) error {
-	routeID, routeOK := parseUUID(res.RouteID)
-	envID, envOK := parseUUID(res.EnvironmentID)
-	if !routeOK || !envOK {
-		return nil
-	}
-	content := map[string]any{"deleted": true, "route_id": routeID.String(), "environment_id": envID.String(), "updated_at": formatTime(time.Now().UTC())}
-	tags := gonostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}}
-	return p.publishReplaceableTombstone(ctx, KindLLMRouteState, llmRouteStateDTag(routeID, envID), tags, content, "llm_route_state.projection", &routeID)
-}
-
 // Phase 3 S1: publishState removed — the shared record builder
 // RuntimeStateRecord in control_state_contract.go replaces it, and the
 // reconciler publishes via RuntimeStatePublisher (bahia-irsry.11.6).
@@ -2705,15 +2452,6 @@ func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res event
 func serviceStateDTag(serviceID, environmentID uuid.UUID) string {
 	return fmt.Sprintf("service:%s:environment:%s", serviceID, environmentID)
 }
-
-// llmRouteStateDTag is the one coordinate builder for LLM route state.
-func llmRouteStateDTag(routeID, environmentID uuid.UUID) string {
-	return fmt.Sprintf("%s:%s", routeID, environmentID)
-}
-
-
-
-
 
 func auditDomainForEvent(t events.EventType) string {
 	s := string(t)
@@ -3045,5 +2783,3 @@ func desiredStateTarget(spec *domain.DesiredServiceSpec) string {
 	}
 	return spec.StableServiceKey
 }
-
-
