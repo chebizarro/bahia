@@ -1,5 +1,4 @@
 import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { publishCommand, resultContent } from './public-controlplane.svelte.js';
 import { encryptNip44 } from '$lib/nostr/nip07-crypto.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
@@ -180,14 +179,10 @@ export async function createServiceSecret(serviceId, payload) {
   const info = await ensureEncryptedSecrets();
   const servicePubkey = servicePubkeyFromSystemInfo(info);
   const { value, ...rest } = payload;
-  // Phase 3 N1: NIP-44 encrypt secret value client-side to the daemon pubkey.
+  // NIP-44 encrypt secret value client-side to the daemon pubkey.
   // The server stores the ciphertext as-is and never sees plaintext.
   const encrypted_value = value ? await encryptNip44(servicePubkey, value) : undefined;
-  const event = await publishCommand({
-    operation: SERVICE_SECRET_ENCRYPTED_OPERATIONS.create,
-    payload: { service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) }
-  });
-  const result = resultContent(event);
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.create, { service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) });
   const secret = result?.secret ?? result;
   if (secret?.id) upsertServiceSecret(id, secret);
   return secret;
@@ -198,13 +193,9 @@ export async function updateServiceSecret(serviceId, secretId, payload) {
   const info = await ensureEncryptedSecrets();
   const servicePubkey = servicePubkeyFromSystemInfo(info);
   const { value, ...rest } = payload;
-  // Phase 3 N1: NIP-44 encrypt secret value client-side to the daemon pubkey.
+  // NIP-44 encrypt secret value client-side to the daemon pubkey.
   const encrypted_value = value ? await encryptNip44(servicePubkey, value) : undefined;
-  const event = await publishCommand({
-    operation: SERVICE_SECRET_ENCRYPTED_OPERATIONS.update,
-    payload: { service_id: id, secret_id: secretId, ...rest, ...(encrypted_value ? { encrypted_value } : {}) }
-  });
-  const result = resultContent(event);
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.update, { service_id: id, secret_id: secretId, ...rest, ...(encrypted_value ? { encrypted_value } : {}) });
   const secret = result?.secret ?? result;
   if (secret?.id) upsertServiceSecret(id, secret);
   return secret;
@@ -212,11 +203,7 @@ export async function updateServiceSecret(serviceId, secretId, payload) {
 
 export async function deleteServiceSecret(serviceId, secretId) {
   const id = String(serviceId || '').trim();
-  const event = await publishCommand({
-    operation: SERVICE_SECRET_ENCRYPTED_OPERATIONS.delete,
-    payload: { service_id: id, secret_id: secretId }
-  });
-  const result = resultContent(event);
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.delete, { service_id: id, secret_id: secretId });
   const current = serviceSecretsState.secretsByService[id] || [];
   setServiceSecrets(id, current.filter((secret) => secret.id !== secretId));
   return result;

@@ -1,5 +1,4 @@
 import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { publishCommand, resultContent } from './public-controlplane.svelte.js';
 import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
@@ -96,29 +95,26 @@ export async function getNotificationChannel(id) {
 }
 
 export async function createNotificationChannel(payload) {
-  // Phase 3 N1: notification mutations go through intent publishing.
-  const event = await publishCommand({ operation: 'notification/create', payload });
-  const result = resultContent(event);
-  const channel = result?.channel ?? null;
+  await ensureEncryptedNotifications();
+  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.createChannel, payload });
+  const channel = extractEncryptedPayload(response)?.channel ?? null;
   if (channel) upsertChannel(channel);
   return channel;
 }
 
 export async function updateNotificationChannel(id, patch) {
-  // Phase 3 N1: notification mutations go through intent publishing.
-  const event = await publishCommand({ operation: 'notification/update', payload: { id, ...patch } });
-  const result = resultContent(event);
-  const channel = result?.channel ?? null;
+  await ensureEncryptedNotifications();
+  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.updateChannel, payload: { id, ...patch } });
+  const channel = extractEncryptedPayload(response)?.channel ?? null;
   if (channel) upsertChannel(channel);
   return channel;
 }
 
 export async function deleteNotificationChannel(id) {
-  // Phase 3 N1: notification mutations go through intent publishing.
-  const event = await publishCommand({ operation: 'notification/delete', payload: { id } });
-  const result = resultContent(event);
+  await ensureEncryptedNotifications();
+  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.deleteChannel, payload: { id } });
   notificationState.channels = notificationState.channels.filter((channel) => channel.id !== id);
-  return result;
+  return extractEncryptedPayload(response);
 }
 
 export async function testNotificationChannel(id) {

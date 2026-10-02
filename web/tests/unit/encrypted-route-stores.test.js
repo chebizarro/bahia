@@ -39,8 +39,6 @@ describe('encrypted route stores', () => {
     const secretId = 'secret-1';
     encryptedRequestsMock.requestEncryptedResult
       .mockResolvedValueOnce({ result: { secrets: [{ id: secretId, name: 'TOKEN', version: 1 }] } })
-      // Phase 3 N1: create/delete go through publishCommand → requestEncryptedResult.
-      // publishCommand wraps the result through throwIfErrorResult.
       .mockResolvedValueOnce({ requestEventId: 'req-2', result: { secret: { id: 'secret-2', name: 'API_KEY', version: 1 }, status: 'created' } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } })
       .mockResolvedValueOnce({ requestEventId: 'req-4', result: { status: 'deleted', secret_id: secretId } });
@@ -55,14 +53,14 @@ describe('encrypted route stores', () => {
 
     // List still uses ContextVM encrypted request
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, expect.objectContaining({ operation: 'services.secrets.list', payload: { service_id: serviceId } }));
-    // Create now goes through publishCommand with encrypted_value (NIP-44 client-side encryption)
+    // Create uses gift-wrapped requestEncryptedResult with NIP-44 client-side encrypted_value
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, expect.objectContaining({
       operation: 'services.secrets.create',
       payload: { service_id: serviceId, name: 'API_KEY', encrypted_value: 'encrypted:super-secret' }
     }));
     // Reveal still uses ContextVM
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
-    // Delete goes through publishCommand
+    // Delete uses gift-wrapped requestEncryptedResult
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, expect.objectContaining({
       operation: 'services.secrets.delete',
       payload: { service_id: serviceId, secret_id: secretId }
