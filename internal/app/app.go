@@ -961,19 +961,27 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
 		llmCoordinator.SetupSubscriptions(publisher)
-		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
+		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
+		llmReconciler.SetupSubscriptions(publisher)
 		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
 		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
 	var dnsProjector *reconcile.DNSProjector
+	var dnsReconciler *reconcile.DNSReconciler
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
 	var dnsOperator controlplane.DNSControlPlaneOperator
 	var dnsBackendClosers []io.Closer
+	var dnsAgentHealthReader *dnsAdapter.AgentHealthReader
+	var dnsZoneSyncPublisher *dnsAdapter.DeferredZoneSyncPublisher
 	if cfg.DNS.Enabled {
-		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, logger)
+		// Phase 3 D1: create agent health reader and deferred publisher for
+		// capability-negotiated backend switching (C-34).
+		dnsAgentHealthReader = dnsAdapter.NewAgentHealthReader(logger)
+		dnsZoneSyncPublisher = &dnsAdapter.DeferredZoneSyncPublisher{}
+		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, dnsAgentHealthReader, dnsZoneSyncPublisher, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -994,7 +1002,7 @@ func New(cfg *config.Config) (*App, error) {
 		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
 			dnsProjector.SetPolicySource(policySource)
 		}
-		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		dnsReconciler = reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		dnsReconciler.SetPublisher(publisher)
 		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
 		dnsReconciler.SetupSubscriptions(publisher)
@@ -1004,6 +1012,26 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
 		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
+
+		// Phase 3 D1: subscribe to NIP-38 agent health events so the daemon
+		// reads agent health and capabilities from events instead of RPC.
+		if dnsAgentHealthReader != nil {
+			var agentPubkeys []string
+			for _, backendCfg := range cfg.DNS.Backends {
+				if backendCfg.Type == string(domain.DNSBackendTypeDnsmasqAgent) && backendCfg.AgentPubkey != "" {
+					agentPubkeys = append(agentPubkeys, backendCfg.AgentPubkey)
+				}
+			}
+			if len(agentPubkeys) > 0 {
+				bgManager.RegisterWithOptions(&agentHealthSubscriber{
+					pool:     controlPlanePool,
+					pubkeys:  agentPubkeys,
+					reader:   dnsAgentHealthReader,
+					logger:   logger,
+				}, RunnerTier(Tier3))
+				logger.Info("DNS agent health subscriber registered", zap.Int("agents", len(agentPubkeys)))
+			}
+		}
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
 
@@ -1033,9 +1061,6 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
-	}
-	if llmRegistry != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
 	}
 	if dnsProjector != nil {
 		projectorOpts = append(projectorOpts,
@@ -1128,6 +1153,23 @@ func New(cfg *config.Config) (*App, error) {
 
 	nostrProjector.SetupSubscriptions(publisher)
 
+	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
+	// each material reconcile so DNS records publish once per mutation instead
+	// of O(fleet) per projector tick (B-17).
+	if dnsReconciler != nil {
+		dnsCanonicalPub := nostrAdapter.NewDNSCanonicalPublisher(nostrProjector, logger)
+		if err := dnsCanonicalPub.HydrateFromStore(ctx); err != nil {
+			logger.Warn("DNS canonical publisher hydration failed", zap.Error(err))
+		}
+		dnsReconciler.SetCanonicalPublisher(dnsCanonicalPub)
+		// Wire the deferred zone sync publisher to the real canonical publisher
+		// so the capability-aware backend can publish zone sync events.
+		if dnsZoneSyncPublisher != nil {
+			dnsZoneSyncPublisher.SetDelegate(dnsCanonicalPub)
+		}
+		logger.Info("DNS canonical publisher wired to reconciler (Phase 3 D1)")
+	}
+
 	// Phase 3 F2: register service domain intent handler.
 	// Uses the relay-first registry when available (canonical 30900 published
 	// before DB write), falling back to the plain registry.
@@ -1210,6 +1252,107 @@ func New(cfg *config.Config) (*App, error) {
 			},
 		))
 		logger.Info("policy intent handler registered")
+	}
+
+	// Phase 3 L1: LLMRouteStatePublisher for canonical 30900 via PublishBeforeCommit.
+	// Created unconditionally so both the legacy (non-intent) ContextVM path and
+	// the intent handler path use the same sign-and-publish closure.
+	var llmRoutePublisher controlplane.LLMRouteStatePublisher
+	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+		var llmPubMu sync.Mutex
+		llmFingerprints := make(map[string]struct{})
+		llmLastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
+		llmRoutePublisher = func(ctx context.Context, route *domain.LLMRoute, deleted bool) error {
+			fp := fmt.Sprintf("%s:%t:%d", route.ID, deleted, route.UpdatedAt.UnixNano())
+			llmPubMu.Lock()
+			if _, dup := llmFingerprints[fp]; dup {
+				llmPubMu.Unlock()
+				return nil
+			}
+			llmFingerprints[fp] = struct{}{}
+			createdAt := nostr.Now()
+			if last := llmLastPublishedAt[route.ID]; createdAt <= last {
+				createdAt = last + 1
+			}
+			llmLastPublishedAt[route.ID] = createdAt
+			llmPubMu.Unlock()
+			recordTags, recordContent := controlplane.LLMRouteRegistryRecord(route, deleted)
+			deletedStr := "false"
+			if deleted {
+				deletedStr = "true"
+			}
+				tags := nostr.Tags{
+				{"d", route.ID.String()},
+				{"domain", "llm-route"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindLLMRouteRegistry)},
+				{"deleted", deletedStr},
+				{"t", kinds.CPStateTopicLLMRoute},
+			}
+				tags = append(tags, recordTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: createdAt,
+				Tags:      tags,
+				Content:   recordContent,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				return fmt.Errorf("sign LLM route state event: %w", err)
+			}
+			return nostrPub.PublishBeforeCommit(ctx, ev, "llm_route", &route.ID)
+		}
+	}
+	// Register the intent handler when the llm domain is enabled.
+	if enabledDomains["llm"] && llmRegistry != nil {
+		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
+			controlplane.LLMRouteIntentHandlerConfig{
+				Routes:  llmRegistry,
+				Publish: llmRoutePublisher,
+				Status:  intentStatus,
+				Logger:  logger,
+			},
+		))
+		logger.Info("LLM route intent handler registered")
+	}
+	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
+	// so state mutations publish 30900 records directly instead of through the projector.
+	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+		var llmStatePubMu sync.Mutex
+		llmStateFingerprints := make(map[string]struct{})
+		llmRegistry.SetLLMCPStatePublisher(func(ctx context.Context, state *domain.LLMRouteState) {
+			fp := fmt.Sprintf("%s:%s:%d", state.RouteID, state.EnvironmentID, state.UpdatedAt.UnixNano())
+			llmStatePubMu.Lock()
+			if _, dup := llmStateFingerprints[fp]; dup {
+				llmStatePubMu.Unlock()
+				return
+			}
+			llmStateFingerprints[fp] = struct{}{}
+			llmStatePubMu.Unlock()
+			recordTags, recordContent := controlplane.LLMRouteStateRecord(state)
+			dTag := controlplane.LLMRouteStateDTag(state.RouteID, state.EnvironmentID)
+				tags := nostr.Tags{
+				{"d", dTag},
+				{"domain", "llm-state"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", nostrAdapter.KindLLMRouteState)},
+				{"deleted", "false"},
+				{"t", kinds.CPStateTopicLLMState},
+			}
+				tags = append(tags, recordTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: nostr.Now(),
+				Tags:      tags,
+				Content:   recordContent,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				logger.Warn("sign LLM route state event failed", zap.Error(err))
+				return
+			}
+			if err := nostrPub.PublishBeforeCommit(ctx, ev, "llm_route_state", nil); err != nil {
+				logger.Warn("publish LLM route state cp-state failed", zap.Error(err))
+			}
+		})
 	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -2004,9 +2147,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 			controlplane.WithMLRegistry(mlRegistry),
 		}, nostrEventRepo)
-		if llmRegistry != nil {
-			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
-		}
 		if assistantOrchestrator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
@@ -2015,6 +2155,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
+		if llmRegistry != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
+		}
 		if policyRepo != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithPolicyService(policySvc))
 			reactorOpts = append(reactorOpts, controlplane.WithIntentProcessor(intentProcessor))
@@ -2022,10 +2165,15 @@ func New(cfg *config.Config) (*App, error) {
 				reactorOpts = append(reactorOpts, controlplane.WithPolicyStatePublisher(policyPublisher))
 			}
 		}
+		// Phase 3 L1: wire LLM route publisher and ContextVM handlers.
+		if llmRoutePublisher != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithLLMRouteStatePublisher(llmRoutePublisher))
+		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
 		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
+		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
@@ -3273,7 +3421,7 @@ func internalRoutingConfigHash(cfg config.InternalRoutingConfig) string {
 // buildDNSRuntime returns the configured zones and backend resolver plus the
 // closers for backends that own remote transports; the caller must close them
 // on shutdown. On error, any already-created backends are closed before return.
-func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRelays []string, signer nostr.Signer, senderPubkey string, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, []io.Closer, error) {
+func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRelays []string, signer nostr.Signer, senderPubkey string, agentHealthReader *dnsAdapter.AgentHealthReader, deferredPublisher *dnsAdapter.DeferredZoneSyncPublisher, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, []io.Closer, error) {
 	var closers []io.Closer
 	succeeded := false
 	defer func() {
@@ -3346,7 +3494,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			if len(relays) == 0 {
 				relays = controlPlaneRelays
 			}
-			backend, err := dnsAdapter.NewRelayDnsmasqAgentBackend(dnsAdapter.DnsmasqAgentConfig{
+			rpcBackend, err := dnsAdapter.NewRelayDnsmasqAgentBackend(dnsAdapter.DnsmasqAgentConfig{
 				Relays:        relays,
 				Signer:        signer,
 				SenderPubkey:  senderPubkey,
@@ -3358,7 +3506,19 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("configuring DNS dnsmasq agent backend %q: %w", ref, err)
 			}
-			closers = append(closers, backend)
+			// Phase 3 D1 (C-34): wrap with capability-aware backend. When the
+			// agent advertises "zone-subscribe" via NIP-38, use event publish;
+			// otherwise fall back to ContextVM RPC for old agents.
+			var backend dnsAdapter.Backend
+			if agentHealthReader != nil && deferredPublisher != nil {
+				eventBackend := dnsAdapter.NewEventPublishDNSBackend(deferredPublisher, logger)
+				capBackend := dnsAdapter.NewCapabilityAwareDNSBackend(rpcBackend, eventBackend, agentHealthReader, backendConfig.AgentPubkey, logger)
+				closers = append(closers, capBackend)
+				backend = capBackend
+			} else {
+				closers = append(closers, rpcBackend)
+				backend = rpcBackend
+			}
 			// The agent is a remote, relay-backed dependency. Do not make Bahia's
 			// process startup depend on a synchronous ContextVM round trip: the DNS
 			// reconciler performs the same health check continuously and surfaces
@@ -3391,6 +3551,58 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 	}
 	succeeded = true
 	return zones, resolver, closers, nil
+}
+
+
+// agentHealthSubscriber is a BackgroundRunner that subscribes to NIP-38 kind
+// 30315 health status events from DNS agents, feeding them to the
+// AgentHealthReader so the daemon reads agent health and capabilities from
+// events instead of ContextVM Health() RPCs (C-34, Phase 3 D1).
+type agentHealthSubscriber struct {
+	pool    *nostrAdapter.RelayPool
+	pubkeys []string
+	reader  *dnsAdapter.AgentHealthReader
+	logger  *zap.Logger
+}
+
+func (s *agentHealthSubscriber) Name() string { return "dns-agent-health-subscriber" }
+
+func (s *agentHealthSubscriber) Run(ctx context.Context) error {
+	return subscribeAgentHealth(ctx, s.pool, s.pubkeys, s.reader, s.logger)
+}
+
+// subscribeAgentHealth subscribes to NIP-38 kind 30315 events from the given
+// agent pubkeys and forwards them to the health reader.
+func subscribeAgentHealth(ctx context.Context, pool *nostrAdapter.RelayPool, agentPubkeys []string, reader *dnsAdapter.AgentHealthReader, logger *zap.Logger) error {
+	pubkeys := make([]nostr.PubKey, 0, len(agentPubkeys))
+	for _, hex := range agentPubkeys {
+		pk, err := nostr.PubKeyFromHex(hex)
+		if err != nil {
+			logger.Warn("invalid agent pubkey for health subscription", zap.String("pubkey", hex), zap.Error(err))
+			continue
+		}
+		pubkeys = append(pubkeys, pk)
+	}
+	if len(pubkeys) == 0 {
+		return nil
+	}
+
+	filter := nostr.Filter{
+		Kinds:   []nostr.Kind{30315},
+		Authors: pubkeys,
+		Tags:    nostr.TagMap{"d": []string{"dns-agent"}},
+	}
+	events, err := pool.SubscribeAll(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return fmt.Errorf("subscribe to agent health events: %w", err)
+	}
+	logger.Info("agent health subscription started", zap.Int("agents", len(pubkeys)))
+	for ev := range events {
+		if ev != nil {
+			reader.HandleEvent(ctx, *ev)
+		}
+	}
+	return nil
 }
 
 func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {

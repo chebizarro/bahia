@@ -211,28 +211,29 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot verifies that a domain
-// family with a legacy RepublishSnapshot leg (llm) is still published by
-// the legacy path when it is NOT listed in intent_domains. Services,
-// environments, and policies are migrated; LLM routes are not yet.
-func TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot(t *testing.T) {
+// TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot verifies that a domain
+// family still on the legacy RepublishSnapshot path (ML) is published by the
+// legacy snapshot when it is NOT listed in intent_domains. Services and
+// environments are migrated; ML models are not yet.
+func TestWarmStartUnmigratedMLModelStillGetsLegacySnapshot(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
 	cfg := warmStartTestCfg()
 
-	routeID := uuid.New()
+	modelID := uuid.New()
 	source := newFakeProjectionSource()
-	source.llmRoutes[routeID] = domain.LLMRoute{
-		ID:   routeID,
-		Name: "test-llm-route",
+	source.mlModels[modelID] = domain.MLModel{
+		ID:   modelID,
+		Slug: "test-model",
+		Name: "Test Model",
 	}
 
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	sink := &captureProjectionPublisher{}
-	// Service, environment, and policy are migrated; LLM is NOT.
+	// Service and environment are migrated; ML is NOT.
 	p := newTestProjector(cfg, source, sink, repo, logger,
-		WithLLMProjectionSource(source),
-		WithIntentDomains([]string{"service", "environment", "policy"}),
+		WithMLProjectionSource(source),
+		WithIntentDomains([]string{"service", "environment"}),
 		WithReadinessTracker(newImmediateReadiness()),
 		WithProjectorRepairInterval(-1))
 
@@ -243,10 +244,14 @@ func TestWarmStartUnmigratedLLMRouteStillGetsLegacySnapshot(t *testing.T) {
 	cancel()
 	<-done
 
-	// LLM is NOT migrated → still published via RepublishSnapshot.
-	llmCount := countByDomain(sink.events, "llm")
-	if llmCount == 0 {
-		t.Errorf("unmigrated domain: expected LLM route publishes from legacy snapshot, got 0")
+	// ML is NOT migrated → still published via RepublishSnapshot.
+	mlCount := countByDomain(sink.events, "ml")
+	if mlCount == 0 {
+		t.Errorf("unmigrated domain: expected ML model publishes from legacy snapshot, got 0")
+	}
+	// Migrated domains should NOT be republished (no history seeded).
+	if n := countByDomain(sink.events, "service"); n != 0 {
+		t.Errorf("migrated domain: expected 0 service publishes, got %d", n)
 	}
 }
 

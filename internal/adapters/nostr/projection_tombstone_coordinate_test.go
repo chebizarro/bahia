@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -11,9 +12,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -158,178 +157,6 @@ func assertNoLegacyDNSKinds(t *testing.T, relay *replaceableRelay) {
 	}
 }
 
-type dnsTestSources struct {
-	endpoints *fakeDNSProjectionSource
-	zones     *fakeDNSZoneProjectionSource
-	backends  *fakeDNSBackendProjectionSource
-	policies  *fakeDNSPolicyProjectionSource
-}
-
-func (s dnsTestSources) options() []ProjectorOption {
-	return []ProjectorOption{WithDNSProjectionSource(s.endpoints), WithDNSZoneProjectionSource(s.zones), WithDNSBackendProjectionSource(s.backends), WithDNSPolicyProjectionSource(s.policies)}
-}
-
-func testDNSEndpoint(name string) domain.DNSEndpoint {
-	port := 8443
-	return domain.DNSEndpoint{
-		Family: domain.DNSEndpointFamilyService, Name: name, Environment: "prod", Zone: "prod.cascadia",
-		FQDN: name + ".prod.cascadia", Protocol: "https", Address: "10.0.1.44", Port: &port,
-		Runtime: string(domain.RuntimeTypeDocker), Health: domain.HealthStatusHealthy, DriftStatus: domain.DriftStatusInSync, Source: "test",
-	}
-}
-
-func fullDNSTestSources(policyID uuid.UUID) dnsTestSources {
-	now := time.Now().UTC()
-	return dnsTestSources{
-		endpoints: &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{testDNSEndpoint("api")}},
-		zones:     &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{Name: "prod.cascadia", Visibility: domain.ZoneVisibilityInternal, BackendRef: "fs-primary", TTL: 60}}},
-		backends:  &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{Ref: "fs-primary", Type: domain.DNSBackendTypeFilesystem, Health: domain.HealthStatusHealthy, ZoneRefs: []string{"prod.cascadia"}, UpdatedAt: now}}},
-		policies: &fakeDNSPolicyProjectionSource{policies: []domain.DNSPolicy{{
-			ID: policyID, Name: "latency-aware", Enabled: true, CreatedAt: now, UpdatedAt: now,
-			Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityInternal}}},
-		}}},
-	}
-}
-
-// TestDNSTombstonesLandOnLiveCoordinate covers the in-process removal path for
-// every DNS family: the tombstone's (kind, pubkey, d) equals the live record's
-// and the relay serves the tombstone afterwards.
-func TestDNSTombstonesLandOnLiveCoordinate(t *testing.T) {
-	ctx := context.Background()
-	sources := fullDNSTestSources(uuid.New())
-	relay := newReplaceableRelay()
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop(), sources.options()...)
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-	live := map[int]gonostr.Event{}
-	for _, kind := range dnsStateLegacyKinds {
-		live[kind] = onlyLive(t, relay, kind)
-	}
-
-	sources.endpoints.endpoints = nil
-	sources.zones.zones = nil
-	sources.backends.backends = nil
-	sources.policies.policies = nil
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after removal: %v", err)
-	}
-	for _, kind := range dnsStateLegacyKinds {
-		assertRelayTombstoned(t, relay, live[kind])
-	}
-	assertNoLegacyDNSKinds(t, relay)
-}
-
-// TestDNSSnapshotRepairTombstonesRowsRemovedWhileDown is the restart path: a
-// fresh projector (empty memory, same retained event store) must tombstone the
-// DNS rows that vanished while the daemon was down, on their live coordinate,
-// and must not re-sign the rows that are unchanged.
-func TestDNSSnapshotRepairTombstonesRowsRemovedWhileDown(t *testing.T) {
-	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
-	relay := newReplaceableRelay()
-	sources := fullDNSTestSources(uuid.New())
-	sources.endpoints.endpoints = append(sources.endpoints.endpoints, testDNSEndpoint("web"))
-
-	before := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), sources.options()...)
-	if err := before.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot before restart: %v", err)
-	}
-	var removedEndpoint, keptEndpoint gonostr.Event
-	for _, ev := range relay.liveByLegacyKind(KindDNSEndpointState) {
-		switch eventDTag(ev) {
-		case "endpoint:service:api:prod":
-			removedEndpoint = ev
-		case "endpoint:service:web:prod":
-			keptEndpoint = ev
-		}
-	}
-	if removedEndpoint.ID == (gonostr.ID{}) || keptEndpoint.ID == (gonostr.ID{}) {
-		t.Fatalf("expected both endpoints live before restart")
-	}
-	removed := []gonostr.Event{removedEndpoint}
-	for _, kind := range []int{KindDNSZoneState, KindDNSBackendState, KindDNSPolicyState} {
-		removed = append(removed, onlyLive(t, relay, kind))
-	}
-
-	// Daemon is down; api endpoint, zone, backend and policy are deleted.
-	down := dnsTestSources{
-		endpoints: &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{testDNSEndpoint("web")}},
-		zones:     &fakeDNSZoneProjectionSource{},
-		backends:  &fakeDNSBackendProjectionSource{},
-		policies:  &fakeDNSPolicyProjectionSource{},
-	}
-	after := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
-	if err := after.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after restart: %v", err)
-	}
-
-	for _, live := range removed {
-		assertRelayTombstoned(t, relay, live)
-	}
-	if got, _ := relay.query(coordinateOf(keptEndpoint)); got.ID != keptEndpoint.ID {
-		t.Fatalf("unchanged endpoint was replaced after restart (deleted=%q)", tagValue(got.Tags, "deleted"))
-	}
-	if n := relay.countOn(coordinateOf(keptEndpoint)); n != 1 {
-		t.Fatalf("unchanged endpoint signed %d times, want 1 (no re-sign after restart)", n)
-	}
-	assertNoLegacyDNSKinds(t, relay)
-
-	// Repair is idempotent: a third process has nothing left to tombstone.
-	again := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), down.options()...)
-	if err := again.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot on second restart: %v", err)
-	}
-	for _, live := range removed {
-		if n := relay.countOn(coordinateOf(live)); n != 2 {
-			t.Fatalf("coordinate %s has %d events after second restart, want live+tombstone", eventDTag(live), n)
-		}
-	}
-}
-
-// TestDNSSnapshotRepairSupersedesLegacyKindTombstone covers deployments that
-// already ran the buggy build: the only tombstone for a removed endpoint went
-// out on the legacy wire kind, so the relay still serves the live 30900 record.
-// Restart repair must treat that coordinate as live and tombstone it properly.
-func TestDNSSnapshotRepairSupersedesLegacyKindTombstone(t *testing.T) {
-	ctx := context.Background()
-	repo := newMemoryNostrEventRepo()
-	relay := newReplaceableRelay()
-	source := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{testDNSEndpoint("api")}}
-	before := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(source))
-	if err := before.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-	live := onlyLive(t, relay, KindDNSEndpointState)
-
-	legacy := gonostr.Event{
-		Kind:      gonostr.Kind(KindDNSEndpointState),
-		CreatedAt: live.CreatedAt + 5,
-		Tags:      gonostr.Tags{{"d", eventDTag(live)}, {"deleted", "true"}, {"t", "dns-endpoint"}},
-		Content:   `{"deleted":true,"coordinate":"endpoint:service:api:prod"}`,
-	}
-	if err := signEventWithPrivateKeyHex(&legacy, projectorTestPrivateKey); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := relay.Publish(ctx, legacy); err != nil {
-		t.Fatal(err)
-	}
-	tagsJSON, _ := json.Marshal(legacy.Tags)
-	if _, err := repo.Record(ctx, &repository.NostrEventRecord{ID: legacy.ID.Hex(), Kind: KindDNSEndpointState, PubKey: legacy.PubKey.Hex(), Content: legacy.Content, Tags: tagsJSON, CreatedAt: legacy.CreatedAt.Time()}); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := relay.query(coordinateOf(live)); got.ID != live.ID {
-		t.Fatal("precondition: a legacy-kind tombstone must not touch the live coordinate")
-	}
-
-	after := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, repo, zap.NewNop(), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
-	if err := after.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after restart: %v", err)
-	}
-	assertRelayTombstoned(t, relay, live)
-}
-
 // TestServiceStateTombstoneSharesLiveCoordinate pins B-19: the bus-driven
 // service-state tombstone uses d=service:<sid>:environment:<eid>, the live d.
 // The tombstone follows the live publish within the same second, so this also
@@ -366,12 +193,13 @@ func TestLLMRouteStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	relay := newReplaceableRelay()
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
-	state := domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync, UpdatedAt: time.Now().UTC()}
-	if err := projector.publishLLMRouteState(ctx, &state); err != nil {
+	// Phase 3 L1: LLM publish methods moved out of projector; use publishControlState directly.
+	dTag := fmt.Sprintf("%s:%s", routeID, envID)
+	if err := projector.publishControlState(ctx, KindLLMRouteState, dTag, false, nil, `{"route_id":"`+routeID.String()+`"}`, "llm_route_state", nil); err != nil {
 		t.Fatalf("publish LLM route state: %v", err)
 	}
 	live := onlyLive(t, relay, KindLLMRouteState)
-	if err := projector.publishLLMRouteStateTombstone(ctx, events.ResourceData{RouteID: routeID.String(), EnvironmentID: envID.String(), Deleted: true}); err != nil {
+	if err := projector.publishControlState(ctx, KindLLMRouteState, dTag, true, nil, `{"deleted":true}`, "llm_route_state", nil); err != nil {
 		t.Fatalf("publish LLM route state tombstone: %v", err)
 	}
 	assertRelayTombstoned(t, relay, live)

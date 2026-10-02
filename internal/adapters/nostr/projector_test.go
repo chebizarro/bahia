@@ -822,58 +822,22 @@ func TestProjectorPublishesMLReadModelSnapshot(t *testing.T) {
 // build/artifact/intent/run cp-state publication — moved to RegistryService
 // (bahia-irsry.11.7, Phase 3 S2).
 
-func TestProjectorRepublishesLLMRouteAndState(t *testing.T) {
+// Phase 3 L1: TestProjectorRepublishesLLMRouteAndState removed —
+// LLM projection is now handled outside the projector.
+
+func TestProjectorPublishesLLMAuditFromRunEvent(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UTC()
-	routeID := uuid.New()
-	envID := uuid.New()
-	releaseID := uuid.New()
-	intentID := uuid.New()
-	runID := uuid.New()
-
-	source := newFakeProjectionSource()
-	source.llmRoutes[routeID] = domain.LLMRoute{ID: routeID, Name: "chat", GatewayConfig: &domain.LLMGatewayRouteConfig{PublicModel: "chat-public"}, CreatedAt: now, UpdatedAt: now}
-	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusInSync, GatewayStatus: domain.GatewayRouteStatusSynced, BackendKind: domain.LLMBackendKindVLLM, BackendHealth: domain.HealthStatusHealthy, UpdatedAt: now}
-
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-
-	routeEvent := assertOneSignedKind(t, sink, KindLLMRouteRegistry)
-	assertTag(t, routeEvent, "route", routeID.String())
-	assertTag(t, routeEvent, "model", "chat-public")
-	stateEvent := assertOneSignedKind(t, sink, KindLLMRouteState)
-	assertTag(t, stateEvent, "route", routeID.String())
-	assertTag(t, stateEvent, "environment", envID.String())
-	assertTag(t, stateEvent, "release", releaseID.String())
-	assertTag(t, stateEvent, "intent", intentID.String())
-	assertTag(t, stateEvent, "run", runID.String())
-	assertTag(t, stateEvent, "gateway_status", string(domain.GatewayRouteStatusSynced))
-}
-
-func TestProjectorPublishesLLMAuditAndStateFromRunEvent(t *testing.T) {
-	ctx := context.Background()
-	routeID := uuid.New()
-	envID := uuid.New()
-	releaseID := uuid.New()
-	intentID := uuid.New()
 	runID := uuid.New()
 	source := newFakeProjectionSource()
-	source.llmIntents[intentID] = domain.LLMDeploymentIntent{ID: intentID, RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID}
-	source.llmRuns[runID] = domain.LLMDeploymentRun{ID: runID, DeploymentIntentID: intentID, Status: domain.RunStatusRunning}
-	source.llmStates[stateKeyForTest(routeID, envID)] = domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &releaseID, DesiredIntentID: &intentID, ActiveRunID: &runID, DriftStatus: domain.DriftStatusDeploying, GatewayStatus: domain.GatewayRouteStatusPending, UpdatedAt: time.Now().UTC()}
 
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithLLMProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunStatusChanged, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
+	// Phase 3 L1: projector still publishes audit events for LLM, but no longer
+	// publishes LLM state (that is now done by the LLM registry service directly).
 	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunStatusChanged)
 	assertTag(t, audit, "run", runID.String())
-	stateEvent := assertOneSignedKind(t, sink, KindLLMRouteState)
-	assertTag(t, stateEvent, "route", routeID.String())
-	assertTag(t, stateEvent, "environment", envID.String())
 }
 
 func projectorTestConfig() config.NostrConfig {
@@ -921,151 +885,6 @@ func (s *fakeDNSPolicyProjectionSource) ListEnabledDNSPolicies(context.Context) 
 	return out, nil
 }
 
-func TestProjectorPublishesDNSZoneStateSnapshot(t *testing.T) {
-	ctx := context.Background()
-	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{
-		Name:       "prod.cascadia",
-		Visibility: domain.ZoneVisibilityInternal,
-		BackendRef: "fs-primary",
-		TTL:        60,
-	}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-
-	zoneEvent := assertOneSignedKind(t, sink, KindDNSZoneState)
-	assertTag(t, zoneEvent, "d", "zone:prod.cascadia")
-	assertTag(t, zoneEvent, "zone", "prod.cascadia")
-	assertTag(t, zoneEvent, "backend", "fs-primary")
-	assertTag(t, zoneEvent, "visibility", "internal")
-	assertTag(t, zoneEvent, "t", "dns-zone")
-	assertTag(t, zoneEvent, "t", "bahia")
-	assertJSONField(t, zoneEvent.Content, "name", "prod.cascadia")
-	assertJSONField(t, zoneEvent.Content, "visibility", "internal")
-	assertJSONField(t, zoneEvent.Content, "backend_ref", "fs-primary")
-	assertJSONField(t, zoneEvent.Content, "ttl", float64(60))
-	assertJSONField(t, zoneEvent.Content, "deleted", false)
-}
-
-func TestProjectorPublishesDNSBackendStateSnapshot(t *testing.T) {
-	ctx := context.Background()
-	now := time.Now().UTC()
-	lastSync := now.Add(-time.Minute)
-	backendSource := &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{
-		Ref:        "fs-primary",
-		Type:       domain.DNSBackendTypeFilesystem,
-		Health:     domain.HealthStatusHealthy,
-		ZoneRefs:   []string{"prod.cascadia"},
-		LastSyncAt: &lastSync,
-		UpdatedAt:  now,
-	}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSBackendProjectionSource(backendSource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-
-	backendEvent := assertOneSignedKind(t, sink, KindDNSBackendState)
-	assertTag(t, backendEvent, "d", "dnsbackend:fs-primary")
-	assertTag(t, backendEvent, "backend", "fs-primary")
-	assertTag(t, backendEvent, "type", "filesystem")
-	assertTag(t, backendEvent, "health", "healthy")
-	assertTag(t, backendEvent, "zone", "prod.cascadia")
-	assertTag(t, backendEvent, "t", "dns-backend")
-	assertTag(t, backendEvent, "t", "bahia")
-	assertJSONField(t, backendEvent.Content, "ref", "fs-primary")
-	assertJSONField(t, backendEvent.Content, "type", "filesystem")
-	assertJSONField(t, backendEvent.Content, "health", "healthy")
-	assertJSONField(t, backendEvent.Content, "deleted", false)
-}
-
-func TestProjectorPublishesDNSPolicyStateSnapshotAndTombstone(t *testing.T) {
-	ctx := context.Background()
-	now := time.Now().UTC()
-	policyID := uuid.New()
-	zoneID := uuid.New()
-	ttl := 120
-	policySource := &fakeDNSPolicyProjectionSource{policies: []domain.DNSPolicy{{
-		ID:        policyID,
-		Name:      "latency-aware",
-		ZoneID:    &zoneID,
-		Rules:     []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityInternal, TTLOverride: &ttl}}},
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSPolicyProjectionSource(policySource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-	policyEvent := assertOneSignedKind(t, sink, KindDNSPolicyState)
-	assertTag(t, policyEvent, "d", "dnspolicy:"+policyID.String())
-	assertTag(t, policyEvent, "policy", policyID.String())
-	assertTag(t, policyEvent, "zone", zoneID.String())
-	assertTag(t, policyEvent, "enabled", "true")
-	assertTag(t, policyEvent, "t", "dns-policy")
-	assertTag(t, policyEvent, "t", "bahia")
-	assertJSONField(t, policyEvent.Content, "id", policyID.String())
-	assertJSONField(t, policyEvent.Content, "name", "latency-aware")
-	assertJSONField(t, policyEvent.Content, "zone_id", zoneID.String())
-	assertJSONField(t, policyEvent.Content, "enabled", true)
-	assertJSONField(t, policyEvent.Content, "deleted", false)
-
-	policySource.policies = nil
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after removal: %v", err)
-	}
-	policyEvents := sink.byKind(KindDNSPolicyState)
-	if len(policyEvents) != 2 {
-		t.Fatalf("expected policy event and tombstone, got %d", len(policyEvents))
-	}
-	tombstone := policyEvents[1]
-	assertTag(t, tombstone, "d", "dnspolicy:"+policyID.String())
-	assertTag(t, tombstone, "deleted", "true")
-	assertTag(t, tombstone, "policy", policyID.String())
-	assertJSONField(t, tombstone.Content, "deleted", true)
-	assertJSONField(t, tombstone.Content, "id", policyID.String())
-}
-
-func TestProjectorPublishesDNSZoneAndBackendTombstones(t *testing.T) {
-	ctx := context.Background()
-	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{Name: "prod.cascadia", Visibility: domain.ZoneVisibilityInternal, BackendRef: "fs-primary", TTL: 60}}}
-	backendSource := &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{Ref: "fs-primary", Type: domain.DNSBackendTypeFilesystem, Health: domain.HealthStatusHealthy, ZoneRefs: []string{"prod.cascadia"}, UpdatedAt: time.Now().UTC()}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource), WithDNSBackendProjectionSource(backendSource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-	zoneSource.zones = nil
-	backendSource.backends = nil
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after removal: %v", err)
-	}
-
-	zoneEvents := sink.byKind(KindDNSZoneState)
-	if len(zoneEvents) != 2 {
-		t.Fatalf("expected zone event and tombstone, got %d", len(zoneEvents))
-	}
-	assertTag(t, zoneEvents[1], "d", "zone:prod.cascadia")
-	assertTag(t, zoneEvents[1], "deleted", "true")
-	assertJSONField(t, zoneEvents[1].Content, "deleted", true)
-
-	backendEvents := sink.byKind(KindDNSBackendState)
-	if len(backendEvents) != 2 {
-		t.Fatalf("expected backend event and tombstone, got %d", len(backendEvents))
-	}
-	assertTag(t, backendEvents[1], "d", "dnsbackend:fs-primary")
-	assertTag(t, backendEvents[1], "deleted", "true")
-	assertJSONField(t, backendEvents[1].Content, "deleted", true)
-}
-
 func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
@@ -1090,94 +909,6 @@ func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	assertOneAudit(t, sink, eventDNSEndpointDeregistered)
 }
 
-func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
-	ctx := context.Background()
-	port := 8443
-	dnsSource := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{{
-		Family:      domain.DNSEndpointFamilyService,
-		Name:        "api",
-		Environment: "prod",
-		Zone:        "prod.cascadia",
-		FQDN:        "api.prod.cascadia",
-		Protocol:    "https",
-		Address:     "10.0.1.44",
-		Port:        &port,
-		Runtime:     string(domain.RuntimeTypeDocker),
-		Health:      domain.HealthStatusHealthy,
-		DriftStatus: domain.DriftStatusInSync,
-		Source:      "test",
-	}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-	endpointEvent := assertOneSignedKind(t, sink, KindDNSEndpointState)
-	assertTag(t, endpointEvent, "d", "endpoint:service:api:prod")
-	assertTag(t, endpointEvent, "family", "service")
-	assertTag(t, endpointEvent, "environment", "prod")
-	assertTag(t, endpointEvent, "health", "healthy")
-	assertTag(t, endpointEvent, "runtime", "docker")
-	assertTag(t, endpointEvent, "dns", "api.prod.cascadia")
-	assertTag(t, endpointEvent, "addr", "10.0.1.44")
-	assertTag(t, endpointEvent, "proto", "https")
-	assertTag(t, endpointEvent, "port", "8443")
-	assertTag(t, endpointEvent, "t", "dns-endpoint")
-	assertTag(t, endpointEvent, "t", "bahia")
-	assertNoTag(t, endpointEvent, "npub", "")
-	assertNoTag(t, endpointEvent, "mesh", "")
-	assertJSONField(t, endpointEvent.Content, "coordinate", "endpoint:service:api:prod")
-
-	dnsSource.endpoints = nil
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot after removal: %v", err)
-	}
-	dnsEvents := sink.byKind(KindDNSEndpointState)
-	if len(dnsEvents) != 2 {
-		t.Fatalf("expected endpoint event and tombstone, got %d", len(dnsEvents))
-	}
-	tombstone := dnsEvents[1]
-	assertTag(t, tombstone, "d", "endpoint:service:api:prod")
-	assertTag(t, tombstone, "deleted", "true")
-	assertTag(t, tombstone, "dns", "api.prod.cascadia")
-	assertJSONField(t, tombstone.Content, "deleted", true)
-	assertJSONField(t, tombstone.Content, "coordinate", "endpoint:service:api:prod")
-}
-
-func TestProjectorPublishesDNSEndpointFIPSTagsWhenWorkerPubkeyPresent(t *testing.T) {
-	ctx := context.Background()
-	port := 8000
-	workerPubkey := "npub1workerpubkey"
-	dnsSource := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{{
-		Family:       domain.DNSEndpointFamilyWorker,
-		Name:         "t7920-l40s",
-		Zone:         "edge.cascadia",
-		FQDN:         "t7920-l40s.edge.cascadia",
-		Protocol:     "http",
-		Address:      "10.0.1.45",
-		Port:         &port,
-		WorkerPubkey: workerPubkey,
-		Health:       domain.HealthStatusHealthy,
-		DriftStatus:  domain.DriftStatusInSync,
-		Source:       "test",
-	}}}
-	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
-
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
-	}
-
-	endpointEvent := assertOneSignedKind(t, sink, KindDNSEndpointState)
-	assertTag(t, endpointEvent, "d", "endpoint:worker:t7920-l40s")
-	assertTag(t, endpointEvent, "worker", workerPubkey)
-	assertTag(t, endpointEvent, "npub", workerPubkey)
-	assertTag(t, endpointEvent, "mesh", "fips")
-}
-
-// The browser hides batch actions from the discovery assistant block: batch is
-// advertised only when assistant.llm_model builds the batch proposer.
 func TestProjectorSystemDiscoveryAdvertisesAssistantWorkflows(t *testing.T) {
 	cases := []struct {
 		name        string
