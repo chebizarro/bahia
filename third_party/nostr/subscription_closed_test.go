@@ -108,3 +108,31 @@ func TestClosedWithoutEvents(t *testing.T) {
 		t.Fatal("rejected subscription was not canceled")
 	}
 }
+
+// TestSecondClosedDoesNotLeak (bahia-irsry.26): a second CLOSED from the relay
+// must not start another goroutine. Before the fix, handleClosed unconditionally
+// started a goroutine that waited on storedwg and sent to ClosedReason; a
+// second call leaked the goroutine (it blocked forever on the buffered-1 send).
+func TestSecondClosedDoesNotLeak(t *testing.T) {
+	sub := closedTestSubscription(t)
+	sub.handleClosed("first")
+	sub.handleClosed("second") // must be a no-op
+
+	select {
+	case reason := <-sub.ClosedReason:
+		if reason != "first" {
+			t.Fatalf("wrong reason: %q", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CLOSED not delivered")
+	}
+
+	// ClosedReason has capacity 1; if a second goroutine ran, it would
+	// block forever on the send (leak). Verify no second reason arrives.
+	select {
+	case reason := <-sub.ClosedReason:
+		t.Fatalf("second CLOSED leaked: %q", reason)
+	case <-time.After(100 * time.Millisecond):
+		// good: no second reason
+	}
+}

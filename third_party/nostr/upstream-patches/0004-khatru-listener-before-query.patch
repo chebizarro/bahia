@@ -1,0 +1,60 @@
+Description: khatru: register live listeners before stored queries
+
+Khatru runs a REQ filter's stored query before it registers the live
+listener. A client CLOSE arriving during the (possibly slow) stored
+query finds nothing to remove, and the listener lingers until
+disconnect. Fix: register all listeners before running stored queries;
+clean up listeners on filter rejection.
+
+Note: this changes the ordering assumption that some server
+implementations may depend on (e.g. gap-buffer mechanisms that
+expect the listener to be added after the query). Such implementations
+need to be updated to handle the new ordering.
+
+--- a/khatru/handlers.go
++++ b/khatru/handlers.go
+@@ -299,20 +299,30 @@
+ 				case *nostr.ReqEnvelope:
+ 					rl.removeListenerId(ws, env.SubscriptionID)
+ 
+ 					// a context just for the "stored events" request handler
+ 					reqCtx, cancelReqCtx := context.WithCancelCause(ctx)
+ 
+ 					// expose subscription id in the context
+ 					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
+ 
+-					// handle each filter separately -- dispatching events as they're loaded from databases
++					// Register all live listeners BEFORE running stored queries.
++					// This ensures a CLOSE arriving during a (possibly slow)
++					// QueryStored call finds the listener and removes it,
++					// instead of leaving it until disconnect.
++					for _, filter := range env.Filters {
++						if filter.IDs == nil {
++							// a query that is just a bunch of "ids": [...] will not add listeners.
++							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
++						}
++					}
++
++					// handle each filter separately -- dispatching events as they're loaded
+ 					for _, filter := range env.Filters {
+ 						err := rl.handleRequest(reqCtx, env.SubscriptionID, ws, filter)
+ 						if err != nil {
+ 							// fail everything if any filter is rejected
+ 							reason := err.Error()
+ 							if strings.HasPrefix(reason, "auth-required:") {
+ 								RequestAuth(ctx)
+ 							}
+ 							ws.WriteJSON(nostr.ClosedEnvelope{SubscriptionID: env.SubscriptionID, Reason: reason})
++							// clean up listeners we registered above
++							rl.removeListenerId(ws, env.SubscriptionID)
+ 							cancelReqCtx(errors.New("filter rejected"))
+ 							return
+-						} else if filter.IDs == nil {
+-							// a query that is just a bunch of "ids": [...] will not add listeners.
+-							// is this a bug? maybe, but I don't think anyone is listening for an ID
+-							// that hasn't been published yet anywhere -- if yes we can change later
+-							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
+ 						}
+ 					}
+ 
+ 					ws.WriteJSON(nostr.EOSEEnvelope{SubscriptionID: env.SubscriptionID})

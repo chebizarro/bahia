@@ -1,0 +1,54 @@
+Subject: [PATCH 1/4] subscription: per-subscription non-blocking event ordering
+
+dispatchEvent spawns a new goroutine for every event. The goroutines race
+to send on sub.Events, so events arrive in random order. This is observable
+under -cpu=2 or higher with bursts of 256+ events.
+
+Replace the per-event goroutine design with a per-subscription ordered queue:
+
+- New subscriptionInbox: a mutex-guarded FIFO slice with a 1-buffered signal
+  channel. push() appends without blocking the caller and sends a non-blocking
+  wake signal. The read loop (handleMessage on the main-loop goroutine) is
+  never blocked, so it can still deliver OK, EOSE, CLOSED, AUTH and NOTICE
+  for every subscription and publish on the connection. A consumer that
+  publishes to the same relay and waits for OK inside an event handler (the
+  OK arrives on the same read loop) no longer deadlocks.
+
+- Overflow: when the queue exceeds subscriptionInboxCap (4096), the inbox is
+  marked closed and the subscription is closed via handleClosed with an
+  overflow reason. No events are silently dropped — the consumer knows the
+  subscription ended and can resubscribe from its cursor.
+
+- Dispatcher goroutine: waits on the signal channel, drains the queue, and
+  delivers items to Events in FIFO order under mu.RLock. On Context.Done,
+  it releases storedwg for remaining items and exits.
+
+- Subscriptions without PrepareSubscription (test helpers) have a nil inbox
+  and fall back to the legacy per-goroutine path.
+
+- Teardown: sets channelsClosed, calls inbox.close(), waits for the dispatcher,
+  then closes Events and countResult.
+
+Also includes:
+- closedHandled atomic.Bool guard on handleClosed to prevent a second CLOSED
+  from leaking a goroutine.
+- isCount field on SubscriptionOptions so countResult is created before the
+  subscription is stored in the map (fixing a race where a COUNT reply arrives
+  before countInternal sets countResult).
+
+Tests: subscription_order_test.go
+- TestDispatchEventPreservesOrderLive (1024 live events, wire order)
+- TestDispatchEventPreservesOrderStored (256 stored, EOSE after last)
+- TestDispatchEventOrderAcrossStoredAndLive (stored + live, each in order)
+- TestDispatchEventNonBlockingUnblocksOnCancel (1000 events without reader)
+- TestInboxDoesNotBlockOtherSubscriptions (sub A blocked, sub B unaffected)
+- TestPublishFromEventHandlerDoesNotDeadlock (publish+OK from handler)
+- TestInboxOverflowClosesSubscription (overflow closes with reason)
+
+Run with: go test -cpu=1,2,8 -count=20 -run 'TestDispatchEvent|TestInbox|TestPublishFrom'
+---
+ relay.go                    |  50 ++++++---
+ subscription.go             | 154 +++++++++++++++++++++++++---
+ subscription_order_test.go  | 303 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 474 insertions(+), 33 deletions(-)
+ create mode 100644 subscription_order_test.go

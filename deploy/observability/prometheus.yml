@@ -15,6 +15,18 @@ scrape_configs:
           environment: edge-01-production
           service: bahia
 
+  - job_name: bahia-relay-sidecar
+    metrics_path: /metrics
+    # NOTE: /metrics is unauthenticated. In production, restrict access with
+    # network policy or a reverse proxy that requires a bearer token for the
+    # metrics path. See docs/runbooks/ws6-alerts.md for details.
+    static_configs:
+      - targets:
+          - bahia:3334
+        labels:
+          environment: edge-01-production
+          service: bahia-relay-sidecar
+
   - job_name: node
     static_configs:
       - targets: [192.168.40.104:9100]
