@@ -47,7 +47,8 @@ type Reconciler struct {
 	deployer     AutoRemediationDeployer
 	// startingTimeout bounds how long a unit may report "starting" before
 	// reconcile stops treating it as progress. Zero selects the default.
-	startingTimeout time.Duration
+	startingTimeout  time.Duration
+	statePublisher   RuntimeStatePublisher
 }
 
 // WithStartingTimeout bounds how long a deploying unit may report "starting"
@@ -451,6 +452,9 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		if driftDetected {
 			r.publishDriftDetected(ctx, currentState, svc, env, driftExtra)
 		}
+		// Phase 3 S1: publish the canonical cp-state record directly to relays
+		// so the projector no longer re-projects it from bus events.
+		r.publishStateToRelay(ctx, currentState, obs)
 	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
 		return r.autoApplyDesiredState(ctx, currentState)
@@ -491,6 +495,8 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 	if err := r.state.Upsert(ctx, state); err != nil {
 		return false, err
 	}
+	// Phase 3 S1: publish the repaired state directly to relays.
+	r.publishStateToRelay(ctx, state, nil)
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
 		EntityID: state.ServiceID.String() + ":" + state.EnvironmentID.String(),
@@ -731,4 +737,27 @@ func (r *Reconciler) reconcileBackoff(failureCount int) time.Duration {
 		return max
 	}
 	return backoff
+}
+
+// publishStateToRelay publishes the canonical cp-state record for a
+// service/environment state to relays. The state publisher is fingerprint-
+// deduped: unchanged state is a no-op (exactly zero events for repeat
+// observations with unchanged material state).
+func (r *Reconciler) publishStateToRelay(ctx context.Context, state *domain.EnvironmentServiceState, obs *domain.RuntimeObservation) {
+	if r.statePublisher == nil {
+		return
+	}
+	if err := r.statePublisher.PublishState(ctx, state, obs); err != nil {
+		r.logger.Warn("publish runtime state to relay failed",
+			zap.String("service_id", state.ServiceID.String()),
+			zap.String("environment_id", state.EnvironmentID.String()),
+			zap.Error(err))
+	}
+}
+
+// SetRuntimeStatePublisher configures the reconciler to publish state directly
+// to relays. This is called after construction when the publisher (which
+// depends on the nostr projector) is created later in the app wiring.
+func (r *Reconciler) SetRuntimeStatePublisher(p RuntimeStatePublisher) {
+	r.statePublisher = p
 }

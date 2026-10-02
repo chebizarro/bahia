@@ -341,7 +341,7 @@ func TestServiceStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
-	if err := projector.publishState(ctx, &state); err != nil {
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatalf("publish state: %v", err)
 	}
 	live := onlyLive(t, relay, KindServiceState)
@@ -349,10 +349,11 @@ func TestServiceStateTombstoneSharesLiveCoordinate(t *testing.T) {
 		t.Fatalf("live d = %q, want %q", eventDTag(live), want)
 	}
 
-	projector.handleEvent(ctx, events.Event{
-		Type: events.EventEnvironmentServiceStateChanged,
-		Data: events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String(), Deleted: true},
-	})
+	// Phase 3 S1: state tombstones are now published by the reconciler's
+	// StateTombstoneHandler; use the test helper for projector-level tests.
+	if err := projector.publishStateTombstoneForTest(ctx, events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String(), Deleted: true}); err != nil {
+		t.Fatalf("publish tombstone: %v", err)
+	}
 	tombstone := assertRelayTombstoned(t, relay, live)
 	if tagValue(tombstone.Tags, "service") != serviceID.String() || tagValue(tombstone.Tags, "environment") != envID.String() {
 		t.Fatalf("tombstone lost service/environment scope tags: %v", tombstone.Tags)

@@ -840,12 +840,13 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; verify
+	// through the test helper that calls the same dedupe pipeline.
+	state := source.states[stateKeyForTest(serviceID, envID)]
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
+		t.Fatalf("publish state: %v", err)
 	}
 
-	// Phase 3 F2/F3: service and environment registry records are no longer
-	// published by the projector (the intent handlers own them).
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	if got, want := eventKindInt(&stateEvent), cascadia.CAS_CP_STATE; got != want {
 		t.Fatalf("service state wire kind = %d, want %d", got, want)
@@ -946,12 +947,9 @@ func TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations(t *testi
 	})
 
 	assertOneAudit(t, sink, events.EventDeploymentRunStatusChanged)
-	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
-	assertTag(t, stateEvent, "service", serviceID.String())
-	assertTag(t, stateEvent, "environment", envID.String())
-	assertTag(t, stateEvent, "artifact", artifactID.String())
-	assertTag(t, stateEvent, "intent", intentID.String())
-	assertTag(t, stateEvent, "run", runID.String())
+	// Phase 3 S1: state is no longer published by handleEvent's run case;
+	// state publication is the reconciler's responsibility.
+	assertNoPublishedKind(t, sink, KindServiceState)
 }
 
 func TestProjectorRepublishesLLMRouteAndState(t *testing.T) {
@@ -1015,18 +1013,16 @@ func TestProjectorPublishesStateTombstoneForDeletedState(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	projector.handleEvent(ctx, events.Event{
-		Type:     events.EventEnvironmentServiceStateChanged,
-		EntityID: stateKeyForTest(serviceID, envID),
-		Data: events.ResourceData{
-			ServiceID:     serviceID.String(),
-			EnvironmentID: envID.String(),
-			Deleted:       true,
-		},
-	})
+	// Phase 3 S1: state tombstones are now published by the reconciler's
+	// StateTombstoneHandler; use the test helper for projector-level tests.
+	if err := projector.publishStateTombstoneForTest(ctx, events.ResourceData{
+		ServiceID:     serviceID.String(),
+		EnvironmentID: envID.String(),
+		Deleted:       true,
+	}); err != nil {
+		t.Fatalf("publish tombstone: %v", err)
+	}
 
-	stateAudit := assertOneAudit(t, sink, events.EventEnvironmentServiceStateChanged)
-	assertTag(t, stateAudit, kinds.CPAuditTagState, serviceStateDTag(serviceID, envID))
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	assertTag(t, stateEvent, "service", serviceID.String())
 	assertTag(t, stateEvent, "environment", envID.String())
@@ -1821,8 +1817,12 @@ func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
+	// test helper with an observation to verify metadata enrichment.
+	state := source.states[stateKeyForTest(serviceID, envID)]
+	obs := source.observations[observationID]
+	if err := projector.publishStateForTest(ctx, &state, &obs); err != nil {
+		t.Fatalf("publish state: %v", err)
 	}
 
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
@@ -1858,22 +1858,24 @@ func TestProjectorStateOmitsDesiredMetadataWhenAbsent(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
+	// Phase 3 S1: state is no longer published by RepublishSnapshot.
+	state := source.states[stateKeyForTest(serviceID, envID)]
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
+		t.Fatalf("publish state: %v", err)
 	}
 
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	// No desired_hash tag when empty
 	assertNoTag(t, stateEvent, "desired_hash", "")
 	// Content should not carry these fields
-	var content map[string]any
-	if err := json.Unmarshal([]byte(stateEvent.Content), &content); err != nil {
+	var ct map[string]any
+	if err := json.Unmarshal([]byte(stateEvent.Content), &ct); err != nil {
 		t.Fatalf("unmarshal content: %v", err)
 	}
-	if _, ok := content["desired_hash"]; ok {
+	if _, ok := ct["desired_hash"]; ok {
 		t.Fatal("content should not have desired_hash when empty")
 	}
-	if _, ok := content["renderer"]; ok {
+	if _, ok := ct["renderer"]; ok {
 		t.Fatal("content should not have renderer when no desired state")
 	}
 }
@@ -2039,26 +2041,28 @@ func TestProjectorStateSecretPlaintextNeverProjected(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish snapshot: %v", err)
+	// Phase 3 S1: state is no longer published by RepublishSnapshot.
+	state := source.states[stateKeyForTest(serviceID, envID)]
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
+		t.Fatalf("publish state: %v", err)
 	}
 
 	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
 	// The content should carry sanitized metadata (renderer/target) but never
-	// the DesiredRuntimeState with potential env values. publishState only
+	// the DesiredRuntimeState with potential env values. RuntimeStateRecord only
 	// projects scalar metadata, not the full spec.
-	var content map[string]any
-	if err := json.Unmarshal([]byte(stateEvent.Content), &content); err != nil {
+	var ct map[string]any
+	if err := json.Unmarshal([]byte(stateEvent.Content), &ct); err != nil {
 		t.Fatalf("unmarshal content: %v", err)
 	}
 	// Must NOT contain env or secret_refs in the projected event
-	if _, ok := content["env"]; ok {
+	if _, ok := ct["env"]; ok {
 		t.Fatal("projected state must not contain env map")
 	}
-	if _, ok := content["secret_refs"]; ok {
+	if _, ok := ct["secret_refs"]; ok {
 		t.Fatal("projected state must not contain secret_refs")
 	}
-	if _, ok := content["desired_runtime_state"]; ok {
+	if _, ok := ct["desired_runtime_state"]; ok {
 		t.Fatal("projected state must not contain full desired_runtime_state")
 	}
 	// Sanitized metadata should be present

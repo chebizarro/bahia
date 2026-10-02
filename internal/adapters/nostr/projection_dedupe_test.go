@@ -63,30 +63,29 @@ func dedupeTestState(serviceID, envID uuid.UUID, now time.Time) domain.Environme
 func TestProjectionUnchangedServiceStateEmitsNoNewEvent(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
-	source := newFakeProjectionSource()
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
-	source.states[stateKeyForTest(serviceID, envID)] = state
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
+	// test helper that calls through the same dedupe pipeline.
 	for i := 0; i < 3; i++ {
-		if err := projector.RepublishSnapshot(ctx); err != nil {
-			t.Fatalf("republish %d: %v", i, err)
+		if err := projector.publishStateForTest(ctx, &state); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 1 {
-		t.Fatalf("service state events after 3 unchanged republishes = %d, want 1", got)
+		t.Fatalf("service state events after 3 unchanged publishes = %d, want 1", got)
 	}
 	m := projector.ProjectionMetrics()["service/state"]
 	if m.Accepted != 1 || m.Deduped < 2 {
 		t.Fatalf("service/state metrics = %+v, want accepted=1 deduped>=2", m)
 	}
 
-	// A REAL change republishes exactly once more.
+	// A REAL change publishes exactly once more.
 	state.DriftStatus = domain.DriftStatusDrifted
-	source.states[stateKeyForTest(serviceID, envID)] = state
-	if err := projector.RepublishSnapshot(ctx); err != nil {
-		t.Fatalf("republish after change: %v", err)
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
+		t.Fatalf("publish after change: %v", err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 2 {
 		t.Fatalf("service state events after real change = %d, want 2", got)
@@ -99,13 +98,14 @@ func TestProjectionUnchangedServiceStateEmitsNoNewEvent(t *testing.T) {
 func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()
-	source := newFakeProjectionSource()
 	now := time.Now().UTC()
 	state := dedupeTestState(serviceID, envID, now)
-	source.states[stateKeyForTest(serviceID, envID)] = state
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
-	if err := projector.RepublishSnapshot(ctx); err != nil {
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
+	// test helper that calls through the same dedupe pipeline.
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,8 +114,7 @@ func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 	state.UpdatedAt = later
 	state.LastReconciledAt = &later
 	state.CurrentObservationID = &newObs
-	source.states[stateKeyForTest(serviceID, envID)] = state
-	if err := projector.RepublishSnapshot(ctx); err != nil {
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 1 {
@@ -197,7 +196,7 @@ func TestProjectionTombstonesNeverSuppressedAndRecreateRepublishes(t *testing.T)
 	res := events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String()}
 
 	for i := 0; i < 2; i++ {
-		if err := projector.publishStateTombstone(ctx, res); err != nil {
+		if err := projector.publishStateTombstoneForTest(ctx, res); err != nil {
 			t.Fatalf("tombstone %d: %v", i, err)
 		}
 	}
@@ -205,7 +204,7 @@ func TestProjectionTombstonesNeverSuppressedAndRecreateRepublishes(t *testing.T)
 		t.Fatalf("tombstones published = %d, want 2 (never suppressed)", got)
 	}
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
-	if err := projector.publishState(ctx, &state); err != nil {
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 	if got := countLegacy(sink, KindServiceState, false) - countLegacy(sink, KindServiceState, true); got != 1 {
@@ -229,7 +228,7 @@ func TestProjectionRejectionOpensSharedBackoffThenRecovers(t *testing.T) {
 
 	// Learn the wire kind for service state from a successful publish.
 	state := dedupeTestState(serviceID, envID, clock)
-	if err := projector.publishState(ctx, &state); err != nil {
+	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 	sink.mu.Lock()
@@ -239,7 +238,7 @@ func TestProjectionRejectionOpensSharedBackoffThenRecovers(t *testing.T) {
 	// Reject the next publish (a changed state) -> backoff opens.
 	sink.errorsByKind = map[int]error{wire: errors.New("rate-limited")}
 	state.DriftStatus = domain.DriftStatusDrifted
-	if err := projector.publishState(ctx, &state); err == nil {
+	if err := projector.publishStateForTest(ctx, &state); err == nil {
 		t.Fatal("expected rejection error")
 	}
 	if m := projector.ProjectionMetrics()["service/state"]; m.Rejected != 1 {
@@ -294,7 +293,7 @@ func TestProjectionBurstCoalescesToSinglePublish(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_ = projector.publishState(ctx, &state)
+			_ = projector.publishStateForTest(ctx, &state)
 		}()
 	}
 	close(start)
@@ -318,21 +317,21 @@ func TestProjectionDedupeHydratesAcrossRestart(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
 	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, repo, zap.NewNop())
-	if err := first.publishState(ctx, &state); err != nil {
+	if err := first.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
 	// Restart: new instance, same retained store, empty in-memory cache.
 	sink := &captureProjectionPublisher{}
 	restarted := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
-	if err := restarted.publishState(ctx, &state); err != nil {
+	if err := restarted.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 0 {
 		t.Fatalf("restart re-signed %d unchanged events, want 0", got)
 	}
 	state.DriftStatus = domain.DriftStatusDrifted
-	if err := restarted.publishState(ctx, &state); err != nil {
+	if err := restarted.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 1 {
@@ -374,7 +373,7 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	retained := newMemoryNostrEventRepo()
 	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
-	if err := first.publishState(ctx, &state); err != nil {
+	if err := first.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
@@ -385,13 +384,13 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	clock := time.Unix(1_800_000_000, 0).UTC()
 	restarted.projection().now = func() time.Time { return clock }
 
-	if err := restarted.publishState(ctx, &state); !errors.Is(err, readErr) {
+	if err := restarted.publishStateForTest(ctx, &state); !errors.Is(err, readErr) {
 		t.Fatalf("first publish error = %v, want retained-state read error", err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 0 {
 		t.Fatalf("failed hydration published %d events, want 0", got)
 	}
-	if err := restarted.publishState(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
+	if err := restarted.publishStateForTest(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
 		t.Fatalf("publish before hydration retry = %v, want backoff", err)
 	}
 	if got := repo.loadCount(); got != 1 {
@@ -402,7 +401,7 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 	}
 
 	clock = clock.Add(projectionHydrationBackoffMin)
-	if err := restarted.publishState(ctx, &state); err != nil {
+	if err := restarted.publishStateForTest(ctx, &state); err != nil {
 		t.Fatalf("publish after successful retry: %v", err)
 	}
 	if got := repo.loadCount(); got != 2 {
@@ -412,7 +411,7 @@ func TestProjectionHydrationFailureFailsClosedAndRecovers(t *testing.T) {
 		t.Fatalf("unchanged state after restart published %d events, want 0", got)
 	}
 	state.DriftStatus = domain.DriftStatusDrifted
-	if err := restarted.publishState(ctx, &state); err != nil {
+	if err := restarted.publishStateForTest(ctx, &state); err != nil {
 		t.Fatalf("real change after hydration: %v", err)
 	}
 	if got := countLegacy(sink, KindServiceState, false); got != 1 {
@@ -439,7 +438,7 @@ func TestProjectionHydrationFailureDoesNotSuppressTombstones(t *testing.T) {
 	// First tombstone hits the failing load; the second lands inside the
 	// hydration backoff window. Both must publish.
 	for i := 0; i < 2; i++ {
-		if err := projector.publishStateTombstone(ctx, res); err != nil {
+		if err := projector.publishStateTombstoneForTest(ctx, res); err != nil {
 			t.Fatalf("tombstone %d during hydration failure: %v", i, err)
 		}
 	}
@@ -447,7 +446,7 @@ func TestProjectionHydrationFailureDoesNotSuppressTombstones(t *testing.T) {
 		t.Fatalf("tombstones published during hydration failure = %d, want 2", got)
 	}
 	state := dedupeTestState(serviceID, envID, clock)
-	if err := projector.publishState(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
+	if err := projector.publishStateForTest(ctx, &state); !errors.Is(err, ErrProjectorHydrationBackoff) {
 		t.Fatalf("non-tombstone during hydration backoff = %v, want hydration backoff", err)
 	}
 }
@@ -481,7 +480,7 @@ func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 	retained := newMemoryNostrEventRepo()
 	first := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, retained, zap.NewNop())
-	if err := first.publishState(ctx, &state); err != nil {
+	if err := first.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
 
@@ -497,7 +496,7 @@ func TestProjectionConcurrentHydrationIsSerialized(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			st := state
-			errs <- restarted.publishState(ctx, &st)
+			errs <- restarted.publishStateForTest(ctx, &st)
 		}()
 	}
 	<-repo.entered

@@ -198,7 +198,8 @@ func isAuditedEvent(t events.EventType) bool {
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop,
-		events.EventReconcileCompleted, events.EventAdoptionImported,
+		// Phase 3 S1: EventReconcileCompleted removed (B-16).
+		events.EventAdoptionImported,
 		events.EventLLMRouteCreated, events.EventLLMRouteUpdated, events.EventLLMReleaseRegistered,
 		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
 		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted,

@@ -347,7 +347,9 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
-		events.EventReconcileCompleted,
+		// Phase 3 S1: EventReconcileCompleted removed — reconciler publishes state
+		// directly; DNS/observed-deployments refresh is driven by
+		// EventEnvironmentServiceStateChanged (B-16, B-17 partial).
 		events.EventAdoptionImported,
 		events.EventRuntimeDeploy,
 		events.EventRuntimeRestart,
@@ -462,19 +464,10 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		return fmt.Errorf("list environments: %w", err)
 	}
 
-	states, err := snapshotSource.ListAllStates(ctx)
-	if err != nil {
-		return fmt.Errorf("list states: %w", err)
-	}
-	for i := range states {
-		if err := p.publishState(ctx, &states[i]); err != nil {
-			p.logger.Warn("publish service state projection failed",
-				zap.String("service_id", states[i].ServiceID.String()),
-				zap.String("environment_id", states[i].EnvironmentID.String()),
-				zap.Error(err),
-			)
-		}
-	}
+	// Phase 3 S1: state snapshot republish removed — runtime state is now
+	// published directly by the reconciler via RuntimeStatePublisher and
+	// warm-started from the daemon's own history (bahia-irsry.11.6).
+	// The state listing is no longer needed here.
 	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshotsFromSource(ctx, snapshotSource, services, envs)
 	policiesPublished := p.publishPolicySnapshots(ctx)
 	llmRoutes := 0
@@ -551,7 +544,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -583,38 +576,24 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 				_ = p.publishDeploymentIntentRegistry(ctx, intent, false)
 			}
 		}
-		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
-			p.publishStateForIntent(ctx, id)
-		}
+		// Phase 3 S1: publishStateForIntent removed — state is published
+		// by the reconciler's observation path (bahia-irsry.11.6).
 	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
 		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
 			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
 				_ = p.publishDeploymentRunRegistry(ctx, run, false)
 				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
 			}
-			p.publishStateForRun(ctx, id)
-		} else if id, ok := parseUUID(res.IntentID); ok {
-			p.publishStateForIntent(ctx, id)
+			// Phase 3 S1: publishStateForRun/publishStateForIntent removed —
+			// state is published by the reconciler (bahia-irsry.11.6).
 		}
-	// Phase 3 F2/F3: service and environment handleEvent cases removed — their
-	// state is published by the intent handlers via PublishBeforeCommit
-	// (bahia-irsry.11.3, bahia-irsry.11.4).
-	case events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected, events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
-		if res.Deleted {
-			if err := p.publishStateTombstone(ctx, res); err != nil {
-				p.logger.Warn("publish service state tombstone failed",
-					zap.String("service_id", res.ServiceID),
-					zap.String("environment_id", res.EnvironmentID),
-					zap.Error(err),
-				)
-			}
-		} else {
-			p.publishStateForResource(ctx, res)
-		}
-		if e.Type == events.EventAdoptionImported {
-			p.publishServiceByID(ctx, res.ServiceID)
-			p.publishEnvironmentByID(ctx, res.EnvironmentID)
-		}
+	// Phase 3 F2/F3: service and environment handleEvent cases removed.
+	// Phase 3 S1: state publication removed — the reconciler publishes state
+	// directly via RuntimeStatePublisher; tombstones are published by
+	// StateTombstoneHandler (bahia-irsry.11.6).
+	case events.EventAdoptionImported:
+		p.publishServiceByID(ctx, res.ServiceID)
+		p.publishEnvironmentByID(ctx, res.EnvironmentID)
 	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated:
 		p.publishLLMRouteByID(ctx, firstString(res.RouteID, e.EntityID))
 	case events.EventLLMReleaseRegistered:
@@ -741,57 +720,9 @@ func (p *Projector) publishEnvironmentByID(ctx context.Context, raw string) {
 	}
 }
 
-func (p *Projector) publishStateForIntent(ctx context.Context, intentID uuid.UUID) {
-	intent, err := p.source.GetDeploymentIntent(ctx, intentID)
-	if err != nil || intent == nil {
-		if err != nil {
-			p.logger.Warn("read deployment intent for projection failed", zap.String("intent_id", intentID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishStateForIDs(ctx, intent.ServiceID, intent.EnvironmentID)
-}
-
-func (p *Projector) publishStateForRun(ctx context.Context, runID uuid.UUID) {
-	run, err := p.source.GetDeploymentRun(ctx, runID)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read deployment run for projection failed", zap.String("run_id", runID.String()), zap.Error(err))
-		}
-		return
-	}
-	p.publishStateForIntent(ctx, run.DeploymentIntentID)
-}
-
-func (p *Projector) publishStateForResource(ctx context.Context, res events.ResourceData) {
-	serviceID, serviceOK := parseUUID(res.ServiceID)
-	envID, envOK := parseUUID(res.EnvironmentID)
-	if !serviceOK || !envOK {
-		return
-	}
-	p.publishStateForIDs(ctx, serviceID, envID)
-}
-
-func (p *Projector) publishStateForIDs(ctx context.Context, serviceID, envID uuid.UUID) {
-	state, err := p.source.GetEnvironmentServiceState(ctx, serviceID, envID)
-	if err != nil || state == nil {
-		if err != nil {
-			p.logger.Warn("read service state for projection failed",
-				zap.String("service_id", serviceID.String()),
-				zap.String("environment_id", envID.String()),
-				zap.Error(err),
-			)
-		}
-		return
-	}
-	if err := p.publishState(ctx, state); err != nil {
-		p.logger.Warn("publish service state projection failed",
-			zap.String("service_id", serviceID.String()),
-			zap.String("environment_id", envID.String()),
-			zap.Error(err),
-		)
-	}
-}
+// Phase 3 S1: publishStateForIntent, publishStateForRun, publishStateForResource,
+// and publishStateForIDs removed — state is now published directly by the
+// reconciler via RuntimeStatePublisher (bahia-irsry.11.6).
 
 func (p *Projector) publishLLMRouteByID(ctx context.Context, raw string) {
 	if p.llmSource == nil {
@@ -2292,7 +2223,9 @@ func shouldRefreshDNSProjection(eventType events.EventType) bool {
 	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
 		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
-		events.EventReconcileCompleted, events.EventAdoptionImported, events.EventRuntimeDeploy,
+		// Phase 3 S1: EventReconcileCompleted removed (B-17 partial) — DNS
+		// refresh is driven by EventEnvironmentServiceStateChanged.
+		events.EventAdoptionImported, events.EventRuntimeDeploy,
 		events.EventRuntimeRestart, events.EventRuntimeStop,
 		events.EventLLMRouteCreated, events.EventLLMRouteUpdated, events.EventLLMReleaseRegistered,
 		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
@@ -2333,7 +2266,7 @@ func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool
 	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
 		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
-		events.EventReconcileCompleted, events.EventAdoptionImported, events.EventRuntimeDeploy,
+		events.EventAdoptionImported, events.EventRuntimeDeploy,
 		events.EventRuntimeRestart, events.EventRuntimeStop:
 		return true
 	default:
@@ -3412,83 +3345,9 @@ func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res event
 	return p.publishReplaceableTombstone(ctx, KindLLMRouteState, llmRouteStateDTag(routeID, envID), tags, content, "llm_route_state.projection", &routeID)
 }
 
-func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentServiceState) error {
-	content := map[string]any{
-		"deleted":            false,
-		"service_id":         state.ServiceID.String(),
-		"environment_id":     state.EnvironmentID.String(),
-		"deployment_unit_id": uuidStringPtr(state.DeploymentUnitID),
-		"drift_status":       string(state.DriftStatus),
-		"updated_at":         formatTime(state.UpdatedAt),
-	}
-	if state.DesiredArtifactID != nil {
-		content["desired_artifact_id"] = state.DesiredArtifactID.String()
-	}
-	if state.DesiredIntentID != nil {
-		content["desired_intent_id"] = state.DesiredIntentID.String()
-	}
-	if state.LastSuccessfulRunID != nil {
-		content["last_successful_run_id"] = state.LastSuccessfulRunID.String()
-	}
-	if state.CurrentObservationID != nil {
-		content["current_observation_id"] = state.CurrentObservationID.String()
-	}
-	if state.LastReconciledAt != nil {
-		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
-	}
-	// Desired-state metadata (additive — old decoders ignore unknown fields).
-	if state.DesiredHash != "" {
-		content["desired_hash"] = state.DesiredHash
-	}
-	observation := p.latestObservation(ctx, state)
-	observedHash := ""
-	if observation != nil {
-		if observation.NormalizedState != nil {
-			observedHash = observation.NormalizedState.ObservationHash
-		}
-		if observedHash == "" {
-			observedHash = observation.NormalizedHash
-		}
-		content["health_status"] = string(observation.HealthStatus)
-		content["observed_image_digest"] = observation.ObservedImageDigest
-		content["observed_at"] = formatTime(observation.ObservedAt)
-	}
-	if observedHash != "" {
-		content["observed_hash"] = observedHash
-	}
-	if state.DesiredRuntimeState != nil {
-		if renderer := desiredStateRenderer(state.DesiredRuntimeState); renderer != "" {
-			content["renderer"] = renderer
-		}
-		if target := desiredStateTarget(state.DesiredRuntimeState); target != "" {
-			content["target"] = target
-		}
-	}
-
-	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{
-		{"service", state.ServiceID.String()},
-		{"environment", state.EnvironmentID.String()},
-		{"unit", unitTagValue(state.DeploymentUnitID)},
-		{"drift_status", string(state.DriftStatus)},
-	}
-	if state.DesiredArtifactID != nil {
-		tags = append(tags, gonostr.Tag{"artifact", state.DesiredArtifactID.String()})
-	}
-	if state.DesiredIntentID != nil {
-		tags = append(tags, gonostr.Tag{"intent", state.DesiredIntentID.String()})
-	}
-	if state.LastSuccessfulRunID != nil {
-		tags = append(tags, gonostr.Tag{"run", state.LastSuccessfulRunID.String()})
-	}
-	if state.DesiredHash != "" {
-		tags = append(tags, gonostr.Tag{"desired_hash", state.DesiredHash})
-	}
-	if observedHash != "" {
-		tags = append(tags, gonostr.Tag{"observed_hash", observedHash})
-	}
-	return p.publishControlState(ctx, KindServiceState, serviceStateDTag(state.ServiceID, state.EnvironmentID), false, tags, string(contentJSON), "state.projection", &state.ServiceID)
-}
+// Phase 3 S1: publishState removed — the shared record builder
+// RuntimeStateRecord in control_state_contract.go replaces it, and the
+// reconciler publishes via RuntimeStatePublisher (bahia-irsry.11.6).
 
 // serviceStateDTag is the one coordinate builder for service state: the live
 // record and its tombstone both use it, so they share one relay coordinate.
@@ -3501,39 +3360,9 @@ func llmRouteStateDTag(routeID, environmentID uuid.UUID) string {
 	return fmt.Sprintf("%s:%s", routeID, environmentID)
 }
 
-func (p *Projector) latestObservation(ctx context.Context, state *domain.EnvironmentServiceState) *domain.RuntimeObservation {
-	if p == nil || state == nil || state.CurrentObservationID == nil {
-		return nil
-	}
-	if p.source == nil {
-		return nil
-	}
-	obs, err := p.source.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
-	if err == nil && obs != nil && obs.ID == *state.CurrentObservationID {
-		return obs
-	}
-	return nil
-}
 
-func (p *Projector) publishStateTombstone(ctx context.Context, res events.ResourceData) error {
-	serviceID, serviceOK := parseUUID(res.ServiceID)
-	envID, envOK := parseUUID(res.EnvironmentID)
-	if !serviceOK || !envOK {
-		return nil
-	}
-	content := map[string]any{
-		"deleted":        true,
-		"service_id":     serviceID.String(),
-		"environment_id": envID.String(),
-		"updated_at":     formatTime(time.Now().UTC()),
-	}
-	tags := gonostr.Tags{
-		{"service", serviceID.String()},
-		{"environment", envID.String()},
-		{"unit", domain.DefaultDeploymentUnitKey},
-	}
-	return p.publishReplaceableTombstone(ctx, KindServiceState, serviceStateDTag(serviceID, envID), tags, content, "state.projection", &serviceID)
-}
+
+
 
 func auditDomainForEvent(t events.EventType) string {
 	s := string(t)
@@ -3864,4 +3693,29 @@ func desiredStateTarget(spec *domain.DesiredServiceSpec) string {
 		return ""
 	}
 	return spec.StableServiceKey
+}
+
+// publishStateForTest is a test-only method that publishes a runtime state
+// record through the projector's dedupe pipeline using the shared record
+// builders from control_state_contract.go. It replaces the removed
+// publishState method for test coverage of the dedupe/outbox infrastructure.
+func (p *Projector) publishStateForTest(ctx context.Context, state *domain.EnvironmentServiceState, obs ...*domain.RuntimeObservation) error {
+	var observation *domain.RuntimeObservation
+	if len(obs) > 0 {
+		observation = obs[0]
+	}
+	tags, content := RuntimeStateRecord(state, observation)
+	return p.publishControlState(ctx, KindServiceState, serviceStateDTag(state.ServiceID, state.EnvironmentID), false, tags, content, "state.projection", &state.ServiceID)
+}
+
+// publishStateTombstoneForTest is a test-only method that publishes a state
+// tombstone through the projector's dedupe pipeline.
+func (p *Projector) publishStateTombstoneForTest(ctx context.Context, res events.ResourceData) error {
+	serviceID, serviceOK := parseUUID(res.ServiceID)
+	envID, envOK := parseUUID(res.EnvironmentID)
+	if !serviceOK || !envOK {
+		return nil
+	}
+	tags, content := RuntimeStateTombstoneRecord(serviceID, envID)
+	return p.publishControlState(ctx, KindServiceState, serviceStateDTag(serviceID, envID), true, tags, content, "state.projection", &serviceID)
 }

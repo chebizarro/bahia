@@ -9,7 +9,6 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
@@ -133,9 +132,13 @@ func TestProjectedControlStateCarriesFamilyTopic(t *testing.T) {
 		func() error {
 			return projector.publishLLMRouteRegistry(ctx, &domain.LLMRoute{ID: uuid.New(), Name: "chat", CreatedAt: now, UpdatedAt: now}, false)
 		},
-		func() error { return projector.publishState(ctx, &state) },
 		func() error {
-			return projector.publishStateTombstone(ctx, events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String()})
+			tags, contentJSON := RuntimeStateRecord(&state, nil)
+			return projector.publishControlState(ctx, KindServiceState, serviceStateDTag(serviceID, envID), false, tags, contentJSON, "state.projection", &serviceID)
+		},
+		func() error {
+			tags, contentJSON := RuntimeStateTombstoneRecord(serviceID, envID)
+			return projector.publishControlState(ctx, KindServiceState, serviceStateDTag(serviceID, envID), true, tags, contentJSON, "state.projection", &serviceID)
 		},
 		func() error {
 			return projector.publishDNSZone(ctx, domain.DNSZone{Name: "prod.cascadia", BackendRef: "fs"}, false)
