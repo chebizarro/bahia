@@ -290,6 +290,38 @@ func (o *Outbox) ListPending(target string, after *OutboxCursor, limit int) ([]O
 	return out, nil
 }
 
+// ListFailed returns up to limit entries in the failed state, oldest-settled
+// first. This is a read-only view for diagnostic inspection of events that
+// could not be delivered.
+func (o *Outbox) ListFailed(limit int) ([]OutboxEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []OutboxEntry
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		entries := tx.Bucket(outboxEntriesBucket)
+		cursor := tx.Bucket(outboxFailedBucket).Cursor()
+		for key, _ := cursor.First(); key != nil && len(out) < limit; key, _ = cursor.Next() {
+			// key = settledKey(settledAt, id); id is the last 32 bytes.
+			id := key[8:]
+			raw := entries.Get(id)
+			if raw == nil {
+				continue
+			}
+			var entry OutboxEntry
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return fmt.Errorf("decode outbox entry %x: %w", id, err)
+			}
+			out = append(out, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list failed outbox entries: %w", err)
+	}
+	return out, nil
+}
+
 // CommitRound records a delivery round for id and returns the stored entry.
 // Several deliveries of one entry may overlap (an inline publish and a
 // runner, or the outgoing and incoming App during a reload), so the commit

@@ -146,6 +146,9 @@ func run(args []string) error {
 				return
 			}
 		}
+		if gaveUp := sub.GaveUp(); gaveUp != nil {
+			logger.Error("zone sync subscription gave up", zap.Error(gaveUp))
+		}
 	}()
 	zoneSubscriber := dnsagent.NewZoneSubscriber(service, cfg.AuthorizedPubkey, zoneSyncEvents, logger)
 	go func() {

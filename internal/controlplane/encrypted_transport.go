@@ -602,6 +602,10 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 			}
 		case ev, ok := <-merged.Events:
 			if !ok {
+				if gaveUp := merged.GaveUp(); gaveUp != nil {
+					t.logger.Error("ContextVM encrypted request subscription gave up", zap.Error(gaveUp))
+					return fmt.Errorf("ContextVM subscription gave up: %w", gaveUp)
+				}
 				t.logger.Warn("ContextVM encrypted request subscription events channel closed")
 				return nil
 			}

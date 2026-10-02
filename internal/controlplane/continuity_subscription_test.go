@@ -116,21 +116,28 @@ func TestContinuityDefinitionsRejectInvalidSignatureAndStandby(t *testing.T) {
 }
 
 func TestContinuityDefinitionsClosedAndCancellationAreNotEOSE(t *testing.T) {
+	// After bahia-irsry.48 item 3, the consumer no longer exits on CLOSED;
+	// the relay pool handles AUTH internally. The consumer logs the CLOSED
+	// and continues until Events closes or the context is cancelled.
 	for _, reason := range []string{"blocked: scope rejected", "auth-required: identify"} {
 		_, h, _, _, _ := continuityFixture(t, nil)
-		closed := make(chan nostradapter.RelayClosed, 1)
-		closed <- nostradapter.RelayClosed{RelayURL: "wss://relay.example", Reason: reason}
+		closedCh := make(chan nostradapter.RelayClosed, 1)
+		closedCh <- nostradapter.RelayClosed{RelayURL: "wss://relay.example", Reason: reason}
+		close(closedCh)
+		eventsCh := make(chan *nostr.Event)
+		close(eventsCh)
 		pool := &continuityTestPool{}
 		h.pool = pool
-		err := h.consumeDefinitions(t.Context(), &nostradapter.MergedSubscription{Closed: closed}, nostradapter.DefaultBackoff())
-		require.ErrorContains(t, err, "CLOSED")
-		require.Equal(t, 1, pool.closed)
-		if nostradapter.IsAuthRequiredReason(reason) {
-			require.Equal(t, 1, pool.auth)
-		}
+		err := h.consumeDefinitions(t.Context(), &nostradapter.MergedSubscription{Closed: closedCh, Events: eventsCh}, nostradapter.DefaultBackoff())
+		require.Error(t, err) // "continuity event stream closed" or "gave up"
+		// RecordRelayClosed may or may not be called depending on select order
+		// (both Closed and Events are immediately readable); the key assertions
+		// are that the consumer does NOT call AuthenticateRelay and does NOT
+		// signal ready.
+		require.Equal(t, 0, pool.auth, "consumer must not call AuthenticateRelay — pool handles AUTH")
 		select {
 		case <-h.ready:
-			t.Fatal("CLOSED is not successful backfill")
+			t.Fatal("CLOSED + Events close is not successful backfill")
 		default:
 		}
 	}

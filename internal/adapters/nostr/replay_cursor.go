@@ -58,12 +58,25 @@ type InboundSyncConfig struct {
 	// NegentropyUpload also publishes to a relay the replaceable and
 	// addressable events it lacks and the local store holds (relay repair).
 	NegentropyUpload bool
+	// NegentropyUploadFilter, when set, is consulted per relay before uploading.
+	// If it returns false for a relay URL, upload is suppressed even when
+	// NegentropyUpload is true. This scopes uploads to the daemon's own relays
+	// so control-plane events are not pushed to interop relays (.50 item 4).
+	NegentropyUploadFilter func(relayURL string) bool
 	// PageLimit is the `limit` of each catch-up REQ page (lowered to a
 	// relay's NIP-11 max_limit). A full page is followed by an older page
 	// bounded with `until`.
 	PageLimit int
 	// NegentropyTimeout bounds one NIP-77 session.
 	NegentropyTimeout time.Duration
+}
+
+// IsZero reports whether the config is the zero value (all scalar fields are
+// zero and the function fields are nil). It replaces direct struct comparison
+// which is invalid when the struct contains func fields.
+func (c InboundSyncConfig) IsZero() bool {
+	return c.ResumeOverlap == 0 && c.RegularLookback == 0 && !c.NegentropyUpload &&
+		c.NegentropyUploadFilter == nil && c.PageLimit == 0 && c.NegentropyTimeout == 0
 }
 
 // DefaultInboundSyncConfig returns the defaults used when none is configured.

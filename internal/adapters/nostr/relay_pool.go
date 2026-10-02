@@ -66,10 +66,11 @@ type RelayPool struct {
 	fetchRelayLimits func(context.Context, string) (relayLimits, *nip11.RelayInformationDocument, error)
 	relayInfoTimeout time.Duration
 
-	// connectedMu guards relay (re)connection listeners. It is never held
-	// while calling out, and notification never blocks the pool.
+	// connectedMu guards relay (re)connection and relay-removal listeners.
+	// It is never held while calling out, and notification never blocks the pool.
 	connectedMu        sync.Mutex
 	connectedListeners map[uint64]chan struct{}
+	removedListeners   map[uint64]chan struct{}
 	nextListenerID     uint64
 }
 
@@ -371,6 +372,9 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 		result.MigratedSubscriptions++
 	}
 
+	if len(removedURLs) > 0 {
+		p.signalRelayRemoved()
+	}
 	p.pruneRetiredRelays()
 	return result
 }
@@ -2341,6 +2345,41 @@ func (p *RelayPool) signalRelayConnected() {
 	p.connectedMu.Lock()
 	defer p.connectedMu.Unlock()
 	for _, ch := range p.connectedListeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// NotifyRelayRemoved registers a wake-up for relay removal from the pool's
+// configured topology (ReconfigureRelayURLs). After any relay is removed, the
+// returned channel becomes readable. Semantics mirror NotifyRelayConnected:
+// capacity one, burst coalescing, cancel unregisters.
+func (p *RelayPool) NotifyRelayRemoved() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	p.connectedMu.Lock()
+	if p.removedListeners == nil {
+		p.removedListeners = make(map[uint64]chan struct{})
+	}
+	p.nextListenerID++
+	id := p.nextListenerID
+	p.removedListeners[id] = ch
+	p.connectedMu.Unlock()
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			p.connectedMu.Lock()
+			delete(p.removedListeners, id)
+			p.connectedMu.Unlock()
+		})
+	}
+}
+
+func (p *RelayPool) signalRelayRemoved() {
+	p.connectedMu.Lock()
+	defer p.connectedMu.Unlock()
+	for _, ch := range p.removedListeners {
 		select {
 		case ch <- struct{}{}:
 		default:

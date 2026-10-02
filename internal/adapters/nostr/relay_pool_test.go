@@ -675,3 +675,38 @@ func setConnectRelayForTest(t *testing.T, pool *RelayPool, fn func(context.Conte
 	pool.connectRelay = fn
 	t.Cleanup(func() { pool.connectRelay = original })
 }
+
+func TestNotifyRelayRemovedSignalsWhenRelaysLeaveTopology(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://keep.example", "wss://remove.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://keep.example")
+	markRelayConnectedForSubscribeTest(pool, "wss://remove.example")
+	setConnectRelayForTest(t, pool, func(_ context.Context, url string, _ gonostr.RelayOptions) (*gonostr.Relay, error) {
+		return gonostr.NewRelay(context.Background(), url, gonostr.RelayOptions{}), nil
+	})
+
+	removed, stopNotify := pool.NotifyRelayRemoved()
+	defer stopNotify()
+
+	// Reconfigure to drop "wss://remove.example".
+	result := pool.ReconfigureRelayURLs([]string{"wss://keep.example"})
+	require.True(t, result.Changed)
+	require.Equal(t, []string{"wss://remove.example"}, result.RemovedURLs)
+
+	// The removed channel must become readable.
+	select {
+	case <-removed:
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("NotifyRelayRemoved channel not signalled after relay removal")
+	}
+
+	// An idempotent reconfigure with no removals must not signal again.
+	result2 := pool.ReconfigureRelayURLs([]string{"wss://keep.example"})
+	require.False(t, result2.Changed)
+	select {
+	case <-removed:
+		t.Fatal("NotifyRelayRemoved should not fire on a no-op reconfigure")
+	default:
+		// expected: channel stays blocked
+	}
+}

@@ -47,8 +47,6 @@
 1	internal/adapters/nostr.EncodeReplayCheckpoint
 1	internal/adapters/nostr.EncodeReplicationPolicyEvent
 1	internal/adapters/nostr.EncodeStandbyNodeDefinitionEvent
-1	internal/adapters/nostr.KindAssistantPromptRequest
-1	internal/adapters/nostr.KindCatalog.KindsForTier
 1	internal/adapters/nostr.KindCatalog.LiveGroups
 1	internal/adapters/nostr.KindCatalog.SnapshotGroups
 1	internal/adapters/nostr.KindSystemDiscovery
@@ -70,6 +68,7 @@
 1	internal/adapters/nostr.RelayPool.GetMaxSubscriptions
 1	internal/adapters/nostr.RelayPool.IsAuthRequired
 1	internal/adapters/nostr.RelayPool.ReconfigureRelayURLs
+1	internal/adapters/nostr.RelayPool.RecordRelayError
 1	internal/adapters/nostr.Subscriber.IsCaughtUp
 1	internal/adapters/nostr.WithAuthorizedAuthors
 1	internal/adapters/nostr.WithKinds
@@ -143,7 +142,6 @@
 1	internal/api/middleware.RequireRole
 1	internal/api/router.New
 1	internal/app.HealthProvider.Liveness
-1	internal/app.ModePolicy.RouteEnabled
 1	internal/auth.Middleware
 1	internal/auth.NIP05Resolver.CacheSize
 1	internal/auth.NIP05Resolver.LookupByIdentifier

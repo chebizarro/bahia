@@ -159,23 +159,14 @@ func (s *Subscriber) Run(ctx context.Context) error {
 
 func (s *Subscriber) subscribe(ctx context.Context) error {
 	filters := s.subscriptionFilters()
-	authAttempted := make(map[string]struct{})
-	for {
-		if s.pool == nil {
-			return fmt.Errorf("hiveci relay pool is not configured")
-		}
-		merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
-		if err != nil {
-			return err
-		}
-		retry, err := s.consumeSubscription(ctx, merged, authAttempted)
-		if err != nil {
-			return err
-		}
-		if !retry {
-			return nil
-		}
+	if s.pool == nil {
+		return fmt.Errorf("hiveci relay pool is not configured")
 	}
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return err
+	}
+	return s.consumeSubscription(ctx, merged)
 }
 
 func (s *Subscriber) subscriptionFilters() []nostr.Filter {
@@ -236,14 +227,15 @@ func releaseRejectionReason(err error) string {
 	}
 }
 
-func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
+func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapter.MergedSubscription) error {
 	if merged == nil {
-		return false, nil
+		return nil
 	}
+	defer merged.Close()
 	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return ctx.Err()
 		case eose, ok := <-merged.RelayEOSE:
 			if ok {
 				s.handleRelayEOSE(eose)
@@ -252,10 +244,12 @@ func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapt
 			}
 		case closed, ok := <-merged.Closed:
 			if ok {
-				if s.handleRelayClosed(ctx, closed, authAttempted) {
-					merged.Close()
-					return true, nil
-				}
+				// NIP-42 AUTH is handled by the relay pool internally.
+				s.logger.Warn("hiveci relay closed subscription",
+					zap.String("relay", closed.RelayURL),
+					zap.String("subscription_id", closed.SubscriptionID),
+					zap.String("reason", closed.Reason),
+				)
 			} else {
 				merged.Closed = nil
 			}
@@ -264,12 +258,15 @@ func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapt
 			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
-				return false, nil
+				if gaveUp := merged.GaveUp(); gaveUp != nil {
+					return fmt.Errorf("hiveci subscription gave up: %w", gaveUp)
+				}
+				return nil
 			}
 			s.handleEvent(ctx, ev)
 		}
 	}
-	return false, nil
+	return nil
 }
 
 func (s *Subscriber) handleRelayEOSE(eose nostrAdapter.RelayEOSE) {
@@ -281,30 +278,6 @@ func (s *Subscriber) handleRelayEOSE(eose nostrAdapter.RelayEOSE) {
 
 func (s *Subscriber) handleEOSE() {
 	s.logger.Info("hiveci EOSE received: caught up with stored workflow events")
-}
-
-func (s *Subscriber) handleRelayClosed(ctx context.Context, closed nostrAdapter.RelayClosed, authAttempted map[string]struct{}) bool {
-	s.logger.Warn("hiveci relay closed subscription",
-		zap.String("relay", closed.RelayURL),
-		zap.String("subscription_id", closed.SubscriptionID),
-		zap.String("reason", closed.Reason),
-	)
-	if !nostrAdapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		s.logger.Warn("hiveci relay subscription auth failed",
-			zap.String("relay", closed.RelayURL),
-			zap.String("reason", closed.Reason),
-			zap.Error(err),
-		)
-		return false
-	}
-	return true
 }
 
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {

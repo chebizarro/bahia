@@ -710,7 +710,7 @@ func New(cfg *config.Config) (*App, error) {
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: controlPlaneAuthors,
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
-		Resume:              inboundSyncConfig(cfg.Nostr.LocalStore),
+		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
@@ -2082,7 +2082,7 @@ func New(cfg *config.Config) (*App, error) {
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalStore(localEventStore),
 		nostrAdapter.WithSelfAuthors(servicePubkey),
-		nostrAdapter.WithInboundSync(inboundSyncConfig(cfg.Nostr.LocalStore)),
+		nostrAdapter.WithInboundSync(inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays)),
 		// NIP-09 deletions from the control-plane authors reach the
 		// projection cache live, as the bootstrapper's deletion group does.
 		nostrAdapter.WithDeletionAuthors(controlPlaneAuthors),
@@ -4580,11 +4580,12 @@ func newLoomCanonicalProjectionSigner(cfg *config.Config, relays []string, logge
 		return nil, nil, fmt.Errorf("loom.canonical_projection.signet_bunker_uri is required")
 	}
 	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{
-		BunkerURI:       projection.SignetBunkerURI,
-		Relays:          relays,
-		ClientSecretKey: projection.SignetClientSecretKey,
-		RequireReal:     !cfg.DevMode,
-		AllowMock:       cfg.DevMode,
+		BunkerURI:         projection.SignetBunkerURI,
+		Relays:            relays,
+		ClientSecretKey:   projection.SignetClientSecretKey,
+		RequireReal:       !cfg.DevMode,
+		AllowMock:         cfg.DevMode,
+		ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget,
 	}, slog.Default())
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize Signet client: %w", err)
@@ -4660,7 +4661,7 @@ func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap
 		return identity, nil, nil, nil
 	}
 	slogLogger := slog.Default()
-	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock}, slogLogger)
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget}, slogLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
 		return identity, nil, nil, nil

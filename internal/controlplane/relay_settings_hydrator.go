@@ -213,7 +213,6 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 		zap.Strings("relays", safeRelayURLsForLog(merged.RelayURLs())),
 		zap.String("service_pubkey", h.servicePubkey),
 	)
-	authAttempted := make(map[string]struct{})
 	eventsCh := merged.Events
 	eoseCh := merged.RelayEOSE
 	allEOSECh := merged.EndOfStoredEvents
@@ -257,9 +256,12 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 				closedCh = nil
 				continue
 			}
-			if h.handleRelayClosed(ctx, closed, authAttempted) {
-				return errRelaySettingsResubscribeNow
-			}
+			// NIP-42 AUTH is handled by the relay pool internally.
+			h.logger.Warn("relay closed relay-settings subscription",
+				zap.String("relay", safeRelayURL(closed.RelayURL)),
+				zap.String("subscription_id", closed.SubscriptionID),
+				zap.Bool("auth_required", nostradapter.IsAuthRequiredReason(closed.Reason)),
+			)
 		case _, ok := <-allEOSECh:
 			if !ok {
 				allEOSECh = nil
@@ -281,6 +283,9 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 		case ev, ok := <-eventsCh:
 			if !ok {
 				eventsCh = nil
+				if gaveUp := merged.GaveUp(); gaveUp != nil {
+					return fmt.Errorf("relay settings subscription gave up: %w", gaveUp)
+				}
 				if allEOSECh != nil {
 					select {
 					case <-allEOSECh:
@@ -317,31 +322,6 @@ func (h *RelaySettingsHydrator) filter() gonostr.Filter {
 		}
 	}
 	return filter
-}
-
-func (h *RelaySettingsHydrator) handleRelayClosed(ctx context.Context, closed nostradapter.RelayClosed, authAttempted map[string]struct{}) bool {
-	relayURL := safeRelayURL(closed.RelayURL)
-	h.logger.Warn("relay closed relay-settings subscription",
-		zap.String("relay", relayURL),
-		zap.String("subscription_id", closed.SubscriptionID),
-		zap.Bool("auth_required", nostradapter.IsAuthRequiredReason(closed.Reason)),
-	)
-	if !nostradapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || h.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := h.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		h.pool.RecordRelayError(closed.RelayURL, "auth-unavailable")
-		h.logger.Warn("relay settings subscription auth failed",
-			zap.String("relay", relayURL),
-			zap.String("failure_class", "auth_unavailable"),
-		)
-		return false
-	}
-	return true
 }
 
 func (h *RelaySettingsHydrator) handleEvent(ctx context.Context, ev *gonostr.Event) bool {

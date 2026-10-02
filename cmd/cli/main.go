@@ -96,6 +96,7 @@ func newRootCommand() *cobra.Command {
 		packageCommands(),
 		soulFactoryCommands(),
 		appCommands(),
+		outboxCommands(),
 	)
 
 	return rootCmd

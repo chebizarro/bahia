@@ -44,13 +44,12 @@ func (h *ContinuityRuntime) consumeDefinitions(ctx context.Context, merged *nost
 				closed = nil
 				continue
 			}
+			// NIP-42 AUTH is handled by the relay pool internally.
 			h.pool.RecordRelayClosed(info.RelayURL, info.Reason)
-			if nostradapter.IsAuthRequiredReason(info.Reason) {
-				if err := h.pool.AuthenticateRelay(ctx, info.RelayURL); err != nil {
-					return fmt.Errorf("continuity relay AUTH: %w", err)
-				}
-			}
-			return fmt.Errorf("continuity subscription CLOSED: %s", info.Reason)
+			h.logger.Warn("continuity subscription CLOSED",
+				zap.String("relay", info.RelayURL),
+				zap.String("reason", info.Reason),
+			)
 		case <-eose:
 			if !merged.AllRelaysReachedEOSE() {
 				return fmt.Errorf("continuity subscription ended without EOSE")
@@ -74,6 +73,9 @@ func (h *ContinuityRuntime) consumeDefinitions(ctx context.Context, merged *nost
 			eose = nil
 		case event, ok := <-merged.Events:
 			if !ok {
+				if gaveUp := merged.GaveUp(); gaveUp != nil {
+					return fmt.Errorf("continuity subscription gave up: %w", gaveUp)
+				}
 				return fmt.Errorf("continuity event stream closed")
 			}
 			h.observeDefinition(ctx, event)

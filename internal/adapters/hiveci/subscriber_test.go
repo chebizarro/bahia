@@ -335,7 +335,12 @@ func TestReleaseWorkflowRunReplayDispatchesOnlyOnce(t *testing.T) {
 	require.Equal(t, 1, dispatches)
 }
 
-func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testing.T) {
+func TestSubscribeAuthRequiredClosedIsLoggedWithoutConsumerRetry(t *testing.T) {
+	// After bahia-irsry.48 item 3, NIP-42 AUTH is handled by the relay pool
+	// internally (authenticateLiveRelay + closedRetryBudget). The consumer
+	// no longer calls AuthenticateRelay or resubscribes itself — it just
+	// logs the CLOSED reason and continues processing events from the
+	// merged subscription until Events closes.
 	repo := newTestHiveRepo()
 	now := time.Unix(1_700_000_000, 0).UTC()
 	publisher := hiveCITestPubkey(t)
@@ -349,9 +354,16 @@ func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testin
 	})
 	run.Content = `{"method":"ci/workflow-run","params":{"repo":"30618:pk:repo","commit":"abc","branch":"main","workflow":".github/workflows/ci.yml","triggered_by":"user"}}`
 	require.NoError(t, nostrutil.SignEventWithHexKey(run, hiveCITestPrivateKey))
+
+	// Build a single subscription that delivers a CLOSED then events.
+	closedCh := make(chan nostrAdapter.RelayClosed, 1)
+	closedCh <- nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted"}
+	close(closedCh)
+	eventsCh := make(chan *nostr.Event, 1)
+	eventsCh <- run
+	close(eventsCh)
 	pool := &fakeRelaySubscriber{subscriptions: []*nostrAdapter.MergedSubscription{
-		mergedWithClosed(nostrAdapter.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted"}),
-		mergedWithEvents(run),
+		{Events: eventsCh, Closed: closedCh},
 	}}
 	s := NewSubscriber(nil, repo, []string{publisher}, zap.NewNop(), nil)
 	s.pool = pool
@@ -359,9 +371,10 @@ func TestSubscribeAuthRequiredClosedAuthenticatesAndRetriesImmediately(t *testin
 
 	require.NoError(t, s.subscribe(context.Background()))
 
-	require.Equal(t, []string{"wss://relay.example"}, pool.authCalls)
-	require.Len(t, pool.filters, 2, "successful AUTH should cause an immediate resubscribe with the same filters")
-	require.Equal(t, pool.filters[0], pool.filters[1])
+	// The consumer must NOT call AuthenticateRelay or resubscribe.
+	require.Empty(t, pool.authCalls, "consumer must not call AuthenticateRelay — pool handles AUTH internally")
+	require.Len(t, pool.filters, 1, "subscribe should call SubscribeAllWithEOSE exactly once")
+	// The event is still processed because the Events channel was open.
 	require.Contains(t, repo.runs, nostrutil.EventIDHex(run))
 }
 
@@ -380,15 +393,15 @@ func TestConsumeSubscriptionHandlesEOSEAndNonAuthClosedDeterministically(t *test
 	pool := &fakeRelaySubscriber{}
 	s := NewSubscriber(nil, newTestHiveRepo(), []string{}, zap.NewNop(), nil)
 	s.pool = pool
-	retry, err := s.consumeSubscription(context.Background(), &nostrAdapter.MergedSubscription{
+	err := s.consumeSubscription(context.Background(), &nostrAdapter.MergedSubscription{
 		EndOfStoredEvents: eose,
 		RelayEOSE:         relayEOSE,
 		Closed:            closed,
-	}, map[string]struct{}{})
+	})
 
 	require.NoError(t, err)
-	require.False(t, retry)
-	require.Empty(t, pool.authCalls, "non-auth CLOSED must not trigger AUTH")
+	// NIP-42 AUTH is handled by the relay pool internally (bahia-irsry.48 item 3);
+	// the consumer no longer performs its own AUTH retry.
 }
 
 func TestRequiredTagParsing(t *testing.T) {
