@@ -318,8 +318,10 @@ func (r *FleetConfigReconciler) awaitApply(
 		return false, nil
 	}
 	late, observed := r.reactor.resultWaiters().park(pending, parkedOperation{
-		shardKey:  soul.AgentID,
-		holdsSoul: hold != nil,
+		shardKey:      soul.AgentID,
+		holdsSoul:     hold != nil,
+		actionEventID: action.EventID,
+		requestKind:   domain.KindSoulFleetConfig,
 		resume: func(ctx context.Context, late *RuntimeControlResultEnvelope) {
 			r.resumeApply(ctx, hold, adapter, action, soul, next, previous, changed, late)
 		},

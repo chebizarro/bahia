@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,8 @@ import (
 )
 
 // Tests for bahia-irsry.57: operator abandon, late result after abandon,
-// unauthorized abandon rejection, and async deferred fleet work ordering.
+// unauthorized abandon rejection, async deferred fleet work ordering,
+// restart-rebuild durability, and rejection when the operation is not parked.
 
 // TestAbandonReleasesStuckSoulAndLaterRollbackProceeds confirms that an
 // operator abandon of a stuck awaiting_terminal operation releases the soul's
@@ -43,7 +45,7 @@ func TestAbandonReleasesStuckSoulAndLaterRollbackProceeds(t *testing.T) {
 		t.Fatal("soul should be free after abandon")
 	}
 
-	// Verify the abandon produced a terminal result.
+	// Verify the abandon produced a terminal result for the abandon action.
 	results := f.capture.byKind(domain.KindProvisioningResult)
 	var abandonResult *nostr.Event
 	for _, r := range results {
@@ -63,6 +65,21 @@ func TestAbandonReleasesStuckSoulAndLaterRollbackProceeds(t *testing.T) {
 	}
 	if payload["reason"] != "test: stuck hot-reload" {
 		t.Fatalf("abandon payload reason = %v, want 'test: stuck hot-reload'", payload["reason"])
+	}
+
+	// Verify the abandon also produced a terminal result for the abandoned
+	// request (the hot-reload), so the restart rebuild sees it as finished.
+	var abandonedRequestResult *nostr.Event
+	for _, r := range results {
+		if tagValue(r.Tags, tagEvent) == hotReload.ID.Hex() && tagValue(r.Tags, tagStatus) == "abandoned" {
+			abandonedRequestResult = r
+		}
+	}
+	if abandonedRequestResult == nil {
+		t.Fatal("no terminal result for the abandoned request (the hot-reload)")
+	}
+	if got := tagValue(abandonedRequestResult.Tags, tagRequestKind); got != strconv.Itoa(domain.KindSoulAction) {
+		t.Fatalf("abandoned request result request-kind = %q, want %d", got, domain.KindSoulAction)
 	}
 
 	// A subsequent rollback now proceeds (it's not deferred forever).
@@ -172,6 +189,121 @@ func TestUnauthorizedAbandonIsRejected(t *testing.T) {
 	}
 	if errorResult == nil {
 		t.Fatal("no error result for the unauthorized abandon")
+	}
+}
+
+// TestAbandonRejectedWhenOperationStillExecuting confirms that an abandon is
+// rejected when the soul is held but its operation is still executing (not yet
+// parked on an awaiting_terminal result). Force-releasing the hold in that
+// state would break per-soul serialization.
+func TestAbandonRejectedWhenOperationStillExecuting(t *testing.T) {
+	f := newLateLifecycleFixture(t)
+
+	// Manually hold the soul: acquire starts an operation but we never run
+	// it, simulating a run func mid-execution.
+	gate := f.reactor.soulOperations()
+	_, outcome := gate.acquire("scout",
+		soulOperation{key: "test:executing", run: func(context.Context, *soulHold) bool { return false }},
+		soulOperation{key: "test:executing", run: func(context.Context, *soulHold) bool { return false }})
+	if outcome != soulOperationStarted {
+		t.Fatalf("acquire outcome = %v, want started", outcome)
+	}
+
+	// Try to abandon — should be rejected because nothing is parked.
+	abandon := buildActionEvent(t, f.signer, "reject-abandon",
+		nostr.Tags{{"soul", buildSoulRefForTest(f.soul)}, {"action", "abandon"}}, "")
+	err := f.handler.HandleAction(t.Context(), abandon)
+	if err == nil || !strings.Contains(err.Error(), "still executing") {
+		t.Fatalf("HandleAction(abandon while executing) error = %v, want 'still executing'", err)
+	}
+
+	// The soul should still be held — not force-released.
+	if held, _ := gate.held("scout"); !held {
+		t.Fatal("soul should still be held after rejected abandon")
+	}
+
+	// An error result should have been published.
+	var errorResult *nostr.Event
+	for _, r := range f.capture.byKind(domain.KindProvisioningResult) {
+		if tagValue(r.Tags, tagEvent) == abandon.ID.Hex() && tagValue(r.Tags, tagStatus) == "error" {
+			errorResult = r
+		}
+	}
+	if errorResult == nil {
+		t.Fatal("no error result for the rejected abandon")
+	}
+	if !strings.Contains(errorResult.Content, "still executing") {
+		t.Fatalf("error result = %q, want to contain 'still executing'", errorResult.Content)
+	}
+}
+
+// TestRestartAfterAbandonDoesNotReDrive confirms that after an abandon the
+// restart rebuild (rebuildParkedOperations -> withoutTerminalResults) sees the
+// abandoned request as finished and does NOT re-hold the soul or re-drive the
+// operation. A later rollback on the free soul proceeds.
+func TestRestartAfterAbandonDoesNotReDrive(t *testing.T) {
+	f := relayBackedLifecycleFixture(t, "timeout")
+
+	// Park a hot-reload.
+	hotReload := f.action(t, "abandoned-rebuild", domain.SoulActionHotReload)
+	if err := f.handler.HandleAction(t.Context(), hotReload); err != nil {
+		t.Fatalf("HandleAction(hot-reload) error = %v", err)
+	}
+
+	// Confirm an awaiting_terminal progress event was published.
+	awaitingEvents := progressWithStatus(f.capture.byKind(domain.KindProvisioningStatus), actionStatusAwaitingTerminal)
+	if len(awaitingEvents) != 1 {
+		t.Fatalf("awaiting_terminal events = %d, want 1", len(awaitingEvents))
+	}
+
+	// Abandon it.
+	abandon := buildActionEvent(t, f.signer, "rebuild-abandon",
+		nostr.Tags{{"soul", buildSoulRefForTest(f.soul)}, {"action", "abandon"}, {"reason", "test: rebuild"}}, "")
+	if err := f.handler.HandleAction(t.Context(), abandon); err != nil {
+		t.Fatalf("HandleAction(abandon) error = %v", err)
+	}
+
+	// Simulate a restart rebuild: feed the published events through the
+	// same logic rebuildParkedOperations uses.
+	factoryKey, err := nostr.PubKeyFromHex(f.signer.pubkey)
+	if err != nil {
+		t.Fatalf("factory key: %v", err)
+	}
+	outstanding := outstandingFromAwaiting(awaitingEvents, factoryKey)
+	if len(outstanding) != 1 {
+		t.Fatalf("outstanding before terminal check = %d, want 1", len(outstanding))
+	}
+	results := f.capture.byKind(domain.KindProvisioningResult)
+	outstanding = withoutTerminalResults(outstanding, results, factoryKey)
+	if len(outstanding) != 0 {
+		var keys []string
+		for _, op := range outstanding {
+			keys = append(keys, op.key())
+		}
+		t.Fatalf("outstanding after abandon = %v, want none (rebuild should skip the abandoned operation)", keys)
+	}
+
+	// The soul is free: a later rollback proceeds.
+	if held, _ := f.reactor.soulOperations().held("scout"); held {
+		t.Fatal("soul should be free after abandon")
+	}
+	rollback := buildActionEvent(t, f.signer, "after-rebuild-rollback",
+		nostr.Tags{
+			{"soul", buildSoulRefForTest(f.soul)}, {"action", string(domain.SoulActionRollback)},
+			{"draft", "31952:" + f.signer.pubkey + ":scout"}, {"draft-event", f.currentDraft.EventID},
+			{"spec-hash", "sha256:old"}, {"previous-spec-hash", "sha256:new"},
+		}, "")
+	if err := f.handler.HandleAction(t.Context(), rollback); err != nil {
+		t.Fatalf("HandleAction(rollback after abandon) error = %v", err)
+	}
+	var rollbackResult *nostr.Event
+	for _, r := range f.capture.byKind(domain.KindProvisioningResult) {
+		if tagValue(r.Tags, tagEvent) == rollback.ID.Hex() {
+			rollbackResult = r
+		}
+	}
+	if rollbackResult == nil {
+		t.Fatal("no terminal result for the rollback after restart rebuild")
 	}
 }
 

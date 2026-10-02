@@ -125,6 +125,13 @@ type parkedOperation struct {
 	// with nothing left to release it.
 	holdsSoul bool
 	resume    func(context.Context, *RuntimeControlResultEnvelope)
+	// actionEventID is the originating lifecycle action (kind:1950) or fleet
+	// revision (kind:31953) event ID, used by abandon to publish a terminal
+	// result that the restart rebuild recognizes as finished.
+	actionEventID string
+	// requestKind is the Nostr kind of the originating request
+	// (domain.KindSoulAction or domain.KindSoulFleetConfig).
+	requestKind int
 }
 
 type parkedRuntimeResult struct {
@@ -305,15 +312,31 @@ func lateRollbackProgress(step string, late *RuntimeControlResultEnvelope) (stat
 	return "completed", fmt.Sprintf("%s: %s completed after its outcome was reported unknown", actionStatusRollbackResolved, step)
 }
 
+// abandonedEntry describes the parked operation that was abandoned.
+type abandonedEntry struct {
+	// runtimeRequestID is the kind:38384 runtime control request event ID.
+	runtimeRequestID string
+	// actionEventID is the originating lifecycle action or fleet revision event
+	// ID, used to publish a terminal result that the restart rebuild recognizes.
+	actionEventID string
+	// requestKind is the Nostr kind of the originating request.
+	requestKind int
+}
+
 // abandon removes the soul-holding parked entry for agentID (the entry whose
 // shardKey matches and holdsSoul is true) and installs a record-only
 // replacement that logs the late result without applying it. It returns the
-// request event ID of the abandoned operation, or "" when nothing was parked.
-func (w *runtimeResultWaiters) abandon(agentID string, recordOnly func(context.Context, *RuntimeControlResultEnvelope)) string {
+// abandoned entry's details, or nil when nothing was parked.
+func (w *runtimeResultWaiters) abandon(agentID string, recordOnly func(context.Context, *RuntimeControlResultEnvelope)) *abandonedEntry {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for id, entry := range w.parked {
 		if entry.op.holdsSoul && abandonShardKeyMatch(entry.op.shardKey, agentID) {
+			info := &abandonedEntry{
+				runtimeRequestID: id,
+				actionEventID:    entry.op.actionEventID,
+				requestKind:      entry.op.requestKind,
+			}
 			// Replace with a record-only handler that does not hold the soul.
 			w.parked[id] = &parkedRuntimeResult{
 				pending: entry.pending,
@@ -324,10 +347,10 @@ func (w *runtimeResultWaiters) abandon(agentID string, recordOnly func(context.C
 				},
 				seq: entry.seq,
 			}
-			return id
+			return info
 		}
 	}
-	return ""
+	return nil
 }
 
 // abandonShardKeyMatch reports whether shardKey identifies agentID. Lifecycle
