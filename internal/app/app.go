@@ -1863,9 +1863,8 @@ func New(cfg *config.Config) (*App, error) {
 
 	// --- Phase 3 N1: Secret and notification intent handlers ---
 	// Sensitive domains whose intents arrive as NIP-59 gift wraps (kind 1059)
-	// through the shared gift-wrapped intent ingress built by O1. The
-	// orchestrator will connect these to O1's ingress at integration.
-	// N1 sensitive domains: "secret", "notification"
+	// through the shared gift-wrapped intent ingress (O1; SensitiveDomains
+	// includes "secret" and "notification").
 	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
 	// holds a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. Secret values are NEVER included in published events.
