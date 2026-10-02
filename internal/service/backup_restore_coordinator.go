@@ -48,6 +48,8 @@ type BackupRestoreCoordinator struct {
 	relayPolicyBackups repository.RelayPolicyProjectionBackupRepository
 	relayPolicyAuthor  string
 
+	triggerCh chan struct{}
+
 	restoreGroup singleflight.Group
 	locksMu      sync.Mutex
 	restoreLocks map[uuid.UUID]*sync.Mutex
@@ -100,6 +102,7 @@ func NewBackupRestoreCoordinator(registry *BackupRegistryService, backendResolve
 			HealthCheckBeforeRun: true,
 		},
 		restoreLocks: make(map[uuid.UUID]*sync.Mutex),
+		triggerCh:    make(chan struct{}, 1),
 	}
 	if registry != nil && registry.repo != nil {
 		if queue, ok := registry.repo.(BackupRestoreQueueRepository); ok {
@@ -130,21 +133,43 @@ func (c *BackupRestoreCoordinator) validateDependencies() error {
 
 func (c *BackupRestoreCoordinator) Name() string { return "backup-restore-recovery" }
 
-// Run performs durable worker recovery for stored restore work. It does not poll for Nostr messages.
+// Run performs durable worker recovery for stored restore work. Event-driven:
+// wakes on the trigger channel or when the stale-recovery timer fires.
+// Phase 3 B1 replaces the fixed 30s polling ticker.
 func (c *BackupRestoreCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err
 	}
 	c.runRecoveryOnce(ctx)
-	ticker := time.NewTicker(c.config.RecoveryPollInterval)
-	defer ticker.Stop()
+	//nostr:allow-poll stale-lease recovery timer fires at computed interval, not fixed 30s
+	timer := time.NewTimer(c.config.RecoveryPollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-c.triggerCh:
 			c.runRecoveryOnce(ctx)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(c.config.RecoveryPollInterval)
+		case <-timer.C:
+			c.runRecoveryOnce(ctx)
+			timer.Reset(c.config.RecoveryPollInterval)
 		}
+	}
+}
+
+// Trigger wakes the coordinator to process new work without waiting for the
+// stale-recovery timer.
+func (c *BackupRestoreCoordinator) Trigger() {
+	select {
+	case c.triggerCh <- struct{}{}:
+	default:
 	}
 }
 

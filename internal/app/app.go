@@ -913,6 +913,77 @@ func New(cfg *config.Config) (*App, error) {
 	})
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
+	// --- Phase 3 B1: Backup config publisher and intent handler ---
+	// Created unconditionally so both the legacy (non-intent) ContextVM path and
+	// the intent handler path use the same sign-and-publish closure.
+	var backupConfigPublisher controlplane.BackupConfigPublishFunc
+	if nostrPub != nil && controlPlaneSigner != nil {
+		var backupPubMu sync.Mutex
+		backupFingerprints := make(map[string]struct{})
+		backupLastPublishedAt := make(map[string]nostr.Timestamp)
+		backupConfigPublisher = func(ctx context.Context, legacyKind int, dTag string, familyTags nostr.Tags, contentJSON string, entityType string, entityID *uuid.UUID, deleted bool) error {
+			fp := fmt.Sprintf("%d:%s:%t:%s", legacyKind, dTag, deleted, contentJSON[:min(64, len(contentJSON))])
+			backupPubMu.Lock()
+			if _, dup := backupFingerprints[fp]; dup {
+				backupPubMu.Unlock()
+				return nil
+			}
+			backupFingerprints[fp] = struct{}{}
+			createdAt := nostr.Now()
+			if last := backupLastPublishedAt[dTag]; createdAt <= last {
+				createdAt = last + 1
+			}
+			backupLastPublishedAt[dTag] = createdAt
+			backupPubMu.Unlock()
+			deletedStr := "false"
+			if deleted {
+				deletedStr = "true"
+			}
+			tags := nostr.Tags{
+				{"d", dTag},
+				{"domain", "backup"},
+				{"schema", "bahia.cp-state.v1"},
+				{"legacy_kind", fmt.Sprintf("%d", legacyKind)},
+				{"deleted", deletedStr},
+			}
+			tags = append(tags, familyTags...)
+			ev := nostr.Event{
+				Kind:      nostr.Kind(nostrAdapter.KindCASControlState),
+				CreatedAt: createdAt,
+				Tags:      tags,
+				Content:   contentJSON,
+			}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+				return fmt.Errorf("sign backup config state event: %w", err)
+			}
+			return nostrPub.PublishBeforeCommit(ctx, ev, entityType, entityID)
+		}
+	}
+	// Wire canonical publisher so the legacy path (projector deleted in B1)
+	// still publishes 30900 records on every backup entity state change.
+	if backupConfigPublisher != nil {
+		backupRegistry.SetCanonicalPublisher(controlplane.NewBackupCanonicalPublisher(backupConfigPublisher, backupRegistry))
+	}
+	// Register the intent handler when the backup domain is enabled.
+	if enabledDomains["backup"] && backupRegistry != nil {
+		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
+			controlplane.BackupIntentHandlerConfig{
+				Registry:    backupRegistry,
+				Definitions: backupRegistry,
+				Publish:     backupConfigPublisher,
+				Executors: controlplane.BackupIntentExecutors{
+					RunExecutor:       backupCoordinator,
+					RestoreExecutor:   backupRestoreCoordinator,
+					RetentionExecutor: backupRetentionCoordinator,
+				},
+				Status: intentStatus,
+				Logger: logger,
+			},
+		))
+		logger.Info("backup intent handler registered")
+	}
+	// --- end B1 wiring ---
+
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
 	// long-running orchestration on the existing LLM path until dedicated buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
@@ -1056,7 +1127,8 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		nostrAdapter.WithBackupProjectionSource(backupRegistry),
+		// Phase 3 B1: WithBackupProjectionSource removed. Canonical records
+		// are now published by BackupCanonicalPublisher wired to the registry.
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
@@ -2060,7 +2132,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger), RunnerTier(Tier1))
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate)
+		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)

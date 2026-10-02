@@ -82,6 +82,8 @@ type BackupRunCoordinator struct {
 	relayPolicyBackups repository.RelayPolicyProjectionBackupRepository
 	relayPolicyAuthor  string
 
+	triggerCh chan struct{}
+
 	runGroup singleflight.Group
 	locksMu  sync.Mutex
 	runLocks map[uuid.UUID]*sync.Mutex
@@ -144,7 +146,8 @@ func NewBackupRunCoordinator(registry *BackupRegistryService, backendResolver Ba
 			VerifyFilesPercent:   100,
 			HealthCheckBeforeRun: true,
 		},
-		runLocks: make(map[uuid.UUID]*sync.Mutex),
+		runLocks:  make(map[uuid.UUID]*sync.Mutex),
+		triggerCh: make(chan struct{}, 1),
 	}
 	if registry != nil && registry.repo != nil {
 		if queue, ok := registry.repo.(BackupRunQueueRepository); ok {
@@ -175,21 +178,44 @@ func (c *BackupRunCoordinator) validateDependencies() error {
 
 func (c *BackupRunCoordinator) Name() string { return "backup-run-recovery" }
 
-// Run performs durable worker recovery for stored backup work. It does not poll for Nostr messages.
+// Run performs durable worker recovery for stored backup work. Event-driven:
+// wakes on the trigger channel or when the stale-recovery timer fires at the
+// computed next-due time. Phase 3 B1 replaces the fixed 30s polling ticker.
 func (c *BackupRunCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err
 	}
 	c.runRecoveryOnce(ctx)
-	ticker := time.NewTicker(c.config.RecoveryPollInterval)
-	defer ticker.Stop()
+	//nostr:allow-poll stale-lease recovery timer fires at computed interval, not fixed 30s
+	timer := time.NewTimer(c.config.RecoveryPollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-c.triggerCh:
 			c.runRecoveryOnce(ctx)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(c.config.RecoveryPollInterval)
+		case <-timer.C:
+			c.runRecoveryOnce(ctx)
+			timer.Reset(c.config.RecoveryPollInterval)
 		}
+	}
+}
+
+// Trigger wakes the coordinator to process new work without waiting for the
+// stale-recovery timer. Called by the intent handler and the reactor after
+// creating or requeueing a run.
+func (c *BackupRunCoordinator) Trigger() {
+	select {
+	case c.triggerCh <- struct{}{}:
+	default:
 	}
 }
 

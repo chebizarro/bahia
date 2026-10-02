@@ -10,6 +10,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.uber.org/zap"
 )
 
 const EventBackupRetentionChanged events.EventType = "backup_retention.changed"
@@ -172,6 +173,11 @@ func (s *BackupRegistryService) ensureRetentionReferences(ctx context.Context, r
 func (s *BackupRegistryService) publishRetentionChanged(ctx context.Context, run *domain.BackupRetentionRun) {
 	if run != nil {
 		s.publish(ctx, EventBackupRetentionChanged, run.ID.String(), map[string]any{"retention_run_id": run.ID.String(), "repository_id": run.RepositoryID.String(), "status": string(run.Status), "dry_run": run.DryRun})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishRetention(ctx, run); err != nil {
+				s.logger.Warn("canonical backup retention publish failed", zap.String("retention_run_id", run.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }
 

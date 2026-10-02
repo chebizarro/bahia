@@ -37,6 +37,8 @@ type BackupRetentionCoordinator struct {
 	logger          *zap.Logger
 	config          BackupRetentionCoordinatorConfig
 
+	triggerCh chan struct{}
+
 	runGroup singleflight.Group
 	locksMu  sync.Mutex
 	runLocks map[uuid.UUID]*sync.Mutex
@@ -85,7 +87,8 @@ func NewBackupRetentionCoordinator(registry *BackupRegistryService, backendResol
 			StaleRunTimeout:      15 * time.Minute,
 			HealthCheckBeforeRun: true,
 		},
-		runLocks: make(map[uuid.UUID]*sync.Mutex),
+		runLocks:  make(map[uuid.UUID]*sync.Mutex),
+		triggerCh: make(chan struct{}, 1),
 	}
 	if registry != nil && registry.repo != nil {
 		if queue, ok := registry.repo.(BackupRetentionQueueRepository); ok {
@@ -100,21 +103,44 @@ func NewBackupRetentionCoordinator(registry *BackupRegistryService, backendResol
 
 func (c *BackupRetentionCoordinator) Name() string { return "backup-retention-recovery" }
 
-// Run performs durable retention worker recovery. It does not poll for Nostr messages.
+// Run performs durable retention worker recovery. Event-driven: wakes on the
+// trigger channel or when the stale-recovery timer fires. Phase 3 B1 replaces
+// the fixed 30s polling ticker.
 func (c *BackupRetentionCoordinator) Run(ctx context.Context) error {
 	if c == nil || c.registry == nil || c.queue == nil {
 		return nil
 	}
 	c.runRecoveryOnce(ctx)
-	ticker := time.NewTicker(c.config.RecoveryPollInterval)
-	defer ticker.Stop()
+	//nostr:allow-poll stale-lease recovery timer fires at computed interval, not fixed 30s
+	timer := time.NewTimer(c.config.RecoveryPollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-c.triggerCh:
 			c.runRecoveryOnce(ctx)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(c.config.RecoveryPollInterval)
+		case <-timer.C:
+			c.runRecoveryOnce(ctx)
+			timer.Reset(c.config.RecoveryPollInterval)
 		}
+	}
+}
+
+// Trigger wakes the coordinator to process new work without waiting for the
+// stale-recovery timer. Called by the intent handler and the reactor after
+// creating or requeueing a retention run.
+func (c *BackupRetentionCoordinator) Trigger() {
+	select {
+	case c.triggerCh <- struct{}{}:
+	default:
 	}
 }
 

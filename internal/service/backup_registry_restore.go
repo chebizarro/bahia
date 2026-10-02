@@ -11,6 +11,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"go.uber.org/zap"
 )
 
 const EventBackupRestoreChanged events.EventType = "backup_restore.changed"
@@ -361,5 +362,10 @@ func restoreResultError(result *BackupRestoreResult, fallback string) string {
 func (s *BackupRegistryService) publishRestoreChanged(ctx context.Context, restore *domain.BackupRestoreRun) {
 	if restore != nil {
 		s.publish(ctx, EventBackupRestoreChanged, restore.ID.String(), map[string]any{"restore_id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "repository_id": restore.RepositoryID.String(), "approval_status": string(restore.ApprovalStatus), "status": string(restore.Status), "verification_status": string(restore.VerificationStatus)})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishRestore(ctx, restore); err != nil {
+				s.logger.Warn("canonical backup restore publish failed", zap.String("restore_id", restore.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }

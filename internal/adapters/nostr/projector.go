@@ -83,22 +83,6 @@ type latestObservationSource interface {
 	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
 }
 
-type BackupProjectionSource interface {
-	ListRecipes(ctx context.Context, limit, offset int) ([]domain.BackupRecipe, error)
-	GetRecipe(ctx context.Context, id uuid.UUID) (*domain.BackupRecipe, error)
-	ListPolicies(ctx context.Context, limit, offset int) ([]domain.BackupPolicy, error)
-	GetPolicy(ctx context.Context, id uuid.UUID) (*domain.BackupPolicy, error)
-	ListRepositories(ctx context.Context, limit, offset int) ([]domain.BackupRepository, error)
-	GetRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error)
-	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
-	GetBackupRun(ctx context.Context, id uuid.UUID) (*domain.BackupRun, error)
-	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
-	GetBackupRestore(ctx context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error)
-	ListBackupRetentionRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRetentionRun, error)
-	GetBackupRetentionRun(ctx context.Context, id uuid.UUID) (*domain.BackupRetentionRun, error)
-	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)
-}
-
 // DNSProjectionSource is the authoritative DNS endpoint read model source used by the projector.
 type DNSProjectionSource interface {
 	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
@@ -171,7 +155,6 @@ type Projector struct {
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
 	workerReadModelSource WorkerReadModelProjectionSource
-	backupSource          BackupProjectionSource
 	dnsSource             DNSProjectionSource
 	dnsZoneSource         DNSZoneProjectionSource
 	dnsBackendSource      DNSBackendProjectionSource
@@ -182,7 +165,6 @@ type Projector struct {
 	privateKey            string
 	enabled               bool
 	repairInterval        time.Duration
-	backupStaleTimeout    time.Duration
 	logger                *zap.Logger
 	systemConfig          *config.Config
 	mcpTransport          bool
@@ -213,15 +195,6 @@ func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
 	return func(p *Projector) { p.repairInterval = interval }
 }
 
-// WithBackupProjectionStaleTimeout overrides the running-run staleness threshold used by backup fleet posture projection.
-func WithBackupProjectionStaleTimeout(timeout time.Duration) ProjectorOption {
-	return func(p *Projector) {
-		if timeout > 0 {
-			p.backupStaleTimeout = timeout
-		}
-	}
-}
-
 func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.mlSource = source }
 }
@@ -234,9 +207,6 @@ func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource)
 	return func(p *Projector) { p.workerReadModelSource = source }
 }
 
-func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.backupSource = source }
-}
 
 func WithDNSProjectionSource(source DNSProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsSource = source }
@@ -289,7 +259,6 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		privateKey:         cfg.PrivateKey,
 		enabled:            cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
 		repairInterval:     10 * time.Minute,
-		backupStaleTimeout: 15 * time.Minute,
 		logger:             logger.Named("nostr-projector"),
 	}
 	for _, opt := range opts {
@@ -356,13 +325,6 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		service.EventMLArtifactChanged,
 		service.EventMLProvenanceChanged,
 		service.EventMLProvenanceDefected,
-		service.EventBackupRecipeChanged,
-		service.EventBackupPolicyChanged,
-		service.EventBackupRepositoryChanged,
-		service.EventBackupRunChanged,
-		service.EventBackupRestoreChanged,
-		service.EventBackupVerificationChanged,
-		service.EventBackupRetentionChanged,
 		eventDNSZoneSynced,
 		eventDNSRecordChanged,
 		eventDNSDriftDetected,
@@ -454,12 +416,13 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	// registry service). RepublishSnapshot LLM block removed.
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
 	workerAssignments, workerDrains := p.publishWorkerReadModelSnapshots(ctx)
-	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications, backupRetentions, backupPostures := p.publishBackupSnapshots(ctx)
+	// Phase 3 B1: Backup snapshot legs removed. Canonical records are now
+	// published by BackupCanonicalPublisher wired to the registry.
 	// Phase 3 D1: DNS snapshot legs removed. DNS endpoint/zone/backend/policy
 	// records are now published by the DNSCanonicalPublisher wired to the
 	// reconciler, triggered by bus events instead of this 10-minute timer.
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -524,32 +487,6 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.publishMLProvenanceByArtifactID(ctx, firstString(stringifyMapValue(e.Data, "artifact_id"), e.EntityID))
 	case service.EventMLProvenanceChanged, service.EventMLProvenanceDefected:
 		p.publishMLProvenanceFromEvent(ctx, e)
-	case service.EventBackupRecipeChanged:
-		p.publishBackupRecipeByID(ctx, firstString(stringifyMapValue(e.Data, "recipe_id"), e.EntityID))
-	case service.EventBackupPolicyChanged:
-		p.publishBackupPolicyByID(ctx, firstString(stringifyMapValue(e.Data, "policy_id"), e.EntityID))
-	case service.EventBackupRepositoryChanged:
-		p.publishBackupRepositoryByID(ctx, firstString(stringifyMapValue(e.Data, "repository_id"), e.EntityID))
-	case service.EventBackupRunChanged:
-		p.publishBackupRunByID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupRestoreChanged:
-		p.publishBackupRestoreByID(ctx, firstString(stringifyMapValue(e.Data, "restore_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupVerificationChanged:
-		p.publishBackupVerificationByRunID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
-	case service.EventBackupRetentionChanged:
-		p.publishBackupRetentionByID(ctx, firstString(stringifyMapValue(e.Data, "retention_run_id"), e.EntityID))
-		if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-			p.logger.Warn("publish backup runtime observation after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
-		}
 	}
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
@@ -689,273 +626,6 @@ func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, ve
 	}
 	return
 }
-
-func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, restoresPublished, verificationsPublished, retentionsPublished, posturesPublished int) {
-	if p.backupSource == nil {
-		return
-	}
-	const pageSize = 500
-	for offset := 0; ; offset += pageSize {
-		recipes, err := p.backupSource.ListRecipes(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup recipes for projection failed", zap.Error(err))
-			break
-		}
-		for i := range recipes {
-			if err := p.publishBackupRecipeRegistry(ctx, &recipes[i]); err != nil {
-				p.logger.Warn("publish backup recipe projection failed", zap.String("recipe_id", recipes[i].ID.String()), zap.Error(err))
-			} else {
-				recipesPublished++
-			}
-		}
-		if len(recipes) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		policies, err := p.backupSource.ListPolicies(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup policies for projection failed", zap.Error(err))
-			break
-		}
-		for i := range policies {
-			if err := p.publishBackupPolicyRegistry(ctx, &policies[i]); err != nil {
-				p.logger.Warn("publish backup policy projection failed", zap.String("policy_id", policies[i].ID.String()), zap.Error(err))
-			} else {
-				policiesPublished++
-			}
-		}
-		if len(policies) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		repositories, err := p.backupSource.ListRepositories(ctx, pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup repositories for projection failed", zap.Error(err))
-			break
-		}
-		for i := range repositories {
-			if err := p.publishBackupRepositoryRegistry(ctx, &repositories[i]); err != nil {
-				p.logger.Warn("publish backup repository projection failed", zap.String("repository_id", repositories[i].ID.String()), zap.Error(err))
-			} else {
-				repositoriesPublished++
-			}
-		}
-		if len(repositories) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		runs, err := p.backupSource.ListBackupRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup runs for projection failed", zap.Error(err))
-			break
-		}
-		for i := range runs {
-			if err := p.publishBackupRunState(ctx, &runs[i]); err != nil {
-				p.logger.Warn("publish backup run state projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-			} else {
-				runsPublished++
-			}
-			verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, runs[i].ID)
-			if err != nil {
-				p.logger.Warn("read backup verification for projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-			} else if verification != nil {
-				if err := p.publishBackupVerificationState(ctx, verification); err != nil {
-					p.logger.Warn("publish backup verification state projection failed", zap.String("run_id", runs[i].ID.String()), zap.Error(err))
-				} else {
-					verificationsPublished++
-				}
-			}
-		}
-		if len(runs) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup restores for projection failed", zap.Error(err))
-			break
-		}
-		for i := range restores {
-			if err := p.publishBackupRestoreState(ctx, &restores[i]); err != nil {
-				p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", restores[i].ID.String()), zap.Error(err))
-			} else {
-				restoresPublished++
-			}
-		}
-		if len(restores) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		retentions, err := p.backupSource.ListBackupRetentionRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup retention runs for projection failed", zap.Error(err))
-			break
-		}
-		for i := range retentions {
-			if err := p.publishBackupRetentionState(ctx, &retentions[i]); err != nil {
-				p.logger.Warn("publish backup retention state projection failed", zap.String("retention_run_id", retentions[i].ID.String()), zap.Error(err))
-			} else {
-				retentionsPublished++
-			}
-		}
-		if len(retentions) < pageSize {
-			break
-		}
-	}
-	if err := p.publishBackupRuntimeObservation(ctx); err != nil {
-		p.logger.Warn("publish backup runtime observation failed", zap.Error(err))
-	} else {
-		posturesPublished++
-	}
-	return
-}
-
-func (p *Projector) publishBackupRecipeByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	recipe, err := p.backupSource.GetRecipe(ctx, id)
-	if err != nil || recipe == nil {
-		if err != nil {
-			p.logger.Warn("read backup recipe for projection failed", zap.String("recipe_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRecipeRegistry(ctx, recipe); err != nil {
-		p.logger.Warn("publish backup recipe projection failed", zap.String("recipe_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupPolicyByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	policy, err := p.backupSource.GetPolicy(ctx, id)
-	if err != nil || policy == nil {
-		if err != nil {
-			p.logger.Warn("read backup policy for projection failed", zap.String("policy_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupPolicyRegistry(ctx, policy); err != nil {
-		p.logger.Warn("publish backup policy projection failed", zap.String("policy_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRepositoryByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	repo, err := p.backupSource.GetRepository(ctx, id)
-	if err != nil || repo == nil {
-		if err != nil {
-			p.logger.Warn("read backup repository for projection failed", zap.String("repository_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRepositoryRegistry(ctx, repo); err != nil {
-		p.logger.Warn("publish backup repository projection failed", zap.String("repository_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRunByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	run, err := p.backupSource.GetBackupRun(ctx, id)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read backup run for projection failed", zap.String("run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRunState(ctx, run); err != nil {
-		p.logger.Warn("publish backup run state projection failed", zap.String("run_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRestoreByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	restore, err := p.backupSource.GetBackupRestore(ctx, id)
-	if err != nil || restore == nil {
-		if err != nil {
-			p.logger.Warn("read backup restore for projection failed", zap.String("restore_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRestoreState(ctx, restore); err != nil {
-		p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRetentionByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	run, err := p.backupSource.GetBackupRetentionRun(ctx, id)
-	if err != nil || run == nil {
-		if err != nil {
-			p.logger.Warn("read backup retention run for projection failed", zap.String("retention_run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRetentionState(ctx, run); err != nil {
-		p.logger.Warn("publish backup retention state projection failed", zap.String("retention_run_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupVerificationByRunID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, id)
-	if err != nil || verification == nil {
-		if err != nil {
-			p.logger.Warn("read backup verification for projection failed", zap.String("run_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupVerificationState(ctx, verification); err != nil {
-		p.logger.Warn("publish backup verification state projection failed", zap.String("run_id", raw), zap.Error(err))
-	}
-	p.publishBackupRunByID(ctx, raw)
-}
-
 func (p *Projector) publishMLModelByID(ctx context.Context, raw string) {
 	if p.mlSource == nil {
 		return
@@ -1957,225 +1627,6 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 	tags, content := environmentRegistryRecord(env, units, deleted)
 	return p.publishControlState(ctx, KindEnvironmentRegistry, env.ID.String(), deleted, tags, content, "environment.projection", &env.ID)
 }
-
-func (p *Projector) publishBackupRecipeRegistry(ctx context.Context, recipe *domain.BackupRecipe) error {
-	if recipe == nil || recipe.Name == "" || recipe.Version == "" {
-		return nil
-	}
-	dTag := "backup-recipe:" + recipe.ID.String()
-	tags := gonostr.Tags{{"recipe", dTag}, {"recipe_id", recipe.ID.String()}, {"repository_id", recipe.RepositoryID.String()}, {"backend", string(recipe.Backend)}, {"target", recipe.TargetRef}, {"version", recipe.Version}}
-	if recipe.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", recipe.PolicyID.String()}, gonostr.Tag{"policy_id", recipe.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRecipeRegistry, dTag, tags, map[string]any{"deleted": false, "id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version, "backend": string(recipe.Backend), "repository_id": recipe.RepositoryID.String(), "policy_id": uuidStringPtr(recipe.PolicyID), "target_ref": recipe.TargetRef, "include": recipe.Include, "exclude": recipe.Exclude, "verification_mode": string(recipe.VerificationMode), "metadata": recipe.Metadata, "created_at": formatTime(recipe.CreatedAt), "updated_at": formatTime(recipe.UpdatedAt)}, "backup.recipe.projection", &recipe.ID)
-}
-
-func (p *Projector) publishBackupPolicyRegistry(ctx context.Context, policy *domain.BackupPolicy) error {
-	if policy == nil || policy.Name == "" {
-		return nil
-	}
-	dTag := "backup-policy:" + policy.ID.String()
-	tags := gonostr.Tags{{"policy", dTag}, {"policy_id", policy.ID.String()}, {"name", policy.Name}, {"require_verification", fmt.Sprintf("%t", policy.RequireVerification)}, {"verification", string(policy.VerificationMode)}}
-	return p.publishReplaceableJSON(ctx, KindBackupPolicyRegistry, dTag, tags, map[string]any{"deleted": false, "id": policy.ID.String(), "name": policy.Name, "require_verification": policy.RequireVerification, "verification_mode": string(policy.VerificationMode), "metadata": policy.Metadata, "created_at": formatTime(policy.CreatedAt), "updated_at": formatTime(policy.UpdatedAt)}, "backup.policy.projection", &policy.ID)
-}
-
-func (p *Projector) publishBackupRepositoryRegistry(ctx context.Context, repo *domain.BackupRepository) error {
-	if repo == nil || repo.Name == "" {
-		return nil
-	}
-	dTag := "backup-repository:" + repo.ID.String()
-	tags := gonostr.Tags{{"repository", dTag}, {"repository_id", repo.ID.String()}, {"name", repo.Name}, {"backend", string(repo.Backend)}}
-	return p.publishReplaceableJSON(ctx, KindBackupRepositoryRegistry, dTag, tags, map[string]any{"deleted": false, "id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend), "repository_uri": repo.RepositoryURI, "credential_profile": repo.CredentialProfile, "metadata": repo.Metadata, "created_at": formatTime(repo.CreatedAt), "updated_at": formatTime(repo.UpdatedAt)}, "backup.repository.projection", &repo.ID)
-}
-
-func (p *Projector) publishBackupRunState(ctx context.Context, run *domain.BackupRun) error {
-	if run == nil {
-		return nil
-	}
-	dTag := "backup-run:" + run.ID.String()
-	restoreEligible := domain.BackupRunRestoreEligible(run)
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "recipe_id": run.RecipeID.String(), "repository_id": run.RepositoryID.String(), "policy_id": uuidStringPtr(run.PolicyID), "requested_by": run.RequestedBy, "request_event_id": run.RequestEventID, "request_kind": run.RequestKind, "request_d_tag": run.RequestDTag, "status": string(run.Status), "backend": string(run.Backend), "target_ref": run.TargetRef, "snapshot_created": run.SnapshotCreated, "snapshot_id": run.SnapshotID, "verification_mode": string(run.VerificationMode), "verification_status": string(run.VerificationStatus), "restore_eligible": restoreEligible, "restore_eligibility": string(run.RestoreEligibility), "restore_eligibility_reason": run.RestoreEligibilityReason, "verification_policy_failure": run.VerificationPolicyFailure, "failure_category": string(run.FailureCategory), "publish_summary": run.PublishSummary, "error": run.Error, "metadata": run.Metadata, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
-	if p.backupSource != nil {
-		if verification, err := p.backupSource.GetBackupVerificationByRunID(ctx, run.ID); err == nil && verification != nil {
-			content["verification_id"] = verification.ID.String()
-			content["verified"] = verification.Verified
-			content["verification_mode"] = string(verification.Mode)
-			content["verification_error"] = verification.Error
-			content["verification"] = map[string]any{"id": verification.ID.String(), "mode": string(verification.Mode), "status": string(verification.Status), "verified": verification.Verified, "evidence": verification.Evidence, "evidence_details": verification.EvidenceDetails, "error": verification.Error}
-		}
-	}
-	tags := gonostr.Tags{{"run", run.ID.String()}, {"recipe_id", run.RecipeID.String()}, {"repository_id", run.RepositoryID.String()}, {"status", string(run.Status)}, {"backend", string(run.Backend)}, {"verification", string(run.VerificationStatus)}, {"restore_eligible", fmt.Sprintf("%t", restoreEligible)}, {"restore_eligibility", string(run.RestoreEligibility)}, {"failure_category", string(run.FailureCategory)}}
-	if run.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRunState, dTag, tags, content, "backup.run_state.projection", &run.ID)
-}
-
-func (p *Projector) publishBackupRestoreState(ctx context.Context, restore *domain.BackupRestoreRun) error {
-	if restore == nil {
-		return nil
-	}
-	dTag := "backup-restore:" + restore.ID.String()
-	pendingApproval := restore.ApprovalStatus == domain.BackupApprovalPending
-	content := map[string]any{"deleted": false, "id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "recipe_id": restore.RecipeID.String(), "repository_id": restore.RepositoryID.String(), "policy_id": uuidStringPtr(restore.PolicyID), "snapshot_id": restore.SnapshotID, "restore_target_ref": restore.RestoreTargetRef, "requested_by": restore.RequestedBy, "request_event_id": restore.RequestEventID, "request_kind": restore.RequestKind, "request_d_tag": restore.RequestDTag, "approval_status": string(restore.ApprovalStatus), "approval_required": restore.ApprovalRequired, "approval_requirement": string(restore.ApprovalRequirement), "pending_approval": pendingApproval, "approval_event_id": restore.ApprovalEventID, "approved_by": restore.ApprovedBy, "approved_at": restore.ApprovedAt, "approval_message": restore.ApprovalMessage, "approval_reason_code": restore.ApprovalReasonCode, "approval_reason": restore.ApprovalReason, "status": string(restore.Status), "backend": string(restore.Backend), "verification_status": string(restore.VerificationStatus), "evidence": restore.Evidence, "publish_summary": restore.PublishSummary, "error": restore.Error, "verification_policy_failure": restore.VerificationPolicyFailure, "failure_category": string(restore.FailureCategory), "metadata": restore.Metadata, "started_at": restore.StartedAt, "finished_at": restore.FinishedAt, "created_at": formatTime(restore.CreatedAt), "updated_at": formatTime(restore.UpdatedAt)}
-	tags := gonostr.Tags{{"restore", restore.ID.String()}, {"restore_id", restore.ID.String()}, {"run", restore.BackupRunID.String()}, {"backup_run_id", restore.BackupRunID.String()}, {"recipe_id", restore.RecipeID.String()}, {"repository_id", restore.RepositoryID.String()}, {"status", string(restore.Status)}, {"approval", string(restore.ApprovalStatus)}, {"approval_required", fmt.Sprintf("%t", restore.ApprovalRequired)}, {"approval_requirement", string(restore.ApprovalRequirement)}, {"pending_approval", fmt.Sprintf("%t", pendingApproval)}, {"verification", string(restore.VerificationStatus)}, {"backend", string(restore.Backend)}, {"failure_category", string(restore.FailureCategory)}}
-	if restore.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", restore.PolicyID.String()}, gonostr.Tag{"policy_id", restore.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRestoreState, dTag, tags, content, "backup.restore_state.projection", &restore.ID)
-}
-
-func (p *Projector) publishBackupVerificationState(ctx context.Context, record *domain.BackupVerificationRecord) error {
-	if record == nil {
-		return nil
-	}
-	dTag := "backup-verification:" + record.BackupRunID.String()
-	tags := gonostr.Tags{{"run", record.BackupRunID.String()}, {"verification_id", record.ID.String()}, {"verification", string(record.Status)}, {"status", string(record.Status)}, {"mode", string(record.Mode)}, {"verified", fmt.Sprintf("%t", record.Verified)}}
-	return p.publishReplaceableJSON(ctx, KindBackupVerificationState, dTag, tags, map[string]any{"deleted": false, "id": record.ID.String(), "backup_run_id": record.BackupRunID.String(), "mode": string(record.Mode), "status": string(record.Status), "verified": record.Verified, "evidence": record.Evidence, "evidence_details": record.EvidenceDetails, "error": record.Error, "publish_summary": record.PublishSummary, "verified_at": record.VerifiedAt, "created_at": formatTime(record.CreatedAt), "updated_at": formatTime(record.UpdatedAt)}, "backup.verification_state.projection", &record.ID)
-}
-
-func (p *Projector) publishBackupRetentionState(ctx context.Context, run *domain.BackupRetentionRun) error {
-	if run == nil {
-		return nil
-	}
-	dTag := "backup-retention:" + run.ID.String()
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "policy_id": uuidStringPtr(run.PolicyID), "requested_by": run.RequestedBy, "request_event_id": run.RequestEventID, "request_kind": run.RequestKind, "request_d_tag": run.RequestDTag, "status": string(run.Status), "backend": string(run.Backend), "dry_run": run.DryRun, "evidence": run.Evidence, "publish_summary": run.PublishSummary, "error": run.Error, "failure_category": string(run.FailureCategory), "metadata": run.Metadata, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
-	tags := gonostr.Tags{{"retention", run.ID.String()}, {"retention_run_id", run.ID.String()}, {"repository_id", run.RepositoryID.String()}, {"status", string(run.Status)}, {"backend", string(run.Backend)}, {"dry_run", fmt.Sprintf("%t", run.DryRun)}, {"failure_category", string(run.FailureCategory)}}
-	if run.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRetentionRegistry, dTag, tags, content, "backup.retention_state.projection", &run.ID)
-}
-
-func (p *Projector) publishBackupRuntimeObservation(ctx context.Context) error {
-	if p.backupSource == nil {
-		return nil
-	}
-	const pageSize = 500
-	now := time.Now().UTC()
-	staleTimeout := p.backupStaleTimeout
-	if staleTimeout <= 0 {
-		staleTimeout = 15 * time.Minute
-	}
-	staleCutoff := now.Add(-staleTimeout)
-	counts := map[string]map[string]int{"runs": {}, "restores": {}, "retention": {}}
-	failureCategories := map[string]map[string]int{"runs": {}, "restores": {}, "retention": {}}
-	backendHealthFailures := make([]map[string]any, 0)
-	pendingApprovals := make([]map[string]any, 0)
-	last := map[string]any{}
-	for offset := 0; ; offset += pageSize {
-		runs, err := p.backupSource.ListBackupRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup runs for runtime observation: %w", err)
-		}
-		for i := range runs {
-			run := runs[i]
-			countBackupStatus(counts["runs"], run.Status, run.UpdatedAt, staleCutoff)
-			countFailureCategory(failureCategories["runs"], run.FailureCategory)
-			if run.Status == domain.RunStatusSucceeded {
-				updateLastBackupOutcome(last, "last_successful_run", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.Status), "repository_id": run.RepositoryID.String(), "recipe_id": run.RecipeID.String(), "snapshot_id": run.SnapshotID, "restore_eligibility": string(run.RestoreEligibility)})
-			}
-			if run.VerificationStatus == domain.BackupVerificationSucceeded {
-				updateLastBackupOutcome(last, "last_verification", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.VerificationStatus), "mode": string(run.VerificationMode), "repository_id": run.RepositoryID.String(), "recipe_id": run.RecipeID.String()})
-			}
-			if run.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "run", "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "error": run.Error, "updated_at": formatTime(run.UpdatedAt)})
-			}
-		}
-		if len(runs) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup restores for runtime observation: %w", err)
-		}
-		for i := range restores {
-			restore := restores[i]
-			countBackupStatus(counts["restores"], restore.Status, restore.UpdatedAt, staleCutoff)
-			if restore.ApprovalStatus == domain.BackupApprovalPending {
-				counts["restores"]["pending_approval"]++
-				if len(pendingApprovals) < 20 {
-					pendingApprovals = append(pendingApprovals, map[string]any{"restore_id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "repository_id": restore.RepositoryID.String(), "requested_by": restore.RequestedBy, "created_at": formatTime(restore.CreatedAt), "approval_requirement": string(restore.ApprovalRequirement)})
-				}
-			}
-			countFailureCategory(failureCategories["restores"], restore.FailureCategory)
-			if backupProjectionTerminalStatus(restore.Status) {
-				updateLastBackupOutcome(last, "last_restore", restore.ID.String(), restore.FinishedAt, restore.CreatedAt, map[string]any{"status": string(restore.Status), "approval_status": string(restore.ApprovalStatus), "repository_id": restore.RepositoryID.String(), "backup_run_id": restore.BackupRunID.String(), "verification_status": string(restore.VerificationStatus), "failure_category": string(restore.FailureCategory)})
-			}
-			if restore.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "restore", "id": restore.ID.String(), "repository_id": restore.RepositoryID.String(), "error": restore.Error, "updated_at": formatTime(restore.UpdatedAt)})
-			}
-		}
-		if len(restores) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		retentions, err := p.backupSource.ListBackupRetentionRuns(ctx, "", pageSize, offset)
-		if err != nil {
-			return fmt.Errorf("list backup retention runs for runtime observation: %w", err)
-		}
-		for i := range retentions {
-			run := retentions[i]
-			countBackupStatus(counts["retention"], run.Status, run.UpdatedAt, staleCutoff)
-			countFailureCategory(failureCategories["retention"], run.FailureCategory)
-			if backupProjectionTerminalStatus(run.Status) {
-				updateLastBackupOutcome(last, "last_retention", run.ID.String(), run.FinishedAt, run.CreatedAt, map[string]any{"status": string(run.Status), "repository_id": run.RepositoryID.String(), "dry_run": run.DryRun, "failure_category": string(run.FailureCategory)})
-			}
-			if run.FailureCategory == domain.BackupFailureBackendHealth && len(backendHealthFailures) < 20 {
-				backendHealthFailures = append(backendHealthFailures, map[string]any{"type": "retention", "id": run.ID.String(), "repository_id": run.RepositoryID.String(), "error": run.Error, "updated_at": formatTime(run.UpdatedAt)})
-			}
-		}
-		if len(retentions) < pageSize {
-			break
-		}
-	}
-	payload := map[string]any{"deleted": false, "scope": "fleet", "generated_at": formatTime(now), "stale_after_seconds": int(staleTimeout.Seconds()), "counts": counts, "last_outcomes": last, "failure_categories": failureCategories, "backend_health_failures": backendHealthFailures, "pending_restore_approvals": pendingApprovals}
-	tags := gonostr.Tags{{"scope", "fleet"}, {"status", "summary"}, {"pending_approval", fmt.Sprintf("%d", counts["restores"]["pending_approval"])}}
-	return p.publishReplaceableJSON(ctx, KindBackupRuntimeObservationState, "backup-runtime:fleet", tags, payload, "backup.runtime_observation.projection", nil)
-}
-
-func countBackupStatus(counts map[string]int, status domain.DeploymentRunStatus, updatedAt time.Time, staleCutoff time.Time) {
-	counts[string(status)]++
-	if status == domain.RunStatusRunning && updatedAt.Before(staleCutoff) {
-		counts["stale"]++
-	}
-}
-
-func countFailureCategory(counts map[string]int, category domain.BackupFailureCategory) {
-	if category != domain.BackupFailureNone {
-		counts[string(category)]++
-	}
-}
-
-func backupProjectionTerminalStatus(status domain.DeploymentRunStatus) bool {
-	switch status {
-	case domain.RunStatusSucceeded, domain.RunStatusFailed, domain.RunStatusCancelled, domain.RunStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-func updateLastBackupOutcome(last map[string]any, key, id string, finishedAt *time.Time, createdAt time.Time, values map[string]any) {
-	candidate := createdAt
-	if finishedAt != nil && !finishedAt.IsZero() {
-		candidate = *finishedAt
-	}
-	if existing, ok := last[key].(map[string]any); ok {
-		if raw, ok := existing["at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339, raw); err == nil && !candidate.After(parsed) {
-				return
-			}
-		}
-	}
-	values["id"] = id
-	values["at"] = formatTime(candidate)
-	last[key] = values
-}
-
 func unitTagValue(id *uuid.UUID) string {
 	if id == nil {
 		return domain.DefaultDeploymentUnitKey

@@ -21,11 +21,26 @@ const (
 	EventBackupVerificationChanged events.EventType = "backup_verification.changed"
 )
 
+// BackupCanonicalPublisher publishes canonical 30900 cp-state records after
+// backup entity mutations. When set on the registry, each state change
+// automatically publishes the corresponding record. This replaces the
+// projector backup legs deleted in Phase 3 B1.
+type BackupCanonicalPublisher interface {
+	PublishRecipe(ctx context.Context, recipe *domain.BackupRecipe) error
+	PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error
+	PublishRepository(ctx context.Context, repo *domain.BackupRepository) error
+	PublishRun(ctx context.Context, run *domain.BackupRun) error
+	PublishRestore(ctx context.Context, restore *domain.BackupRestoreRun) error
+	PublishVerification(ctx context.Context, record *domain.BackupVerificationRecord) error
+	PublishRetention(ctx context.Context, run *domain.BackupRetentionRun) error
+}
+
 // BackupRegistryService owns authoritative backup registry and run state.
 type BackupRegistryService struct {
-	repo      repository.BackupControlPlaneRepository
-	publisher events.Publisher
-	logger    *zap.Logger
+	repo               repository.BackupControlPlaneRepository
+	publisher          events.Publisher
+	canonicalPublisher BackupCanonicalPublisher
+	logger             *zap.Logger
 }
 
 func NewBackupRegistryService(repo repository.BackupControlPlaneRepository, publisher events.Publisher, logger *zap.Logger) *BackupRegistryService {
@@ -36,6 +51,12 @@ func NewBackupRegistryService(repo repository.BackupControlPlaneRepository, publ
 		logger = zap.NewNop()
 	}
 	return &BackupRegistryService{repo: repo, publisher: publisher, logger: logger}
+}
+
+// SetCanonicalPublisher sets the canonical 30900 publisher. Must be called
+// before any mutations to ensure all state changes are published.
+func (s *BackupRegistryService) SetCanonicalPublisher(p BackupCanonicalPublisher) {
+	s.canonicalPublisher = p
 }
 
 func (s *BackupRegistryService) CreateOrUpdateRecipe(ctx context.Context, recipe *domain.BackupRecipe) error {
@@ -373,29 +394,66 @@ func (s *BackupRegistryService) publish(ctx context.Context, typ events.EventTyp
 func (s *BackupRegistryService) publishRecipeChanged(ctx context.Context, recipe *domain.BackupRecipe) {
 	if recipe != nil {
 		s.publish(ctx, EventBackupRecipeChanged, recipe.ID.String(), map[string]any{"recipe_id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishRecipe(ctx, recipe); err != nil {
+				s.logger.Warn("canonical backup recipe publish failed", zap.String("recipe_id", recipe.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }
 
 func (s *BackupRegistryService) publishPolicyChanged(ctx context.Context, policy *domain.BackupPolicy) {
 	if policy != nil {
 		s.publish(ctx, EventBackupPolicyChanged, policy.ID.String(), map[string]any{"policy_id": policy.ID.String(), "name": policy.Name, "require_verification": policy.RequireVerification})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishPolicy(ctx, policy); err != nil {
+				s.logger.Warn("canonical backup policy publish failed", zap.String("policy_id", policy.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }
 
 func (s *BackupRegistryService) publishRepositoryChanged(ctx context.Context, repo *domain.BackupRepository) {
 	if repo != nil {
 		s.publish(ctx, EventBackupRepositoryChanged, repo.ID.String(), map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend)})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishRepository(ctx, repo); err != nil {
+				s.logger.Warn("canonical backup repository publish failed", zap.String("repository_id", repo.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }
 
 func (s *BackupRegistryService) publishRunChanged(ctx context.Context, run *domain.BackupRun) {
 	if run != nil {
 		s.publish(ctx, EventBackupRunChanged, run.ID.String(), map[string]any{"run_id": run.ID.String(), "recipe_id": run.RecipeID.String(), "repository_id": run.RepositoryID.String(), "status": string(run.Status), "verification_status": string(run.VerificationStatus)})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishRun(ctx, run); err != nil {
+				s.logger.Warn("canonical backup run publish failed", zap.String("run_id", run.ID.String()), zap.Error(err))
+			}
+		}
 	}
 }
 
 func (s *BackupRegistryService) publishVerificationChanged(ctx context.Context, record *domain.BackupVerificationRecord) {
 	if record != nil {
 		s.publish(ctx, EventBackupVerificationChanged, record.ID.String(), map[string]any{"verification_id": record.ID.String(), "run_id": record.BackupRunID.String(), "status": string(record.Status), "verified": record.Verified})
+		if s.canonicalPublisher != nil {
+			if err := s.canonicalPublisher.PublishVerification(ctx, record); err != nil {
+				s.logger.Warn("canonical backup verification publish failed", zap.String("verification_id", record.ID.String()), zap.Error(err))
+			}
+		}
 	}
+}
+
+// UpsertBackupDefinition delegates to the repository. Phase 3 B1: exposes the
+// definition upsert through the registry service so the intent handler can use
+// a single interface for all backup entity types.
+func (s *BackupRegistryService) UpsertBackupDefinition(ctx context.Context, definition *domain.BackupDefinition) error {
+	return s.repo.UpsertBackupDefinition(ctx, definition)
+}
+
+// GetBackupDefinitionByName delegates to the repository.
+func (s *BackupRegistryService) GetBackupDefinitionByName(ctx context.Context, name string) (*domain.BackupDefinition, error) {
+	return s.repo.GetBackupDefinitionByName(ctx, name)
 }
