@@ -52,10 +52,9 @@ func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMReque
 		return nil, err
 	}
 	if replayed {
-		// The stored policy's record is already published.
 		return policyMutationResult("policy_create", policy.ID), nil
 	}
-	if err := r.publishPolicyRegistry(ctx, policy, false); err != nil {
+	if err := r.publishPolicyState(ctx, policy, false); err != nil {
 		return nil, fmt.Errorf("policy created but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_create", policy.ID), nil
@@ -108,7 +107,6 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, request ContextVMReque
 	if policy == nil {
 		return nil, fmt.Errorf("policy not found")
 	}
-	// Do not mutate a repository-owned value until the patch has been validated.
 	updated := *policy
 	if req.Name != nil {
 		updated.Name = *req.Name
@@ -138,7 +136,7 @@ func (r *Reactor) handlePolicyUpdate(ctx context.Context, request ContextVMReque
 	if err := r.policyService.UpdatePolicy(ctx, &updated); err != nil {
 		return nil, err
 	}
-	if err := r.publishPolicyRegistry(ctx, &updated, false); err != nil {
+	if err := r.publishPolicyState(ctx, &updated, false); err != nil {
 		return nil, fmt.Errorf("policy updated but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_update", updated.ID), nil
@@ -167,7 +165,7 @@ func (r *Reactor) handlePolicyDelete(ctx context.Context, request ContextVMReque
 	if err := r.policyService.DeletePolicy(ctx, req.ID); err != nil {
 		return nil, err
 	}
-	if err := r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: req.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
+	if err := r.publishPolicyState(ctx, &domain.DeploymentPolicy{ID: req.ID, UpdatedAt: time.Now().UTC()}, true); err != nil {
 		return nil, fmt.Errorf("policy deleted but registry publication failed: %w", err)
 	}
 	return policyMutationResult("policy_delete", req.ID), nil
@@ -217,6 +215,20 @@ func validateContextVMPolicy(policy *domain.DeploymentPolicy) error {
 		}
 	}
 	return nil
+}
+
+// publishPolicyState publishes a canonical 30900 for a policy mutation through
+// the injected PolicyStatePublisher (sign + PublishBeforeCommit). This is the
+// legacy (non-intent) publication path; the intent path publishes through the
+// PolicyIntentHandler's own publisher. Both use the same PolicyRegistryRecord
+// builder and PolicyStatePublisher type.
+func (r *Reactor) publishPolicyState(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+	if r.policyPublisher != nil {
+		return r.policyPublisher(ctx, policy, deleted)
+	}
+	// Fallback: no publisher configured. This happens only in legacy configs
+	// where nostr publishing is completely disabled.
+	return fmt.Errorf("policy state publisher not configured")
 }
 
 // policyIntentEnabled reports whether the policy domain is routed through the

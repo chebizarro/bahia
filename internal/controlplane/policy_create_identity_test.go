@@ -24,9 +24,11 @@ func TestPolicyCreateIsIdempotentByClientID(t *testing.T) {
 	ctx := context.Background()
 	repo := &identityPolicyRepo{rows: map[uuid.UUID]domain.DeploymentPolicy{}}
 	publisher := &mockEncryptedPublisher{}
-	reactor := NewReactor(Config{}, nil, nil, newResponder(t, publisher).signer, zap.NewNop(),
+	responder := newResponder(t, publisher)
+	reactor := NewReactor(Config{}, nil, nil, responder.signer, zap.NewNop(),
 		WithControlPlanePublisher(publisher),
-		WithPolicyService(service.NewPolicyService(repo, &testSignatureRepo{}, nil, zap.NewNop())))
+		WithPolicyService(service.NewPolicyService(repo, &testSignatureRepo{}, nil, zap.NewNop())),
+		WithPolicyStatePublisher(testPolicyPublisher(publisher, responder.signer)))
 
 	id := domain.NewEntityID()
 	create := func(params map[string]any) (any, error) {
