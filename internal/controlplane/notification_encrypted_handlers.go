@@ -64,11 +64,11 @@ func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport,
 		dispatcher: dispatcher,
 		authorizer: encryptedTenantAuthorizer{rbac: rbac},
 	}
-	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/list")
-	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/get")
+	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/channels-list")
+	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/channels-get")
 	// Phase 3 N1: create/update/delete registrations deleted — mutations go through intent publishing.
-	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel, "notifications/test")
-	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs, "notifications/logs")
+	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel, "notifications/channels-test")
+	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs, "notifications/logs-list")
 }
 
 func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler, contextVMAliases ...string) {
