@@ -12,30 +12,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// fakeWorkerReadModelSource serves one worker's assignment and drain read
-// models to the projector.
-type fakeWorkerReadModelSource struct {
-	assignment domain.WorkerAssignmentState
-	drain      domain.WorkerDrainStatus
-}
-
-func (s *fakeWorkerReadModelSource) ListAssignmentStates(context.Context) ([]domain.WorkerAssignmentState, error) {
-	return []domain.WorkerAssignmentState{s.assignment}, nil
-}
-
-func (s *fakeWorkerReadModelSource) GetAssignmentState(context.Context, string) (*domain.WorkerAssignmentState, error) {
-	state := s.assignment
-	return &state, nil
-}
-
-func (s *fakeWorkerReadModelSource) ListDrainStatuses(context.Context) ([]domain.WorkerDrainStatus, error) {
-	return []domain.WorkerDrainStatus{s.drain}, nil
-}
-
-func (s *fakeWorkerReadModelSource) GetDrainStatus(context.Context, string) (*domain.WorkerDrainStatus, error) {
-	status := s.drain
-	return &status, nil
-}
+// Phase 3 W1: fakeWorkerReadModelSource removed — worker assignment/drain
+// read models are published directly from the mutation site via
+// WorkerReadModelPublisher (bahia-irsry.11.14). The coordinate-isolation
+// test below uses publishReplaceableJSON directly.
 
 // TestProjectorWorkerFamiliesCoexistOnRelay pins bahia-irsry.36 against a relay
 // with NIP-01 addressable replacement: the projector's assignment and drain
@@ -46,13 +26,18 @@ func TestProjectorWorkerFamiliesCoexistOnRelay(t *testing.T) {
 	ctx := context.Background()
 	workerPubkey := strings.Repeat("ab", 32)
 	relay := newReplaceableRelay()
-	source := &fakeWorkerReadModelSource{
-		assignment: domain.WorkerAssignmentState{WorkerPubKey: workerPubkey, ActiveAssignments: []domain.WorkerAssignment{{Type: domain.WorkerAssignmentService, WorkloadID: "svc-1"}}},
-		drain:      domain.WorkerDrainStatus{WorkerPubKey: workerPubkey, SchedulingState: domain.WorkerSchedulingDraining},
-	}
-	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop(), WithWorkerReadModelProjectionSource(source))
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
-	projector.publishWorkerReadModelsForWorker(ctx, workerPubkey)
+	// Publish assignment and drain records directly via publishReplaceableJSON,
+	// which is what the now-removed projector methods did internally.
+	assignment := domain.WorkerAssignmentState{WorkerPubKey: workerPubkey, ActiveAssignments: []domain.WorkerAssignment{{Type: domain.WorkerAssignmentService, WorkloadID: "svc-1"}}}
+	if err := projector.publishReplaceableJSON(ctx, KindWorkerAssignmentState, workerPubkey, nil, assignment, "worker_assignment_state.projection", nil); err != nil {
+		t.Fatalf("publish assignment: %v", err)
+	}
+	drain := domain.WorkerDrainStatus{WorkerPubKey: workerPubkey, SchedulingState: domain.WorkerSchedulingDraining}
+	if err := projector.publishReplaceableJSON(ctx, KindWorkerDrainStatus, workerPubkey, nil, drain, "worker_drain_status.projection", nil); err != nil {
+		t.Fatalf("publish drain: %v", err)
+	}
 	if err := projector.publishReplaceableJSON(ctx, KindWorkerEligibilityPreview, "preview-1", nil, domain.WorkerEligibilityPreview{PreviewID: "preview-1"}, "worker_eligibility.projection", nil); err != nil {
 		t.Fatalf("publish eligibility: %v", err)
 	}

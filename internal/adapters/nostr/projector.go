@@ -72,12 +72,9 @@ type SBOMProjectionSource interface {
 	ListPublishedManifests(ctx context.Context, limit int) ([]domain.SBOMManifest, error)
 }
 
-type WorkerReadModelProjectionSource interface {
-	ListAssignmentStates(ctx context.Context) ([]domain.WorkerAssignmentState, error)
-	GetAssignmentState(ctx context.Context, workerPubKey string) (*domain.WorkerAssignmentState, error)
-	ListDrainStatuses(ctx context.Context) ([]domain.WorkerDrainStatus, error)
-	GetDrainStatus(ctx context.Context, workerPubKey string) (*domain.WorkerDrainStatus, error)
-}
+// Phase 3 W1: WorkerReadModelProjectionSource interface removed — worker
+// assignment/drain read models are published directly from the mutation site
+// via WorkerReadModelPublisher (bahia-irsry.11.14).
 
 type latestObservationSource interface {
 	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
@@ -170,7 +167,7 @@ type Projector struct {
 	source                ProjectionSource
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
-	workerReadModelSource WorkerReadModelProjectionSource
+	// Phase 3 W1: workerReadModelSource field removed (bahia-irsry.11.14).
 	backupSource          BackupProjectionSource
 	dnsSource             DNSProjectionSource
 	dnsZoneSource         DNSZoneProjectionSource
@@ -230,9 +227,8 @@ func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.workerSource = source }
 }
 
-func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.workerReadModelSource = source }
-}
+// Phase 3 W1: WithWorkerReadModelProjectionSource removed (bahia-irsry.11.14).
+// Worker read models are published directly from the mutation site.
 
 func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.backupSource = source }
@@ -315,14 +311,9 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		// subscriptions removed — their state is published by the intent handlers
 		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
 		//
-		// Phase 3 S2: build, artifact, deployment intent and deployment run
-		// cp-state subscriptions removed — their cp-state is published directly
-		// from the RegistryService mutation methods (bahia-irsry.11.7).
-		// Run events are kept for worker read-model refresh (assignment/drain
-		// state must update immediately, not on the RepublishSnapshot ticker).
-		events.EventDeploymentRunCreated,
-		events.EventDeploymentRunStatusChanged,
-		events.EventDeploymentRunCompleted,
+		// Phase 3 S2/W1: deployment run event subscriptions removed — their
+		// cp-state is published directly from RegistryService (S2), and worker
+		// read models are published from the run mutation site (W1, bahia-irsry.11.14).
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -453,13 +444,15 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	// directly from the mutation site (intent handler, ContextVM handler,
 	// registry service). RepublishSnapshot LLM block removed.
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
-	workerAssignments, workerDrains := p.publishWorkerReadModelSnapshots(ctx)
+	// Phase 3 W1: worker assignment/drain read models are published directly
+	// from the mutation site (worker_handlers.go, registry.go, ml_registry.go).
+	// RepublishSnapshot worker block removed (bahia-irsry.11.14).
 	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications, backupRetentions, backupPostures := p.publishBackupSnapshots(ctx)
 	// Phase 3 D1: DNS snapshot legs removed. DNS endpoint/zone/backend/policy
 	// records are now published by the DNSCanonicalPublisher wired to the
 	// reconciler, triggered by bus events instead of this 10-minute timer.
 	sbomRefs, sbomAvailLists := p.publishSBOMSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("policies", policiesPublished), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("sbom_references", sbomRefs), zap.Int("sbom_availability_lists", sbomAvailLists))
 	return nil
 }
 
@@ -473,15 +466,9 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 
 	res := resourceFromEvent(e)
 	switch e.Type {
-	// Phase 3 S2: deployment run events are still handled for worker
-	// read-model refresh (assignment/drain state). The run's own cp-state
-	// is published directly from RegistryService (bahia-irsry.11.7).
-	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
-		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
-			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
-				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
-			}
-		}
+	// Phase 3 W1: deployment run event cases removed — worker assignment/drain
+	// read models are published directly from the run mutation site
+	// (registry.go, ml_registry.go) instead of reactively here (bahia-irsry.11.14).
 
 	// Phase 3 F2/F3: service and environment handleEvent cases removed.
 	// Phase 3 S1: state publication removed — the reconciler publishes state
@@ -505,11 +492,8 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		}
 	case service.EventMLRunChanged:
 		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID)); ok {
-			if p.mlSource != nil {
-				if run, err := p.mlSource.GetMLDeploymentRun(ctx, id); err == nil && run != nil {
-					p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
-				}
-			}
+			// Phase 3 W1: worker read model refresh removed — published directly
+			// from ml_registry.go mutation site (bahia-irsry.11.14).
 			p.publishMLStateForRun(ctx, id)
 		} else if id, ok := parseUUID(stringifyMapValue(e.Data, "intent_id")); ok {
 			p.publishMLStateForIntent(ctx, id)
@@ -2360,88 +2344,11 @@ func (p *Projector) publishMLRuntimeCapabilityProfile(ctx context.Context, worke
 	return p.publishReplaceableJSON(ctx, KindMLRuntimeCapabilityProfile, dTag, tags, worker, "ml_runtime_capability.projection", nil)
 }
 
-func (p *Projector) publishWorkerAssignmentState(ctx context.Context, state *domain.WorkerAssignmentState) error {
-	if state == nil || state.WorkerPubKey == "" {
-		return nil
-	}
-	tags := gonostr.Tags{{"worker", state.WorkerPubKey}, {"assignment_count", fmt.Sprintf("%d", len(state.ActiveAssignments))}}
-	for _, assignment := range state.ActiveAssignments {
-		if assignment.Type != "" {
-			tags = append(tags, gonostr.Tag{"assignment_type", string(assignment.Type)})
-		}
-		if assignment.WorkloadID != "" {
-			tags = append(tags, gonostr.Tag{"workload", assignment.WorkloadID})
-		}
-		if assignment.Status != "" {
-			tags = append(tags, gonostr.Tag{"status", assignment.Status})
-		}
-		if assignment.Pinned {
-			tags = append(tags, gonostr.Tag{"pinned", "true"})
-		}
-	}
-	return p.publishReplaceableJSON(ctx, KindWorkerAssignmentState, state.WorkerPubKey, tags, state, "worker_assignment_state.projection", nil)
-}
-
-func (p *Projector) publishWorkerDrainStatus(ctx context.Context, status *domain.WorkerDrainStatus) error {
-	if status == nil || status.WorkerPubKey == "" {
-		return nil
-	}
-	tags := gonostr.Tags{{"worker", status.WorkerPubKey}, {"scheduling_state", string(status.SchedulingState)}, {"safe_to_enter_maintenance", fmt.Sprintf("%t", status.SafeToEnterMaintenance)}, {"safe_to_disable", fmt.Sprintf("%t", status.SafeToDisable)}, {"remaining", fmt.Sprintf("%d", len(status.RemainingAssignments))}, {"pinned_blockers", fmt.Sprintf("%d", len(status.PinnedBlockers))}}
-	return p.publishReplaceableJSON(ctx, KindWorkerDrainStatus, status.WorkerPubKey, tags, status, "worker_drain_status.projection", nil)
-}
-
-func (p *Projector) publishWorkerReadModelsForWorker(ctx context.Context, workerPubKey string) {
-	if p.workerReadModelSource == nil || strings.TrimSpace(workerPubKey) == "" {
-		return
-	}
-	assignment, err := p.workerReadModelSource.GetAssignmentState(ctx, workerPubKey)
-	if err != nil {
-		p.logger.Warn("read worker assignment state for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
-	} else if assignment != nil {
-		if err := p.publishWorkerAssignmentState(ctx, assignment); err != nil {
-			p.logger.Warn("publish worker assignment state failed", zap.String("worker", workerPubKey), zap.Error(err))
-		}
-	}
-	drain, err := p.workerReadModelSource.GetDrainStatus(ctx, workerPubKey)
-	if err != nil {
-		p.logger.Warn("read worker drain status for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
-	} else if drain != nil {
-		if err := p.publishWorkerDrainStatus(ctx, drain); err != nil {
-			p.logger.Warn("publish worker drain status failed", zap.String("worker", workerPubKey), zap.Error(err))
-		}
-	}
-}
-
-func (p *Projector) publishWorkerReadModelSnapshots(ctx context.Context) (assignmentsPublished, drainsPublished int) {
-	if p.workerReadModelSource == nil {
-		return
-	}
-	assignments, err := p.workerReadModelSource.ListAssignmentStates(ctx)
-	if err != nil {
-		p.logger.Warn("list worker assignment states for projection failed", zap.Error(err))
-	} else {
-		for i := range assignments {
-			if err := p.publishWorkerAssignmentState(ctx, &assignments[i]); err != nil {
-				p.logger.Warn("publish worker assignment state failed", zap.String("worker", assignments[i].WorkerPubKey), zap.Error(err))
-			} else {
-				assignmentsPublished++
-			}
-		}
-	}
-	drains, err := p.workerReadModelSource.ListDrainStatuses(ctx)
-	if err != nil {
-		p.logger.Warn("list worker drain statuses for projection failed", zap.Error(err))
-	} else {
-		for i := range drains {
-			if err := p.publishWorkerDrainStatus(ctx, &drains[i]); err != nil {
-				p.logger.Warn("publish worker drain status failed", zap.String("worker", drains[i].WorkerPubKey), zap.Error(err))
-			} else {
-				drainsPublished++
-			}
-		}
-	}
-	return
-}
+// Phase 3 W1: publishWorkerAssignmentState, publishWorkerDrainStatus,
+// publishWorkerReadModelsForWorker, and publishWorkerReadModelSnapshots
+// removed — worker assignment/drain read models are published directly from
+// the mutation site (worker_handlers.go, registry.go, ml_registry.go) via
+// WorkerReadModelPublisher (bahia-irsry.11.14).
 
 // Phase 3 S1: publishState removed — the shared record builder
 // RuntimeStateRecord in control_state_contract.go replaces it, and the

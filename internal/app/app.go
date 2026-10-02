@@ -1059,7 +1059,8 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithBackupProjectionSource(backupRegistry),
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
-		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
+		// Phase 3 W1: WithWorkerReadModelProjectionSource removed — worker read
+		// models are published directly from the mutation site (bahia-irsry.11.14).
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if dnsProjector != nil {
@@ -2154,6 +2155,13 @@ func New(cfg *config.Config) (*App, error) {
 			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
+		// Phase 3 W1: wire worker read model publisher for direct publication
+		// from mutation sites (bahia-irsry.11.14).
+		workerReadModelPublisher := controlplane.NewWorkerReadModelPublisher(
+			controlPlanePool, controlPlaneSigner, workerReadModelSvc, logger)
+		reactorOpts = append(reactorOpts,
+			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
+		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
@@ -2799,6 +2807,76 @@ func setupWorkerPressureSubscriptions(
 			}
 		}()
 	})
+}
+
+// setupWorkerReadModelEventSubscriptions wires event-bus subscriptions so that
+// deployment-run and ML-run lifecycle events trigger an immediate worker
+// read-model republish (assignment, drain, eligibility). This replaces the
+// projector's reactive handleEvent cases removed in Phase 3 W1
+// (bahia-irsry.11.14).
+func setupWorkerReadModelEventSubscriptions(
+	pub events.Publisher,
+	workerReadModelPublisher *controlplane.WorkerReadModelPublisher,
+	registry *service.RegistryService,
+	mlRegistry *service.MLRegistryService,
+	logger *zap.Logger,
+) {
+	if pub == nil || workerReadModelPublisher == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	// Deployment run events: look up the run to extract the worker pubkey,
+	// then republish assignment/drain/eligibility for that worker.
+	publishForDeploymentRun := func(ctx context.Context, e events.Event) {
+		runID := e.EntityID
+		if res, ok := e.Data.(events.ResourceData); ok && res.RunID != "" {
+			runID = res.RunID
+		}
+		id, err := uuid.Parse(runID)
+		if err != nil {
+			return
+		}
+		run, err := registry.GetDeploymentRun(ctx, id)
+		if err != nil || run == nil || run.WorkerPubkey == "" {
+			if err != nil {
+				logger.Warn("lookup deployment run for worker read model refresh failed",
+					zap.String("run_id", runID), zap.Error(err))
+			}
+			return
+		}
+		workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+	}
+	pub.Subscribe(events.EventDeploymentRunCreated, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunStatusChanged, publishForDeploymentRun)
+	pub.Subscribe(events.EventDeploymentRunCompleted, publishForDeploymentRun)
+
+	// ML deployment run events: same pattern, using the ML registry.
+	if mlRegistry != nil {
+		pub.Subscribe(service.EventMLRunChanged, func(ctx context.Context, e events.Event) {
+			runID := e.EntityID
+			if m, ok := e.Data.(map[string]any); ok {
+				if rid, ok := m["run_id"].(string); ok && rid != "" {
+					runID = rid
+				}
+			}
+			id, err := uuid.Parse(runID)
+			if err != nil {
+				return
+			}
+			run, err := mlRegistry.GetMLDeploymentRun(ctx, id)
+			if err != nil || run == nil || run.WorkerPubkey == "" {
+				if err != nil {
+					logger.Warn("lookup ML deployment run for worker read model refresh failed",
+						zap.String("run_id", runID), zap.Error(err))
+				}
+				return
+			}
+			workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
+		})
+	}
 }
 
 func executeContinuityFailoverCommand(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, command events.ContinuityCommandRequested, logger *zap.Logger) {
