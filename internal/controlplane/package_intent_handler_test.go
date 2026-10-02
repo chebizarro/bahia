@@ -36,9 +36,9 @@ type pkgIntentStore struct {
 func newPkgIntentStore() *pkgIntentStore {
 	return &pkgIntentStore{
 		memoryPackageProjection: newMemoryPackageProjection(),
-		claims:                 map[string]repository.PackageRequestClaim{},
-		approvals:              map[uuid.UUID]repository.PackageApproval{},
-		consumed:               map[uuid.UUID]bool{},
+		claims:                  map[string]repository.PackageRequestClaim{},
+		approvals:               map[uuid.UUID]repository.PackageApproval{},
+		consumed:                map[uuid.UUID]bool{},
 	}
 }
 
@@ -69,10 +69,10 @@ func (s *pkgIntentStore) ConsumePackageApproval(_ context.Context, id uuid.UUID,
 
 // pkgIntentPublishCapture implements PackageCPStateWriter for test assertions.
 type pkgIntentPublishCapture struct {
-	mu          sync.Mutex
-	repos       []*domain.PackageRepository
-	artifacts   []*domain.PackageArtifact
-	promotions  []*domain.PackagePublication
+	mu         sync.Mutex
+	repos      []*domain.PackageRepository
+	artifacts  []*domain.PackageArtifact
+	promotions []*domain.PackagePublication
 }
 
 func (p *pkgIntentPublishCapture) PublishPackageRepositoryRegistry(_ context.Context, repo *domain.PackageRepository, _ bool) error {

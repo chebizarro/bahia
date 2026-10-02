@@ -202,7 +202,6 @@ func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 // Phase 3 W1: WithWorkerReadModelProjectionSource removed (bahia-irsry.11.14).
 // Worker read models are published directly from the mutation site.
 
-
 func WithDNSProjectionSource(source DNSProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsSource = source }
 }
@@ -248,13 +247,13 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		logger = zap.NewNop()
 	}
 	p := &Projector{
-		source:             source,
-		publisher:          publisher,
-		history:            history,
-		privateKey:         cfg.PrivateKey,
-		enabled:            cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
-		repairInterval:     10 * time.Minute,
-		logger:             logger.Named("nostr-projector"),
+		source:         source,
+		publisher:      publisher,
+		history:        history,
+		privateKey:     cfg.PrivateKey,
+		enabled:        cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
+		repairInterval: 10 * time.Minute,
+		logger:         logger.Named("nostr-projector"),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -429,13 +428,13 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 	case events.EventAdoptionImported:
 		p.publishServiceByID(ctx, res.ServiceID)
 		p.publishEnvironmentByID(ctx, res.EnvironmentID)
-	// Phase 3 L1: LLM handleEvent cases removed — route registry and state
-	// records are published directly from the mutation site (intent handler,
-	// ContextVM handler, registry service) instead of reactively here.
-	// Phase 3 M1: ML model/version/endpoint/intent/observation/state/artifact/provenance
-	// handleEvent cases removed — ML state is now published directly from
-	// the mutation site via MLCanonicalPublisher. Worker read models
-	// for ML runs are refreshed by WorkerReadModelPublisher (W1).
+		// Phase 3 L1: LLM handleEvent cases removed — route registry and state
+		// records are published directly from the mutation site (intent handler,
+		// ContextVM handler, registry service) instead of reactively here.
+		// Phase 3 M1: ML model/version/endpoint/intent/observation/state/artifact/provenance
+		// handleEvent cases removed — ML state is now published directly from
+		// the mutation site via MLCanonicalPublisher. Worker read models
+		// for ML runs are refreshed by WorkerReadModelPublisher (W1).
 	}
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
@@ -480,6 +479,7 @@ func (p *Projector) publishEnvironmentByID(ctx context.Context, raw string) {
 		p.logger.Warn("publish environment registry projection failed", zap.String("environment_id", raw), zap.Error(err))
 	}
 }
+
 // Phase 3 M1: publishMLModelByID, publishMLModelVersionByID,
 // publishMLEndpointByID, publishMLStateForIntent, publishMLStateForRun,
 // publishMLStateForIDs, publishMLProvenanceByArtifactID,

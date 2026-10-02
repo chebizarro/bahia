@@ -44,7 +44,6 @@ func (r *Reactor) recoverPackageIntents(ctx context.Context) {
 	}
 }
 
-
 // packageIntentEnabled reports whether the package domain is routed through
 // the intent processor (Phase 3 dual dispatch).
 func (r *Reactor) packageIntentEnabled() bool {

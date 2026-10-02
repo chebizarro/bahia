@@ -47,10 +47,10 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, 
 	}
 	h := backupContextVMHandlers{
 		intentProcessor: intentProcessor,
-		publisher:     transport.responder.publisher,
-		signer:        transport.responder.signer,
-		servicePubkey: normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
-		authorizer:    encryptedTenantAuthorizer{rbac: rbac},
+		publisher:       transport.responder.publisher,
+		signer:          transport.responder.signer,
+		servicePubkey:   normalizeEncryptedPubkey(transport.responder.ServicePubkey()),
+		authorizer:      encryptedTenantAuthorizer{rbac: rbac},
 	}
 	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupRepositoryRegister, h.repositoryRegister, gate)
 	transport.RegisterOperatorContextVMHandler(ContextVMMethodBackupPolicyApply, h.policyApply, gate)
@@ -66,10 +66,10 @@ func RegisterBackupAliasContextVMHandlers(transport *EncryptedRequestTransport, 
 
 type backupContextVMHandlers struct {
 	intentProcessor *IntentProcessor
-	publisher     NostrEventPublisher
-	signer        nostr.Signer
-	servicePubkey string
-	authorizer    encryptedTenantAuthorizer
+	publisher       NostrEventPublisher
+	signer          nostr.Signer
+	servicePubkey   string
+	authorizer      encryptedTenantAuthorizer
 }
 
 // backupIntentEnabled reports whether the backup domain is routed through
@@ -91,7 +91,6 @@ func (h backupContextVMHandlers) backupDualDispatch(ctx context.Context, request
 	}
 	return h.intentProcessor.ProcessInProcess(ctx, intent)
 }
-
 
 type backupDelegationRecord struct {
 	Version          string `json:"version"`
