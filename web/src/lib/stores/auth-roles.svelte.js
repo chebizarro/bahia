@@ -82,6 +82,12 @@ export function roles() {
  */
 export function hasAnyRole(requiredRoles) {
   if (!requiredRoles || requiredRoles.length === 0) return true;
+
+  // E2E development override: let tests inject roles without real relay membership.
+  if (import.meta.env.DEV && typeof window !== 'undefined' && Array.isArray(window.__BAHIA_E2E_USER_ROLES)) {
+    return requiredRoles.some(r => window.__BAHIA_E2E_USER_ROLES.includes(r));
+  }
+
   const currentRoles = roles();
   return requiredRoles.some(r => currentRoles.has(r));
 }

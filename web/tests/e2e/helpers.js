@@ -63,7 +63,7 @@ export async function installE2EMocks(
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -112,6 +112,12 @@ export async function installE2EMocks(
       window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
     } else {
       delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
+    }
+    // Inject user roles for hasAnyRole() in auth-roles.svelte.js (dev-only E2E override)
+    if (authenticated && backendRole) {
+      window.__BAHIA_E2E_USER_ROLES = [backendRole];
+    } else {
+      delete window.__BAHIA_E2E_USER_ROLES;
     }
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
     window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = (contextVMOperations || []).map((entry) => ({ ...entry }));
@@ -633,6 +639,7 @@ export async function installE2EMocks(
     authenticated,
     extension,
     pubkey: TEST_PUBKEY,
+    backendRole,
     sseEvents,
     nostrEvents,
     systemInfo: effectiveSystemInfo,
