@@ -214,7 +214,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 			zap.Error(err),
 		)
 		if p.status != nil {
-			p.status.PublishRejection(ctx, intent, err.Error())
+			if IsRevisionConflict(err) {
+				p.status.PublishConflict(ctx, intent)
+			} else {
+				p.status.PublishRejection(ctx, intent, err.Error())
+			}
 		}
 		return err
 	}

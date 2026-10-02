@@ -1073,6 +1073,26 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", string(policy.RequestedMode)))
 	}
+	// Phase 3 F3: register environment intent handler when "environment" is
+	// in intent_domains. Uses the relay-first registry (which publishes the
+	// canonical 30900 via PublishBeforeCommit) or falls back to the plain
+	// registry when relay-first is not configured.
+	if enabledDomains["environment"] {
+		var envRegistry service.EnvironmentIntentRegistry
+		if relayFirstRegistry != nil {
+			envRegistry = relayFirstRegistry
+		} else {
+			envRegistry = registry
+		}
+		envHandler := controlplane.NewEnvironmentIntentHandler(
+			envRegistry,
+			nil, // statePublisher: the relay-first registry handles publishing
+			logger,
+		)
+		intentProcessor.RegisterHandler("environment", envHandler)
+		logger.Info("environment intent handler registered")
+	}
+
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
@@ -1717,6 +1737,7 @@ func New(cfg *config.Config) (*App, error) {
 			Registry:        registryMutations,
 			DeploymentUnits: deploymentUnitRepo,
 			RBAC:            tenantRBAC,
+			IntentProcessor: intentProcessor,
 			Logger:          logger,
 		}).Register(encryptedRequestTransport)
 		// The build request contract is registered even while the fleet Gitea
