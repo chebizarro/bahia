@@ -41,6 +41,22 @@ type DomainHandler interface {
 	PermissionFor(op string) domain.Permission
 }
 
+// FleetScopedHandler is an optional interface that DomainHandler
+// implementations may satisfy to signal that authorization for their domain
+// uses fleet-operator identity (config authorized_pubkeys) rather than the
+// default per-org RBAC check.
+//
+// When the intent processor detects that a handler implements this interface
+// and IsFleetScoped() returns true, it authorizes the actor by checking
+// whether the pubkey appears in TrustSet.FleetOps() instead of calling
+// TrustSet.HasPermission. This is required for domains like deployment
+// policies where the authorized principals are fleet operators who are
+// explicitly NOT org members (design §2.2/§2.4).
+type FleetScopedHandler interface {
+	IsFleetScoped() bool
+}
+
+
 // Intent is the parsed, validated representation of a kind-30900 intent event.
 type Intent struct {
 	// Event is the original Nostr event.
@@ -182,7 +198,15 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 
 	// Step 3: Authorize.
 	perm := handler.PermissionFor(intent.Op)
-	if !p.trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, perm) {
+	authorized := false
+	if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
+		// Fleet-scoped domain: check fleet operator identity instead of
+		// per-org RBAC. Fleet operators are NOT org members (§2.2).
+		authorized = p.isFleetOperator(intent.Actor)
+	} else {
+		authorized = p.trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, perm)
+	}
+	if !authorized {
 		if p.trustSet.IsKnownPrincipal(intent.Actor) {
 			// Known principal, insufficient permission → publish rejection.
 			p.logger.Info("rejecting intent from known principal lacking permission",
@@ -239,6 +263,17 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 		zap.String("coordinate", intent.Coordinate),
 	)
 	return nil
+}
+
+
+// isFleetOperator reports whether pubkey is a fleet operator.
+func (p *IntentProcessor) isFleetOperator(pubkey string) bool {
+	for _, pk := range p.trustSet.FleetOps() {
+		if pk == pubkey {
+			return true
+		}
+	}
+	return false
 }
 
 // isProcessed checks whether an intent_id has already been processed.

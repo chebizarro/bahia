@@ -530,3 +530,132 @@ func (r *RelayFirstStatePublisher) publishAuthoritativeProjection(ctx context.Co
 	wireKind, baseTags := controlStateEnvelope(legacyKind, id.String(), deleted)
 	return r.projector.publishAuthoritative(ctx, wireKind, append(baseTags, tags...), content, entityType, &id)
 }
+
+// Runtime state records -------------------------------------------------------
+//
+// The runtime state record for a service+environment pair is published both by
+// the projector (RepublishSnapshot, handleEvent) and by the reconciler via its
+// RuntimeStatePublisher. Both must emit the same wire shape, so the record
+// builder lives here. Phase 3 S1 moves publication to the reconciler and
+// deletes the projector state legs.
+
+// RuntimeStateRecord returns the family tags and JSON content of a
+// service/environment runtime state record. observation may be nil when the
+// state has no linked observation yet.
+func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) (gonostr.Tags, string) {
+	content := map[string]any{
+		"deleted":            false,
+		"service_id":         state.ServiceID.String(),
+		"environment_id":     state.EnvironmentID.String(),
+		"deployment_unit_id": uuidStringPtr(state.DeploymentUnitID),
+		"drift_status":       string(state.DriftStatus),
+		"updated_at":         formatTime(state.UpdatedAt),
+	}
+	if state.DesiredArtifactID != nil {
+		content["desired_artifact_id"] = state.DesiredArtifactID.String()
+	}
+	if state.DesiredIntentID != nil {
+		content["desired_intent_id"] = state.DesiredIntentID.String()
+	}
+	if state.LastSuccessfulRunID != nil {
+		content["last_successful_run_id"] = state.LastSuccessfulRunID.String()
+	}
+	if state.CurrentObservationID != nil {
+		content["current_observation_id"] = state.CurrentObservationID.String()
+	}
+	if state.LastReconciledAt != nil {
+		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
+	}
+	if state.DesiredHash != "" {
+		content["desired_hash"] = state.DesiredHash
+	}
+	observedHash := ""
+	if observation != nil {
+		if observation.NormalizedState != nil {
+			observedHash = observation.NormalizedState.ObservationHash
+		}
+		if observedHash == "" {
+			observedHash = observation.NormalizedHash
+		}
+		content["health_status"] = string(observation.HealthStatus)
+		content["observed_image_digest"] = observation.ObservedImageDigest
+		content["observed_at"] = formatTime(observation.ObservedAt)
+	}
+	if observedHash != "" {
+		content["observed_hash"] = observedHash
+	}
+	if state.DesiredRuntimeState != nil {
+		if renderer := desiredStateRenderer(state.DesiredRuntimeState); renderer != "" {
+			content["renderer"] = renderer
+		}
+		if target := desiredStateTarget(state.DesiredRuntimeState); target != "" {
+			content["target"] = target
+		}
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	tags := gonostr.Tags{
+		{"service", state.ServiceID.String()},
+		{"environment", state.EnvironmentID.String()},
+		{"unit", unitTagValue(state.DeploymentUnitID)},
+		{"drift_status", string(state.DriftStatus)},
+	}
+	if state.DesiredArtifactID != nil {
+		tags = append(tags, gonostr.Tag{"artifact", state.DesiredArtifactID.String()})
+	}
+	if state.DesiredIntentID != nil {
+		tags = append(tags, gonostr.Tag{"intent", state.DesiredIntentID.String()})
+	}
+	if state.LastSuccessfulRunID != nil {
+		tags = append(tags, gonostr.Tag{"run", state.LastSuccessfulRunID.String()})
+	}
+	if state.DesiredHash != "" {
+		tags = append(tags, gonostr.Tag{"desired_hash", state.DesiredHash})
+	}
+	if observedHash != "" {
+		tags = append(tags, gonostr.Tag{"observed_hash", observedHash})
+	}
+	return tags, string(contentJSON)
+}
+
+// RuntimeStateTombstoneRecord returns the family tags and JSON content of a
+// tombstone for a service/environment state coordinate.
+func RuntimeStateTombstoneRecord(serviceID, envID uuid.UUID) (gonostr.Tags, string) {
+	content := map[string]any{
+		"deleted":        true,
+		"service_id":     serviceID.String(),
+		"environment_id": envID.String(),
+		"updated_at":     formatTime(time.Now().UTC()),
+	}
+	contentJSON, _ := json.Marshal(content)
+	tags := gonostr.Tags{
+		{"service", serviceID.String()},
+		{"environment", envID.String()},
+		{"unit", domain.DefaultDeploymentUnitKey},
+	}
+	return tags, string(contentJSON)
+}
+
+// ServiceStateDTag returns the cp-state d-tag for a service/environment state
+// coordinate. Exported for the reconciler's state publisher.
+func ServiceStateDTag(serviceID, environmentID uuid.UUID) string {
+	return serviceStateDTag(serviceID, environmentID)
+}
+
+// PublishState publishes state's runtime state record (or re-publishes it when
+// unchanged content is fingerprint-deduped by the projector). observation is the
+// latest observation linked to the state; nil if none.
+func (r *RelayFirstStatePublisher) PublishState(ctx context.Context, state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) error {
+	if state == nil {
+		return fmt.Errorf("state is nil")
+	}
+	tags, content := RuntimeStateRecord(state, observation)
+	return r.publish(ctx, KindServiceState, state.ServiceID, false, tags, content, "state.projection")
+}
+
+// PublishStateTombstone publishes a tombstone for the service/environment state
+// coordinate, so relay readers see the removal.
+func (r *RelayFirstStatePublisher) PublishStateTombstone(ctx context.Context, serviceID, envID uuid.UUID) error {
+	tags, content := RuntimeStateTombstoneRecord(serviceID, envID)
+	return r.publish(ctx, KindServiceState, serviceID, true, tags, content, "state.projection")
+}

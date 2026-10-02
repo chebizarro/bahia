@@ -175,11 +175,11 @@ func TestProjectionAuditFactAbandonedDeliveryAllowsRepublish(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-	ev := events.Event{Type: events.EventReconcileCompleted, EntityID: uuid.NewString()}
+	ev := events.Event{Type: events.EventDeploymentRunStatusChanged, EntityID: uuid.NewString()}
 	if err := projector.publishAudit(ctx, ev); err != nil {
 		t.Fatal(err)
 	}
-	projector.ForgetAbandonedProjection(assertOneAudit(t, sink, events.EventReconcileCompleted))
+	projector.ForgetAbandonedProjection(assertOneAudit(t, sink, events.EventDeploymentRunStatusChanged))
 	if err := projector.publishAudit(ctx, ev); err != nil {
 		t.Fatal(err)
 	}
