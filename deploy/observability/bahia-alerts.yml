@@ -129,6 +129,15 @@ groups:
         annotations:
           summary: "OpenClaw provisioning run {{ $labels.run_id }} has resource correlation mismatches"
           runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      - alert: BahiaSidecarSubscriptionOverflow
+        expr: increase(bahia_relay_sidecar_subscription_overflow_closes_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Relay sidecar closed {{ $value }} subscription(s) due to overflow in the last 5 minutes"
+          description: "A subscriber fell behind live delivery and was CLOSED so it re-subscribes from its cursor. Sustained overflow indicates a client that cannot keep up."
+          runbook_url: "/docs/runbooks/ws6-alerts.md#bahiasidecarsubscriptionoverflow"
       - alert: NodeExporterDown
         expr: up{job="node",expected_state="up"} == 0
         for: 5m

@@ -157,3 +157,33 @@ func TestOutboxSurvivesReopenAndSharesHandlesInProcess(t *testing.T) {
 	require.True(t, pending[0].Relays["wss://a"].Accepted, "per-relay acceptance survives a restart")
 	require.Equal(t, "docs", pending[0].EntityType)
 }
+
+func TestOutboxListFailedReturnsFailedEntriesOldestFirst(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	base := time.Unix(1_700_000_000, 0)
+	a, b, c := outboxEvent(t, "first-fail"), outboxEvent(t, "second-fail"), outboxEvent(t, "pending")
+	for _, ev := range []nostr.Event{a, b, c} {
+		_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "", EnqueuedAt: base})
+		require.NoError(t, err)
+	}
+	// Fail a and b at different times; c stays pending.
+	_, err := outbox.CommitRound(a.ID, OutboxRound{Rounds: 3, State: OutboxFailed, Detail: "abandoned: budget exhausted", At: base.Add(time.Minute)})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(b.ID, OutboxRound{Rounds: 1, State: OutboxFailed, Detail: "abandoned: rejected by all relays", At: base.Add(2 * time.Minute)})
+	require.NoError(t, err)
+
+	failed, err := outbox.ListFailed(10)
+	require.NoError(t, err)
+	require.Len(t, failed, 2, "only failed entries are returned, not pending")
+	require.Equal(t, a.ID, failed[0].Event.ID, "oldest settled first")
+	require.Equal(t, b.ID, failed[1].Event.ID)
+	require.Equal(t, OutboxFailed, failed[0].State)
+	require.Equal(t, 3, failed[0].Rounds)
+	require.Equal(t, "abandoned: budget exhausted", failed[0].LastError)
+
+	// With a limit of 1, only the oldest is returned.
+	one, err := outbox.ListFailed(1)
+	require.NoError(t, err)
+	require.Len(t, one, 1)
+	require.Equal(t, a.ID, one[0].Event.ID)
+}

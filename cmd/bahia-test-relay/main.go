@@ -169,6 +169,7 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 	if err := add(eventSpec{Kind: kindControlplaneState, Author: serviceKey, Tags: nostr.Tags{
 		{"domain", "assistant"},
 		{"schema", "bahia.assistant-session.v1"},
+		{"t", kinds.AssistantSessionTopic},
 		{"d", "assistant-session-1"},
 		{"session", "assistant-session-1"},
 		{"status", "completed"},
@@ -328,7 +329,7 @@ func seedCorpus(relayURL string) ([]nostr.Event, error) {
 	if err := add(eventSpec{Kind: kindAudit, Author: serviceKey, Tags: nostr.Tags{{"domain", "controlplane"}, {"schema", "bahia.audit.v1"}, {"type", "service.created"}, {"event_type", "service.created"}, {"t", kinds.CPAuditTopic}, {kinds.CPAuditTagState, "svc-1"}, {"service", "svc-1"}}, Content: map[string]any{"schema": "bahia.audit.v1", "type": "service.created", "event_type": "service.created", "entity_id": "svc-1", "data": map[string]any{"name": "Checkout API"}}}); err != nil {
 		return nil, err
 	}
-	if err := add(eventSpec{Kind: kindNIP38Status, Author: serviceKey, Tags: nostr.Tags{{"domain", "controlplane"}, {"status", "running"}, {"service", "svc-1"}}, Content: map[string]any{"status": "running", "message": "Checkout API running"}}); err != nil {
+	if err := add(eventSpec{Kind: kindNIP38Status, Author: serviceKey, Tags: nostr.Tags{{"d", "controlplane:svc-1:running"}, {"domain", "controlplane"}, {"status", "running"}, {"service", "svc-1"}}, Content: map[string]any{"status": "running", "message": "Checkout API running"}}); err != nil {
 		return nil, err
 	}
 	if err := add(eventSpec{Kind: kindSBOMAttestation, Author: serviceKey, Tags: nostr.Tags{{"d", "art-1"}, {"service", "svc-1"}}, Content: map[string]any{"artifact_id": "art-1", "digest": "sha256:abc", "packages": []string{"pkg-one"}}}); err != nil {

@@ -106,6 +106,7 @@ const (
 	SoulActionUpdate     SoulActionType = "update"
 	SoulActionHotReload  SoulActionType = "hot-reload"
 	SoulActionRollback   SoulActionType = "rollback"
+	SoulActionAbandon    SoulActionType = "abandon"
 )
 
 const (

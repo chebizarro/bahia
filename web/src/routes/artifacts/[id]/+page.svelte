@@ -16,7 +16,7 @@ import Table from '$lib/components/Table.svelte';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_CONTEXTVM_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { ensureRelayConnection, getTagValue, nostr, parseJsonContent } from '$lib/nostr/client.js';
-  import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE } from '$lib/nostr/kinds.gen.js';
+  import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -229,8 +229,8 @@ import Table from '$lib/components/Table.svelte';
       ];
       if (digest) {
         filters.push(
-          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
+          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
         );
       }
       const events = await new Promise((resolve) => {
@@ -417,8 +417,8 @@ import Table from '$lib/components/Table.svelte';
     ];
     if (digest) {
       filters.push(
-        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#schema': [BAHIA_SBOM_REFERENCE_SCHEMA], limit: 20 },
-        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#schema': [BAHIA_SBOM_AVAILABLE_LIST_SCHEMA], limit: 5 }
+        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
+        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
       );
     }
     sbomReferenceUnsubscribe = nostr.subscribe(filters, {

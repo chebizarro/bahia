@@ -13,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 // Engine outcomes surfaced to transport handlers. Each is a stable token so the
@@ -1954,7 +1955,7 @@ func assistantProjectionCoordinate(sessionID string) string {
 }
 
 func assistantProjectionTags(p domain.AssistantSessionV2) nostr.Tags {
-	tags := nostr.Tags{{"d", assistantProjectionCoordinate(p.SessionID)}, {domain.AssistantSessionTagSchema, domain.AssistantSessionSchemaV2}, {"session", p.SessionID}, {"agent", p.AssistantID}, {"status", string(p.State)}}
+	tags := nostr.Tags{{"d", assistantProjectionCoordinate(p.SessionID)}, {domain.AssistantSessionTagSchema, domain.AssistantSessionSchemaV2}, {"t", kinds.AssistantSessionTopic}, {"session", p.SessionID}, {"agent", p.AssistantID}, {"status", string(p.State)}}
 	if p.OperatorPubkey != "" {
 		tags = append(tags, nostr.Tag{"p", p.OperatorPubkey, "", "operator"})
 	}

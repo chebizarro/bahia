@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fiatjaf.com/nostr"
+
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 )
@@ -12,5 +14,24 @@ func inboundSyncConfig(store config.NostrLocalStoreConfig) nostrAdapter.InboundS
 	sync.ResumeOverlap = store.ResumeOverlap
 	sync.RegularLookback = store.RegularLookback
 	sync.NegentropyUpload = store.NegentropyUpload
+	return sync
+}
+
+// inboundSyncConfigScoped is inboundSyncConfig with negentropy upload scoped to
+// the daemon's own service relays. Control-plane events in the local store are
+// not pushed to interop relays that happen to be in the subscription pool
+// (.50 item 4).
+func inboundSyncConfigScoped(store config.NostrLocalStoreConfig, serviceRelays []string) nostrAdapter.InboundSyncConfig {
+	sync := inboundSyncConfig(store)
+	if sync.NegentropyUpload && len(serviceRelays) > 0 {
+		allowed := make(map[string]struct{}, len(serviceRelays))
+		for _, url := range serviceRelays {
+			allowed[nostr.NormalizeURL(url)] = struct{}{}
+		}
+		sync.NegentropyUploadFilter = func(relayURL string) bool {
+			_, ok := allowed[nostr.NormalizeURL(relayURL)]
+			return ok
+		}
+	}
 	return sync
 }

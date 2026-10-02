@@ -19,6 +19,7 @@ import (
 	securityadapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -740,8 +741,8 @@ func (s *SecurityScanner) handleSBOMEvent(ctx context.Context, ev *nostr.Event) 
 
 func securitySBOMFilters() []nostr.Filter {
 	return []nostr.Filter{
-		{Kinds: []nostr.Kind{nostr.Kind(sbomadapter.KindSBOMReference)}, Tags: nostr.TagMap{"domain": []string{"sbom"}, "schema": []string{"bahia.sbom.ref.v1"}}},
-		{Kinds: []nostr.Kind{nostr.Kind(sbomadapter.KindSBOMAvailabilityList)}, Tags: nostr.TagMap{"domain": []string{"sbom"}, "schema": []string{"bahia.sbom.available-list.v1"}}},
+		{Kinds: []nostr.Kind{nostr.Kind(sbomadapter.KindSBOMReference)}, Tags: nostr.TagMap{"t": []string{kinds.SBOMReferenceTopic}}},
+		{Kinds: []nostr.Kind{nostr.Kind(sbomadapter.KindSBOMAvailabilityList)}, Tags: nostr.TagMap{"t": []string{kinds.SBOMAvailabilityTopic}}},
 	}
 }
 
@@ -887,7 +888,7 @@ func (s *SecurityScanner) publishCompletedStatus(ctx context.Context, run *domai
 
 func (s *SecurityScanner) publishStatus(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, status domain.SecurityScanStatus, step, message string) error {
 	content, _ := json.Marshal(map[string]any{"run_id": run.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "status": status, "step": step, "message": message, "updated_at": time.Now().UTC()})
-	tags := nostr.Tags{{"d", "security:scan:" + run.ID.String()}, {"domain", "security"}, {"schema", SecurityStatusSchema}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(status)}, {"step", step}}
+	tags := nostr.Tags{{"d", "security:scan:" + run.ID.String()}, {"domain", "security"}, {"schema", SecurityStatusSchema}, {"t", kinds.SecurityScanStatusTopic}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(status)}, {"step", step}}
 	if run.RequestEventID != "" {
 		tags = append(tags, nostr.Tag{"e", run.RequestEventID})
 	}
@@ -898,14 +899,14 @@ func (s *SecurityScanner) publishStatus(ctx context.Context, run *domain.Securit
 func (s *SecurityScanner) publishScanSummary(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget) error {
 	content, _ := json.Marshal(map[string]any{"run_id": run.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "status": run.Status, "finding_count": run.FindingCount, "severity_counts": run.SeverityCounts, "unsupported_count": run.UnsupportedCount, "unsupported_reasons": run.UnsupportedReasons, "finished_at": run.FinishedAt})
 	d := "security:scan-summary:" + run.ID.String()
-	ev := &nostr.Event{Kind: KindSecuritySummary, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityScanSummarySchema}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(run.Status)}}, Content: string(content)}
+	ev := &nostr.Event{Kind: KindSecuritySummary, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityScanSummarySchema}, {"t", kinds.SecuritySummaryTopic}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(run.Status)}}, Content: string(content)}
 	return s.publishObservable(ctx, run, target, nil, "scan_summary", SecurityScanSummarySchema, d, ev)
 }
 
 func (s *SecurityScanner) publishTargetSummary(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget) error {
 	content, _ := json.Marshal(map[string]any{"target_id": target.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "latest_run_id": run.ID, "status": run.Status, "finding_count": run.FindingCount, "severity_counts": run.SeverityCounts, "scanned_at": run.FinishedAt})
 	d := "security:target-summary:" + target.TargetKeyHash
-	ev := &nostr.Event{Kind: KindSecuritySummary, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityTargetSummarySchema}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(run.Status)}}, Content: string(content)}
+	ev := &nostr.Event{Kind: KindSecuritySummary, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityTargetSummarySchema}, {"t", kinds.SecuritySummaryTopic}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"status", string(run.Status)}}, Content: string(content)}
 	return s.publishObservable(ctx, run, target, nil, "target_summary", SecurityTargetSummarySchema, d, ev)
 }
 
@@ -923,7 +924,7 @@ func (s *SecurityScanner) publishFindings(ctx context.Context, run *domain.Secur
 		}
 		content, _ := json.Marshal(map[string]any{"run_id": run.ID, "target_key_hash": target.TargetKeyHash, "chunk_index": i, "chunk_count": chunkCount, "findings": findings[start:end]})
 		d := fmt.Sprintf("security:findings:%s:%d", run.ID, i)
-		ev := &nostr.Event{Kind: KindSecurityFinding, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityFindingsSchema}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"chunk_index", fmt.Sprint(i)}, {"chunk_count", fmt.Sprint(chunkCount)}}, Content: string(content)}
+		ev := &nostr.Event{Kind: KindSecurityFinding, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityFindingsSchema}, {"t", kinds.SecurityFindingsTopic}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"chunk_index", fmt.Sprint(i)}, {"chunk_count", fmt.Sprint(chunkCount)}}, Content: string(content)}
 		if err := s.publishObservable(ctx, run, target, nil, "findings", SecurityFindingsSchema, d, ev); err != nil {
 			return err
 		}
@@ -935,7 +936,7 @@ func (s *SecurityScanner) publishAudit(ctx context.Context, run *domain.Security
 	content, _ := json.Marshal(map[string]any{"action": action, "run_id": run.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "message": message, "created_at": time.Now().UTC()})
 	d := "security:audit:" + run.ID.String() + ":" + action
 
-	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"type", "security-scan"}, {"action", action}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}}, Content: string(content)}
+	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"t", kinds.SecurityAuditTopic}, {"type", "security-scan"}, {"action", action}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}}, Content: string(content)}
 	return s.publishObservable(ctx, run, target, nil, "audit", SecurityAuditSchema, d, ev)
 }
 
@@ -1043,7 +1044,7 @@ func uniqueOSVIDs(findings []domain.SecurityOSVFinding) []string {
 func (s *SecurityScanner) publishPolicyBreachAudit(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, breach *domain.SecurityPolicyBreach, result domain.SecurityBreachRecordResult) error {
 	content, _ := json.Marshal(map[string]any{"action": "security.policy_breached", "run_id": run.ID, "target_key_hash": target.TargetKeyHash, "target_type": target.Type, "policy_id": breach.PolicyID, "breach_id": breach.ID, "fingerprint": breach.Fingerprint, "record_result": result, "violated_rules": breach.ViolatedRules, "severity_counts": breach.SeverityCounts, "osv_ids": breach.OSVIDs, "created_at": time.Now().UTC()})
 	d := "security:audit:" + run.ID.String() + ":policy-breached:" + breach.PolicyID.String()
-	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"type", "security-policy"}, {"action", "security.policy_breached"}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"policy_id", breach.PolicyID.String()}, {"breach_id", breach.ID.String()}}, Content: string(content)}
+	ev := &nostr.Event{Kind: KindSecurityAudit, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", d}, {"domain", "security"}, {"schema", SecurityAuditSchema}, {"t", kinds.SecurityAuditTopic}, {"type", "security-policy"}, {"action", "security.policy_breached"}, {"run_id", run.ID.String()}, {"target_type", string(target.Type)}, {"target_key_hash", target.TargetKeyHash}, {"policy_id", breach.PolicyID.String()}, {"breach_id", breach.ID.String()}}, Content: string(content)}
 	return s.publishObservable(ctx, run, target, nil, "policy_breach_audit", SecurityAuditSchema, d, ev)
 }
 
