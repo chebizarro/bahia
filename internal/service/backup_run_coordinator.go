@@ -94,6 +94,9 @@ type BackupRunQueueRepository interface {
 	repository.BackupOperationCheckpointRepository
 	ClaimNextQueuedBackupRun(ctx context.Context) (*domain.BackupRun, error)
 	RequeueStaleBackupRuns(ctx context.Context, olderThan time.Duration) (int, error)
+	// NextStaleBackupRunDeadline returns the time at which the oldest running
+	// run becomes stale, or nil if no runs are in progress.
+	NextStaleBackupRunDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 }
 
 type BackupRunCoordinatorOption func(*BackupRunCoordinator)
@@ -186,8 +189,8 @@ func (c *BackupRunCoordinator) Run(ctx context.Context) error {
 		return err
 	}
 	c.runRecoveryOnce(ctx)
-	//nostr:allow-poll stale-lease recovery timer fires at computed interval, not fixed 30s
-	timer := time.NewTimer(c.config.RecoveryPollInterval)
+	//nostr:allow-poll stale-lease recovery timer fires at computed stale-lease deadline
+	timer := time.NewTimer(c.nextStaleInterval(ctx))
 	defer timer.Stop()
 	for {
 		select {
@@ -201,22 +204,41 @@ func (c *BackupRunCoordinator) Run(ctx context.Context) error {
 				default:
 				}
 			}
-			timer.Reset(c.config.RecoveryPollInterval)
+			timer.Reset(c.nextStaleInterval(ctx))
 		case <-timer.C:
 			c.runRecoveryOnce(ctx)
-			timer.Reset(c.config.RecoveryPollInterval)
+			timer.Reset(c.nextStaleInterval(ctx))
 		}
 	}
 }
 
 // Trigger wakes the coordinator to process new work without waiting for the
-// stale-recovery timer. Called by the intent handler and the reactor after
-// creating or requeueing a run.
+// stale-recovery timer. Called by the registry notifier hook after every
+// mutation that creates or requeues work.
 func (c *BackupRunCoordinator) Trigger() {
 	select {
 	case c.triggerCh <- struct{}{}:
 	default:
 	}
+}
+
+// nextStaleInterval computes how long to wait before the next stale-lease
+// recovery check. Uses the genuine stale-lease deadline (earliest running
+// run's lease expiry) rather than a fixed polling interval.
+func (c *BackupRunCoordinator) nextStaleInterval(ctx context.Context) time.Duration {
+	if c.queue != nil {
+		deadline, err := c.queue.NextStaleBackupRunDeadline(ctx, c.config.StaleRunTimeout)
+		if err == nil && deadline != nil {
+			d := time.Until(*deadline)
+			if d <= 0 {
+				return time.Second // already stale, check immediately
+			}
+			if d < c.config.RecoveryPollInterval {
+				return d
+			}
+		}
+	}
+	return c.config.RecoveryPollInterval // ceiling
 }
 
 func (c *BackupRunCoordinator) runRecoveryOnce(ctx context.Context) {

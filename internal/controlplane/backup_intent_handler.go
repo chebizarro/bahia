@@ -5,10 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
+
+// BackupIntentPublisher publishes canonical 30900 cp-state records for backup
+// entities. The intent handler uses this interface for all publish operations.
+// The nostr.BackupCanonicalPublisher implements it.
+type BackupIntentPublisher interface {
+	PublishRecipe(ctx context.Context, recipe *domain.BackupRecipe) error
+	PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error
+	PublishRepository(ctx context.Context, repo *domain.BackupRepository) error
+	PublishDefinition(ctx context.Context, def *domain.BackupDefinition) error
+	PublishDeleted(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content string, entityType string, entityID *uuid.UUID) error
+}
 
 // BackupIntentCRUD is the read/write contract the backup intent handler uses
 // for level-triggered reconciliation. service.BackupRegistryService satisfies
@@ -83,7 +96,7 @@ type BackupIntentExecutors struct {
 type BackupIntentHandler struct {
 	registry    BackupIntentCRUD
 	definitions BackupIntentDefinitionCRUD
-	publish     BackupConfigPublishFunc
+	publisher   BackupIntentPublisher
 	executors   BackupIntentExecutors
 	status      *IntentStatusPublisher
 	logger      *zap.Logger
@@ -93,7 +106,7 @@ type BackupIntentHandler struct {
 type BackupIntentHandlerConfig struct {
 	Registry    BackupIntentCRUD
 	Definitions BackupIntentDefinitionCRUD
-	Publish     BackupConfigPublishFunc
+	Publisher   BackupIntentPublisher
 	Executors   BackupIntentExecutors
 	Status      *IntentStatusPublisher
 	Logger      *zap.Logger
@@ -108,7 +121,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 	return &BackupIntentHandler{
 		registry:    cfg.Registry,
 		definitions: cfg.Definitions,
-		publish:     cfg.Publish,
+		publisher:   cfg.Publisher,
 		executors:   cfg.Executors,
 		status:      cfg.Status,
 		logger:      logger.Named("backup-intent"),
@@ -503,49 +516,48 @@ func (h *BackupIntentHandler) handleDelete(ctx context.Context, intent *Intent) 
 // --- Publish helpers -------------------------------------------------------
 
 func (h *BackupIntentHandler) publishRecipe(ctx context.Context, recipe *domain.BackupRecipe, deleted bool) error {
-	if h.publish == nil {
+	if h.publisher == nil {
 		return nil
 	}
-	tags, content := BackupRecipeRegistryRecord(recipe, deleted)
-	return h.publish(ctx, backupFamilyKindRecipeRegistry, BackupRecipeDTag(recipe.ID), tags, content, "backup_recipe", &recipe.ID, deleted)
+	if deleted {
+		tags, content := nostradapter.BackupRecipeRegistryRecord(recipe, true)
+		return h.publisher.PublishDeleted(ctx, nostradapter.KindBackupRecipeRegistry, nostradapter.BackupRecipeDTag(recipe.ID), tags, content, "backup_recipe", &recipe.ID)
+	}
+	return h.publisher.PublishRecipe(ctx, recipe)
 }
 
 func (h *BackupIntentHandler) publishPolicy(ctx context.Context, policy *domain.BackupPolicy, deleted bool) error {
-	if h.publish == nil {
+	if h.publisher == nil {
 		return nil
 	}
-	tags, content := BackupPolicyRegistryRecord(policy, deleted)
-	return h.publish(ctx, backupFamilyKindPolicyRegistry, BackupPolicyDTag(policy.ID), tags, content, "backup_policy", &policy.ID, deleted)
+	if deleted {
+		tags, content := nostradapter.BackupPolicyRegistryRecord(policy, true)
+		return h.publisher.PublishDeleted(ctx, nostradapter.KindBackupPolicyRegistry, nostradapter.BackupPolicyDTag(policy.ID), tags, content, "backup_policy", &policy.ID)
+	}
+	return h.publisher.PublishPolicy(ctx, policy)
 }
 
 func (h *BackupIntentHandler) publishRepository(ctx context.Context, repo *domain.BackupRepository, deleted bool) error {
-	if h.publish == nil {
+	if h.publisher == nil {
 		return nil
 	}
-	tags, content := BackupRepositoryRegistryRecord(repo, deleted)
-	return h.publish(ctx, backupFamilyKindRepositoryRegistry, BackupRepositoryDTag(repo.ID), tags, content, "backup_repository", &repo.ID, deleted)
+	if deleted {
+		tags, content := nostradapter.BackupRepositoryRegistryRecord(repo, true)
+		return h.publisher.PublishDeleted(ctx, nostradapter.KindBackupRepositoryRegistry, nostradapter.BackupRepositoryDTag(repo.ID), tags, content, "backup_repository", &repo.ID)
+	}
+	return h.publisher.PublishRepository(ctx, repo)
 }
 
 func (h *BackupIntentHandler) publishDefinition(ctx context.Context, def *domain.BackupDefinition, deleted bool) error {
-	if h.publish == nil {
+	if h.publisher == nil {
 		return nil
 	}
-	tags, content := BackupDefinitionRegistryRecord(def, deleted)
-	return h.publish(ctx, backupFamilyKindDefinitionRegistry, BackupDefinitionDTag(def.ID), tags, content, "backup_definition", &def.ID, deleted)
+	if deleted {
+		tags, content := nostradapter.BackupDefinitionRegistryRecord(def, true)
+		return h.publisher.PublishDeleted(ctx, nostradapter.KindBackupDefinitionRegistry, nostradapter.BackupDefinitionDTag(def.ID), tags, content, "backup_definition", &def.ID)
+	}
+	return h.publisher.PublishDefinition(ctx, def)
 }
-
-// Legacy kind constants match internal/kinds (used to build controlStateEnvelope).
-const (
-	backupFamilyKindDefinitionRegistry = 31991 // kinds.BackupDefinitionRegistry
-	backupFamilyKindPolicyRegistry     = 31992 // kinds.BackupPolicyRegistry
-	backupFamilyKindRepositoryRegistry = 31993 // kinds.BackupRepositoryRegistry
-	backupFamilyKindRetentionRegistry  = 31994 // kinds.BackupRetentionRegistry
-	backupFamilyKindRecipeRegistry     = 31995 // kinds.BackupRecipeRegistry
-	backupFamilyKindRunState           = 31996 // kinds.BackupRunState
-	backupFamilyKindVerificationState  = 31997 // kinds.BackupVerificationState
-	backupFamilyKindRestoreState       = 31998 // kinds.BackupRestoreState
-	backupFamilyKindRuntimeObservation = 31999 // kinds.BackupRuntimeObservationState
-)
 
 // --- Content parsers -------------------------------------------------------
 

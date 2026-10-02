@@ -367,5 +367,6 @@ func (s *BackupRegistryService) publishRestoreChanged(ctx context.Context, resto
 				s.logger.Warn("canonical backup restore publish failed", zap.String("restore_id", restore.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }

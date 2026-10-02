@@ -40,6 +40,7 @@ type BackupRegistryService struct {
 	repo               repository.BackupControlPlaneRepository
 	publisher          events.Publisher
 	canonicalPublisher BackupCanonicalPublisher
+	notifyHook         func()
 	logger             *zap.Logger
 }
 
@@ -57,6 +58,19 @@ func NewBackupRegistryService(repo repository.BackupControlPlaneRepository, publ
 // before any mutations to ensure all state changes are published.
 func (s *BackupRegistryService) SetCanonicalPublisher(p BackupCanonicalPublisher) {
 	s.canonicalPublisher = p
+}
+
+// SetNotifyHook sets a function that is called after every registry mutation.
+// Used to wake coordinators (Trigger) so they process new/requeued work
+// immediately rather than waiting for the stale-recovery timer.
+func (s *BackupRegistryService) SetNotifyHook(hook func()) {
+	s.notifyHook = hook
+}
+
+func (s *BackupRegistryService) notify() {
+	if s.notifyHook != nil {
+		s.notifyHook()
+	}
 }
 
 func (s *BackupRegistryService) CreateOrUpdateRecipe(ctx context.Context, recipe *domain.BackupRecipe) error {
@@ -399,6 +413,7 @@ func (s *BackupRegistryService) publishRecipeChanged(ctx context.Context, recipe
 				s.logger.Warn("canonical backup recipe publish failed", zap.String("recipe_id", recipe.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 
@@ -410,6 +425,7 @@ func (s *BackupRegistryService) publishPolicyChanged(ctx context.Context, policy
 				s.logger.Warn("canonical backup policy publish failed", zap.String("policy_id", policy.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 
@@ -421,6 +437,7 @@ func (s *BackupRegistryService) publishRepositoryChanged(ctx context.Context, re
 				s.logger.Warn("canonical backup repository publish failed", zap.String("repository_id", repo.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 
@@ -432,6 +449,7 @@ func (s *BackupRegistryService) publishRunChanged(ctx context.Context, run *doma
 				s.logger.Warn("canonical backup run publish failed", zap.String("run_id", run.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 
@@ -443,6 +461,7 @@ func (s *BackupRegistryService) publishVerificationChanged(ctx context.Context, 
 				s.logger.Warn("canonical backup verification publish failed", zap.String("verification_id", record.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 

@@ -1,21 +1,14 @@
-package controlplane
+package nostr
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"fiatjaf.com/nostr"
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
-
-// BackupConfigPublishFunc signs and publishes a canonical kind-30900 cp-state
-// record for a backup config entity mutation (recipe, policy, repository,
-// definition). The implementation uses PublishBeforeCommit for outbox
-// durability (design §3.6).
-type BackupConfigPublishFunc func(ctx context.Context, legacyKind int, dTag string, familyTags nostr.Tags, contentJSON string, entityType string, entityID *uuid.UUID, deleted bool) error
 
 // --- Record builders -------------------------------------------------------
 // Each function returns the family-specific tags and content JSON for one
@@ -25,7 +18,7 @@ type BackupConfigPublishFunc func(ctx context.Context, legacyKind int, dTag stri
 
 // BackupRecipeRegistryRecord builds canonical cp-state tags and content for a
 // backup recipe mutation.
-func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (nostr.Tags, string) {
+func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      recipe.ID.String(),
@@ -45,7 +38,7 @@ func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (nost
 		content["updated_at"] = backupFormatTime(recipe.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"recipe", "backup-recipe:" + recipe.ID.String()},
 		{"recipe_id", recipe.ID.String()},
 		{"repository_id", recipe.RepositoryID.String()},
@@ -55,8 +48,8 @@ func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (nost
 	}
 	if recipe.PolicyID != nil {
 		tags = append(tags,
-			nostr.Tag{"policy", recipe.PolicyID.String()},
-			nostr.Tag{"policy_id", recipe.PolicyID.String()},
+			gonostr.Tag{"policy", recipe.PolicyID.String()},
+			gonostr.Tag{"policy_id", recipe.PolicyID.String()},
 		)
 	}
 	return tags, string(contentJSON)
@@ -64,7 +57,7 @@ func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (nost
 
 // BackupPolicyRegistryRecord builds canonical cp-state tags and content for a
 // backup policy mutation.
-func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (nostr.Tags, string) {
+func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      policy.ID.String(),
@@ -78,7 +71,7 @@ func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (nost
 		content["updated_at"] = backupFormatTime(policy.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"policy", "backup-policy:" + policy.ID.String()},
 		{"policy_id", policy.ID.String()},
 		{"name", policy.Name},
@@ -90,7 +83,7 @@ func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (nost
 
 // BackupRepositoryRegistryRecord builds canonical cp-state tags and content
 // for a backup repository mutation.
-func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool) (nostr.Tags, string) {
+func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      repo.ID.String(),
@@ -105,7 +98,7 @@ func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool)
 		content["updated_at"] = backupFormatTime(repo.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"repository", "backup-repository:" + repo.ID.String()},
 		{"repository_id", repo.ID.String()},
 		{"name", repo.Name},
@@ -116,7 +109,7 @@ func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool)
 
 // BackupDefinitionRegistryRecord builds canonical cp-state tags and content
 // for a backup definition mutation.
-func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) (nostr.Tags, string) {
+func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      def.ID.String(),
@@ -151,7 +144,7 @@ func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) 
 		content["created_by"] = def.CreatedBy
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"definition", "backup-definition:" + def.ID.String()},
 		{"definition_id", def.ID.String()},
 		{"name", def.Name},
@@ -161,14 +154,14 @@ func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) 
 		{"schedule_enabled", fmt.Sprintf("%t", def.ScheduleEnabled)},
 	}
 	if def.Group != "" {
-		tags = append(tags, nostr.Tag{"group", def.Group})
+		tags = append(tags, gonostr.Tag{"group", def.Group})
 	}
 	return tags, string(contentJSON)
 }
 
 // BackupRunStateRecord builds canonical cp-state tags and content for a
 // backup run state event published by the daemon.
-func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVerificationRecord) (nostr.Tags, string) {
+func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVerificationRecord) (gonostr.Tags, string) {
 	restoreEligible := domain.BackupRunRestoreEligible(run)
 	content := map[string]any{
 		"deleted":                     false,
@@ -216,7 +209,7 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 		}
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"run", run.ID.String()},
 		{"recipe_id", run.RecipeID.String()},
 		{"repository_id", run.RepositoryID.String()},
@@ -229,8 +222,8 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 	}
 	if run.PolicyID != nil {
 		tags = append(tags,
-			nostr.Tag{"policy", run.PolicyID.String()},
-			nostr.Tag{"policy_id", run.PolicyID.String()},
+			gonostr.Tag{"policy", run.PolicyID.String()},
+			gonostr.Tag{"policy_id", run.PolicyID.String()},
 		)
 	}
 	return tags, string(contentJSON)
@@ -238,7 +231,7 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 
 // BackupRestoreStateRecord builds canonical cp-state tags and content for a
 // backup restore state event published by the daemon.
-func BackupRestoreStateRecord(restore *domain.BackupRestoreRun) (nostr.Tags, string) {
+func BackupRestoreStateRecord(restore *domain.BackupRestoreRun) (gonostr.Tags, string) {
 	pendingApproval := restore.ApprovalStatus == domain.BackupApprovalPending
 	content := map[string]any{
 		"deleted":                     false,
@@ -278,7 +271,7 @@ func BackupRestoreStateRecord(restore *domain.BackupRestoreRun) (nostr.Tags, str
 		"updated_at":                  backupFormatTime(restore.UpdatedAt),
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"restore", restore.ID.String()},
 		{"restore_id", restore.ID.String()},
 		{"run", restore.BackupRunID.String()},
@@ -296,8 +289,8 @@ func BackupRestoreStateRecord(restore *domain.BackupRestoreRun) (nostr.Tags, str
 	}
 	if restore.PolicyID != nil {
 		tags = append(tags,
-			nostr.Tag{"policy", restore.PolicyID.String()},
-			nostr.Tag{"policy_id", restore.PolicyID.String()},
+			gonostr.Tag{"policy", restore.PolicyID.String()},
+			gonostr.Tag{"policy_id", restore.PolicyID.String()},
 		)
 	}
 	return tags, string(contentJSON)
@@ -305,7 +298,7 @@ func BackupRestoreStateRecord(restore *domain.BackupRestoreRun) (nostr.Tags, str
 
 // BackupVerificationStateRecord builds canonical cp-state tags and content
 // for a backup verification state event published by the daemon.
-func BackupVerificationStateRecord(record *domain.BackupVerificationRecord) (nostr.Tags, string) {
+func BackupVerificationStateRecord(record *domain.BackupVerificationRecord) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted":          false,
 		"id":               record.ID.String(),
@@ -322,7 +315,7 @@ func BackupVerificationStateRecord(record *domain.BackupVerificationRecord) (nos
 		"updated_at":       backupFormatTime(record.UpdatedAt),
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"run", record.BackupRunID.String()},
 		{"verification_id", record.ID.String()},
 		{"verification", string(record.Status)},
@@ -335,7 +328,7 @@ func BackupVerificationStateRecord(record *domain.BackupVerificationRecord) (nos
 
 // BackupRetentionStateRecord builds canonical cp-state tags and content
 // for a backup retention state event published by the daemon.
-func BackupRetentionStateRecord(run *domain.BackupRetentionRun) (nostr.Tags, string) {
+func BackupRetentionStateRecord(run *domain.BackupRetentionRun) (gonostr.Tags, string) {
 	content := map[string]any{
 		"deleted":          false,
 		"id":               run.ID.String(),
@@ -359,7 +352,7 @@ func BackupRetentionStateRecord(run *domain.BackupRetentionRun) (nostr.Tags, str
 		"updated_at":       backupFormatTime(run.UpdatedAt),
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := nostr.Tags{
+	tags := gonostr.Tags{
 		{"retention", run.ID.String()},
 		{"retention_run_id", run.ID.String()},
 		{"repository_id", run.RepositoryID.String()},
@@ -370,8 +363,8 @@ func BackupRetentionStateRecord(run *domain.BackupRetentionRun) (nostr.Tags, str
 	}
 	if run.PolicyID != nil {
 		tags = append(tags,
-			nostr.Tag{"policy", run.PolicyID.String()},
-			nostr.Tag{"policy_id", run.PolicyID.String()},
+			gonostr.Tag{"policy", run.PolicyID.String()},
+			gonostr.Tag{"policy_id", run.PolicyID.String()},
 		)
 	}
 	return tags, string(contentJSON)
@@ -418,9 +411,3 @@ func backupFormatTime(t time.Time) string {
 	}
 	return t.UTC().Format(time.RFC3339)
 }
-
-// Ensure BackupConfigPublishFunc is usable (compile-time reference).
-var _ BackupConfigPublishFunc = nil
-
-// Ensure context is used (the BackupConfigPublishFunc type references it).
-var _ context.Context

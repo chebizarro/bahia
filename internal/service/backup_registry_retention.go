@@ -178,6 +178,7 @@ func (s *BackupRegistryService) publishRetentionChanged(ctx context.Context, run
 				s.logger.Warn("canonical backup retention publish failed", zap.String("retention_run_id", run.ID.String()), zap.Error(err))
 			}
 		}
+		s.notify()
 	}
 }
 

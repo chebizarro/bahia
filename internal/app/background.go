@@ -422,6 +422,7 @@ const defaultBackupSchedulerInterval = 5 * time.Minute
 type BackupSchedulerRunner struct {
 	scheduler BackupScheduleProcessor
 	interval  time.Duration
+	triggerCh chan struct{}
 	logger    *zap.Logger
 }
 
@@ -432,7 +433,7 @@ func NewBackupSchedulerRunner(scheduler BackupScheduleProcessor, interval time.D
 	if interval <= 0 {
 		interval = defaultBackupSchedulerInterval
 	}
-	return &BackupSchedulerRunner{scheduler: scheduler, interval: interval, logger: logger}
+	return &BackupSchedulerRunner{scheduler: scheduler, interval: interval, triggerCh: make(chan struct{}, 1), logger: logger}
 }
 
 func (r *BackupSchedulerRunner) Name() string { return "backup-scheduler" }
@@ -462,6 +463,15 @@ func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-r.triggerCh:
+			// Definition or schedule changed — recompute immediately.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(r.nextDueInterval(ctx))
 		case <-timer.C:
 			result, err := r.scheduler.ProcessDueSchedules(ctx)
 			if err != nil {
@@ -483,6 +493,16 @@ func (r *BackupSchedulerRunner) Run(ctx context.Context) error {
 // nextDueInterval computes how long to wait before the next schedule evaluation.
 // Uses the earliest next-due time from the scheduler; falls back to the
 // configured interval when no schedules are due.
+// Trigger wakes the scheduler runner to recompute the next-due timer. Called
+// when a backup definition or schedule changes so the runner picks up the
+// new schedule immediately.
+func (r *BackupSchedulerRunner) Trigger() {
+	select {
+	case r.triggerCh <- struct{}{}:
+	default:
+	}
+}
+
 func (r *BackupSchedulerRunner) nextDueInterval(ctx context.Context) time.Duration {
 	next, err := r.scheduler.NextDueTime(ctx)
 	if err != nil || next == nil {

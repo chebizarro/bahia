@@ -28,6 +28,7 @@ type BackupRestoreQueueRepository interface {
 	repository.BackupOperationCheckpointRepository
 	ClaimNextQueuedBackupRestore(ctx context.Context) (*domain.BackupRestoreRun, error)
 	RequeueStaleBackupRestores(ctx context.Context, olderThan time.Duration) (int, error)
+	NextStaleBackupRestoreDeadline(ctx context.Context, staleTimeout time.Duration) (*time.Time, error)
 }
 
 // BackupRestoreCoordinatorConfig controls durable restore recovery.
@@ -141,8 +142,8 @@ func (c *BackupRestoreCoordinator) Run(ctx context.Context) error {
 		return err
 	}
 	c.runRecoveryOnce(ctx)
-	//nostr:allow-poll stale-lease recovery timer fires at computed interval, not fixed 30s
-	timer := time.NewTimer(c.config.RecoveryPollInterval)
+	//nostr:allow-poll stale-lease recovery timer fires at computed stale-lease deadline
+	timer := time.NewTimer(c.nextStaleInterval(ctx))
 	defer timer.Stop()
 	for {
 		select {
@@ -156,21 +157,39 @@ func (c *BackupRestoreCoordinator) Run(ctx context.Context) error {
 				default:
 				}
 			}
-			timer.Reset(c.config.RecoveryPollInterval)
+			timer.Reset(c.nextStaleInterval(ctx))
 		case <-timer.C:
 			c.runRecoveryOnce(ctx)
-			timer.Reset(c.config.RecoveryPollInterval)
+			timer.Reset(c.nextStaleInterval(ctx))
 		}
 	}
 }
 
 // Trigger wakes the coordinator to process new work without waiting for the
-// stale-recovery timer.
+// stale-recovery timer. Called by the registry notifier hook.
 func (c *BackupRestoreCoordinator) Trigger() {
 	select {
 	case c.triggerCh <- struct{}{}:
 	default:
 	}
+}
+
+// nextStaleInterval computes how long to wait before the next stale-lease
+// recovery check using the genuine stale-lease deadline.
+func (c *BackupRestoreCoordinator) nextStaleInterval(ctx context.Context) time.Duration {
+	if c.queue != nil {
+		deadline, err := c.queue.NextStaleBackupRestoreDeadline(ctx, c.config.StaleRunTimeout)
+		if err == nil && deadline != nil {
+			d := time.Until(*deadline)
+			if d <= 0 {
+				return time.Second
+			}
+			if d < c.config.RecoveryPollInterval {
+				return d
+			}
+		}
+	}
+	return c.config.RecoveryPollInterval
 }
 
 func (c *BackupRestoreCoordinator) runRecoveryOnce(ctx context.Context) {
