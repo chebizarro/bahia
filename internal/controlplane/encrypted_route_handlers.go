@@ -96,6 +96,7 @@ type EncryptedRouteHandlersConfig struct {
 	Registry        RegistryMutationBackend
 	DeploymentUnits readmodel.EnvironmentDeploymentUnitReader
 	RBAC            *auth.RBAC
+	IntentProcessor *IntentProcessor
 	Logger          *zap.Logger
 }
 
@@ -112,6 +113,7 @@ type EncryptedRouteHandlers struct {
 	registry        RegistryMutationBackend
 	deploymentUnits readmodel.EnvironmentDeploymentUnitReader
 	rbac            *auth.RBAC
+	intentProcessor *IntentProcessor
 	logger          *zap.Logger
 }
 
@@ -136,6 +138,7 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		registry:        cfg.Registry,
 		deploymentUnits: cfg.DeploymentUnits,
 		rbac:            cfg.RBAC,
+		intentProcessor: cfg.IntentProcessor,
 		logger:          logger.Named("encrypted-route-handlers"),
 	}
 }
@@ -581,6 +584,114 @@ func effectiveIdempotencyKey(request ContextVMRequest, compatibilityKey string) 
 	return strings.TrimSpace(compatibilityKey)
 }
 
+// environmentDualDispatch routes an environment mutation through the intent
+// processor when the environment domain is enabled. The ContextVM authorization
+// has already been checked by the caller. Returns (result, true, nil) if
+// dual dispatch handled the request, or (nil, false, nil) to fall through to
+// the legacy path.
+func (h *EncryptedRouteHandlers) environmentDualDispatch(ctx context.Context, request ContextVMRequest, op string, envID uuid.UUID, orgID uuid.UUID, content map[string]interface{}) error {
+	if h.intentProcessor == nil {
+		return nil
+	}
+	if h.intentProcessor.Handler("environment") == nil {
+		return nil
+	}
+	intent := &Intent{
+		Domain:     "environment",
+		Op:         op,
+		OrgID:      orgID,
+		IntentID:   effectiveIdempotencyKey(request, envID.String()),
+		Coordinate: envID.String(),
+		Content:    content,
+		Actor:      request.Event.PubKey.Hex(),
+	}
+	// Check for expected_updated_at in content.
+	if raw, ok := content["expected_updated_at"]; ok {
+		switch v := raw.(type) {
+		case float64:
+			ts := int64(v)
+			intent.ExpectedUpdatedAt = &ts
+		case int64:
+			intent.ExpectedUpdatedAt = &v
+		}
+	}
+	return h.intentProcessor.ProcessInProcess(ctx, intent)
+}
+
+// buildEnvironmentIntentContent builds the intent content map from a parsed
+// domain.Environment and optional deployment units. Returns nil if the
+// environment domain is not enabled in the intent processor (legacy path).
+func (h *EncryptedRouteHandlers) buildEnvironmentIntentContent(env *domain.Environment, units []*domain.DeploymentUnit) map[string]interface{} {
+	if h.intentProcessor == nil || h.intentProcessor.Handler("environment") == nil {
+		return nil
+	}
+	content := map[string]interface{}{
+		"id":              env.ID.String(),
+		"name":            env.Name,
+		"deploy_strategy": string(env.DeployStrategy),
+		"protected":       env.Protected,
+	}
+	if env.OrgID != uuid.Nil {
+		content["org_id"] = env.OrgID.String()
+	}
+	if env.LoomWorkerSelector != nil {
+		content["loom_worker_selector"] = env.LoomWorkerSelector
+	}
+	if env.RuntimeConfig != nil {
+		content["runtime_config"] = env.RuntimeConfig
+	}
+	content["targeting"] = map[string]interface{}{
+		"default_unit_key":       env.Targeting.DefaultUnitKey,
+		"failure_domain_labels":  env.Targeting.FailureDomainLabels,
+		"secret_scope_mode":      string(env.Targeting.SecretScopeMode),
+		"default_reconcile_mode": string(env.Targeting.DefaultReconcileMode),
+	}
+	if units != nil {
+		unitMaps := make([]map[string]interface{}, 0, len(units))
+		for _, u := range units {
+			um := map[string]interface{}{
+				"key":          u.Key,
+				"runtime_type": string(u.RuntimeType),
+			}
+			if u.DisplayName != "" {
+				um["display_name"] = u.DisplayName
+			}
+			if u.EndpointRef != "" {
+				um["endpoint_ref"] = u.EndpointRef
+			}
+			if u.ComposeDir != "" {
+				um["compose_dir"] = u.ComposeDir
+			}
+			if u.Namespace != "" {
+				um["namespace"] = u.Namespace
+			}
+			if len(u.NetworkProfile) > 0 {
+				um["network_profile"] = u.NetworkProfile
+			}
+			if u.GitSource != nil {
+				um["git_source"] = map[string]interface{}{
+					"repository_url": u.GitSource.RepositoryURL,
+					"ref":            u.GitSource.Ref,
+					"branch":         u.GitSource.Branch,
+					"commit_sha":     u.GitSource.CommitSHA,
+				}
+			}
+			if string(u.ReconcileMode) != "" {
+				um["reconcile_mode"] = string(u.ReconcileMode)
+			}
+			if string(u.OwnershipMode) != "" {
+				um["ownership_mode"] = string(u.OwnershipMode)
+			}
+			if len(u.RuntimeConfig) > 0 {
+				um["runtime_config"] = u.RuntimeConfig
+			}
+			unitMaps = append(unitMaps, um)
+		}
+		content["deployment_units"] = unitMaps
+	}
+	return content
+}
+
 func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("environment registry mutation handling is not configured")
@@ -634,6 +745,13 @@ func (h *EncryptedRouteHandlers) CreateEnvironment(ctx context.Context, request 
 	}
 	if err := h.authorizeEnvironmentOrg(ctx, request, env.OrgID); err != nil {
 		return nil, err
+	}
+	// Phase 3 F3 dual dispatch: route through intent processor when enabled.
+	if ddContent := h.buildEnvironmentIntentContent(env, units); ddContent != nil {
+		if err := h.environmentDualDispatch(ctx, request, "create", env.ID, env.OrgID, ddContent); err != nil {
+			return nil, fmt.Errorf("failed to create environment: %w", err)
+		}
+		return map[string]any{"status": "created", "environment": env, "environment_id": env.ID.String(), "deployment_units": units}, nil
 	}
 	if payload.DeploymentUnits != nil {
 		if err := h.registry.CreateEnvironmentWithDeploymentUnits(ctx, env, units); err != nil {
@@ -735,6 +853,16 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 	if err != nil {
 		return nil, err
 	}
+	// Phase 3 F3 dual dispatch: route through intent processor when enabled.
+	if ddContent := h.buildEnvironmentIntentContent(env, units); ddContent != nil {
+		if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
+			ddContent["expected_updated_at"] = payload.ExpectedUpdatedAt.UnixMicro()
+		}
+		if err := h.environmentDualDispatch(ctx, request, "update", env.ID, env.OrgID, ddContent); err != nil {
+			return nil, fmt.Errorf("failed to update environment: %w", err)
+		}
+		return map[string]any{"status": "updated", "environment": env, "environment_id": env.ID.String(), "deployment_units": units}, nil
+	}
 	if payload.DeploymentUnits != nil {
 		if payload.ExpectedUpdatedAt == nil || payload.ExpectedUpdatedAt.IsZero() {
 			return nil, fmt.Errorf("expected_updated_at is required when deployment_units is supplied")
@@ -761,8 +889,25 @@ func (h *EncryptedRouteHandlers) DeleteEnvironment(ctx context.Context, request 
 		return nil, err
 	}
 	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
-	if _, err := authorizer.authorizeEnvironment(ctx, request.Event, id, domain.PermWriteEnvironments); err != nil {
+	env, err := authorizer.authorizeEnvironment(ctx, request.Event, id, domain.PermWriteEnvironments)
+	if err != nil {
 		return nil, err
+	}
+	// Phase 3 F3 dual dispatch: route through intent processor when enabled.
+	if h.intentProcessor != nil && h.intentProcessor.Handler("environment") != nil {
+		orgID := uuid.Nil
+		if env != nil {
+			orgID = env.OrgID
+		}
+		ddContent := map[string]interface{}{
+			"id":      id.String(),
+			"deleted": true,
+			"force":   payload.Force,
+		}
+		if err := h.environmentDualDispatch(ctx, request, "delete", id, orgID, ddContent); err != nil {
+			return nil, fmt.Errorf("failed to delete environment: %w", err)
+		}
+		return map[string]any{"status": "deleted", "environment_id": id.String()}, nil
 	}
 	if err := h.registry.DeleteEnvironment(ctx, id, payload.Force); err != nil {
 		return nil, fmt.Errorf("failed to delete environment: %w", err)

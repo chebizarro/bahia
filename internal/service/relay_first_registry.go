@@ -383,3 +383,17 @@ func (r *RelayFirstRegistry) ListDriftedStates(ctx context.Context) ([]domain.En
 func (r *RelayFirstRegistry) ListAllStates(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.delegate.ListAllStates(ctx)
 }
+
+// EnvironmentIntentRegistry is the contract the environment intent handler
+// uses for environment CRUD. Both RegistryService and RelayFirstRegistry
+// satisfy it. The handler uses PublishBeforeCommit through the relay-first
+// registry path, so the canonical 30900 is published exactly once per
+// mutation.
+type EnvironmentIntentRegistry interface {
+	CreateEnvironment(ctx context.Context, env *domain.Environment) error
+	CreateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit) error
+	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
+	UpdateEnvironment(ctx context.Context, env *domain.Environment) error
+	UpdateEnvironmentWithDeploymentUnits(ctx context.Context, env *domain.Environment, units []*domain.DeploymentUnit, expectedUpdatedAt time.Time) error
+	DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error
+}
