@@ -788,11 +788,14 @@ func TestProjectorPublishesLLMAuditFromRunEvent(t *testing.T) {
 
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
-	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunStatusChanged, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
+	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunCompleted, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
 	// Phase 3 L1: projector still publishes audit events for LLM, but no longer
 	// publishes LLM state (that is now done by the LLM registry service directly).
-	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunStatusChanged)
+	// Phase 3 X1 B-16: EventLLMDeploymentRunStatusChanged removed from audit
+	// (observation/state-changed); EventLLMDeploymentRunCompleted is the
+	// discrete mutation boundary event.
+	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunCompleted)
 	assertTag(t, audit, "run", runID.String())
 }
 
@@ -841,26 +844,25 @@ func (s *fakeDNSPolicyProjectionSource) ListEnabledDNSPolicies(context.Context) 
 	return out, nil
 }
 
+// TestProjectorPublishesDNSAuditEvents verifies that DNS endpoint
+// registered/deregistered events produce audit facts, while DNS sync/drift
+// events do not (B-16: observation/sync events removed from audit set).
 func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
+	// DNS sync/drift events should produce zero audit facts (B-16).
 	projector.handleEvent(ctx, events.Event{Type: eventDNSZoneSynced, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSRecordChanged, EntityID: "api.prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "fqdn": "api.prod.cascadia", "record_type": "A", "operation": "add"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSDriftDetected, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
+	if got := len(auditEvents(sink)); got != 0 {
+		t.Fatalf("audit facts after DNS sync/drift events = %d, want 0 (B-16)", got)
+	}
+
+	// DNS endpoint registered/deregistered are discrete mutations and produce audit facts.
 	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointRegistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointDeregistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
-
-	zoneSynced := assertOneAudit(t, sink, eventDNSZoneSynced)
-	assertTag(t, zoneSynced, "event_type", "dns.zone_synced")
-	assertTag(t, zoneSynced, "zone", "prod.cascadia")
-	assertTag(t, zoneSynced, "backend", "fs-primary")
-	recordChanged := assertOneAudit(t, sink, eventDNSRecordChanged)
-	assertTag(t, recordChanged, "fqdn", "api.prod.cascadia")
-	assertTag(t, recordChanged, "record_type", "A")
-	assertTag(t, recordChanged, "operation", "add")
-	assertOneAudit(t, sink, eventDNSDriftDetected)
 	assertOneAudit(t, sink, eventDNSEndpointRegistered)
 	assertOneAudit(t, sink, eventDNSEndpointDeregistered)
 }

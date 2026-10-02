@@ -152,18 +152,11 @@ func auditFactID(t events.EventType, entityID string, content []byte) string {
 // id, which is the d of the entity's registry record.
 func auditStateCoordinate(e events.Event, res events.ResourceData) string {
 	switch e.Type {
-	case events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
-		events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
+	case events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
 		serviceID, serviceOK := parseUUID(res.ServiceID)
 		envID, envOK := parseUUID(res.EnvironmentID)
 		if serviceOK && envOK {
 			return serviceStateDTag(serviceID, envID)
-		}
-	case events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected:
-		routeID, routeOK := parseUUID(res.RouteID)
-		envID, envOK := parseUUID(res.EnvironmentID)
-		if routeOK && envOK {
-			return fmt.Sprintf("%s:%s", routeID, envID)
 		}
 	}
 	return strings.TrimSpace(e.EntityID)
@@ -189,23 +182,22 @@ func isHexEventID(id string) bool {
 }
 
 // isAuditedEvent reports whether the projector records e as an audit fact.
+// isAuditedEvent returns true for operator-meaningful, discrete mutations.
+// Phase 3 X1 B-16: observation/sync/state-changed/drift events removed.
+// Their state is already published as replaceable cp-state by the
+// mutation-site publishers; auditing them produced ~1 440 noise events/day.
 func isAuditedEvent(t events.EventType) bool {
 	switch t {
 	case events.EventBuildRegistered, events.EventArtifactRegistered,
 		events.EventDeploymentIntentCreated, events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected,
-		events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted,
-		events.EventDriftDetected, events.EventRuntimeObservation,
+		events.EventDeploymentRunCreated, events.EventDeploymentRunCompleted,
 		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
-		events.EventEnvironmentServiceStateChanged,
 		events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop,
-		// Phase 3 S1: EventReconcileCompleted removed (B-16).
 		events.EventAdoptionImported,
 		events.EventLLMRouteCreated, events.EventLLMRouteUpdated, events.EventLLMReleaseRegistered,
 		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
-		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted,
-		events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected,
-		events.EventLLMGatewayRouteSynced,
-		eventDNSZoneSynced, eventDNSRecordChanged, eventDNSDriftDetected, eventDNSEndpointRegistered, eventDNSEndpointDeregistered:
+		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunCompleted,
+		eventDNSEndpointRegistered, eventDNSEndpointDeregistered:
 		return true
 	default:
 		return false

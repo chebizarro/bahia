@@ -262,12 +262,13 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		// Phase 3 S2/W1: deployment run event subscriptions removed — their
 		// cp-state is published directly from RegistryService (S2), and worker
 		// read models are published from the run mutation site (W1, bahia-irsry.11.14).
+		// Observed-deployments side effect only (no audit). Their cp-state is
+		// published by the mutation-site publishers; the observed-deployments
+		// announcement is a coalesced aggregate refreshed on change (B-16).
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
-		// Phase 3 S1: EventReconcileCompleted removed — reconciler publishes state
-		// directly; DNS/observed-deployments refresh is driven by
-		// EventEnvironmentServiceStateChanged (B-16, B-17 partial).
+		// Operator-meaningful discrete mutations (audited).
 		events.EventAdoptionImported,
 		events.EventRuntimeDeploy,
 		events.EventRuntimeRestart,
@@ -279,15 +280,14 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMDeploymentIntentApproved,
 		events.EventLLMDeploymentIntentRejected,
 		events.EventLLMDeploymentRunCreated,
-		events.EventLLMDeploymentRunStatusChanged,
 		events.EventLLMDeploymentRunCompleted,
-		events.EventLLMRouteObservation,
-		events.EventLLMRouteStateChanged,
-		events.EventLLMRouteDriftDetected,
-		events.EventLLMGatewayRouteSynced,
-		eventDNSZoneSynced,
-		eventDNSRecordChanged,
-		eventDNSDriftDetected,
+		// Phase 3 X1 B-16: observation/sync/state-changed/drift events removed.
+		// EventLLMDeploymentRunStatusChanged, EventLLMRouteObservation,
+		// EventLLMRouteStateChanged, EventLLMRouteDriftDetected,
+		// EventLLMGatewayRouteSynced, eventDNSZoneSynced, eventDNSRecordChanged,
+		// eventDNSDriftDetected: their state is already published as replaceable
+		// cp-state by mutation-site publishers. DNS endpoint registered/deregistered
+		// are discrete mutations and remain.
 		eventDNSEndpointRegistered,
 		eventDNSEndpointDeregistered,
 	} {
@@ -1134,8 +1134,7 @@ func isLLMEvent(t events.EventType) bool {
 	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated,
 		events.EventLLMReleaseRegistered,
 		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
-		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted,
-		events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected, events.EventLLMGatewayRouteSynced:
+		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunCompleted:
 		return true
 	default:
 		return false
