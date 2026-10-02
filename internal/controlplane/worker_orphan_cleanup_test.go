@@ -2,20 +2,28 @@ package controlplane
 
 import (
 	"context"
+	"iter"
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 type orphanCleanupTestRelay struct {
-	events    []*nostr.Event
+	events    []nostr.Event
 	published []nostr.Event
 }
 
-func (r *orphanCleanupTestRelay) QuerySync(_ context.Context, _ nostr.Filter) ([]*nostr.Event, error) {
-	return r.events, nil
+func (r *orphanCleanupTestRelay) QueryEvents(_ nostr.Filter) iter.Seq[nostr.Event] {
+	return func(yield func(nostr.Event) bool) {
+		for _, ev := range r.events {
+			if !yield(ev) {
+				return
+			}
+		}
+	}
 }
 
 func (r *orphanCleanupTestRelay) Publish(_ context.Context, event nostr.Event) error {
@@ -23,14 +31,24 @@ func (r *orphanCleanupTestRelay) Publish(_ context.Context, event nostr.Event) e
 	return nil
 }
 
+func newCleanupTestSigner(t *testing.T) nostr.Signer {
+	t.Helper()
+	sk := nostr.Generate()
+	return keyer.NewPlainKeySigner(sk)
+}
+
 func TestWorkerOrphanCleanupDryRun(t *testing.T) {
 	ctx := context.Background()
-	sk := nostr.Generate()
+	signer := newCleanupTestSigner(t)
+	pk, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	orphanedPubkey := "deadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
-	orphanedEvent := &nostr.Event{
+	orphanedEvent := nostr.Event{
 		ID: nostr.ID{0x01}, Kind: nostr.Kind(kinds.CASControlState),
-		PubKey: sk.Public(), CreatedAt: nostr.Now(),
+		PubKey: pk, CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", orphanedPubkey},
 			{"domain", kinds.WorkerDomain},
@@ -40,9 +58,9 @@ func TestWorkerOrphanCleanupDryRun(t *testing.T) {
 		Content: `{"scheduling_state":"active"}`,
 	}
 
-	validEvent := &nostr.Event{
+	validEvent := nostr.Event{
 		ID: nostr.ID{0x02}, Kind: nostr.Kind(kinds.CASControlState),
-		PubKey: sk.Public(), CreatedAt: nostr.Now(),
+		PubKey: pk, CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", "worker:state:" + orphanedPubkey},
 			{"domain", kinds.WorkerDomain},
@@ -54,9 +72,9 @@ func TestWorkerOrphanCleanupDryRun(t *testing.T) {
 	}
 
 	// Non-worker record should be ignored.
-	nonWorkerEvent := &nostr.Event{
+	nonWorkerEvent := nostr.Event{
 		ID: nostr.ID{0x03}, Kind: nostr.Kind(kinds.CASControlState),
-		PubKey: sk.Public(), CreatedAt: nostr.Now(),
+		PubKey: pk, CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", "some-service-id"},
 			{"domain", "controlplane"},
@@ -66,9 +84,9 @@ func TestWorkerOrphanCleanupDryRun(t *testing.T) {
 		Content: `{}`,
 	}
 
-	relay := &orphanCleanupTestRelay{events: []*nostr.Event{orphanedEvent, validEvent, nonWorkerEvent}}
+	relay := &orphanCleanupTestRelay{events: []nostr.Event{orphanedEvent, validEvent, nonWorkerEvent}}
 
-	results, err := cleanupOrphanedWorkerRecords(ctx, relay, sk, true)
+	results, err := CleanupOrphanedWorkerRecords(ctx, relay, signer, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +106,16 @@ func TestWorkerOrphanCleanupDryRun(t *testing.T) {
 
 func TestWorkerOrphanCleanupLiveRun(t *testing.T) {
 	ctx := context.Background()
-	sk := nostr.Generate()
+	signer := newCleanupTestSigner(t)
+	pk, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	orphanedPubkey := "deadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
-	orphanedEvent := &nostr.Event{
+	orphanedEvent := nostr.Event{
 		ID: nostr.ID{0x01}, Kind: nostr.Kind(kinds.CASControlState),
-		PubKey: sk.Public(), CreatedAt: nostr.Now(),
+		PubKey: pk, CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", orphanedPubkey},
 			{"domain", kinds.WorkerDomain},
@@ -102,9 +124,9 @@ func TestWorkerOrphanCleanupLiveRun(t *testing.T) {
 		Content: `{}`,
 	}
 
-	relay := &orphanCleanupTestRelay{events: []*nostr.Event{orphanedEvent}}
+	relay := &orphanCleanupTestRelay{events: []nostr.Event{orphanedEvent}}
 
-	results, err := cleanupOrphanedWorkerRecords(ctx, relay, sk, false)
+	results, err := CleanupOrphanedWorkerRecords(ctx, relay, signer, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +150,15 @@ func TestWorkerOrphanCleanupLiveRun(t *testing.T) {
 
 func TestWorkerOrphanCleanupNoOrphans(t *testing.T) {
 	ctx := context.Background()
-	sk := nostr.Generate()
+	signer := newCleanupTestSigner(t)
+	pk, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	validEvent := &nostr.Event{
+	validEvent := nostr.Event{
 		ID: nostr.ID{0x01}, Kind: nostr.Kind(kinds.CASControlState),
-		PubKey: sk.Public(), CreatedAt: nostr.Now(),
+		PubKey: pk, CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", "worker:state:somepubkey"},
 			{"domain", kinds.WorkerDomain},
@@ -141,12 +167,20 @@ func TestWorkerOrphanCleanupNoOrphans(t *testing.T) {
 		},
 	}
 
-	relay := &orphanCleanupTestRelay{events: []*nostr.Event{validEvent}}
-	results, err := cleanupOrphanedWorkerRecords(ctx, relay, sk, true)
+	relay := &orphanCleanupTestRelay{events: []nostr.Event{validEvent}}
+	results, err := CleanupOrphanedWorkerRecords(ctx, relay, signer, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 0 {
 		t.Fatalf("expected 0 orphans, got %d", len(results))
+	}
+}
+
+func TestWorkerOrphanCleanupNilSignerReturnsError(t *testing.T) {
+	relay := &orphanCleanupTestRelay{}
+	_, err := CleanupOrphanedWorkerRecords(context.Background(), relay, nil, true)
+	if err == nil {
+		t.Fatal("expected error for nil signer")
 	}
 }

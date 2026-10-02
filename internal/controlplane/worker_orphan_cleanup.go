@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strings"
 
 	"fiatjaf.com/nostr"
@@ -10,9 +11,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// workerOrphanCleanupResult describes the outcome of a single orphaned worker
+// WorkerOrphanCleanupResult describes the outcome of a single orphaned worker
 // record deletion.
-type workerOrphanCleanupResult struct {
+type WorkerOrphanCleanupResult struct {
 	// DTag is the bare-pubkey d tag of the orphaned 30900 record.
 	DTag string
 	// EventID is the id of the orphaned event.
@@ -21,35 +22,41 @@ type workerOrphanCleanupResult struct {
 	DeletionID string
 }
 
-// workerOrphanRelay abstracts the relay operations the cleanup needs.
-type workerOrphanRelay interface {
-	QuerySync(ctx context.Context, filter nostr.Filter) ([]*nostr.Event, error)
+// WorkerOrphanRelay abstracts the relay operations the cleanup needs.
+type WorkerOrphanRelay interface {
+	QueryEvents(filter nostr.Filter) iter.Seq[nostr.Event]
 	Publish(ctx context.Context, event nostr.Event) error
 }
 
-// cleanupOrphanedWorkerRecords finds 30900 worker records published by
-// daemonPubkey that carry a bare-pubkey d tag (no "worker:" prefix) and
-// publishes NIP-09 kind-5 deletions for them on the relay.
+// CleanupOrphanedWorkerRecords finds 30900 worker records published by
+// the signer's public key that carry a bare-pubkey d tag (no "worker:" prefix)
+// and publishes NIP-09 kind-5 deletions for them on the relay.
+//
+// The signer must be the service identity that originally authored the records;
+// NIP-09 deletions only take effect when signed by the original author.
 //
 // When dryRun is true, the orphans are identified but no deletions are
 // published. The function returns one result per orphaned record found.
-func cleanupOrphanedWorkerRecords(ctx context.Context, relay workerOrphanRelay, secretKey nostr.SecretKey, dryRun bool) ([]workerOrphanCleanupResult, error) {
-	daemonPubkey := secretKey.Public()
+func CleanupOrphanedWorkerRecords(ctx context.Context, relay WorkerOrphanRelay, signer nostr.Signer, dryRun bool) ([]WorkerOrphanCleanupResult, error) {
+	if signer == nil {
+		return nil, fmt.Errorf("signer is required: NIP-09 deletions must be signed by the original author (the service identity)")
+	}
+	daemonPubkey, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get signer public key: %w", err)
+	}
+
 	// Fetch all 30900 events authored by the daemon. We cannot assume the
 	// relay indexes multi-letter tags, so we query by kind+author and filter
-	// locally for worker-domain records.
+	// locally for worker-domain records with bare-pubkey d tags.
 	filter := nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 		Authors: []nostr.PubKey{daemonPubkey},
 		Limit:   1000,
 	}
-	events, err := relay.QuerySync(ctx, filter)
-	if err != nil {
-		return nil, fmt.Errorf("query 30900 records: %w", err)
-	}
 
-	var results []workerOrphanCleanupResult
-	for _, ev := range events {
+	var results []WorkerOrphanCleanupResult
+	for ev := range relay.QueryEvents(filter) {
 		dTag := workerOrphanTagValue(ev.Tags, "d")
 		if dTag == "" {
 			continue
@@ -62,7 +69,7 @@ func cleanupOrphanedWorkerRecords(ctx context.Context, relay workerOrphanRelay, 
 		if strings.HasPrefix(dTag, "worker:") {
 			continue
 		}
-		result := workerOrphanCleanupResult{
+		result := WorkerOrphanCleanupResult{
 			DTag:    dTag,
 			EventID: ev.ID.Hex(),
 		}
@@ -72,7 +79,7 @@ func cleanupOrphanedWorkerRecords(ctx context.Context, relay workerOrphanRelay, 
 				Kind: nostr.KindDeletion,
 				Tags: nostr.Tags{{"a", address}},
 			}
-			if err := deletion.Sign(secretKey); err != nil {
+			if err := signer.SignEvent(ctx, &deletion); err != nil {
 				return results, fmt.Errorf("sign deletion for d=%s: %w", dTag, err)
 			}
 			if err := relay.Publish(ctx, deletion); err != nil {

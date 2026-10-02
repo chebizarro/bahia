@@ -1001,7 +1001,7 @@ func workersCommands() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(listCmd, showCmd)
+	cmd.AddCommand(listCmd, showCmd, workersCleanupOrphansCommand())
 	return cmd
 }
 
