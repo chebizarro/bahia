@@ -585,6 +585,10 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindBackupVerificationState:       {"backup", "verification", kinds.CPStateTopicBackupVerification},
 	KindBackupRestoreState:            {"backup", "restore", kinds.CPStateTopicBackupRestore},
 	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
+	// Org cp-state families (Phase 3 Wave 5 O1).
+	KindOrgRegistry:       {"org", "registry", kinds.CPStateTopicOrgRegistry},
+	KindOrgMemberRegistry: {"org", "member", kinds.CPStateTopicOrgMemberRegistry},
+	KindOrgInviteRegistry: {"org", "invite", kinds.CPStateTopicOrgInviteRegistry},
 }
 
 func canonicalStateDomain(kind int) (domainName string, entity string) {

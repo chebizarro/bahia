@@ -56,6 +56,18 @@ type FleetScopedHandler interface {
 	IsFleetScoped() bool
 }
 
+// SelfAuthorizingHandler is an optional interface that DomainHandler
+// implementations may satisfy when the default per-org RBAC or fleet-scoped
+// authorization is insufficient. The org domain needs this because org-create
+// uses fleet-ops/bootstrap-owner auth while member/invite operations use
+// per-org RBAC (design §2.2, §7 Wave 5 O1).
+//
+// When the intent processor detects that a handler implements this interface,
+// it delegates authorization to AuthorizeIntent instead of the default
+// TrustSet.HasPermission or FleetOps check.
+type SelfAuthorizingHandler interface {
+	AuthorizeIntent(ctx context.Context, trustSet *TrustSet, intent *Intent) error
+}
 
 // Intent is the parsed, validated representation of a kind-30900 intent event.
 type Intent struct {
@@ -197,34 +209,52 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 	}
 
 	// Step 3: Authorize.
-	perm := handler.PermissionFor(intent.Op)
-	authorized := false
-	if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
-		// Fleet-scoped domain: check fleet operator identity instead of
-		// per-org RBAC. Fleet operators are NOT org members (§2.2).
-		authorized = p.isFleetOperator(intent.Actor)
-	} else {
-		authorized = p.trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, perm)
-	}
-	if !authorized {
-		if p.trustSet.IsKnownPrincipal(intent.Actor) {
-			// Known principal, insufficient permission → publish rejection.
-			p.logger.Info("rejecting intent from known principal lacking permission",
+	// SelfAuthorizingHandler: the handler does its own authorization (e.g. the
+	// org domain has per-operation auth: fleet-ops for org create, per-org RBAC
+	// for member/invite ops). See design §2.2, §7 Wave 5 O1.
+	if sa, ok := handler.(SelfAuthorizingHandler); ok {
+		if err := sa.AuthorizeIntent(ctx, p.trustSet, intent); err != nil {
+			p.logger.Info("self-authorizing handler rejected intent",
 				zap.String("actor", intent.Actor),
-				zap.String("permission", string(perm)),
+				zap.String("domain", intent.Domain),
 				zap.String("intent_id", intent.IntentID),
+				zap.Error(err),
 			)
 			if p.status != nil {
-				p.status.PublishRejection(ctx, intent, fmt.Sprintf("insufficient permission: %s", perm))
+				p.status.PublishRejection(ctx, intent, err.Error())
 			}
-			return fmt.Errorf("insufficient permission: %s", perm)
+			return err
 		}
-		// Unknown author → silent drop (§2.3).
-		p.logger.Debug("dropping intent from untrusted author",
-			zap.String("actor", intent.Actor),
-			zap.String("intent_id", intent.IntentID),
-		)
-		return nil
+	} else {
+		perm := handler.PermissionFor(intent.Op)
+		authorized := false
+		if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
+			// Fleet-scoped domain: check fleet operator identity instead of
+			// per-org RBAC. Fleet operators are NOT org members (§2.2).
+			authorized = p.isFleetOperator(intent.Actor)
+		} else {
+			authorized = p.trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, perm)
+		}
+		if !authorized {
+			if p.trustSet.IsKnownPrincipal(intent.Actor) {
+				// Known principal, insufficient permission → publish rejection.
+				p.logger.Info("rejecting intent from known principal lacking permission",
+					zap.String("actor", intent.Actor),
+					zap.String("permission", string(perm)),
+					zap.String("intent_id", intent.IntentID),
+				)
+				if p.status != nil {
+					p.status.PublishRejection(ctx, intent, fmt.Sprintf("insufficient permission: %s", perm))
+				}
+				return fmt.Errorf("insufficient permission: %s", perm)
+			}
+			// Unknown author → silent drop (§2.3).
+			p.logger.Debug("dropping intent from untrusted author",
+				zap.String("actor", intent.Actor),
+				zap.String("intent_id", intent.IntentID),
+			)
+			return nil
+		}
 	}
 
 	// Steps 4-5: Reconcile toward desired state (domain handler).
@@ -264,7 +294,6 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 	)
 	return nil
 }
-
 
 // isFleetOperator reports whether pubkey is a fleet operator.
 func (p *IntentProcessor) isFleetOperator(pubkey string) bool {

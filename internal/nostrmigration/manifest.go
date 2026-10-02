@@ -305,6 +305,9 @@ var constantJustifications = map[string]KindJustification{
 	"LegacyWorkerAssignmentState":    omitted("LegacyWorkerAssignmentState", kinds.LegacyWorkerAssignmentState, "conflicting-alias", "shares 31991 with BackupDefinitionRegistry; ResolveDisposition maps worker assignment events to worker state"),
 	"LegacyWorkerDrainStatus":        omitted("LegacyWorkerDrainStatus", kinds.LegacyWorkerDrainStatus, "conflicting-alias", "shares 31992 with BackupPolicyRegistry; ResolveDisposition maps worker drain events to worker state"),
 	"LegacyWorkerEligibilityPreview": omitted("LegacyWorkerEligibilityPreview", kinds.LegacyWorkerEligibilityPreview, "conflicting-alias", "shares 31993 with BackupRepositoryRegistry; ResolveDisposition maps worker eligibility events to worker state"),
+	"OrgRegistry":                    omitted("OrgRegistry", kinds.OrgRegistry, "cp-state-family", "canonical cp-state output for org registry; not a legacy migration input"),
+	"OrgMemberRegistry":              omitted("OrgMemberRegistry", kinds.OrgMemberRegistry, "cp-state-family", "canonical cp-state output for org member registry; not a legacy migration input"),
+	"OrgInviteRegistry":              omitted("OrgInviteRegistry", kinds.OrgInviteRegistry, "cp-state-family", "canonical cp-state output for org invite registry; not a legacy migration input"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

@@ -139,6 +139,8 @@
 1	internal/api/handlers.LLMHandler.RegisterHost
 1	internal/api/handlers.NewLogHandler
 1	internal/api/handlers.TenantHandler.AcceptInvite
+1	internal/api/handlers.TenantHandler.CreateOrg
+1	internal/api/handlers.TenantHandler.UpdateOrg
 1	internal/api/middleware.ParseStatusBucket
 1	internal/api/middleware.RequireOperator
 1	internal/api/middleware.RequireRole
@@ -230,7 +232,6 @@
 1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
 1	internal/controlplane.TrustSet.RoleFor
-1	internal/controlplane.TrustSet.SetRelayMembers
 1	internal/controlplane.WithBackupDefinitionRegistry
 1	internal/controlplane.WithBackupRepositoryProbeExecutor
 1	internal/controlplane.WithBackupVerificationExecutor

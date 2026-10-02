@@ -1085,6 +1085,7 @@ func New(cfg *config.Config) (*App, error) {
 	warmStartDomains := append(append([]string(nil), cfg.Nostr.IntentDomains...),
 		"build", "artifact", "deployment", // S2: authoritative projection (bahia-irsry.11.7)
 		"backup", // B1: authority inversion (bahia-irsry.11.11)
+		"org",    // O1: org authority inversion (bahia-irsry.11.15)
 	)
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
@@ -1373,6 +1374,43 @@ func New(cfg *config.Config) (*App, error) {
 			},
 		))
 		logger.Info("package intent handler registered")
+	}
+
+	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
+	// The handler processes org/member/invite intents and publishes canonical
+	// cp-state through the OrgCanonicalPublisher.
+	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
+		orgCanonicalPub := nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, logger)
+		orgHandler := controlplane.NewOrgIntentHandler(controlplane.OrgIntentHandlerConfig{
+			Orgs:      orgRepo,
+			Members:   orgMemberRepo,
+			Invites:   orgInviteRepo,
+			Publisher: orgCanonicalPub,
+			Status:    intentStatus,
+			Logger:    logger,
+			OnMemberChange: func(orgID uuid.UUID) {
+				// Rebuild relay members for this org from the repository.
+				members, err := orgMemberRepo.ListByOrg(ctx, orgID)
+				if err != nil {
+					logger.Warn("failed to list org members for TrustSet update",
+						zap.String("org_id", orgID.String()), zap.Error(err))
+					return
+				}
+				roleMap := make(map[string]domain.Role, len(members))
+				for _, m := range members {
+					roleMap[m.Pubkey] = m.Role
+				}
+				trustSet.SetRelayMembers(orgID.String(), roleMap)
+				if intentAuthorsSyncer != nil {
+					intentAuthorsSyncer.Notify()
+				}
+				logger.Debug("TrustSet relay members updated for org",
+					zap.String("org_id", orgID.String()),
+					zap.Int("member_count", len(members)))
+			},
+		})
+		intentProcessor.RegisterHandler("org", orgHandler)
+		logger.Info("org intent handler registered")
 	}
 	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
@@ -2044,6 +2082,7 @@ func New(cfg *config.Config) (*App, error) {
 			Members:               orgMemberRepo,
 			Invites:               orgInviteRepo,
 			RBAC:                  tenantRBAC,
+			IntentProcessor:       intentProcessor,
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(encryptedRequestTransport)
