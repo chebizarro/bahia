@@ -1,113 +1,54 @@
-diff --git a/third_party/nostr/subscription.go b/third_party/nostr/subscription.go
-index 4ea5af87..2aac85ab 100644
---- a/third_party/nostr/subscription.go
-+++ b/third_party/nostr/subscription.go
-@@ -14,6 +14,12 @@ var (
- 	ErrFireFailed   = errors.New("failed to fire")
- )
- 
-+// dispatchItem is an event queued in the per-subscription inbox for FIFO delivery.
-+type dispatchItem struct {
-+	event    Event
-+	isStored bool
-+}
-+
- // Subscription represents a subscription to a relay.
- type Subscription struct {
- 	counter int64
-@@ -29,8 +35,8 @@ type Subscription struct {
- 	// will be closed when the subscription ends
- 	Events chan Event
- 
--	// mu guards the closing of Events and countResult. Senders hold the read
--	// lock for the whole send and check channelsClosed first; the teardown
-+	// mu guards the closing of Events, countResult and inbox. Senders hold the
-+	// read lock for the whole send and check channelsClosed first; the teardown
- 	// goroutine takes the write lock, sets channelsClosed and closes the
- 	// channels. Because teardown only runs after Context is done, and every
- 	// sender also selects on Context.Done(), the write lock is always granted
-@@ -39,6 +45,14 @@ type Subscription struct {
- 	mu             sync.RWMutex
- 	channelsClosed bool
- 
-+	// inbox is the per-subscription ordered delivery queue. Events are
-+	// enqueued by dispatchEvent (called on the relay's main-loop goroutine)
-+	// and delivered to Events in FIFO order by the dispatcher goroutine
-+	// started in PrepareSubscription. nil for subscriptions created
-+	// without PrepareSubscription (test helpers). (bahia-irsry.58)
-+	inbox          chan dispatchItem
-+	dispatcherDone chan struct{} // closed when the dispatcher goroutine exits
-+
- 	// the EndOfStoredEvents channel receives a value when an EOSE comes for that subscription
- 	EndOfStoredEvents chan EndOfStoredEvent
- 
-@@ -62,6 +76,10 @@ type Subscription struct {
- 	eoseTimedOut chan struct{}
- 	cancel       context.CancelCauseFunc
- 
-+	// closedHandled guards handleClosed so that a second CLOSED from the relay
-+	// does not leak a goroutine. (bahia-irsry.26)
-+	closedHandled atomic.Bool
-+
- 	// this keeps track of the events we've received before the EOSE that we must dispatch before
- 	// closing the EndOfStoredEvents channel
- 	storedwg sync.WaitGroup
-@@ -88,6 +106,12 @@ type SubscriptionOptions struct {
- 	// a fake EndOfStoredEvents will be dispatched at this time if nothing is received before.
- 	// defaults to 7s (in order to disable, set it to time.Duration(math.MaxInt64))
- 	MaxWaitForEOSE time.Duration
-+
-+	// isCount is set by countInternal so that PrepareSubscription creates
-+	// countResult before the subscription is stored in the map.
-+	// (bahia-irsry.26: fixes the race where a COUNT reply arrives before
-+	// countInternal can set countResult.)
-+	isCount bool
- }
- 
- // GetID returns the subscription ID.
-@@ -100,6 +124,31 @@ func (sub *Subscription) dispatchEvent(evt Event) {
- 		isStored = true
- 	}
- 
-+	if inbox := sub.inbox; inbox != nil {
-+		// Ordered path (bahia-irsry.58): enqueue via the inbox FIFO.
-+		// The dispatcher goroutine delivers items to Events in order.
-+		// Hold the read lock so teardown cannot close inbox underneath us.
-+		sub.mu.RLock()
-+		if sub.channelsClosed || !sub.live.Load() {
-+			if isStored {
-+				sub.storedwg.Done()
-+			}
-+			sub.mu.RUnlock()
-+			return
-+		}
-+		select {
-+		case inbox <- dispatchItem{event: evt, isStored: isStored}:
-+		case <-sub.Context.Done():
-+			if isStored {
-+				sub.storedwg.Done()
-+			}
-+		}
-+		sub.mu.RUnlock()
-+		return
-+	}
-+
-+	// Legacy path: per-event goroutine (used by test helpers that create
-+	// subscriptions without PrepareSubscription).
- 	go func() {
- 		if isStored {
- 			defer sub.storedwg.Done()
-@@ -154,6 +203,13 @@ func (sub *Subscription) dispatchEose(hint []string) {
- 
- // handleClosed handles the CLOSED message from a relay.
- func (sub *Subscription) handleClosed(reason string) {
-+	// Guard against a second CLOSED leaking a goroutine. A relay may send
-+	// CLOSED more than once (e.g. an overflow close followed by a
-+	// disconnect close), but only the first should be delivered.
-+	// (bahia-irsry.26)
-+	if !sub.closedHandled.CompareAndSwap(false, true) {
-+		return
-+	}
- 	go func() {
- 		// A relay can close a completed ID query immediately after EOSE.
- 		// Deliver pending history before notifying consumers or canceling it.
+Subject: [PATCH 1/4] subscription: per-subscription non-blocking event ordering
+
+dispatchEvent spawns a new goroutine for every event. The goroutines race
+to send on sub.Events, so events arrive in random order. This is observable
+under -cpu=2 or higher with bursts of 256+ events.
+
+Replace the per-event goroutine design with a per-subscription ordered queue:
+
+- New subscriptionInbox: a mutex-guarded FIFO slice with a 1-buffered signal
+  channel. push() appends without blocking the caller and sends a non-blocking
+  wake signal. The read loop (handleMessage on the main-loop goroutine) is
+  never blocked, so it can still deliver OK, EOSE, CLOSED, AUTH and NOTICE
+  for every subscription and publish on the connection. A consumer that
+  publishes to the same relay and waits for OK inside an event handler (the
+  OK arrives on the same read loop) no longer deadlocks.
+
+- Overflow: when the queue exceeds subscriptionInboxCap (4096), the inbox is
+  marked closed and the subscription is closed via handleClosed with an
+  overflow reason. No events are silently dropped — the consumer knows the
+  subscription ended and can resubscribe from its cursor.
+
+- Dispatcher goroutine: waits on the signal channel, drains the queue, and
+  delivers items to Events in FIFO order under mu.RLock. On Context.Done,
+  it releases storedwg for remaining items and exits.
+
+- Subscriptions without PrepareSubscription (test helpers) have a nil inbox
+  and fall back to the legacy per-goroutine path.
+
+- Teardown: sets channelsClosed, calls inbox.close(), waits for the dispatcher,
+  then closes Events and countResult.
+
+Also includes:
+- closedHandled atomic.Bool guard on handleClosed to prevent a second CLOSED
+  from leaking a goroutine.
+- isCount field on SubscriptionOptions so countResult is created before the
+  subscription is stored in the map (fixing a race where a COUNT reply arrives
+  before countInternal sets countResult).
+
+Tests: subscription_order_test.go
+- TestDispatchEventPreservesOrderLive (1024 live events, wire order)
+- TestDispatchEventPreservesOrderStored (256 stored, EOSE after last)
+- TestDispatchEventOrderAcrossStoredAndLive (stored + live, each in order)
+- TestDispatchEventNonBlockingUnblocksOnCancel (1000 events without reader)
+- TestInboxDoesNotBlockOtherSubscriptions (sub A blocked, sub B unaffected)
+- TestPublishFromEventHandlerDoesNotDeadlock (publish+OK from handler)
+- TestInboxOverflowClosesSubscription (overflow closes with reason)
+
+Run with: go test -cpu=1,2,8 -count=20 -run 'TestDispatchEvent|TestInbox|TestPublishFrom'
+---
+ relay.go                    |  50 ++++++---
+ subscription.go             | 154 +++++++++++++++++++++++++---
+ subscription_order_test.go  | 303 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 474 insertions(+), 33 deletions(-)
+ create mode 100644 subscription_order_test.go

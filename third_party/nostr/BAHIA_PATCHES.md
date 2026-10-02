@@ -285,21 +285,30 @@ always observable on single-CPU machines under contention. Any consumer that
 assumes the relay's wire order (e.g. a cursor that tracks the most recent
 `created_at`) could skip events or move a resume cursor backward.
 
-- `subscription.go`: new `dispatchItem` struct and `inbox chan dispatchItem`.
-  `dispatchEvent` sends to the bounded inbox (capacity 256) under `mu.RLock`;
-  the dispatcher goroutine reads from the inbox and sends to `Events` in FIFO
-  order, also under `mu.RLock`. When the inbox is full the caller blocks, which
-  applies bounded backpressure to the relay's read loop (the caller is
-  `handleMessage`, running on the main loop goroutine). `eoseTimedOut` and
-  `Context.Done` are still available as early exits, preserving overflow
-  semantics. Subscriptions created without `PrepareSubscription` (test helpers
-  that build a `Subscription` literal) have a nil inbox and fall back to the
-  legacy per-goroutine path.
+- `subscription.go`: new `subscriptionInbox` struct — a mutex-guarded FIFO
+  slice with a 1-buffered signal channel. `dispatchEvent` calls `push()`,
+  which appends the item under `inbox.mu` and sends a non-blocking signal.
+  **push never blocks the caller** (the relay's main-loop goroutine), avoiding
+  head-of-line blocking: the read loop also processes OK, EOSE, CLOSED, AUTH
+  and NOTICE for every subscription and publish on the connection. A blocking
+  inbox would stall them all and deadlock a consumer that publishes to the
+  same relay from an event handler (e.g. Bahia's intent processor / encrypted
+  transport receive an event, publish canonical state or a reply, and wait for
+  OK through the outbox — the OK arrives on the same read loop).
+- When the queue exceeds `subscriptionInboxCap` (4096), the inbox is marked
+  closed and the subscription is closed with `handleClosed("error: subscription
+  inbox overflow")`. Consumers resubscribe from their resume cursor. No events
+  are silently dropped: the consumer knows the subscription was closed.
+- The dispatcher goroutine waits on the signal channel, drains the queue, and
+  delivers items to `Events` in FIFO order under `mu.RLock`. On `Context.Done`,
+  it releases `storedwg` for any remaining items and exits.
+- Subscriptions created without `PrepareSubscription` (test helpers that build
+  a `Subscription` literal) have a nil inbox and fall back to the legacy
+  per-goroutine path.
 - `relay.go` (`PrepareSubscription`): creates the inbox and starts the
-  dispatcher goroutine. The teardown goroutine now closes the inbox under
-  `mu.Lock` (preventing further sends), waits for the dispatcher to drain the
-  remaining items, and then closes `Events` and `countResult`. This preserves
-  the `mu` discipline from bahia-irsry.17.
+  dispatcher goroutine. The teardown goroutine sets `channelsClosed`, calls
+  `inbox.close()`, waits for the dispatcher to exit, and then closes `Events`
+  and `countResult`. This preserves the `mu` discipline from bahia-irsry.17.
 
 Tests: `subscription_order_test.go`:
 - `TestDispatchEventPreservesOrderLive`: 1024 live events arrive in wire order.
@@ -307,9 +316,17 @@ Tests: `subscription_order_test.go`:
   order with EOSE after the last one.
 - `TestDispatchEventOrderAcrossStoredAndLive`: stored burst, EOSE, live burst,
   each sub-sequence in order.
-- `TestDispatchEventBackpressureUnblocksOnCancel`: full inbox + context cancel.
+- `TestDispatchEventNonBlockingUnblocksOnCancel`: 1000 events dispatched without
+  a reader complete instantly (no blocking), then cancel shuts down cleanly.
+- `TestInboxDoesNotBlockOtherSubscriptions`: a blocked consumer on sub A does
+  not delay delivery to sub B on the same relay.
+- `TestPublishFromEventHandlerDoesNotDeadlock`: simulates a consumer that
+  publishes to the same relay and waits for OK inside its event handler; the
+  read loop remains free to deliver the OK after dispatching 500 events.
+- `TestInboxOverflowClosesSubscription`: overflow closes the subscription
+  with a reason (no silent drops); context is canceled and Events is closed.
 
-Run with: `CGO_ENABLED=0 go test fiatjaf.com/nostr -cpu=1,2,8 -count=20 -run TestDispatchEventPreservesOrder`.
+Run with: `CGO_ENABLED=0 go test fiatjaf.com/nostr -cpu=1,2,8 -count=20 -run 'TestDispatchEvent|TestInbox|TestPublishFrom'`.
 
 ## Second CLOSED goroutine leak (bahia-irsry.26)
 

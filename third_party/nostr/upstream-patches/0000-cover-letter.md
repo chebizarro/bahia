@@ -5,12 +5,18 @@ These patches are prepared against `fiatjaf.com/nostr v0.0.0-20260916040958-27e3
 
 ## Patches
 
-### 0001: Per-subscription event delivery order
+### 0001: Per-subscription non-blocking event ordering
 
 `Subscription.dispatchEvent` spawns a goroutine per event, so events delivered
-on `sub.Events` arrive in random order under contention. Replace with a bounded
-FIFO inbox (capacity 256) and a single dispatcher goroutine per subscription.
-Backward compatible: subscriptions created without `PrepareSubscription` fall
+on `sub.Events` arrive in random order under contention. Replace with a
+non-blocking per-subscription inbox (mutex-guarded FIFO slice with a 1-buffered
+signal channel) and a single dispatcher goroutine. `push()` never blocks the
+relay's main-loop goroutine, which also delivers OK, EOSE, CLOSED, AUTH and
+NOTICE. A bounded channel would cause head-of-line blocking (one slow
+subscriber stalls all) and deadlock a consumer that publishes to the same relay
+and waits for OK inside an event handler. The inbox has a cap (4096); overflow
+closes the subscription with a reason so the consumer can resubscribe from its
+cursor. Backward compatible: subscriptions without `PrepareSubscription` fall
 back to the legacy goroutine path.
 
 **Status**: Applied to Bahia's vendored copy. Ready for upstream review.

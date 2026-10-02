@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,9 +25,10 @@ func TestDispatchEventPreservesOrderLive(t *testing.T) {
 	sub.dispatchEose(nil)
 	<-sub.EndOfStoredEvents
 
-	// Dispatch in a separate goroutine: dispatchEvent may block when the
-	// bounded inbox is full (this is the desired backpressure behavior),
-	// so the dispatcher and the consumer must run concurrently.
+	// With the non-blocking inbox, push never blocks, so all dispatches
+	// complete without a concurrent reader. We still dispatch in a
+	// goroutine so the test structure matches the real relay read loop
+	// (a single goroutine dispatching while the consumer reads).
 	go func() {
 		for i := range count {
 			sub.dispatchEvent(Event{Kind: Kind(i)})
@@ -61,8 +63,6 @@ func TestDispatchEventPreservesOrderStored(t *testing.T) {
 	sub := r.PrepareSubscription(ctx, Filter{}, SubscriptionOptions{MaxWaitForEOSE: math.MaxInt64})
 	sub.live.Store(true)
 
-	// Dispatch stored events in a goroutine because the inbox may fill
-	// while the unbuffered Events channel has no reader yet.
 	go func() {
 		for i := range count {
 			sub.dispatchEvent(Event{Kind: Kind(i)})
@@ -158,9 +158,10 @@ func TestDispatchEventOrderAcrossStoredAndLive(t *testing.T) {
 	}
 }
 
-// TestDispatchEventBackpressureUnblocksOnCancel (bahia-irsry.58): when the inbox
-// is full and the context is canceled, dispatchEvent must unblock promptly.
-func TestDispatchEventBackpressureUnblocksOnCancel(t *testing.T) {
+// TestDispatchEventNonBlockingUnblocksOnCancel (bahia-irsry.58): dispatching
+// more events than the old channel capacity (256) without a reader must
+// complete without blocking, and cancel must still shut everything down.
+func TestDispatchEventNonBlockingUnblocksOnCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	r := NewRelay(ctx, "ws://127.0.0.1:1", RelayOptions{})
@@ -170,27 +171,196 @@ func TestDispatchEventBackpressureUnblocksOnCancel(t *testing.T) {
 	sub.dispatchEose(nil)
 	<-sub.EndOfStoredEvents
 
-	// Dispatch more events than the inbox can hold without reading Events.
+	// Dispatch more events than the old channel cap (256) without reading.
+	// With the non-blocking inbox, every push returns immediately.
 	dispatched := make(chan struct{})
 	go func() {
 		defer close(dispatched)
-		for i := range 300 {
+		for i := range 1000 {
 			sub.dispatchEvent(Event{Kind: Kind(i)})
 		}
 	}()
 
-	// Let some events queue up, then cancel.
-	time.Sleep(10 * time.Millisecond)
-	sub.cancel(nil)
-
-	// Drain Events to let teardown complete.
-	for range sub.Events {
+	// All 1000 pushes must complete promptly (well under 1s).
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("dispatchEvent blocked — read loop would be stalled")
 	}
 
-	// The dispatch goroutine must finish promptly after cancellation.
+	sub.cancel(nil)
+	for range sub.Events {
+	}
+}
+
+// TestInboxDoesNotBlockOtherSubscriptions (bahia-irsry.58): a blocked consumer
+// on subscription A must not delay event delivery to subscription B on the
+// same relay connection. With the old channel-based inbox, a full inbox blocked
+// dispatchEvent on the main loop, stalling all other subscriptions.
+func TestInboxDoesNotBlockOtherSubscriptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	r := NewRelay(ctx, "ws://127.0.0.1:1", RelayOptions{})
+
+	subA := r.PrepareSubscription(ctx, Filter{}, SubscriptionOptions{MaxWaitForEOSE: math.MaxInt64})
+	subB := r.PrepareSubscription(ctx, Filter{}, SubscriptionOptions{MaxWaitForEOSE: math.MaxInt64})
+	subA.live.Store(true)
+	subB.live.Store(true)
+	subA.dispatchEose(nil)
+	subB.dispatchEose(nil)
+	<-subA.EndOfStoredEvents
+	<-subB.EndOfStoredEvents
+
+	// Fill sub A's inbox well beyond the old 256-slot channel without
+	// reading. With the non-blocking inbox this completes immediately.
+	for i := range 2000 {
+		subA.dispatchEvent(Event{Kind: Kind(i)})
+	}
+
+	// Now dispatch to sub B from a goroutine that simulates the read loop.
+	// This must not block even though sub A has thousands of pending events.
+	bDone := make(chan struct{})
+	go func() {
+		subB.dispatchEvent(Event{Kind: 42})
+		close(bDone)
+	}()
+
+	select {
+	case <-bDone:
+		// good: push to B was non-blocking
+	case <-time.After(time.Second):
+		t.Fatal("dispatchEvent for sub B blocked — head-of-line blocking detected")
+	}
+
+	// Sub B must receive the event promptly.
+	select {
+	case evt := <-subB.Events:
+		if evt.Kind != 42 {
+			t.Fatalf("wrong kind: got %d, want 42", evt.Kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sub B did not receive event")
+	}
+
+	cancel()
+	for range subA.Events {
+	}
+	for range subB.Events {
+	}
+}
+
+// TestPublishFromEventHandlerDoesNotDeadlock (bahia-irsry.58): a consumer that
+// publishes to the same relay and waits for OK inside its event handler must
+// not deadlock. The relay's read loop must remain free to deliver the OK after
+// dispatching events.
+//
+// Scenario: the read loop dispatches 500 events (more than the old 256-slot
+// channel) to sub A, then delivers an OK callback. If dispatchEvent blocked
+// the read loop (as with the old bounded channel), the OK would never be
+// delivered while the inbox was full — deadlocking the consumer.
+func TestPublishFromEventHandlerDoesNotDeadlock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	r := NewRelay(ctx, "ws://127.0.0.1:1", RelayOptions{})
+
+	sub := r.PrepareSubscription(ctx, Filter{}, SubscriptionOptions{MaxWaitForEOSE: math.MaxInt64})
+	sub.live.Store(true)
+	sub.dispatchEose(nil)
+	<-sub.EndOfStoredEvents
+
+	// Simulate the read loop: dispatch events then deliver an OK.
+	okDelivered := make(chan struct{})
+	readLoopDone := make(chan struct{})
+	go func() {
+		defer close(readLoopDone)
+		// Dispatch 500 events (more than old cap 256). With non-blocking
+		// inbox, all pushes complete without blocking.
+		for i := range 500 {
+			sub.dispatchEvent(Event{Kind: Kind(i)})
+		}
+		// After dispatching, the read loop processes an OK callback.
+		close(okDelivered)
+	}()
+
+	// The consumer reads the first event, "publishes" to the same relay,
+	// and waits for the OK (simulated by okDelivered). With a blocking
+	// inbox, the read loop would be stuck at event ~257, and this would
+	// deadlock.
+	select {
+	case <-sub.Events:
+		// Consumer got an event. "Publish" and wait for OK.
+		select {
+		case <-okDelivered:
+			// OK delivered: no deadlock.
+		case <-time.After(5 * time.Second):
+			t.Fatal("OK callback not delivered — deadlock: read loop blocked by full inbox")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event received")
+	}
+
+	<-readLoopDone
+	cancel()
+	for range sub.Events {
+	}
+}
+
+// TestInboxOverflowClosesSubscription (bahia-irsry.58): when the inbox exceeds
+// its capacity without the consumer reading, the subscription must be closed
+// with an overflow reason. No events may be silently dropped — the consumer
+// knows the subscription was closed and resubscribes from its cursor.
+func TestInboxOverflowClosesSubscription(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	r := NewRelay(ctx, "ws://127.0.0.1:1", RelayOptions{})
+
+	sub := r.PrepareSubscription(ctx, Filter{}, SubscriptionOptions{MaxWaitForEOSE: math.MaxInt64})
+	sub.live.Store(true)
+	sub.dispatchEose(nil)
+	<-sub.EndOfStoredEvents
+
+	// Use a small cap so overflow is guaranteed within a few pushes,
+	// regardless of how the dispatcher schedules relative to pushes.
+	const testCap = 8
+	sub.inbox.mu.Lock()
+	sub.inbox.cap = testCap
+	sub.inbox.mu.Unlock()
+
+	// Dispatch many more events than the test cap without reading Events.
+	// All pushes must complete without blocking.
+	const totalEvents = 200
+	dispatched := make(chan struct{})
+	go func() {
+		defer close(dispatched)
+		for i := range totalEvents {
+			sub.dispatchEvent(Event{Kind: Kind(i)})
+		}
+	}()
+
 	select {
 	case <-dispatched:
 	case <-time.After(5 * time.Second):
-		t.Fatal("dispatch goroutine stuck after cancellation")
+		t.Fatal("dispatches blocked — inbox push is not non-blocking")
+	}
+
+	// The subscription must be closed with an overflow reason.
+	select {
+	case reason := <-sub.ClosedReason:
+		if !strings.Contains(reason, "overflow") {
+			t.Fatalf("wrong close reason: %q (expected to contain \"overflow\")", reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscription not closed after overflow")
+	}
+
+	// Context must be canceled.
+	select {
+	case <-sub.Context.Done():
+	case <-time.After(time.Second):
+		t.Fatal("context not canceled after overflow close")
+	}
+
+	// Events channel must eventually be closed (teardown completes).
+	for range sub.Events {
 	}
 }

@@ -717,36 +717,55 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 	defer subIdPool.Put(buf)
 	sub.id = string(buf)
 
-	// bahia-irsry.58: per-subscription ordered delivery. The inbox is a bounded
-	// FIFO that preserves the relay's event order. The dispatcher goroutine
-	// reads from inbox and delivers to Events in order.
-	sub.inbox = make(chan dispatchItem, 256)
+	// bahia-irsry.58: per-subscription non-blocking ordered delivery. The
+	// inbox is a mutex-guarded FIFO that the read loop appends to without
+	// blocking. The dispatcher goroutine drains the queue and delivers to
+	// Events in order. This avoids head-of-line blocking: the read loop also
+	// processes OK, EOSE, CLOSED, AUTH and NOTICE for every subscription and
+	// publish on the connection, so blocking it would stall them all and
+	// deadlock a consumer that publishes to the same relay from an event
+	// handler (e.g. Bahia's intent processor / encrypted transport).
+	sub.inbox = newSubscriptionInbox(subscriptionInboxCap)
 	sub.dispatcherDone = make(chan struct{})
 	go func() {
 		defer close(sub.dispatcherDone)
-		for item := range sub.inbox {
-			sub.mu.RLock()
-			if sub.channelsClosed {
+		for {
+			select {
+			case <-sub.inbox.signal:
+			case <-sub.Context.Done():
+				// Release storedwg for any remaining items.
+				for _, item := range sub.inbox.drain() {
+					if item.isStored {
+						sub.storedwg.Done()
+					}
+				}
+				return
+			}
+
+			for _, item := range sub.inbox.drain() {
+				sub.mu.RLock()
+				if sub.channelsClosed {
+					if item.isStored {
+						sub.storedwg.Done()
+					}
+					sub.mu.RUnlock()
+					continue
+				}
 				if item.isStored {
+					select {
+					case sub.Events <- item.event:
+					case <-sub.Context.Done():
+					case <-sub.eoseTimedOut:
+					}
 					sub.storedwg.Done()
+				} else {
+					select {
+					case sub.Events <- item.event:
+					case <-sub.Context.Done():
+					}
 				}
 				sub.mu.RUnlock()
-				continue
 			}
-			if item.isStored {
-				select {
-				case sub.Events <- item.event:
-				case <-sub.Context.Done():
-				case <-sub.eoseTimedOut:
-				}
-				sub.storedwg.Done()
-			} else {
-				select {
-				case sub.Events <- item.event:
-				case <-sub.Context.Done():
-				}
-			}
-			sub.mu.RUnlock()
 		}
 	}()
 
@@ -792,13 +811,13 @@ func (r *Relay) PrepareSubscription(ctx context.Context, filter Filter, opts Sub
 		// remove subscription from our map
 		sub.Relay.Subscriptions.Delete(sub.counter)
 
-		// Stop accepting new items into inbox and signal the dispatcher to
-		// drain. channelsClosed prevents dispatchEvent from sending to the
-		// (now closed) inbox channel.
+		// Mark channels closed (guards dispatchCount and the legacy path)
+		// and stop the inbox. channelsClosed is set before inbox.close() so
+		// the dispatcher sees it when it drains.
 		sub.mu.Lock()
 		sub.channelsClosed = true
-		close(sub.inbox)
 		sub.mu.Unlock()
+		sub.inbox.close()
 
 		// Wait for the dispatcher to finish draining the inbox. After this
 		// point no goroutine will send on Events or countResult.
