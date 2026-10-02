@@ -287,7 +287,6 @@
 1	internal/reconcile.WithRemediationIntentHistory
 1	internal/reconcile.WithStartingTimeout
 1	internal/relaysidecar.Server.Relay
-1	internal/relaysidecar.Server.SetIntentAuthors
 1	internal/repository.BackupCheckpointExecuting
 1	internal/repository.PgOCIRepository.CreateUpload
 1	internal/repository.PgOCIRepository.DeleteUpload

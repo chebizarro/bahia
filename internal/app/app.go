@@ -103,6 +103,7 @@ type App struct {
 	IntentProcessor   *controlplane.IntentProcessor
 	IntentReadiness   *controlplane.ReadinessTracker
 	IntentSubscriber  *controlplane.IntentSubscriber
+	IntentAuthorsSyncer *controlplane.IntentAuthorsSyncer
 }
 
 var (
@@ -798,6 +799,17 @@ func New(cfg *config.Config) (*App, error) {
 			logger,
 		)
 		bgManager.RegisterWithOptions(intentSubscriber, RunnerTier(Tier2), RunnerRequired(false))
+	}
+
+	// Phase 3 intent authors syncer (F1 §7.1): on startup and whenever the
+	// TrustSet changes, push the current set of intent-permitted pubkeys to
+	// each Bahia-owned sidecar via NIP-86 setintentauthors.
+	var intentAuthorsSyncer *controlplane.IntentAuthorsSyncer
+	if len(enabledDomains) > 0 {
+		intentAuthorsSyncer = buildIntentAuthorsSyncer(ctx, cfg, trustSet, secretRepo, secretEncryptor, logger)
+		if intentAuthorsSyncer != nil {
+			bgManager.RegisterWithOptions(intentAuthorsSyncer, RunnerTier(Tier2), RunnerRequired(false))
+		}
 	}
 
 	// The legacy nostr_events migration (internal/nostrmigration) is not on
@@ -4350,5 +4362,64 @@ func newDocsRelayQuerier(pool *nostrAdapter.RelayPool, pubkey string, logger *za
 				events = append(events, ev)
 			}
 		}
+	})
+}
+
+// buildIntentAuthorsSyncer creates an IntentAuthorsSyncer that pushes the
+// TrustSet's principal set to Bahia-owned sidecar relays via NIP-86. Returns
+// nil if relay administration is disabled, has no Bahia-owned targets, or the
+// admin private key cannot be resolved. In those cases the sidecar's intent
+// authors set starts empty, and only admin-allowlisted pubkeys can publish.
+func buildIntentAuthorsSyncer(ctx context.Context, cfg *config.Config, trustSet *controlplane.TrustSet, secretRepo repository.SecretRepository, secretEncryptor *secretsAdapter.Encryptor, logger *zap.Logger) *controlplane.IntentAuthorsSyncer {
+	if cfg == nil || !cfg.Nostr.RelayAdministration.Enabled {
+		return nil
+	}
+
+	// Filter to Bahia-owned targets only.
+	var bahiaOwnedTargets []relayadmin.Target
+	for _, target := range cfg.Nostr.RelayAdministration.Targets {
+		if target.Authorization != config.RelayAdministrationBahiaOwned {
+			continue
+		}
+		bahiaOwnedTargets = append(bahiaOwnedTargets, relayadmin.Target{
+			Ref:                  target.Ref,
+			RelayURL:             target.RelayURL,
+			HTTPURL:              target.HTTPURL,
+			AdministratorPubkeys: target.AdministratorPubkeys,
+		})
+	}
+	if len(bahiaOwnedTargets) == 0 {
+		logger.Info("intent authors syncer disabled: no bahia_owned relay admin targets configured")
+		return nil
+	}
+
+	resolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+	privateKey, err := resolver.ResolveSecret(ctx, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef)
+	if err != nil {
+		logger.Warn("intent authors syncer disabled: administrator private key could not be resolved", zap.Error(err))
+		return nil
+	}
+
+	client, err := relayadmin.NewClient(relayadmin.Config{
+		Enabled:       true,
+		PrivateKeyHex: strings.TrimSpace(privateKey),
+		Targets:       bahiaOwnedTargets,
+		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+	})
+	if err != nil {
+		logger.Warn("intent authors syncer disabled: relay admin client validation failed", zap.Error(err))
+		return nil
+	}
+
+	targetRefs := make([]string, 0, len(bahiaOwnedTargets))
+	for _, t := range bahiaOwnedTargets {
+		targetRefs = append(targetRefs, t.Ref)
+	}
+
+	return controlplane.NewIntentAuthorsSyncer(controlplane.IntentAuthorsSyncerConfig{
+		TrustSet:   trustSet,
+		Admin:      client,
+		TargetRefs: targetRefs,
+		Logger:     logger,
 	})
 }

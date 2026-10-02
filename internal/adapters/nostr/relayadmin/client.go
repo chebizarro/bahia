@@ -45,6 +45,7 @@ const (
 	MethodListBlockedIPs              = "listblockedips"
 	MethodConfigStatus                = "configstatus"
 	MethodReload                      = "reload"
+	MethodSetIntentAuthors            = "setintentauthors"
 )
 
 var (
@@ -79,6 +80,7 @@ var allowedMethods = map[string]struct{}{
 	MethodListBlockedIPs:              {},
 	MethodConfigStatus:                {},
 	MethodReload:                      {},
+	MethodSetIntentAuthors:            {},
 }
 
 // Config constructs an opt-in NIP-86 relay administration client. PrivateKeyHex
@@ -283,6 +285,27 @@ func (c *Client) AllowKind(ctx context.Context, targetRef string, kind int) erro
 func (c *Client) DisallowKind(ctx context.Context, targetRef string, kind int) error {
 	_, err := c.Call(ctx, targetRef, MethodDisallowKind, []any{kind})
 	return err
+}
+
+// SetIntentAuthors pushes the intent authors set to a single configured target
+// via the NIP-86 setintentauthors method. Params is a flat list of hex pubkey
+// strings. The sidecar replaces its intent authors set atomically.
+func (c *Client) SetIntentAuthors(ctx context.Context, targetRef string, pubkeys []string) error {
+	params := make([]any, len(pubkeys))
+	for i, pk := range pubkeys {
+		params[i] = pk
+	}
+	_, err := c.Call(ctx, targetRef, MethodSetIntentAuthors, params)
+	return err
+}
+
+// TargetRefs returns the refs of all configured targets.
+func (c *Client) TargetRefs() []string {
+	refs := make([]string, 0, len(c.targets))
+	for ref := range c.targets {
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) {
