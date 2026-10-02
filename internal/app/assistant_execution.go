@@ -11,6 +11,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/mcp"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -35,6 +36,9 @@ type assistantExecutionDeps struct {
 	// RelayConnections signals relay (re)connection of the pool behind
 	// Publisher; fenced sessions are healed on each signal. Optional.
 	RelayConnections assistantRelayConnectionNotifier
+	// History is the daemon's local event store for the service pubkey.
+	// Used by the assistant session topic migration (bahia-irsry.43).
+	History repository.NostrEventRepository
 }
 
 // assistantRelayConnectionNotifier is implemented by *nostr.RelayPool.
@@ -196,6 +200,16 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Logger:          slog.Default(),
 	})
 	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber})
+	// bahia-irsry.43: attach the startup topic migration so recovery re-tags
+	// legacy assistant session events before querying the relay with #t.
+	if deps.History != nil && deps.Signer != nil && deps.Publisher != nil {
+		recovery.SetTopicMigration(service.NewAssistantSessionTopicMigration(service.AssistantSessionTopicMigrationConfig{
+			History:       deps.History,
+			Signer:        deps.Signer,
+			Publisher:     deps.Publisher,
+			ServicePubkey: deps.ServicePubkey,
+		}))
+	}
 	var healer *assistantFenceHealer
 	if deps.RelayConnections != nil {
 		healer = newAssistantFenceHealer(engine, deps.RelayConnections)
