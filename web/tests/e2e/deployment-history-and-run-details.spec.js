@@ -333,17 +333,13 @@ test.describe('Deployment history and run details current-contract smoke', () =>
     await dialog.getByRole('button', { name: 'Create Rollback Intent' }).click();
 
     await expect(dialog).not.toBeVisible();
-    await expect.poll(() => page.evaluate(() => ({
-      requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
-      latestIntent: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents[0]
-    }))).toMatchObject({
-      requestKinds: expect.arrayContaining([25910]),
-      latestIntent: expect.objectContaining({
-        service_id: 'service-1',
-        environment_id: 'env-1',
-        artifact_id: 'artifact-rollback-2'
-      })
-    });
+    await expect(page.getByTestId('deployment-pending-intents')).toContainText('Pending');
+    const intent = await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.find(event =>
+      event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'deployment')
+        && event.tags.some(tag => tag[0] === 'op' && tag[1] === 'rollback')));
+    expect(intent.kind).toBe(30900);
+    expect(JSON.parse(intent.content)).toMatchObject({ service_id: 'service-1', environment_id: 'env-1',
+      target_artifact_id: 'artifact-rollback-2' });
   });
 
   test('loads completed run logs from Bahia service records', async ({ page }) => {

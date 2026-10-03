@@ -3,6 +3,7 @@
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import MLRegistryMutations from './MLRegistryMutations.svelte';
   import {
     buildTaskKindOptions,
     buildModalityOptions,
@@ -251,6 +252,8 @@
     </div>
 
     <!-- Model Catalog -->
+    <MLRegistryMutations models={mlModels} versions={mlModelVersions} endpoints={mlEndpoints} {environments} />
+
     <section class="panel" data-testid="ml-model-catalog">
       <div class="section-header">
         <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Model Catalog</h2>

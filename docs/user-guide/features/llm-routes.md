@@ -12,12 +12,10 @@ LLM Routes provide:
 - **Deployment workflow** — Deploy with approvals
 - **State tracking** — Monitor active deployments
 
-The web console signs kind-`30900` intents for route creation and release
-registration. A pending badge remains until the service publishes a matching
-`30315` intent status or newer canonical route state; relay acceptance alone
-does not mean the mutation succeeded. Deployment, rollback, and approval
-actions still use ContextVM because the daemon has no corresponding intent
-handler for those operations.
+The web console signs kind-`30900` intents for route creation, release
+registration, deployment, rollback, approval, and rejection. A pending badge
+remains until the service publishes a matching `30315` intent status or newer
+canonical state; relay acceptance alone does not mean the mutation succeeded.
 
 ## Gateway administration credentials
 
@@ -166,9 +164,9 @@ The current CLI does not register a top-level `bahia llm` command. Use the web U
 }
 ```
 
-### Nostr (ContextVM)
+### Legacy Nostr (ContextVM)
 
-Publish a ContextVM `llm/deploy` request:
+Legacy clients that have not migrated to signed kind-`30900` intents may still publish a ContextVM `llm/deploy` request. The web console does not use this path:
 
 ```json
 {
@@ -198,7 +196,7 @@ The current CLI does not register `bahia llm approve` or `bahia llm reject`. Use
 
 ### Nostr
 
-Publish a ContextVM `llm/approve` or `llm/reject` request and follow canonical observables scoped by `intent`.
+The web console publishes signed kind-`30900` `llm/approve` or `llm/reject` intents and follows scoped `30315` status and canonical observables. Legacy clients may still use ContextVM `llm/approve` or `llm/reject`.
 
 ## Rolling Back
 
@@ -250,7 +248,8 @@ Subscribe for real-time updates:
 
 | Surface | Contract | Description |
 |---------|----------|-------------|
-| Mutation intent | ContextVM `25910` (`1059`/`21059` when encrypted) | `llm/route-create`, `llm/release-register`, `llm/deploy`, `llm/approve`, `llm/reject`, `llm/rollback` |
+| Web mutation intent | Signed `30900` | Route creation, release registration, deploy, approve, reject, rollback |
+| Legacy client mutation | ContextVM `25910` (`1059`/`21059` when encrypted) | Existing `llm/*` methods for non-migrated clients |
 | Observable state | `30900` | Route, release, and route/environment projections |
 | Observable status/audit | `30315`, `4903` | Progress, approvals, terminal facts, and provenance |
 

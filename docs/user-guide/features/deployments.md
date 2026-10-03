@@ -17,7 +17,7 @@ See [Virtual machines](virtual-machines.md) for safe public connections and scop
 
 When `nostr.intent_domains` includes `deployment`, operators publish a signed kind `30900` intent with `domain=deployment`, schema `bahia.intent.deployment.v1`, an org tag, and a UUIDv7 `intent_id`. `create` supplies `service_id`, `environment_id`, and `artifact_id`; `rollback` supplies those service/environment IDs plus `target_artifact_id` (or `target_run_id`) and `supersedes_intent_id`. `approve` and `reject` supply `deployment_intent_id` and should include the canonical intent's `expected_updated_at` revision. Create/rollback require `deployments:write`; decisions require `deployments:approve`.
 
-`runtime` intents use `deploy`, `restart`, or `stop` with `service_id` and `environment_id`; only deploy may include `artifact_id`. They require `deployments:write`. Follow the bounded kind `30315` intent status and daemon-authored deployment/run/state records. When the domain is disabled, the existing ContextVM action remains in effect.
+`runtime` intents use `deploy`, `restart`, or `stop` with `service_id` and `environment_id`; only deploy may include `artifact_id`. They require `deployments:write`. The web console publishes signed deployment create/approve/reject/rollback and runtime deploy/restart/stop intents and shows them as pending until bounded kind `30315` intent status or newer daemon-authored deployment/run/state records arrive. The web console does not silently fall back to ContextVM if a domain is disabled.
 
 ## Deployment Workflow
 
@@ -124,7 +124,7 @@ For a single explicit unit, the wizard selects its durable ID automatically. For
 
 ### CLI and MCP
 
-Deployment intent creation is signer-first. CLI, MCP, web, and agent flows use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) and then follow canonical observables for durable progress. Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
+Deployment intent creation is signer-first. The web console publishes signed kind-`30900` deployment intents and follows scoped status and canonical observables for durable progress. CLI, MCP, and agent flows may still use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers). Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
 
 ### Nostr (ContextVM)
 

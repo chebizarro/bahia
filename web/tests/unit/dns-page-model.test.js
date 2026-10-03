@@ -41,7 +41,7 @@ describe('DNS command page model', () => {
   it('validates forms before dispatching malformed DNS commands', () => {
     expect(validateDNSCommandForm(DNS_COMMANDS.ZONE_CREATE, { zone: 'invalid', backend: '', visibility: 'public' })).toEqual({
       valid: false,
-      errors: ['Zone must be a DNS name such as prod.example.com.', 'Backend is required.']
+      errors: ['Zone must be a DNS name such as prod.example.com.', 'Backend is required.', 'TTL must be a positive integer.']
     });
 
     expect(validateDNSCommandForm(DNS_COMMANDS.RECORD_OVERRIDE, {
@@ -51,7 +51,7 @@ describe('DNS command page model', () => {
       value: '192.0.2.10',
       ttl: 'sixty',
       reason: ''
-    }).errors).toEqual(['TTL must be a positive integer when provided.', 'Reason is required for operator overrides.']);
+    }).errors).toEqual(['TTL must be a positive integer.', 'Reason is required for operator overrides.']);
 
     expect(validateDNSCommandForm(DNS_COMMANDS.DRIFT_REMEDIATE, { zone: 'prod.example.com', fqdn: 'api.prod.example.com' })).toEqual({ valid: true, errors: [] });
   });
@@ -61,22 +61,21 @@ describe('DNS command page model', () => {
       zone: 'prod.example.com',
       backend: 'coredns-prod',
       visibility: 'public',
-      reconcile: true,
-      idempotencyKey: 'zone-prod-1'
+      ttl: '60',
+      authoritative: true
     })).toEqual({
-      zone: 'prod.example.com',
       name: 'prod.example.com',
       backend_ref: 'coredns-prod',
       visibility: 'public',
-      reconcile: true,
-      idempotency_key: 'zone-prod-1'
+      ttl: 60,
+      authoritative: true
     });
 
     expect(buildDNSCommandPayload(DNS_COMMANDS.POLICY_APPLY, {
-      policyId: 'policy-internal',
-      zone: 'prod.example.com',
-      environment: 'prod'
-    })).toEqual({ policy_id: 'policy-internal', zone_id: 'prod.example.com', environment_id: 'prod' });
+      policyId: '00000000-0000-4000-8000-000000000001',
+      name: 'prod', rules: '[{"match":{},"action":{"ttl_override":60}}]', enabled: true
+    })).toEqual({ id: '00000000-0000-4000-8000-000000000001', name: 'prod',
+      rules: [{ match: {}, action: { ttl_override: 60 } }], enabled: true });
 
     expect(buildDNSCommandPayload(DNS_COMMANDS.RECORD_OVERRIDE, {
       zone: 'prod.example.com',
@@ -125,7 +124,7 @@ describe('DNS command page model', () => {
 
     expect(commandRunView({
       id: 'run-2',
-      command: DNS_COMMANDS.POLICY_APPLY,
+      command: DNS_COMMANDS.DRIFT_REMEDIATE,
       phase: 'rejected',
       requestEventId: '',
       publishOk: [{ relay: 'wss://a.example', sent: true, accepted: false, message: 'auth-required' }],

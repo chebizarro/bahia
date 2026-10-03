@@ -5,20 +5,15 @@ export const DNS_COMMANDS = {
   ZONE_CREATE: 'zone_create',
   POLICY_APPLY: 'policy_apply',
   RECORD_OVERRIDE: 'record_override',
+  OVERRIDE_RETIRE: 'override_retire',
   DRIFT_REMEDIATE: 'drift_remediate'
 };
 
 export const DNS_CONTEXTVM_OPERATIONS = {
-  [DNS_COMMANDS.ZONE_CREATE]: 'dns/zone-create',
-  [DNS_COMMANDS.POLICY_APPLY]: 'dns/policy-apply',
-  [DNS_COMMANDS.RECORD_OVERRIDE]: 'dns/record-set',
   [DNS_COMMANDS.DRIFT_REMEDIATE]: 'dns/drift-remediate'
 };
 
 export const DNS_ACTIONS = {
-  [DNS_COMMANDS.ZONE_CREATE]: 'dns_zone_create',
-  [DNS_COMMANDS.POLICY_APPLY]: 'dns_policy_apply',
-  [DNS_COMMANDS.RECORD_OVERRIDE]: 'dns_record_override',
   [DNS_COMMANDS.DRIFT_REMEDIATE]: 'dns_drift_remediate'
 };
 
@@ -45,26 +40,8 @@ function defaultTagsForCommand(command, payload = {}) {
   const tags = [];
   const zone = firstString(payload.zone, payload.zone_name, payload.name);
 
-  switch (command) {
-    case DNS_COMMANDS.ZONE_CREATE:
-      addTag(tags, 'zone', zone);
-      break;
-    case DNS_COMMANDS.POLICY_APPLY:
-      addTag(tags, 'policy', firstString(payload.policy_id, payload.id, payload.name));
-      addTag(tags, 'zone', firstString(payload.zone, payload.zone_name, payload.zone_id));
-      addTag(tags, 'environment', firstString(payload.environment_id));
-      break;
-    case DNS_COMMANDS.RECORD_OVERRIDE:
-      addTag(tags, 'zone', firstString(payload.zone_name, payload.zone));
-      addTag(tags, 'record', firstString(payload.record_name, payload.name));
-      addTag(tags, 'record-type', firstString(payload.record_type, payload.type));
-      break;
-    case DNS_COMMANDS.DRIFT_REMEDIATE:
-      addTag(tags, 'zone', zone);
-      break;
-    default:
-      throw new Error(`Unknown DNS command: ${command}`);
-  }
+  if (command !== DNS_COMMANDS.DRIFT_REMEDIATE) throw new Error(`DNS ${command} uses signed intents`);
+  addTag(tags, 'zone', zone);
 
   addTag(tags, 'action', DNS_ACTIONS[command]);
   addTag(tags, 'idempotency-key', firstString(payload.idempotency_key, payload.idempotencyKey));

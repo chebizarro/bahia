@@ -24,12 +24,14 @@
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
   import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import {
     updateService,
     deleteService,
     previewServiceDeployment,
     createDeploymentIntent,
-    rollbackDeployment
+    rollbackDeployment,
+    requestRuntimeAction
   } from '$lib/stores/public-controlplane.svelte.js';
   import {
     DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS,
@@ -83,6 +85,11 @@
   } from '$lib/icons/domain-icons.js';
 
   let service = $state(null);
+  let runtimeEnvironmentId = $state('');
+  let runtimeArtifactId = $state('');
+  let runtimeSubmitting = $state('');
+  let runtimeNotice = $state('');
+  let runtimeError = $state('');
   let builds = $state([]);
   let artifacts = $state([]);
   let environments = $state([]);
@@ -733,6 +740,22 @@
     }
   }
 
+  async function handleRuntimeAction(op) {
+    runtimeError = '';
+    runtimeNotice = '';
+    if (!runtimeEnvironmentId) return void (runtimeError = 'Select an environment');
+    runtimeSubmitting = op;
+    try {
+      await requestRuntimeAction(op, { service_id: serviceId, environment_id: runtimeEnvironmentId,
+        ...(op === 'deploy' && runtimeArtifactId ? { artifact_id: runtimeArtifactId } : {}) });
+      runtimeNotice = `Runtime ${op} intent pending daemon acceptance`;
+    } catch (err) {
+      runtimeError = err?.message || `Failed to sign runtime ${op} intent`;
+    } finally {
+      runtimeSubmitting = '';
+    }
+  }
+
   function openRollbackModal() {
     rollbackForm = {
       environment_id: '',
@@ -1106,6 +1129,8 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="deployment" />
+  <PendingDomainIntents domain="runtime" />
   {#if intentFeedback}
     <p role="alert" class="error">{intentFeedback.status === 'conflict' ? 'Revision conflict — re-read and resubmit.' : `Intent ${intentFeedback.status}.`} {intentFeedback.reason}
       <button type="button" onclick={() => window.location.reload()}>Re-read canonical state</button>
@@ -1141,6 +1166,29 @@
       <Card title="Runtime" titleIcon={ServiceIcon} value={service.runtime_type || 'docker'} />
       <Card title="Default Branch" titleIcon={BranchIcon} value={service.default_branch || 'main'} />
     </div>
+
+    <section aria-label="Runtime actions">
+      <h2 class="section-title">Runtime actions</h2>
+      <label>Environment
+        <select bind:value={runtimeEnvironmentId} disabled={Boolean(runtimeSubmitting)}>
+          <option value="">Select environment</option>
+          {#each environments as environment (environment.id)}<option value={environment.id}>{environmentDisplayName(environment)}</option>{/each}
+        </select>
+      </label>
+      <label>Artifact for runtime deploy (optional)
+        <select bind:value={runtimeArtifactId} disabled={Boolean(runtimeSubmitting)}>
+          <option value="">Current artifact</option>
+          {#each artifacts as artifact (artifact.id)}<option value={artifact.id}>{artifactDisplayName(artifact)}</option>{/each}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('deploy')}>Runtime deploy</button>
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('restart')}>Restart runtime</button>
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('stop')}>Stop runtime</button>
+      </div>
+      {#if runtimeNotice}<p role="status">{runtimeNotice}</p>{/if}
+      {#if runtimeError}<p role="alert" class="error">{runtimeError}</p>{/if}
+    </section>
 
     <section>
       <h2 class="section-title"><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Recent Builds ({builds.length})</span></h2>

@@ -200,9 +200,8 @@
     deploySubmitting = true;
     resetNotice();
     try {
-      const { event: statusEvent } = await requestLLMDeploy(buildDeployPayload(deployForm, currentRequesterPubkey()));
-      const content = resultContent(statusEvent);
-      setSuccess(content.message || 'LLM deployment request accepted for async processing');
+      await requestLLMDeploy(buildDeployPayload(deployForm, currentRequesterPubkey()));
+      setSuccess('LLM deployment intent pending daemon acceptance');
     } catch (err) {
       setFailure(err.message || 'Failed to request LLM deployment');
     } finally {
@@ -218,9 +217,8 @@
     rollbackSubmitting = rollbackKey(routeState);
     resetNotice();
     try {
-      const { event: statusEvent } = await requestLLMRollback(buildRollbackPayload(routeState, currentRequesterPubkey()));
-      const content = resultContent(statusEvent);
-      setSuccess(content.message || 'LLM rollback request accepted for async processing');
+      await requestLLMRollback(buildRollbackPayload(routeState, currentRequesterPubkey()));
+      setSuccess('LLM rollback intent pending daemon acceptance');
     } catch (err) {
       setFailure(err.message || 'Failed to request LLM rollback');
     } finally {
@@ -236,7 +234,7 @@
         ? await approveLLMDeploymentIntent(intentId)
         : await rejectLLMDeploymentIntent(intentId);
       const content = resultContent(result);
-      setSuccess(content.message || `Deployment ${decision}d`);
+      setSuccess(content.message || `Deployment ${decision} intent pending daemon acceptance`);
     } catch (err) {
       setFailure(err.message || `Failed to ${decision} deployment`);
     } finally {

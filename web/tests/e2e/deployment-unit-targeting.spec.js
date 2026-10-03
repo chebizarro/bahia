@@ -91,7 +91,7 @@ test.beforeEach(async ({ page }) => {
 test.describe('Explicit deployment-unit targeting', () => {
   test('requires a unit for multi-unit environments and sends only its ID and endpoint alias', async ({ page }) => {
     await page.goto('/services/svc-compose');
-    await page.getByRole('button', { name: 'Deploy' }).click();
+    await page.getByRole('button', { name: 'Deploy', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Create Deployment Intent' });
 
     await dialog.getByLabel('Environment *').selectOption('env-multi');
@@ -118,7 +118,10 @@ test.describe('Explicit deployment-unit targeting', () => {
       intent: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents[0]
     }));
     const preview = trace.requests.find((request) => request.operation === 'service/deploy-preview');
-    const deploy = trace.requests.find((request) => request.operation === 'service/deploy');
+    await expect(page.getByTestId('deployment-pending-intents')).toContainText('Pending');
+    const deploy = await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.find(event =>
+      event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'deployment')
+        && event.tags.some(tag => tag[0] === 'op' && tag[1] === 'create')));
     expect(preview.payload).toMatchObject({
       service_id: 'svc-compose',
       environment_id: 'env-multi',
@@ -131,7 +134,7 @@ test.describe('Explicit deployment-unit targeting', () => {
         restart_policy: 'unless-stopped'
       })
     });
-    expect(deploy.payload).toMatchObject({
+    expect(JSON.parse(deploy.content)).toMatchObject({
       service_id: 'svc-compose',
       environment_id: 'env-multi',
       deployment_unit_id: 'unit-max',
@@ -139,14 +142,15 @@ test.describe('Explicit deployment-unit targeting', () => {
       expected_desired_state_hash: `sha256:${'d'.repeat(64)}`,
       idempotency_key: `sha256:${'d'.repeat(64)}`
     });
-    expect(deploy.tags).toEqual(expect.arrayContaining([['unit', 'unit-max']]));
-    expect(trace.intent.deployment_unit_id).toBe('unit-max');
+    expect(deploy.kind).toBe(30900);
+    expect(deploy.tags).toEqual(expect.arrayContaining([['op', 'create'], ['domain', 'deployment']]));
+    expect(trace.intent?.deployment_unit_id).not.toBe('unit-max');
     expect(JSON.stringify(deploy)).not.toContain('tcp://');
   });
 
   test('blocks a Compose target that is missing Bahia-managed ownership', async ({ page }) => {
     await page.goto('/services/svc-compose');
-    await page.getByRole('button', { name: 'Deploy' }).click();
+    await page.getByRole('button', { name: 'Deploy', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Create Deployment Intent' });
 
     await dialog.getByLabel('Environment *').selectOption('env-invalid');

@@ -1,4 +1,5 @@
 <script>
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -330,6 +331,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="deployment" />
   <div class="header">
     <div class="title-row">
       <h1>

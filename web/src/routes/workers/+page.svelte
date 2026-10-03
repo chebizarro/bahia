@@ -2,14 +2,15 @@
   import { workers, workerCleanupExecutions, workerJobs, operations } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+  import { workerIntentRequest } from '$lib/nostr/domain-intents.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import CleanupRequestDialog from './CleanupRequestDialog.svelte';
   import { activeCleanupByWorker } from '../fleet-health/page-model.js';
   import {
     SCHEDULING_STATES,
     WORKER_COMMANDS,
-    workerCommandPublishPayload
+    workerOperation
   } from './actions.js';
   import {
     inferWorkerActivityBucket,
@@ -36,7 +37,7 @@
       command: WORKER_COMMANDS.CLEANUP_REQUEST,
       cleanup: true,
       reasonPrompt: 'Reason for requesting worker cleanup (optional)',
-      allowedFrom: SCHEDULING_STATES
+      allowedFrom: SCHEDULING_STATES.filter(state => state !== 'disabled')
     },
     {
       label: 'Cordon',
@@ -78,7 +79,7 @@
       label: 'Edit labels',
       command: WORKER_COMMANDS.LABELS_UPDATE,
       labels: true,
-      allowedFrom: SCHEDULING_STATES
+      allowedFrom: SCHEDULING_STATES.filter(state => state !== 'disabled')
     }
   ];
 
@@ -358,22 +359,6 @@
     return labels;
   }
 
-  function randomId() {
-    const cryptoApi = globalThis.crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    if (cryptoApi?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      cryptoApi.getRandomValues(bytes);
-      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-    throw new Error('Browser cryptographic random ID generation is unavailable');
-  }
-
-  function idempotencyKey(action, worker) {
-    return `${action.command}:${worker.pubkey}:${randomId()}`;
-  }
-
-
   function actionPendingKey(worker, action) {
     return `${worker.pubkey}:${action.command}`;
   }
@@ -411,17 +396,9 @@
 
   async function publishWorkerAction(worker, action, reason, labels = null, cleanupMode = null) {
     if (!worker?.pubkey) throw new Error('Worker pubkey is required');
-    const key = idempotencyKey(action, worker);
-    const result = await publishCommand(workerCommandPublishPayload({
-      action,
-      worker,
-      key,
-      reason,
-      requesterPubkey: currentRequesterPubkey() || '',
-      labels,
-      cleanupMode
-    }));
-    return resultContent(result);
+    const result = await publishIntent(workerIntentRequest(workerOperation(action), worker,
+      resolveIntentOrgId('worker'), { reason, labels, cleanupMode }));
+    return { ...result.desiredState, message: 'Signed worker intent pending daemon acceptance' };
   }
 
   async function handleWorkerAction(event, worker, action) {
@@ -484,6 +461,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="worker" />
   <div class="header">
     <h1>
       <StandardIcon size={28} strokeWidth={1.75} ariaHidden="true" />
@@ -790,7 +768,6 @@
   open={cleanupDialogOpen}
   worker={cleanupWorker}
   activeCleanup={selectedActiveCleanup}
-  source="web.workers.list"
   onClose={closeCleanupDialog}
   onSubmitted={handleCleanupSubmitted}
 />
