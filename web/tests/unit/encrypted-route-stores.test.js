@@ -11,6 +11,14 @@ const encryptedRequestsMock = vi.hoisted(() => ({
 const nip07Mock = vi.hoisted(() => ({
   encryptNip44: vi.fn(async (_pubkey, plaintext) => 'encrypted:' + plaintext)
 }));
+const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, pending: true })));
+vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({
+  orgIdFor: record => record?.org_id || '0199c749-9300-7444-8444-444444444444',
+  submitSensitiveIntent: intentMock
+}));
+vi.mock('../../src/lib/stores/auth.svelte.js', () => ({
+  encryptWithAuth: async (_pubkey, plaintext) => 'encrypted:' + plaintext
+}));
 
 const bootstrapMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
@@ -30,43 +38,33 @@ describe('encrypted route stores', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    encryptedRequestsMock.requestEncryptedResult.mockReset();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
     systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] } });
   });
 
-  it('lists, creates, reveals, and deletes service secrets through encrypted operations', async () => {
+  it('lists and reveals through ContextVM while create/delete submit intents', async () => {
     const serviceId = 'svc-123';
     const secretId = 'secret-1';
     encryptedRequestsMock.requestEncryptedResult
       .mockResolvedValueOnce({ result: { secrets: [{ id: secretId, name: 'TOKEN', version: 1 }] } })
-      .mockResolvedValueOnce({ requestEventId: 'req-2', result: { secret: { id: 'secret-2', name: 'API_KEY', version: 1 }, status: 'created' } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } })
-      .mockResolvedValueOnce({ requestEventId: 'req-4', result: { status: 'deleted', secret_id: secretId } });
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } });
 
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
     await expect(store.listServiceSecrets(serviceId)).resolves.toHaveLength(1);
     // Create now NIP-44 encrypts client-side and sends encrypted_value
-    await expect(store.createServiceSecret(serviceId, { name: 'API_KEY', value: 'super-secret' })).resolves.toMatchObject({ id: 'secret-2' });
+    await expect(store.createServiceSecret(serviceId, { name: 'API_KEY', value: 'super-secret' })).resolves.toMatchObject({ pending: true });
     await expect(store.revealServiceSecret(serviceId, secretId)).resolves.toBe('plaintext');
-    await expect(store.deleteServiceSecret(serviceId, secretId)).resolves.toMatchObject({ status: 'deleted' });
+    await expect(store.deleteServiceSecret(serviceId, secretId)).resolves.toMatchObject({ pending: true });
 
     // List still uses ContextVM encrypted request
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, expect.objectContaining({ operation: 'services.secrets.list', payload: { service_id: serviceId } }));
-    // Create uses gift-wrapped requestEncryptedResult with NIP-44 client-side encrypted_value
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      operation: 'services.secrets.create',
-      payload: { service_id: serviceId, name: 'API_KEY', encrypted_value: 'encrypted:super-secret' }
-    }));
+    expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'create',
+      content: expect.objectContaining({ encrypted_value: 'encrypted:super-secret' }) }));
     // Reveal still uses ContextVM
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
-    // Delete uses gift-wrapped requestEncryptedResult
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, expect.objectContaining({
-      operation: 'services.secrets.delete',
-      payload: { service_id: serviceId, secret_id: secretId }
-    }));
-    // Verify NIP-44 encryption was called with the service pubkey
-    expect(nip07Mock.encryptNip44).toHaveBeenCalledWith('b'.repeat(64), 'super-secret');
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
+    expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'delete' }));
   });
 
   it('unwraps legacy encrypted route payload envelopes for service secrets', async () => {

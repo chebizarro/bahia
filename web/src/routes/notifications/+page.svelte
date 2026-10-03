@@ -4,10 +4,12 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
+  import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import { toast } from '$lib/components/toast.js';
+  import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
   import { NotificationIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     deleteNotificationChannel,
@@ -31,6 +33,18 @@
   } from './list-utils.js';
 
   let channels = $derived(normalizeChannels(notificationState.channels));
+  $effect(() => {
+    const rows = sensitivePendingState.rows;
+    const current = notificationState.channels;
+    if (!current.some(channel => channel.pendingIntentId)) return;
+    const next = current.map(channel => {
+      if (!channel.pendingIntentId) return channel;
+      const row = rows.find(item => item.intentId === channel.pendingIntentId);
+      if (row) return channel.pendingStatus === row.status ? channel : { ...channel, pendingStatus: row.status };
+      return channel.pendingDelete ? null : { ...channel, pending: false, pendingIntentId: null, pendingStatus: null };
+    }).filter(Boolean);
+    if (next.some((channel, index) => channel !== current[index]) || next.length !== current.length) notificationState.channels = next;
+  });
   let loading = $derived(notificationState.channelsLoading);
   let error = $derived(notificationState.channelsError);
   let statusFilter = $state('all');
@@ -153,11 +167,13 @@
       <LoadingButton variant="secondary" onclick={() => goto('/notifications/log')}>
         View log
       </LoadingButton>
-      <LoadingButton variant="primary" onclick={() => goto('/notifications/new')}>
+      <LoadingButton variant="primary" onclick={() => goto('/notifications/new')} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
         Create channel
       </LoadingButton>
     </div>
   </div>
+
+  <SensitiveIntentNotice domain="notification" />
 
   <section class="filters-panel" aria-labelledby="notification-filter-heading">
     <h2 id="notification-filter-heading">Filters</h2>
@@ -190,16 +206,16 @@
     <span>{enabledCount} enabled</span>
   </div>
 
-  {#if loading}
+  {#if loading && channels.length === 0}
     <p class="loading">Loading notification channels...</p>
   {:else if error}
     <ErrorState message={error} resetLabel="Try again" onReset={loadChannels} />
   {:else if channels.length === 0}
     <EmptyState
       title="No notification channels"
-      message="Create a webhook or Nostr DM channel to start receiving platform event notifications."
+      message={sensitiveMutationBlocker() || 'Create a webhook or Nostr DM channel to start receiving platform event notifications.'}
       iconComponent={NotificationIcon}
-      actionLabel="Create channel"
+      actionLabel={sensitiveMutationBlocker() ? '' : 'Create channel'}
       onAction={() => goto('/notifications/new')}
     />
   {:else}
@@ -231,7 +247,7 @@
               <td>
                 <span class="channel-status" class:enabled={channel.enabled} class:disabled={!channel.enabled}>
                   <span class="status-dot" aria-hidden="true"></span>
-                  {channel.enabled ? 'Enabled' : 'Disabled'}
+                  {channel.pending ? (channel.pendingStatus || 'Pending') : channel.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </td>
               <td>{formatDateTime(channel.updated_at || channel.created_at)}</td>
@@ -240,7 +256,8 @@
                   <button
                     type="button"
                     class="action-button"
-                    disabled={Boolean(actionKey)}
+                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
+                    title={sensitiveMutationBlocker() || undefined}
                     onclick={() => toggleChannel(channel)}
                   >
                     {actionKey === `toggle:${channel.id}` ? 'Saving...' : channel.enabled ? 'Disable' : 'Enable'}
@@ -256,7 +273,8 @@
                   <button
                     type="button"
                     class="action-button"
-                    disabled={Boolean(actionKey)}
+                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
+                    title={sensitiveMutationBlocker() || undefined}
                     onclick={() => goto(`/notifications/${encodeURIComponent(channel.id)}/edit`)}
                   >
                     Edit
@@ -264,7 +282,8 @@
                   <button
                     type="button"
                     class="action-button danger"
-                    disabled={Boolean(actionKey)}
+                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
+                    title={sensitiveMutationBlocker() || undefined}
                     onclick={() => requestDelete(channel)}
                   >
                     Delete

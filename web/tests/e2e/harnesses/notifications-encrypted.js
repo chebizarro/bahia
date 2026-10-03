@@ -46,6 +46,10 @@ export async function installEncryptedNotificationHarness(
     window.__BAHIA_E2E_ENCRYPTED_OKS = [];
     window.__BAHIA_E2E_ENCRYPTED_RESULTS = [];
     window.__BAHIA_E2E_ENCRYPTED_PENDING_RESULTS = [];
+    window.__BAHIA_E2E_INTENT_STATUS_OVERRIDE = Object.fromEntries(
+      Object.entries(operationErrors || {}).filter(([operation]) => operation.startsWith('notification.intent.'))
+        .map(([operation, error]) => [operation.replace('.intent.', '.'), error.message || String(error)])
+    );
     window.__BAHIA_E2E_NOTIFICATION_STATE = {
       nextId: 2,
       channels: (initialChannels || []).map((channel) => ({ ...channel })),
@@ -246,6 +250,24 @@ export async function installEncryptedNotificationHarness(
 
       if (Array.isArray(message) && message[0] === 'CLOSE') {
         this.__bahiaSubs?.delete(message[1]);
+        return originalSend.call(this, data);
+      }
+
+      const signedIntent = message?.[0] === 'EVENT' && message[1]?.kind === KIND_GIFT_WRAP
+        ? window.__BAHIA_E2E_SIGNED_INTENTS?.[0] : null;
+      if (signedIntent?.tags?.some(tag => tag[0] === 'domain' && tag[1] === 'notification')) {
+        const content = JSON.parse(signedIntent.content || '{}');
+        const op = signedIntent.tags.find(tag => tag[0] === 'op')?.[1];
+        const state = window.__BAHIA_E2E_NOTIFICATION_STATE;
+        if (window.__BAHIA_E2E_INTENT_STATUS_OVERRIDE?.[`notification.${op}`]) {
+          // Rejected intents do not mutate canonical channel state.
+        } else if (op === 'delete') state.channels = state.channels.filter(channel => channel.id !== content.id);
+        else {
+          const current = state.channels.find(channel => channel.id === content.id);
+          const channel = { ...current, ...content, id: content.id, updated_at: new Date().toISOString() };
+          state.channels = [channel, ...state.channels.filter(candidate => candidate.id !== channel.id)];
+        }
+        window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(`notification.intent.${op}`);
         return originalSend.call(this, data);
       }
 

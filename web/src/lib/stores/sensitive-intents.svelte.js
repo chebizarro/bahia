@@ -1,0 +1,110 @@
+import { authState } from './auth.svelte.js';
+import { getNip07Signer } from '$lib/nostr/nip07-signer.js';
+import { getNip46Signer } from '$lib/nostr/nip46.js';
+import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from '$lib/nostr/boot.js';
+import { signIntent } from '$lib/nostr/intent-signer.js';
+import { giftWrapIntent, sensitiveIntentBlocker } from '$lib/nostr/intent-giftwrap.js';
+import { createIntentOutbox } from '$lib/nostr/outbox.js';
+import { createPendingIntents } from './pending-intents.svelte.js';
+import { orgRoles } from './auth-roles.svelte.js';
+
+export const sensitivePendingState = $state({ rows: [] });
+let session = null;
+let sessionOpening = null;
+
+export function sensitiveMutationBlocker() {
+  return sensitiveIntentBlocker(authState.capabilities);
+}
+
+export function orgIdFor(record, relatedRecords = []) {
+  const explicit = record?.org_id || record?.orgId || record?.organization_id;
+  if (explicit) return explicit;
+  const orgs = [...new Set([...Object.keys(orgRoles), ...relatedRecords.map(item => item?.org_id || item?.orgId).filter(Boolean)])];
+  if (orgs.length === 1) return orgs[0];
+  throw new Error('Select an organization before changing sensitive settings');
+}
+
+function activeSigner() {
+  return authState.authMethod === 'nip46' ? getNip46Signer() : getNip07Signer();
+}
+
+async function openSession() {
+  if (authState.status !== 'authenticated' || !authState.pubkey) throw new Error('Sign in to submit an intent');
+  await boot();
+  const servicePubkey = getServicePubkey();
+  const relays = getRelayUrls();
+  const pool = getPool();
+  const store = getEventStore();
+  if (!servicePubkey || !relays.length || !pool || !store) throw new Error('Service pubkey and relays are required for sensitive intents');
+  const namespace = `${servicePubkey}-${authState.pubkey}`;
+  if (session?.namespace === namespace) return session;
+  session?.close();
+  const pending = createPendingIntents({ namespace, servicePubkey, requesterPubkey: authState.pubkey });
+  await pending.open();
+  const refresh = () => { sensitivePendingState.rows = pending.query(); };
+  const unsubPending = pending.subscribe(refresh);
+  refresh();
+
+  const sockets = new Map(relays.map(relay => [relay, pool.getPool().get(relay)]));
+  const listeners = new Set();
+  const detachSockets = [];
+  for (const [relay, socket] of sockets) {
+    const onStatus = status => {
+      if (status === 'open') for (const listener of listeners) listener({ relay });
+    };
+    socket.on('status', onStatus);
+    detachSockets.push(() => socket.off('status', onStatus));
+    const onAuth = status => {
+      if (status === 'ok') for (const listener of listeners) listener({ relay, auth: true });
+    };
+    socket.auth.on('status', onAuth);
+    detachSockets.push(() => socket.auth.off('status', onAuth));
+  }
+  const deliveryPool = {
+    publishEvent: args => pool.publishEvent(args),
+    getConnectedRelays: () => [...sockets].filter(([, socket]) => socket.status === 'open').map(([relay]) => relay),
+    onRelayReady(listener) { listeners.add(listener); return () => listeners.delete(listener); }
+  };
+  const outbox = createIntentOutbox({ namespace, pool: deliveryPool, relays, onStateChange: entry => {
+    if (entry.state === 'failed') {
+      const intentId = pending.query().find(row => row.wrapEventId === entry.id)?.intentId;
+      if (intentId) void pending.setFailed(intentId, 'Every relay permanently rejected the gift wrap');
+    }
+  } });
+  await outbox.open();
+  const statusFilter = { kinds: [30315], authors: [servicePubkey], '#p': [authState.pubkey], '#t': ['intent-status'], limit: 500 };
+  const unsubStatus = store.subscribe(statusFilter, event => void pending.handleStatus(event));
+  for (const event of store.query(statusFilter)) await pending.handleStatus(event);
+  const statusReq = pool.subscribe({ relays, filters: [statusFilter], filterKey: `intent-status:${authState.pubkey}` });
+  const unsubCanonical = store.subscribe({ kinds: [30900], authors: [servicePubkey] }, event => void pending.handleCanonical(event));
+  session = { namespace, pending, outbox, close() {
+    unsubPending(); for (const detach of detachSockets) detach(); unsubStatus(); unsubCanonical(); statusReq.unsubscribe();
+    outbox.close(); pending.close();
+  } };
+  return session;
+}
+
+function ensureSession() {
+  if (!sessionOpening) sessionOpening = openSession().finally(() => { sessionOpening = null; });
+  return sessionOpening;
+}
+
+/** Restore redacted pending metadata and resume status/outbox subscriptions. */
+export async function initializeSensitiveIntents() {
+  await ensureSession();
+}
+
+export async function submitSensitiveIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema }) {
+  const blocker = sensitiveMutationBlocker();
+  if (blocker) throw new Error(blocker);
+  const { pending, outbox } = await ensureSession();
+  const signer = activeSigner();
+  const { event: inner, intentId } = await signIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema }, signer);
+  const wrap = await giftWrapIntent(inner, getServicePubkey(), signer);
+  // Never persist plaintext sensitive desired state or the signed inner event.
+  const row = await pending.add({ event: inner, domain, op, desiredState: null });
+  row.wrapEventId = wrap.id;
+  await outbox.enqueue(wrap);
+  for (const relay of getRelayUrls()) outbox.onReconnect(relay);
+  return { id: coordinate, intentId, pending: true };
+}

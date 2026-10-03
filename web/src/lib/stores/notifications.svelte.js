@@ -1,6 +1,8 @@
 import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
 import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { mintEntityId } from '$lib/entity-id.js';
+import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
 
 export const notificationState = $state({
   channels: [],
@@ -18,9 +20,6 @@ let subscribedLogParams = null;
 export const NOTIFICATION_ENCRYPTED_OPERATIONS = {
   listChannels: 'notifications.channels.list',
   getChannel: 'notifications.channels.get',
-  createChannel: 'notifications.channels.create',
-  updateChannel: 'notifications.channels.update',
-  deleteChannel: 'notifications.channels.delete',
   testChannel: 'notifications.channels.test',
   listLogs: 'notifications.logs.list'
 };
@@ -95,26 +94,31 @@ export async function getNotificationChannel(id) {
 }
 
 export async function createNotificationChannel(payload) {
-  await ensureEncryptedNotifications();
-  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.createChannel, payload });
-  const channel = extractEncryptedPayload(response)?.channel ?? null;
-  if (channel) upsertChannel(channel);
+  const id = mintEntityId();
+  const orgId = orgIdFor(payload, notificationState.channels);
+  const intent = await submitSensitiveIntent({ domain: 'notification', op: 'create', coordinate: id, orgId,
+    content: { ...payload, id, org_id: orgId } });
+  const channel = { ...payload, id, org_id: orgId, pending: true, pendingIntentId: intent.intentId };
+  upsertChannel(channel);
   return channel;
 }
 
 export async function updateNotificationChannel(id, patch) {
-  await ensureEncryptedNotifications();
-  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.updateChannel, payload: { id, ...patch } });
-  const channel = extractEncryptedPayload(response)?.channel ?? null;
-  if (channel) upsertChannel(channel);
-  return channel;
+  const current = notificationState.channels.find(channel => channel.id === id);
+  if (!current) throw new Error('Load the canonical notification channel before updating it');
+  const channel = { ...current, ...patch, id };
+  const intent = await submitSensitiveIntent({ domain: 'notification', op: 'update', coordinate: id,
+    orgId: orgIdFor(channel), content: channel, currentRecord: current });
+  upsertChannel({ ...channel, pending: true, pendingIntentId: intent.intentId });
+  return { ...channel, pending: true, pendingIntentId: intent.intentId };
 }
 
 export async function deleteNotificationChannel(id) {
-  await ensureEncryptedNotifications();
-  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.deleteChannel, payload: { id } });
-  notificationState.channels = notificationState.channels.filter((channel) => channel.id !== id);
-  return extractEncryptedPayload(response);
+  const current = notificationState.channels.find(channel => channel.id === id);
+  const intent = await submitSensitiveIntent({ domain: 'notification', op: 'delete', coordinate: id,
+    orgId: orgIdFor(current), content: { id } });
+  upsertChannel({ ...current, id, pending: true, pendingDelete: true, pendingIntentId: intent.intentId });
+  return { id, pending: true };
 }
 
 export async function testNotificationChannel(id) {

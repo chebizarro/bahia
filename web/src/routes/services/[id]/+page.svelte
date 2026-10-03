@@ -66,6 +66,8 @@
     revealServiceSecret,
     updateServiceSecret
   } from '$lib/stores/service-secrets.svelte.js';
+  import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
+  import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
   import {
     ArtifactIcon,
     CopyIcon,
@@ -86,6 +88,17 @@
   let artifactsLoadError = $state(null);
   let environmentsLoadError = $state(null);
   let secrets = $state([]);
+  $effect(() => {
+    const rows = sensitivePendingState.rows;
+    if (!secrets.some(secret => secret.pendingIntentId)) return;
+    const next = secrets.map(secret => {
+      if (!secret.pendingIntentId) return secret;
+      const row = rows.find(item => item.intentId === secret.pendingIntentId);
+      if (row) return secret.pendingStatus === row.status ? secret : { ...secret, pendingStatus: row.status };
+      return secret.pendingDelete ? null : { ...secret, pending: false, pendingIntentId: null, pendingStatus: null };
+    }).filter(Boolean);
+    if (next.some((secret, index) => secret !== secrets[index]) || next.length !== secrets.length) secrets = next;
+  });
   let secretsLoading = $state(false);
   let secretsError = $state(null);
   let repositoriesLoading = $state(false);
@@ -877,13 +890,14 @@
     secretCreateError = null;
 
     try {
-      await createServiceSecret(serviceId, {
+      const pendingSecret = await createServiceSecret(serviceId, {
         name: secretForm.name.trim(),
-        value: secretForm.value
+        value: secretForm.value,
+        org_id: service?.org_id
       });
+      secrets = [pendingSecret, ...secrets];
       secretForm.value = '';
       closeSecretCreateModal();
-      await reloadSecrets();
     } catch (err) {
       // Never log the secret value
       secretCreateError = err.message || 'Failed to create secret';
@@ -905,10 +919,10 @@
     secretUpdateError = null;
 
     try {
-      await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue });
+      const pendingSecret = await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
+      secrets = secrets.map(secret => secret.id === pendingSecret.id ? pendingSecret : secret);
       secretValueCache = { ...secretValueCache, [secretToUpdate.id]: undefined };
       closeSecretUpdateModal();
-      await reloadSecrets();
     } catch (err) {
       secretUpdateError = err.message || 'Failed to update secret';
     } finally {
@@ -935,11 +949,11 @@
     secretDeleteError = null;
 
     try {
-      await deleteServiceSecret(serviceId, secretToDelete.id);
+      const result = await deleteServiceSecret(serviceId, secretToDelete.id, service?.org_id);
+      secrets = secrets.map(secret => secret.id === result.id ? { ...secret, ...result, pendingDelete: true } : secret);
       const { [secretToDelete.id]: _removed, ...remainingCache } = secretValueCache;
       secretValueCache = remainingCache;
       closeSecretDeleteModal();
-      await reloadSecrets();
     } catch (err) {
       secretDeleteError = err.message || 'Failed to delete secret';
     } finally {
@@ -1169,10 +1183,11 @@
     <section>
       <div class="section-header">
         <h2 class="section-title"><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Secrets ({secrets.length})</span></h2>
-        <LoadingButton variant="primary" onclick={openSecretCreateModal}>
+        <LoadingButton variant="primary" onclick={openSecretCreateModal} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
           Add Secret
         </LoadingButton>
       </div>
+      <SensitiveIntentNotice domain="secret" />
       {#if secretsLoading}
         <p class="muted">Loading secrets…</p>
       {:else if secretsError}
@@ -1188,7 +1203,8 @@
               <div class="secret-info">
                 <ProtectedIcon size={16} strokeWidth={1.75} ariaHidden="true" className="inline-entity-icon" />
                 <code class="secret-name">{secret.name}</code>
-                <span class="secret-version">v{secret.version}</span>
+                {#if secret.version}<span class="secret-version">v{secret.version}</span>{/if}
+                {#if secret.pending}<span class="secret-version">{secret.pendingStatus && secret.pendingStatus !== 'pending' ? secret.pendingStatus : 'Pending'}{secret.pendingDelete ? ' deletion' : ''}</span>{/if}
                 {#if secret.environment_id}
                   <span class="secret-scope">env: {secret.environment_id}</span>
                 {/if}
@@ -1203,12 +1219,16 @@
                 <LoadingButton
                   variant="secondary"
                   onclick={() => openSecretUpdateModal(secret)}
+                  disabled={Boolean(sensitiveMutationBlocker()) || secret.pending}
+                  title={sensitiveMutationBlocker() || undefined}
                 >
                   Update
                 </LoadingButton>
                 <LoadingButton 
                   variant="danger" 
                   onclick={() => openSecretDeleteModal(secret)}
+                  disabled={Boolean(sensitiveMutationBlocker()) || secret.pending}
+                  title={sensitiveMutationBlocker() || undefined}
                 >
                   Delete
                 </LoadingButton>
@@ -1220,7 +1240,7 @@
         <div class="empty-state">
           <ProtectedIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
           <p class="empty">No secrets configured</p>
-          <LoadingButton variant="primary" onclick={openSecretCreateModal}>
+          <LoadingButton variant="primary" onclick={openSecretCreateModal} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
             Add Your First Secret
           </LoadingButton>
         </div>
@@ -1915,6 +1935,8 @@
         type="submit"
         variant="primary"
         loading={secretCreating}
+        disabled={Boolean(sensitiveMutationBlocker())}
+        title={sensitiveMutationBlocker() || undefined}
       >
         Create Secret
       </LoadingButton>
