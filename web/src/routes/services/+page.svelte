@@ -143,8 +143,6 @@
       iconComponent={ServiceIcon}
       title="No services yet"
       message="Create your first service to get started with deployments"
-      actionLabel="Create Service"
-      onAction={openCreateModal}
     />
   {:else if filteredServices.length === 0}
     <EmptyState

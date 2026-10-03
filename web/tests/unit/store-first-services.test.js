@@ -1,154 +1,118 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { CAS_CONTROL_STATE, CP_STATE_TOPICS, BAHIA_STATE_SCHEMAS } from '../../src/lib/nostr/kinds.gen.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import { CP_STATE_TOPICS } from '../../src/lib/nostr/kinds.gen.js';
 
-// Mock boot.js to return a controllable store
-const mockEvents = vi.hoisted(() => ({ events: [] }));
-
-const bootMock = vi.hoisted(() => ({
-  getEventStore: vi.fn(() => ({
-    query: vi.fn((filter) => {
-      // Return events matching the topic filter
-      const topics = filter['#t'] || [];
-      return mockEvents.events.filter(e => {
-        const eventTopics = (e.tags || []).filter(t => t[0] === 't').map(t => t[1]);
-        return topics.some(t => eventTopics.includes(t));
-      });
-    }),
-  })),
-  onStoreRefresh: vi.fn(() => () => {}),
+const SERVICE = 'b'.repeat(64);
+const boot = vi.hoisted(() => ({ store: null }));
+vi.mock('../../src/lib/nostr/boot.js', () => ({
+  getEventStore: () => boot.store,
+  getServicePubkey: () => SERVICE
 }));
 
-vi.mock('../../src/lib/nostr/boot.js', () => bootMock);
-
-function makeEvent({ id, schema, topic, content, created_at = 100, pubkey = 'b'.repeat(64), deleted = false }) {
-  const tags = [
-    ['d', id],
-    ['domain', 'service'],
-    ['schema', schema],
-    ['t', topic],
-    ['deleted', String(deleted)],
-  ];
+function event(topic, { id = 'a'.repeat(64), d = 'entity-1', content = {}, created_at = 100, pubkey = SERVICE, deleted = false } = {}) {
   return {
-    id: `evt-${id}`,
-    kind: CAS_CONTROL_STATE,
-    pubkey,
-    created_at,
-    tags,
-    content: JSON.stringify({ ...content, id }),
+    id, kind: 30900, pubkey, created_at,
+    tags: [['d', d], ['t', topic], ['deleted', String(deleted)]],
+    content: JSON.stringify({ id: d, name: d, ...content })
   };
 }
 
-describe('store-first services', () => {
-  let services, serviceMap, rebuildServicesFromStore, initServiceStoreBinding, teardownServiceStoreBinding, resetServices;
+function fakeStore(initial = []) {
+  const events = [...initial];
+  const subscriptions = [];
+  return {
+    query: vi.fn(filter => events.filter(item => matchFilter(filter, item))),
+    subscribe: vi.fn((filter, cb) => {
+      const subscription = { filter, cb };
+      subscriptions.push(subscription);
+      return () => subscriptions.splice(subscriptions.indexOf(subscription), 1);
+    }),
+    emit(item) {
+      events.push(item);
+      for (const { filter, cb } of [...subscriptions]) if (matchFilter(filter, item)) cb(item);
+    }
+  };
+}
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    mockEvents.events = [];
+const domains = [
+  { name: 'services', topic: CP_STATE_TOPICS.SERVICE_REGISTRY, module: 'services', array: 'services', bind: 'initServiceStoreBinding', unbind: 'teardownServiceStoreBinding' },
+  { name: 'environments', topic: CP_STATE_TOPICS.ENVIRONMENT_REGISTRY, module: 'environments', array: 'environments', bind: 'initEnvironmentStoreBinding', unbind: 'teardownEnvironmentStoreBinding' },
+  { name: 'states', topic: CP_STATE_TOPICS.SERVICE_STATE, module: 'deployments', array: 'states', bind: 'initCoreDeploymentStoreBindings', unbind: 'teardownCoreDeploymentStoreBindings', content: { service_id: 'svc', environment_id: 'env' }, rowId: 'svc:env' },
+  { name: 'policies', topic: CP_STATE_TOPICS.POLICY_REGISTRY, module: 'deployments', array: 'policies', bind: 'initCoreDeploymentStoreBindings', unbind: 'teardownCoreDeploymentStoreBindings' },
+  { name: 'package repositories', topic: CP_STATE_TOPICS.PACKAGE_REPOSITORY, module: 'deployments', array: 'packageRepositories', bind: 'initCoreDeploymentStoreBindings', unbind: 'teardownCoreDeploymentStoreBindings' },
+  { name: 'package artifacts', topic: CP_STATE_TOPICS.PACKAGE_ARTIFACT, module: 'deployments', array: 'packageArtifacts', bind: 'initCoreDeploymentStoreBindings', unbind: 'teardownCoreDeploymentStoreBindings' },
+  { name: 'package promotions', topic: CP_STATE_TOPICS.PACKAGE_PROMOTION, module: 'deployments', array: 'packagePromotions', bind: 'initCoreDeploymentStoreBindings', unbind: 'teardownCoreDeploymentStoreBindings' }
+];
 
-    const mod = await import('../../src/lib/stores/collections/services.svelte.js');
-    services = mod.services;
-    serviceMap = mod.serviceMap;
-    rebuildServicesFromStore = mod.rebuildServicesFromStore;
-    initServiceStoreBinding = mod.initServiceStoreBinding;
-    teardownServiceStoreBinding = mod.teardownServiceStoreBinding;
-    resetServices = mod.resetServices;
-    resetServices();
-  });
-
-  it('rebuilds services from BahiaEventStore events', () => {
-    mockEvents.events = [
-      makeEvent({ id: 'svc-1', schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, topic: CP_STATE_TOPICS.SERVICE_REGISTRY, content: { name: 'Alpha' } }),
-      makeEvent({ id: 'svc-2', schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, topic: CP_STATE_TOPICS.SERVICE_REGISTRY, content: { name: 'Beta' } }),
-    ];
-
-    rebuildServicesFromStore();
-
-    expect(services).toHaveLength(2);
-    expect(services[0].name).toBe('Alpha');
-    expect(services[1].name).toBe('Beta');
-    expect(serviceMap.size).toBe(2);
-  });
-
-  it('renders empty when store has no matching events', () => {
-    mockEvents.events = [];
-
-    rebuildServicesFromStore();
-
-    expect(services).toHaveLength(0);
-  });
-
-  it('does nothing when store is null', () => {
-    bootMock.getEventStore.mockReturnValueOnce(null);
-
-    rebuildServicesFromStore();
-
-    expect(services).toHaveLength(0);
-  });
-
-  it('initServiceStoreBinding calls rebuild and registers for refresh', () => {
-    mockEvents.events = [
-      makeEvent({ id: 'svc-init', schema: BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, topic: CP_STATE_TOPICS.SERVICE_REGISTRY, content: { name: 'Init Service' } }),
-    ];
-
-    initServiceStoreBinding();
-
-    expect(services).toHaveLength(1);
-    expect(services[0].name).toBe('Init Service');
-    expect(bootMock.onStoreRefresh).toHaveBeenCalledOnce();
-  });
-
-  it('teardown unsubscribes from refresh', () => {
-    const unsub = vi.fn();
-    bootMock.onStoreRefresh.mockReturnValueOnce(unsub);
-
-    initServiceStoreBinding();
-    teardownServiceStoreBinding();
-
-    expect(unsub).toHaveBeenCalledOnce();
-  });
+beforeEach(() => {
+  vi.resetModules();
+  const callbacks = [];
+  vi.stubGlobal('requestAnimationFrame', cb => { callbacks.push(cb); return callbacks.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  globalThis.flushCoreFrame = () => {
+    for (const cb of callbacks.splice(0)) cb();
+  };
 });
 
-describe('store-first environments', () => {
-  let environments, environmentMap, rebuildEnvironmentsFromStore, initEnvironmentStoreBinding, teardownEnvironmentStoreBinding, resetEnvironments;
+describe.each(domains)('$name store query', ({ topic, module, array, bind, unbind, content = {}, rowId = 'entity-1' }) => {
+  it('hydrates by topic, updates in one frame, rejects older and wrong-author events, and removes tombstones', async () => {
+    const seed = event(topic, { content: { ...content, name: 'cached' } });
+    boot.store = fakeStore([seed, event(CP_STATE_TOPICS.BACKUP_POLICY, { d: 'other' })]);
+    const collection = await import(`../../src/lib/stores/collections/${module}.svelte.js`);
+    collection[bind]();
+    expect(collection[array]).toHaveLength(1);
+    expect(collection[array][0]).toMatchObject({ id: rowId, name: 'cached' });
+    expect(boot.store.query).toHaveBeenCalledWith(expect.objectContaining({ kinds: [30900], '#t': [topic], authors: [SERVICE] }));
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    mockEvents.events = [];
+    boot.store.emit(event(topic, { id: 'c'.repeat(64), content: { ...content, name: 'live' }, created_at: 101 }));
+    globalThis.flushCoreFrame();
+    expect(collection[array][0].name).toBe('live');
+    boot.store.emit(event(topic, { id: 'd'.repeat(64), content: { ...content, name: 'stale' }, created_at: 100 }));
+    boot.store.emit(event(topic, { id: 'e'.repeat(64), content: { ...content, name: 'wrong author' }, created_at: 200, pubkey: 'f'.repeat(64) }));
+    globalThis.flushCoreFrame();
+    expect(collection[array][0].name).toBe('live');
 
-    const mod = await import('../../src/lib/stores/collections/environments.svelte.js');
-    environments = mod.environments;
-    environmentMap = mod.environmentMap;
-    rebuildEnvironmentsFromStore = mod.rebuildEnvironmentsFromStore;
-    initEnvironmentStoreBinding = mod.initEnvironmentStoreBinding;
-    teardownEnvironmentStoreBinding = mod.teardownEnvironmentStoreBinding;
-    resetEnvironments = mod.resetEnvironments;
-    resetEnvironments();
-  });
+    boot.store.emit(event(topic, { id: 'b'.repeat(64), content: { ...content, name: 'tie winner' }, created_at: 101 }));
+    globalThis.flushCoreFrame();
+    expect(collection[array][0].name).toBe('tie winner');
+    boot.store.emit(event(topic, { id: 'f'.repeat(64), content, created_at: 102, deleted: true }));
+    globalThis.flushCoreFrame();
+    expect(collection[array]).toHaveLength(0);
+    collection[unbind]();
+  }, 15000);
 
-  it('rebuilds environments from BahiaEventStore events', () => {
-    mockEvents.events = [
-      makeEvent({ id: 'env-1', schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, topic: CP_STATE_TOPICS.ENVIRONMENT_REGISTRY, content: { name: 'production' } }),
-      makeEvent({ id: 'env-2', schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, topic: CP_STATE_TOPICS.ENVIRONMENT_REGISTRY, content: { name: 'staging' } }),
-    ];
+  it('removes a live coordinate on kind-5 deletion without a collection cascade', async () => {
+    boot.store = fakeStore([event(topic, { content })]);
+    const collection = await import(`../../src/lib/stores/collections/${module}.svelte.js`);
+    collection[bind]();
+    expect(collection[array]).toHaveLength(1);
+    boot.store.emit({ id: '5'.repeat(64), kind: 5, pubkey: SERVICE, created_at: 103, tags: [['a', `30900:${SERVICE}:entity-1`]], content: '' });
+    globalThis.flushCoreFrame();
+    expect(collection[array]).toHaveLength(0);
+    boot.store.emit(event(topic, { id: '1'.repeat(64), content, created_at: 102 }));
+    globalThis.flushCoreFrame();
+    expect(collection[array]).toHaveLength(0);
+    boot.store.emit(event(topic, { id: '2'.repeat(64), content: { ...content, name: 'recreated' }, created_at: 104 }));
+    globalThis.flushCoreFrame();
+    expect(collection[array][0].name).toBe('recreated');
+    collection[unbind]();
+  }, 15000);
+});
 
-    rebuildEnvironmentsFromStore();
-
-    expect(environments).toHaveLength(2);
-    expect(environments.map(e => e.name).sort()).toEqual(['production', 'staging']);
-    expect(environmentMap.size).toBe(2);
-  });
-
-  it('initEnvironmentStoreBinding calls rebuild and registers for refresh', () => {
-    mockEvents.events = [
-      makeEvent({ id: 'env-init', schema: BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, topic: CP_STATE_TOPICS.ENVIRONMENT_REGISTRY, content: { name: 'dev' } }),
-    ];
-
-    initEnvironmentStoreBinding();
-
-    expect(environments).toHaveLength(1);
-    expect(environments[0].name).toBe('dev');
-    expect(bootMock.onStoreRefresh).toHaveBeenCalledOnce();
-  });
+describe('exact e deletion', () => {
+  it('does not delete a newer revision when an old event id is deleted', async () => {
+    const topic = CP_STATE_TOPICS.SERVICE_REGISTRY;
+    boot.store = fakeStore([event(topic, { id: 'a'.repeat(64), content: { name: 'old' } })]);
+    const collection = await import('../../src/lib/stores/collections/services.svelte.js');
+    collection.initServiceStoreBinding();
+    boot.store.emit(event(topic, { id: 'b'.repeat(64), content: { name: 'new' }, created_at: 101 }));
+    globalThis.flushCoreFrame();
+    boot.store.emit({ id: '5'.repeat(64), kind: 5, pubkey: SERVICE, created_at: 102, tags: [['e', 'a'.repeat(64)]], content: '' });
+    globalThis.flushCoreFrame();
+    expect(collection.services[0].name).toBe('new');
+    boot.store.emit({ id: '6'.repeat(64), kind: 5, pubkey: SERVICE, created_at: 99, tags: [['e', 'b'.repeat(64)]], content: '' });
+    globalThis.flushCoreFrame();
+    expect(collection.services).toHaveLength(0);
+    collection.teardownServiceStoreBinding();
+  }, 15000);
 });

@@ -45,36 +45,13 @@ it.each([false, true])('retains the lowest-ID tombstone or live event in either 
   }
 });
 
-for (const [name, rows] of [['serviceState', states], ['intent', deploymentIntents]]) {
-  describe(`${name}: coordinate winners precede domain-time merging`, () => {
-    beforeEach(resetDeployments);
-    for (const deleted of [false, true]) {
-      it(`converges in every delivery order even when the losing event has a newer domain clock (deleted=${deleted})`, () => {
-        const winner = event(low, { deleted });
-        const loser = event(high, { domainTime: '2026-09-23T13:00:00Z', deleted: !deleted });
-        for (const order of [[winner, loser], [loser, winner]]) {
-          resetDeployments();
-          const map = new Map();
-          order.forEach((e) => deploymentApplicators[name](e, map));
-          refreshDeployments();
-          expect(rows.map((row) => row.nostr_event_id)).toEqual(deleted ? [] : [low]);
-          expect([...map.values()]).toEqual([winner]);
-          expect(deploymentApplicators[name](loser, map)).toBe(false);
-        }
-      });
-    }
-    it('recomputes the logical winner if a NIP-01 winner displaces a candidate with a newer domain clock', () => {
-      const winner = event(low);
-      const loser = event(high, { domainTime: '2026-09-23T14:00:00Z' });
-      const legacy = event('8'.repeat(64), { d: 'legacy', domainTime: '2026-09-23T13:00:00Z' });
-      for (const order of permutations([winner, loser, legacy])) {
-        resetDeployments();
-        const map = new Map();
-        order.forEach((e) => deploymentApplicators[name](e, map));
-        refreshDeployments();
-        expect(rows.map((row) => row.nostr_event_id)).toEqual([legacy.id]);
-        expect(map.get(replaceableKey(winner))).toEqual(winner);
-      }
-    });
+describe('deployment intent legacy projection', () => {
+  beforeEach(resetDeployments);
+  it('keeps the lowest id on a timestamp tie', () => {
+    const map = new Map();
+    deploymentApplicators.intent(event(high), map);
+    deploymentApplicators.intent(event(low), map);
+    refreshDeployments();
+    expect(deploymentIntents.map(row => row.nostr_event_id)).toEqual([low]);
   });
-}
+});

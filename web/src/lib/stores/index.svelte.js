@@ -86,18 +86,11 @@ const inFlight = {
   events: null
 };
 
-export async function loadServices() { return bootstrapControlplane(); }
-export async function loadEnvironments() { return bootstrapControlplane(); }
-export async function loadStates() { return bootstrapControlplane(); }
 export async function loadWorkers() { return bootstrapControlplane(); }
 export async function loadArtifacts() { return bootstrapControlplane(); }
 export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }
 export async function loadDeploymentRuns() { return bootstrapControlplane(); }
-export async function loadPolicies() { return bootstrapControlplane(); }
-export async function loadPackageRepositories() { return bootstrapControlplane(); }
-export async function loadPackageArtifacts() { return bootstrapControlplane(); }
-export async function loadPackagePromotions() { return bootstrapControlplane(); }
 export async function loadBackupControlplane() { return bootstrapControlplane(); }
 
 export async function loadAll() {

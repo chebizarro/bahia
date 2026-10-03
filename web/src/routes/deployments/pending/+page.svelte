@@ -11,8 +11,6 @@
     services,
     environments,
     loadDeploymentIntents,
-    loadServices,
-    loadEnvironments,
     operations
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
@@ -87,7 +85,7 @@
     error = null;
 
     try {
-      await Promise.all([loadDeploymentIntents(), loadServices(), loadEnvironments()]);
+      await Promise.all([loadDeploymentIntents()]);
     } catch (err) {
       error = err.message || 'Failed to load pending approvals';
       console.error('Error loading pending approvals:', err);

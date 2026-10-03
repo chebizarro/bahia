@@ -1,5 +1,8 @@
 # Policies
 
+The web policy list and detail views read the local verified event store by the `policy-registry` topic. Cached policies render without a network loading gate; live canonical `30900` updates and kind-5 deletions update the view in place. Policy mutation transport remains unchanged in this phase.
+
+
 **Policies** in Bahia define rules for deployment approval, SBOM requirements, and operational governance.
 
 ## Overview

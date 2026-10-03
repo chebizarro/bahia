@@ -127,15 +127,9 @@ const PERSISTED_COLLECTION_CAPS = Object.freeze({
 });
 
 export const PERSISTED_CONTROLPLANE_COLLECTIONS = Object.freeze([
-  'services',
-  'environments',
-  'states',
   'llmRoutes',
   'artifacts',
   'deploymentIntents',
-  'policies',
-  'packageRepositories',
-  'packageArtifacts',
   'workers',
   'workerAssignments',
   'workerDrainStatuses',

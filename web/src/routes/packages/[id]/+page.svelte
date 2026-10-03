@@ -12,17 +12,12 @@
     packageRepositories,
     packageArtifacts,
     packagePromotions,
-    operations,
-    loadPackageRepositories,
-    loadPackageArtifacts,
-    loadPackagePromotions
+    operations
   } from '$lib/stores';
   import { promotePackage, yankPackage } from '$lib/stores/public-controlplane.svelte.js';
   import { packageDriftOutcome, packageOperationLabel, packageOperationsForRepository } from '../page-model.js';
 import { formatBytes } from '../../instance-health/page-model.js';
 
-  let loading = $state(true);
-  let error = $state(null);
   let actionError = $state(null);
   let promoteOpen = $state(false);
   let yankOpen = $state(false);
@@ -40,26 +35,6 @@ import { formatBytes } from '../../instance-health/page-model.js';
   let targetRepositoryOptions = $derived(packageRepositories
     .filter((candidate) => candidate.id !== repositoryId && !candidate.deleted)
     .map((candidate) => ({ value: candidate.id, label: candidate.name || candidate.id })));
-
-  $effect(() => {
-    if (!repositoryId) return;
-    void loadDetail();
-  });
-
-  async function loadDetail() {
-    loading = true;
-    error = null;
-    try {
-      await Promise.all([loadPackageRepositories(), loadPackageArtifacts(), loadPackagePromotions()]);
-      if (!packageRepositories.find((candidate) => candidate.id === repositoryId)) {
-        throw new Error('Package repository not found');
-      }
-    } catch (err) {
-      error = err.message || 'Failed to load package repository';
-    } finally {
-      loading = false;
-    }
-  }
 
   function formatDate(value) {
     if (!value) return '-';
@@ -203,11 +178,7 @@ import { formatBytes } from '../../instance-health/page-model.js';
 <div class="page">
   <a href="/packages" class="back">← Packages</a>
 
-  {#if loading}
-    <p class="loading">Loading package repository...</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title="Unable to load package repository" message={error} />
-  {:else if repository}
+  {#if repository}
     <div class="header">
       <h1><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> {repository.name}</h1>
       <span class="drift {liveDrift?.status || driftStatus(repository)}">Drift: {liveDrift?.status || driftStatus(repository)}</span>

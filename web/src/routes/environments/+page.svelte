@@ -86,7 +86,7 @@
   };
 
   let columns = $derived([
-    { key: 'name', label: 'Name', icon: EnvironmentIcon, text: (r) => r.name || '-' },
+    { key: 'name', label: 'Name', icon: EnvironmentIcon, text: (r) => r.name || '-', href: (r) => `/environments/${encodeURIComponent(r.id)}` },
     { key: 'deploy_strategy', label: 'Strategy' },
     {
       key: 'protected',
@@ -239,11 +239,9 @@
       iconComponent={EnvironmentIcon}
       title="No environments yet"
       message="Create your first environment to define deployment targets"
-      actionLabel="Create Environment"
-      onAction={openCreateModal}
     />
   {:else}
-    <Table {columns} data={environments} onRowClick={(row) => goto(`/environments/${row.id}`)} />
+    <Table {columns} data={environments} rowClickable={true} onRowClick={(row) => goto(`/environments/${row.id}`)} />
   {/if}
 </div>
 

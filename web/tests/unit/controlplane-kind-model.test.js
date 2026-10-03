@@ -8,7 +8,6 @@ import {
   resetEventRouting
 } from '../../src/lib/stores/controlplane/events.svelte.js';
 import { controlplaneConnection } from '../../src/lib/stores/controlplane/connection.svelte.js';
-import { resetServices, serviceMap } from '../../src/lib/stores/collections/services.svelte.js';
 import { applyActivityEvent, events as activity, refreshActivity, resetActivity } from '../../src/lib/stores/collections/activity.svelte.js';
 import { CP_AUDIT_TOPIC, CP_STATE_TOPICS, CP_STATE_TOPIC_BY_SCHEMA } from '../../src/lib/nostr/kinds.gen.js';
 
@@ -45,7 +44,6 @@ function auditFact({ id, fact, type = 'drift.detected', state = `service:${SERVI
 beforeEach(() => {
   controlplaneConnection.servicePubkey = SERVICE_PUBKEY;
   resetEventRouting();
-  resetServices();
   resetActivity();
 });
 
@@ -89,8 +87,7 @@ describe('controlplane read-model filters on single-letter topics', () => {
     expect(matchFilter(stateFilter, pkg)).toBe(true);
     expect(matchFilter(stateFilter, untopiced)).toBe(false);
 
-    expect(applyControlplaneEvent(service)).toBe(true);
-    expect(serviceMap.get(SERVICE_ID)).toMatchObject({ name: 'api' });
+    expect(applyControlplaneEvent(service)).toBe(false); // core view is fed by BahiaEventStore, not the legacy router
   });
 });
 

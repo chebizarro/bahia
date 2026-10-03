@@ -18,7 +18,6 @@
 
 import { Repository } from '@welshman/net';
 import { matchFilters, getAddress } from '@welshman/util';
-import { on } from '@welshman/lib';
 import { validateForIngestion, isExpired } from './ingestion.js';
 
 // ---------------------------------------------------------------------------
@@ -240,15 +239,14 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
 
   /** @type {Map<string, number>} cursor key → since */
   const cursors = new Map();
+  const deletedIds = new Set();
+  const deletedCoordinates = new Map();
 
   /** @type {number | null} */
   let sweepTimer = null;
 
   /** @type {Array<{ filter: import('./store-interface.js').Filter, cb: import('./store-interface.js').EventCallback }>} */
   const subscriptions = [];
-
-  /** @type {(() => void) | null} */
-  let repoUnsub = null;
 
   // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -258,7 +256,13 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     // Load persisted events into the in-memory repository
     const events = await loadAllEvents(db);
     if (events.length > 0) {
-      repository.load(events);
+      for (const event of events) if (event.kind === 5) indexDeletion(event);
+      const surviving = events.filter(event => !isTombstoned(event));
+      // IndexedDB getAll is ordered by id, not NIP-01 winner order. Load
+      // older timestamps first and higher ids before lower ids on a tie.
+      repository.load(surviving.sort((a, b) =>
+        a.created_at - b.created_at || b.id.localeCompare(a.id)
+      ));
     }
 
     // Load persisted cursors
@@ -272,32 +276,12 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
 
     // NIP-40: periodic sweep
     sweepTimer = setInterval(() => sweepExpired(), SWEEP_INTERVAL_MS);
-
-    // Wire repository updates → subscriber notifications
-    repoUnsub = on(repository, 'update', ({ added }) => {
-      if (subscriptions.length === 0) return;
-      for (const event of added) {
-        for (const sub of subscriptions) {
-          if (matchFilters([sub.filter], event)) {
-            try {
-              sub.cb(event);
-            } catch (err) {
-              console.error('[BahiaEventStore] subscriber error:', err);
-            }
-          }
-        }
-      }
-    });
   }
 
   async function close() {
     if (sweepTimer !== null) {
       clearInterval(sweepTimer);
       sweepTimer = null;
-    }
-    if (repoUnsub) {
-      repoUnsub();
-      repoUnsub = null;
     }
     if (db) {
       db.close();
@@ -312,12 +296,31 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
   async function clear() {
     repository.clear();
     cursors.clear();
+    deletedIds.clear();
+    deletedCoordinates.clear();
     if (db) {
       await clearDatabase(db);
     }
   }
 
   // ── Ingestion ─────────────────────────────────────────────────────
+
+  function indexDeletion(deletion) {
+    for (const tag of deletion.tags || []) {
+      if (tag[0] === 'e' && tag[1]) deletedIds.add(`${deletion.pubkey}:${tag[1]}`);
+      if (tag[0] === 'a' && tag[1] && /^\d+:/.test(tag[1]) && tag[1].split(':')[1] === deletion.pubkey) {
+        deletedCoordinates.set(tag[1], Math.max(deletedCoordinates.get(tag[1]) || 0, deletion.created_at));
+      }
+    }
+  }
+
+  function isTombstoned(event) {
+    if (event.kind === 5) return false;
+    if (deletedIds.has(`${event.pubkey}:${event.id}`)) return true;
+    if (!isAddressableKind(event.kind)) return false;
+    const cutoff = deletedCoordinates.get(getAddress(event));
+    return cutoff !== undefined && event.created_at <= cutoff;
+  }
 
   function ingest(event) {
     // 1. Validate structure + signature
@@ -327,7 +330,7 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
 
     // 2. Check NIP-40 expiration before storing
-    if (isExpired(event)) {
+    if (isExpired(event) || isTombstoned(event)) {
       return false;
     }
 
@@ -346,6 +349,15 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
       }
     }
 
+    // Kind 5 must reach topic projections even though it does not match their
+    // topic filter. The repository retains the deletion marker for late events.
+    if (event.kind === 5) {
+      if (repository.getEvent(event.id)) return false;
+      deleteTombstoned(event);
+      notify(event);
+      return true;
+    }
+
     // 4. Publish to repository (handles NIP-01 replaceable/addressable
     //    latest-wins and NIP-09 deletion).  Returns false if the event
     //    is a duplicate or was superseded.
@@ -353,6 +365,8 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     if (!accepted) {
       return false;
     }
+
+    notify(event);
 
     // 5. Persist to IndexedDB (fire-and-forget; the in-memory repo is
     //    the source of truth, IndexedDB is durable cache)
@@ -363,6 +377,14 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
 
     return true;
+  }
+
+  function notify(event) {
+    for (const sub of subscriptions) {
+      if (!matchFilters([sub.filter], event)) continue;
+      try { sub.cb(event); }
+      catch (err) { console.error('[BahiaEventStore] subscriber error:', err); }
+    }
   }
 
   // ── Query ─────────────────────────────────────────────────────────
@@ -402,6 +424,7 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     if (!kind5 || kind5.kind !== 5) return;
 
     const deletionAuthor = kind5.pubkey;
+    indexDeletion(kind5);
 
     for (const tag of kind5.tags) {
       if (tag[0] === 'e' && tag[1]) {

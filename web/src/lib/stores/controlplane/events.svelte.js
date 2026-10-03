@@ -17,8 +17,6 @@ import {
 } from '../../nostr/client.js';
 import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../nostr/cp-state.js';
 import { controlplaneConnection } from './connection.svelte.js';
-import { applyServiceEvent } from '../collections/services.svelte.js';
-import { applyEnvironmentEvent } from '../collections/environments.svelte.js';
 import { deploymentApplicators } from '../collections/deployments.svelte.js';
 import {
   applyWorkerEvent,
@@ -83,7 +81,16 @@ function canonicalAuthorFilter() {
 // #domain/#schema.
 export function controlplaneStateTopics() {
   const topics = new Set();
-  for (const route of handlers.keys()) {
+  for (const route of [
+    ...handlers.keys(),
+    BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY,
+    BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY,
+    BAHIA_STATE_SCHEMAS.SERVICE_STATE,
+    BAHIA_STATE_SCHEMAS.POLICY_REGISTRY,
+    BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY,
+    BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY,
+    BAHIA_STATE_SCHEMAS.PACKAGE_PROMOTION_REGISTRY
+  ]) {
     const topic = CP_STATE_TOPIC_BY_SCHEMA[route];
     if (topic) topics.add(topic);
   }
@@ -95,6 +102,7 @@ export function readModelFilters() {
   return [
     { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': controlplaneStateTopics(), limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: NON_STATE_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
+    { kinds: [5], limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
     {
       kinds: LOOM_JOB_KINDS,
@@ -180,19 +188,12 @@ export function resetEventRouting() {
 }
 
 const handlers = new Map([
-  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, applyServiceEvent],
-  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, applyEnvironmentEvent],
-  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, deploymentApplicators.serviceState],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, deploymentApplicators.llmRoute],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE, deploymentApplicators.llmRouteState],
   [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, deploymentApplicators.artifact],
   [BAHIA_STATE_SCHEMAS.BUILD_REGISTRY, deploymentApplicators.build],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, deploymentApplicators.intent],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY, deploymentApplicators.run],
-  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, deploymentApplicators.policy],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, deploymentApplicators.packageRepository],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, deploymentApplicators.packageArtifact],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_PROMOTION_REGISTRY, deploymentApplicators.packagePromotion],
   [LOOM_WORKER_ADVERTISEMENT, applyWorkerEvent],
   [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
   [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
@@ -236,15 +237,9 @@ const handlers = new Map([
 // Routes whose events feed a persisted (cached) collection. The cache stores
 // these raw events so hydration can replay them through applyControlplaneEvent.
 const PERSISTED_ROUTE_COLLECTIONS = new Map([
-  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, 'services'],
-  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, 'environments'],
-  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, 'states'],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, 'llmRoutes'],
   [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, 'artifacts'],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, 'deploymentIntents'],
-  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, 'policies'],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, 'packageRepositories'],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, 'packageArtifacts'],
   [LOOM_WORKER_ADVERTISEMENT, 'workers'],
   [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
   [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],

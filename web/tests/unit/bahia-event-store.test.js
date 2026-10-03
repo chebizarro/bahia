@@ -166,6 +166,62 @@ describe('BahiaEventStore', () => {
     expect(results).toHaveLength(0);
   });
 
+  it('ingests kind-5 through the same subscription path and notifies the view', () => {
+    const target = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:live'], ['t', 'service-registry']], content: '{"id":"svc:live"}', created_at: 100 });
+    const received = [];
+    const unsub = store.subscribe({ kinds: [5], authors: [alice.pk] }, event => received.push(event));
+    expect(store.ingest(target)).toBe(true);
+    const deletion = signedEvent(alice.sk, { kind: 5, tags: [['a', `30900:${alice.pk}:svc:live`]], created_at: 101 });
+    expect(store.ingest(deletion)).toBe(true);
+    expect(received.map(event => event.id)).toEqual([deletion.id]);
+    expect(store.query({ kinds: [30900], '#t': ['service-registry'] })).toEqual([]);
+    unsub();
+  });
+
+  it('does not resurrect a deleted coordinate when the IndexedDB store reopens', async () => {
+    const prefix = uniquePrefix(alice.pk);
+    const database = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await database.open();
+    const target = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:deleted'], ['t', 'service-registry']], content: '{"id":"svc:deleted"}', created_at: 100 });
+    const deletion = signedEvent(alice.sk, { kind: 5, tags: [['a', `30900:${alice.pk}:svc:deleted`]], created_at: 101 });
+    database.ingest(target);
+    database.ingest(deletion);
+    // A subsequent transaction is ordered after the store's pending writes.
+    const idb = await new Promise((resolve, reject) => {
+      const request = indexedDB.open(`bahia-events-${prefix}`, 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = idb.transaction('events', 'readonly');
+      transaction.objectStore('events').getAll();
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    idb.close();
+    await database.close();
+    const reopened = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await reopened.open();
+    expect(reopened.query({ kinds: [30900], '#t': ['service-registry'] })).toEqual([]);
+    await reopened.close();
+  });
+
+  it('rejects an older coordinate event delivered after an a-tag deletion', () => {
+    const deletion = signedEvent(alice.sk, { kind: 5, tags: [['a', `30900:${alice.pk}:svc:late`]], created_at: 101 });
+    expect(store.ingest(deletion)).toBe(true);
+    const late = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:late'], ['t', 'service-registry']], content: '{"id":"svc:late"}', created_at: 100 });
+    expect(store.ingest(late)).toBe(false);
+    expect(store.query({ kinds: [30900], '#d': ['svc:late'] })).toEqual([]);
+  });
+
+  it('accepts a canonical revision newer than its coordinate deletion', () => {
+    const deletion = signedEvent(alice.sk, { kind: 5, tags: [['a', `30900:${alice.pk}:svc:recreated`]], created_at: 101 });
+    expect(store.ingest(deletion)).toBe(true);
+    const newer = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:recreated'], ['t', 'service-registry']], content: '{"id":"svc:recreated"}', created_at: 102 });
+    expect(store.ingest(newer)).toBe(true);
+    expect(store.query({ kinds: [30900], '#d': ['svc:recreated'] }).map(event => event.id)).toEqual([newer.id]);
+  });
+
   it('kind-5 from a DIFFERENT author is ignored', () => {
     const target = signedEvent(alice.sk, { kind: 30900, content: '{"name":"svc1"}', tags: [['d', 'svc:1']] });
     store.ingest(target);
@@ -274,6 +330,32 @@ describe('BahiaEventStore', () => {
     // NIP-01: lowest id wins when created_at is identical
     const expectedWinner = e1.id < e2.id ? e1 : e2;
     expect(results[0].id).toBe(expectedWinner.id);
+  });
+
+  it('hydrates the lowest-id winner from persisted equal-timestamp coordinates', async () => {
+    const prefix = uniquePrefix(alice.pk);
+    const database = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await database.open();
+    await database.close();
+    const first = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:persisted-tie']], content: '{"v":1}', created_at: 1700000000 });
+    const second = signedEvent(alice.sk, { kind: 30900, tags: [['d', 'svc:persisted-tie']], content: '{"v":2}', created_at: 1700000000 });
+    const idb = await new Promise((resolve, reject) => {
+      const request = indexedDB.open(`bahia-events-${prefix}`, 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = idb.transaction('events', 'readwrite');
+      transaction.objectStore('events').put(first);
+      transaction.objectStore('events').put(second);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    idb.close();
+    const reopened = createBahiaEventStore({ servicePubkeyPrefix: prefix });
+    await reopened.open();
+    expect(reopened.query({ kinds: [30900], '#d': ['svc:persisted-tie'] }).map(event => event.id)).toEqual([first.id < second.id ? first.id : second.id]);
+    await reopened.close();
   });
 
   // ── Namespace isolation ───────────────────────────────────────────

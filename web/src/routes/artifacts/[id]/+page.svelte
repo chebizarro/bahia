@@ -10,7 +10,7 @@ import Table from '$lib/components/Table.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
-  import { artifacts, services, loadArtifacts, loadServices, operations, operationsForEntity } from '$lib/stores';
+  import { artifacts, services, loadArtifacts, operations, operationsForEntity } from '$lib/stores';
   import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
@@ -138,7 +138,7 @@ import Table from '$lib/components/Table.svelte';
     error = null;
 
     try {
-      await Promise.allSettled([loadArtifacts(), loadServices()]);
+      await Promise.allSettled([loadArtifacts()]);
       await tick();
       const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
