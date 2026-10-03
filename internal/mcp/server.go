@@ -60,6 +60,7 @@ type Server struct {
 	dnsEndpoints         DNSEndpointLister
 	authorizedPubkeys    []string
 	rbac                 *auth.RBAC
+	outbox               OutboxReader // optional: for outbox inspection tool
 }
 
 // Config holds MCP server configuration.
@@ -103,6 +104,8 @@ type ServerDeps struct {
 	AuthorizedPubkeys []string
 	// RBAC is required for tenant-scoped authorization such as secret access.
 	RBAC *auth.RBAC
+	// Outbox is optional: exposes daemon outbox counts and failed entries to MCP callers.
+	Outbox OutboxReader
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -214,6 +217,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		dnsEndpoints:         deps.DNSEndpoints,
 		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
 		rbac:                 deps.RBAC,
+		outbox:               deps.Outbox,
 	}
 }
 
@@ -1834,7 +1838,8 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, workerToolDefinitions()...)
 	tools = append(tools, packageToolDefinitions()...)
 	tools = append(tools, backupToolDefinitions()...)
-	return append(tools, docsToolDefinitions()...)
+	tools = append(tools, docsToolDefinitions()...)
+	return append(tools, outboxToolDefinitions()...)
 }
 
 // CallTool handles an MCP tool call.
@@ -2211,6 +2216,9 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleDocsRead(ctx, arguments)
 	case "bahia_docs_list":
 		return s.handleDocsList(ctx, arguments)
+	// Outbox inspection
+	case "bahia_outbox_status":
+		return s.handleOutboxStatus(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
