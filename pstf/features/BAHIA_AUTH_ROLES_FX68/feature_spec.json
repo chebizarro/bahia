@@ -1,0 +1,5 @@
+{
+  "issue": "bahia-irsry.68",
+  "observed": "The web role map accepted any OCK-decryptable org-member record, including another member's owner role.",
+  "intended": "Role-gated UI uses only the current session's service-authored, coordinate-matched and content-matched membership. The org detail member list remains separate and includes all members."
+}

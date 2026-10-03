@@ -138,7 +138,7 @@ describe('encrypted payments/orgs stores', () => {
     await orgsStore.updateOrgMemberRole('org-1', 'bob', { role: 'admin' });
     await orgsStore.createOrgInvite('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
 
-    expect(orgsStore.orgDetailState.myRole).toBe('owner');
+    expect(orgsStore.orgMemberListState).toEqual({ orgID: 'org-1', members: [{ pubkey: 'alice', role: 'owner' }] });
     expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
       operation: 'orgs.update_member_role',
       payload: { org_id: 'org-1', pubkey: 'bob', role: 'admin' },
