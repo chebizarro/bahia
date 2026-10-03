@@ -106,6 +106,13 @@ func newRootCommand() *cobra.Command {
 		appCommands(),
 		outboxCommands(),
 	)
+	deploymentAliases := deployCommands()
+	for _, alias := range append([]*cobra.Command(nil), deploymentAliases.Commands()...) {
+		if alias.Name() == "deploy" || alias.Name() == "rollback" {
+			deploymentAliases.RemoveCommand(alias)
+			rootCmd.AddCommand(alias)
+		}
+	}
 
 	return rootCmd
 }
@@ -315,6 +322,11 @@ func servicesCommands() *cobra.Command {
 	actionsCmd := serviceActionsCommands()
 
 	cmd.AddCommand(listCmd, getCmd, createCmd, updateCmd, actionsCmd)
+	directActions := serviceActionsCommands()
+	for _, action := range append([]*cobra.Command(nil), directActions.Commands()...) {
+		directActions.RemoveCommand(action)
+		cmd.AddCommand(action)
+	}
 	return cmd
 }
 
@@ -344,23 +356,21 @@ func serviceActionsCommands() *cobra.Command {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
 			artifactID, _ := cmd.Flags().GetString("artifact")
-			var artifact *string
-			if artifactID != "" {
-				artifact = &artifactID
-			}
-			result, err := runRuntimeActionNostrFirst(cmd, "deploy", serviceID, envID, artifact, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.DeployServiceRuntime(ctx, serviceID, envID, artifact)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "deploy", serviceID, envID, artifactID, key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	deployCmd.Flags().String("org", "", "Organization ID")
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("artifact", "", "Artifact ID (optional; defaults to desired artifact)")
-	deployCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	deployCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = deployCmd.MarkFlagRequired("org")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 
@@ -371,18 +381,20 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := runRuntimeActionNostrFirst(cmd, "restart", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.RestartServiceRuntime(ctx, serviceID, envID)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "restart", serviceID, envID, "", key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	restartCmd.Flags().String("org", "", "Organization ID")
 	restartCmd.Flags().String("service", "", "Service ID")
 	restartCmd.Flags().String("environment", "", "Environment ID")
-	restartCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	restartCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = restartCmd.MarkFlagRequired("org")
 	_ = restartCmd.MarkFlagRequired("service")
 	_ = restartCmd.MarkFlagRequired("environment")
 
@@ -393,18 +405,20 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := runRuntimeActionNostrFirst(cmd, "stop", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.StopServiceRuntime(ctx, serviceID, envID)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "stop", serviceID, envID, "", key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	stopCmd.Flags().String("org", "", "Organization ID")
 	stopCmd.Flags().String("service", "", "Service ID")
 	stopCmd.Flags().String("environment", "", "Environment ID")
-	stopCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	stopCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = stopCmd.MarkFlagRequired("org")
 	_ = stopCmd.MarkFlagRequired("service")
 	_ = stopCmd.MarkFlagRequired("environment")
 
@@ -552,16 +566,15 @@ func deployCommands() *cobra.Command {
 			deploymentUnitID, _ := cmd.Flags().GetString("deployment-unit")
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			expectedDesiredStateHash, _ := cmd.Flags().GetString("expected-desired-state-hash")
-			requestedBy, _ := cmd.Flags().GetString("requested-by")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runDeploymentIntentNostr(cmd, client.DeploymentIntentNostrRequest{
+			org, _ := cmd.Flags().GetString("org")
+			result, err := runDeploymentCreateIntent(cmd, org, client.DeploymentIntentNostrRequest{
 				ServiceID:                serviceID,
 				EnvironmentID:            envID,
 				DeploymentUnitID:         deploymentUnitID,
 				ArtifactID:               artifactID,
 				ExpectedDesiredStateHash: expectedDesiredStateHash,
-				RequestedBy:              requestedBy,
 				IdempotencyKey:           idempotencyKey,
 			})
 			if err != nil {
@@ -578,13 +591,14 @@ func deployCommands() *cobra.Command {
 			return nil
 		},
 	}
+	deployCmd.Flags().String("org", "", "Organization ID")
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("expected-desired-state-hash", "", "Expected managed desired-state hash from a reviewed deploy preview")
-	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
-	deployCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	deployCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this deployment")
+	_ = deployCmd.MarkFlagRequired("org")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")
@@ -654,7 +668,8 @@ func deployCommands() *cobra.Command {
 			supersedesIntentID, _ := cmd.Flags().GetString("supersedes-intent")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runRollbackIntentNostr(cmd, client.RollbackDeploymentNostrRequest{
+			org, _ := cmd.Flags().GetString("org")
+			result, err := runDeploymentRollbackIntent(cmd, org, client.RollbackDeploymentNostrRequest{
 				ServiceID:          serviceID,
 				EnvironmentID:      envID,
 				DeploymentUnitID:   unitID,
@@ -676,12 +691,14 @@ func deployCommands() *cobra.Command {
 			return nil
 		},
 	}
+	rollbackCmd.Flags().String("org", "", "Organization ID")
 	rollbackCmd.Flags().String("service", "", "Service ID")
 	rollbackCmd.Flags().String("environment", "", "Environment ID")
 	rollbackCmd.Flags().String("deployment-unit", "", "Deployment unit ID (required for explicit-unit intents)")
 	rollbackCmd.Flags().String("target-artifact", "", "Previously healthy artifact ID to restore")
 	rollbackCmd.Flags().String("supersedes-intent", "", "Current deployed intent ID being superseded")
-	rollbackCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	rollbackCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this rollback")
+	_ = rollbackCmd.MarkFlagRequired("org")
 	_ = rollbackCmd.MarkFlagRequired("service")
 	_ = rollbackCmd.MarkFlagRequired("environment")
 	_ = rollbackCmd.MarkFlagRequired("target-artifact")
@@ -695,11 +712,13 @@ func deployCommands() *cobra.Command {
 				intentID, _ := cmd.Flags().GetString("intent")
 				idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-				result, err := runDeploymentApprovalNostr(cmd, client.DeploymentApprovalNostrRequest{
+				org, _ := cmd.Flags().GetString("org")
+				revision, _ := cmd.Flags().GetString("expected-updated-at")
+				result, err := runDeploymentDecisionIntent(cmd, org, client.DeploymentApprovalNostrRequest{
 					IntentID:       intentID,
 					Decision:       decision,
 					IdempotencyKey: idempotencyKey,
-				})
+				}, revision)
 				if err != nil {
 					return err
 				}
@@ -714,9 +733,13 @@ func deployCommands() *cobra.Command {
 				return nil
 			},
 		}
+		cmd.Flags().String("org", "", "Organization ID")
 		cmd.Flags().String("intent", "", "Deployment intent ID")
-		cmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+		cmd.Flags().String("expected-updated-at", "", "Expected canonical deployment revision (RFC3339)")
+		cmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this decision")
+		_ = cmd.MarkFlagRequired("org")
 		_ = cmd.MarkFlagRequired("intent")
+		_ = cmd.MarkFlagRequired("expected-updated-at")
 		return cmd
 	}
 

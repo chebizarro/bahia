@@ -1084,21 +1084,6 @@ func (c *OperatorControlPlaneClient) GetEnvironmentDetailsNostr(ctx context.Cont
 	return &result, nil
 }
 
-// DeployServiceRuntimeNostr requests a direct runtime deploy over Nostr.
-func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus, idempotencyKey...)
-}
-
-// CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) CreateDeploymentIntentNostr(ctx context.Context, serviceID, envID, artifactID, requestedBy string, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	return c.CreateDeploymentIntentWithRequestNostr(ctx, DeploymentIntentNostrRequest{
-		ServiceID:     serviceID,
-		EnvironmentID: envID,
-		ArtifactID:    artifactID,
-		RequestedBy:   requestedBy,
-	}, onStatus)
-}
-
 // PreviewDeploymentNostr publishes signer-first service/deploy-preview and
 // returns the reviewed desired-state preview payload.
 func (c *OperatorControlPlaneClient) PreviewDeploymentNostr(ctx context.Context, req DeploymentPreviewNostrRequest, onStatus func(OperatorStatusEvent)) (map[string]any, error) {
@@ -1148,67 +1133,6 @@ func (c *OperatorControlPlaneClient) PreviewDeploymentNostr(ctx context.Context,
 	return result, nil
 }
 
-// CreateDeploymentIntentWithRequestNostr publishes a signer-first service/deploy intent with explicit correlation options.
-func (c *OperatorControlPlaneClient) CreateDeploymentIntentWithRequestNostr(ctx context.Context, req DeploymentIntentNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	req.ServiceID = strings.TrimSpace(req.ServiceID)
-	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
-	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
-	req.ArtifactID = strings.TrimSpace(req.ArtifactID)
-	req.ExpectedDesiredStateHash = strings.TrimSpace(req.ExpectedDesiredStateHash)
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.ServiceID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
-	}
-	if req.EnvironmentID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
-	}
-	if req.ArtifactID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate deployment intent request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is required")}
-	}
-	// Attribution is signer-first: the server derives requested_by from the
-	// verified ContextVM event pubkey. Keep the parameter for API compatibility,
-	// but never serialize caller-provided attribution.
-	_ = req.RequestedBy
-	payload := map[string]any{"service_id": req.ServiceID, "environment_id": req.EnvironmentID, "artifact_id": req.ArtifactID}
-	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.ArtifactID}}
-	if req.DeploymentUnitID != "" {
-		payload["deployment_unit_id"] = req.DeploymentUnitID
-		tags = append(tags, nostr.Tag{"deployment-unit", req.DeploymentUnitID})
-	}
-	if req.ExpectedDesiredStateHash != "" {
-		payload["expected_desired_state_hash"] = req.ExpectedDesiredStateHash
-		tags = append(tags, nostr.Tag{"desired-hash", req.ExpectedDesiredStateHash})
-	}
-	if req.IdempotencyKey != "" {
-		payload["idempotency_key"] = req.IdempotencyKey
-		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: controlplane.ContextVMMethodServiceDeploy, Tags: tags, Payload: payload}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result DeploymentCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode deployment intent result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "submitted"
-	}
-	if result.ServiceID == "" {
-		result.ServiceID = req.ServiceID
-	}
-	if result.EnvironmentID == "" {
-		result.EnvironmentID = req.EnvironmentID
-	}
-	if result.DeploymentUnitID == "" {
-		result.DeploymentUnitID = req.DeploymentUnitID
-	}
-	if result.ArtifactID == "" {
-		result.ArtifactID = req.ArtifactID
-	}
-	return &result, nil
-}
-
 // RouteAttach publishes a signer-first service/route-attach intent for the current deployed artifact.
 func (c *OperatorControlPlaneClient) RouteAttach(ctx context.Context, req RouteAttachRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
 	req.ServiceID = strings.TrimSpace(req.ServiceID)
@@ -1254,113 +1178,6 @@ func (c *OperatorControlPlaneClient) RouteAttach(ctx context.Context, req RouteA
 		result.DeploymentUnitID = req.DeploymentUnitID
 	}
 	return &result, nil
-}
-
-// RollbackDeploymentNostr publishes a signer-first service/rollback intent and awaits the correlated ContextVM acknowledgment.
-func (c *OperatorControlPlaneClient) RollbackDeploymentNostr(ctx context.Context, req RollbackDeploymentNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	req.ServiceID = strings.TrimSpace(req.ServiceID)
-	req.EnvironmentID = strings.TrimSpace(req.EnvironmentID)
-	req.DeploymentUnitID = strings.TrimSpace(req.DeploymentUnitID)
-	req.TargetArtifactID = strings.TrimSpace(req.TargetArtifactID)
-	req.SupersedesIntentID = strings.TrimSpace(req.SupersedesIntentID)
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	for field, value := range map[string]string{
-		"service_id":           req.ServiceID,
-		"environment_id":       req.EnvironmentID,
-		"target_artifact_id":   req.TargetArtifactID,
-		"supersedes_intent_id": req.SupersedesIntentID,
-	} {
-		if value == "" {
-			return nil, &ControlPlaneRequestError{Phase: "validate rollback request", RequestAccepted: false, Cause: fmt.Errorf("%s is required", field)}
-		}
-	}
-	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.TargetArtifactID}, {"supersedes", req.SupersedesIntentID}}
-	if req.DeploymentUnitID != "" {
-		tags = append(tags, nostr.Tag{"deployment_unit", req.DeploymentUnitID})
-	}
-	payload := map[string]any{
-		"service_id":           req.ServiceID,
-		"environment_id":       req.EnvironmentID,
-		"target_artifact_id":   req.TargetArtifactID,
-		"supersedes_intent_id": req.SupersedesIntentID,
-	}
-	if req.DeploymentUnitID != "" {
-		payload["deployment_unit_id"] = req.DeploymentUnitID
-	}
-	if req.IdempotencyKey != "" {
-		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: "service/rollback", Tags: tags, Payload: payload}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result DeploymentCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode rollback result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "submitted"
-	}
-	if result.ServiceID == "" {
-		result.ServiceID = req.ServiceID
-	}
-	if result.EnvironmentID == "" {
-		result.EnvironmentID = req.EnvironmentID
-	}
-	if result.DeploymentUnitID == "" {
-		result.DeploymentUnitID = req.DeploymentUnitID
-	}
-	if result.ArtifactID == "" {
-		result.ArtifactID = req.TargetArtifactID
-	}
-	return &result, nil
-}
-
-// ApproveDeploymentNostr publishes a signer-first approval or rejection for a pending deployment intent.
-func (c *OperatorControlPlaneClient) ApproveDeploymentNostr(ctx context.Context, req DeploymentApprovalNostrRequest, onStatus func(OperatorStatusEvent)) (*DeploymentCommandResult, error) {
-	req.IntentID = strings.TrimSpace(req.IntentID)
-	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.IntentID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate deployment approval request", RequestAccepted: false, Cause: fmt.Errorf("intent_id is required")}
-	}
-	if req.Decision != "approve" && req.Decision != "reject" {
-		return nil, &ControlPlaneRequestError{Phase: "validate deployment approval request", RequestAccepted: false, Cause: fmt.Errorf("decision must be approve or reject")}
-	}
-	method := controlplane.ContextVMMethodApprovalApprove
-	if req.Decision == "reject" {
-		method = controlplane.ContextVMMethodApprovalReject
-	}
-	payload := map[string]any{"intent_id": req.IntentID, "decision": req.Decision}
-	tags := nostr.Tags{{"intent", req.IntentID}, {"decision", req.Decision}}
-	if req.IdempotencyKey != "" {
-		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{Method: method, Tags: tags, Payload: payload}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result DeploymentCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode deployment approval result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "submitted"
-	}
-	if result.IntentID == "" {
-		result.IntentID = req.IntentID
-	}
-	return &result, nil
-}
-
-// RestartServiceRuntimeNostr requests a direct runtime restart over Nostr.
-func (c *OperatorControlPlaneClient) RestartServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "restart", serviceID, envID, nil, onStatus, idempotencyKey...)
-}
-
-// StopServiceRuntimeNostr requests a direct runtime stop over Nostr.
-func (c *OperatorControlPlaneClient) StopServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "stop", serviceID, envID, nil, onStatus, idempotencyKey...)
 }
 
 // ScanAdoptionNostr requests adoption scan previews over Nostr.
@@ -1411,50 +1228,6 @@ func (c *OperatorControlPlaneClient) ImportAdoptionNostr(ctx context.Context, re
 		return results, nil
 	}
 	return nil, terminalEventError("adoption import", event)
-}
-
-func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action string, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
-	serviceID = strings.TrimSpace(serviceID)
-	envID = strings.TrimSpace(envID)
-	action = strings.ToLower(strings.TrimSpace(action))
-	if action != "deploy" && action != "restart" && action != "stop" {
-		return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("unsupported runtime action %q", action)}
-	}
-	if serviceID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("service_id is required")}
-	}
-	if envID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("environment_id is required")}
-	}
-	payload := directRuntimeActionEventRequest{Action: action, ServiceID: serviceID, EnvironmentID: envID}
-	tags := nostr.Tags{{"action", action}, {"service", serviceID}, {"environment", envID}}
-	if len(idempotencyKey) > 0 && strings.TrimSpace(idempotencyKey[0]) != "" {
-		tags = append(nostr.Tags{{"d", strings.TrimSpace(idempotencyKey[0])}}, tags...)
-	}
-	if artifactID != nil && strings.TrimSpace(*artifactID) != "" {
-		if action != "deploy" {
-			return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is only valid for deploy actions")}
-		}
-		payload.ArtifactID = strings.TrimSpace(*artifactID)
-		tags = append(tags, nostr.Tag{"artifact", payload.ArtifactID})
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Method:  "service/action",
-		Tags:    tags,
-		Payload: payload,
-	}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	status := firstTagValue(event.Tags, "status")
-	if status != "" && status != "success" {
-		return nil, terminalEventError("runtime action", event)
-	}
-	var result RuntimeActionResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode runtime action result: %w", err)
-	}
-	return &result, nil
 }
 
 type operatorRequest struct {
@@ -2006,13 +1779,6 @@ func validateSignerFirstAdoptionTargets(targets []AdoptionTarget) error {
 		}
 	}
 	return nil
-}
-
-type directRuntimeActionEventRequest struct {
-	Action        string `json:"action"`
-	ServiceID     string `json:"service_id"`
-	EnvironmentID string `json:"environment_id"`
-	ArtifactID    string `json:"artifact_id,omitempty"`
 }
 
 type adoptionScanEventRequest struct {

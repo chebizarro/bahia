@@ -109,7 +109,7 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 Service/environment create and update publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read the resulting canonical `30900` state. Other signer-first CLI mutations still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
-For service/environment writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. `--http-fallback` does not redirect these writes to HTTP.
+For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. `--http-fallback` does not redirect these writes to HTTP.
 
 For remaining ContextVM commands, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
 
@@ -170,10 +170,11 @@ bahia services create --org "$ORG_UUID" \
   --artifact-repo "ghcr.io/company/payment-api"
 bahia services update --service <service-uuid> --name "payment-api-v2"
 
-# Direct runtime lifecycle actions
-bahia services actions deploy --service svc-123 --environment env-456 --artifact art-789
-bahia services actions restart --service svc-123 --environment env-456
-bahia services actions stop --service svc-123 --environment env-456
+# Direct runtime lifecycle actions (UUIDs and organization required)
+# The same commands are also available under `services actions`.
+bahia services deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
+bahia services restart --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
+bahia services stop --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
 ```
 
 ### Environments
@@ -262,7 +263,7 @@ bahia deployments preview --service svc-123 --environment env-456 --artifact art
   --managed-runtime-config-file runtime.json --compact
 
 # Submit signer-first deployment intent
-bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
+bahia deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
 
 # Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
 bahia deployments route-attach --service svc-123 --environment env-456 \
@@ -274,21 +275,14 @@ bahia deployments route-attach --service svc-123 --environment env-456 \
   --upstream-port 8080 --health-path /healthz --internal=false
 
 # Submit signer-first rollback intent
-bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current
+bahia rollback --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --deployment-unit "$UNIT_UUID" --target-artifact "$PRIOR_ARTIFACT_UUID" --supersedes-intent "$CURRENT_INTENT_UUID"
+
+# Approve or reject a pending deployment using its canonical revision
+bahia deployments approve --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
+bahia deployments reject --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
 ```
 
-Deployment creation, rollback, approval, and `services actions deploy/restart/stop`
-currently use signed ContextVM requests. The daemon does not yet register a
-`deployment` 30900 intent handler, and the direct runtime action reactor does
-not implement a 30900 `runtime` intent handler. These commands cannot use
-direct intent publication until those handlers reconcile the corresponding
-canonical state.
-Each invocation prints a UUIDv7 idempotency key and sends it as
-`_meta.progressToken`. If a response is interrupted, retry the same operation
-with `--idempotency-key <printed-key>`; a new key requests a new execution.
-`-32011` means the daemon cannot replay the outcome, not that the deployment
-failed. `--http-fallback` still controls the legacy compatibility path for
-these unmigrated commands.
+Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. `--http-fallback` prints a no-op notice for these writes and never changes their transport. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach remain ContextVM calls and retain their retry keys.
 
 ### State
 
