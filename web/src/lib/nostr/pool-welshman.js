@@ -15,6 +15,7 @@
 
 import {
   Pool,
+  SocketStatus,
   request as welshmanRequest,
   publish as welshmanPublish,
   PublishStatus,
@@ -66,6 +67,26 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   /** @type {Map<string, ManagedSubscription>} */
   const subs = new Map();
+
+  /** Outbox delivery is driven by socket readiness, never by a polling timer. */
+  function getConnectedRelays(relays) {
+    return relays.filter(url => pool.has(url) && pool.get(url).status === SocketStatus.Open);
+  }
+
+  function onRelayReady(callback, relays = []) {
+    const removers = [];
+    const attach = socket => {
+      const status = value => { if (value === SocketStatus.Open) callback({ relay: socket.url, auth: false }); };
+      const auth = value => { if (value === 'ok') callback({ relay: socket.url, auth: true }); };
+      socket.on('status', status);
+      socket.auth.on('status', auth);
+      removers.push(() => { socket.off('status', status); socket.auth.off('status', auth); });
+      if (socket.status === SocketStatus.Open) callback({ relay: socket.url, auth: false });
+    };
+    const unsubscribe = pool.subscribe(attach);
+    for (const relay of relays) if (pool.has(relay)) attach(pool.get(relay));
+    return () => { unsubscribe(); removers.forEach(remove => remove()); };
+  }
 
   /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
@@ -264,6 +285,8 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     subscribe,
     addRef,
     publishEvent,
+    getConnectedRelays,
+    onRelayReady,
     setSign,
     getPool,
     destroy,

@@ -11,6 +11,13 @@ Backup features include:
 - **Verification** — Ensure backups are restorable
 - **Restore orchestration** — Managed recovery process
 
+The web console signs kind-`30900` intents for repository, policy, recipe,
+and definition changes and for run, restore, verification, retention, and
+repository-probe requests. These show as pending until a scoped `30315`
+status or newer canonical state arrives. Restore approval and rejection remain
+on ContextVM: the daemon's `restore-approval` intent branch currently rejects
+them.
+
 ## Key Concepts
 
 ### Backup Definition

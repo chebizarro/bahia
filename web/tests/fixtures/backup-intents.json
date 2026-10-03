@@ -1,0 +1,128 @@
+{
+  "cases": [
+    {
+      "name": "repository-register",
+      "request": {
+        "domain": "backup",
+        "op": "repository-register",
+        "coordinate": "backup-repository:018f1fae-7b91-7bea-81d6-0669758de943",
+        "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de952",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "backend": "kopia",
+          "id": "018f1fae-7b91-7bea-81d6-0669758de943",
+          "metadata": {
+            "source": "web.backup.repositories.register"
+          },
+          "name": "archive",
+          "repository_uri": "kopia://archive"
+        }
+      },
+      "event": {
+        "content": "{\"backend\":\"kopia\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"metadata\":{\"source\":\"web.backup.repositories.register\"},\"name\":\"archive\",\"repository_uri\":\"kopia://archive\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "backup-repository:018f1fae-7b91-7bea-81d6-0669758de943"
+          ],
+          [
+            "domain",
+            "backup"
+          ],
+          [
+            "schema",
+            "bahia.intent.backup.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "backup"
+          ],
+          [
+            "op",
+            "repository-register"
+          ],
+          [
+            "org",
+            "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de952"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "run",
+      "request": {
+        "domain": "backup",
+        "op": "run",
+        "coordinate": "backup-run:018f1fae-7b91-7bea-81d6-0669758de946",
+        "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de953",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "backend": "kopia",
+          "id": "018f1fae-7b91-7bea-81d6-0669758de946",
+          "metadata": {
+            "source": "web.backup.run"
+          },
+          "recipe_id": "018f1fae-7b91-7bea-81d6-0669758de944",
+          "repository_id": "018f1fae-7b91-7bea-81d6-0669758de943",
+          "target_ref": "fs:/srv/app",
+          "verification_mode": "none"
+        }
+      },
+      "event": {
+        "content": "{\"backend\":\"kopia\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de946\",\"metadata\":{\"source\":\"web.backup.run\"},\"recipe_id\":\"018f1fae-7b91-7bea-81d6-0669758de944\",\"repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"target_ref\":\"fs:/srv/app\",\"verification_mode\":\"none\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "backup-run:018f1fae-7b91-7bea-81d6-0669758de946"
+          ],
+          [
+            "domain",
+            "backup"
+          ],
+          [
+            "schema",
+            "bahia.intent.backup.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "backup"
+          ],
+          [
+            "op",
+            "run"
+          ],
+          [
+            "org",
+            "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de953"
+          ]
+        ]
+      }
+    }
+  ]
+}

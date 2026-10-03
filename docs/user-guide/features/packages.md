@@ -1,6 +1,6 @@
 # Packages
 
-The web package repository, artifact, and promotion views read the local verified event store by the `package-repository`, `package-artifact`, and `package-promotion` topics. Cached data renders without a network loading gate; live canonical `30900` updates and kind-5 deletions update the views in place. Package mutation transport remains unchanged in this phase.
+The web package repository, artifact, and promotion views read the local verified event store by the `package-repository`, `package-artifact`, and `package-promotion` topics. Cached data renders without a network loading gate; live canonical `30900` updates and kind-5 deletions update the views in place. Web promotion and yank now publish signed kind-`30900` intents with a pending badge until `30315` or canonical state resolves them. Publishing, drift detection, and approval still use ContextVM.
 
 
 **Packages** in Bahia provide package repository management for distributing software artifacts beyond container images.
@@ -15,8 +15,8 @@ Package features include:
 
 ## Authenticated package mutations
 
-`package/publish`, `package/promote`, `package/yank`, and `package/drift-detect`
-execute through signed plain or wrapped ContextVM requests. Every method requires
+`package/publish` and `package/drift-detect` execute through signed plain or
+wrapped ContextVM requests; web promote/yank use signed intents. Every method requires
 a configured, nonempty fleet-operator allowlist and an `idempotency_key` (or
 `_meta.progressToken`). Reusing that key with changed parameters is rejected.
 Durable request claims prevent re-execution across transport restarts, including

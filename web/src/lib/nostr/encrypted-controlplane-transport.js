@@ -23,12 +23,12 @@ import {
   normalizeRelays,
   normalizeTags,
   publishAccepted,
-  randomId,
   servicePubkeyFromSystemInfo,
   signalAbortError,
   throwIfSignalAborted
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
+import { mintEntityId } from '../entity-id.js';
 
 export class EncryptedControlplaneTransport {
   constructor({ relays = encryptedRelayUrlsFromSystemInfo(), servicePubkey = servicePubkeyFromSystemInfo(), client = null } = {}) {
@@ -64,7 +64,7 @@ export class EncryptedControlplaneTransport {
     this.connected = false;
   }
 
-  async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000), requestId = randomId() } = {}) {
+  async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000), requestId = mintEntityId() } = {}) {
     if (authState.status !== 'authenticated' || !authState.pubkey) {
       throw new Error('Nostr authentication is required for ContextVM requests');
     }
@@ -137,7 +137,7 @@ export class EncryptedControlplaneTransport {
     try {
       await this.connect();
       throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
-      const contextVMRequestId = request.requestId || randomId();
+      const contextVMRequestId = request.requestId || mintEntityId();
       const event = await this.buildEncryptedRequestEvent({ ...request, requestId: contextVMRequestId });
       throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
       signal?.addEventListener?.('abort', forwardAbort, { once: true });

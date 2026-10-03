@@ -1,0 +1,128 @@
+{
+  "cases": [
+    {
+      "name": "route-create",
+      "request": {
+        "domain": "llm",
+        "op": "create",
+        "coordinate": "018f1fae-7b91-7bea-81d6-0669758de941",
+        "orgId": "3b45458b-2724-4dda-9fc6-66f12249660d",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de950",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "gateway_config": {
+            "public_model": "bahia/chat"
+          },
+          "id": "018f1fae-7b91-7bea-81d6-0669758de941",
+          "name": "chat"
+        }
+      },
+      "event": {
+        "content": "{\"gateway_config\":{\"public_model\":\"bahia/chat\"},\"id\":\"018f1fae-7b91-7bea-81d6-0669758de941\",\"name\":\"chat\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "018f1fae-7b91-7bea-81d6-0669758de941"
+          ],
+          [
+            "domain",
+            "llm"
+          ],
+          [
+            "schema",
+            "bahia.intent.llm.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "llm"
+          ],
+          [
+            "op",
+            "create"
+          ],
+          [
+            "org",
+            "3b45458b-2724-4dda-9fc6-66f12249660d"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de950"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "release-register",
+      "request": {
+        "domain": "llm",
+        "op": "release-register",
+        "coordinate": "llm-release:018f1fae-7b91-7bea-81d6-0669758de942",
+        "orgId": "3b45458b-2724-4dda-9fc6-66f12249660d",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de951",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "backend_preferences": [
+            "external_api"
+          ],
+          "external_backend": {
+            "base_url": "https://llm.example"
+          },
+          "id": "018f1fae-7b91-7bea-81d6-0669758de942",
+          "model_ref": "hf://example/chat",
+          "model_source": "huggingface",
+          "route_id": "018f1fae-7b91-7bea-81d6-0669758de941",
+          "version": "v1"
+        }
+      },
+      "event": {
+        "content": "{\"backend_preferences\":[\"external_api\"],\"external_backend\":{\"base_url\":\"https://llm.example\"},\"id\":\"018f1fae-7b91-7bea-81d6-0669758de942\",\"model_ref\":\"hf://example/chat\",\"model_source\":\"huggingface\",\"route_id\":\"018f1fae-7b91-7bea-81d6-0669758de941\",\"version\":\"v1\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "llm-release:018f1fae-7b91-7bea-81d6-0669758de942"
+          ],
+          [
+            "domain",
+            "llm"
+          ],
+          [
+            "schema",
+            "bahia.intent.llm.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "llm"
+          ],
+          [
+            "op",
+            "release-register"
+          ],
+          [
+            "org",
+            "3b45458b-2724-4dda-9fc6-66f12249660d"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de951"
+          ]
+        ]
+      }
+    }
+  ]
+}
