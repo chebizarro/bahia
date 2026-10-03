@@ -355,6 +355,7 @@ func serviceActionsCommands() *cobra.Command {
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("artifact", "", "Artifact ID (optional; defaults to desired artifact)")
+	deployCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 
@@ -376,6 +377,7 @@ func serviceActionsCommands() *cobra.Command {
 	}
 	restartCmd.Flags().String("service", "", "Service ID")
 	restartCmd.Flags().String("environment", "", "Environment ID")
+	restartCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
 	_ = restartCmd.MarkFlagRequired("service")
 	_ = restartCmd.MarkFlagRequired("environment")
 
@@ -397,6 +399,7 @@ func serviceActionsCommands() *cobra.Command {
 	}
 	stopCmd.Flags().String("service", "", "Service ID")
 	stopCmd.Flags().String("environment", "", "Environment ID")
+	stopCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
 	_ = stopCmd.MarkFlagRequired("service")
 	_ = stopCmd.MarkFlagRequired("environment")
 

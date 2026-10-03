@@ -1226,8 +1226,8 @@ func (c *OperatorControlPlaneClient) UpdateEnvironmentNostr(ctx context.Context,
 }
 
 // DeployServiceRuntimeNostr requests a direct runtime deploy over Nostr.
-func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus)
+func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus, idempotencyKey...)
 }
 
 // CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
@@ -1495,13 +1495,13 @@ func (c *OperatorControlPlaneClient) ApproveDeploymentNostr(ctx context.Context,
 }
 
 // RestartServiceRuntimeNostr requests a direct runtime restart over Nostr.
-func (c *OperatorControlPlaneClient) RestartServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "restart", serviceID, envID, nil, onStatus)
+func (c *OperatorControlPlaneClient) RestartServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "restart", serviceID, envID, nil, onStatus, idempotencyKey...)
 }
 
 // StopServiceRuntimeNostr requests a direct runtime stop over Nostr.
-func (c *OperatorControlPlaneClient) StopServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "stop", serviceID, envID, nil, onStatus)
+func (c *OperatorControlPlaneClient) StopServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "stop", serviceID, envID, nil, onStatus, idempotencyKey...)
 }
 
 // ScanAdoptionNostr requests adoption scan previews over Nostr.
@@ -1554,7 +1554,7 @@ func (c *OperatorControlPlaneClient) ImportAdoptionNostr(ctx context.Context, re
 	return nil, terminalEventError("adoption import", event)
 }
 
-func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action string, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
+func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action string, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
 	serviceID = strings.TrimSpace(serviceID)
 	envID = strings.TrimSpace(envID)
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -1569,6 +1569,9 @@ func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action s
 	}
 	payload := directRuntimeActionEventRequest{Action: action, ServiceID: serviceID, EnvironmentID: envID}
 	tags := nostr.Tags{{"action", action}, {"service", serviceID}, {"environment", envID}}
+	if len(idempotencyKey) > 0 && strings.TrimSpace(idempotencyKey[0]) != "" {
+		tags = append(nostr.Tags{{"d", strings.TrimSpace(idempotencyKey[0])}}, tags...)
+	}
 	if artifactID != nil && strings.TrimSpace(*artifactID) != "" {
 		if action != "deploy" {
 			return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is only valid for deploy actions")}
@@ -1798,6 +1801,9 @@ func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *o
 				message := strings.TrimSpace(rpc.Error.Message)
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
+				}
+				if rpc.Error.Code == controlplane.ContextVMDuplicateRequestErrorCode {
+					message += fmt.Sprintf("; retry with --idempotency-key %s, or choose a new key to re-execute", requestID)
 				}
 				return nil, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message}
 			}
