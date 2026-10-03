@@ -170,7 +170,7 @@ func decryptOrgState(key OrgStateKey, content string) ([]byte, error) {
 // LegacyOrgStateDecryptor interface in confidential_state.go. Condition
 // for deletion: no legacy-format (O1 sha256-derived AEAD) records remain
 // in any deployment's local event store or relay history.
-// Follow-up issue: bahia-irsry.64-cleanup (file after soak).
+// Follow-up issue: bahia-irsry.65 (file after soak).
 type OrgStateEncryptorImpl struct {
 	keyProvider OrgStateKeyProvider
 }

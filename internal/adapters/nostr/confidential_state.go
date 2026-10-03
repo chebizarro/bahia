@@ -33,7 +33,7 @@ import (
 // this function and the selfDecryptNIP44Legacy call sites. Condition for
 // deletion: no legacy-format (N1 NIP-44 self-encrypted) records remain
 // in any deployment's local event store or relay history.
-// Follow-up issue: bahia-irsry.64-cleanup (file after soak).
+// Follow-up issue: bahia-irsry.65 (file after soak).
 
 // selfDecryptNIP44Legacy decrypts content that was NIP-44 self-encrypted
 // to the service's own pubkey using the raw private key. Legacy read-only path.
